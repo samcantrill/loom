@@ -15,7 +15,7 @@ Detailed design notes live in:
 - [docs/loom.md](docs/loom.md)
 - [docs/config.md](docs/config.md)
 - [docs/structure.md](docs/structure.md)
-- [docs/future.md](docs/future.md)
+- [docs/implementation-plan.md](docs/implementation-plan.md)
 
 ## Development
 

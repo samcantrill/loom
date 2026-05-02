@@ -107,7 +107,6 @@ and project-scoped Codex workflow metadata.
     errors.md
     cli.md
     testing.md
-    future.md
     implementation-plan.md
 
   tests/
@@ -708,8 +707,9 @@ testing.md
   Test layout, package tests, unit tests, integration tests, contract tests, and
   validation gates.
 
-future.md
-  Deferred features and revisit triggers.
+implementation-plan.md
+  Review-gated phase plan, phase status, accepted tradeoffs, and deferred v0
+  scope boundaries.
 ```
 
 ---

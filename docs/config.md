@@ -565,6 +565,12 @@ name
 pipeline
 ```
 
+Config files may include `schema_version` at stable document boundaries. V0 only
+needs to accept the supported version and fail clearly on unsupported versions;
+migrations can wait until there are real historical formats to preserve.
+Persisted document version parsing belongs to `loom.serialization`, while
+`loom.config` decides which config document versions it supports.
+
 ---
 
 ## 14. Secret Redaction

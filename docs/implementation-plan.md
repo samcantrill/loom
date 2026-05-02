@@ -4,7 +4,7 @@
 
 Implement `loom` v0 as a source-tree-first, fully typed Python package aligned
 with the boundaries in `docs/structure.md`, `docs/config.md`, `docs/loom.md`,
-and `docs/future.md`.
+and the subsystem specifications in `docs/`.
 
 The v0 target is a generic runtime that can compose trusted YAML config, expand
 recipes, instantiate user stage targets, validate a local artifact DAG, run it
@@ -299,7 +299,8 @@ Notes:
 
 - Source references: `docs/structure.md` sections 3.4 through 4.7, 20.5,
   20.6, 21.1, 22 Phase 1, 23.1; `docs/loom.md` sections 6.1, 6.2, 6.3, 10,
-  11, 12; `docs/future.md` sections 5.1 through 5.5, 9.1.
+  11, 12; `docs/core-model.md`, `docs/artifacts.md`, and
+  `docs/fingerprints.md`.
 - Never use Python built-in `hash()` for persisted identities.
 
 Completion summary:
@@ -349,8 +350,8 @@ Test expectations:
 Notes:
 
 - Source references: `docs/structure.md` sections 1.3, 5, 6, 7, 20.15, 21.5,
-  22 Phase 2, 23.2; `docs/loom.md` sections 4, 6.1, 6.3; `docs/future.md`
-  section 16.
+  22 Phase 2, 23.2; `docs/loom.md` sections 4, 6.1, 6.3; `docs/io.md` and
+  `docs/artifacts.md`.
 - I/O owns bytes, files, URIs, sources, and codecs. Serialization owns object to
   plain structured data conversion.
 
@@ -460,7 +461,7 @@ Notes:
 
 - Source references: `docs/config.md` sections 5.6, 5.7, 6.3, 7, 11, 12, 16,
   18; `docs/structure.md` sections 9, 10, 20.3, 20.7, 20.15, 21.2,
-  22 Phase 4, 23.3; `docs/future.md` sections 4.1, 4.2, 20 Phase 3.
+  22 Phase 4, 23.3.
 - Configs are trusted project code in v0.
 
 Completion summary:
@@ -514,7 +515,7 @@ Notes:
 
 - Source references: `docs/structure.md` sections 11, 12, 20.1, 20.16, 21.3,
   22 Phase 5, 23.4; `docs/loom.md` sections 6.4, 6.5, 8, 12, 14;
-  `docs/future.md` sections 6, 7.1, 7.2, 7.4, 18.2.
+  `docs/pipeline.md`, `docs/state.md`, and `docs/testing.md`.
 
 Completion summary:
 
@@ -568,7 +569,8 @@ Notes:
 
 - Source references: `docs/structure.md` sections 13, 16, 20.4 through 20.10,
   21.4, 22 Phase 5, 23.5; `docs/loom.md` sections 9, 10, 11;
-  `docs/future.md` sections 8, 9, 16.
+  `docs/run-store.md`, `docs/artifacts.md`, `docs/fingerprints.md`, and
+  `docs/resume.md`.
 - Fingerprints must exclude noisy values unless explicitly configured.
 
 Completion summary:
@@ -624,7 +626,8 @@ Notes:
 
 - Source references: `docs/structure.md` sections 14, 15.1 through 15.3, 20.4,
   20.8, 20.9, 23.4, 23.6, 23.7; `docs/loom.md` sections 8 through 12;
-  `docs/future.md` sections 7, 8, 9, 10.1, 18.
+  `docs/pipeline.md`, `docs/execution.md`, `docs/run-store.md`,
+  `docs/resume.md`, and `docs/testing.md`.
 - The runner, not the stage, owns lifecycle, output validation, status writes,
   fingerprints, and resume decisions.
 
@@ -683,7 +686,8 @@ Notes:
 
 - Source references: `docs/structure.md` sections 20.1 through 20.16, 21, 23,
   24, 25; `docs/config.md` sections 14, 16, 19; `docs/loom.md` sections 9
-  through 16; `docs/future.md` sections 8, 9, 18, 19, 21, 22.
+  through 16; `docs/run-store.md`, `docs/resume.md`, `docs/testing.md`, and
+  `docs/cli.md`.
 - This phase should harden v0, not expand it into postponed features.
 
 Completion summary:

@@ -1225,9 +1225,32 @@ V0 can defer sweep commands until the sweep planning API exists.
 
 ---
 
-## 20. Error Formatting
+## 20. Deferred Operational Commands
 
-### 20.1 Known Errors
+Several useful operational commands should stay out of the first CLI unless the
+underlying Python APIs already exist:
+
+```text
+loom graph CONFIG --format dot
+loom preflight CONFIG --run-dir RUN_DIR
+loom diff RUN_A RUN_B
+loom clean RUN_DIR --failed-temp
+loom gc RUNS_DIR --older-than 30d
+loom export RUN_DIR ARCHIVE
+loom inspect ARCHIVE
+```
+
+`graph` should format pipeline graph APIs, `preflight` should call best-effort
+config/pipeline/store/executor checks, `diff` should format planning and
+provenance summaries, and cleanup/export commands should operate only through
+run-store and artifact-store APIs. The CLI should not load domain artifact
+payloads or implement file deletion policy directly.
+
+---
+
+## 21. Error Formatting
+
+### 21.1 Known Errors
 
 Known `loom` errors should print:
 
@@ -1247,7 +1270,7 @@ Path: pipeline.stages[1].depends_on[0]
 Error: unknown stage "load"
 ```
 
-### 20.2 Tracebacks
+### 21.2 Tracebacks
 
 Default:
 
@@ -1262,7 +1285,7 @@ With `--traceback`:
 print full traceback
 ```
 
-### 20.3 Error JSON
+### 21.3 Error JSON
 
 For `--format json`, errors should be structured where practical:
 
@@ -1281,9 +1304,9 @@ V0 can start with text errors and add JSON errors after result models stabilize.
 
 ---
 
-## 21. Result Models
+## 22. Result Models
 
-### 21.1 Purpose
+### 22.1 Purpose
 
 CLI modules should format structured result objects returned by Python APIs.
 
@@ -1301,7 +1324,7 @@ LogLocationResult
 
 The CLI should not need to inspect internal dataclasses deeply.
 
-### 21.2 Formatting Helpers
+### 22.2 Formatting Helpers
 
 Recommended modules:
 
@@ -1324,9 +1347,9 @@ Keep formatting helpers independent from business logic.
 
 ---
 
-## 22. Configuration and Environment
+## 23. Configuration and Environment
 
-### 22.1 CLI Environment Variables
+### 23.1 CLI Environment Variables
 
 V0 can avoid CLI-specific environment variables.
 
@@ -1340,14 +1363,14 @@ LOOM_CONFIG_ROOT
 
 Do not add environment variables unless scripts need them.
 
-### 22.2 Working Directory
+### 23.2 Working Directory
 
 CLI commands should pass the current working directory to provenance capture
 where appropriate.
 
 Path resolution policy belongs to config/run-store APIs.
 
-### 22.3 Secrets
+### 23.3 Secrets
 
 The CLI should avoid printing:
 
@@ -1362,9 +1385,9 @@ Use redacted config/provenance views by default.
 
 ---
 
-## 23. Testing Strategy
+## 24. Testing Strategy
 
-### 23.1 Parser Tests
+### 24.1 Parser Tests
 
 Test:
 
@@ -1382,7 +1405,7 @@ repeated --force-stage and --skip-stage
 invalid command returns usage error
 ```
 
-### 23.2 Command Unit Tests
+### 24.2 Command Unit Tests
 
 Use fake APIs where possible.
 
@@ -1398,7 +1421,7 @@ logs calls run-store log path API
 artifacts list calls artifact index API
 ```
 
-### 23.3 Exit Code Tests
+### 24.3 Exit Code Tests
 
 Test:
 
@@ -1411,7 +1434,7 @@ run failure returns documented execution code
 KeyboardInterrupt returns 130
 ```
 
-### 23.4 Golden Output Tests
+### 24.4 Golden Output Tests
 
 Use small stable text snapshots for:
 
@@ -1424,7 +1447,7 @@ known error message
 
 Avoid brittle snapshots for timestamps or full paths unless normalized.
 
-### 23.5 Integration Tests
+### 24.5 Integration Tests
 
 Test through the console entry point or `main(argv)`:
 
@@ -1439,7 +1462,7 @@ loom status after failure
 loom logs returns paths or content
 ```
 
-### 23.6 Import Boundary Tests
+### 24.6 Import Boundary Tests
 
 Test:
 
@@ -1452,9 +1475,9 @@ loom.cli modules do not get imported by pipeline/config/stores
 
 ---
 
-## 24. Implementation Plan
+## 25. Implementation Plan
 
-### 24.1 Phase 1: Entry Point and Parser
+### 25.1 Phase 1: Entry Point and Parser
 
 Create:
 
@@ -1474,7 +1497,7 @@ top-level --traceback
 exit code constants
 ```
 
-### 24.2 Phase 2: Validate and Plan
+### 25.2 Phase 2: Validate and Plan
 
 Create:
 
@@ -1494,7 +1517,7 @@ selector option parsing
 plan table formatting
 ```
 
-### 24.3 Phase 3: Run
+### 25.3 Phase 3: Run
 
 Create:
 
@@ -1512,7 +1535,7 @@ PipelineRunner integration
 run summary formatting
 ```
 
-### 24.4 Phase 4: Stage Worker
+### 25.4 Phase 4: Stage Worker
 
 Create:
 
@@ -1529,7 +1552,7 @@ stage worker API integration
 worker result exit codes
 ```
 
-### 24.5 Phase 5: Status and Logs
+### 25.5 Phase 5: Status and Logs
 
 Create:
 
@@ -1547,7 +1570,7 @@ JSON status output
 loom logs, at least path display or simple content display
 ```
 
-### 24.6 Phase 6: Artifacts
+### 25.6 Phase 6: Artifacts
 
 Create:
 
@@ -1563,7 +1586,7 @@ loom artifacts show
 text and JSON output
 ```
 
-### 24.7 Phase 7: Executor-Specific Commands
+### 25.7 Phase 7: Executor-Specific Commands
 
 Add after executor APIs are stable:
 
@@ -1574,7 +1597,7 @@ loom slurm status
 loom slurm cancel
 ```
 
-### 24.8 Phase 8: Sweep Commands
+### 25.8 Phase 8: Sweep Commands
 
 Add after sweep design and APIs exist:
 
@@ -1586,9 +1609,9 @@ loom sweep status
 
 ---
 
-## 25. Open Questions
+## 26. Open Questions
 
-### 25.1 Should the CLI Use `argparse` or `typer`?
+### 26.1 Should the CLI Use `argparse` or `typer`?
 
 Recommended v0 answer:
 
@@ -1598,7 +1621,7 @@ argparse
 
 The initial command set does not justify a new hard runtime dependency.
 
-### 25.2 Should `loom submit` Exist?
+### 26.2 Should `loom submit` Exist?
 
 Recommended answer:
 
@@ -1615,7 +1638,7 @@ loom run CONFIG --executor slurm-afterok
 Add `loom submit` later only if submission semantics diverge clearly from run
 semantics.
 
-### 25.3 Should `loom inspect` Be a Group?
+### 26.3 Should `loom inspect` Be a Group?
 
 Recommended answer:
 
@@ -1625,7 +1648,7 @@ prefer concrete commands first: status, logs, artifacts
 
 An `inspect` group can be added later if inspection commands become numerous.
 
-### 25.4 Should `loom status` Query SLURM by Default?
+### 26.4 Should `loom status` Query SLURM by Default?
 
 Recommended answer:
 
@@ -1636,7 +1659,7 @@ no
 Default status should read persisted run state. Use `--jobs` or `loom slurm
 status` for scheduler state.
 
-### 25.5 Should Artifact Commands Load Artifact Contents?
+### 26.5 Should Artifact Commands Load Artifact Contents?
 
 Recommended answer:
 
@@ -1648,7 +1671,7 @@ Inspect refs first. Loading content through project codecs should be explicit.
 
 ---
 
-## 26. Summary
+## 27. Summary
 
 `loom.cli` should be a thin, stable command-line shell over the Python APIs.
 
