@@ -32,6 +32,15 @@ artifact has a URI, type label, optional codec, checksum, producer, and metadata
 It should not know what a checkpoint, metrics file, video, report, model, or
 dataset-specific object means.
 
+### 1.1 Alignment With `loom.md`
+
+This document specializes the artifact portion of the generic runtime described
+in [loom.md](loom.md). It inherits the package-wide rule that `loom` records and
+passes artifact references, while project code owns domain artifact schemas,
+payload meaning, and specialized readers or writers. The v0 emphasis should stay
+on local, inspectable artifact state that supports provenance and conservative
+resume.
+
 ---
 
 ## 2. Core Position
@@ -1168,6 +1177,26 @@ executor metadata
 Run provenance should include the artifact index and stage provenance summaries.
 
 This keeps `ArtifactRef` lightweight while preserving lineage elsewhere.
+
+### 16.1 Retention Metadata
+
+Future artifact stores may support retention intent as metadata.
+
+Examples:
+
+```text
+keep:
+  final outputs, reports, metrics, and review artifacts
+
+temporary:
+  scratch outputs and intermediates that can be regenerated
+
+archive:
+  selected artifacts intended for export or long-term review
+```
+
+Retention metadata should not delete files by itself. Cleanup commands should be
+explicit, conservative, and inspect the run store before removing artifacts.
 
 ---
 

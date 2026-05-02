@@ -24,6 +24,13 @@ afterok:
 Controller mode, job arrays, and container-specific execution can be added after
 these two modes are stable.
 
+### 1.1 Alignment With `loom.md`
+
+[loom.md](loom.md) includes SLURM as execution scaffolding rather than a core
+dependency. This document keeps SLURM optional and executor-shaped: it maps
+generic plans and runtime metadata onto scheduler scripts and submissions
+without changing pipeline semantics or requiring a Python SLURM library.
+
 ---
 
 ## 2. Core Position

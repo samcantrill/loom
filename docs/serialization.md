@@ -31,6 +31,14 @@ How should authored configs be composed or interpolated?
 
 Those belong to `loom.io`, `loom.pipeline.stores`, and `loom.config`.
 
+### 1.1 Alignment With `loom.md`
+
+[loom.md](loom.md) separates generic runtime state from domain behavior. This
+document provides the plain-data boundary that lets refs, records, artifacts,
+provenance, fingerprints, config snapshots, and run-store documents stay
+deterministic without making serialization responsible for files, codecs,
+workflow execution, or project-specific schemas.
+
 ---
 
 ## 2. Core Position

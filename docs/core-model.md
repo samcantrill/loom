@@ -34,6 +34,15 @@ Which identifiers and timestamp formats are shared across subsystems?
 Which vocabulary is safe for downstream packages to rely on?
 ```
 
+### 1.1 Alignment With `loom.md`
+
+This document expands the foundational public vocabulary named in
+[loom.md](loom.md): resource references, records, manifests, artifact references,
+fingerprints, timestamps, protocols, and shared errors. The same package-wide
+boundary applies here most strongly: these types must stay lightweight,
+domain-neutral, serializable, and safe to import from any subsystem or downstream
+package.
+
 ---
 
 ## 2. Core Position
@@ -1745,7 +1754,7 @@ stabilize.
 
 ### 19.3 Stable Imports During Refactors
 
-If `records.py` becomes a package later, preserve:
+Whether records are implemented in a single module or a package, preserve:
 
 ```python
 from loom.records import Record

@@ -62,6 +62,13 @@ For example, `loom` may decide that the `train` stage must run. The training
 stage may then decide to resume from `latest.ckpt` inside its stage directory.
 `loom` should not implement model-specific checkpoint loading.
 
+### 1.1 Alignment With `loom.md`
+
+[loom.md](loom.md) calls for fingerprints and resume logic, but v0 intentionally
+keeps reuse conservative. This document refines that into same-run-directory
+stage reuse decisions based on persisted state, fingerprints, and artifact
+validity, leaving stage-internal checkpoint behavior to project code.
+
 ---
 
 ## 3. Package Boundary

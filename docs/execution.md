@@ -21,6 +21,14 @@ perform the selected stages and record what happened?
 The design should keep execution small enough to reason about locally while
 leaving room for subprocess, cluster, and container execution later.
 
+### 1.1 Alignment With `loom.md`
+
+This document refines the stage execution and local/subprocess/SLURM scaffolding
+goals from [loom.md](loom.md). It keeps execution as a coordinator over an
+already validated plan: project stages do the work, stores persist state,
+executors invoke stages, and the runner records outcomes without interpreting
+domain behavior.
+
 ---
 
 ## 2. Core Position
@@ -745,7 +753,27 @@ afterok:
   one cluster job per stage with scheduler dependencies
 ```
 
-### 7.5 Run Result
+### 7.5 Preflight Checks
+
+Future execution APIs may expose preflight checks before expensive execution or
+submission.
+
+Useful checks:
+
+```text
+pipeline validation
+writable run and artifact directories
+known input artifact existence
+executor availability
+SLURM command availability for SLURM modes
+basic disk-space warnings when practical
+```
+
+Preflight should report what was checked and what could not be checked. It
+should not mutate run state except when an explicit dry-run or planning command
+chooses to persist an inspectable plan.
+
+### 7.6 Run Result
 
 The runner should return a structured result rather than only raising or exiting.
 
@@ -1222,6 +1250,26 @@ outputs persisted before SUCCEEDED
 artifact index updated before SUCCEEDED
 failure persisted before FAILED
 ```
+
+### 11.7 Lifecycle Event Sinks
+
+Future runner implementations may emit generic lifecycle events while preserving
+the same status semantics.
+
+Events may include:
+
+```text
+run started
+stage started
+stage succeeded
+stage failed
+run finished
+submission created
+```
+
+The execution layer should only produce structured event records or call a small
+callback interface. Service-specific notification delivery should live outside
+core `loom`.
 
 ---
 

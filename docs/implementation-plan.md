@@ -48,7 +48,7 @@ After all phases are complete, `loom` should expose:
 - No functional CLI in v0; CLI modules may exist only as import-safe unsupported
   feature stubs.
 - No remote stores, database-backed orchestration, dashboards, distributed
-  executors, SLURM, subprocess execution, or fully autonomous merging.
+  executors, SLURM, subprocess execution, or unreviewed autonomous merging.
 - No Hydra defaults, include graphs, arbitrary expression language, complex list
   patching, automatic schema inference, or registry aliases for every
   configurable object.
@@ -78,6 +78,122 @@ uv run pyright
 uv run pytest
 uv build
 ```
+
+## Design Principles
+
+- Preserve stable public imports while allowing internal modules to grow into
+  packages.
+- Keep foundational vocabulary near the top level and keep expensive or optional
+  subsystems out of `loom.__init__`.
+- Keep serialization separate from I/O.
+- Use structural protocols and explicit registries instead of inheritance-heavy
+  frameworks.
+- Keep the CLI thin and defer functional CLI behavior until after the v0 runtime
+  kernel is stable.
+- Prefer small, reviewable phases over large cross-cutting changes.
+- Add abstractions only when they protect a documented boundary or remove real
+  duplication.
+
+## Key Design Choices
+
+- `loom.records` and `loom.provenance` are packages from the start because they
+  are expected to grow multiple implementations and helper modules.
+- Config dependencies are introduced only in Phase 4 so earlier primitive and
+  I/O phases remain lightweight.
+- Configs are trusted project code in v0; sandboxing and allow lists are
+  deferred.
+- Local execution is the first runtime target. Remote stores, subprocess
+  execution, SLURM, and dashboards are deferred.
+- Resume is same-run-directory only in v0. Cross-run cache reuse is deferred.
+- The runner owns lifecycle, output validation, status writes, fingerprints, and
+  resume decisions. Stages only implement domain work through the structural
+  stage protocol.
+
+## Conflicts And Tradeoffs
+
+- Public API stability vs incremental implementation: phases should expose only
+  stable imports that are backed by implemented behavior or explicit unsupported
+  stubs.
+- Extensibility vs over-abstraction: protocols and registries are used at
+  subsystem boundaries, but implementation-specific abstractions should wait
+  until there are multiple real implementations or clear complexity pressure.
+- Trusted config ergonomics vs safety: v0 accepts trusted `_target_` imports to
+  keep the system simple and explicit. Sandboxing is documented as out of scope.
+- Resume correctness vs reuse aggressiveness: v0 prefers conservative invalidation
+  and refuses reuse for partial, corrupt, stale, or unverifiable state.
+- Phase size vs architectural coherence: phases should be split when a PR cannot
+  be reviewed objectively, even if that means adding another planning step.
+
+## Maintainability Assessment
+
+The plan keeps foundational modules small, separates behavior-preserving
+structure from runtime behavior, and delays dependencies until their phase needs
+them. Each phase has narrow ownership and explicit out-of-scope work. Import
+boundary tests and domain-neutrality checks are required early so later phases do
+not accumulate hidden coupling.
+
+Maintainability risks to watch:
+
+- Adding registries before they resolve real names across a boundary.
+- Letting config or pipeline behavior leak into top-level imports.
+- Mixing refactors with runtime behavior in a single phase.
+- Letting local execution hard-code assumptions that should belong to stores,
+  codecs, or stage contracts.
+
+## Extensibility Assessment
+
+The plan intentionally supports future codecs, sources, stores, executors,
+recipes, and downstream stage implementations through protocols and explicit
+registries. It also protects future source-tree growth by keeping public imports
+stable even when files become packages.
+
+Deferred extensibility is intentional for:
+
+- Remote storage.
+- Cross-run cache reuse.
+- SLURM and subprocess execution.
+- Config sandboxing.
+- Functional CLI behavior.
+- Rich migration support for serialized schemas.
+
+## Technical Debt Ledger
+
+- Import-safe unsupported stubs are accepted during early phases to preserve
+  public paths. Revisit when the corresponding subsystem phase implements real
+  behavior.
+- Hard config dependencies are deferred until Phase 4. Revisit if earlier phases
+  accidentally need config behavior.
+- Same-run-directory resume only is accepted for v0. Revisit after local
+  execution and invalidation tests are stable.
+- No lock manager is accepted initially. Revisit if atomic-write tests or
+  interrupted-run tests expose a concrete race.
+- CLI behavior is deferred. Revisit after the local runner has a stable public
+  Python API.
+
+## Plan Quality Gate
+
+Status: pending review by `loom_plan_reviewer`.
+
+Before Phase 1 starts:
+
+- Review this plan with `.codex/prompts/implementation-plan-review.md`.
+- Resolve blocking maintainability, extensibility, technical debt,
+  conflicting-design, and reviewability findings.
+- Record accepted risks with revisit triggers in this section or the technical
+  debt ledger.
+- Split any phase that is too broad for one reviewable PR.
+
+Every expanded phase plan in `docs/phases/` must include:
+
+- Design impact.
+- Future compatibility.
+- Alternatives rejected.
+- Debt introduced.
+- Reviewability.
+
+Approved phase PRs target `develop`. The managing agent may mark a phase
+`merged` only after the approved PR has been merged into `develop` and the
+phase worktree has been removed.
 
 ## Phased Implementation
 

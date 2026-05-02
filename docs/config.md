@@ -13,6 +13,15 @@ The initial design should be intentionally narrow. The first implementation shou
 
 It should avoid intermediate mechanisms at first, especially registry aliases, arbitrary include graphs, complex list merge operators, and large global component registries. Those can be added later if concrete use makes them necessary.
 
+### 1.1 Alignment With `loom.md`
+
+This document refines the configuration responsibilities listed in
+[loom.md](loom.md): configuration composition, recursive importlib construction,
+named recipe expansion, validation, provenance capture, and redaction. It keeps
+the same non-goal boundary: authored configs are trusted project code in v0, but
+`loom.config` must not execute stages, define domain recipes, or become a Hydra
+replacement.
+
 ---
 
 ## 2. Core Position
@@ -455,6 +464,22 @@ Example:
   ]
 }
 ```
+
+### 11.4 Static Fan-Out Recipes
+
+Recipes may later help generate repeated static stage patterns.
+
+Example use cases:
+
+```text
+one evaluation stage per dataset
+one report stage per cohort
+one validation branch per configured model checkpoint
+```
+
+The expansion should happen during config composition or recipe expansion, before
+pipeline validation and planning. This keeps the pipeline graph static for
+resume, provenance, and SLURM dependency generation.
 
 ---
 

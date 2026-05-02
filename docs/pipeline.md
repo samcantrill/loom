@@ -30,6 +30,14 @@ tracking, and resume planning. It should avoid dynamic DAG mutation, nested task
 scheduling, domain-specific stage types, and scheduler features that would turn
 `loom` into a general workflow platform too early.
 
+### 1.1 Alignment With `loom.md`
+
+This document expands the pipeline DAG, stage execution, artifact passing, status
+tracking, and resume responsibilities from [loom.md](loom.md). The package-wide
+boundary remains strict: `loom.pipeline` owns orchestration around stages, while
+project code owns stage internals, data semantics, metrics, training, reports,
+and any domain-specific recovery.
+
 ---
 
 ## 2. Core Position
@@ -631,6 +639,23 @@ stage config defines the particular invocation
 
 In simple cases these may overlap, but the pipeline layer should keep the
 distinction available.
+
+### 7.6 Static Fan-Out Templates
+
+Repeated stage patterns can be useful, but they should still produce an explicit
+static DAG before execution starts.
+
+Examples:
+
+```text
+evaluate one checkpoint across several datasets
+generate one report per cohort
+validate several model variants with the same stage target
+```
+
+Prefer config-time or recipe-time expansion for this. `loom.pipeline` should
+receive the expanded `PipelineSpec`, validate it normally, and avoid runtime DAG
+mutation.
 
 ---
 

@@ -110,66 +110,25 @@ Avoid hard dependencies on large task-specific libraries. User projects can depe
 
 ---
 
-## 5. Recommended Package Structure
+## 5. Relationship to Source Structure
+
+The canonical source-tree map lives in [structure.md](structure.md). This
+document intentionally stays at the product/runtime level:
 
 ```text
-src/loom/
-  __init__.py
+loom.md:
+  purpose, design goals, non-goals, dependency policy, core concepts, public API,
+  execution model, provenance, resume, CLI intent, and error model
 
-  ids.py
-  refs.py
-  records.py
-  artifacts.py
-  provenance.py
-  fingerprints.py
-  protocols.py
-  errors.py
-  serialization.py
-  time.py
-
-  io/
-    __init__.py
-    sources.py
-    codecs.py
-
-  config/
-    __init__.py
-    api.py
-    loader.py
-    composer.py
-    overrides.py
-    interpolation.py
-    merge.py
-    recipes.py
-    recipe_catalog.py
-    instantiate.py
-    provenance.py
-    redact.py
-    validation.py
-    errors.py
-
-  pipeline/
-    __init__.py
-    specs.py
-    stages.py
-    context.py
-    runner.py
-    run_dir.py
-    status.py
-    resume.py
-    sweep.py
-    executors/
-      __init__.py
-      local.py
-      subprocess.py
-      slurm.py
-
-  cli/
-    __init__.py
-    main.py
+structure.md:
+  repository layout, target source tree, package boundaries, module ownership,
+  dependency direction, docs map, test layout, and source-structure review
+  checklist
 ```
 
-This layout keeps the public package unified while preserving clear internal boundaries.
+When package ownership, import paths, or module layout changes, update
+[structure.md](structure.md). When runtime goals, public concepts, non-goals, or
+user-facing behavior changes, update this document.
 
 ---
 

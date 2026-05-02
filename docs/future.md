@@ -4,7 +4,9 @@
 
 This document outlines the functionality that is not currently assumed to be implemented in `loom`, based on the feature set discussed so far. It is written as a planning document rather than a final implementation spec.
 
-`loom` is treated here as the domain-agnostic core library for reproducible, configurable, artifact-based research pipelines. Domain-specific packages such as `rphys` should build on top of it.
+`loom` is treated here as the domain-agnostic core library for reproducible,
+configurable, artifact-based research pipelines. Downstream domain packages
+should build on top of it.
 
 The document separates missing functionality into:
 
@@ -632,6 +634,39 @@ This should fall naturally out of DAG support.
 
 ---
 
+## 6.6 Static fan-out templates
+
+Priority: P2
+
+Status: Not assumed implemented.
+
+Description:
+
+Expand repeated stage patterns before execution starts.
+
+Example use cases:
+
+```text
+evaluate one checkpoint against several datasets
+render the same report for several cohorts
+run the same validation stage for several configs
+```
+
+Recommendation:
+
+Keep this as config-time expansion, likely through recipes or a small static
+template helper. Do not treat it as runtime DAG mutation.
+
+Why it matters:
+
+```text
+keeps authored DAGs readable
+supports repeated evaluation branches
+preserves static planning and SLURM dependency generation
+```
+
+---
+
 ## 7. Stage Execution Features
 
 ## 7.1 Stage protocol
@@ -902,6 +937,38 @@ inspection CLI
 pipeline branching
 analysis stages
 ```
+
+---
+
+## 8.6 Run annotations, tags, and notes
+
+Priority: P2
+
+Status: Not assumed implemented.
+
+Description:
+
+Allow users or project code to attach human-oriented metadata to a run.
+
+Examples:
+
+```text
+tags: baseline, paper-figure-3, candidate
+owner: researcher name or team
+notes: short free-text context
+```
+
+Why it matters:
+
+```text
+finding useful runs later
+separating exploratory and candidate results
+reviewing completed experiments
+```
+
+Implementation notes:
+
+Store this as generic run metadata. Do not interpret tag names in core `loom`.
 
 ---
 
@@ -1408,6 +1475,122 @@ Not essential early.
 
 ---
 
+## 11.6 Run catalog / local run index
+
+Priority: P2
+
+Status: Not assumed implemented.
+
+Description:
+
+Maintain a lightweight index over many local run directories.
+
+Useful queries:
+
+```text
+runs by status
+runs by config hash or git commit
+runs that produced a logical artifact
+runs with a tag or note
+```
+
+Why it matters:
+
+```text
+large local experiment collections
+fast inspection without scanning every file
+finding reusable or reviewable runs
+```
+
+Recommendation:
+
+Start with a local sidecar index that can be rebuilt from run directories. Defer
+database-backed catalogs until local behavior is stable.
+
+---
+
+## 11.7 Run comparison
+
+Priority: P2
+
+Status: Not assumed implemented.
+
+Description:
+
+Compare two completed or failed runs.
+
+Potential command:
+
+```bash
+loom diff RUN_A RUN_B
+```
+
+Compare:
+
+```text
+resolved config summaries
+stage actions and statuses
+stage fingerprints
+input and output artifact identities
+selected provenance facts
+```
+
+Why it matters:
+
+```text
+understanding why results differ
+reviewing ablations
+debugging unexpected reruns
+```
+
+Implementation notes:
+
+Use existing fingerprint/provenance summaries where possible. Do not require
+loading domain artifact payloads.
+
+---
+
+## 11.8 Preflight checks
+
+Priority: P1
+
+Status: Not assumed implemented.
+
+Description:
+
+Check obvious run problems before expensive execution.
+
+Potential command:
+
+```bash
+loom preflight experiment.yaml --run-dir runs/example
+```
+
+Checks may include:
+
+```text
+pipeline validation
+writable run and artifact paths
+input artifact existence when statically known
+executor availability
+SLURM command availability for SLURM runs
+basic disk-space warnings when practical
+```
+
+Why it matters:
+
+```text
+fail before queueing expensive work
+better cluster ergonomics
+clearer setup errors
+```
+
+Implementation notes:
+
+Preflight should be best-effort and explicit about checks it could not perform.
+
+---
+
 ## 12. Sweep Features
 
 ## 12.1 Grid sweeps
@@ -1619,6 +1802,76 @@ Not essential early.
 
 ---
 
+## 13.6 Notification and event hooks
+
+Priority: P3
+
+Status: Not assumed implemented.
+
+Description:
+
+Expose structured lifecycle events that external tools can consume.
+
+Events:
+
+```text
+run started
+stage started
+stage succeeded
+stage failed
+run finished
+submission created
+```
+
+Why it matters:
+
+```text
+lightweight Slack/email integrations
+cluster monitoring
+automation without a dashboard
+```
+
+Recommendation:
+
+Keep core `loom` limited to generic event records or callback hooks. Do not ship
+service-specific notification backends initially.
+
+---
+
+## 13.7 Artifact retention policy
+
+Priority: P2
+
+Status: Not assumed implemented.
+
+Description:
+
+Let runs describe which artifacts should be kept, archived, or treated as
+temporary.
+
+Examples:
+
+```text
+keep final reports and metrics
+drop temporary intermediates after successful downstream stages
+archive selected artifacts for review
+```
+
+Why it matters:
+
+```text
+disk-heavy pipelines
+cluster scratch cleanup
+long-lived experiment archives
+```
+
+Implementation notes:
+
+Start with metadata and inspection support. Actual deletion should remain
+explicit and conservative.
+
+---
+
 ## 14. Conditional and Dynamic Behavior
 
 ## 14.1 Simple conditional stages
@@ -1763,6 +2016,41 @@ reviewing artifacts elsewhere
 ```
 
 Not essential early.
+
+---
+
+## 15.4 Input/source inventory lock
+
+Priority: P2
+
+Status: Not assumed implemented.
+
+Description:
+
+Record the external inputs discovered or resolved for a run.
+
+The inventory may include:
+
+```text
+source URI or path
+discovered files
+checksums or versions when available
+resolution time
+source metadata supplied by project code
+```
+
+Why it matters:
+
+```text
+detecting changed mounted datasets
+reproducing a run after external data moves
+reviewing exactly what inputs were visible
+```
+
+Implementation notes:
+
+This should be a provenance/run-store document. It should not force `loom` to
+understand domain dataset semantics.
 
 ---
 

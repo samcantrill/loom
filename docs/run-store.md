@@ -33,6 +33,14 @@ The local filesystem run store is the v0 implementation. Its files should be
 plain and human-inspectable so users can debug failed cluster jobs without
 special tooling.
 
+### 1.1 Alignment With `loom.md`
+
+This document turns the run directory, status tracking, artifact index, and
+resume-inspection goals from [loom.md](loom.md) into a persistence contract.
+`loom` should favor local, plain, schema-versioned files in v0 so config,
+pipeline, execution, provenance, and resume state can be inspected without
+domain tooling.
+
 ---
 
 ## 2. Core Position
@@ -531,6 +539,24 @@ runs/RUN_ID/
 V0 does not need every file to exist for every run. The layout should reserve
 these locations so later features do not require churn.
 
+Future sidecar files may include:
+
+```text
+annotations.json:
+  user/project tags, notes, owner, and other human-oriented run metadata
+
+input_inventory.json:
+  external inputs resolved for the run, such as source paths, discovered files,
+  checksums, and project-supplied source metadata
+
+events.jsonl:
+  append-friendly lifecycle events for inspection or external notification tools
+```
+
+These files should remain optional and rebuildable or explainable from durable
+run state where possible. V0 should not require a global run catalog, but the
+local layout should make one easy to rebuild by scanning run directories.
+
 ### 7.2 Required v0 Files
 
 For a successful local run:
@@ -632,6 +658,11 @@ metadata
 `run.json` should not be rewritten frequently. Use `status.json` for changing
 run state.
 
+Human-oriented run tags, notes, and owner fields may live under `metadata` in
+v0-compatible documents. If they become large or frequently edited later, move
+them to an optional `annotations.json` sidecar rather than rewriting core status
+files.
+
 ### 8.3 Root `status.json`
 
 Purpose: current run status.
@@ -706,6 +737,11 @@ Where `artifacts` maps logical names to serialized `ArtifactRef`s:
 ```
 
 The exact `ArtifactRef` fields should be defined in `artifacts.md`.
+
+Future local run catalogs should be derived from `run.json`, `status.json`,
+`plan.json`, `artifacts.json`, and optional annotation/inventory sidecars. The
+run store should not require a database-backed catalog before local directory
+semantics are stable.
 
 ### 8.6 Stage `status.json`
 
