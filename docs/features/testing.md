@@ -38,7 +38,7 @@ Test loom as a generic workflow runtime, not as a domain application.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) requires `loom` to remain useful and testable on its own. This
+[loom.md](../loom.md) requires `loom` to remain useful and testable on its own. This
 document turns that into a test layout and strategy built around synthetic
 pipelines, dummy generic stages/codecs/sources, import-boundary checks, and local
 validation commands rather than downstream domain fixtures.

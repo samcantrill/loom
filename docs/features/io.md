@@ -40,7 +40,7 @@ project packages:
 ### 1.1 Alignment With `loom.md`
 
 This document details the resource access and codec mechanisms implied by
-[loom.md](loom.md). It keeps the dependency policy narrow: local files and simple
+[loom.md](../loom.md). It keeps the dependency policy narrow: local files and simple
 JSON/text/bytes codecs are generic `loom` concerns, while heavy storage clients
 and domain formats belong in optional integrations or project packages.
 

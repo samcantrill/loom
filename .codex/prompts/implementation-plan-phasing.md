@@ -3,7 +3,7 @@ You are converting a rough implementation plan into a structured phased plan for
 Read existing repository files before editing:
 
 - `AGENTS.md`, if present
-- `docs/implementation-plan.md`, if present
+- `docs/implementation-plans/implementation-plan-v0.md`, if present
 - README or project documentation
 - Existing tests and package/build configuration
 - Any user-provided plan or design document
@@ -11,7 +11,7 @@ Read existing repository files before editing:
 Task:
 
 1. Preserve existing files and project guidance.
-2. Do not overwrite `docs/implementation-plan.md` if it already exists.
+2. Do not overwrite `docs/implementation-plans/implementation-plan-v0.md` if it already exists.
 3. Add or align these plan-level sections when relevant:
    - Goal
    - Context

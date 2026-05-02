@@ -37,7 +37,7 @@ Which vocabulary is safe for downstream packages to rely on?
 ### 1.1 Alignment With `loom.md`
 
 This document expands the foundational public vocabulary named in
-[loom.md](loom.md): resource references, records, manifests, artifact references,
+[loom.md](../loom.md): resource references, records, manifests, artifact references,
 fingerprints, timestamps, protocols, and shared errors. The same package-wide
 boundary applies here most strongly: these types must stay lightweight,
 domain-neutral, serializable, and safe to import from any subsystem or downstream
@@ -140,7 +140,7 @@ It should not know about domain-specific dataset structure.
 Owns `ArtifactRef`.
 
 `ArtifactRef` is adjacent to the core model and is already specified in
-`docs/artifacts.md`.
+`docs/features/artifacts.md`.
 
 The core model should document the distinction:
 

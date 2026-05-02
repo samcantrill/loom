@@ -24,7 +24,8 @@ uv build
 ## Codex Phase Implementation Workflow
 
 This repository uses a phase-based Codex workflow for larger implementation
-plans. The canonical implementation plan lives in `docs/implementation-plan.md`.
+plans. The canonical v0 implementation plan lives in
+`docs/implementation-plans/implementation-plan-v0.md`.
 Individual expanded phase plans live in `docs/phases/`.
 Reusable project-scoped Codex plans live in `.codex/plans/`.
 
@@ -96,7 +97,7 @@ Before merging, the managing agent must confirm:
 
 After merging, the managing agent must:
 
-- Update the phase status in `docs/implementation-plan.md` on `develop` to
+- Update the phase status in `docs/implementation-plans/implementation-plan-v0.md` on `develop` to
   `merged`.
 - Record the PR link or branch, implementation summary, checks, and follow-up
   notes.
@@ -120,9 +121,10 @@ gh pr merge --auto --squash --delete-branch
 
 ### Plan Quality Gate
 
-Before any phase implementation begins, `docs/implementation-plan.md` must be
-reviewed for maintainability, extensibility, future compatibility, conflicting
-design choices, technical debt, test strategy, and reviewability.
+Before any phase implementation begins,
+`docs/implementation-plans/implementation-plan-v0.md` must be reviewed for
+maintainability, extensibility, future compatibility, conflicting design
+choices, technical debt, test strategy, and reviewability.
 
 The implementation plan should include, where relevant:
 
@@ -148,7 +150,7 @@ revisiting it.
 
 ### Phase Statuses
 
-Use only these status values in `docs/implementation-plan.md`:
+Use only these status values in `docs/implementation-plans/implementation-plan-v0.md`:
 
 ```text
 pending

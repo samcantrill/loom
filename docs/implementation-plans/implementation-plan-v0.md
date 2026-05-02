@@ -3,8 +3,8 @@
 ## Goal
 
 Implement `loom` v0 as a source-tree-first, fully typed Python package aligned
-with the boundaries in `docs/structure.md`, `docs/config.md`, `docs/loom.md`,
-and the subsystem specifications in `docs/`.
+with the boundaries in `docs/structure.md`, `docs/features/config.md`,
+`docs/loom.md`, and the subsystem specifications in `docs/features/`.
 
 The v0 target is a generic runtime that can compose trusted YAML config, expand
 recipes, instantiate user stage targets, validate a local artifact DAG, run it
@@ -108,6 +108,145 @@ uv build
 - The runner owns lifecycle, output validation, status writes, fingerprints, and
   resume decisions. Stages only implement domain work through the structural
   stage protocol.
+
+## Concrete Public Interfaces
+
+The v0 public surface should stay small and stable. `loom.__init__` may expose
+only package metadata and cheap primitive exports:
+
+```python
+from loom.refs import ResourceRef
+from loom.records import InMemoryManifest, ManifestView, Record
+from loom.artifacts import ArtifactRef
+from loom.fingerprints import Fingerprint, hash_mapping
+```
+
+It must not import config composition, pipeline runners, CLI modules, plugin
+discovery, domain packages, SLURM/subprocess executors, or optional/heavy
+dependency paths.
+
+Foundational vocabulary lives near the top level:
+
+- `loom.ids`
+- `loom.refs`
+- `loom.records`
+- `loom.artifacts`
+- `loom.provenance`
+- `loom.fingerprints`
+- `loom.protocols`
+- `loom.errors`
+- `loom.timestamps`
+
+Config exposes the trusted-project API:
+
+- `compose_config`
+- `instantiate`
+- `register_recipe`
+- `Recipe`
+- `ConfigError`
+
+`compose_config(config_path, overlays=(), overrides=(), recipe_catalog=None)`
+returns a `ComposedConfig` containing `resolved`, `redacted`, `provenance`, and
+`fingerprint`. The composition order is:
+
+```text
+load base config
+load overlays
+recursive merge
+apply dot-path overrides
+resolve enough interpolation for recipe args
+expand recipes
+resolve interpolation again
+validate
+redact
+compute config provenance and fingerprint
+```
+
+Pipeline APIs expose static specs and local execution through:
+
+- `PipelineSpec`
+- `StageSpec`
+- `OutputSpec`
+- `Stage`
+- `StageContext`
+- `PipelineRunner`
+
+Stages are structural protocol implementations, not subclasses:
+
+```python
+def run(
+    self,
+    context: StageContext,
+    inputs: Mapping[str, ArtifactRef],
+) -> Mapping[str, ArtifactRef]: ...
+```
+
+The supported stage config shape is inline and explicit:
+
+```yaml
+pipeline:
+  stages:
+    - name: build
+      _target_: project.stages.BuildStage
+      config:
+        limit: 100
+      outputs:
+        index:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: report
+      _target_: project.stages.ReportStage
+      depends_on: [build]
+      inputs:
+        index: build.index
+      outputs:
+        report:
+          artifact_type: text
+          codec_key: text.v1
+```
+
+Stage parsing rules:
+
+- Parse only orchestration fields into `StageSpec`: `name`, `_target_`,
+  `config`, `depends_on`, `inputs`, `outputs`, and `resources`.
+- Pass only the stage `config` mapping as constructor kwargs to the stage target.
+- Require every output name to declare `artifact_type` and `codec_key`.
+- Use only `stage.output` for input bindings.
+- Input refs create data dependencies; `depends_on` adds control dependencies.
+
+I/O and stores expose generic extension points only:
+
+- `DataSource`, `LocalFileSystemSource`
+- `Codec`, `CodecRegistry`, `JSONCodec`, `TextCodec`, `BytesCodec`
+- `ArtifactStore`, `RunStore`, `LocalArtifactStore`, `LocalRunStore`
+
+I/O owns bytes, files, URIs, sources, and codecs. Serialization owns Python
+object to plain structured data conversion. Tests must protect this boundary.
+
+The local run layout should remain human-inspectable and stable enough for
+resume tests:
+
+```text
+config/raw.yaml
+config/overlays.yaml
+config/cli_overrides.yaml
+config/resolved.yaml
+config/resolved.redacted.yaml
+config/recipe_manifest.json
+stages/<stage>/status.json
+stages/<stage>/inputs.json
+stages/<stage>/outputs.json
+stages/<stage>/fingerprint.json
+stages/<stage>/provenance.json
+stages/<stage>/logs/
+artifacts/<stage>/
+artifacts.json
+run.json
+provenance/environment.json
+provenance/git.json
+provenance/dependencies.json
+```
 
 ## Conflicts And Tradeoffs
 
@@ -219,6 +358,35 @@ Scope:
 - Update `loom.__init__` only with stable cheap public exports that are available
   in this phase.
 
+Implementation checkpoints:
+
+- Create package skeletons under `src/loom/records`, `src/loom/provenance`,
+  `src/loom/serialization`, `src/loom/io`, `src/loom/config`,
+  `src/loom/pipeline`, and `src/loom/cli`.
+- Define simple ID aliases only: `RecordID`, `ResourceKey`, `CodecKey`,
+  `ArtifactID`, `ArtifactType`, `RunID`, and `StageID`. Do not use `NewType`
+  or wrapper classes in v0.
+- Define broad catchable errors: `LoomError`, `ValidationError`,
+  `ContractError`, `ArtifactError`, `ConfigError`, `PipelineError`,
+  `ExecutionError`, and `IOErrorBase`.
+- Define UTC-only timestamp helpers: `utc_now`, `utc_timestamp`,
+  `safe_timestamp_for_path`, and `parse_timestamp`.
+- Deferred callables should raise a clear `LoomError` subclass when called,
+  while deferred modules still import cleanly.
+
+Design and review notes:
+
+- Design impact: establishes public import paths and package boundaries without
+  committing to runtime behavior.
+- Future compatibility: keeps internal modules free to grow into real
+  implementations while preserving stable imports.
+- Alternatives rejected: no early config dependencies, registries, or runtime
+  behavior in this foundation phase.
+- Debt introduced: unsupported stubs are accepted only until the corresponding
+  subsystem phase implements real behavior.
+- Reviewability: this phase should be mostly structure, import behavior, errors,
+  timestamps, and focused tests.
+
 Out of scope:
 
 - Config composition, recipes, object construction, codecs, stores, planning,
@@ -273,6 +441,36 @@ Scope:
   and schema-version checks.
 - Preserve checksum and fingerprint as distinct concepts.
 
+Implementation checkpoints:
+
+- `ResourceRef` and `ArtifactRef` are frozen typed dataclasses with URI,
+  type/key, schema version, checksum, fingerprint/provenance metadata where
+  applicable, and no loading methods.
+- `Record` is a frozen typed dataclass with generic resources, metadata,
+  annotations, and provenance; it must not grow domain fields.
+- `InMemoryManifest` rejects duplicate record IDs and preserves deterministic
+  iteration; `ManifestView` supports lazy generic filters such as
+  `HasResource`, `MetadataEquals`, and `MetadataIn`.
+- Provenance models cover code, environment, run, and stage context without
+  heavy dependency inspection.
+- Fingerprint helpers use stable JSON and cryptographic hashes; never use
+  Python built-in `hash()` for persisted identities.
+- Serialization emits only plain structured data and keeps filesystem atomic
+  writes out of this layer.
+
+Design and review notes:
+
+- Design impact: creates the public vocabulary that later config, I/O, stores,
+  and execution layers share.
+- Future compatibility: structural primitives allow downstream packages to
+  compose records and artifacts without subclassing `loom` internals.
+- Alternatives rejected: no domain-specific resource helpers, schema migrations,
+  or object loading behavior in primitive refs.
+- Debt introduced: schema-version helpers are validation-only in v0; migration
+  support is deferred until serialized formats need it.
+- Reviewability: primitive behavior should be covered by deterministic,
+  isolated unit tests and import-boundary checks.
+
 Out of scope:
 
 - I/O sources, codecs, filesystem writes, artifact stores, and stage execution.
@@ -299,8 +497,8 @@ Notes:
 
 - Source references: `docs/structure.md` sections 3.4 through 4.7, 20.5,
   20.6, 21.1, 22 Phase 1, 23.1; `docs/loom.md` sections 6.1, 6.2, 6.3, 10,
-  11, 12; `docs/core-model.md`, `docs/artifacts.md`, and
-  `docs/fingerprints.md`.
+  11, 12; `docs/features/core-model.md`, `docs/features/artifacts.md`, and
+  `docs/features/fingerprints.md`.
 - Never use Python built-in `hash()` for persisted identities.
 
 Completion summary:
@@ -326,6 +524,30 @@ Scope:
   explicit instance-based `CodecRegistry`.
 - Keep this layer as the bridge between plain serialized data and stored bytes.
 
+Implementation checkpoints:
+
+- URI helpers include `parse_uri`, `is_file_uri`, `uri_to_path`,
+  `path_to_file_uri`, `normalize_uri`, and `get_uri_scheme`.
+- `LocalFileSystemSource` supports local paths and `file://` URIs with
+  `open`, `exists`, `stat`, `glob`, and `resolve`.
+- `JSONCodec` accepts only plain-data-compatible values; `TextCodec` is UTF-8
+  by default; `BytesCodec` handles raw bytes only.
+- `CodecRegistry` is instance-based and rejects duplicate registrations and
+  unknown codec keys.
+
+Design and review notes:
+
+- Design impact: creates the generic byte/file boundary used later by artifact
+  stores.
+- Future compatibility: keeps remote sources and richer source registries
+  possible without changing serialization primitives.
+- Alternatives rejected: no artifact-store layout, remote source support, or
+  domain codecs in this phase.
+- Debt introduced: only local filesystem source support is accepted for v0.
+  Revisit when remote stores become a planned phase.
+- Reviewability: tests should prove URI behavior, codec round trips, registry
+  failures, and the serialization/I/O boundary.
+
 Out of scope:
 
 - Remote sources or stores.
@@ -350,8 +572,8 @@ Test expectations:
 Notes:
 
 - Source references: `docs/structure.md` sections 1.3, 5, 6, 7, 20.15, 21.5,
-  22 Phase 2, 23.2; `docs/loom.md` sections 4, 6.1, 6.3; `docs/io.md` and
-  `docs/artifacts.md`.
+  22 Phase 2, 23.2; `docs/loom.md` sections 4, 6.1, 6.3; `docs/features/io.md` and
+  `docs/features/artifacts.md`.
 - I/O owns bytes, files, URIs, sources, and codecs. Serialization owns object to
   plain structured data conversion.
 
@@ -377,6 +599,35 @@ Scope:
   validation, redaction, config provenance, and public `compose_config`.
 - Return `ComposedConfig` with resolved config, redacted config, provenance, and
   fingerprint.
+
+Implementation checkpoints:
+
+- Add dependency entries for `omegaconf>=2.3`, `pydantic>=2`, and `pyyaml>=6`.
+- Split config behavior into loading, merge, overrides, interpolation,
+  validation, redaction, provenance, and compose modules.
+- Merge semantics are recursive mapping merge, scalar replacement, list
+  replacement, and explicit `null`; do not add list patch operators.
+- Overrides parse booleans, nulls, integers, floats, JSON arrays/objects, and
+  strings, then apply through dot paths with path-aware errors.
+- Interpolation is wrapped behind a local API so non-config modules do not
+  become OmegaConf-specific.
+- Redaction recursively masks secret-like keys such as `token`, `secret`,
+  `password`, `api_key`, `credential`, and `private_key`.
+- Config composition writes nothing by itself. Persistence belongs to the runner
+  and run store.
+
+Design and review notes:
+
+- Design impact: introduces the first hard runtime dependencies and the trusted
+  config composition contract.
+- Future compatibility: a local interpolation wrapper and provenance model leave
+  room for different config backends or stricter modes later.
+- Alternatives rejected: no Hydra defaults, include graph, expression language,
+  config sandbox, or object construction in this phase.
+- Debt introduced: config imports are trusted code; revisit if users need an
+  allow-list or sandbox mode.
+- Reviewability: the PR should be limited to config resolution/provenance and
+  must avoid pipeline execution behavior.
 
 Out of scope:
 
@@ -404,7 +655,7 @@ Test expectations:
 
 Notes:
 
-- Source references: `docs/config.md` sections 1 through 10, 13 through 16,
+- Source references: `docs/features/config.md` sections 1 through 10, 13 through 16,
   18; `docs/structure.md` sections 8.1 through 8.11, 20.3, 20.12, 21.2,
   22 Phase 3, 23.3; `docs/loom.md` sections 7, 11, 12, 14.
 - Composition should write nothing by itself. Persistence belongs to the runner
@@ -434,6 +685,35 @@ Scope:
   `_inject_`.
 - Validate reserved-key usage and path-aware constructor/import failures.
 
+Implementation checkpoints:
+
+- Define `ConfigRecipe`/`Recipe` contracts and a Pydantic-backed recipe model
+  path for typed recipe inputs.
+- `RecipeCatalog` is explicit and instance-based; the public default registry
+  must be test-isolated.
+- Recipe expansion recursively replaces mappings with `_recipe_`, records path,
+  recipe name, target, input arguments, expanded hash, expanded path, and loom
+  version.
+- Target imports support `package.module.Class`, `package.module:function`, and
+  `package.module:Class`, with path-aware import and constructor errors.
+- Recursive instantiation handles nested mappings/sequences, `_args_`,
+  `_partial_=true`, and `_inject_` from an explicit runtime dependency mapping.
+- Reserved keys are `_target_`, `_args_`, `_partial_`, `_context_`, and
+  `_recipe_`; misuse fails loudly.
+
+Design and review notes:
+
+- Design impact: turns resolved trusted configs into ergonomic reusable objects
+  while keeping orchestration explicit.
+- Future compatibility: explicit catalogs preserve room for entry-point
+  discovery later without committing to plugin behavior in v0.
+- Alternatives rejected: no import sandbox, allow list, entry-point recipe
+  discovery, or serialized runtime injection values.
+- Debt introduced: the default recipe registry is a convenience; tests must
+  prevent global state leakage.
+- Reviewability: recipes and instantiation can be reviewed independently from
+  pipeline execution.
+
 Out of scope:
 
 - Entry-point recipe discovery.
@@ -459,7 +739,7 @@ Test expectations:
 
 Notes:
 
-- Source references: `docs/config.md` sections 5.6, 5.7, 6.3, 7, 11, 12, 16,
+- Source references: `docs/features/config.md` sections 5.6, 5.7, 6.3, 7, 11, 12, 16,
   18; `docs/structure.md` sections 9, 10, 20.3, 20.7, 20.15, 21.2,
   22 Phase 4, 23.3.
 - Configs are trusted project code in v0.
@@ -489,6 +769,33 @@ Scope:
 - Support `stage.output` input references and distinguish data dependencies
   from control-only `depends_on`.
 
+Implementation checkpoints:
+
+- `OutputSpec`, `StageSpec`, and `PipelineSpec` are frozen dataclasses that
+  preserve authored order but validate execution order separately.
+- `StageSpec` stores `target_path`, `constructor_config`, `depends_on`,
+  `inputs`, `outputs`, and `resources`.
+- `StageContext` contains only generic runtime fields: run/stage IDs and paths,
+  resolved and stage config, artifact/run stores, provenance, metadata, and
+  stage-bound artifact helpers.
+- Status types include stage/run statuses and serializable status records.
+- Graph helpers build dependencies, detect cycles, compute upstream/downstream
+  sets, and topologically sort linear, branching, and diamond DAGs.
+- Binding helpers parse only strict `stage.output` references.
+
+Design and review notes:
+
+- Design impact: defines the static pipeline contract before any persistent
+  state or execution side effects exist.
+- Future compatibility: separating specs, graph, and bindings leaves execution
+  backends replaceable.
+- Alternatives rejected: no persistent stores, resume planning, target
+  instantiation, or stage execution in this phase.
+- Debt introduced: the status model should be kept minimal until store and
+  runner phases prove additional states are needed.
+- Reviewability: all behavior should be pure parsing, validation, status
+  modeling, and graph tests.
+
 Out of scope:
 
 - Persistent stores.
@@ -515,7 +822,7 @@ Notes:
 
 - Source references: `docs/structure.md` sections 11, 12, 20.1, 20.16, 21.3,
   22 Phase 5, 23.4; `docs/loom.md` sections 6.4, 6.5, 8, 12, 14;
-  `docs/pipeline.md`, `docs/state.md`, and `docs/testing.md`.
+  `docs/features/pipeline.md`, `docs/features/state.md`, and `docs/features/testing.md`.
 
 Completion summary:
 
@@ -539,6 +846,39 @@ Scope:
   stage fingerprint calculation, execution plan models, resume checks, and
   downstream invalidation.
 - Define and persist the inspectable local run directory layout.
+
+Implementation checkpoints:
+
+- `ArtifactStore` exposes save/load/exists/validate; `LocalArtifactStore` uses
+  `CodecRegistry`, writes through temp paths and atomic moves where possible,
+  computes stored-byte checksums, and returns typed `ArtifactRef`s.
+- `RunStore` exposes run/stage directory resolution plus status, input, output,
+  and fingerprint reads/writes.
+- Local run layout includes config files, stage state files, logs, per-stage
+  artifact directories, `artifacts.json`, `run.json`, and provenance files.
+- Atomic helpers cover JSON, text, bytes, replacement, directory creation, and
+  unique temp filenames.
+- Artifact indexes use logical keys of the form `stage.output`.
+- Fingerprints include stage name, target path, constructor config, output specs,
+  bound inputs, Python version, `loom` version, relevant git state, configured
+  dependency versions, and configured extra fields.
+- Fingerprints exclude noisy values such as wall-clock timestamps, logs, temp
+  paths, and random run IDs unless explicitly configured.
+- Resume skips only a previous `SUCCEEDED` stage with matching fingerprint,
+  existing `outputs.json`, existing artifacts, and valid checksums.
+
+Design and review notes:
+
+- Design impact: creates durable local state and conservative reuse decisions
+  without invoking user stage code.
+- Future compatibility: store protocols keep remote stores and global run
+  discovery possible later.
+- Alternatives rejected: no actual stage execution, remote stores, cross-run
+  cache reuse, or lock manager unless tests prove one is required.
+- Debt introduced: v0 relies on atomic writes, not a full lock manager. Revisit
+  if interrupted-run tests expose race conditions.
+- Reviewability: stores, indexes, fingerprints, planning, resume, and
+  invalidation should be testable without running stages.
 
 Out of scope:
 
@@ -569,8 +909,8 @@ Notes:
 
 - Source references: `docs/structure.md` sections 13, 16, 20.4 through 20.10,
   21.4, 22 Phase 5, 23.5; `docs/loom.md` sections 9, 10, 11;
-  `docs/run-store.md`, `docs/artifacts.md`, `docs/fingerprints.md`, and
-  `docs/resume.md`.
+  `docs/features/run-store.md`, `docs/features/artifacts.md`,
+  `docs/features/fingerprints.md`, and `docs/features/resume.md`.
 - Fingerprints must exclude noisy values unless explicitly configured.
 
 Completion summary:
@@ -596,6 +936,37 @@ Scope:
   pipeline specs, instantiate stage targets, build stage contexts, plan, bind
   inputs, execute runnable stages, validate outputs, persist stage/run state,
   update artifact indexes, and support same-run-directory resume.
+
+Implementation checkpoints:
+
+- `LocalExecutor` invokes `stage.run(context, inputs)` in the current Python
+  process and returns an `ExecutionResult`.
+- Lifecycle helpers mark stages running, succeeded, failed, skipped, and
+  finalized through the run store.
+- `PipelineRunner` accepts a composed config or resolved mapping plus run
+  options, writes config/provenance, parses the pipeline, instantiates targets,
+  builds contexts, asks the planner for work, executes runnable stages, validates
+  returned outputs, writes state, updates indexes, and finalizes `run.json`.
+- Output validation requires returned keys to match declared outputs exactly,
+  each value to be an `ArtifactRef`, artifact type and codec key to match the
+  output spec, referenced files to exist, and checksums to validate when present.
+- Failure behavior writes `FAILED` status and error context, avoids executing
+  downstream stages in the same run, marks the run failed, and leaves state
+  inspectable.
+- Resume behavior is same-run-directory only; valid unchanged stages are skipped
+  or represented through explicit skip decisions.
+
+Design and review notes:
+
+- Design impact: delivers the first end-to-end runnable local v0 path.
+- Future compatibility: executor protocol keeps subprocess, SLURM, and
+  distributed backends out of the runner contract.
+- Alternatives rejected: no CLI behavior, subprocess execution, SLURM, remote
+  stores, or cross-run cache reuse.
+- Debt introduced: local in-process execution is the only backend in v0. Revisit
+  after the Python API and run-state format stabilize.
+- Reviewability: local execution should be validated with synthetic generic
+  stages and same-run-directory resume tests.
 
 Out of scope:
 
@@ -626,8 +997,9 @@ Notes:
 
 - Source references: `docs/structure.md` sections 14, 15.1 through 15.3, 20.4,
   20.8, 20.9, 23.4, 23.6, 23.7; `docs/loom.md` sections 8 through 12;
-  `docs/pipeline.md`, `docs/execution.md`, `docs/run-store.md`,
-  `docs/resume.md`, and `docs/testing.md`.
+  `docs/features/pipeline.md`, `docs/features/execution.md`,
+  `docs/features/run-store.md`, `docs/features/resume.md`, and
+  `docs/features/testing.md`.
 - The runner, not the stage, owns lifecycle, output validation, status writes,
   fingerprints, and resume decisions.
 
@@ -658,6 +1030,32 @@ Scope:
   fingerprints, and same-run-directory resume.
 - Make import-boundary tests permanent guardrails.
 
+Implementation checkpoints:
+
+- Representative errors include config paths such as
+  `pipeline.stages[2]._target_`, stage names, artifact keys such as
+  `train.best_checkpoint`, target paths, and filesystem paths.
+- Stale `RUNNING`, missing `outputs.json`, corrupt JSON, partial artifacts,
+  checksum mismatch, and failed prior stages are not reusable.
+- Extension contract tests prove downstream-style stages, codecs, recipes, and
+  stores satisfy protocols structurally without inheritance.
+- README/docs snippets document trusted configs, `_target_`, `_recipe_`, stage
+  contract, artifact saving, output specs, run directory layout, checksums vs
+  fingerprints, and same-run-directory resume.
+
+Design and review notes:
+
+- Design impact: hardens the completed local runtime kernel without widening v0
+  scope.
+- Future compatibility: docs and contract tests make downstream extension points
+  explicit before adding remote/executor/plugin features.
+- Alternatives rejected: no new execution backends, remote storage, dashboards,
+  or orchestration features.
+- Debt introduced: any docs examples that cannot execute must be recorded with
+  a reason and revisit trigger.
+- Reviewability: this phase should be a hardening/docs PR, not a feature
+  expansion PR.
+
 Out of scope:
 
 - Major deferred features.
@@ -685,11 +1083,93 @@ Test expectations:
 Notes:
 
 - Source references: `docs/structure.md` sections 20.1 through 20.16, 21, 23,
-  24, 25; `docs/config.md` sections 14, 16, 19; `docs/loom.md` sections 9
-  through 16; `docs/run-store.md`, `docs/resume.md`, `docs/testing.md`, and
-  `docs/cli.md`.
+  24, 25; `docs/features/config.md` sections 14, 16, 19; `docs/loom.md`
+  sections 9 through 16; `docs/features/run-store.md`,
+  `docs/features/resume.md`, `docs/features/testing.md`, and
+  `docs/features/cli.md`.
 - This phase should harden v0, not expand it into postponed features.
 
 Completion summary:
 
 - Pending.
+
+## Deferred Features
+
+Do not implement these in v0 except as import-safe unsupported stubs where a
+stable public path is useful:
+
+- Functional CLI commands.
+- Subprocess, SLURM, or distributed executors.
+- Sweeps.
+- Plugins or entry-point discovery.
+- Remote artifact stores.
+- Source registries beyond local source needs.
+- Executor registries unless needed for local-only ergonomics.
+- Global run discovery.
+- Cross-run cache indexes.
+- Path templates or output path interpolation.
+- Domain codecs, stages, recipes, schemas, datasets, models, metrics, reports,
+  or analysis logic.
+- Config sandbox or allow-list mode.
+- Hydra defaults, include graphs, complex list patching, arbitrary expression
+  language, automatic schema inference, or registry aliases for every
+  configurable object.
+- Database-backed orchestration or dashboards.
+
+## Overall Test Plan
+
+Unit tests should cover:
+
+- Primitive construction, immutability, public imports, and plain-data
+  serialization.
+- Stable fingerprint determinism and checksum/fingerprint separation.
+- Dataclass conversion, schema-version checks, and stable JSON output.
+- URI helpers, local source behavior, codec round trips, and codec registry
+  errors.
+- Config load, merge, overrides, interpolation, validation, redaction, and
+  provenance.
+- Recipe registration, expansion, validation, provenance, target import,
+  recursive instantiation, `_args_`, `_partial_`, `_inject_`, and constructor
+  failures.
+- Pipeline spec parsing, DAG validation, graph order, input binding, output spec
+  validation, and stage output validation.
+- Artifact/run store atomic writes, artifact indexes, status transitions, resume
+  decisions, invalidation, and corrupt state handling.
+
+End-to-end tests should cover:
+
+- Running a synthetic local pipeline from YAML.
+- Verifying run directories contain config, provenance, status, fingerprint,
+  input, output, artifact, and index files.
+- Rerunning the same run directory and skipping unchanged stages.
+- Rerunning changed stages and downstream dependents after config or upstream
+  artifact changes.
+- Refusing reuse when artifact files are missing or corrupt.
+- Failing with path-aware errors for undeclared, missing, wrong-type,
+  wrong-codec, or non-existent outputs.
+- Persisting status/provenance cleanly after stage failure.
+
+Final acceptance gates:
+
+```sh
+uv run ruff check .
+uv run pyright
+uv run pytest
+uv build
+```
+
+## Assumptions And Defaults
+
+- Python remains `>=3.12`.
+- Pyright must pass, but strict mode is deferred.
+- Config dependencies are hard runtime dependencies once Phase 4 starts.
+- CLI modules may exist only as import-safe stubs.
+- No local lock manager is required in v0 unless tests prove it necessary;
+  atomic writes are required.
+- Same-run-directory resume is required; cross-run cache reuse is not.
+- Physical artifact paths are owned by `LocalArtifactStore`.
+- Stages declare logical output names and specs, not path templates.
+- Public imports should remain stable even if internals are later refactored.
+- Deferred features fail explicitly, not silently.
+- Configs are trusted code; no sandbox or allow-list mode exists in v0.
+- Every `loom` extension point remains domain-agnostic and structurally typed.

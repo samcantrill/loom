@@ -45,7 +45,7 @@ code, and user-selected policy.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) identifies fingerprints as the basis for resume logic and
+[loom.md](../loom.md) identifies fingerprints as the basis for resume logic and
 provenance. This document narrows that into deterministic hashing utilities and
 digest records; it deliberately leaves policy decisions about which stage fields
 matter to pipeline planning, stage specs, and project code.

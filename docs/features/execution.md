@@ -24,7 +24,7 @@ leaving room for subprocess, cluster, and container execution later.
 ### 1.1 Alignment With `loom.md`
 
 This document refines the stage execution and local/subprocess/SLURM scaffolding
-goals from [loom.md](loom.md). It keeps execution as a coordinator over an
+goals from [loom.md](../loom.md). It keeps execution as a coordinator over an
 already validated plan: project stages do the work, stores persist state,
 executors invoke stages, and the runner records outcomes without interpreting
 domain behavior.

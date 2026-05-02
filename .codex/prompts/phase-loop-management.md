@@ -3,7 +3,7 @@ You are the managing agent for a multi-phase implementation plan.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plan.md`
+- `docs/implementation-plans/implementation-plan-v0.md`
 - Existing phase plans in `docs/phases/`
 - Open PRs and CI/test results if available
 
@@ -11,7 +11,7 @@ Your job is to advance the implementation plan one phase at a time.
 
 Before implementation begins:
 
-1. Confirm `docs/implementation-plan.md` has a Plan quality gate section.
+1. Confirm `docs/implementation-plans/implementation-plan-v0.md` has a Plan quality gate section.
 2. Review the plan with the `loom_plan_reviewer` custom agent using `.codex/prompts/implementation-plan-review.md`.
 3. If review finds blocking maintainability, extensibility, technical debt, conflicting-design, or reviewability issues, refine the plan using `.codex/prompts/implementation-plan-refinement.md`.
 4. Do not assign implementation work until blocking plan findings are resolved or explicitly documented as accepted risk with a revisit trigger.
@@ -43,7 +43,7 @@ For each phase:
    use `gh pr merge --auto --squash --delete-branch` when branch protection
    requires checks to finish first. If merging is unavailable, leave the phase
    at `approved`, document why, and stop before the next phase.
-11. After a successful merge, update `docs/implementation-plan.md` on `develop`
+11. After a successful merge, update `docs/implementation-plans/implementation-plan-v0.md` on `develop`
    without overwriting unrelated plan content. Record:
    - Phase status.
    - PR link or branch name.

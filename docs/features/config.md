@@ -16,7 +16,7 @@ It should avoid intermediate mechanisms at first, especially registry aliases, a
 ### 1.1 Alignment With `loom.md`
 
 This document refines the configuration responsibilities listed in
-[loom.md](loom.md): configuration composition, recursive importlib construction,
+[loom.md](../loom.md): configuration composition, recursive importlib construction,
 named recipe expansion, validation, provenance capture, and redaction. It keeps
 the same non-goal boundary: authored configs are trusted project code in v0, but
 `loom.config` must not execute stages, define domain recipes, or become a Hydra

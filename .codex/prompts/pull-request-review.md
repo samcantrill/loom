@@ -4,7 +4,7 @@ This prompt is intended for the `loom_phase_reviewer` custom agent.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plan.md`
+- `docs/implementation-plans/implementation-plan-v0.md`
 - The relevant expanded phase plan in `docs/phases/`
 - The PR body or prepared PR body
 - The current diff

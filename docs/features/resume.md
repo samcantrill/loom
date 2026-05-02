@@ -64,7 +64,7 @@ stage may then decide to resume from `latest.ckpt` inside its stage directory.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) calls for fingerprints and resume logic, but v0 intentionally
+[loom.md](../loom.md) calls for fingerprints and resume logic, but v0 intentionally
 keeps reuse conservative. This document refines that into same-run-directory
 stage reuse decisions based on persisted state, fingerprints, and artifact
 validity, leaving stage-internal checkpoint behavior to project code.

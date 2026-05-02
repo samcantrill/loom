@@ -4,7 +4,7 @@ This prompt is intended for the `loom_phase_implementer` custom agent.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plan.md`
+- `docs/implementation-plans/implementation-plan-v0.md`
 - The expanded phase plan in `docs/phases/`
 - The current diff
 - Validation results
@@ -19,7 +19,7 @@ Task:
 5. Confirm future phases were not implemented early.
 6. Confirm relevant tests were added or updated.
 7. Confirm validation commands were run or explain why not.
-8. Update `docs/implementation-plan.md` phase status to `pr_open` without overwriting unrelated content.
+8. Update `docs/implementation-plans/implementation-plan-v0.md` phase status to `pr_open` without overwriting unrelated content.
 9. Ensure the expanded phase plan has completion notes.
 10. Create a PR body using `.github/PULL_REQUEST_TEMPLATE.md`.
 11. Open the PR if GitHub tooling and authentication are available. Otherwise, leave the PR body ready to use and document why the PR was not opened.

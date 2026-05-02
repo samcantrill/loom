@@ -41,7 +41,7 @@ project code:
 
 ### 1.1 Alignment With `loom.md`
 
-This document expands the provenance capture goal from [loom.md](loom.md):
+This document expands the provenance capture goal from [loom.md](../loom.md):
 recording enough generic config, code, environment, command, fingerprint, input,
 output, and executor context to make runs reproducible and inspectable. Project
 code may add metadata, but `loom.provenance` must not interpret domain-specific

@@ -5,7 +5,7 @@ This prompt is intended for the `loom_phase_implementer` custom agent.
 
 Inputs:
 
-- Full implementation plan: `docs/implementation-plan.md`
+- Full implementation plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Assigned phase: `<PHASE_ID_OR_TITLE>`
 - Required branch name: `codex/<summary-of-feature>`
 

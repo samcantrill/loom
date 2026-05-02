@@ -38,7 +38,7 @@ A sweep is a deterministic collection of normal pipeline runs.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) lists sweep orchestration as a generic runtime goal. This
+[loom.md](../loom.md) lists sweep orchestration as a generic runtime goal. This
 document constrains that goal to deterministic expansion of normal `loom` runs:
 config composition, planning, execution, stores, provenance, and resume remain
 the same mechanisms used outside sweeps.

@@ -13,9 +13,9 @@ The package focuses on generic infrastructure:
 Detailed design notes live in:
 
 - [docs/loom.md](docs/loom.md)
-- [docs/config.md](docs/config.md)
+- [docs/features/config.md](docs/features/config.md)
 - [docs/structure.md](docs/structure.md)
-- [docs/implementation-plan.md](docs/implementation-plan.md)
+- [implementation-plan-v0.md](docs/implementation-plans/implementation-plan-v0.md)
 
 ## Development
 

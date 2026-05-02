@@ -33,7 +33,7 @@ scheduling, domain-specific stage types, and scheduler features that would turn
 ### 1.1 Alignment With `loom.md`
 
 This document expands the pipeline DAG, stage execution, artifact passing, status
-tracking, and resume responsibilities from [loom.md](loom.md). The package-wide
+tracking, and resume responsibilities from [loom.md](../loom.md). The package-wide
 boundary remains strict: `loom.pipeline` owns orchestration around stages, while
 project code owns stage internals, data semantics, metrics, training, reports,
 and any domain-specific recovery.

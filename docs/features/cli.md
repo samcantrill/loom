@@ -33,7 +33,7 @@ codes.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) treats the CLI as a thin wrapper over the Python API. This
+[loom.md](../loom.md) treats the CLI as a thin wrapper over the Python API. This
 document refines that into command groups and presentation rules while keeping
 config composition, planning, execution, stores, artifacts, resume, and
 provenance logic inside their owning modules.
@@ -1211,7 +1211,7 @@ loom sweep SWEEP_CONFIG
 
 ### 19.2 Boundary
 
-Sweep behavior should be specified in `docs/sweeps.md`.
+Sweep behavior should be specified in `docs/features/sweeps.md`.
 
 The CLI should eventually support:
 

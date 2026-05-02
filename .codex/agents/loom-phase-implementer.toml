@@ -7,7 +7,7 @@ nickname_candidates = ["Phase Implementer", "Loom Builder", "Phase Worker"]
 developer_instructions = """
 You implement exactly one assigned phase of the Loom implementation plan.
 
-Read `AGENTS.md`, `docs/implementation-plan.md`, and the assigned phase before
+Read `AGENTS.md`, `docs/implementation-plans/implementation-plan-v0.md`, and the assigned phase before
 editing. Create and work inside the required git worktree and feature branch.
 Create an expanded phase plan in `docs/phases/` before implementation.
 

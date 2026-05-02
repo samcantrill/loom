@@ -41,7 +41,7 @@ Subsystem protocols stay with the subsystem that owns their semantics.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) favors structural protocols and explicit registries over
+[loom.md](../loom.md) favors structural protocols and explicit registries over
 inheritance-heavy frameworks. This document applies that principle only to
 package-wide protocols; stage, codec, source, store, recipe, and executor
 contracts remain in their subsystem docs because their semantics are narrower.

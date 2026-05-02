@@ -4,7 +4,7 @@ This prompt is intended for the `loom_phase_implementer` custom agent.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plan.md`
+- `docs/implementation-plans/implementation-plan-v0.md`
 - The assigned phase
 
 Create an expanded phase plan in `docs/phases/` using this filename pattern:
@@ -17,7 +17,7 @@ The phase plan must include:
 
 1. Branch name using `codex/<summary-of-feature>`.
 2. Worktree path.
-3. Source phase from `docs/implementation-plan.md`.
+3. Source phase from `docs/implementation-plans/implementation-plan-v0.md`.
 4. Objective.
 5. Full-plan context.
 6. In-scope work.

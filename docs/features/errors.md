@@ -38,7 +38,7 @@ Concrete errors live next to the subsystem that raises them.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) requires clear error handling across configuration,
+[loom.md](../loom.md) requires clear error handling across configuration,
 construction, pipeline planning, execution, artifact state, resume, provenance,
 and CLI presentation. This document turns that requirement into a shared error
 model while preserving subsystem ownership of concrete failures and avoiding

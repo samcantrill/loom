@@ -263,7 +263,7 @@ pipeline:
       depends_on: [build_manifest]
 ```
 
-Configuration details are specified in [config.md](config.md).
+Configuration details are specified in [config.md](features/config.md).
 
 ---
 

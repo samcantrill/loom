@@ -39,7 +39,7 @@ Importing `loom` should not discover or import third-party plugins.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) keeps plugin behavior outside the minimum runtime kernel. This
+[loom.md](../loom.md) keeps plugin behavior outside the minimum runtime kernel. This
 document describes the deferred extension layer that can connect downstream
 recipes, codecs, sources, executors, and CLI additions to explicit registries
 without making plugin discovery a side effect of importing `loom`.

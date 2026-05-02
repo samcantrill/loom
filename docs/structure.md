@@ -88,26 +88,36 @@ and project-scoped Codex workflow metadata.
   docs/
     loom.md
     structure.md
-    core-model.md
-    config.md
-    serialization.md
-    io.md
-    artifacts.md
-    pipeline.md
-    execution.md
-    run-store.md
-    state.md
-    fingerprints.md
-    provenance.md
-    resume.md
-    sweeps.md
-    slurm.md
-    plugins.md
-    protocols.md
-    errors.md
-    cli.md
-    testing.md
-    implementation-plan.md
+    implementation-plans/
+      implementation-plan-v0.md
+    features/
+      core-model.md
+      timestamps.md
+      config.md
+      serialization.md
+      io.md
+      artifacts.md
+      pipeline.md
+      pipeline-graph.md
+      runtime-resources.md
+      execution.md
+      run-store.md
+      state.md
+      fingerprints.md
+      provenance.md
+      resume.md
+      preflight.md
+      run-catalog.md
+      sweeps.md
+      slurm.md
+      container-executors.md
+      remote-stores.md
+      reliability.md
+      plugins.md
+      protocols.md
+      errors.md
+      cli.md
+      testing.md
 
   tests/
     README.md
@@ -403,7 +413,9 @@ from loom.records import Record
 
 ### 6.1 Core Model
 
-Detailed specification: [core-model.md](core-model.md)
+Detailed specifications: [core-model.md](features/core-model.md),
+[timestamps.md](features/timestamps.md), [protocols.md](features/protocols.md),
+[errors.md](features/errors.md)
 
 ```text
 ids.py
@@ -441,7 +453,7 @@ errors.py
 
 ### 6.2 Serialization
 
-Detailed specification: [serialization.md](serialization.md)
+Detailed specification: [serialization.md](features/serialization.md)
 
 `loom.serialization` converts Python objects to and from plain structured data.
 It owns deterministic JSON/YAML-safe representations, dataclass conversion, and
@@ -461,7 +473,7 @@ errors.py       serialization-specific errors
 
 ### 6.3 I/O
 
-Detailed specification: [io.md](io.md)
+Detailed specification: [io.md](features/io.md)
 
 `loom.io` handles URI parsing, source backends, and codecs. It bridges stored
 bytes/text with Python objects but does not own artifact-store layout or
@@ -488,7 +500,7 @@ need.
 
 ### 6.4 Configuration
 
-Detailed specification: [config.md](config.md)
+Detailed specification: [config.md](features/config.md)
 
 `loom.config` composes trusted project configuration and constructs Python
 objects. It loads YAML, applies overlays and CLI overrides, resolves
@@ -518,7 +530,9 @@ specs, but execution belongs to `loom.pipeline`.
 
 ### 6.5 Pipeline Model and Planning
 
-Detailed specification: [pipeline.md](pipeline.md)
+Detailed specifications: [pipeline.md](features/pipeline.md),
+[pipeline-graph.md](features/pipeline-graph.md),
+[runtime-resources.md](features/runtime-resources.md)
 
 `loom.pipeline` models static artifact DAGs, validates dependencies, binds
 upstream artifacts to downstream inputs, plans stage actions, and exposes the
@@ -545,7 +559,9 @@ should not contain domain-specific stage subclasses.
 
 ### 6.6 Execution and Executors
 
-Detailed specifications: [execution.md](execution.md), [slurm.md](slurm.md)
+Detailed specifications: [execution.md](features/execution.md),
+[slurm.md](features/slurm.md),
+[container-executors.md](features/container-executors.md)
 
 `loom.pipeline.execution` coordinates the runner lifecycle. It prepares stages,
 uses planning decisions, constructs stage contexts, invokes executors, commits
@@ -567,8 +583,10 @@ semantics, resume policy, config composition, or artifact indexes.
 
 ### 6.7 Stores and State
 
-Detailed specifications: [run-store.md](run-store.md), [state.md](state.md),
-[artifacts.md](artifacts.md)
+Detailed specifications: [run-store.md](features/run-store.md),
+[state.md](features/state.md), [artifacts.md](features/artifacts.md),
+[remote-stores.md](features/remote-stores.md),
+[run-catalog.md](features/run-catalog.md)
 
 Stores persist the inspectable state of a run. Local stores should use ordinary
 files so a failed or completed run can be inspected without importing Python.
@@ -603,8 +621,9 @@ The runner owns lifecycle transitions. Stores persist those transitions.
 
 ### 6.8 Provenance and Resume
 
-Detailed specifications: [provenance.md](provenance.md),
-[resume.md](resume.md), [fingerprints.md](fingerprints.md)
+Detailed specifications: [provenance.md](features/provenance.md),
+[resume.md](features/resume.md), [fingerprints.md](features/fingerprints.md),
+[reliability.md](features/reliability.md)
 
 Provenance records how a run was produced: config inputs, recipe expansions,
 target imports, command line, working directory, git state, Python and package
@@ -616,7 +635,7 @@ same run directory.
 
 ### 6.9 Sweeps
 
-Detailed specification: [sweeps.md](sweeps.md)
+Detailed specification: [sweeps.md](features/sweeps.md)
 
 `loom.pipeline.sweep` expands parameter sets into multiple run configurations
 and coordinates trial execution through the same config, planning, execution, and
@@ -627,7 +646,7 @@ experiment database, or scheduler replacement in v0.
 
 ### 6.10 Plugins
 
-Detailed specification: [plugins.md](plugins.md)
+Detailed specification: [plugins.md](features/plugins.md)
 
 `loom.plugins` provides future extension discovery through entry points and
 registration hooks. The initial runtime should not require plugin discovery for
@@ -639,7 +658,8 @@ through documented APIs.
 
 ### 6.11 CLI
 
-Detailed specification: [cli.md](cli.md)
+Detailed specifications: [cli.md](features/cli.md),
+[preflight.md](features/preflight.md), [run-catalog.md](features/run-catalog.md)
 
 `loom.cli` owns command-line presentation. It parses arguments, calls public
 Python APIs, formats results, maps errors to exit codes, and exposes thin
@@ -662,54 +682,71 @@ structure.md
   Source-tree layout, package boundaries, module ownership, dependency shape, and
   repository organization.
 
-core-model.md
+features/core-model.md
   Foundational public types: identifiers, resource refs, records, manifests,
   artifact refs, timestamps, and core validation.
 
-config.md
+features/timestamps.md
+  UTC timestamp helpers, canonical persisted timestamp strings, and path-safe
+  timestamp formatting.
+
+features/config.md
   Config loading, composition, overrides, interpolation, recipes, target
   instantiation, redaction, and config provenance.
 
-serialization.md
+features/serialization.md
   Plain data model, deterministic JSON/YAML helpers, schema-version checks, and
   object conversion boundaries.
 
-io.md
+features/io.md
   URI helpers, source backends, codecs, source registries, and codec registries.
 
-artifacts.md
+features/artifacts.md
   ArtifactRef, ArtifactStore, LocalArtifactStore, artifact identities, codecs,
   validation, and artifact lineage.
 
-pipeline.md
+features/pipeline.md
   Static DAG specs, stages, contexts, graph validation, binding, planning, and
   orchestration boundaries.
 
-execution.md
+features/pipeline-graph.md / features/runtime-resources.md
+  DAG construction, topology, artifact binding, runtime options, resource
+  requests, and runtime profiles.
+
+features/execution.md
   Runner lifecycle, execution requests/results, executor protocol, logs,
   failures, context construction, and backend integration.
 
-run-store.md / state.md
+features/run-store.md / features/state.md
   Run directory layout, persisted documents, state transitions, atomic writes,
   indexes, locking policy, and inspection.
 
-fingerprints.md / resume.md
+features/fingerprints.md / features/resume.md
   Stable hashing, stage fingerprint documents, invalidation inputs, and
   conservative same-run-directory reuse.
 
-provenance.md
+features/provenance.md
   Generic run, stage, code, environment, dependency, and config provenance.
 
-sweeps.md / slurm.md / plugins.md / cli.md
+features/preflight.md / features/run-catalog.md
+  Pre-run diagnostics, local run indexing, run comparison, export, and import
+  behavior.
+
+features/sweeps.md / features/slurm.md / features/plugins.md / features/cli.md
   Optional orchestration surfaces and operational integration points.
 
-testing.md
+features/container-executors.md / features/remote-stores.md /
+features/reliability.md
+  Container runtimes, optional remote artifact backends, retries, timeouts,
+  cleanup, event hooks, and retention policies.
+
+features/testing.md
   Test layout, package tests, unit tests, integration tests, contract tests, and
   validation gates.
 
-implementation-plan.md
-  Review-gated phase plan, phase status, accepted tradeoffs, and deferred v0
-  scope boundaries.
+implementation-plans/implementation-plan-v0.md
+  Review-gated v0 phase plan, phase status, accepted tradeoffs, and deferred
+  v0 scope boundaries.
 ```
 
 ---
@@ -830,9 +867,10 @@ When adding modules:
 7. Record accepted technical debt and revisit triggers in the relevant module
    doc or phase plan.
 
-The repository phase workflow in `AGENTS.md` and `docs/implementation-plan.md`
-controls large implementation work. This structure document should guide those
-phases but should not be treated as permission to implement future phases early.
+The repository phase workflow in `AGENTS.md` and
+`docs/implementation-plans/implementation-plan-v0.md` controls large
+implementation work. This structure document should guide those phases but
+should not be treated as permission to implement future phases early.
 
 ---
 

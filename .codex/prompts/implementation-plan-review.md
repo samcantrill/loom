@@ -4,7 +4,7 @@ This prompt is intended for the `loom_plan_reviewer` custom agent.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plan.md`
+- `docs/implementation-plans/implementation-plan-v0.md`
 - Relevant design docs referenced by the plan
 - Existing source and tests needed to verify current boundaries
 - Existing phase plans in `docs/phases/`, if any
@@ -44,4 +44,3 @@ Output:
 - Then state whether the plan is ready for phase implementation.
 
 Do not edit files. Do not implement code.
-

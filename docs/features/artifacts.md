@@ -35,7 +35,7 @@ dataset-specific object means.
 ### 1.1 Alignment With `loom.md`
 
 This document specializes the artifact portion of the generic runtime described
-in [loom.md](loom.md). It inherits the package-wide rule that `loom` records and
+in [loom.md](../loom.md). It inherits the package-wide rule that `loom` records and
 passes artifact references, while project code owns domain artifact schemas,
 payload meaning, and specialized readers or writers. The v0 emphasis should stay
 on local, inspectable artifact state that supports provenance and conservative

@@ -42,7 +42,7 @@ State transitions are decided by the runner and planner.
 
 ### 1.1 Alignment With `loom.md`
 
-[loom.md](loom.md) requires stage status tracking and run directories. This
+[loom.md](../loom.md) requires stage status tracking and run directories. This
 document defines the shared state vocabulary that makes those requirements
 consistent across planning, execution, resume, run stores, CLI output, tests, and
 optional executors.

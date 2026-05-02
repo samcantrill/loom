@@ -36,7 +36,7 @@ special tooling.
 ### 1.1 Alignment With `loom.md`
 
 This document turns the run directory, status tracking, artifact index, and
-resume-inspection goals from [loom.md](loom.md) into a persistence contract.
+resume-inspection goals from [loom.md](../loom.md) into a persistence contract.
 `loom` should favor local, plain, schema-versioned files in v0 so config,
 pipeline, execution, provenance, and resume state can be inspected without
 domain tooling.
