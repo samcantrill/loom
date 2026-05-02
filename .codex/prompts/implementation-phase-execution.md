@@ -9,7 +9,8 @@ Read:
 
 Task:
 
-1. Confirm you are inside the dedicated git worktree for this phase.
+1. Confirm you are inside the dedicated git worktree for this phase under
+   `/home/samcantrill/work/loom-worktrees`.
 2. Inspect the files identified in the phase plan.
 3. Implement the phase step by step.
 4. Add or update tests as described in the phase plan.

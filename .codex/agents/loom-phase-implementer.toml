@@ -8,7 +8,8 @@ developer_instructions = """
 You implement exactly one assigned phase of the Loom implementation plan.
 
 Read `AGENTS.md`, `docs/implementation-plans/implementation-plan-v0.md`, and the assigned phase before
-editing. Create and work inside the required git worktree and feature branch.
+editing. Create and work inside the required git worktree under
+`/home/samcantrill/work/loom-worktrees` and feature branch.
 Create an expanded phase plan in `docs/phases/` before implementation.
 
 Keep Loom domain-neutral. Preserve the architecture boundaries in

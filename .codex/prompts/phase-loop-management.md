@@ -7,6 +7,10 @@ Read:
 - Existing phase plans in `docs/phases/`
 - Open PRs and CI/test results if available
 
+Use `/home/samcantrill/work/loom-worktrees` as the root for all phase
+worktrees. Worktree names should match the lowercase kebab branch summary
+without the `codex/` prefix.
+
 Your job is to advance the implementation plan one phase at a time.
 
 Before implementation begins:
@@ -53,8 +57,9 @@ For each phase:
 12. Commit the metadata update with a `docs:` commit message and push it when
    permissions allow. If direct pushes to `develop` are disallowed, prepare a
    small metadata PR and stop before the next phase.
-13. Remove the phase worktree, run `git worktree prune`, and delete the phase
-   branch if the merge command did not already delete it.
+13. Remove the phase worktree from `/home/samcantrill/work/loom-worktrees`,
+   run `git worktree prune`, and delete the phase branch if the merge command
+   did not already delete it.
 14. Move to the next pending phase.
 15. Stop when all phases are complete, approved, merged, or blocked.
 

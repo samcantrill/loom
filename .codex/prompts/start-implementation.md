@@ -2,6 +2,7 @@ Implement `loom` v0 using the repository’s phase workflow.
 
 Repository: `/home/samcantrill/work/loom`
 Base branch: `develop`
+Worktree root: `/home/samcantrill/work/loom-worktrees`
 Full plan: `docs/implementation-plans/implementation-plan-v0.md`
 Manager prompt: `.codex/prompts/phase-loop-management.md`
 
@@ -39,7 +40,7 @@ For each phase:
 9. Prepare or open a PR targeting `develop`.
 10. Review the PR with `loom_phase_reviewer` using `.codex/prompts/pull-request-review.md`.
 11. If approved and checks pass, the managing agent may merge to `develop` using the automatic merge policy in `AGENTS.md`.
-12. After merge, update `docs/implementation-plans/implementation-plan-v0.md` on `develop` to `merged`, record summary/checks/follow-ups, remove the phase worktree, run `git worktree prune`, and continue to the next phase.
+12. After merge, update `docs/implementation-plans/implementation-plan-v0.md` on `develop` to `merged`, record summary/checks/follow-ups, remove the phase worktree from `/home/samcantrill/work/loom-worktrees`, run `git worktree prune`, and continue to the next phase.
 
 Rules:
 

@@ -10,7 +10,8 @@ Read:
 
 Task:
 
-1. Confirm you are inside the dedicated git worktree for this phase.
+1. Confirm you are inside the dedicated git worktree for this phase under
+   `/home/samcantrill/work/loom-worktrees`.
 2. Identify failing tests, lint errors, type errors, build errors, or obvious runtime problems.
 3. Determine whether each failure is caused by the current phase.
 4. Fix failures caused by the current phase.

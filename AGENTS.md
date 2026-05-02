@@ -54,7 +54,12 @@ for example `implementation-plan-review.md`, `pull-request-review.md`, and
 
 - Create a feature branch using `codex/<summary-of-feature>`.
 - Use lowercase kebab case for the branch summary.
-- Do all phase work in a separate git worktree.
+- Create phase branches from `develop` unless the phase plan explicitly says
+  otherwise.
+- Do all phase work in a separate git worktree under
+  `/home/samcantrill/work/loom-worktrees/`.
+- Name each worktree with the branch summary, without the `codex/` prefix, for
+  example `/home/samcantrill/work/loom-worktrees/config-recipes`.
 - Do not implement phase work directly in the original checkout.
 - Record the branch and worktree path in the expanded phase plan.
 
@@ -104,7 +109,8 @@ After merging, the managing agent must:
 - Commit the metadata update with a `docs:` commit message and push it when
   permissions allow. If direct pushes to `develop` are disallowed, prepare a
   small metadata PR and stop before starting the next phase.
-- Remove the phase worktree and prune stale worktree metadata.
+- Remove the phase worktree from `/home/samcantrill/work/loom-worktrees/` and
+  prune stale worktree metadata with `git worktree prune`.
 - Delete the phase branch if it was not deleted by the merge command.
 
 Prefer GitHub squash merges with branch deletion when available:

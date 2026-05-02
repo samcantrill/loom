@@ -31,8 +31,11 @@ Worktree requirement:
 ```bash
 git fetch origin
 BRANCH="codex/<summary-of-feature>"
-WORKTREE="../<repo-name>-codex-<summary-of-feature>"
-git worktree add -b "$BRANCH" "$WORKTREE"
+BASE_BRANCH="develop"
+WORKTREE_ROOT="/home/samcantrill/work/loom-worktrees"
+WORKTREE="$WORKTREE_ROOT/<summary-of-feature>"
+mkdir -p "$WORKTREE_ROOT"
+git worktree add -b "$BRANCH" "$WORKTREE" "$BASE_BRANCH"
 cd "$WORKTREE"
 ```
 
