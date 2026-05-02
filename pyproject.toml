@@ -26,6 +26,15 @@ dev = [
 testpaths = [
     "tests",
 ]
+addopts = [
+    "--strict-markers",
+]
+markers = [
+    "package: package import, metadata, and distribution smoke tests",
+    "integration: tests that combine multiple loom components without exercising a full user workflow",
+    "e2e: full end-to-end behavior tests through public APIs or CLI",
+    "contract: reusable behavior tests for extension-point implementations",
+]
 
 [tool.pyright]
 include = [

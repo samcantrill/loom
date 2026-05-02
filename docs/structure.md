@@ -3720,151 +3720,262 @@ contract tests for extension points
 
 ## 23. Testing Strategy
 
-### 23.1 Primitive tests
+Tests should be organized by test intent first. Unit tests mirror the source
+tree. Tests that are not naturally owned by one source module live in explicit
+purpose directories.
+
+Recommended layout:
 
 ```text
-test_refs.py
-test_records.py
-test_artifacts.py
-test_provenance.py
-test_fingerprints.py
-test_serialization.py
+tests/
+  unit/
+    loom/
+      test_ids.py
+      test_refs.py
+      test_records.py
+      test_artifacts.py
+      test_provenance.py
+      test_fingerprints.py
+      test_protocols.py
+      test_errors.py
+      test_timestamps.py
+
+      serialization/
+        test_plain.py
+        test_dataclasses.py
+        test_json.py
+        test_schema.py
+
+      io/
+        test_uris.py
+        sources/
+          test_local.py
+          test_registry.py
+        codecs/
+          test_json_codec.py
+          test_text_codec.py
+          test_bytes_codec.py
+          test_registry.py
+
+      config/
+        test_load.py
+        test_merge.py
+        test_overrides.py
+        test_compose.py
+        test_validation.py
+        test_redaction.py
+        recipes/
+          test_catalog.py
+          test_expansion.py
+        instantiate/
+          test_targets.py
+          test_recursive.py
+          test_injection.py
+
+      pipeline/
+        test_specs.py
+        test_stage.py
+        test_context.py
+        test_status.py
+        test_validation.py
+        test_selectors.py
+        test_resources.py
+        graph/
+          test_dag.py
+          test_topology.py
+          test_bindings.py
+        planning/
+          test_plan.py
+          test_planner.py
+          test_resume.py
+          test_invalidation.py
+        execution/
+          test_runner.py
+          test_lifecycle.py
+          test_atomic.py
+          test_logs.py
+        executors/
+          test_local.py
+          test_subprocess.py
+          test_slurm.py
+          test_registry.py
+        stores/
+          test_artifact_store.py
+          test_run_store.py
+          test_indexes.py
+          test_local_artifacts.py
+          test_local_runs.py
+          test_atomic.py
+          test_locking.py
+        sweep/
+          test_spec.py
+          test_grid.py
+          test_manual.py
+          test_trials.py
+          test_runner.py
+
+      plugins/
+        test_entrypoints.py
+
+      cli/
+        test_main.py
+        test_validate.py
+        test_plan.py
+        test_run.py
+        test_stage.py
+        test_sweep.py
+
+  package/
+    test_import.py
+    test_public_api.py
+    test_distribution_metadata.py
+    test_typing_marker.py
+
+  integration/
+    test_config_instantiates_pipeline.py
+    test_planner_uses_graph_and_stores.py
+    test_runner_writes_store_state.py
+    test_resume_uses_artifact_fingerprints.py
+
+  e2e/
+    test_synthetic_pipeline.py
+    test_cli_run_synthetic_pipeline.py
+
+  contracts/
+    test_codec_contract.py
+    test_source_contract.py
+    test_stage_contract.py
+    test_artifact_store_contract.py
+    test_run_store_contract.py
+
+  support/
+    factories.py
+    stages.py
+    codecs.py
+    stores.py
 ```
+
+### 23.1 Unit tests mirror `src/loom`
+
+For source-owned behavior, mirror the path below `src/loom` under
+`tests/unit/loom`.
+
+Examples:
+
+```text
+src/loom/refs.py                         -> tests/unit/loom/test_refs.py
+src/loom/serialization/plain.py          -> tests/unit/loom/serialization/test_plain.py
+src/loom/io/codecs/json_codec.py         -> tests/unit/loom/io/codecs/test_json_codec.py
+src/loom/pipeline/planning/planner.py    -> tests/unit/loom/pipeline/planning/test_planner.py
+src/loom/cli/run.py                      -> tests/unit/loom/cli/test_run.py
+```
+
+Unit tests should usually use direct Python imports, small fixtures, and local
+temporary directories. They should not need a full pipeline run, subprocess CLI
+execution, optional remote services, or domain packages.
+
+### 23.2 Package tests
+
+Package tests validate the distribution and import surface rather than a single
+implementation module.
 
 Test:
 
 ```text
-ResourceRef serialization
-Record helpers
-ManifestView filters
-ArtifactRef construction
-fingerprint determinism
-provenance serialization
+package imports cheaply
+`__version__` is available
+public imports are stable
+`py.typed` is included
+package metadata is readable after installation
+optional extras do not import eagerly
 ```
 
-### 23.2 I/O tests
+These tests belong in `tests/package/` and should use only public imports.
+
+### 23.3 Integration tests
+
+Integration tests combine multiple `loom` components while still remaining
+smaller than a full user workflow. Put them in `tests/integration/` and mark
+them with `@pytest.mark.integration`.
+
+Examples:
 
 ```text
-test_io_uris.py
-test_local_source.py
-test_codecs_json.py
-test_codecs_registry.py
+config composition -> target instantiation
+pipeline graph validation -> planner output
+runner -> local run store -> status files
+artifact store -> fingerprints -> resume decisions
+executor -> lifecycle hooks -> failure status writes
 ```
 
-Test:
+Integration tests should stay domain-neutral and deterministic. Prefer dummy
+stages, temporary directories, and in-memory/local stores.
 
-```text
-file URI normalization
-local source open/exists/stat/glob
-JSON/Text/Bytes codec roundtrips
-unknown codec errors
-```
+### 23.4 End-to-end tests
 
-### 23.3 Config tests
+End-to-end tests validate complete behavior through the same entry points a user
+would use. Put them in `tests/e2e/` and mark them with `@pytest.mark.e2e`.
 
-```text
-test_config_load.py
-test_config_merge.py
-test_config_overrides.py
-test_config_compose.py
-test_config_recipes.py
-test_config_instantiate.py
-test_config_redaction.py
-```
-
-Test:
-
-```text
-base config loading
-overlay merge policy
-CLI overrides
-interpolation
-recipe expansion
-nested target instantiation
-runtime injection
-bad target errors
-secret redaction
-config provenance
-```
-
-### 23.4 Pipeline tests
-
-```text
-test_pipeline_specs.py
-test_pipeline_validation.py
-test_pipeline_graph.py
-test_pipeline_planner.py
-test_pipeline_runner.py
-test_stage_lifecycle.py
-```
-
-Test:
-
-```text
-DAG validation
-topological order
-input binding
-stage status transitions
-resume skip
-force stage
-invalidated downstream stages
-failure status writes
-```
-
-### 23.5 Store tests
-
-```text
-test_artifact_store.py
-test_run_store.py
-test_store_atomic.py
-test_store_locking.py
-```
-
-Test:
-
-```text
-artifact save/load
-status file writes
-outputs file writes
-atomic write behavior
-corrupt store detection
-```
-
-### 23.6 Executor tests
-
-```text
-test_local_executor.py
-test_subprocess_executor.py
-test_slurm_script_generation.py
-```
-
-Test:
-
-```text
-local stage execution
-subprocess command construction
-subprocess failure capture
-SBATCH script generation without actual cluster submission
-```
-
-### 23.7 End-to-end synthetic pipeline
-
-Use dummy stages:
+Use a synthetic domain-neutral pipeline:
 
 ```text
 WriteNumberStage
 AddNumberStage
 MultiplyNumberStage
 ReportStage
-```
 
-Pipeline:
-
-```text
 write -> add -> multiply -> report
 ```
 
-This proves the package works without any domain dependency.
+An end-to-end test should create an isolated project/run directory, execute the
+workflow through the public API or CLI, and verify observable outputs:
+
+```text
+final artifacts exist
+status files are written
+provenance is persisted
+resume skips unchanged stages
+forced reruns invalidate downstream outputs
+CLI exits with the expected status
+```
+
+These tests prove `loom` works without any downstream domain dependency. If a
+future end-to-end test needs a cluster, network service, or heavyweight optional
+dependency, it should be separately marked and skipped unless explicitly
+enabled.
+
+### 23.5 Contract tests
+
+Contract tests define reusable behavior for extension points:
+
+```text
+Codec roundtrip behavior
+DataSource open/exists/stat/glob behavior
+Stage input/output contract
+ArtifactStore save/load/list behavior
+RunStore status transition behavior
+```
+
+Keep these tests in `tests/contracts/`. Where useful, expose helper functions
+that downstream packages can reuse to validate their own codecs, stages, stores,
+and sources against `loom` expectations.
+
+### 23.6 Shared test support
+
+Shared test helpers live in `tests/support/`.
+
+Acceptable support code:
+
+```text
+dummy stages
+dummy codecs
+temporary project factories
+assertion helpers for run directories
+fixtures for small generic manifests and artifacts
+```
+
+Support code must stay generic. It should not import downstream domain packages
+or encode domain-specific metadata.
 
 ---
 
