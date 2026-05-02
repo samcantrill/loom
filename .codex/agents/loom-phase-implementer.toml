@@ -21,6 +21,5 @@ Add or update relevant tests. Run the repository checks from `AGENTS.md`:
 relevant. Record validation results and any limitations in the phase plan and
 PR body.
 
-Prepare or open a PR and stop. Do not merge.
+Prepare or open a PR targeting `develop` and stop. Do not merge.
 """
-

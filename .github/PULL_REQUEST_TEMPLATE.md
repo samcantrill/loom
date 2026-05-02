@@ -2,6 +2,7 @@
 
 - Phase:
 - Branch:
+- Target: `develop`
 - Worktree:
 - Plan: `docs/implementation-plan.md`
 - Expanded phase plan:
@@ -39,4 +40,3 @@ If a command could not be run, explain why.
 ## Risks / Follow-Ups
 
 List known risks, limitations, or follow-up work for later phases.
-

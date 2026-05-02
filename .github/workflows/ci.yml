@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches:
+      - develop
       - main
 
 jobs:
@@ -36,4 +37,3 @@ jobs:
 
       - name: Build
         run: uv build
-

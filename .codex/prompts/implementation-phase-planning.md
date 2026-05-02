@@ -23,12 +23,17 @@ The phase plan must include:
 6. In-scope work.
 7. Out-of-scope work.
 8. Assumptions.
-9. Files and areas to inspect.
-10. Implementation steps.
-11. Test plan.
-12. Risks.
-13. Validation commands.
-14. Completion notes placeholder.
+9. Design impact.
+10. Future compatibility.
+11. Alternatives rejected.
+12. Debt introduced.
+13. Reviewability.
+14. Files and areas to inspect.
+15. Implementation steps.
+16. Test plan.
+17. Risks.
+18. Validation commands.
+19. Completion notes placeholder.
 
 Planning rules:
 
@@ -36,5 +41,9 @@ Planning rules:
 - Do not expand the phase beyond its stated scope.
 - Identify future-phase work and explicitly keep it out of scope.
 - Prefer a plan that produces a small, reviewable PR.
+- Explain how this phase preserves maintainability and extensibility.
+- Document conflicting design choices and why this phase chooses one path.
+- Avoid introducing technical debt. If debt is unavoidable, name it, justify it, and add a revisit trigger.
+- Do not start implementation if the full plan has unresolved blocking findings from `loom_plan_reviewer`.
 - Use repository validation commands from `AGENTS.md`.
 - Commit the phase plan from inside the worktree with `git commit -m "plan: add phase plan"`.
