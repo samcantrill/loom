@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Mapping
 
 from loom.fingerprints import Fingerprint
-from loom.errors import ConfigError
 from loom.serialization import PlainData
 from loom.config.errors import ConfigValidationError
 

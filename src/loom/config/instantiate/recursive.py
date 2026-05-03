@@ -1,7 +1,7 @@
 """Recursive `_target_` object construction."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import Any
 
@@ -30,14 +30,8 @@ def _instantiate(*, value: object, runtime: Mapping[str, object] | None, path: s
     if isinstance(value, Mapping):
         return _instantiate_mapping(mapping=value, runtime=runtime, path=path)
 
-    if isinstance(value, list):
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_instantiate(value=item, runtime=runtime, path=f"{path}[{index}]") for index, item in enumerate(value)]
-
-    if isinstance(value, tuple):
-        return tuple(
-            _instantiate(value=item, runtime=runtime, path=f"{path}[{index}]")
-            for index, item in enumerate(value)
-        )
 
     return value
 
@@ -67,7 +61,7 @@ def _instantiate_mapping(*, mapping: Mapping[str, Any], runtime: Mapping[str, ob
         raise ReservedConfigKeyError(f"_target_ must be a non-empty string at {path}")
 
     args_value = mapping.get("_args_", ())
-    if not isinstance(args_value, list | tuple):
+    if not isinstance(args_value, Sequence) or isinstance(args_value, (str, bytes, bytearray)):
         raise ReservedConfigKeyError(f"_args_ must be a sequence at {path}")
 
     inject_value = mapping.get("_inject_")

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import importlib
 
 from loom.config.errors import TargetImportError

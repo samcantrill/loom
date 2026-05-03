@@ -6,7 +6,7 @@ import pytest
 
 from loom.config.errors import ReservedConfigKeyError, TargetInstantiationError
 from loom.config.instantiate import instantiate
-from tests.support.config_samples import AddService, EchoService, concat
+from tests.support.config_samples import AddService, EchoService
 
 
 def test_instantiate_scalar_passthrough() -> None:
@@ -27,6 +27,17 @@ def test_instantiate_nested_mappings_and_lists() -> None:
     assert result["root"].value == "x"
     assert result["items"][0] == "ab"
     assert result["items"][1] == "leaf"
+
+
+def test_instantiate_non_string_sequences_as_lists() -> None:
+    result = instantiate(
+        (
+            "leaf",
+            {"_target_": "tests.support.config_samples:concat", "_args_": ("a", "b")},
+        )
+    )
+
+    assert result == ["leaf", "ab"]
 
 
 def test_instantiate_positional_args() -> None:

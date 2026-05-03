@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import subprocess
 import sys
@@ -50,6 +51,24 @@ def test_config_exports_and_signature() -> None:
     assert instantiate_params[0].name == "value"
     assert instantiate_params[1].name == "runtime"
     assert instantiate_params[1].default is None
+
+
+def test_config_instantiate_callable_survives_submodule_import_order() -> None:
+    import loom.config
+
+    package_instantiate = loom.config.instantiate
+    assert package_instantiate.__module__ == "loom.config.api"
+
+    instantiate_submodule = importlib.import_module("loom.config.instantiate")
+    assert inspect.ismodule(instantiate_submodule)
+    assert callable(instantiate_submodule.instantiate)
+    assert callable(instantiate_submodule.import_target)
+    assert loom.config.instantiate is package_instantiate
+
+    importlib.reload(instantiate_submodule)
+    assert loom.config.instantiate is package_instantiate
+    assert loom.config.instantiate({"value": ("a", "b")}) == {"value": ["a", "b"]}
+
 
 def test_import_config_module_only() -> None:
     script = dedent(

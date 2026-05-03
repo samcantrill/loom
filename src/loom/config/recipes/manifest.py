@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from loom import __version__
@@ -39,7 +40,7 @@ class RecipeManifestRecord:
         path: str,
         name: str,
         recipe: RecipeImplementation,
-        arguments: dict[str, PlainData],
+        arguments: Mapping[str, PlainData],
         expanded: dict[str, PlainData],
     ) -> "RecipeManifestRecord":
         expanded_hash = hash_mapping(expanded)
@@ -54,8 +55,11 @@ class RecipeManifestRecord:
         )
 
 
-def _normalize_arguments(arguments: dict[str, object]) -> dict[str, PlainData]:
-    return ensure_plain_data(arguments, path="recipe_arguments")
+def _normalize_arguments(arguments: Mapping[str, object]) -> dict[str, PlainData]:
+    plain = ensure_plain_data(dict(arguments), path="recipe_arguments")
+    if not isinstance(plain, dict):
+        raise TypeError("recipe arguments must normalize to a mapping")
+    return plain
 
 
 def _recipe_target(recipe: RecipeImplementation) -> str:

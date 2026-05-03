@@ -1047,7 +1047,14 @@ make test-summary
 - Plan expansion/refinement: used by this final expanded-plan pass. Do not run
   another automated plan expansion/refinement pass unless the manager explicitly
   reopens the budget.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used on 2026-05-03 by the single bounded
+  `loom_phase_refiner` pass. Summary: fixed Phase 5 validation/type issues,
+  simplified instantiate subpackage parent mutation, preserved the package-level
+  `loom.config.instantiate` callable across submodule import/reload order,
+  normalized non-string sequence instantiation to lists, tightened nested recipe
+  argument rejection before interpolation, and added focused import-order,
+  reserved-key, override pre-resolution, manifest fingerprint, and live-API
+  regression coverage.
 - PR review: unused.
 
 ## Completion Notes
@@ -1056,8 +1063,41 @@ make test-summary
   `fd6b04cae25432cd57a06e8a7543d9c8300e535a`.
 - Final expanded plan: completed in this pass and ready for
   `loom_phase_executor` handoff after the `plan:` commit.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary: executor commits added recipe contracts/catalogs,
+  recursive recipe expansion with deterministic manifest records, recipe-aware
+  config composition and fingerprinting, target import helpers, recursive
+  explicit instantiation with `_args_`, `_partial_`, and `_inject_`, and
+  package/unit/contract/integration coverage.
+- Implementation validation reviewed: current diff against `develop`, phase
+  commits `92973fd` and `49d6aa2`, manager handoff notes, and an initial
+  targeted pytest run. The initial targeted run failed only because
+  `tests/unit/loom/test_deferred_stubs.py` still expected Phase 5 APIs to be
+  unsupported stubs.
+- Refinement scope: blocking issues caused by Phase 5 implementation/tests and
+  phase-scoped coverage gaps only. No Phase 6+ pipeline parsing, runner,
+  stores, plugin discovery, entry-point loading, or PR preparation work was
+  performed.
+- Refinement summary: replaced stale deferred-stub expectations with live API
+  coverage, removed redundant parent mutation from
+  `loom.config.instantiate.__init__`, kept the defensive package-level
+  `__setattr__` guard because the public callable and same-named subpackage
+  otherwise conflict after submodule imports, made non-string sequences
+  instantiate as lists per contract, rejected nested recipe blocks inside recipe
+  arguments before interpolation can mask the intended error, corrected lint and
+  Pyright issues in the new Phase 5 code/tests, and added regression coverage
+  for import order, all reserved recipe directive keys, override-backed recipe
+  argument pre-resolution, recipe manifest fingerprint contribution, and
+  `UnknownRecipeError` inheritance.
+- Refinement validation:
+  - `make validate-pr`: passed after installing worktree dependencies with
+    `uv sync --all-groups`; includes `ruff check .`, `pyright`, default pytest
+    (`221 passed`), and `uv build`.
+  - `make test-package` equivalent via harness: `14 passed`.
+  - `make test-unit` equivalent via harness: `189 passed`.
+  - `make test-contract` equivalent via harness: `9 passed`.
+  - `make test-integration` equivalent via harness: `9 passed`.
+  - Focused pytest before full validation:
+    `tests/package/test_config_api.py tests/unit/loom/test_deferred_stubs.py tests/unit/loom/config/instantiate tests/unit/loom/config/recipes tests/unit/loom/config/test_config_provenance.py tests/unit/loom/config/test_config_errors.py tests/integration/config/test_compose_config.py`
+    passed with `49 passed`.
 - PR preparation: pending.
-- Remaining blockers: none known.
+- Remaining blockers: none known after this bounded refinement pass.

@@ -1,5 +1,7 @@
 """Contract tests for extension-style recipe implementations."""
 
+from typing import Any, cast
+
 from loom.config.recipes import Recipe, RecipeCatalog
 from loom.config.recipes.expansion import expand_recipes
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, NestedOutputRecipe, function_recipe, nested_output_recipe
@@ -10,7 +12,8 @@ def test_downstream_dataclass_recipe_without_base_class_registers() -> None:
     catalog.register("downstream", DownstreamRecipe)
     assert catalog.get("downstream") is DownstreamRecipe
     expanded, manifest = expand_recipes({"pipeline": {"_recipe_": "downstream", "value": "alpha"}}, catalog=catalog)
-    assert expanded["pipeline"]["value"] == "downstream:alpha"
+    pipeline = cast(dict[str, Any], expanded["pipeline"])
+    assert pipeline["value"] == "downstream:alpha"
     assert manifest and len(manifest) == 1
 
 
@@ -57,7 +60,10 @@ def test_contract_recipe_output_can_be_nested_recipe() -> None:
         {"pipeline": {"_recipe_": "nested-output", "value": "x"}},
         catalog=catalog,
     )
-    assert expanded["pipeline"]["outer"]["value"] == "x"
-    assert expanded["pipeline"]["outer"]["inner"]["value"] == "nested:x-inner"
+    pipeline = cast(dict[str, Any], expanded["pipeline"])
+    outer = cast(dict[str, Any], pipeline["outer"])
+    inner = cast(dict[str, Any], outer["inner"])
+    assert outer["value"] == "x"
+    assert inner["value"] == "nested:x-inner"
     assert manifest[0]["name"] == "nested-output"
     assert manifest[1]["name"] == "downstream"

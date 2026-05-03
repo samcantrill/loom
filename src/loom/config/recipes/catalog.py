@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
 
 from loom.serialization import PlainData
 
@@ -53,7 +52,7 @@ class RecipeCatalog:
         return tuple((name, self._recipes[name]) for name in self._order)
 
     def to_dict(self) -> dict[str, PlainData]:
-        output = {name: _normalize_recipe_target(recipe) for name, recipe in self.items()}
+        output: dict[str, PlainData] = {name: _normalize_recipe_target(recipe) for name, recipe in self.items()}
         return output
 
     @classmethod
@@ -75,7 +74,7 @@ def _validate_recipe_implementation(*, name: str, recipe: RecipeImplementation) 
     if callable(recipe):
         return
 
-    raise RecipeRegistrationError(f"Recipe {name!r} must be callable, a recipe class, or a ConfigRecipe instance")
+    raise RecipeRegistrationError(f"Recipe {name!r} must be a callable recipe implementation or recipe class")
 
 
 def _normalize_recipe_target(recipe: RecipeImplementation) -> str:

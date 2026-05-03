@@ -54,7 +54,7 @@ def test_catalog_invalid_name_and_implementation() -> None:
     class NotCallable:
         pass
 
-    with pytest.raises(RecipeRegistrationError, match="callable|ConfigRecipe"):
+    with pytest.raises(RecipeRegistrationError, match="callable recipe implementation|recipe class"):
         catalog.register("bad", NotCallable())  # type: ignore[arg-type]
 
 

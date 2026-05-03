@@ -28,6 +28,8 @@ def resolve_recipe_argument_interpolation(
     """Resolve interpolation only inside recipe argument values."""
 
     root = to_plain_data(config, path=path)
+    if not isinstance(root, dict):
+        raise ConfigInterpolationError(f"Recipe argument resolution root must be a mapping at {path}")
     resolved, _ = _resolve_recipe_arguments(root, root=root, path=path)
     if not isinstance(resolved, dict):
         raise ConfigInterpolationError(f"Recipe argument resolution root must be a mapping at {path}")
@@ -44,6 +46,8 @@ def expand_recipes(
 
     plain = to_plain_data(config, path=path)
     expanded, manifest = _expand_node(plain, catalog=catalog, path=path)
+    if not isinstance(expanded, dict):
+        raise InvalidRecipeOutputError(f"Recipe expansion root must remain a mapping at {path}")
     return expanded, tuple(item.to_dict() for item in manifest)
 
 
@@ -52,32 +56,32 @@ def _resolve_recipe_arguments(node: Any, *, root: Mapping[str, Any], path: str) 
         if "_recipe_" in node:
             return _resolve_recipe_args_node(node, root=root, path=path), True
 
-        output: dict[str, Any] = {}
+        mapping_output: dict[str, Any] = {}
         has_recipe = False
         for key, value in node.items():
             resolved_child, child_has_recipe = _resolve_recipe_arguments(value, root=root, path=_child_path(path, key))
-            output[key] = resolved_child
+            mapping_output[key] = resolved_child
             if child_has_recipe:
                 has_recipe = True
-        return output, has_recipe
+        return mapping_output, has_recipe
 
     if isinstance(node, list):
-        output: list[Any] = []
+        sequence_output: list[Any] = []
         has_recipe = False
         for index, value in enumerate(node):
             resolved_child, child_has_recipe = _resolve_recipe_arguments(value, root=root, path=_child_path(path, index))
-            output.append(resolved_child)
+            sequence_output.append(resolved_child)
             has_recipe = has_recipe or child_has_recipe
-        return output, has_recipe
+        return sequence_output, has_recipe
 
     if isinstance(node, tuple):
-        output: list[Any] = []
+        tuple_output: list[Any] = []
         has_recipe = False
         for index, value in enumerate(node):
             resolved_child, child_has_recipe = _resolve_recipe_arguments(value, root=root, path=_child_path(path, index))
-            output.append(resolved_child)
+            tuple_output.append(resolved_child)
             has_recipe = has_recipe or child_has_recipe
-        return output, has_recipe
+        return tuple_output, has_recipe
 
     return node, False
 
@@ -90,6 +94,7 @@ def _resolve_recipe_args_node(node: Mapping[str, Any], *, root: Mapping[str, Any
         raise ConfigInterpolationError(f"_recipe_ must be a non-empty string at {path}")
 
     _validate_recipe_reserved_keys(node, path=path)
+    _reject_nested_recipe(node, path=path)
 
     output: dict[str, Any] = {"_recipe_": recipe_name}
     for key, value in node.items():
@@ -174,27 +179,27 @@ def _lookup_interpolation_token(token: str, *, root: Mapping[str, Any], path: st
     return current
 
 
-def _expand_node(node: Any, *, catalog: RecipeCatalog, path: str) -> tuple[dict[str, PlainData], tuple[RecipeManifestRecord, ...]]:
+def _expand_node(node: Any, *, catalog: RecipeCatalog, path: str) -> tuple[PlainData, tuple[RecipeManifestRecord, ...]]:
     if isinstance(node, dict):
         if "_recipe_" in node:
             return _expand_recipe_node(node, catalog=catalog, path=path)
 
         manifest: list[RecipeManifestRecord] = []
-        output: dict[str, PlainData] = {}
+        mapping_output: dict[str, PlainData] = {}
         for key, child in node.items():
             expanded_child, child_manifest = _expand_node(child, catalog=catalog, path=_child_path(path, key))
-            output[key] = expanded_child
+            mapping_output[key] = expanded_child
             manifest.extend(child_manifest)
-        return output, tuple(manifest)
+        return mapping_output, tuple(manifest)
 
     if isinstance(node, list):
         manifest: list[RecipeManifestRecord] = []
-        output: list[PlainData] = []
+        sequence_output: list[PlainData] = []
         for index, child in enumerate(node):
             expanded_child, child_manifest = _expand_node(child, catalog=catalog, path=_child_path(path, index))
-            output.append(expanded_child)
+            sequence_output.append(expanded_child)
             manifest.extend(child_manifest)
-        return output, tuple(manifest)
+        return sequence_output, tuple(manifest)
 
     return node, ()
 
@@ -216,7 +221,9 @@ def _expand_recipe_node(
     _reject_nested_recipe(node, path=path)
 
     impl = catalog.get(name)
-    arguments = {key: value for key, value in node.items() if key != "_recipe_"}
+    arguments: dict[str, PlainData] = {
+        key: to_plain_data(value, path=_child_path(path, key)) for key, value in node.items() if key != "_recipe_"
+    }
     expanded = _run_recipe(implementation=impl, name=name, arguments=arguments, path=path)
 
     try:

@@ -1,5 +1,7 @@
 """Unit tests for recipe argument pre-resolution and expansion."""
 
+from typing import Any, cast
+
 import pytest
 
 from loom.config.errors import (
@@ -11,6 +13,7 @@ from loom.config.errors import (
 from loom.config.recipes import RecipeCatalog
 from loom.config.recipes.expansion import expand_recipes, resolve_recipe_argument_interpolation
 from loom.config.interpolation import resolve_interpolation
+from loom.serialization import PlainData
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, nested_argument_recipe, composed_output_recipe
 
 
@@ -34,7 +37,7 @@ def test_expand_nested_recipe_order_and_paths() -> None:
     catalog.register("dataclass", DownstreamRecipe)
 
     config = {"pipeline": {"_recipe_": "outer", "value": "hello"}}
-    expanded, manifest = expand_recipes(config, catalog=catalog)
+    expanded, manifest = expand_recipes(cast(dict[str, PlainData], config), catalog=catalog)
 
     assert expanded["pipeline"] == {"outer": {"value": "hello", "inner": {"value": "seeded:hello-inner"}}}
     assert [entry["name"] for entry in manifest] == ["outer", "dataclass"]
@@ -44,13 +47,14 @@ def test_expand_nested_recipe_order_and_paths() -> None:
     assert manifest[1]["name"] == "dataclass"
 
 
-def test_expand_rejects_reserved_keys_in_recipe_block() -> None:
+@pytest.mark.parametrize("reserved_key", ["_target_", "_args_", "_partial_", "_inject_"])
+def test_expand_rejects_reserved_keys_in_recipe_block(reserved_key: str) -> None:
     catalog = RecipeCatalog()
     catalog.register("argument", ArgumentRecipe)
 
     with pytest.raises(ReservedConfigKeyError) as exc:
-        expand_recipes({"x": {"_recipe_": "argument", "_target_": "bad", "value": "x"}}, catalog=catalog)
-    assert "Reserved key '_target_' is not allowed in recipe blocks" in str(exc.value)
+        expand_recipes({"x": {"_recipe_": "argument", reserved_key: "bad", "value": "x"}}, catalog=catalog)
+    assert f"Reserved key {reserved_key!r} is not allowed in recipe blocks" in str(exc.value)
 
 
 def test_expand_rejects_nested_recipe_inside_arguments() -> None:
@@ -66,6 +70,18 @@ def test_expand_rejects_nested_recipe_inside_arguments() -> None:
                 },
             },
             catalog=catalog,
+        )
+
+
+def test_pre_resolution_rejects_nested_recipe_inside_arguments_before_interpolation() -> None:
+    with pytest.raises(RecipeExpansionError):
+        resolve_recipe_argument_interpolation(
+            {
+                "x": {
+                    "_recipe_": "argument",
+                    "value": {"inner": {"_recipe_": "argument", "value": "${missing}"}},
+                },
+            }
         )
 
 
@@ -108,6 +124,8 @@ def test_expand_handles_final_interpolation_for_output() -> None:
     resolved_args = resolve_recipe_argument_interpolation(config)
     expanded, _ = expand_recipes(resolved_args, catalog=catalog)
     resolved = resolve_interpolation(expanded, path="$")
-    assert resolved["pipeline"]["value"] == "one"
-    assert resolved["pipeline"]["nested"]["value"] == "nested:one-child"
-    assert resolved["pipeline"]["resolved"] == "one-resolved"
+    pipeline = cast(dict[str, Any], resolved["pipeline"])
+    nested = cast(dict[str, Any], pipeline["nested"])
+    assert pipeline["value"] == "one"
+    assert nested["value"] == "nested:one-child"
+    assert pipeline["resolved"] == "one-resolved"

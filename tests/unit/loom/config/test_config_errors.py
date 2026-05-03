@@ -19,6 +19,7 @@ from loom.config.errors import (
     OverrideApplyError,
     OverrideParseError,
     UnsupportedRecipeError,
+    UnknownRecipeError,
 )
 
 
@@ -34,6 +35,7 @@ def test_config_error_shapes() -> None:
     assert issubclass(UnsupportedRecipeError, ConfigError)
     assert issubclass(RecipeRegistrationError, ConfigError)
     assert issubclass(DuplicateRecipeError, RecipeRegistrationError)
+    assert issubclass(UnknownRecipeError, ConfigError)
     assert issubclass(RecipeExpansionError, ConfigError)
     assert issubclass(InvalidRecipeOutputError, RecipeExpansionError)
     assert issubclass(ReservedConfigKeyError, ConfigValidationError)

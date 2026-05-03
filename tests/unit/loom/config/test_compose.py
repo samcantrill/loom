@@ -60,7 +60,7 @@ def test_compose_expands_recipe_key(tmp_path: Path) -> None:
 
 def test_compose_rejects_recipe_catalog() -> None:
     with pytest.raises(ConfigValidationError):
-        compose_config("does-not-exist.yaml", recipe_catalog=object())
+        compose_config("does-not-exist.yaml", recipe_catalog=cast(Any, object()))
 
 
 def test_compose_rejects_none_overlays() -> None:

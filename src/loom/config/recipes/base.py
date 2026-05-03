@@ -14,6 +14,7 @@ class ConfigRecipe(Protocol):
 
     def expand(self) -> Mapping[str, Any]:
         """Return a plain-data mapping to replace a `_recipe_` block."""
+        ...
 
 
 class Recipe(BaseModel):

@@ -1,6 +1,7 @@
 """Integration checks for recipe-aware configuration composition."""
 
 from pathlib import Path
+from typing import Any, cast
 
 from loom.config import RecipeCatalog, compose_config
 from tests.support.config_samples import DownstreamRecipe, argument_recipe
@@ -23,12 +24,12 @@ def test_public_composition_with_overlays_and_overrides(tmp_path: Path) -> None:
 
     pipeline = composed.resolved["pipeline"]
     assert isinstance(pipeline, dict)
-    nested = pipeline["nested"]
+    nested = cast(dict[str, Any], pipeline["nested"])
     assert nested["value"] == "override"
     assert pipeline["stage"] == "override"
     assert pipeline["root"] == "/tmp"
 
-    redacted_pipeline = composed.redacted["pipeline"]
+    redacted_pipeline = cast(dict[str, Any], composed.redacted["pipeline"])
     assert redacted_pipeline["secret_token"] == "***REDACTED***"
 
 
@@ -42,16 +43,17 @@ def test_public_compose_expands_recipes_and_nested_interpolation(tmp_path: Path)
         "name: base\n"
         "pipeline:\n"
         "  _recipe_: downstream\n"
-        "  value: ${paths.root}\n"
+        "  value: ${paths.cli}\n"
         "paths:\n"
         "  root: /tmp\n",
         encoding="utf-8",
     )
     overlay.write_text("pipeline:\n  marker: ${paths.root}-overlay\n", encoding="utf-8")
 
-    composed = compose_config(base, overlays=(overlay,), recipe_catalog=catalog)
+    composed = compose_config(base, overlays=(overlay,), overrides=("+paths.cli=/cli",), recipe_catalog=catalog)
 
-    assert composed.resolved["pipeline"]["value"] == "/tmp-overlay:/tmp"
+    pipeline = cast(dict[str, Any], composed.resolved["pipeline"])
+    assert pipeline["value"] == "/tmp-overlay:/cli"
     assert composed.recipe_manifest[0]["name"] == "downstream"
     assert composed.recipe_manifest[0]["path"] == "pipeline"
 
@@ -68,7 +70,9 @@ def test_public_fingerprints_change_with_recipe_manifest(tmp_path: Path) -> None
     second = compose_config(base, recipe_catalog=catalog)
 
     assert first.fingerprint != second.fingerprint
-    assert first.resolved["pipeline"]["value"] != second.resolved["pipeline"]["value"]
+    first_pipeline = cast(dict[str, Any], first.resolved["pipeline"])
+    second_pipeline = cast(dict[str, Any], second.resolved["pipeline"])
+    assert first_pipeline["value"] != second_pipeline["value"]
 
 
 def test_compose_does_not_instantiate_targets(tmp_path: Path) -> None:
@@ -89,5 +93,6 @@ def test_compose_does_not_instantiate_targets(tmp_path: Path) -> None:
     )
 
     composed = compose_config(base, recipe_catalog=catalog)
-    assert isinstance(composed.resolved["target"], dict)
-    assert composed.resolved["target"]["_target_"] == "tests.support.config_samples:concat"
+    target = composed.resolved["target"]
+    assert isinstance(target, dict)
+    assert target["_target_"] == "tests.support.config_samples:concat"
