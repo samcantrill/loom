@@ -9,7 +9,7 @@
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Phase execution plan: `docs/phases/add-local-stores-run-layout.md`
 - Draft pass: complete
-- Refine pass: pending
+- Refine pass: complete
 
 ## Summary
 
@@ -78,22 +78,22 @@ result: passed
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
-result: passed in the implementation refinement pass; Ruff passed, Pyright passed, default pytest passed with 302 passed, and uv build produced source and wheel distributions.
+result: passed in the PR body refine pass; Ruff passed, Pyright passed, default pytest passed with 302 passed, and uv build produced source and wheel distributions.
 ```
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
-result: passed during PR body draft; wrote build/test-summary.md.
+result: passed in the PR body refine pass; wrote build/test-summary.md.
 ```
 
 ### Test Suite Summary
 
 | Suite | Status | Duration | Command |
 | --- | --- | ---: | --- |
-| package | passed | 0.93s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
-| unit | passed | 0.97s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
-| contract | passed | 0.39s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
-| integration | passed | 0.59s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
+| package | passed | 0.92s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
+| unit | passed | 0.98s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
+| contract | passed | 0.36s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
+| integration | passed | 0.56s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
 | e2e | not present | 0.00s | `uv run pytest tests/e2e -m "not slow and not slurm and not network and not optional_dependency"` |
 
 Suite output totals from `build/test-summary.md`:
@@ -124,14 +124,16 @@ Suite output totals from `build/test-summary.md`:
 
 ## PR Creation Status
 
-PR creation was not attempted in this draft pass because
-`.codex/prompts/pr-body-draft.md` explicitly says not to open the PR. No
-GitHub CLI blocker is known from this draft pass.
+PR body refine verified the draft against the phase execution plan, actual
+diff, acceptance criteria, scope boundaries, risks, and refreshed suite
+evidence. No Phase 8 planning/resume/selector behavior, Phase 9 runner/executor
+behavior, or Phase 10 hardening/documentation behavior is included early.
 
-Refine/open pass command to use with explicit base and head:
+PR creation is pending the refine/open pass GitHub authentication, branch push,
+and explicit base/head command:
 
 ```sh
-gh pr create --base develop --head codex/add-local-stores-run-layout --body-file docs/phases/add-local-stores-run-layout-pr-body.md
+gh pr create --base develop --head codex/add-local-stores-run-layout --body-file docs/phases/add-local-stores-run-layout-pr-body.md --title "Phase 7: Local Stores And Run Layout"
 ```
 
 After creation, verify with:
