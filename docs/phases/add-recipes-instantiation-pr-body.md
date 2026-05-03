@@ -113,10 +113,19 @@ tests, and integration collected 9 tests.
 
 ## PR Creation Status
 
-PR body prepared locally. After this file is committed and pushed, create the
-PR with:
+PR opened successfully:
+
+```text
+command: git push -u origin codex/add-recipes-instantiation
+result: pushed new branch and set upstream to origin/codex/add-recipes-instantiation
+```
 
 ```text
 command: gh pr create --base develop --head codex/add-recipes-instantiation --title "Phase 5: Recipes And Instantiation" --body-file docs/phases/add-recipes-instantiation-pr-body.md
-result: pending
+result: https://github.com/samcantrill/loom/pull/8
+```
+
+```text
+command: gh pr view 8 --json baseRefName,headRefName,state,url
+result: {"baseRefName":"develop","headRefName":"codex/add-recipes-instantiation","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/8"}
 ```

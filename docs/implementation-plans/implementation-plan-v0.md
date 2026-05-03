@@ -919,8 +919,7 @@ Completion summary:
 
 Status: pr_open
 Branch: `codex/add-recipes-instantiation`
-PR: pending; body prepared at
-`docs/phases/add-recipes-instantiation-pr-body.md`
+PR: https://github.com/samcantrill/loom/pull/8
 
 Goal:
 
@@ -1037,8 +1036,10 @@ Completion summary:
   commit `f88d16a`. PR review budget: unused.
 - PR body prepared at
   `docs/phases/add-recipes-instantiation-pr-body.md`.
-- PR creation status: pending branch push and GitHub PR creation from the
-  prepared body.
+- GitHub PR #8 opened on 2026-05-03 and verified with
+  `gh pr view 8 --json baseRefName,headRefName,state,url`; `baseRefName` is
+  `develop`, `headRefName` is `codex/add-recipes-instantiation`, and state is
+  `OPEN`.
 - Accepted risks and follow-ups: default recipe registry convenience, no
   recipe sequence fan-out, trusted target imports without sandbox/allow-list,
   pipeline parsing and stage construction deferred to later phases, and runtime

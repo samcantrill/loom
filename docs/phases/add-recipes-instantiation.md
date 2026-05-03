@@ -1117,8 +1117,10 @@ make test-summary
     integration `9 passed`, and e2e `not present`.
 - PR body prepared at
   `docs/phases/add-recipes-instantiation-pr-body.md`.
-- PR creation status: pending branch push and GitHub PR creation from this
-  prepared body.
+- PR creation status: GitHub PR #8 opened on 2026-05-03 and verified with
+  `gh pr view 8 --json baseRefName,headRefName,state,url`; `baseRefName` is
+  `develop`, `headRefName` is `codex/add-recipes-instantiation`, state is
+  `OPEN`, and url is `https://github.com/samcantrill/loom/pull/8`.
 - Accepted risks and follow-ups:
   - The public default recipe registry remains a v0 convenience; explicit
     catalogs are preferred for deterministic tests and future plugin loading.
