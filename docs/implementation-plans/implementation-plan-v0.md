@@ -926,7 +926,7 @@ Completion summary:
 
 ### Phase 5 — Recipes And Instantiation
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-recipes-instantiation`
 PR: https://github.com/samcantrill/loom/pull/8
 
@@ -1049,6 +1049,9 @@ Completion summary:
   `gh pr view 8 --json baseRefName,headRefName,state,url`; `baseRefName` is
   `develop`, `headRefName` is `codex/add-recipes-instantiation`, and state is
   `OPEN`.
+- GitHub PR #8 was squash-merged into `develop` on 2026-05-04 local time
+  (`mergedAt` 2026-05-03T20:42:37Z) as merge commit
+  `1eef9d28cd7f194f5bcba6730c48e940144c1418`.
 - Accepted risks and follow-ups: default recipe registry convenience, no
   recipe sequence fan-out, trusted target imports without sandbox/allow-list,
   pipeline parsing and stage construction deferred to later phases, and runtime
@@ -1057,11 +1060,12 @@ Completion summary:
 
 ### Phase 6 — Pipeline Specs And Graph
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-pipeline-specs-graph`
-PR: prepared locally; not opened because GitHub CLI credentials are invalid.
-Stack predecessor: `codex/add-recipes-instantiation`
-Target branch: `codex/add-recipes-instantiation`
+PR: https://github.com/samcantrill/loom/pull/9
+Develop repair PR: https://github.com/samcantrill/loom/pull/10
+Stack predecessor: none after repair
+Target branch: `develop`
 Worktree: `/home/samcantrill/work/loom-worktrees/add-pipeline-specs-graph`
 
 Goal:
@@ -1190,22 +1194,26 @@ Completion summary:
     passed, and e2e was not present.
 - Phase execution plan drafted in commit `fee1274` and refined in commit
   `d1e0e3a`. Phase implementation refinement budget was used by
-  `loom_phase_refiner` in commit `5dbd6af`; PR review budget remains unused.
+  `loom_phase_refiner` in commit `5dbd6af`; PR review budget was used by local
+  manager review before merging the develop repair PR.
 - PR body prepared at
   `docs/phases/add-pipeline-specs-graph-pr-body.md` and finalized in commit
   `ba65fa6`.
-- PR creation status: prepared but not opened. `gh auth status` reports the
-  configured `samcantrill` token in
-  `/home/samcantrill/.config/gh/hosts.yml` is invalid, so remote push, PR
-  creation, and PR verification are unavailable until credentials are
-  refreshed. After authentication is restored, open the stacked PR with
-  `--base codex/add-recipes-instantiation --head codex/add-pipeline-specs-graph`
-  and verify `baseRefName` is `codex/add-recipes-instantiation`.
-- Merge eligibility: reviewable as a stacked prepared PR against
-  `codex/add-recipes-instantiation`; not merge-eligible until Phase 5 lands and
-  Phase 6 is retargeted or rebased onto `develop`.
-- Remaining product blockers: none known after local validation. Remote PR
-  opening is blocked by unavailable GitHub credentials.
+- GitHub PR #9 was opened and merged against the predecessor branch
+  `codex/add-recipes-instantiation` on 2026-05-04 local time (`mergedAt`
+  2026-05-03T20:44:20Z) as commit
+  `a0ff8fc4f802d47a6278ac04886d84896aec0207`. That left Phase 6 on the
+  predecessor branch rather than on `develop`.
+- Stack repair replayed commit `a0ff8fc4f802d47a6278ac04886d84896aec0207`
+  onto the latest `develop` through GitHub PR #10. The repair PR was verified
+  with `baseRefName` `develop`, `headRefName`
+  `codex/replay-phase-6-to-develop`, and passing GitHub `checks`; it was
+  squash-merged on 2026-05-04 local time (`mergedAt`
+  2026-05-03T21:07:43Z) as
+  `07254a402f32cd73990dd36b2a32cce928778b91`.
+- Stack maintenance: Phase 7 should now branch from latest `develop` and target
+  `develop`; do not use Phase 5 or Phase 6 branches as continuation bases.
+- Remaining product blockers: none known after the develop repair merge.
 
 ### Phase 7 — Local Stores And Run Layout
 

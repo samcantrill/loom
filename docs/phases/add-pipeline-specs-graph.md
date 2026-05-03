@@ -649,7 +649,15 @@ result: passed, 38 passed
 - Refinement summary: completed by `loom_phase_refiner`; fixed validation failures, aligned `StageStatusRecord` with the refined plan, added direct-constructor spec normalization, renamed the colliding test file, and consumed the implementation refinement budget.
 - Final validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff passed, Pyright passed with 0 errors, default pytest passed with 264 passed, and source/wheel build completed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md` with package, unit, contract, and integration suites passed and e2e not present.
 - PR preparation: prepared but not opened. PR body draft commit `943d116df9722c756b2614f8e747f67d88f35f73`; final PR body refine pass completed in this PR-preparation pass.
-- PR creation blocker: `gh auth status` reports the configured github.com account `samcantrill` token in `/home/samcantrill/.config/gh/hosts.yml` is invalid and recommends `gh auth login -h github.com`. Because credentials are unavailable, the branch was not pushed and `gh pr create --base codex/add-recipes-instantiation --head codex/add-pipeline-specs-graph --body-file docs/phases/add-pipeline-specs-graph-pr-body.md` was not attempted.
-- PR verification: unavailable because no PR was opened. Once credentials are refreshed and the PR is created, verify with `gh pr view <PR> --json baseRefName,headRefName,state,url` and stop if `baseRefName` is not `codex/add-recipes-instantiation`.
-- Stack maintenance: pending predecessor merge and retarget/rebase handling.
-- Remaining blockers: none known after local implementation refinement; only remote PR creation is blocked by invalid GitHub credentials.
+- PR creation and stack repair: original stacked PR #9 was opened and merged
+  into predecessor branch `codex/add-recipes-instantiation` as
+  `a0ff8fc4f802d47a6278ac04886d84896aec0207`. Because that left Phase 6 off
+  `develop`, repair PR #10 replayed that squash commit onto latest `develop`.
+  PR #10 was verified with `baseRefName` `develop`, passing GitHub `checks`,
+  and was squash-merged into `develop` as
+  `07254a402f32cd73990dd36b2a32cce928778b91`.
+- PR verification: completed for repair PR #10 with
+  `gh pr view 10 --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
+- Stack maintenance: complete; Phase 7 should branch from latest `develop` and
+  target `develop`.
+- Remaining blockers: none known after the develop repair merge.

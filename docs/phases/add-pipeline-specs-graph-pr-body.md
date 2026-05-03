@@ -2,15 +2,19 @@
 
 - Phase: Phase 6 - Pipeline Specs And Graph
 - Branch: `codex/add-pipeline-specs-graph`
-- Target: `codex/add-recipes-instantiation`
-- Stack predecessor: `codex/add-recipes-instantiation`
+- Original target: `codex/add-recipes-instantiation`
+- Develop repair target: `develop`
+- Stack predecessor: none after develop repair
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-pipeline-specs-graph`
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Expanded phase plan: `docs/phases/add-pipeline-specs-graph.md`
 - PR body draft pass: complete
 - PR body refine pass: complete
-- PR creation status: prepared, not opened; remote push and PR creation blocked by invalid GitHub credentials.
-- Merge eligibility: reviewable against `codex/add-recipes-instantiation`; not merge-eligible until Phase 5 lands and Phase 6 is retargeted or rebased onto `develop`.
+- PR creation status: original stacked PR #9 opened and merged into
+  `codex/add-recipes-instantiation`; develop repair PR #10 replayed the Phase 6
+  squash onto `develop` and merged.
+- Merge eligibility: repaired and merged into `develop`; Phase 7 should branch
+  from latest `develop`.
 - Head commit prepared for draft: `5dbd6af9964c7abffc6f0dba28645fd82dd070ff`
 - Implementation commits: `fee1274` plan draft, `d1e0e3a` plan refinement, `888043f` implementation, `5dbd6af` validation refinement.
 
@@ -119,30 +123,22 @@ Suite details:
 
 ## PR Creation Status
 
-Prepared but not opened.
+Original stacked PR:
 
-Credential preflight was performed before any push or PR operation:
+- URL: https://github.com/samcantrill/loom/pull/9
+- Target: `codex/add-recipes-instantiation`
+- Head: `codex/add-pipeline-specs-graph`
+- Result: merged into the predecessor branch as
+  `a0ff8fc4f802d47a6278ac04886d84896aec0207`, not into `develop`.
 
-```text
-command: gh auth status
-result: unavailable. GitHub CLI reports the configured github.com account `samcantrill` token in `/home/samcantrill/.config/gh/hosts.yml` is invalid and recommends `gh auth login -h github.com`.
-```
+Develop repair PR:
 
-Because credentials are unavailable, no push or PR creation command was attempted and no unsafe authentication workaround was used. After credentials are refreshed, push the branch and open the stacked PR with the recorded target:
-
-```sh
-git push -u origin codex/add-pipeline-specs-graph
-gh pr create --base codex/add-recipes-instantiation --head codex/add-pipeline-specs-graph --body-file docs/phases/add-pipeline-specs-graph-pr-body.md
-```
-
-Verify the PR target before handoff:
-
-```sh
-gh pr view <PR> --json baseRefName,headRefName,state,url
-```
-
-Required verification facts once opened:
-
-- `baseRefName` must be `codex/add-recipes-instantiation`.
-- `headRefName` must be `codex/add-pipeline-specs-graph`.
-- The PR is stacked for review only and is not merge-eligible until Phase 5 lands and stack maintenance retargets or rebases Phase 6 onto `develop`.
+- URL: https://github.com/samcantrill/loom/pull/10
+- Target: `develop`
+- Head: `codex/replay-phase-6-to-develop`
+- Source replayed: `a0ff8fc4f802d47a6278ac04886d84896aec0207`
+- Validation: GitHub `checks` passed, and local repair validation passed with
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`.
+- Result: squash-merged into `develop` as
+  `07254a402f32cd73990dd36b2a32cce928778b91`.
