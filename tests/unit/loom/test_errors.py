@@ -7,10 +7,14 @@ def test_error_hierarchy_inherits_from_exception() -> None:
     assert issubclass(errors.LoomError, Exception)
     assert issubclass(errors.ValidationError, errors.LoomError)
     assert issubclass(errors.ContractError, errors.LoomError)
+    assert issubclass(errors.ResourceError, errors.LoomError)
     assert issubclass(errors.ArtifactError, errors.LoomError)
     assert issubclass(errors.ConfigError, errors.LoomError)
+    assert issubclass(errors.SerializationError, errors.LoomError)
+    assert issubclass(errors.FingerprintError, errors.LoomError)
     assert issubclass(errors.PipelineError, errors.LoomError)
     assert issubclass(errors.ExecutionError, errors.LoomError)
+    assert issubclass(errors.ProvenanceError, errors.LoomError)
     assert issubclass(errors.IOErrorBase, errors.LoomError)
 
 
@@ -19,10 +23,14 @@ def test_error_export_surface() -> None:
         "LoomError",
         "ValidationError",
         "ContractError",
+        "ResourceError",
         "ArtifactError",
         "ConfigError",
+        "SerializationError",
+        "FingerprintError",
         "PipelineError",
         "ExecutionError",
+        "ProvenanceError",
         "IOErrorBase",
     ]
 

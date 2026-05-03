@@ -1,6 +1,4 @@
-"""Package-level API smoke tests."""
-
-from types import ModuleType
+"""Package-level API tests."""
 
 import pytest
 
@@ -8,79 +6,66 @@ import pytest
 pytestmark = pytest.mark.package
 
 
-def test_phase_one_modules_import_cleanly() -> None:
-    from loom import __version__
-    import loom.config
-    import loom.ids
-    import loom.errors
-    import loom.io
-    import loom.pipeline
-    import loom.pipeline.graph
-    import loom.pipeline.planning
-    import loom.pipeline.execution
-    import loom.pipeline.executors
-    import loom.pipeline.stores
-    import loom.provenance
-    import loom.records
-    import loom.serialization
-    import loom.timestamps
+def test_public_root_symbols() -> None:
+    from loom import ArtifactRef, Fingerprint, InMemoryManifest, ManifestView, Record, ResourceRef, __all__, __version__, hash_mapping
 
     assert __version__
-    assert loom.config.__all__ == [
-        "ConfigError",
-        "compose_config",
-        "instantiate",
-        "register_recipe",
-    ]
+    assert __all__
+    assert ResourceRef
+    assert ArtifactRef
+    assert InMemoryManifest
+    assert ManifestView
+    assert Record
+    assert Fingerprint
+    assert callable(hash_mapping)
 
 
-def test_phase_one_modules_are_importable_via_from_import() -> None:
-    from loom.ids import ArtifactID, ArtifactType, CodecKey, RecordID, ResourceKey, RunID, StageID
-    from loom.errors import ArtifactError, ConfigError, ContractError, ExecutionError
-    from loom.timestamps import parse_timestamp, safe_timestamp_for_path, utc_now, utc_timestamp
-
-    assert ArtifactID
-    assert ArtifactType
-    assert CodecKey
-    assert RecordID
-    assert ResourceKey
-    assert RunID
-    assert StageID
-    assert ConfigError
-    assert ContractError
-    assert ArtifactError
-    assert ExecutionError
-    assert parse_timestamp("2026-05-03T12:34:56Z")
-    assert safe_timestamp_for_path(utc_now())
-    assert utc_timestamp(utc_now())
-
-
-def test_empty_skeleton_packages_export_no_public_names() -> None:
-    import loom.cli
-    import loom.io
-    import loom.pipeline
-    import loom.pipeline.execution
-    import loom.pipeline.executors
-    import loom.pipeline.graph
-    import loom.pipeline.planning
-    import loom.pipeline.stores
-    import loom.provenance
+def test_package_modules_import_cleanly() -> None:
+    import loom.fingerprints
+    import loom.ids
+    import loom.refs
+    import loom.artifacts
     import loom.records
     import loom.serialization
+    import loom.provenance
+    import loom.protocols
+    import loom.errors
+    import loom.timestamps
 
-    skeletons: tuple[ModuleType, ...] = (
-        loom.cli,
-        loom.io,
-        loom.pipeline,
-        loom.pipeline.execution,
-        loom.pipeline.executors,
-        loom.pipeline.graph,
-        loom.pipeline.planning,
-        loom.pipeline.stores,
-        loom.provenance,
-        loom.records,
-        loom.serialization,
-    )
+    assert loom.ids
+    assert loom.refs
+    assert loom.artifacts
+    assert loom.records
+    assert loom.serialization
+    assert loom.provenance
+    assert loom.protocols
+    assert loom.errors
+    assert loom.timestamps
 
-    for module in skeletons:
-        assert module.__all__ == []
+
+def test_public_import_paths() -> None:
+    from loom.fingerprints import Fingerprint, hash_mapping
+    from loom.ids import Checksum, Fingerprint as IdFingerprint, ResourceType
+    from loom.refs import ResourceRef, ResourceRefError
+    from loom.artifacts import ArtifactRef, ArtifactValidationError
+    from loom.records import Record
+    from loom.serialization import PlainData
+    from loom.serialization import dataclass_to_dict
+    from loom.provenance import capture_command_provenance, ProvenanceCaptureOptions, StageProvenance, RunProvenance
+
+    assert Fingerprint
+    assert hash_mapping
+    assert Checksum
+    assert IdFingerprint
+    assert ResourceType
+    assert ResourceRef
+    assert ResourceRefError
+    assert ArtifactRef
+    assert ArtifactValidationError
+    assert Record
+    assert PlainData
+    assert dataclass_to_dict
+    assert ProvenanceCaptureOptions
+    assert capture_command_provenance
+    assert StageProvenance
+    assert RunProvenance
