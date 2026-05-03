@@ -370,30 +370,39 @@ Deferred extensibility is intentional for:
 
 ## Plan Quality Gate
 
-Status: pending re-review by `loom_plan_reviewer` after plan refinement.
+Status: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review.
 
 Loop budget: one plan review, one automated plan refinement pass, and one
 confirmation review. If blocking findings remain after the confirmation review,
 mark the plan or next phase `blocked`, report the exact blocker, and stop
 instead of starting another review/refine cycle.
 
-Before Phase 1 starts:
+Budget state:
 
-- Review this plan with `.codex/prompts/implementation-plan-review.md`.
-- Resolve blocking maintainability, extensibility, technical debt,
-  conflicting-design, and reviewability findings.
-- Blocking findings from the first plan review are being addressed by:
+- Initial plan review: used.
+- Automated plan refinement pass: used.
+- Confirmation review: used.
+
+Gate result:
+
+- Confirmation review found no blocking maintainability, extensibility,
+  technical debt, conflicting-design, or reviewability findings.
+- Blocking findings from the first plan review were addressed by:
   - clarifying stage `config` as runtime invocation config;
   - making output `codec_key` optional and adding artifact registration;
   - splitting stores/run layout from planning/resume/selectors;
   - adding root status, plan, and failure files to the run-store contract;
   - recording the hard config dependency tradeoff and revisit trigger;
   - adding selectors to the planning phase; and
-  - requiring all four validation commands for each phase unless unavailable
-    checks are explicitly justified.
-- Record accepted risks with revisit triggers in this section or the technical
-  debt ledger.
-- Split any phase that is too broad for one reviewable PR.
+  - requiring `make validate-pr` and `make test-summary` for each phase unless
+    unavailable checks are explicitly justified.
+- Accepted risks remain recorded in the technical debt ledger. The controlling
+  v0 scope intentionally narrows broader feature documents where this plan
+  makes explicit v0 tradeoffs.
+- Phase 9 expanded planning should preserve the `StageContext` helper intent
+  for artifact-store, output-path, and save/register ergonomics without widening
+  v0 execution scope.
+- Remaining blockers: none.
 
 Every expanded phase plan in `docs/phases/` must include:
 
