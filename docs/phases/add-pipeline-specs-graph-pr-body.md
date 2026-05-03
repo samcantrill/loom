@@ -8,7 +8,8 @@
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Expanded phase plan: `docs/phases/add-pipeline-specs-graph.md`
 - PR body draft pass: complete
-- PR body refine pass: pending
+- PR body refine pass: complete
+- PR creation status: prepared, not opened; remote push and PR creation blocked by invalid GitHub credentials.
 - Merge eligibility: reviewable against `codex/add-recipes-instantiation`; not merge-eligible until Phase 5 lands and Phase 6 is retargeted or rebased onto `develop`.
 - Head commit prepared for draft: `5dbd6af9964c7abffc6f0dba28645fd82dd070ff`
 - Implementation commits: `fee1274` plan draft, `d1e0e3a` plan refinement, `888043f` implementation, `5dbd6af` validation refinement.
@@ -118,18 +119,30 @@ Suite details:
 
 ## PR Creation Status
 
-PR not opened in this draft pass by assignment.
+Prepared but not opened.
 
-No PR creation command was attempted. The expected stacked PR creation command for the later refine/open pass is:
+Credential preflight was performed before any push or PR operation:
 
-```sh
-gh pr create --base codex/add-recipes-instantiation --head codex/add-pipeline-specs-graph --title "Phase 6: Pipeline Specs And Graph" --body-file docs/phases/add-pipeline-specs-graph-pr-body.md
+```text
+command: gh auth status
+result: unavailable. GitHub CLI reports the configured github.com account `samcantrill` token in `/home/samcantrill/.config/gh/hosts.yml` is invalid and recommends `gh auth login -h github.com`.
 ```
 
-After creation, verify the PR target before handoff:
+Because credentials are unavailable, no push or PR creation command was attempted and no unsafe authentication workaround was used. After credentials are refreshed, push the branch and open the stacked PR with the recorded target:
+
+```sh
+git push -u origin codex/add-pipeline-specs-graph
+gh pr create --base codex/add-recipes-instantiation --head codex/add-pipeline-specs-graph --body-file docs/phases/add-pipeline-specs-graph-pr-body.md
+```
+
+Verify the PR target before handoff:
 
 ```sh
 gh pr view <PR> --json baseRefName,headRefName,state,url
 ```
 
-The verified `baseRefName` must be `codex/add-recipes-instantiation` for this stacked PR draft, not `main` and not `develop` until Phase 5 has landed and stack maintenance retargets or rebases Phase 6.
+Required verification facts once opened:
+
+- `baseRefName` must be `codex/add-recipes-instantiation`.
+- `headRefName` must be `codex/add-pipeline-specs-graph`.
+- The PR is stacked for review only and is not merge-eligible until Phase 5 lands and stack maintenance retargets or rebases Phase 6 onto `develop`.

@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: PR prepared; remote PR creation blocked by invalid GitHub credentials.
 - Branch: `codex/add-pipeline-specs-graph`
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-pipeline-specs-graph`
 - Phase execution plan path: `docs/phases/add-pipeline-specs-graph.md`
@@ -17,7 +17,8 @@
 - Plan quality gate loop budget: initial plan review used, automated plan refinement pass used, confirmation review used. Do not rerun the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner`; draft commit `fee127460ad171cc364485169575916a7acdcdee`.
 - Refine pass: completed by `loom_phase_planner` on 2026-05-03.
-- Setup limitations: `gh auth status` reported an invalid configured `samcantrill` token during the draft pass, so remote synchronization was unavailable. This refine pass performed no remote operations by assignment. The worktree was created from the local recorded predecessor branch.
+- Setup limitations: `gh auth status` reported an invalid configured `samcantrill` token during the draft pass, so remote synchronization was unavailable. The phase plan refine pass performed no remote operations by assignment. Final PR preparation repeated `gh auth status` before push or PR creation; the token was still invalid, so remote push and PR opening were not attempted. The worktree was created from the local recorded predecessor branch.
+- PR preparation status: PR body refined and ready; remote PR creation blocked by invalid GitHub credentials. No PR URL or verification JSON is available.
 - Blockers: none for local phase implementation.
 
 ## Objective
@@ -646,6 +647,9 @@ result: passed, 38 passed
 - Implementation summary: completed by `loom_phase_executor` in commit `feat: add pipeline specs and graph primitives`, with Phase 6 static specs, context, stage protocol, status values, bindings, graph helpers, and phase-scoped tests.
 - Implementation validation: manager preflight passed package, contract, integration, and targeted pipeline checks; this refinement pass reran lint, typecheck, unit, package, and targeted pipeline checks successfully.
 - Refinement summary: completed by `loom_phase_refiner`; fixed validation failures, aligned `StageStatusRecord` with the refined plan, added direct-constructor spec normalization, renamed the colliding test file, and consumed the implementation refinement budget.
-- PR preparation: pending.
+- Final validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff passed, Pyright passed with 0 errors, default pytest passed with 264 passed, and source/wheel build completed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md` with package, unit, contract, and integration suites passed and e2e not present.
+- PR preparation: prepared but not opened. PR body draft commit `943d116df9722c756b2614f8e747f67d88f35f73`; final PR body refine pass completed in this PR-preparation pass.
+- PR creation blocker: `gh auth status` reports the configured github.com account `samcantrill` token in `/home/samcantrill/.config/gh/hosts.yml` is invalid and recommends `gh auth login -h github.com`. Because credentials are unavailable, the branch was not pushed and `gh pr create --base codex/add-recipes-instantiation --head codex/add-pipeline-specs-graph --body-file docs/phases/add-pipeline-specs-graph-pr-body.md` was not attempted.
+- PR verification: unavailable because no PR was opened. Once credentials are refreshed and the PR is created, verify with `gh pr view <PR> --json baseRefName,headRefName,state,url` and stop if `baseRefName` is not `codex/add-recipes-instantiation`.
 - Stack maintenance: pending predecessor merge and retarget/rebase handling.
-- Remaining blockers: none known after local implementation refinement.
+- Remaining blockers: none known after local implementation refinement; only remote PR creation is blocked by invalid GitHub credentials.
