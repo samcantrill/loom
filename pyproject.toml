@@ -49,6 +49,8 @@ include = [
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
 
 [tool.ruff]
 src = [
