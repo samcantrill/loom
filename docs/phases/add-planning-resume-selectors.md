@@ -841,9 +841,9 @@ make test-summary
   - plan persistence and public planning exports;
   - focused tests for each slice.
 - Tests to run with each slice:
-  - model/fingerprint changes: `uv run pytest tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/planning/test_fingerprints.py -q`;
+  - model/fingerprint changes: `uv run pytest tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/planning/test_planning_fingerprints.py -q`;
   - selector/planner changes: `uv run pytest tests/unit/loom/pipeline/planning/test_selectors.py tests/unit/loom/pipeline/planning/test_planner.py -q`;
-  - resume/error changes: `uv run pytest tests/unit/loom/pipeline/planning/test_resume.py tests/unit/loom/pipeline/planning/test_errors.py -q`;
+  - resume/error changes: `uv run pytest tests/unit/loom/pipeline/planning/test_resume.py tests/unit/loom/pipeline/planning/test_planning_errors.py -q`;
   - store collaboration: `uv run pytest tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q`;
   - exports/import boundaries: `make test-package`.
 - Decisions the executor must not revisit:
@@ -872,8 +872,8 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` in this branch.
 - Final phase execution plan: refined and decision-complete for implementation on 2026-05-04 local time.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed locally after executor handoff attempts hit context-window tool failures before committing. Added the `loom.pipeline.planning` models, errors, fingerprinting, selector normalization, direct resume checks, topological planner, plan persistence, and exact planning exports. Added Phase 8-scoped package, unit, and integration coverage without runner/executor, CLI, remote store, or future-phase behavior.
+- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache uv run python -m compileall src/loom/pipeline/planning` passed; focused Phase 8 pytest scope passed with 23 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/planning tests/package/test_pipeline_planning_api.py tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors; `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed with 24 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed with 271 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-integration` passed with 15 tests.
 - Refinement summary: pending.
 - PR preparation: pending.
 - Stack maintenance: pending Phase 7 merge/rebase or retarget decision.
