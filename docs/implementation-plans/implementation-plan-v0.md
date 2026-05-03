@@ -543,11 +543,9 @@ Completion summary:
 
 ### Phase 2 — Primitives And Serialization
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-primitives-serialization`
-PR: not opened; branch push to `origin` is blocked by SSH public-key
-authentication. Body prepared at
-`docs/phases/add-primitives-serialization-pr-body.md`.
+PR: https://github.com/samcantrill/loom/pull/2
 
 Goal:
 
@@ -656,20 +654,26 @@ Completion summary:
   persistence beyond `InMemoryManifest`, stage fingerprint policy, file/stream
   checksum helpers, fuller provenance capture, and YAML helpers remain deferred
   to their owning future phases.
-- Phase implementation refinement budget: used. PR review budget: unused.
+- Phase implementation refinement budget: used. PR review budget: used by
+  merge-time review for GitHub PR #2.
 - PR body prepared at
   `docs/phases/add-primitives-serialization-pr-body.md`.
-- Remote PR creation blocker on 2026-05-03:
+- GitHub PR #2 squash-merged into `develop` as
+  `9f195edf0e393bdcf5f132fb27b8b4db7e60d8ac` on 2026-05-03.
+- Earlier remote PR creation blocker recorded on 2026-05-03 was resolved before
+  merge:
   `git push -u origin codex/add-primitives-serialization` failed with
   `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`,
   `git@github.com: Permission denied (publickey).`, and
   `fatal: Could not read from remote repository.`
+- Remaining blockers: none.
 
 ### Phase 3 — I/O Basics
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-io-basics`
-PR: pending
+PR: pending (remote push/authentication blocked; body prepared at
+`docs/phases/add-io-basics-pr-body.md`)
 
 Goal:
 
@@ -742,7 +746,39 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Implemented the complete Phase 3 I/O surface on `codex/add-io-basics` in
+  worktree `/home/samcantrill/work/loom-worktrees/add-io-basics`, including
+  URI helpers, `DataSource` and `LocalFileSystemSource`, JSON/text/bytes
+  codecs, codec errors, and an explicit instance-based `CodecRegistry`.
+- Kept the phase scoped to local standard-library I/O only. No config,
+  pipeline, store, runner, remote backend, checksum, plugin, domain codec, or
+  top-level `loom` export behavior was added.
+- Added package, unit, contract, and integration coverage for the Phase 3
+  public surface. The expanded phase plan explicitly defers e2e and opt-in
+  suites because Phase 3 has no config composition, stores, runner, CLI,
+  remote source, network, optional dependency, SLURM, or slow-test behavior.
+- Final PR-prep validation on 2026-05-03:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: passed; Ruff passed,
+    Pyright reported 0 errors, default pytest passed with 136 tests, and
+    `uv build` produced source and wheel distributions.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`: passed and wrote
+    `build/test-summary.md`; package suite passed with 11 tests, unit suite
+    passed with 119 tests, contract suite passed with 4 tests, integration
+    suite passed with 2 tests, and e2e was not present as deferred.
+- Implementation refinement budget: used. PR review budget: unused.
+- PR body prepared at `docs/phases/add-io-basics-pr-body.md`.
+- PR creation blocker: branch push failed because SSH authentication is not
+  available in this environment:
+  `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`;
+  `git@github.com: Permission denied (publickey).`; `fatal: Could not read
+  from remote repository.` A non-interactive `gh pr create --base develop
+  --head codex/add-io-basics --title "Phase 3: I/O Basics" --body-file
+  docs/phases/add-io-basics-pr-body.md` attempt then failed because the head
+  branch was not present on GitHub: `GraphQL: Head sha can't be blank, Base sha
+  can't be blank, No commits between develop and codex/add-io-basics, Head ref
+  must be a branch (createPullRequest)`.
+- Remaining blockers: remote PR creation unavailable until the branch can be
+  pushed or created on GitHub.
 
 ### Phase 4 — Config Composition
 
