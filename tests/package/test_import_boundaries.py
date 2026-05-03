@@ -22,6 +22,9 @@ def test_import_does_not_import_deferred_modules() -> None:
         for forbidden in ("loom.config", "loom.pipeline", "loom.cli"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported eagerly")
+        for forbidden in ("omegaconf", "yaml", "pydantic"):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported eagerly")
         print("ok")
         """
     )
