@@ -1344,9 +1344,9 @@ Completion summary:
 
 ### Phase 8 — Planning, Resume, And Selectors
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-planning-resume-selectors`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/12
 
 Goal:
 
@@ -1436,7 +1436,41 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Phase 8 planning, resume, and selector behavior implemented on
+  `codex/add-planning-resume-selectors` in worktree
+  `/home/samcantrill/work/loom-worktrees/add-planning-resume-selectors`.
+- GitHub PR #12 opened on 2026-05-04 and verified with
+  `gh pr view 12 --json baseRefName,headRefName,state,url`;
+  `baseRefName` is `codex/add-local-stores-run-layout`, `headRefName` is
+  `codex/add-planning-resume-selectors`, and state is `OPEN`.
+- Implemented planning-only behavior: deterministic plan models, stage
+  fingerprints, selector normalization, same-run-directory resume checks,
+  downstream invalidation, plan persistence through the run store, and exact
+  `loom.pipeline.planning` exports. Future Phase 9 runner/executor behavior,
+  CLI behavior, remote stores, and cross-run cache reuse remain out of scope.
+- Validation before PR open:
+  - Focused Phase 8 pytest scope passed with 23 tests before refinement; the
+    bounded refinement pass then passed its focused pytest scope with 10 tests
+    and the broader planning/integration pytest slice with 22 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright
+    reported 0 errors, default pytest passed with 327 tests, and build
+    succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed; package, unit,
+    contract, and integration suites passed, and e2e was not present.
+  - GitHub PR #12 CI `checks` completed successfully against the stacked base.
+- Phase implementation refinement budget: used by `loom_phase_refiner` in
+  commit `0e9f742`. PR review budget: unused.
+- PR body prepared at
+  `docs/phases/add-planning-resume-selectors-pr-body.md` in the phase branch.
+  `gh pr edit --body-file` hit the known Projects Classic deprecation GraphQL
+  error, so the PR body was updated with a `gh api` pull-request body patch and
+  recorded in the phase artifacts.
+- Stack maintenance: Phase 9 should branch from
+  `codex/add-planning-resume-selectors` and target
+  `codex/add-planning-resume-selectors` while Phase 8 remains unmerged. If
+  Phase 8 lands before Phase 9 starts, Phase 9 should instead branch from the
+  latest valid predecessor according to the stack state.
+- Remaining blockers: none known after PR preparation.
 
 ### Phase 9 — Local Execution
 
