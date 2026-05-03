@@ -793,8 +793,13 @@ The implementation refinement budget is consumed. The PR review budget remains a
 - PR status:
   - Canonical Phase 2 status updated to `pr_open`.
   - PR body prepared at `docs/phases/add-primitives-serialization-pr-body.md`.
-  - Remote PR creation is pending branch push/open attempt.
+  - Remote PR creation was attempted on 2026-05-03.
+  - `gh pr list --base develop --head codex/add-primitives-serialization --json number,title,url,state` succeeded through the GitHub API and returned no existing PRs.
+  - `git push -u origin codex/add-primitives-serialization` failed with `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`, `git@github.com: Permission denied (publickey).`, and `fatal: Could not read from remote repository.`
+  - PR opening is blocked until SSH credentials or an alternate approved push path are available. No remote or repository-scope workaround was attempted.
 - Budget status:
   - Phase implementation refinement: used.
   - PR review: unused.
-- Remaining blockers: none identified.
+- Remaining blockers:
+  - No implementation blockers identified.
+  - PR creation is blocked by unavailable SSH authentication for pushing `codex/add-primitives-serialization` to `origin`.

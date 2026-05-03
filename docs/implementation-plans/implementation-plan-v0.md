@@ -545,8 +545,9 @@ Completion summary:
 
 Status: pr_open
 Branch: `codex/add-primitives-serialization`
-PR: pending; body prepared at
-`docs/phases/add-primitives-serialization-pr-body.md`
+PR: not opened; branch push to `origin` is blocked by SSH public-key
+authentication. Body prepared at
+`docs/phases/add-primitives-serialization-pr-body.md`.
 
 Goal:
 
@@ -657,8 +658,12 @@ Completion summary:
   to their owning future phases.
 - Phase implementation refinement budget: used. PR review budget: unused.
 - PR body prepared at
-  `docs/phases/add-primitives-serialization-pr-body.md`; remote PR creation
-  status is recorded in the expanded phase plan.
+  `docs/phases/add-primitives-serialization-pr-body.md`.
+- Remote PR creation blocker on 2026-05-03:
+  `git push -u origin codex/add-primitives-serialization` failed with
+  `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`,
+  `git@github.com: Permission denied (publickey).`, and
+  `fatal: Could not read from remote repository.`
 
 ### Phase 3 — I/O Basics
 
