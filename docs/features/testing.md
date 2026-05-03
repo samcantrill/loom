@@ -188,23 +188,26 @@ dummy stages
 synthetic pipeline fixtures
 contract tests for core extension points
 local executor tests
-subprocess executor tests
 run-store and artifact-store tests
 resume/fingerprint tests
-CLI main(argv) tests
+import-safe CLI stub tests
 import-boundary tests
 ruff, pyright, pytest, and build checks
+make targets for suite-specific test runs and PR summaries
 ```
 
 ### 4.2 Should Support Soon
 
 ```text
 CLI golden-output tests
+CLI main(argv) tests
+subprocess executor tests
+stage-worker invocation tests
 SLURM fake-command tests
 plugin fake-entry-point tests
 sweep runner tests with fake PipelineRunner
 failure injection helpers
-test markers for slow/integration/e2e/slurm/network
+test markers for slow/integration/e2e/slurm/network/optional dependencies
 coverage thresholds for critical packages
 ```
 
@@ -297,9 +300,6 @@ tests/
           test_logs.py
         executors/
           test_local.py
-          test_subprocess.py
-          test_slurm.py
-          test_registry.py
         stores/
           test_artifact_store.py
           test_run_store.py
@@ -307,25 +307,10 @@ tests/
           test_local_artifacts.py
           test_local_runs.py
           test_atomic.py
-          test_locking.py
-        sweep/
-          test_spec.py
-          test_grid.py
-          test_manual.py
-          test_trials.py
-          test_runner.py
-
-      plugins/
-        test_entrypoints.py
 
       cli/
-        test_main.py
-        test_validate.py
-        test_plan.py
-        test_run.py
-        test_stage.py
-        test_status.py
-        test_sweep.py
+        test_import_safe.py
+        test_unsupported_stubs.py
 
   package/
     test_import.py
@@ -334,7 +319,7 @@ tests/
     test_typing_marker.py
 
   integration/
-    test_config_instantiates_pipeline.py
+    test_pipeline_parses_config_specs.py
     test_planner_uses_graph_and_stores.py
     test_runner_writes_store_state.py
     test_resume_uses_artifact_fingerprints.py
@@ -392,7 +377,7 @@ src/loom/refs.py                         -> tests/unit/loom/test_refs.py
 src/loom/serialization/plain.py          -> tests/unit/loom/serialization/test_plain.py
 src/loom/io/codecs/json_codec.py         -> tests/unit/loom/io/codecs/test_json_codec.py
 src/loom/pipeline/planning/planner.py    -> tests/unit/loom/pipeline/planning/test_planner.py
-src/loom/cli/run.py                      -> tests/unit/loom/cli/test_run.py
+src/loom/cli/run.py                      -> tests/unit/loom/cli/test_run.py, post-v0
 ```
 
 ### 6.3 Unit Test Boundaries
@@ -532,7 +517,7 @@ write -> add -> multiply -> report
 ### 9.3 Observable Assertions
 
 An end-to-end test should create an isolated project/run directory, execute the
-workflow through the public API or CLI, and verify:
+workflow through the public Python API, and verify:
 
 ```text
 final artifacts exist
@@ -543,8 +528,10 @@ fingerprints are persisted
 resume skips unchanged stages
 forced reruns invalidate downstream outputs
 failure metadata is written
-CLI exits with expected status
 ```
+
+Functional CLI exit checks are post-v0. V0 CLI coverage is limited to
+import-safe modules and unsupported-stub failures.
 
 ### 9.4 Opt-In Heavy E2E Tests
 
@@ -639,7 +626,6 @@ status transitions
 stage status read/write
 fingerprint read/write
 artifact index read/write
-locking
 corrupt state errors
 ```
 
@@ -776,9 +762,12 @@ from loom.provenance import RunProvenance, StageProvenance
 
 ## 13. CLI Tests
 
+Functional CLI tests are post-v0. V0 should test only import-safe CLI modules
+and clear unsupported-stub failures.
+
 ### 13.1 Parser Tests
 
-Test `main(argv)` directly for:
+When functional CLI behavior is added, test `main(argv)` directly for:
 
 ```text
 --help
@@ -828,7 +817,8 @@ platform-specific path separators
 
 ### 13.4 CLI E2E
 
-At least one e2e test should call the real console path or `main(argv)` for:
+CLI E2E tests are post-v0. When functional CLI behavior is added, at least one
+e2e test should call the real console path or `main(argv)` for:
 
 ```text
 loom run synthetic config
@@ -855,6 +845,8 @@ metadata recording
 ```
 
 ### 14.2 Subprocess Executor
+
+Subprocess executor tests are post-v0.
 
 Test:
 
@@ -915,7 +907,10 @@ temporary files are cleaned or recoverable
 corrupt partial files are detected
 ```
 
-### 15.3 Locking Tests
+### 15.3 Post-v0 Locking Tests
+
+V0 does not include a lock manager by default. Add these tests only if
+atomic/interruption tests prove a lock is required or after locking is planned.
 
 Test:
 
@@ -948,7 +943,7 @@ optional_dependency
 
 ### 16.2 Default Test Run
 
-Default `pytest` should run:
+The default local test target should run:
 
 ```text
 unit
@@ -965,6 +960,12 @@ real SLURM
 network
 large slow tests
 missing optional dependency tests
+```
+
+The raw command is:
+
+```bash
+uv run pytest tests -m "not slow and not slurm and not network and not optional_dependency"
 ```
 
 ### 16.3 Opt-In Commands
@@ -986,13 +987,11 @@ uv run pytest -m "e2e and not slow"
 Use:
 
 ```bash
-uv run ruff check .
-uv run pyright
-uv run pytest
-uv build
+make validate-pr
 ```
 
-These are the repository-level checks from `AGENTS.md`.
+This is the repository-level gate from `AGENTS.md`. It wraps Ruff, Pyright, the
+default Pytest suite, and the package build.
 
 ### 17.2 Docs-Only Changes
 
@@ -1025,6 +1024,78 @@ uv run pytest
 ```
 
 Finish with full local checks before commit.
+
+### 17.4 Phase Workflow Timing
+
+Testing is planned and implemented throughout the phase workflow rather than as
+a separate late-stage agent handoff.
+
+Phase planning and plan expansion should define the expected test evidence by
+suite:
+
+```text
+package tests for public import, distribution, or typing-surface changes
+unit tests for new or changed module behavior
+contract tests for extension points and reusable implementations
+integration tests for collaboration across implemented components
+e2e tests for complete synthetic user-visible workflows
+opt-in tests for slow, SLURM, network, or optional dependency behavior
+```
+
+The expanded phase plan should state which suites are required, which test paths
+are expected, what behavior they must assert, and which suites are explicitly
+deferred because the phase does not expose that layer yet.
+
+Phase execution should implement the phase-scoped tests with the code change.
+Start with the narrowest useful unit or package tests, then broaden to contract,
+integration, or e2e tests only when the phase wires enough behavior together to
+make those suites meaningful.
+
+The bounded refinement pass should fix failing validation and missing
+phase-scoped coverage. It should not add broad future-phase tests or redesign
+the test strategy.
+
+PR preparation should not create new coverage. It should run the suite harness,
+capture the resulting summary, and make any unavailable checks explicit in the
+PR body.
+
+### 17.5 Make Harness And PR Summary
+
+The Makefile should expose stable suite targets:
+
+```bash
+make test
+make test-package
+make test-unit
+make test-contract
+make test-integration
+make test-e2e
+make test-all
+make test-summary
+make validate-pr
+```
+
+`make test` runs the default local suite and excludes opt-in heavy tests.
+Suite-specific targets run their corresponding `tests/` directory and report
+`not present` when a future suite directory has no tests yet. Once tests exist
+in a suite, failures must fail the target.
+
+`make test-all` runs all non-external local tests, including tests marked
+`slow`, but still excludes `slurm`, `network`, and `optional_dependency`.
+
+`make validate-pr` runs the local PR gate:
+
+```text
+ruff
+pyright
+default pytest suite
+build
+```
+
+`make test-summary` writes a Markdown test-suite summary under `build/` for PR
+inclusion. The summary should list each suite, command, status, duration, and a
+short output tail. If any executed suite fails, the command should still write
+the summary and then exit non-zero.
 
 ---
 
@@ -1136,10 +1207,9 @@ invalid output types
 corrupt status files
 missing artifacts
 checksum mismatch
-lock contention
-subprocess non-zero exit
-SLURM submission failure
-plugin load failure
+subprocess non-zero exit, post-v0
+SLURM submission failure, post-v0
+plugin load failure, post-v0
 codec decode failure
 ```
 
@@ -1251,7 +1321,7 @@ pipeline spec tests
 DAG tests
 planner/resume tests
 runner lifecycle tests
-local/subprocess executor tests
+local executor tests
 ```
 
 ### 22.5 Phase 5: CLI and E2E
@@ -1259,8 +1329,7 @@ local/subprocess executor tests
 Implement:
 
 ```text
-main(argv) parser tests
-CLI command tests
+import-safe CLI stub tests
 synthetic pipeline e2e
 resume e2e
 failure e2e
@@ -1319,11 +1388,11 @@ be opt-in.
 Recommended answer:
 
 ```text
-both
+Python API for v0; add CLI e2e after functional CLI behavior exists
 ```
 
-Use Python API e2e for faster failure localization and CLI e2e for user-visible
-behavior.
+Use Python API e2e for faster failure localization. CLI e2e should cover
+user-visible behavior after the functional CLI is implemented.
 
 ### 23.5 Should Tests Use Domain Examples?
 

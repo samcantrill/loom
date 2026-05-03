@@ -110,7 +110,7 @@ expand recipes
 resolve interpolation
 validate config-level schemas
 instantiate `_target_` objects
-write resolved config and config provenance
+produce resolved config and config provenance data for the runner/run store
 ```
 
 `loom.config` may produce a resolved pipeline config or instantiate a
@@ -167,11 +167,11 @@ Responsibilities:
 
 ```text
 local in-process execution
-subprocess execution
-SLURM script generation and submission, later
+post-v0 subprocess execution
+post-v0 SLURM script generation and submission
 executor result reporting
 log capture integration
-runtime/resource mapping
+post-v0 runtime/resource mapping
 ```
 
 Executors should not reinterpret pipeline semantics. They receive an execution
@@ -301,18 +301,17 @@ policy.
 
 ### 5.3 Stage
 
-A concrete Python object or callable that performs work.
+A concrete Python object with `run(context, inputs)` that performs work.
 
 Stages are supplied by project code. They are checked structurally rather than
-through inheritance-heavy base classes.
+through inheritance-heavy base classes. Plain callable stages are post-v0.
 
 ### 5.4 Stage Target
 
-The import path or already-instantiated object that identifies the stage
-implementation.
+The import path that identifies the stage implementation.
 
 When authored in YAML, the stage target usually appears as `_target_` and is
-resolved by `loom.config`.
+parsed into internal `StageSpec.target_path`.
 
 ### 5.5 StageContext
 
@@ -359,7 +358,7 @@ Example:
 outputs:
   metrics:
     artifact_type: metrics.json
-    path: metrics.json
+    codec_key: json.v1
 ```
 
 ### 5.9 Execution Plan
@@ -526,7 +525,7 @@ pipeline:
       outputs:
         manifest:
           artifact_type: manifest
-          path: manifest.json
+          codec_key: json.v1
 
     - name: summarize
       _target_: project.stages.SummarizeStage
@@ -535,7 +534,7 @@ pipeline:
       outputs:
         summary:
           artifact_type: summary.json
-          path: summary.json
+          codec_key: json.v1
 ```
 
 The authored config may be compact. After `loom.config` resolves it, the pipeline
@@ -555,7 +554,6 @@ pipeline:
       outputs:
         best_checkpoint:
           artifact_type: checkpoint
-          path: best.ckpt
 
     - name: evaluate_main
       _target_: project.stages.EvaluateStage
@@ -564,7 +562,7 @@ pipeline:
       outputs:
         metrics:
           artifact_type: metrics.json
-          path: metrics-main.json
+          codec_key: json.v1
 
     - name: evaluate_external
       _target_: project.stages.EvaluateStage
@@ -573,7 +571,7 @@ pipeline:
       outputs:
         metrics:
           artifact_type: metrics.json
-          path: metrics-external.json
+          codec_key: json.v1
 ```
 
 One upstream artifact can be consumed by multiple downstream stages. This should
@@ -621,7 +619,6 @@ Stage-specific configuration should live under `config`:
   outputs:
     best_checkpoint:
       artifact_type: checkpoint
-      path: best.ckpt
   config:
     max_epochs: 100
     batch_size: 32
@@ -661,7 +658,7 @@ mutation.
 
 ## 8. PipelineSpec
 
-### 8.1 Recommended Fields
+### 8.1 V0 Fields
 
 ```python
 from dataclasses import dataclass, field
@@ -672,9 +669,8 @@ class PipelineSpec:
     stages: Sequence[StageSpec]
     name: str | None = None
     description: str | None = None
-    defaults: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    schema_version: int = 1
+    schema_version: int | None = None
 ```
 
 Suggested meanings:
@@ -690,13 +686,14 @@ stages:
   ordered or unordered collection of StageSpec objects
 
 defaults:
-  pipeline-level defaults for runtime, retry, resources, or executor settings
+  deferred in v0; authored defaults should fail validation clearly
 
 metadata:
   generic user/project metadata, not interpreted by loom unless documented
 
 schema_version:
-  pipeline spec schema version
+  optional pipeline spec schema version; omitted means no schema version
+  constraint
 ```
 
 ### 8.2 Stage Order in Authored Config
@@ -714,6 +711,9 @@ stable topological sorting preserves authored order where possible
 This makes diffs readable while keeping semantics explicit.
 
 ### 8.3 Pipeline-Level Defaults
+
+Pipeline-level defaults are post-v0. Authored `pipeline.defaults` should fail
+validation clearly in v0.
 
 Pipeline defaults may provide values for stages that omit them.
 
@@ -745,7 +745,7 @@ Keep this aligned with config merge semantics where possible.
 
 ## 9. StageSpec
 
-### 9.1 Recommended Fields
+### 9.1 V0 Fields
 
 ```python
 from dataclasses import dataclass, field
@@ -754,16 +754,20 @@ from typing import Any, Mapping, Sequence
 @dataclass(frozen=True, slots=True)
 class StageSpec:
     name: str
-    target: str | object
+    target_path: str
     inputs: Mapping[str, str] = field(default_factory=dict)
     outputs: Mapping[str, "OutputSpec"] = field(default_factory=dict)
-    depends_on: Sequence[str] = field(default_factory=tuple)
-    config: Mapping[str, Any] = field(default_factory=dict)
+    dependencies: Sequence[str] = field(default_factory=tuple)
+    stage_config: Mapping[str, Any] = field(default_factory=dict)
     resources: Mapping[str, Any] = field(default_factory=dict)
-    runtime: Mapping[str, Any] = field(default_factory=dict)
-    retry: Mapping[str, Any] = field(default_factory=dict)
-    when: str | bool | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+```
+
+Authored YAML keys are parsed into these internal fields:
+
+```text
+_target_ -> target_path
+config -> stage_config
+depends_on -> dependencies
 ```
 
 Suggested meanings:
@@ -772,8 +776,8 @@ Suggested meanings:
 name:
   stable stage identifier within the pipeline
 
-target:
-  import target or instantiated stage object
+target_path:
+  import target path copied from `_target_`
 
 inputs:
   map of stage input name to upstream logical artifact name
@@ -781,27 +785,33 @@ inputs:
 outputs:
   map of stage output name to declared output spec
 
-depends_on:
+dependencies:
   explicit stage dependencies not represented by artifact inputs
 
-config:
+stage_config:
   invocation-specific config visible to the stage
 
 resources:
-  CPU, memory, GPU, walltime, and similar resource requests
+  opaque plain-data metadata preserved for inspection; v0 does not interpret
+  scheduler fields or include resources in semantic fingerprints by default
 
 runtime:
-  executor/runtime hints such as executor name, container, environment, queue
+  deferred in v0; authored `runtime` fields should fail validation clearly
 
 retry:
-  retry policy, initially simple or ignored in v0
+  deferred in v0; authored `retry` fields should fail validation clearly
 
 when:
-  optional conditional stage control, deferred or restricted in v0
+  deferred in v0; authored `when` fields should fail validation clearly
 
 metadata:
-  generic user/project metadata
+  deferred at the stage-spec level in v0; authored `metadata` fields should
+  fail validation clearly
 ```
+
+V0 intentionally rejects unknown stage-level orchestration keys instead of
+preserving them silently. `runtime`, `retry`, `when`, and stage-level
+`metadata` are post-v0 fields.
 
 ### 9.2 Stage Names
 
@@ -859,16 +869,14 @@ The compact string should be enough for v0.
 
 ### 9.4 OutputSpec
 
-Recommended fields:
+V0 fields:
 
 ```python
 @dataclass(frozen=True, slots=True)
 class OutputSpec:
     artifact_type: str
-    path: str | None = None
     codec_key: str | None = None
-    schema_version: int = 1
-    required: bool = True
+    schema_version: int | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 ```
 
@@ -879,49 +887,55 @@ artifact_type:
   generic type label used for validation and inspection
 
 path:
-  relative path under the stage artifact directory, if known before execution
+  deferred in v0; physical paths are allocated by the artifact store
 
 codec_key:
   optional codec expected for the artifact
 
 schema_version:
-  artifact schema version
+  optional artifact schema version; omitted means no schema version constraint
 
 required:
-  whether the stage must return this output to succeed
+  deferred in v0; declared outputs are required
 
 metadata:
   generic metadata
 ```
 
-For v0, prefer required declared outputs. Optional outputs can be added when
+For v0, declared outputs are required, and authored output `path` fields should
+fail validation clearly. Optional outputs and path templates can be added when
 there is a concrete use case.
 
 ### 9.5 ResourceSpec
 
-The pipeline layer should treat resources as generic declarations.
+The pipeline layer should treat resources as opaque plain-data metadata in v0.
+They have no executor-specific semantics, no scheduler mapping, and no default
+impact on stage fingerprints. Future runtime/resource phases may add typed
+resource models or an explicit fingerprint-inclusion policy.
 
 Example:
 
 ```yaml
 resources:
-  cpu: 16
-  memory_gb: 64
-  gpu: 1
-  walltime: "08:00:00"
-  slurm:
-    partition: gpu
+  cpus: 16
+  memory_mb: 65536
+  gpus: 1
+  wall_time_seconds: 28800
+  label: "large-local"
 ```
 
 Validation should be light in v0:
 
 ```text
-known common keys get basic type checks
-unknown nested executor-specific keys may pass through
-executor decides how to map resource keys to execution backend
+value must be plain-data-compatible
+no executor-specific fields are interpreted
+unknown keys are preserved as metadata
 ```
 
 ### 9.6 RuntimeSpec
+
+Runtime settings are post-v0. V0 should reject authored stage `runtime` fields
+with a clear validation error.
 
 Runtime settings describe how the stage should be invoked.
 
@@ -935,8 +949,9 @@ runtime:
     OMP_NUM_THREADS: "8"
 ```
 
-The pipeline layer should not implement container behavior in v0. It should
-preserve runtime settings for executors and fingerprints.
+The pipeline layer should not implement or preserve runtime settings in v0.
+Authored stage `runtime` fields must fail validation clearly. Preserving runtime
+settings for executors and fingerprints is post-v0.
 
 ---
 
@@ -989,17 +1004,19 @@ adapted after the object protocol is stable.
 
 ### 10.3 Stage Construction
 
-Stage construction should be handled by `loom.config.instantiate`, not by
-`loom.pipeline`.
+Pipeline stage mappings are orchestration specs, not generic `_target_` object
+graphs.
 
-The pipeline layer may accept:
+For v0, Phase 9 imports the internal `target_path`, calls the target with no
+constructor kwargs, and then invokes:
 
 ```text
-already-instantiated stage object
-target string plus constructor config, if passed by config layer
+stage.run(context, inputs)
 ```
 
-But it should avoid growing a second instantiation system.
+Authored `config` is parsed into `StageSpec.stage_config` and exposed through
+`StageContext`; it is not passed to the stage target constructor. Accepting
+already-instantiated stage objects or target constructor config is post-v0.
 
 ### 10.4 Stage Idempotence
 
@@ -1040,7 +1057,7 @@ but it should not implement domain-specific checkpoint recovery.
 
 ## 11. StageContext
 
-### 11.1 Required Fields
+### 11.1 Phase 6 Minimal Fields
 
 Recommended fields:
 
@@ -1055,25 +1072,39 @@ class StageContext:
     stage_name: str
     run_dir: Path
     stage_dir: Path
-    artifact_dir: Path
     resolved_config: Mapping[str, Any]
     stage_config: Mapping[str, Any]
-    artifact_store: "ArtifactStore"
-    run_store: "RunStore"
-    logger: Any
-    seed: int | None = None
-    runtime: Mapping[str, Any] = field(default_factory=dict)
-    resources: Mapping[str, Any] = field(default_factory=dict)
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 ```
 
-The concrete type can evolve. The important contract is that stages should not
-need global state to discover where they are running or where to write outputs.
+The Phase 6 context is a minimal static value shape so stage protocol tests do
+not depend on stores or execution. The concrete type can evolve when store and
+runner phases add runtime services.
 
-### 11.2 Output Path Allocation
+### 11.2 Phase 9 Runtime Extensions
 
-The context should provide a helper to allocate output paths under the stage's
-artifact directory.
+After run/artifact store protocols and runner wiring exist, the runtime context
+may expose store-backed fields and helpers:
+
+```text
+artifact_dir
+artifact_store
+run_store
+logger
+provenance writer
+temporary directory helper
+output path helper
+save_artifact/register_artifact helpers
+```
+
+Phase 6 acceptance tests should assert that the minimal context does not require
+artifact stores, run stores, loggers, or helper implementations.
+
+### 11.3 Output Path Allocation
+
+Runtime context extensions can provide a helper to allocate output paths under
+the stage artifact directory.
 
 Example:
 
@@ -1090,9 +1121,9 @@ path = context.artifact_path("metrics.json")
 The helper should prevent stages from accidentally writing outside the stage
 artifact directory unless the user explicitly provides an external artifact URI.
 
-### 11.3 Runtime Services
+### 11.4 Runtime Services
 
-The context may expose runtime services:
+Runtime context extensions may expose generic services:
 
 ```text
 artifact_store
@@ -1104,9 +1135,10 @@ output path helper
 ```
 
 Avoid adding domain services to `StageContext`. Domain packages can pass their own
-dependencies through stage construction or stage config.
+dependencies through stage runtime config or their own imported code. V0 does
+not pass authored stage `config` as target constructor kwargs.
 
-### 11.4 Config Visibility
+### 11.5 Config Visibility
 
 Stages may need both:
 
@@ -1332,7 +1364,7 @@ expected outputs
 fingerprint
 upstream dependencies
 downstream dependencies
-runtime/resources
+resources metadata
 ```
 
 ### 14.3 Stage Actions
@@ -1374,7 +1406,8 @@ the plan is useful for explanation.
 Default policy:
 
 ```text
-reuse prior succeeded stage only if fingerprint matches and required artifacts exist
+reuse prior succeeded stage only if fingerprint matches, required artifacts
+exist, and present checksums validate when the store can read the URI
 rerun failed, incomplete, stale, or missing stages
 rerun downstream stages if upstream artifact identity changed
 fail if required upstream artifacts are missing and cannot be produced
@@ -1390,13 +1423,13 @@ Support selectors:
 from_stage:
   run this stage and all downstream stages
 
-only_stage:
+only_stages:
   run exactly this stage, requiring inputs to already exist or be reusable
 
-force_stage:
+force_stages:
   rerun this stage even if reusable; downstream invalidation applies
 
-skip_stage:
+skip_stages:
   exclude this stage and stages that require its outputs, unless their inputs are already satisfied
 ```
 
@@ -1546,7 +1579,7 @@ stage spec
 stage context
 bound inputs
 fingerprint
-runtime/resources
+resources metadata
 ```
 
 The result should include:
@@ -1554,7 +1587,7 @@ The result should include:
 ```text
 success flag
 returned outputs, for in-process execution
-exit code, for subprocess execution
+exit code, for post-v0 subprocess execution
 exception metadata
 stdout/stderr log paths
 executor metadata
@@ -1577,6 +1610,8 @@ The local executor may return `ArtifactRef`s directly from the stage call.
 
 ### 16.3 Subprocess Executor
 
+Post-v0.
+
 Runs one stage through:
 
 ```bash
@@ -1592,10 +1627,12 @@ closer to SLURM/container execution
 debugging stage entry points
 ```
 
-The subprocess executor should not require Python object sharing across stages.
-It should communicate through run store files and artifact refs.
+Future subprocess executors should not require Python object sharing across
+stages. They should communicate through run store files and artifact refs.
 
 ### 16.4 SLURM Executors
+
+Post-v0.
 
 SLURM behavior should live in executor implementations, not in the core planner.
 
@@ -1677,11 +1714,13 @@ declared inputs
 input artifact refs
 input artifact checksums/fingerprints when available
 declared outputs
-selected runtime/resources that affect outputs
+explicit future opt-in runtime/resource fields that affect outputs
 relevant code provenance
 loom version or pipeline contract version
 user-provided extra fingerprint fields
 ```
+
+V0 excludes `StageSpec.resources` from semantic fingerprints by default.
 
 Avoid noisy values:
 
@@ -1845,9 +1884,11 @@ plan
 
 ## 21. CLI Integration
 
-The pipeline package should support CLI commands without becoming CLI-specific.
+Functional CLI integration is post-v0. V0 may provide import-safe unsupported
+stubs only. When implemented, the pipeline package should support CLI commands
+without becoming CLI-specific.
 
-CLI commands can call Python APIs:
+Post-v0 CLI commands can call Python APIs:
 
 ```text
 loom validate experiment.yaml
@@ -1901,6 +1942,8 @@ return non-zero on failure
 
 ### 21.4 `loom stage run`
 
+Post-v0.
+
 Should:
 
 ```text
@@ -1911,7 +1954,7 @@ run exactly that stage
 write status/outputs/failure metadata
 ```
 
-This command is required for subprocess, SLURM, and container execution.
+This command is required for post-v0 subprocess, SLURM, and container execution.
 
 ---
 
@@ -2093,7 +2136,10 @@ assert stage can run with synthetic ArtifactRefs
 
 ---
 
-## 24. Initial Implementation Plan
+## 24. Implementation Plan Sketch
+
+Items 1-12 align with the v0 plan. Items 13-15 are post-v0 and must not be
+implemented during v0 phase work.
 
 Build in this order:
 
@@ -2108,10 +2154,11 @@ Build in this order:
 9. Pipeline runner lifecycle with status writes.
 10. Stage output validation and artifact index updates.
 11. Resume/reuse planning.
-12. Stage selectors: `from`, `only`, `force`, `skip`.
-13. Subprocess stage command support.
-14. CLI wrappers for validate, plan, run, and stage run.
-15. SLURM executor support after subprocess mode is stable.
+12. Stage selectors: `from_stage`, `only_stages`, `force_stages`,
+    `skip_stages`.
+13. Subprocess stage command support, post-v0.
+14. CLI wrappers for validate, plan, run, and stage run, post-v0.
+15. SLURM executor support after subprocess mode is stable, post-v0.
 
 Each step should include focused tests before the next step depends on it.
 

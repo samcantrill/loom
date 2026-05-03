@@ -74,16 +74,15 @@ Conceptually:
 PipelineSpec
   stages:
     stage_id:
-      callable
-      inputs
+      target_path
+      inputs: Mapping[str, str] strict stage.output refs
       outputs
       resources
-      metadata
 ```
 
-The graph layer may depend on the shape of `PipelineSpec`, `StageSpec`,
-`InputSpec`, and `OutputSpec`, but it should avoid depending on project runtime
-objects.
+The graph layer may depend on the shape of `PipelineSpec`, `StageSpec`, and
+`OutputSpec`, but it should avoid depending on project runtime objects. V0 does
+not define `InputSpec`; richer input specs are deferred.
 
 ## Outputs
 
@@ -223,29 +222,27 @@ Recommended resolved value:
 @dataclass(frozen=True)
 class ResolvedInputBinding:
     input_name: str
-    source_stage_id: str | None
-    source_output_name: str | None
-    literal_value: object | None
+    source_stage_id: str
+    source_output_name: str
 ```
 
-The exact shape should follow the existing input model. The contract is that
-stage inputs are resolved before execution planning needs them.
+The v0 contract is that authored inputs are `Mapping[str, str]` where each value
+is a strict `stage.output` reference. Stage inputs are resolved before execution
+planning needs them.
 
 ## Binding Sources
 
-Inputs may be:
+V0 inputs may be:
 
 ```text
 upstream artifact references
-literal config values
-external source references
-runtime-provided values
 ```
 
 Only upstream artifact references create graph edges.
 
-Literal values and external sources may still be validated by preflight, but
-they do not create stage-to-stage dependencies.
+Literal config values, external source references, and runtime-provided values
+are post-v0 input-spec features. Stage runtime config should use
+`StageSpec.stage_config`, not `inputs`.
 
 ## Graph Construction
 
@@ -460,8 +457,6 @@ cycle detection
 deterministic topological ordering
 direct upstream and downstream queries
 transitive upstream and downstream queries
-literal inputs do not create edges
-external inputs do not create edges
 ```
 
 Tests should use small in-memory pipeline specs and should not require artifact
@@ -490,4 +485,3 @@ fan-out and fan-in shorthand syntax
 ```
 
 These should be designed only after the static DAG model is stable.
-

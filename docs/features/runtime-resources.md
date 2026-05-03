@@ -14,6 +14,21 @@ much of that request they can enforce.
 
 ## Scope
 
+V0 alignment:
+
+```text
+v0 keeps authored stage resources as a generic StageSpec.resources mapping
+with no executor-specific semantics and no default fingerprint impact
+v0 supports Python planning selector fields from_stage, only_stages,
+force_stages, and skip_stages
+typed ResourceRequest, RunOptions, ExecutionOptions, runtime profiles,
+preflight, and executor-specific resource mapping are post-v0
+```
+
+The sections below describe the intended stable direction for the runtime and
+resource surface. V0 implementations should not introduce the full option
+model unless a later phase explicitly expands scope.
+
 This component owns:
 
 ```text
@@ -58,6 +73,13 @@ make dry-run and preflight paths use the same normalized options as execution
 
 `ResourceRequest` is the scheduler-neutral declaration of resources requested
 by a stage.
+
+Post-v0 direction:
+
+```text
+v0 keeps stage resources as a plain structured mapping on StageSpec
+typed ResourceRequest validation begins after the local v0 runner is stable
+```
 
 Recommended shape:
 
@@ -148,6 +170,14 @@ by the executor and included in submission metadata when relevant.
 
 `RunOptions` captures invocation-level choices for one run.
 
+Post-v0 direction:
+
+```text
+v0 runner APIs may accept minimal run directory and selector inputs directly
+full RunOptions normalization, profiles, dry-run, and executor selection are
+post-v0
+```
+
 Recommended shape:
 
 ```python
@@ -179,6 +209,8 @@ class ResumeOptions:
     enabled: bool = False
     force_stages: frozenset[str] = frozenset()
     from_stage: str | None = None
+    only_stages: frozenset[str] = frozenset()
+    skip_stages: frozenset[str] = frozenset()
     reuse_successful: bool = True
     require_fingerprint_match: bool = True
 ```
@@ -187,7 +219,7 @@ Examples:
 
 ```text
 resume=True
-force={"train"}
+force_stages={"train"}
 from_stage="evaluate"
 ```
 
@@ -197,6 +229,13 @@ pipeline graph itself.
 ## Execution Options
 
 `ExecutionOptions` captures execution behavior that applies across stages.
+
+Post-v0 direction:
+
+```text
+v0 supports only in-process local execution
+parallelism, environment shaping, profiles, and executor selection are post-v0
+```
 
 Recommended shape:
 
@@ -217,6 +256,9 @@ Executor-specific options belong in profiles.
 ## Runtime Profiles
 
 A runtime profile is a named collection of operational defaults.
+
+Runtime profiles are post-v0. V0 should preserve the stage/resource boundary
+without adding profile merging or executor-specific profile validation.
 
 Example:
 
@@ -381,6 +423,9 @@ defaults were applied.
 
 Preflight should use runtime/resource objects to check:
 
+Preflight is post-v0 except for validation already required by config, graph,
+stores, planning, and local execution phases.
+
 ```text
 selected executor exists
 required executor commands are available
@@ -434,5 +479,4 @@ resource usage measurement
 resource recommendation reports
 ```
 
-These should be added after the basic local and SLURM mappings are stable.
-
+These should be added after post-v0 runtime/resource mappings are stable.

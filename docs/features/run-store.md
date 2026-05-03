@@ -7,7 +7,8 @@ The run store is the persistent state layer for `loom` pipeline runs.
 It exists to make runs inspectable, resumable, debuggable, and safe under
 interruption. It should define the run directory layout, stage state files,
 status transitions, input and output records, fingerprints, logs, execution
-plans, artifact indexes, atomic write behavior, and locking policy.
+plans, artifact indexes, and atomic write behavior. Locking is post-v0 unless
+atomic/interruption tests expose a concrete need.
 
 The run store should not know how to execute stages. It should not know how to
 load domain data. It should not own artifact serialization or artifact object
@@ -73,7 +74,6 @@ atomic writes
 simple JSON/YAML documents
 stable paths
 clear schema versions
-minimal locking
 no required database
 ```
 
@@ -136,7 +136,7 @@ path normalization
 JSON/YAML file persistence
 atomic file replacement
 local log paths
-local lock files
+local lock files, post-v0
 interrupted-run inspection
 ```
 
@@ -176,7 +176,7 @@ secret redaction
 The run store provides paths and persistence helpers for these files, but config
 semantics remain in `loom.config`.
 
-### 3.6 `loom.cli`
+### 3.6 `loom.cli`, Post-v0
 
 Owns command-line presentation.
 
@@ -502,7 +502,6 @@ runs/RUN_ID/
   status.json
   plan.json
   artifacts.json
-  lock
 
   config/
     raw.yaml
@@ -511,7 +510,6 @@ runs/RUN_ID/
     recipe_manifest.json
     resolved.yaml
     resolved.redacted.yaml
-    provenance.json
 
   provenance/
     environment.json
@@ -527,9 +525,9 @@ runs/RUN_ID/
       fingerprint.json
       failure.json
       provenance.json
-      stdout.log
-      stderr.log
       logs/
+        stdout.log
+        stderr.log
 
   artifacts/
     STAGE_NAME/
@@ -578,8 +576,8 @@ For a failed stage:
 ```text
 stages/STAGE_NAME/status.json
 stages/STAGE_NAME/failure.json
-stages/STAGE_NAME/stdout.log
-stages/STAGE_NAME/stderr.log
+stages/STAGE_NAME/logs/stdout.log
+stages/STAGE_NAME/logs/stderr.log
 ```
 
 ### 7.3 File Formats
@@ -1069,7 +1067,8 @@ ArtifactRef local path exists when checkable
 duplicate logical names are rejected
 ```
 
-These checks should be used by `loom status`, `loom plan --resume`, and tests.
+These checks should be used by tests and by post-v0 `loom status` /
+`loom plan --resume` commands.
 
 ---
 
@@ -1122,7 +1121,11 @@ asks to repair or ignore it.
 
 ### 13.1 V0 Locking Policy
 
-V0 should include a simple run-level lock if practical.
+V0 does not include a lock manager by default. It relies on atomic writes and
+conservative resume validation. Revisit run-level locking if atomic-write,
+interrupted-run, or concurrent-run tests expose a concrete race.
+
+Post-v0, a simple run-level lock may be added.
 
 Purpose:
 
@@ -1134,7 +1137,8 @@ make interrupted runs easier to detect
 
 ### 13.2 Lock File
 
-Recommended `lock` content:
+Post-v0 recommended `lock` content:
+
 
 ```text
 schema_version
@@ -1147,7 +1151,8 @@ command
 
 ### 13.3 Stale Locks
 
-Stale lock handling should be conservative.
+Post-v0 stale lock handling should be conservative.
+
 
 Recommended behavior:
 
@@ -1182,8 +1187,9 @@ stage statuses
 missing state files
 corrupt state files
 artifact index entries
-lock state
 ```
+
+Lock state is post-v0 unless a lock manager is added later.
 
 ### 14.2 Interrupted RUNNING State
 
@@ -1192,8 +1198,7 @@ A stage with status `RUNNING` from an old process should not be reused.
 Recommended planner behavior:
 
 ```text
-if status is RUNNING and owner is not live, mark incomplete or stale
-if status is RUNNING and owner may be live, refuse conflicting run unless forced
+if status is RUNNING, mark incomplete or stale and refuse reuse
 ```
 
 The run store should expose enough metadata for the planner to make this
@@ -1208,7 +1213,7 @@ Safe repairs:
 ```text
 rebuild artifact index from successful stage outputs
 mark old RUNNING stages as interrupted with explicit user command
-remove stale lock with explicit user command
+remove stale lock with explicit user command, post-v0
 ```
 
 Do not silently rewrite ambiguous state.
@@ -1245,9 +1250,11 @@ run store usage is mainly for tests, inspection tools, and advanced integrations
 
 ---
 
-## 16. CLI Integration
+## 16. Post-v0 CLI Integration
 
-The run store should support CLI commands without becoming CLI-specific.
+When functional CLI behavior is added, the run store should support CLI commands
+without becoming CLI-specific. V0 exposes public Python APIs and import-safe CLI
+stubs only.
 
 ### 16.1 `loom status RUN_DIR`
 
@@ -1278,9 +1285,8 @@ log paths
 Should resolve:
 
 ```text
-stages/STAGE/stdout.log
-stages/STAGE/stderr.log
-stages/STAGE/logs/
+stages/STAGE/logs/stdout.log
+stages/STAGE/logs/stderr.log
 ```
 
 It should not guess paths independently from the run store.
@@ -1336,7 +1342,7 @@ Reason:
   invalid JSON at line 1 column 12
 ```
 
-### 17.2 Lock Error Example
+### 17.2 Post-v0 Lock Error Example
 
 ```text
 Run directory is locked.
@@ -1425,7 +1431,6 @@ Test:
 old RUNNING stage is reported
 missing outputs for SUCCEEDED stage are reported
 artifact index can be rebuilt from outputs
-stale lock detection on same host where practical
 ```
 
 ### 18.5 Runner Integration Tests
@@ -1456,10 +1461,10 @@ Build in this order:
 8. Implement stage status, inputs, outputs, and fingerprint read/write.
 9. Implement failure metadata read/write.
 10. Implement artifact index read/write and update helpers.
-11. Add basic run-level lock support if practical.
-12. Add scan/recovery helpers for existing runs.
-13. Connect `PipelineRunner` to `RunStore`.
-14. Add CLI-backed status/log/artifact inspection later.
+11. Add scan/recovery helpers for existing runs.
+12. Connect `PipelineRunner` to `RunStore`.
+13. Add CLI-backed status/log/artifact inspection later.
+14. Add run-level lock support post-v0 only if needed.
 
 Each step should include tests before higher-level pipeline code depends on it.
 
@@ -1480,7 +1485,6 @@ fingerprint records
 failure metadata
 artifact indexes
 atomic writes
-basic locking
 interrupted-run recovery
 path-aware errors
 CLI inspection
@@ -1494,6 +1498,7 @@ owning artifact serialization
 opaque database-only state
 silent repair of ambiguous failures
 distributed locking in v0
+run-level locking before atomic/interruption tests prove it necessary
 remote run stores before local behavior is stable
 domain-specific assumptions
 ```

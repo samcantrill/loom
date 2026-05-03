@@ -4,9 +4,9 @@
 
 `loom.config` is the configuration composition and object construction layer for `loom`.
 
-It exists to keep experiment and pipeline configuration readable while preserving full access to ordinary Python code. It should compose YAML, expand named recipes, validate stable boundaries, construct object graphs, record provenance, and hand the resolved result to `loom.pipeline`.
+It exists to keep experiment and pipeline configuration readable while preserving full access to ordinary Python code. It should compose YAML, validate stable boundaries, construct object graphs, record provenance, and hand the resolved result to `loom.pipeline`. Recipe expansion is introduced after the initial composition API is in place.
 
-The initial design should be intentionally narrow. The first implementation should support two authoring modes:
+The initial design should be intentionally narrow. The full v0 implementation should support two authoring modes:
 
 1. Full dynamic import instantiation using `_target_`.
 2. Named recipes that expand into explicit `_target_` object graphs.
@@ -17,7 +17,10 @@ It should avoid intermediate mechanisms at first, especially registry aliases, a
 
 This document refines the configuration responsibilities listed in
 [loom.md](../loom.md): configuration composition, recursive importlib construction,
-named recipe expansion, validation, provenance capture, and redaction. It keeps
+named recipe expansion, validation, provenance capture, and redaction. Recipe
+expansion arrives after base composition: Phase 4 rejects `_recipe_` blocks with
+a clear unsupported-recipe error, and Phase 5 enables deterministic expansion
+and recipe manifests. It keeps
 the same non-goal boundary: authored configs are trusted project code in v0, but
 `loom.config` must not execute stages, define domain recipes, or become a Hydra
 replacement.
@@ -44,7 +47,7 @@ Execution:
   handled by loom.pipeline, not by loom.config
 ```
 
-This means `loom.config` is not a workflow engine. It does not run stages or interpret application-specific data. It composes configs, expands recipes, validates structure, constructs Python objects, records provenance, and provides the resulting config/object graph to the caller.
+This means `loom.config` is not a workflow engine. It does not run stages or interpret application-specific data. It composes configs, validates structure, constructs Python objects, records provenance, and provides the resulting config/object graph to the caller. After Phase 5 it also expands recipes.
 
 ---
 
@@ -82,7 +85,7 @@ resolve import targets
 instantiate object graphs
 inject runtime dependencies when requested
 record config provenance
-write resolved configs
+produce serializable resolved config snapshots for the runner/run store
 redact secrets
 ```
 
@@ -123,8 +126,8 @@ runtime dependency injection
 partial construction or builder construction
 basic top-level validation
 recipe-level validation
-resolved config export
-include/recipe provenance
+resolved config snapshot generation
+include/recipe provenance data for the runner/run store to persist
 secret redaction
 clear error messages
 ```
@@ -169,7 +172,7 @@ The config after recipe expansion. At this point, high-level recipe references s
 
 ### 5.4 Resolved Config
 
-The final config after interpolation, missing-value checks, redaction handling, and validation. This is what should be saved for reproducibility.
+The final config after interpolation, missing-value checks, redaction handling, and validation. This is what the runner/run store should save for reproducibility.
 
 ### 5.5 Object Graph
 
@@ -193,16 +196,20 @@ Expands to:
 ```yaml
 data:
   source:
-    _target_: loom.io.sources.LocalFileSystemSource
+    _target_: project.sources.ProjectLocalSource
     root: /data/project
   discovery:
-    _target_: loom.io.sources.GlobDiscovery
+    _target_: project.discovery.GlobDiscovery
     pattern: "*.jsonl"
   manifest:
-    _target_: loom.records.ManifestBuilder
+    _target_: project.manifests.ManifestBuilder
     source: ${data.source}
     discovery: ${data.discovery}
 ```
+
+The targets above are project-provided examples. V0 `loom` does not provide a
+generic `GlobDiscovery` or `ManifestBuilder`; recipe examples should avoid
+implying those APIs exist in core.
 
 ### 5.7 Target
 
@@ -260,10 +267,10 @@ An alias like `default_runner` can be convenient, but aliases, registries, inclu
 For now:
 
 ```yaml
-runner:
-  _target_: loom.pipeline.runner.PipelineRunner
-  executor:
-    _target_: loom.pipeline.executors.LocalExecutor
+serialization:
+  codec:
+    _target_: project.codecs.CustomJSONCodec
+    indent: 2
 ```
 
 or:
@@ -286,22 +293,47 @@ runner:
 
 ## 7. Composition Order
 
-Recommended flow:
+Full v0 flow after recipes are implemented:
 
 ```text
 1. Load raw base config.
 2. Load overlay configs in order.
 3. Merge overlays into base config.
 4. Apply CLI dot-path overrides.
-5. Expand recipes.
-6. Resolve interpolation.
-7. Validate missing values and stable schemas.
-8. Redact secrets for persisted config views.
-9. Save raw, overlay, override, recipe, and resolved provenance.
-10. Instantiate object graph when requested.
+5. Resolve enough interpolation for recipe arguments from the composed config.
+6. Expand recipes.
+7. Resolve interpolation again after expansion.
+8. Validate missing values and stable schemas.
+9. Redact secrets for persisted config views.
+10. Produce raw, overlay, override, recipe, and resolved provenance data for
+   the runner/run store to persist.
+11. Instantiate object graph when requested.
 ```
 
-Recipe expansion should happen before final interpolation so expanded blocks can reference values elsewhere in the config.
+Recipe argument pre-resolution should resolve currently resolvable interpolation
+from the composed base/overlay/override config so recipe arguments can reference
+those values. Expanded blocks then participate in final interpolation after
+expansion. Phase 5 tests should cover both recipe args referencing composed
+values and expanded blocks referencing values resolved by the final pass.
+
+Phase 4 bridge behavior:
+
+```text
+load base config
+load overlays
+recursive merge
+apply dot-path overrides
+resolve interpolation
+detect `_recipe_` keys and fail with unsupported-recipe ConfigError
+validate
+redact
+produce empty recipe_manifest
+compute config provenance and fingerprint
+```
+
+Phase 4 composition writes nothing by itself. Persistence belongs to the runner
+and run store. Phase 5 replaces the unsupported-recipe bridge with deterministic
+recipe expansion and manifest records.
 
 ---
 
@@ -334,7 +366,7 @@ Support dot-path overrides:
 ```text
 loom run experiment.yaml \
   --set run.seed=123 \
-  --set pipeline.executor.max_workers=8 \
+  --set serialization.codec.indent=2 \
   --set data.root=/data/project
 ```
 
@@ -355,7 +387,11 @@ Overrides should be recorded exactly as provided and after parsing.
 
 ## 10. Interpolation
 
-Use OmegaConf-style interpolation if OmegaConf is installed with the config extra.
+Use OmegaConf-style interpolation. Earlier design notes described a `config`
+extra, but the v0 implementation plan intentionally makes OmegaConf, Pydantic
+v2, and YAML support hard runtime dependencies when config composition ships so
+there is one tested installation shape for v0. Revisit optional config extras
+after v0 if downstream users need a primitives-only install.
 
 Examples:
 
@@ -400,22 +436,23 @@ class LocalJsonlManifestRecipe:
     def expand(self) -> dict[str, Any]:
         return {
             "source": {
-                "_target_": "loom.io.sources.LocalFileSystemSource",
+                "_target_": "project.sources.ProjectLocalSource",
                 "root": self.root,
             },
             "discovery": {
-                "_target_": "loom.io.sources.GlobDiscovery",
+                "_target_": "project.discovery.GlobDiscovery",
                 "pattern": self.pattern,
             },
             "manifest": {
-                "_target_": "loom.records.ManifestBuilder",
+                "_target_": "project.manifests.ManifestBuilder",
                 "source": "${data.source}",
                 "discovery": "${data.discovery}",
             },
         }
 ```
 
-The recipe may validate its own arguments before returning expanded config.
+The recipe may validate its own arguments before returning expanded config. The
+targets above are project-provided examples, not built-in `loom` APIs.
 
 ### 11.2 Recipe Catalog
 
@@ -488,10 +525,14 @@ resume, provenance, and SLURM dependency generation.
 Any mapping with `_target_` should be constructible.
 
 ```yaml
-executor:
-  _target_: loom.pipeline.executors.LocalExecutor
-  max_workers: 4
+serialization:
+  codec:
+    _target_: project.codecs.CustomJSONCodec
+    indent: 2
 ```
+
+Pipeline stage specs are not generic object graphs in v0; do not use runner or
+executor examples here as if config composition constructs them.
 
 Rules:
 
@@ -590,8 +631,8 @@ credential
 Persist both:
 
 ```text
-resolved.full.yaml:
-  private, local-only, optional
+resolved.yaml:
+  full resolved config, private and local-only
 
 resolved.redacted.yaml:
   safe for logs and bug reports
@@ -625,11 +666,30 @@ cfg = compose_config(
 )
 ```
 
+`compose_config` returns a `ComposedConfig` with:
+
+```text
+resolved
+redacted
+provenance
+recipe_manifest
+fingerprint
+```
+
+Before Phase 5, `recipe_manifest` is empty and `_recipe_` blocks fail clearly as
+unsupported.
+
 `instantiate`:
 
 ```python
-pipeline = instantiate(cfg["pipeline"])
+codec = instantiate(cfg["serialization"]["codec"])
 ```
+
+Do not use generic `instantiate()` on `pipeline` stage mappings in v0.
+`PipelineRunner` parses `pipeline.stages` into `PipelineSpec`/`StageSpec`
+objects, where authored `_target_` is stored as `StageSpec.target_path` and
+authored `config` is stored as `StageSpec.stage_config`. Stage targets are not
+constructed during config composition or generic pipeline parsing.
 
 `register_recipe`:
 
@@ -646,10 +706,10 @@ Config errors should identify the failing path and the exact problem.
 Example:
 
 ```text
-Could not instantiate target project.stages.SummarizeStage.
+Could not instantiate target project.codecs.CustomJSONCodec.
 
 Config path:
-  pipeline.stages[1]
+  serialization.codec
 
 Reason:
   __init__() got an unexpected keyword argument 'formatterr'
@@ -691,24 +751,28 @@ loom run experiment.yaml --set run.seed=123
 
 `plan` should show the resolved pipeline graph and recipe expansions.
 
-`run` should compose config, instantiate the pipeline, create a run directory, and hand execution to `loom.pipeline`.
+When functional CLI behavior is added, `run` should compose config, create a run
+directory, and hand execution to `PipelineRunner`. The runner, not
+`loom.config.instantiate`, parses `pipeline.stages` and imports stage targets
+with no constructor kwargs in v0.
 
 ---
 
-## 18. Initial Implementation Plan
+## 18. Implementation Plan Sketch
 
 Build in this order:
 
 1. Config file loading and recursive merge.
 2. Dot-path CLI override parsing and application.
 3. Interpolation and missing-value checks.
-4. Recipe registry and deterministic expansion.
-5. Resolved config export and recipe provenance.
-6. Recursive `_target_` instantiation.
-7. Runtime dependency injection.
-8. Redaction.
+4. Redaction, provenance data, empty recipe manifest, and clear rejection of
+   `_recipe_` until recipe support lands.
+5. Recipe registry and deterministic expansion.
+6. Resolved config snapshot data and recipe provenance data.
+7. Recursive `_target_` instantiation.
+8. Runtime dependency injection.
 9. Top-level validation and clear error formatting.
-10. CLI wrappers.
+10. Functional CLI wrappers after v0.
 
 Each step should include tests before the next step depends on it.
 

@@ -30,10 +30,15 @@ addopts = [
     "--strict-markers",
 ]
 markers = [
+    "unit: source-mirrored tests for code under src/loom",
     "package: package import, metadata, and distribution smoke tests",
     "integration: tests that combine multiple loom components without exercising a full user workflow",
     "e2e: full end-to-end behavior tests through public APIs or CLI",
     "contract: reusable behavior tests for extension-point implementations",
+    "slow: tests that are too slow for frequent targeted development runs",
+    "slurm: tests that require or simulate SLURM-specific execution behavior",
+    "network: tests that require network access",
+    "optional_dependency: tests that require optional dependencies outside the default dev environment",
 ]
 
 [tool.pyright]

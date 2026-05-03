@@ -260,8 +260,9 @@ automatic domain metadata interpretation
 untrusted-code sandboxing
 ```
 
-The v0 target is enough structured context to debug and reproduce local and
-SLURM pipeline runs.
+The v0 target is enough structured context to debug and reproduce local
+in-process pipeline runs. SLURM, subprocess, and container provenance are
+post-v0 executor concerns that should reuse the same generic document shapes.
 
 ---
 
@@ -1083,11 +1084,13 @@ RUNNING
 SUCCEEDED
 FAILED
 SKIPPED
-REUSED
 INTERRUPTED
 ```
 
 Do not define a separate provenance-only status vocabulary unless necessary.
+V0 does not persist a separate reuse stage status. Resume planning may emit a
+`REUSE` decision for a valid prior result; the prior `SUCCEEDED` stage state is
+retained, while `SKIPPED` remains reserved for selector or condition exclusion.
 
 ### 15.3 Attempts
 
@@ -1372,8 +1375,8 @@ The run store owns paths such as:
 
 ```text
 runs/RUN_ID/
+  run.json
   provenance/
-    run.json
     environment.json
     git.json
     dependencies.json
@@ -1388,7 +1391,8 @@ should be stable.
 
 ### 19.2 Top-Level `run.json`
 
-`run.json` can contain a summary and links to detailed provenance files.
+The top-level `run.json` contains run metadata, a summary, and links to detailed
+provenance files.
 
 Avoid duplicating large provenance payloads in multiple files unless there is a
 clear reason.
@@ -1400,10 +1404,13 @@ Stage provenance should be written after:
 ```text
 stage starts, with RUNNING status
 stage finishes, with SUCCEEDED or FAILED status
-stage is reused, with REUSED status
+stage is selector-skipped, with SKIPPED status
 ```
 
 If v0 only writes at completion, status files still track live state.
+When resume planning emits `REUSE`, v0 should keep the prior `SUCCEEDED` stage
+status/provenance and record the reuse as a planning decision rather than a new
+persisted status.
 
 ### 19.4 Atomic Writes
 
@@ -1648,12 +1655,13 @@ planned
 started
 finished
 failed
-reused
 skipped
 ```
 
 V0 can persist a final stage provenance record and rely on status files for live
 state.
+V0 records valid reuse as a planner `REUSE` decision, not as a distinct
+provenance status.
 
 ### 24.2 Executor Metadata
 
@@ -1936,7 +1944,8 @@ run store writes run provenance
 run store writes stage provenance
 pipeline records input/output artifact refs
 failed stage records error summary
-reused stage records REUSED provenance
+same-run-directory reuse records a REUSE planning decision and retains prior
+SUCCEEDED stage state
 fingerprint input can include selected provenance facts
 CLI status can read provenance summary
 ```

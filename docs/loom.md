@@ -18,6 +18,12 @@ project code:
 
 `loom` should remain useful and testable on its own.
 
+V0 scope is intentionally narrower than the long-term specification below. V0
+supports local in-process execution through the Python API, inspectable local
+run directories, and import-safe unsupported CLI stubs only. Functional CLI
+commands, subprocess workers, SLURM execution, containers, sweeps, and runtime
+profiles are roadmap work after v0.
+
 ---
 
 ## 2. Design Goals
@@ -37,7 +43,8 @@ stage execution
 run directories
 stage status tracking
 fingerprints and resume logic
-local/subprocess/SLURM execution scaffolding
+local execution
+post-v0 subprocess/SLURM execution
 sweep orchestration
 provenance capture
 clear error handling
@@ -74,7 +81,7 @@ It should also avoid becoming a general-purpose workflow engine with too many fe
 
 `loom` should minimize hard dependencies.
 
-Recommended policy:
+Recommended long-term policy:
 
 ```text
 loom primitives:
@@ -107,6 +114,13 @@ dev = [
 ```
 
 Avoid hard dependencies on large task-specific libraries. User projects can depend on those libraries as needed.
+
+The v0 implementation plan intentionally uses a narrower packaging path: the
+package has no runtime dependencies until config composition lands, then
+OmegaConf, Pydantic v2, and YAML support become hard runtime dependencies. This
+keeps the initial validation matrix small while the public runtime API settles.
+Revisit optional config extras after v0 if downstream users need a
+primitives-only install.
 
 ---
 
@@ -201,13 +215,19 @@ pipeline:
     - name: build_index
       _target_: project.stages.BuildIndexStage
       outputs:
-        index: artifacts/index.json
+        index:
+          artifact_type: json
+          codec_key: json.v1
 
     - name: summarize
       _target_: project.stages.SummarizeStage
       depends_on: [build_index]
       inputs:
-        index: ${stages.build_index.outputs.index}
+        index: build_index.index
+      outputs:
+        summary:
+          artifact_type: text
+          codec_key: text.v1
 ```
 
 `loom` validates and runs this graph. The stage classes live in user code.
@@ -218,11 +238,15 @@ Each stage receives a `StageContext` with paths, config, artifacts, and run meta
 
 ```python
 class Stage:
-    def run(self, context):
+    def run(self, context, inputs):
         ...
 ```
 
-The context should provide:
+For v0 the stage contract is `run(context, inputs) -> Mapping[str, ArtifactRef]`.
+Callable stages, context-collected outputs, and alternate result objects are
+post-v0.
+
+Phase 6 defines the minimal context shape:
 
 ```text
 run_id
@@ -230,11 +254,13 @@ run_dir
 stage_name
 stage_dir
 resolved_config
-input_artifacts
-output_artifact_paths
-logger
-provenance writer
+stage_config
+provenance
+metadata
 ```
+
+Store fields, loggers, artifact helpers, and bound input conveniences are wired
+once run/artifact stores and the local runner exist.
 
 ---
 
@@ -253,14 +279,23 @@ data:
   pattern: "*.jsonl"
 
 pipeline:
-  _target_: loom.pipeline.specs.PipelineSpec
   stages:
     - name: build_manifest
       _target_: project.stages.BuildManifestStage
-      source: ${data.source}
+      config:
+        source: ${data.source}
+      outputs:
+        manifest:
+          artifact_type: manifest
     - name: summarize
       _target_: project.stages.SummarizeStage
       depends_on: [build_manifest]
+      inputs:
+        manifest: build_manifest.manifest
+      outputs:
+        summary:
+          artifact_type: text
+          codec_key: text.v1
 ```
 
 Configuration details are specified in [config.md](features/config.md).
@@ -276,13 +311,14 @@ pipeline DAG validation
 stage ordering
 stage context creation
 local execution
-subprocess execution
-SLURM submission scaffolding
 stage status tracking
 resume decisions
 artifact collection
 run finalization
 ```
+
+Subprocess execution, SLURM submission, and container execution are post-v0.
+V0 should expose local in-process execution only.
 
 The runner should treat stages as black boxes with explicit inputs, outputs, and metadata.
 
@@ -294,19 +330,30 @@ Every run should have a stable directory layout.
 
 ```text
 runs/RUN_ID/
+  run.json
+  status.json
+  plan.json
+  artifacts.json
+
   config/
     raw.yaml
     overlays.yaml
     cli_overrides.yaml
     resolved.yaml
+    resolved.redacted.yaml
     recipe_manifest.json
 
   stages/
     STAGE_NAME/
       status.json
-      stdout.log
-      stderr.log
+      inputs.json
+      outputs.json
+      fingerprint.json
+      failure.json (failed stages only)
       provenance.json
+      logs/
+        stdout.log
+        stderr.log
 
   artifacts/
     STAGE_NAME/
@@ -318,7 +365,6 @@ runs/RUN_ID/
     command.json
     dependencies.json
 
-  run.json
 ```
 
 The layout should favor debuggability over cleverness.
@@ -397,7 +443,10 @@ The public API should stay small until repeated usage shows that more helpers ar
 
 ## 13. CLI
 
-`loom` can expose low-level commands:
+The functional CLI is post-v0. V0 may contain import-safe CLI modules or entry
+points that fail with an explicit unsupported error.
+
+Post-v0, `loom` can expose low-level commands:
 
 ```text
 loom validate CONFIG
@@ -448,8 +497,10 @@ Build `loom` in small, testable layers:
 3. Pipeline specs, stage context, local runner, and run directory layout.
 4. Provenance capture and stage fingerprints.
 5. Resume behavior.
-6. Subprocess and SLURM executor scaffolding.
-7. CLI wrappers.
+6. Hardening, docs, and import-safe unsupported CLI stubs for v0.
+
+Roadmap versions after v0 add functional CLI wrappers, subprocess execution,
+SLURM execution, containers, sweeps, remote stores, and reliability policies.
 
 Each layer should include focused tests before the next layer depends on it.
 

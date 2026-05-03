@@ -22,5 +22,6 @@ Detailed design notes live in:
 ```sh
 uv sync --all-groups
 make check
+make test-summary
 make build
 ```

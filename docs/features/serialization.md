@@ -964,7 +964,7 @@ def from_dict(cls, data: Mapping[str, object]) -> Self:
     return cls(
         uri=require_str(data, "uri"),
         resource_type=require_str(data, "resource_type"),
-        codec_key=require_str(data, "codec_key"),
+        codec_key=optional_str(data, "codec_key"),
         metadata=ensure_plain_mapping(data.get("metadata", {})),
     )
 ```
@@ -1248,6 +1248,8 @@ check_supported_schema
 ensure_mapping
 require_field
 optional_field
+require_str
+optional_str
 ```
 
 The goal is clear failure, not a full schema-validation framework.
@@ -1463,7 +1465,8 @@ resource_type:
   required string
 
 codec_key:
-  required string
+  optional string or None; omitted means the resource is tracked but not
+  generically loadable without an explicit codec
 
 schema_version:
   required or defaulted by ResourceRef constructor
@@ -1727,10 +1730,11 @@ Serialization should not execute those targets or recipes.
 
 ### 18.2 Resolved Config Export
 
-`loom.config` may use serialization to persist:
+`loom.config` may use serialization to produce plain serializable documents for
+the runner/run store to persist:
 
 ```text
-resolved.full.yaml
+resolved.yaml
 resolved.redacted.yaml
 config.provenance.json
 cli_overrides.yaml
@@ -1741,9 +1745,10 @@ overlays.yaml
 
 ```text
 what gets redacted
-where files are written
 which config stages are persisted
 ```
+
+The runner/run store owns where these files are written in the run directory.
 
 Serialization owns:
 
@@ -2265,6 +2270,7 @@ Test with public types:
 
 ```text
 ResourceRef round trip
+ResourceRef round trip with omitted and null codec_key
 Record round trip
 InMemoryManifest round trip
 ArtifactRef round trip

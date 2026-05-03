@@ -1132,6 +1132,9 @@ fingerprint is unavailable.
 ### 13.6 Runtime Resources
 
 Runtime fields should be included only when they can affect outputs.
+V0 excludes `StageSpec.resources` from semantic stage fingerprints by default;
+future runtime/resource phases may add explicit opt-in fields after typed
+resource semantics exist.
 
 Examples usually included:
 

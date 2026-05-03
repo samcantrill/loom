@@ -18,16 +18,18 @@ Given a pipeline spec, a run directory, a plan, and an executor, how should loom
 perform the selected stages and record what happened?
 ```
 
-The design should keep execution small enough to reason about locally while
-leaving room for subprocess, cluster, and container execution later.
+The v0 design is local in-process execution only. Subprocess, cluster, and
+container execution details in this document are future scaffolding and must not
+be treated as v0 acceptance criteria unless the implementation plan adds a
+phase for them.
 
 ### 1.1 Alignment With `loom.md`
 
-This document refines the stage execution and local/subprocess/SLURM scaffolding
-goals from [loom.md](../loom.md). It keeps execution as a coordinator over an
-already validated plan: project stages do the work, stores persist state,
-executors invoke stages, and the runner records outcomes without interpreting
-domain behavior.
+This document refines stage execution goals from [loom.md](../loom.md). It keeps
+execution as a coordinator over an already validated plan: project stages do the
+work, stores persist state, executors invoke stages, and the runner records
+outcomes without interpreting domain behavior. For v0, that executor is local
+and in-process.
 
 ---
 
@@ -76,7 +78,6 @@ Responsibilities:
 PipelineSpec
 StageSpec
 StageContext
-StageResult
 pipeline validation
 DAG construction
 topological ordering
@@ -196,12 +197,14 @@ load authored config
 apply overlays and CLI overrides
 expand recipes
 resolve interpolation
-instantiate stage objects when needed
-write resolved config/provenance files
+provide generic object instantiation helpers outside pipeline stage specs
+produce resolved config/provenance data for the runner/run store to persist
 ```
 
-Execution may receive already-instantiated stage objects or use config helpers
-to instantiate them. It should not implement config loading rules.
+For v0, pipeline stage mappings are orchestration specs. Execution imports the
+stage `target_path`, calls the target with no constructor kwargs, then invokes
+`stage.run(context, inputs)`. It should not treat stage mappings as generic
+`_target_` object graphs or implement config loading rules.
 
 ### 3.8 `loom.cli`
 
@@ -248,15 +251,12 @@ runtime metadata.
 ```text
 serial execution of a planned DAG
 local in-process executor
-subprocess executor design and command contract
-StageExecutionRequest and StageExecutionResult dataclasses
+local execution request/result dataclasses or equivalent typed models
 stage lifecycle transitions
-stage attempt numbering
 input binding persistence
 fingerprint persistence handoff
 stdout/stderr log path conventions
 Python exception capture for local execution
-process exit capture for subprocess execution
 stage output validation
 artifact index updates
 run finalization
@@ -274,9 +274,12 @@ scheduling in v0.
 ```text
 parallel local scheduling
 retry policies beyond a single attempt
-timeout enforcement beyond subprocess timeout plumbing
+timeout enforcement
 dynamic DAG mutation
 continue-on-failure for independent branches
+subprocess executor implementation
+subprocess executor command contract
+stage-worker command entry point
 distributed locks
 remote run stores
 remote artifact stores
@@ -316,7 +319,7 @@ Examples:
 
 ```text
 LocalExecutor
-SubprocessExecutor
+SubprocessExecutor, post-v0
 SlurmExecutor, later
 DockerExecutor, later
 ```
@@ -369,19 +372,19 @@ The runner validates the result before committing stage success.
 
 ### 5.5 StageContext
 
-The runtime object given to a stage.
+The runtime object given to a stage. Phase 6 defines only the minimal static
+context shape; execution adds runtime services after stores and runner wiring
+exist.
 
-It should expose:
+Runtime execution may expose:
 
 ```text
 run_id
 stage_name
-attempt
 run directory
 stage directory
 artifact store
 run store helpers
-bound inputs
 output path allocation
 resolved stage config
 runtime metadata
@@ -422,7 +425,9 @@ Invocation mode belongs to executor metadata, not to the stage implementation.
 
 ### 5.8 Runtime Profile
 
-Generic resource and runtime hints attached to a stage.
+Runtime profiles and typed resource hints are post-v0. In v0, stage resources
+are opaque plain-data metadata preserved for inspection; the local executor does
+not interpret them.
 
 Examples:
 
@@ -436,8 +441,8 @@ working directory policy
 backend-specific metadata
 ```
 
-The execution layer should carry these hints. Backend-specific interpretation
-belongs to the executor.
+Post-v0 execution layers may carry these hints. Backend-specific
+interpretation belongs to the executor.
 
 ### 5.9 Log Paths
 
@@ -529,7 +534,7 @@ executor completed successfully
 required outputs were returned or registered
 outputs are valid ArtifactRef values
 required artifact files exist when local validation applies
-optional checksum validation passes when enabled
+checksums validate when present and the store can read the URI
 outputs.json is persisted
 artifact index is updated
 stage status is marked SUCCEEDED
@@ -642,7 +647,7 @@ Recommended flow:
 1. Receive a run request.
 2. Validate or load the pipeline spec.
 3. Create or open the run directory.
-4. Acquire the run lock when required.
+4. Prepare atomic write state; do not acquire a run lock in v0.
 5. Persist run metadata and resolved config references.
 6. Build or receive the execution plan.
 7. Persist plan.json.
@@ -654,14 +659,14 @@ Recommended flow:
 13. Persist fingerprint candidate.
 14. Mark the stage RUNNING.
 15. Invoke the executor.
-16. Validate returned or registered outputs.
+16. Validate returned outputs.
 17. Persist outputs.
 18. Update artifact index.
 19. Mark the stage SUCCEEDED.
 20. On failure, persist failure metadata and mark FAILED.
 21. Stop or continue according to failure policy.
 22. Finalize root run status.
-23. Release the run lock.
+23. Release any post-v0 run lock if one is later added.
 24. Return a structured run result.
 ```
 
@@ -738,9 +743,6 @@ For v0:
 ```text
 local executor:
   whole-pipeline process, in-process stage calls
-
-subprocess executor:
-  whole-pipeline coordinator, per-stage subprocess calls
 ```
 
 Future SLURM support can map either:
@@ -945,7 +947,7 @@ the run directory inspectable.
 
 ## 9. StageExecutionRequest
 
-### 9.1 Recommended Fields
+### 9.1 V0 Fields
 
 Recommended dataclass:
 
@@ -955,13 +957,11 @@ class StageExecutionRequest:
     run_id: str
     run_dir: Path
     stage_name: str
-    attempt: int
     stage_spec: StageSpec
     stage_context: StageContext
     inputs: Mapping[str, ArtifactRef]
     expected_outputs: Mapping[str, OutputSpec]
     fingerprint: str
-    runtime: RuntimeSpec | None
     resources: ResourceSpec | None
     stdout_path: Path
     stderr_path: Path
@@ -992,8 +992,8 @@ StageExecutionRequest.run_dir:
   always present
 ```
 
-For subprocess execution, the command should load the run directory and stage
-spec rather than trying to pickle Python objects.
+For future subprocess execution, the command should load the run directory and
+stage spec rather than trying to pickle Python objects.
 
 ### 9.3 Serialization Boundary
 
@@ -1010,7 +1010,7 @@ attempt
 input artifact refs
 expected output specs
 fingerprint
-runtime/resources
+resources metadata
 log paths
 ```
 
@@ -1044,7 +1044,6 @@ Recommended dataclass:
 @dataclass(frozen=True)
 class StageExecutionResult:
     stage_name: str
-    attempt: int
     status: ExecutionStatus
     outputs: Mapping[str, ArtifactRef] = field(default_factory=dict)
     started_at: str | None = None
@@ -1277,19 +1276,17 @@ core `loom`.
 
 ### 12.1 Required Context Values
 
-The context should include:
+Phase 9 runtime context construction may include:
 
 ```text
 run_id
 run_dir
 stage_name
 stage_dir
-attempt
-inputs
 artifact_store
 run_store
 output path helpers
-runtime/resources
+resources metadata
 stage config
 executor metadata
 ```
@@ -1330,8 +1327,9 @@ manual register:
   context.register_artifact("checkpoint", path, artifact_type="checkpoint")
 ```
 
-Both should result in `ArtifactRef`s that the stage can return or that the
-runner can collect.
+Both should return `ArtifactRef`s that the stage returns in its output mapping.
+For v0, the runner only accepts the direct `stage.run(context, inputs)` return
+mapping. Context-collected outputs are post-v0.
 
 ### 12.4 Runtime Services
 
@@ -1459,22 +1457,21 @@ Recommended behavior:
 ```text
 1. receive StageExecutionRequest
 2. get constructed stage object or construct from stage spec
-3. call stage.run(context) or stage(context)
-4. normalize returned outputs
+3. call stage.run(context, inputs)
+4. validate the returned ArtifactRef mapping
 5. capture exceptions
 6. write traceback when needed
 7. return StageExecutionResult
 ```
 
-Supported stage call forms should match the pipeline spec:
+The v0 stage call form must match the pipeline spec exactly:
 
 ```python
-stage.run(context)
-stage(context)
+stage.run(context, inputs)
 ```
 
-The pipeline spec should define which form is canonical. The local executor
-should implement only the accepted forms.
+Callable stages, `stage.run(context)` without explicit inputs, and stage objects
+that collect outputs through context are post-v0.
 
 ### 14.3 Stdout and Stderr
 
@@ -1508,30 +1505,29 @@ finished_at
 The traceback file should contain the full Python traceback. The JSON failure
 metadata should contain concise structured fields.
 
-### 14.5 Return Value Normalization
+### 14.5 Return Value Validation
 
-Stages may return:
+V0 stages must return:
 
 ```text
 Mapping[str, ArtifactRef]
-StageResult
-None, only if outputs were registered through context
 ```
 
-The local executor or runner should normalize these into one mapping of output
-name to `ArtifactRef`.
+The local executor or runner should validate this mapping against declared
+outputs. Returning a `StageResult`, returning `None`, callable stages, or relying
+on context-registered outputs are post-v0 behaviors.
 
 Recommended policy:
 
 ```text
-runner performs final output collection and validation
-executor returns direct stage return value normalized as far as practical
-context exposes registered outputs
+runner validates the direct returned output mapping
+executor returns the direct stage return mapping or failure metadata
+context save/register helpers return ArtifactRefs
 ```
 
 ---
 
-## 15. SubprocessExecutor
+## 15. Post-v0 SubprocessExecutor
 
 ### 15.1 Purpose
 
@@ -1768,21 +1764,24 @@ This keeps status and failure files compact while preserving debugging detail.
 
 ## 17. Runtime and Resource Profiles
 
+Runtime and resource profiles are post-v0.
+
 ### 17.1 Generic ResourceSpec
 
-Recommended generic fields:
+Possible future generic fields:
 
 ```text
-cpu
-memory_gb
-gpu
-walltime
+cpus
+memory_mb
+gpus
+wall_time_seconds
 disk_gb
 tmp_gb
 ```
 
-These fields are hints. The local executor may ignore most of them, while SLURM
-or container executors can translate them.
+These fields would be hints. The v0 local executor ignores
+`StageSpec.resources`; post-v0 SLURM or container executors can translate a
+typed resource model after that contract is introduced.
 
 ### 17.2 RuntimeSpec
 
@@ -1804,10 +1803,10 @@ Backend-specific values should be nested:
 runtime:
   executor: slurm-afterok
   resources:
-    cpu: 16
-    memory_gb: 64
-    gpu: 1
-    walltime: "08:00:00"
+    cpus: 16
+    memory_mb: 65536
+    gpus: 1
+    wall_time_seconds: 28800
   slurm:
     partition: gpu
     account: research
@@ -1921,7 +1920,6 @@ The runner should use run-store methods for:
 ```text
 create_run
 open_run
-acquire_lock
 write_plan
 write_run_status
 prepare_stage
@@ -1932,8 +1930,10 @@ write_stage_outputs
 write_stage_failure
 write_stage_provenance
 stage_log_paths
-release_lock
 ```
+
+Run-store lock methods are post-v0 unless atomic/interruption tests prove a lock
+manager is required.
 
 The exact method names can differ, but runner code should not duplicate path
 and schema rules from the run-store spec.
@@ -1961,7 +1961,7 @@ Before marking a stage succeeded, the runner should be able to check:
 outputs.json matches returned outputs
 artifact index contains committed outputs
 required artifacts exist
-checksums match when strict checksum mode is enabled
+checksums match when present and locally readable
 stage status transition is valid
 ```
 
@@ -1969,9 +1969,12 @@ These checks can be partly delegated to stores.
 
 ### 19.4 Locking
 
-V0 should acquire a run-level lock for execution.
+V0 does not acquire a run-level lock by default. It relies on atomic writes and
+conservative resume validation. Revisit locking only if atomic-write,
+interrupted-run, or concurrent-run tests expose a concrete race.
 
-The lock should protect:
+Post-v0, a run-level lock may protect:
+
 
 ```text
 status files
@@ -2004,7 +2007,13 @@ from loom.pipeline.execution import (
 
 ### 20.2 Executor Types
 
-Recommended exports:
+V0 executor exports:
+
+```python
+from loom.pipeline.executors import Executor, LocalExecutor
+```
+
+Post-v0 recommended exports:
 
 ```python
 from loom.pipeline.executors import (
@@ -2054,6 +2063,9 @@ the public package boundary.
 
 ### 21.1 `loom run`
 
+Functional CLI commands are post-v0. V0 provides only import-safe CLI modules
+and unsupported stubs.
+
 `loom run` should:
 
 ```text
@@ -2074,7 +2086,8 @@ loom run experiment.yaml --run-dir runs/example --executor local
 
 ### 21.2 `loom stage run`
 
-`loom stage run` is the subprocess worker entry point.
+`loom stage run` is the future subprocess worker entry point. It is not part of
+v0 functional behavior.
 
 It should:
 
@@ -2103,6 +2116,8 @@ submit scheduler jobs
 
 ### 21.3 `loom logs`
 
+Functional CLI commands are post-v0.
+
 Execution should make logs easy for CLI commands to find:
 
 ```bash
@@ -2113,6 +2128,8 @@ The CLI should use run-store path helpers or metadata rather than assuming path
 strings.
 
 ### 21.4 `loom status`
+
+Functional CLI commands are post-v0.
 
 Execution should write enough state for:
 
@@ -2245,15 +2262,13 @@ invalid request fails clearly
 Test:
 
 ```text
-stage.run(context)
-callable stage
+stage.run(context, inputs)
 returned ArtifactRef mapping
-context-registered outputs
 Python exception capture
 traceback file writing
 ```
 
-### 23.4 SubprocessExecutor Tests
+### 23.4 Post-v0 SubprocessExecutor Tests
 
 Test:
 
@@ -2281,14 +2296,12 @@ failure files are inspectable
 interrupted RUNNING stages are not reused
 ```
 
-### 23.6 CLI Smoke Tests
+### 23.6 Post-v0 CLI Smoke Tests
 
 Test:
 
 ```text
 loom run with local executor
-loom run with subprocess executor
-loom stage run for one stage
 loom status after success
 loom status after failure
 loom logs finds expected paths
@@ -2341,12 +2354,12 @@ Implement:
 StageContext output path allocation
 context.save_artifact
 context.register_artifact
-registered output collection
+returned ArtifactRef mapping validation
 ```
 
 Keep the helpers generic and artifact-store backed.
 
-### 24.4 Phase 4: Subprocess Worker
+### 24.4 Post-v0: Subprocess Worker
 
 Implement:
 

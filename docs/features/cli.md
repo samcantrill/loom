@@ -4,9 +4,15 @@
 
 `loom.cli` is the command-line interface for `loom`.
 
-It exists so users can validate configs, inspect plans, run pipelines, execute
-stage workers, inspect run state, read logs, inspect artifacts, and submit or
-monitor executor-backed work without writing Python for every operation.
+For v0, `loom.cli` is limited to import-safe modules and unsupported stubs.
+Functional CLI commands are post-v0. The command descriptions below document
+the intended later CLI shape, not v0 acceptance criteria, unless a section says
+otherwise.
+
+It exists so users can eventually validate configs, inspect plans, run
+pipelines, execute stage workers, inspect run state, read logs, inspect
+artifacts, and submit or monitor executor-backed work without writing Python for
+every operation.
 
 The CLI should answer:
 
@@ -211,24 +217,28 @@ build dependency graphs directly
 ### 4.1 Must Support in v0
 
 ```text
-loom --help
-loom --version
-loom validate CONFIG
-loom plan CONFIG
-loom run CONFIG
-loom stage run --run-dir RUN_DIR --stage STAGE
-loom status RUN_DIR
-basic top-level exception formatting
-non-zero exit codes for failures
-config overlays and CLI overrides
-resume selector flags shared by plan and run
-local and subprocess executor selection
-machine-readable JSON output for plan/status where practical
+import-safe `loom.cli` modules
+unsupported command stubs that fail clearly if called
+no import of config composition, pipeline runners, plugin discovery, or
+optional/heavy paths from `import loom`
+documentation that functional CLI commands are deferred
 ```
 
 ### 4.2 Should Support Soon
 
 ```text
+loom --help
+loom --version
+loom validate CONFIG
+loom plan CONFIG
+loom run CONFIG
+loom status RUN_DIR
+basic top-level exception formatting
+non-zero exit codes for failures
+config overlays and CLI overrides
+resume selector flags shared by plan and run
+local executor selection
+machine-readable JSON output for plan/status where practical
 loom logs RUN_DIR STAGE
 loom artifacts list RUN_DIR
 loom artifacts show RUN_DIR ARTIFACT_ID
@@ -252,6 +262,7 @@ automatic config wizard
 domain-specific commands
 rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
+subprocess executor selection in the v0 CLI
 ```
 
 Domain packages can expose their own CLIs that call `loom` Python APIs.
@@ -262,7 +273,8 @@ Domain packages can expose their own CLIs that call `loom` Python APIs.
 
 ### 5.1 Recommended Default
 
-Use `argparse` from the standard library for v0.
+Use `argparse` from the standard library when functional CLI behavior is added
+after v0.
 
 Reasons:
 
@@ -350,7 +362,8 @@ STAGE
 ARTIFACT_ID
 ```
 
-Do not infer a config path from the current directory in v0.
+When functional CLI behavior is added, do not infer a config path from the
+current directory.
 
 ### 6.4 Option Names
 
@@ -1169,9 +1182,9 @@ loom slurm status RUN_DIR
 loom slurm cancel RUN_DIR
 ```
 
-### 18.2 Recommended V0
+### 18.2 Post-v0 Starting Point
 
-Start with:
+When functional CLI behavior exists, start with:
 
 ```text
 loom status RUN_DIR
@@ -1449,13 +1462,14 @@ Avoid brittle snapshots for timestamps or full paths unless normalized.
 
 ### 24.5 Integration Tests
 
-Test through the console entry point or `main(argv)`:
+These are post-v0 functional CLI tests. In v0, tests should only cover
+import-safe CLI modules and clear unsupported-stub failures. Later, test through
+the console entry point or `main(argv)`:
 
 ```text
 loom validate example config
 loom plan example config
 loom run with local executor
-loom run with subprocess executor
 loom stage run worker path
 loom status after success
 loom status after failure
@@ -1475,9 +1489,12 @@ loom.cli modules do not get imported by pipeline/config/stores
 
 ---
 
-## 25. Implementation Plan
+## 25. Post-v0 Implementation Plan
 
-### 25.1 Phase 1: Entry Point and Parser
+V0 only requires import-safe `loom.cli` modules and unsupported command stubs.
+The command implementation phases below are post-v0 guidance.
+
+### 25.1 Phase 1: Entry Point and Parser, Post-v0
 
 Create:
 
@@ -1497,7 +1514,7 @@ top-level --traceback
 exit code constants
 ```
 
-### 25.2 Phase 2: Validate and Plan
+### 25.2 Phase 2: Validate and Plan, Post-v0
 
 Create:
 
@@ -1517,7 +1534,7 @@ selector option parsing
 plan table formatting
 ```
 
-### 25.3 Phase 3: Run
+### 25.3 Phase 3: Run, Post-v0
 
 Create:
 
@@ -1535,7 +1552,7 @@ PipelineRunner integration
 run summary formatting
 ```
 
-### 25.4 Phase 4: Stage Worker
+### 25.4 Phase 4: Stage Worker, Post-v0
 
 Create:
 
@@ -1552,7 +1569,7 @@ stage worker API integration
 worker result exit codes
 ```
 
-### 25.5 Phase 5: Status and Logs
+### 25.5 Phase 5: Status and Logs, Post-v0
 
 Create:
 
@@ -1570,7 +1587,7 @@ JSON status output
 loom logs, at least path display or simple content display
 ```
 
-### 25.6 Phase 6: Artifacts
+### 25.6 Phase 6: Artifacts, Post-v0
 
 Create:
 
@@ -1613,7 +1630,7 @@ loom sweep status
 
 ### 26.1 Should the CLI Use `argparse` or `typer`?
 
-Recommended v0 answer:
+Recommended answer when functional CLI behavior is added:
 
 ```text
 argparse

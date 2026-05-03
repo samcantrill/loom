@@ -872,7 +872,7 @@ external immutable artifact URI
 validate expected artifact type
 resolve codec key
 check existence when supported
-optionally verify checksum in strict mode
+verify checksum when present and locally readable
 return decoded object
 ```
 
@@ -928,7 +928,7 @@ Avoid duplicating run layout logic where possible.
 
 ### 12.2 Path Allocation
 
-Recommended behavior:
+Post-v0 path-template behavior:
 
 ```text
 if OutputSpec.path is provided, use it under artifacts/STAGE_NAME/
@@ -936,6 +936,11 @@ otherwise derive a filename from output name and codec/artifact type
 ensure parent directories exist
 reject paths outside stage artifact directory by default
 ```
+
+V0 does not include `OutputSpec.path`. Physical artifact paths are allocated by
+`LocalArtifactStore`, or stages may write files under the stage artifact
+directory and register them explicitly. Authored output `path` fields should
+fail validation clearly until path templates are added.
 
 Examples:
 
@@ -1068,7 +1073,7 @@ ref.artifact_type matches declared artifact_type
 ref.codec_key matches declared codec_key when declared
 ref.schema_version matches declared schema_version when declared
 artifact exists when local/checkable
-checksum verifies in strict mode
+checksum verifies when present and locally readable
 ```
 
 ### 14.3 Input Binding Validation
@@ -1126,22 +1131,22 @@ omit checksum for directories unless supplied
 preserve supplied checksum for external URIs
 ```
 
-### 15.3 Strict Validation
+### 15.3 Validation
 
-Strict checksum validation can be optional:
+V0 checksum validation verifies local readable artifacts by default whenever a
+checksum is present.
 
 ```text
 normal mode:
   require existence for local artifacts
-
-strict mode:
-  also verify checksum when present
+  verify checksum when present and the store can read the URI
 ```
 
-Strict mode is useful for:
+Future strict modes are useful for extra policies such as:
 
 ```text
-resume safety
+remote checksum verification
+directory checksum policies
 archival validation
 run inspection
 debugging suspected corruption

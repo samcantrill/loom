@@ -143,7 +143,7 @@ Responsibilities:
 
 ```text
 check artifact existence
-verify checksums in strict mode
+verify checksums by default when present and locally readable
 resolve local paths
 report unsupported URI schemes
 ```
@@ -241,7 +241,7 @@ prior status is SUCCEEDED
 fingerprint matches current expected fingerprint
 required outputs are present
 required artifacts exist when checkable
-checksums verify when strict mode is enabled
+checksums verify by default when present and the store can read the URI
 ```
 
 ### 5.4 Stale Stage
@@ -407,10 +407,12 @@ input artifact fingerprints when available
 input artifact checksums when available
 declared outputs
 selected resolved config subtree
-selected runtime/resources that affect outputs
+explicit future opt-in runtime/resource fields that affect outputs
 loom version or pipeline contract version
 user-provided extra fingerprint fields
 ```
+
+V0 excludes `StageSpec.resources` from semantic fingerprints by default.
 
 ### 7.2 Optional Inputs
 
@@ -517,8 +519,13 @@ ArtifactRef exists in outputs.json
 ArtifactRef artifact_type matches OutputSpec
 ArtifactRef codec_key matches OutputSpec when declared
 local artifact exists when URI is file://
-checksum verifies when strict mode is enabled and checksum exists
+checksum verifies when present and the store can read the URI
 ```
+
+Strict validation modes are post-v0 policy extensions for additional checks
+such as remote checksum verification, directory checksums, or fail-vs-rerun
+behavior. They must not weaken the v0 default that readable local artifacts with
+checksums are verified before reuse.
 
 Unsupported remote URI validation should be explicit. Do not pretend a remote
 artifact is valid if the current store cannot check it.
@@ -705,7 +712,7 @@ Use case:
 rerun training and all evaluations after changing train config
 ```
 
-### 11.2 `only_stage`
+### 11.2 `only_stages`
 
 Command shape:
 
@@ -727,7 +734,7 @@ Use case:
 debug one stage with existing inputs
 ```
 
-### 11.3 `force_stage`
+### 11.3 `force_stages`
 
 Command shape:
 
@@ -749,7 +756,7 @@ Use case:
 rerun a flaky stage or regenerate outputs
 ```
 
-### 11.4 `skip_stage`
+### 11.4 `skip_stages`
 
 Command shape:
 
@@ -780,13 +787,13 @@ Multiple selectors should be validated for conflicts.
 Examples:
 
 ```text
-same stage in force_stage and skip_stage:
+same stage in force_stages and skip_stages:
   error
 
-only_stage evaluate and from_stage train:
+only_stages evaluate and from_stage train:
   error unless explicitly defined
 
-force_stage train and from_stage train:
+force_stages train and from_stage train:
   allowed, train and downstream run
 ```
 
@@ -807,7 +814,6 @@ current resolved config or config fingerprint view
 run store state snapshot
 artifact store
 resume enabled flag
-strict checksum flag
 selectors
 fingerprint policy
 ```
@@ -1055,7 +1061,7 @@ Recommended fields:
 @dataclass(frozen=True, slots=True)
 class StageSelector:
     from_stage: str | None = None
-    only_stage: str | None = None
+    only_stages: frozenset[str] = frozenset()
     force_stages: frozenset[str] = frozenset()
     skip_stages: frozenset[str] = frozenset()
 ```
@@ -1248,7 +1254,7 @@ RUNNING from old process -> RUN or blocked lock error
 missing outputs -> RUN/STALE
 missing fingerprint -> RUN/STALE
 missing artifact -> RUN/STALE
-checksum mismatch in strict mode -> RUN/STALE or error
+checksum mismatch when locally readable -> RUN/STALE or error
 corrupt state -> error
 ```
 
@@ -1307,7 +1313,7 @@ Build in this order:
 3. Implement prior stage state loading from `RunStore`.
 4. Implement direct reuse checks for one stage.
 5. Add artifact existence validation through `ArtifactStore`.
-6. Add strict checksum validation.
+6. Add default checksum validation for readable artifacts when checksums exist.
 7. Integrate reuse checks into `plan_pipeline`.
 8. Implement downstream invalidation for linear and branching DAGs.
 9. Implement `force-stage`.
@@ -1334,7 +1340,7 @@ prior state inspection
 safe stage reuse
 rerun of stale or incomplete stages
 artifact existence validation
-strict checksum validation
+checksum validation for readable artifacts with checksums
 downstream invalidation
 stage selectors
 dry-run explanations

@@ -1,0 +1,1029 @@
+# Implementation Roadmap
+
+## Purpose
+
+This document is the staged implementation roadmap for `loom` after the
+feature specifications in `docs/features/`.
+
+It is still a roadmap, not a detailed project plan. Each version below should
+later become a dedicated implementation plan with concrete interfaces, phase
+boundaries, test strategy, compatibility notes, review gates, branch/worktree
+metadata, and accepted technical debt.
+
+The canonical v0 plan remains
+[`implementation-plan-v0.md`](implementation-plan-v0.md). v0 is intentionally
+larger than a normal roadmap step because it is already split into detailed
+internal phases. After v0, each roadmap step should be small enough to become
+one comprehensive project plan without needing to combine unrelated subsystems.
+
+## Roadmap Refinement Summary
+
+The first roadmap grouped the planned work into v0 through v8. That was useful
+for module coverage, but several steps were too broad to become consistent
+project-plan units. This revision keeps the same implementation direction but
+splits oversized steps:
+
+- The original local-operations step is split into CLI core and local
+  diagnostics/preflight.
+- Runtime options are separated from stage-worker and subprocess execution.
+- SLURM is split into script planning/dry-run and live submission/operations.
+- Many-run workflows are split into run catalog, bundle export/import, and
+  deterministic sweeps.
+- Remote stores are split into the backend-neutral contract and optional
+  operational backend work.
+- Container execution is split into Docker and Apptainer/SLURM composition.
+- Reliability is split into retry/timeout/events and cleanup/retention/GC.
+
+The result is a longer roadmap, but each version has a more comparable scope
+and a clearer acceptance boundary.
+
+## Roadmap Quality Bar
+
+Every post-v0 version should satisfy these expectations before implementation
+starts:
+
+- One primary user-visible outcome.
+- One main package cluster or adapter family.
+- Explicit prerequisites from earlier roadmap steps.
+- Clear public API surface and CLI surface, if any.
+- Persisted file/schema changes called out explicitly.
+- Optional dependencies isolated behind adapters or plugins.
+- Tests that can run without real clusters, containers, cloud services, or
+  network access by default.
+- A short list of deferred work that prevents scope creep.
+- Reviewability as one project plan and one implementation sequence.
+
+If a version needs two unrelated public APIs, two external systems, or multiple
+new persisted schemas, it should be split before the detailed project plan is
+written.
+
+## Planning Principles
+
+- Keep `loom` domain-neutral. Project code owns concrete stages, codecs,
+  datasets, models, metrics, reports, recipes, and domain schemas.
+- Preserve the source-tree and import boundaries in
+  [`docs/structure.md`](../structure.md).
+- Treat v0 as the local, inspectable runtime kernel: config composition,
+  primitives, local I/O, static pipeline DAGs, local stores, conservative
+  same-run-directory resume, and local in-process execution.
+- Add operational layers only after the Python APIs and persisted run layout
+  they expose are stable.
+- Prefer generic contracts plus optional adapters over hard dependencies on
+  cloud, cluster, container, dashboard, or domain frameworks.
+- Keep every version useful on its own and reviewable as a coherent product
+  increment.
+
+## Version Overview
+
+| Version | Theme | Primary outcome |
+| --- | --- | --- |
+| v0 | Local runtime kernel | Local Python API for composing, running, tracing, and resuming static artifact DAGs in one run directory. |
+| v1 | CLI core | Thin `loom` CLI for validate, plan, and run over the v0 local runtime. |
+| v2 | Local diagnostics and preflight | Preflight checks plus status, logs, and artifact inspection for local runs. |
+| v3 | Runtime options and resources | Typed invocation, resume, execution, profile, and resource models shared by later executors. |
+| v4 | Stage worker and subprocess execution | Stable one-stage worker contract, subprocess executor, logs, and baseline failure records. |
+| v5 | SLURM script planning | Scheduler-neutral resource mapping, SLURM models, script builders, and dry-run manifests. |
+| v6 | SLURM operations | Optional live `sbatch` submission, status, cancellation, and submission recovery. |
+| v7 | Run catalog and comparison | Rebuildable local run index, run listing, filtering, and metadata comparison. |
+| v8 | Run bundles | Safe run export, inspect, and import with portable manifests. |
+| v9 | Deterministic sweeps | Grid/manual sweep expansion, manifests, sequential execution, status, and collection. |
+| v10 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, and provenance. |
+| v11 | Remote store contract | Backend-neutral artifact-store capabilities, fake remote store, and remote preflight surface. |
+| v12 | Remote store operations | Explicit remote payload operations and at most one optional backend adapter family, if selected. |
+| v13 | Docker container executor | Docker CLI executor using the stage-worker and artifact/run-store contracts. |
+| v14 | HPC container execution | Apptainer/Singularity executor and SLURM-container composition. |
+| v15 | Reliability policies | Retry, timeout, failure-category, and runtime event policies across executors. |
+| v16 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
+
+## v0 - Local Runtime Kernel
+
+Status:
+
+- Covered by [`implementation-plan-v0.md`](implementation-plan-v0.md).
+
+Goal:
+
+- Build the local reference implementation for config, primitives, pipeline
+  DAGs, stores, planning, resume, provenance, and in-process execution.
+
+Implement:
+
+- Core primitives, timestamps, shared errors, package-wide protocols,
+  serialization, fingerprints, provenance value objects, local I/O, and generic
+  JSON/text/bytes codecs.
+- Trusted config composition, overlays, dot-path overrides, interpolation,
+  redaction, recipe expansion, and `_target_` instantiation.
+- Static pipeline specs, stage specs, output specs, stage context, graph
+  construction, topological ordering, input binding, and status records.
+- Local artifact and run stores with inspectable JSON/YAML/text files, atomic
+  writes, artifact indexes, stage inputs/outputs, fingerprints, failures, logs,
+  and config/provenance snapshots.
+- Deterministic planning, selectors, same-run-directory resume, downstream
+  invalidation, and local in-process execution.
+- Tests proving import boundaries, primitive behavior, store contracts, graph
+  behavior, local execution, failure persistence, and conservative resume.
+
+Exit criteria:
+
+- All phases in the canonical v0 plan are merged or explicitly deferred with
+  accepted risk.
+- Local Python APIs can compose, plan, run, inspect persisted records, and
+  resume a small static DAG without CLI-only behavior.
+- The run directory layout is documented enough for v1 and v2 to expose it.
+
+Defer:
+
+- Functional CLI behavior, typed runtime/resource options, subprocess
+  execution, SLURM, containers, sweeps, plugins, remote stores, run catalogs,
+  retries, cleanup, dashboards, and domain features.
+
+Primary feature docs:
+
+- All v0-owned feature docs, especially `core-model.md`, `config.md`,
+  `pipeline.md`, `pipeline-graph.md`, `run-store.md`, `artifacts.md`,
+  `state.md`, `resume.md`, `provenance.md`, `execution.md`, and `testing.md`.
+
+## v1 - CLI Core
+
+Goal:
+
+- Make the v0 local runtime usable from scripts and terminals through a thin
+  CLI that delegates to Python APIs.
+
+Implement:
+
+- Functional `loom` entry point using `argparse`.
+- `loom --help`, `loom --version`, top-level exception handling, and shared
+  exit-code mapping.
+- `loom validate CONFIG` over config composition and pipeline validation.
+- `loom plan CONFIG` with config overlays, dot-path overrides, selector flags,
+  resume flags, dry-run summaries, and machine-readable JSON output.
+- `loom run CONFIG` for the local executor, including selected run directory,
+  overlays, overrides, selectors, resume flags, and concise summary output.
+- Shared CLI parsing helpers that convert arguments into public config,
+  planning, and execution API objects without duplicating module logic.
+- CLI tests and small end-to-end tests using synthetic local pipelines.
+
+Exit criteria:
+
+- A user can validate, plan, and run a v0 pipeline from the command line.
+- JSON output exists for commands expected to be consumed by automation.
+- CLI modules remain outer-layer code and are not imported by config, pipeline,
+  stores, artifacts, provenance, or execution internals.
+
+Defer:
+
+- `loom status`, logs, artifact inspection, full preflight reports, subprocess
+  worker commands, executor-specific commands, sweeps, catalogs, plugins,
+  remote stores, containers, shell completion, rich progress UI, and dashboards.
+
+Primary feature docs:
+
+- `cli.md`
+- `errors.md`
+- `config.md`
+- `pipeline.md`
+- `resume.md`
+- `execution.md`
+- `testing.md`
+
+## v2 - Local Diagnostics And Preflight
+
+Goal:
+
+- Give users reliable local diagnostics before and after execution without
+  requiring them to inspect run files manually.
+
+Implement:
+
+- Preflight result models, check result models, statuses, severities, stable
+  check IDs, and JSON output.
+- Config, pipeline graph, selector, run directory, local artifact store, codec
+  registry, local executor, and local filesystem checks.
+- Minimal preflight subset reused by `loom run` for config load, graph
+  validation, run directory safety, and executor resolution.
+- `loom preflight CONFIG` with `--strict`, `--json`, and local-only check
+  grouping.
+- `loom status RUN_DIR` over public run-store inspection APIs.
+- `loom logs RUN_DIR STAGE` over recorded stage log paths.
+- `loom artifacts list RUN_DIR` and `loom artifacts show RUN_DIR ARTIFACT_ID`
+  over public artifact/run-store APIs.
+- Golden-output tests where useful and synthetic e2e tests for failed and
+  successful local runs.
+
+Exit criteria:
+
+- A local run can be checked, executed, inspected, and debugged through the CLI.
+- Preflight can fail or warn with stable IDs and machine-readable output.
+- Inspection commands use store APIs rather than hard-coded private file paths
+  when public APIs exist.
+
+Defer:
+
+- Runtime/resource profiles, subprocess checks, SLURM checks, plugin checks,
+  remote credential checks, container checks, large checksum scans, and policy
+  files.
+
+Primary feature docs:
+
+- `preflight.md`
+- `cli.md`
+- `run-store.md`
+- `artifacts.md`
+- `pipeline-graph.md`
+- `errors.md`
+- `testing.md`
+
+## v3 - Runtime Options And Resources
+
+Goal:
+
+- Define the shared operational control surface used by subprocess, SLURM,
+  containers, sweeps, and preflight without mixing invocation choices into
+  semantic pipeline specs.
+
+Implement:
+
+- `RunOptions`, `ResumeOptions`, `ExecutionOptions`, `ResourceRequest`, and
+  runtime profile models.
+- Normalization and validation for executor names, dry-run flags, resume
+  settings, selector fields, tags, notes, and scheduler-neutral resource
+  requests.
+- Config and CLI mapping into runtime option objects.
+- Capability-aware validation for resource fields without executor-specific
+  assumptions in the core resource model.
+- Executor registry surface for resolving known executor names without loading
+  optional backends eagerly.
+- Preflight checks for runtime option consistency and unsupported executor
+  capability declarations.
+- Tests for normalization, validation, serialization, CLI/config mapping, and
+  resource edge cases.
+
+Exit criteria:
+
+- Later executors can receive one normalized runtime/options object instead of
+  ad hoc flags.
+- Pipeline specs remain semantic and portable across executors.
+- Resource fields do not affect semantic fingerprints unless an explicit
+  fingerprint policy says so.
+
+Defer:
+
+- Stage-worker execution, subprocess process control, SLURM script generation,
+  Docker/Apptainer mapping, retry policies, timeout enforcement, and parallel
+  local scheduling.
+
+Primary feature docs:
+
+- `runtime-resources.md`
+- `execution.md`
+- `preflight.md`
+- `cli.md`
+- `pipeline.md`
+- `testing.md`
+
+## v4 - Stage Worker And Subprocess Execution
+
+Goal:
+
+- Add the process-isolated execution substrate that later executor adapters can
+  reuse.
+
+Implement:
+
+- Stage execution request/result records for exactly one prepared stage
+  attempt.
+- `loom stage run --run-dir RUN_DIR --stage STAGE` as the stable worker
+  command.
+- Stage-worker APIs that read prepared run metadata, execute one stage, write
+  outputs through store contracts, and persist a structured result.
+- `SubprocessExecutor` using the same stage contract, run store, artifact store,
+  fingerprint records, and failure files as local execution.
+- Baseline `FailureRecord` shape for Python exceptions, exit codes, signals,
+  log paths, attempt numbers, and timestamps.
+- Log capture, traceback recording, redacted command recording, and nonzero
+  exit-code mapping.
+- Preflight checks for worker command availability and subprocess executor
+  capability support.
+- Tests with fake commands and synthetic stages; no real cluster or container
+  requirements.
+
+Exit criteria:
+
+- The same small pipeline can run through local in-process execution and the
+  subprocess executor with equivalent persisted semantics.
+- A failed subprocess stage leaves enough structured state and logs to debug
+  through v2 inspection commands.
+- The worker command is stable enough for SLURM and containers to invoke.
+
+Defer:
+
+- SLURM submission, container command construction, automatic retries, timeout
+  enforcement beyond basic process result metadata, and parallel local
+  scheduling.
+
+Primary feature docs:
+
+- `execution.md`
+- `reliability.md`
+- `state.md`
+- `run-store.md`
+- `cli.md`
+- `preflight.md`
+- `testing.md`
+
+## v5 - SLURM Script Planning
+
+Goal:
+
+- Make SLURM execution inspectable and testable before adding live scheduler
+  submission.
+
+Implement:
+
+- SLURM option models, modes, job records, submission records, and script
+  builder interfaces.
+- Scheduler-neutral resource mapping to SBATCH fields for CPU, memory, GPU,
+  and wall time.
+- Single-job script generation where one SLURM allocation runs the whole
+  pipeline.
+- Afterok script generation where one job per runnable stage uses scheduler
+  dependency edges.
+- Dry-run manifest files under the run directory with planned jobs, scripts,
+  dependencies, resources, and worker commands.
+- CLI integration for selecting SLURM dry-run planning and printing generated
+  script paths.
+- Preflight checks for SLURM profile validity, resource mapping support,
+  shared-run-directory assumptions, and optional command availability when
+  known.
+- Fake-command and pure unit tests for script generation and dependency
+  construction.
+
+Exit criteria:
+
+- A user can generate reviewable SLURM scripts and manifests for a planned run
+  without calling `sbatch`.
+- Generated scripts invoke the v4 stage worker or whole-run entry points rather
+  than duplicating execution logic.
+- Resource mapping failures are reported before submission.
+
+Defer:
+
+- Live submission, scheduler polling, cancellation, recovery after partial live
+  submission, controller mode, job arrays, MPI, remote stores, and containers
+  inside SLURM.
+
+Primary feature docs:
+
+- `slurm.md`
+- `execution.md`
+- `runtime-resources.md`
+- `preflight.md`
+- `cli.md`
+- `run-store.md`
+- `testing.md`
+
+## v6 - SLURM Operations
+
+Goal:
+
+- Add optional live SLURM submission and operational commands over the stable
+  script/submission model.
+
+Implement:
+
+- `sbatch --parsable` integration, job ID parsing, command recording, and
+  redacted submission metadata.
+- Partial-submission failure handling with explicit submitted, skipped, and
+  failed job records.
+- SLURM stdout/stderr log path conventions under the run directory.
+- `squeue`/`sacct` status integration where available, with capability-aware
+  fallbacks.
+- `scancel` cancellation support for submitted jobs.
+- CLI integration for submission, job IDs, status, cancellation, and JSON
+  output.
+- Preflight checks for `sbatch`, optional status commands, profile-required
+  fields, and writable submission/log directories.
+- Fake-command tests for submission parsing, status mapping, cancellation,
+  command failures, and partial-submission recovery.
+
+Exit criteria:
+
+- A user can submit, inspect, and cancel a small SLURM run in environments where
+  SLURM commands are available.
+- Default tests still do not require a real SLURM cluster.
+- All live scheduler facts are persisted as provenance or state, not only
+  printed to the terminal.
+
+Defer:
+
+- Controller-mode SLURM, job arrays, multi-node MPI orchestration, automatic
+  retry classification from accounting state, remote stores, distributed locks,
+  and containerized SLURM jobs.
+
+Primary feature docs:
+
+- `slurm.md`
+- `execution.md`
+- `runtime-resources.md`
+- `preflight.md`
+- `cli.md`
+- `run-store.md`
+- `state.md`
+- `provenance.md`
+- `testing.md`
+
+## v7 - Run Catalog And Comparison
+
+Goal:
+
+- Make many local runs discoverable, searchable, and comparable without adding
+  a database or tracking server.
+
+Implement:
+
+- `RunSummary`, artifact summary, catalog index, and catalog warning models.
+- Local run collection scanning based on run-store markers and metadata.
+- Rebuildable sidecar catalog index with direct-scan fallback.
+- `loom runs index` or equivalent rebuild command.
+- `loom runs list` with core filters such as status, tag, fingerprint, commit,
+  stage status, and JSON output.
+- Stale-index detection and visible warnings for invalid, unreadable, partial,
+  or disappeared runs.
+- Metadata-only run comparison using config fingerprints, pipeline
+  fingerprints, stage status, stage fingerprints, artifact identities,
+  checksums, executor identities, and selected provenance facts.
+- CLI command for metadata diff with human and JSON output.
+- Tests with temporary run collections, synthetic run stores, stale indexes,
+  invalid directories, and comparison fixtures.
+
+Exit criteria:
+
+- A run collection can be indexed, listed, filtered, and rebuilt from local run
+  directories.
+- Two runs can be compared without loading domain artifact payloads.
+- The catalog remains derived data; the run store stays authoritative.
+
+Defer:
+
+- Export/import bundles, sweeps, SQLite-backed catalogs, dashboard UI, remote
+  catalog services, domain-specific artifact diffs, and incremental watchers.
+
+Primary feature docs:
+
+- `run-catalog.md`
+- `run-store.md`
+- `artifacts.md`
+- `provenance.md`
+- `cli.md`
+- `testing.md`
+
+## v8 - Run Bundles
+
+Goal:
+
+- Provide a safe archive and transfer path for local run metadata and selected
+  payloads.
+
+Implement:
+
+- Run bundle manifest model with format version, entry records, checksums, and
+  payload selection metadata.
+- Metadata-only export by default using standard-library archive support.
+- Explicit artifact/log inclusion flags and size/path reporting.
+- Path traversal, symlink, partially written run, and missing-payload safety
+  checks.
+- Bundle inspection without extraction.
+- Import into a local run collection with manifest validation, checksum
+  verification when requested, safe path handling, and catalog stale marking.
+- CLI commands for export, inspect, and import.
+- Tests for manifest creation, metadata-only bundles, payload selection, unsafe
+  path rejection, inspect without extraction, and import into a temporary run
+  collection.
+
+Exit criteria:
+
+- A run can be exported, inspected, and imported without executing project
+  code.
+- The default export path is conservative and does not unexpectedly include
+  large payloads.
+- Bundle safety checks are covered by focused tests.
+
+Defer:
+
+- Remote payload download, signed bundles, large payload deduplication,
+  cross-machine catalog synchronization, bundle encryption, and domain-specific
+  comparison reports.
+
+Primary feature docs:
+
+- `run-catalog.md`
+- `run-store.md`
+- `artifacts.md`
+- `io.md`
+- `cli.md`
+- `testing.md`
+
+## v9 - Deterministic Sweeps
+
+Goal:
+
+- Support repeated experiments as deterministic collections of ordinary `loom`
+  runs.
+
+Implement:
+
+- `SweepSpec`, `TrialSpec`, sweep manifests, trial manifests, and stable
+  directory layout.
+- Grid sweep expansion, manual trial expansion, deterministic trial IDs, stable
+  trial ordering, and trial override generation through config APIs.
+- Plan-only mode that writes or prints the resolved trial set.
+- Sequential trial execution through `PipelineRunner` using normalized runtime
+  options.
+- Basic trial status aggregation from run stores and catalog-compatible
+  summaries.
+- Generic result collection starting with artifact refs and simple metadata,
+  not domain metric semantics.
+- `loom sweep plan`, `loom sweep run`, `loom sweep status`, and basic
+  `loom sweep collect`.
+- Tests for deterministic expansion, stable IDs, override generation, manifest
+  persistence, failed-trial visibility, status aggregation, and collection from
+  synthetic runs.
+
+Exit criteria:
+
+- A user can define a grid or manual sweep, inspect the planned trials, run
+  them sequentially, and see trial statuses.
+- Every trial remains an ordinary run that v7 and v8 tools can inspect.
+- Sweep logic does not implement its own config merge, stage execution, or
+  scheduler submission behavior.
+
+Defer:
+
+- Bounded local concurrency, distributed sweep controllers, SLURM per-trial
+  batch submission, failed-trial rerun policies, random search, Bayesian
+  optimization, adaptive trial generation, early stopping, and domain-specific
+  result aggregation.
+
+Primary feature docs:
+
+- `sweeps.md`
+- `config.md`
+- `pipeline.md`
+- `execution.md`
+- `run-store.md`
+- `run-catalog.md`
+- `artifacts.md`
+- `provenance.md`
+- `cli.md`
+- `testing.md`
+
+## v10 - Plugin Discovery
+
+Goal:
+
+- Let installed trusted packages contribute extensions explicitly without
+  making discovery an import-time side effect.
+
+Implement:
+
+- Known entry point group constants for recipes, codecs, sources, executors,
+  and artifact store backends.
+- `PluginRecord`, `PluginLoadResult`, plugin errors, duplicate handling, and
+  structured failure reporting.
+- Generic entry point listing and loading through `importlib.metadata`.
+- Recipe plugin loading into supplied recipe catalogs.
+- Codec plugin loading into supplied codec registries.
+- Source, executor, and store backend loading after corresponding registries
+  exist.
+- Plugin provenance summaries for plugin names, packages, versions, groups, and
+  load results.
+- `loom plugins list` and `loom plugins check`.
+- Preflight checks for requested plugin availability, duplicate registration,
+  and failed loads.
+- Tests with fake entry points and fake registries.
+
+Exit criteria:
+
+- Plugin discovery is explicit and deterministic enough for tests and
+  provenance.
+- Importing `loom` does not load arbitrary third-party plugin code.
+- Recipe and codec plugins can extend v0/v1 behavior through public registries.
+
+Defer:
+
+- Plugin marketplace behavior, automatic installation, dependency resolution,
+  version solving, remote indexes, sandboxing, and third-party command
+  injection into the core CLI.
+
+Primary feature docs:
+
+- `plugins.md`
+- `config.md`
+- `io.md`
+- `execution.md`
+- `remote-stores.md`
+- `cli.md`
+- `preflight.md`
+- `provenance.md`
+- `testing.md`
+
+## v11 - Remote Store Contract
+
+Goal:
+
+- Define backend-neutral artifact-store capabilities and tests before selecting
+  or shipping real remote backends.
+
+Implement:
+
+- Artifact-store capability model: readable, writable, listable,
+  atomic-commit support, checksum verification, and delete support.
+- Backend-neutral URI/config validation hooks and redaction helpers.
+- Store registry hooks compatible with v10 plugin loading.
+- Fake remote artifact store for contract and preflight tests.
+- Manifest-last commit expectations and metadata shapes for remote-like stores.
+- Read-only store behavior for reference artifacts.
+- Local staging and cache policy records, without making cache authoritative.
+- Preflight checks for backend plugin availability, URI validity, credentials
+  when cheaply checkable, read/write capability, and unsupported operations.
+- Run catalog and bundle awareness for metadata-only remote refs.
+
+Exit criteria:
+
+- Core tests can exercise remote-store semantics through a fake backend.
+- Remote stores advertise capabilities rather than relying on assumptions about
+  consistency, checksums, listing, or deletion.
+- No cloud SDK becomes a hard dependency.
+
+Defer:
+
+- Real cloud backend adapters, remote payload export/import, credential refresh
+  management, distributed caches, remote garbage collection, cross-region
+  replication, signed manifests, and remote run catalog services.
+
+Primary feature docs:
+
+- `remote-stores.md`
+- `artifacts.md`
+- `io.md`
+- `plugins.md`
+- `preflight.md`
+- `run-catalog.md`
+- `reliability.md`
+- `testing.md`
+
+## v12 - Remote Store Operations
+
+Goal:
+
+- Operationalize remote artifact stores after the contract is stable, while
+  keeping real backend dependencies optional.
+
+Implement:
+
+- Explicit remote payload upload/download paths where backend capabilities
+  support them.
+- Checksum verification and clear unsupported-operation errors for remote
+  payload movement.
+- Local staging lifecycle records for remote writes and downloads.
+- Bundle export support for explicit remote payload downloads when requested.
+- Import support that can preserve metadata-only remote refs without requiring
+  credentials.
+- At most one optional backend adapter family in the detailed plan, only if a
+  concrete downstream need selects it.
+- Plugin packaging and tests that keep optional backend dependencies outside
+  the core package.
+- Fake-backend tests for all core behavior and opt-in integration tests for
+  any selected real backend.
+
+Exit criteria:
+
+- Remote refs can be preserved in metadata-only workflows and materialized only
+  when explicitly requested.
+- Optional backend dependencies remain isolated from the default install.
+- The detailed plan either selects one backend family or explicitly skips this
+  step until one is needed.
+
+Defer:
+
+- Broad S3/GCS/Azure/MLflow parity, remote tracking services, distributed
+  locking, global content-addressed caches, credential lifecycle management,
+  signed manifests, and remote run catalog services.
+
+Primary feature docs:
+
+- `remote-stores.md`
+- `artifacts.md`
+- `io.md`
+- `plugins.md`
+- `run-catalog.md`
+- `preflight.md`
+- `testing.md`
+
+## v13 - Docker Container Executor
+
+Goal:
+
+- Add a Docker-based container executor that reuses the stage-worker and store
+  contracts.
+
+Implement:
+
+- Shared container config models for image, workdir, mounts, environment, and
+  resource mappings.
+- Docker command builder and executor using the Docker CLI.
+- Environment filtering and secret redaction for recorded commands.
+- Mount validation, working directory validation, run-directory writability
+  checks, and artifact-root mount checks.
+- Image/runtime provenance, including Docker version and image digest when
+  cheaply available.
+- Container log, exit-code, timeout metadata where available, and failure
+  integration with run stores.
+- Preflight checks for Docker command availability, image reference presence,
+  mount sources, required environment variables, and resource support.
+- Fake-command tests for command construction, mount validation, environment
+  filtering, redaction, resource flags, exit-code mapping, and provenance.
+
+Exit criteria:
+
+- A stage can run through Docker with the same declared inputs/outputs and run
+  store semantics as local and subprocess execution.
+- Docker failures are inspectable through existing diagnostics.
+- No Docker SDK dependency is required for the initial implementation.
+
+Defer:
+
+- Image build commands, registry authentication helpers, Docker Compose,
+  Kubernetes, automatic image pulls during preflight, image lock files,
+  advanced GPU mapping, Apptainer/Singularity, and treating containers as a
+  security sandbox for untrusted code.
+
+Primary feature docs:
+
+- `container-executors.md`
+- `execution.md`
+- `runtime-resources.md`
+- `preflight.md`
+- `provenance.md`
+- `reliability.md`
+- `testing.md`
+
+## v14 - HPC Container Execution
+
+Goal:
+
+- Support Apptainer/Singularity and the common SLURM plus Apptainer execution
+  path used on HPC systems.
+
+Implement:
+
+- Apptainer/Singularity command builder and executor using CLI tools.
+- Runtime detection for `apptainer` and `singularity` command names.
+- HPC-friendly bind mount validation and working directory behavior.
+- Image/runtime provenance for Apptainer/Singularity version and image
+  identity when cheaply available.
+- Resource mapping behavior that composes with v3 resource requests and v5/v6
+  SLURM options.
+- SLURM plus Apptainer script composition after standalone SLURM and standalone
+  container paths are stable.
+- Preflight checks for command availability, image reference presence, bind
+  mounts, run-directory writability, required environment variables, and
+  scheduler/container compatibility.
+- Fake-command tests for command construction, SLURM script composition,
+  environment filtering, resource flags, and failure mapping.
+
+Exit criteria:
+
+- Apptainer/Singularity can execute stages through the same worker contract as
+  Docker.
+- A dry-run SLURM plus Apptainer script can be generated and inspected.
+- Live SLURM plus Apptainer behavior reuses v6 submission paths rather than
+  inventing a separate scheduler implementation.
+
+Defer:
+
+- MPI orchestration, multi-node container coordination, site-specific module
+  loading, automatic image conversion, registry authentication, Kubernetes, and
+  treating containers as a security boundary.
+
+Primary feature docs:
+
+- `container-executors.md`
+- `slurm.md`
+- `execution.md`
+- `runtime-resources.md`
+- `preflight.md`
+- `provenance.md`
+- `reliability.md`
+- `testing.md`
+
+## v15 - Reliability Policies
+
+Goal:
+
+- Make retry, timeout, failure classification, and runtime events explicit and
+  inspectable across executors.
+
+Implement:
+
+- Shared retry, timeout, failure-category, and runtime event models.
+- Retry planning around safe output transactions and explicit idempotency
+  assumptions.
+- Retry decision records persisted in run stores.
+- Timeout support where executors can enforce it, with warnings and metadata
+  when they cannot.
+- Event records for run and stage lifecycle events, submission events, retry
+  decisions, timeout outcomes, and plugin callback hooks.
+- Preflight warnings for unsupported retry, timeout, and event policies.
+- CLI inspection for event records where useful.
+- Tests for retry boundaries, retry-disabled behavior, non-retryable validation
+  failures, timeout metadata, unsupported timeout warnings, event record
+  serialization, and callback failure behavior.
+
+Exit criteria:
+
+- Reliability policy decisions are recorded as data, not hidden inside executor
+  control flow.
+- Automatic retry is conservative and only occurs after a failed attempt with
+  safe output transaction semantics.
+- Timeout behavior is capability-aware across local, subprocess, SLURM, and
+  container executors.
+
+Defer:
+
+- Cleanup and deletion operations, artifact retention policy, full
+  run-collection garbage collection, service-specific notifications,
+  distributed event streaming, advanced exponential backoff, retry budgets
+  across runs, and resource-aware retry escalation.
+
+Primary feature docs:
+
+- `reliability.md`
+- `execution.md`
+- `run-store.md`
+- `state.md`
+- `artifacts.md`
+- `preflight.md`
+- `plugins.md`
+- `cli.md`
+- `testing.md`
+
+## v16 - Cleanup And Retention
+
+Goal:
+
+- Add conservative cleanup, retention, and garbage-collection operations without
+  surprising deletion of user data.
+
+Implement:
+
+- Cleanup candidate models for loom-owned temporary files and failed-attempt
+  artifacts recorded in metadata.
+- Cleanup dry-run reporting and explicit deletion APIs.
+- CLI cleanup commands with confirmation or programmatic delete intent.
+- Path safety rules: managed roots only, metadata or marker ownership, symlink
+  rejection, visible deletion failures, and no arbitrary directory guessing.
+- Artifact retention metadata and inspection support.
+- Retention modes such as keep, temporary, archive, and external as policy
+  hints rather than automatic deletion commands.
+- Conservative run-collection garbage collection for explicitly selected
+  candidates.
+- Preflight warnings for cleanup paths outside managed roots and retention
+  policies unsupported by selected stores.
+- Tests for cleanup dry-run, path safety, symlink rejection, deletion intent,
+  retention serialization, GC candidate selection, and artifact ownership.
+
+Exit criteria:
+
+- Users can see what `loom` would clean before deletion.
+- Actual deletion requires explicit intent and is limited to loom-owned paths.
+- Retention metadata is visible to export/import and inspection workflows.
+
+Defer:
+
+- Automatic retention deletion, aggressive artifact garbage collection, global
+  cache collection, organization-specific cleanup policies, remote service
+  retention enforcement, and destructive cleanup without explicit user intent.
+
+Primary feature docs:
+
+- `reliability.md`
+- `artifacts.md`
+- `run-store.md`
+- `run-catalog.md`
+- `preflight.md`
+- `cli.md`
+- `testing.md`
+
+## Detailed Plan Drafting Checklist
+
+Before turning any roadmap version into a full implementation plan:
+
+1. Re-read the primary feature docs for that version and the feature docs it
+   depends on.
+2. Confirm the previous roadmap version has landed, or document the smallest
+   compatible assumption if planning must start early.
+3. Define public Python interfaces, CLI commands, persisted records, and file
+   layout changes.
+4. Identify dependency changes, optional extras, plugin boundaries, and import
+   boundary risks.
+5. List conflicts, tradeoffs, alternatives rejected, accepted debt, and revisit
+   triggers.
+6. Split the version if it contains unrelated adapters, multiple external
+   systems, or more than one major persisted schema.
+7. Break the version into implementation phases that can be reviewed
+   independently.
+8. Define default tests, fake-backend tests, opt-in integration tests, and
+   checks that must pass before PR review.
+9. Record branch, worktree path, plan quality gate status, assumptions, and
+   reviewability notes in the expanded plan.
+10. Keep future-version behavior behind explicit deferral notes rather than
+    partial implementation.
+
+## Module Coverage
+
+| Feature document | Primary placement | Notes |
+| --- | --- | --- |
+| `core-model.md` | v0 | Foundational vocabulary for refs, records, manifests, filters, identifiers, timestamps, and hashing terminology. |
+| `timestamps.md` | v0 | UTC helpers are needed by status, stores, provenance, logs, and generated IDs. |
+| `protocols.md` | v0 | Tiny shared protocols and import-boundary rules come before subsystem contracts. |
+| `errors.md` | v0, v1, v2 | Shared roots land in v0; CLI formatting and local diagnostics mature in v1 and v2. |
+| `serialization.md` | v0 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, and config snapshots. |
+| `fingerprints.md` | v0 | Hash helpers and digest records underpin resume and artifact integrity. |
+| `io.md` | v0, v10, v11, v12 | Local sources/codecs in v0; plugin source/codec loading in v10; remote hooks and operations in v11/v12. |
+| `artifacts.md` | v0, v2, v8, v11, v12, v16 | Local artifact refs/stores in v0; inspection in v2; bundles in v8; remote capabilities in v11/v12; retention in v16. |
+| `config.md` | v0, v1, v9, v10 | Composition, recipes, and instantiation in v0; CLI exposure in v1; sweep overrides in v9; recipe plugins in v10. |
+| `pipeline.md` | v0, v1, v9 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI and sweeps expose them later. |
+| `pipeline-graph.md` | v0, v1, v2 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
+| `runtime-resources.md` | v3, v5, v6, v13, v14 | Shared runtime/resource objects arrive before executor-specific mapping. |
+| `execution.md` | v0, v3, v4, v5, v6, v13, v14, v15 | Local execution in v0; options in v3; subprocess in v4; SLURM and containers later; reliability in v15. |
+| `run-store.md` | v0, v2, v4, v7, v8, v15, v16 | Local layout in v0; inspection/failures/catalog/bundles/reliability/cleanup build on it. |
+| `state.md` | v0, v4, v6, v15 | Basic statuses in v0; attempts/failures, scheduler state, and reliability records mature later. |
+| `provenance.md` | v0, v5, v6, v10, v13, v14, v15 | Generic provenance in v0; submission, plugin, container, and event facts added with those capabilities. |
+| `resume.md` | v0, v1, v2, v9, v15 | Same-run-directory resume in v0; CLI/preflight/sweeps expose it; retry policies remain later. |
+| `preflight.md` | v2, v3, v4, v5, v6, v10, v11, v12, v13, v14, v15, v16 | Core check runner in v2; new checks arrive with each operational feature. |
+| `run-catalog.md` | v7, v8, v9, v12, v16 | Catalog/comparison in v7; bundles in v8; sweeps integrate in v9; remote refs and cleanup later. |
+| `sweeps.md` | v9 | Sweeps are many ordinary runs, so they follow local execution, CLI basics, and run catalog foundations. |
+| `slurm.md` | v5, v6, v14 | Script/dry-run support first; live operations second; container composition after both are stable. |
+| `container-executors.md` | v13, v14 | Docker first; Apptainer and SLURM-container composition second. |
+| `remote-stores.md` | v11, v12 | Contract and fake backend first; payload operations and optional real backends second. |
+| `reliability.md` | v4, v15, v16 | Baseline failure metadata starts with subprocess; richer policies and cleanup land later. |
+| `plugins.md` | v10, v11, v12, v15 | Explicit discovery in v10; remote backend and callback integration later. |
+| `cli.md` | v1, v2, v4, v5, v6, v7, v8, v9, v10, v12, v13, v14, v15, v16 | Core CLI lands in v1; commands grow only with their owning feature. |
+| `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
+
+## Functionality Not Encompassed By This Roadmap
+
+The feature documents mention or leave room for the following capabilities, but
+this roadmap does not assign them to a version. They should remain out of scope
+until there is a specific downstream need and a separate design review.
+
+- Domain-specific stages, codecs, artifact schemas, datasets, models, metrics,
+  reports, analysis logic, recipes, or comparison semantics.
+- Untrusted config sandboxing, import allow lists, plugin sandboxing, or
+  treating containers as a security boundary.
+- Hydra-compatible defaults, arbitrary config expression languages, advanced
+  list patching, broad registry aliases for every component, and automatic
+  schema inference for arbitrary targets.
+- Runtime DAG mutation, conditional branch expression languages, nested task
+  scheduling, dynamic fan-out/fan-in at execution time, and general distributed
+  workflow-engine behavior.
+- Cross-run cache reuse as a default behavior, global content-addressed cache,
+  partial stage reuse, and domain-specific checkpoint continuation in core
+  `loom`.
+- Database-backed orchestration, remote tracking servers, web dashboards,
+  authorization systems, and hosted run catalog services.
+- Controller-mode SLURM, job arrays, multi-node MPI orchestration, cloud batch
+  backends, Kubernetes, and workflow submission across unrelated clusters.
+- Built-in Bayesian optimization, random search as a core feature,
+  population-based training, adaptive trial generation, early stopping across
+  trials, and metric query languages.
+- Broad first-party parity across S3, GCS, Azure, MLflow, fsspec, and similar
+  backends. v12 should select at most one optional adapter family if a concrete
+  need exists.
+- Full SBOM generation, cryptographic attestation, signed artifact manifests,
+  distributed tracing, and remote telemetry.
+- Service-specific notification delivery such as Slack, email, Teams,
+  PagerDuty, or webhooks in core `loom`.
+- Automatic artifact deletion, automatic run garbage collection, and aggressive
+  cleanup policies without explicit user intent.
+- Large real-data acceptance suites, real cluster tests, cloud-service tests,
+  container-runtime tests, or network tests in the default test suite.
+
+## Roadmap Review Triggers
+
+Revisit this roadmap when any of the following become true:
+
+- v0 acceptance tests expose a missing boundary that blocks CLI or subprocess
+  work.
+- A detailed project plan for any version violates the sizing rules above.
+- A downstream project needs remote stores, plugins, or sweeps earlier than the
+  current ordering.
+- Users need a primitives-only install after config dependencies become hard
+  runtime dependencies.
+- The local run layout changes in a way that would affect catalogs, export,
+  SLURM workers, containers, or remote stores.
+- Multiple downstream packages implement similar plugins, codecs, stores, or
+  executor adapters outside `loom`.
+- Operational failures show that reliability policy work should move earlier.
