@@ -6,7 +6,7 @@
 - Branch:
 - PR:
 - Target branch:
-- Expanded phase plan:
+- Phase execution plan:
 - PR body:
 - Reviewer:
 - Review date:

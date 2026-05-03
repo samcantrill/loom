@@ -11,6 +11,7 @@ Read:
 - `docs/implementation-plans/implementation-plan-v0.md`
 - Relevant design docs referenced by the plan
 - The findings from `loom_plan_reviewer`
+- `.codex/templates/implementation-plan.md`
 - `.codex/templates/plan-refinement-summary.md`
 
 Task:

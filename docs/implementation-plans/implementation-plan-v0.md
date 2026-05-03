@@ -128,10 +128,10 @@ Phase agents should treat this implementation plan as the controlling scope and
 use the referenced feature documents in `docs/features/` for detailed subsystem
 guidance. When a feature document describes post-v0 behavior or wider future
 direction, implement only the v0 behavior named in this plan and record any
-accepted deferral in the expanded phase plan.
+accepted deferral in the phase execution plan.
 
 Each phase's `Source references` list names the feature documents most relevant
-to that phase. Expanded phase plans should preserve those references and add
+to that phase. Phase execution plans should preserve those references and add
 more specific sections from the same feature documents when they rely on a
 particular contract, boundary, or testing strategy.
 
@@ -399,18 +399,19 @@ Gate result:
 - Accepted risks remain recorded in the technical debt ledger. The controlling
   v0 scope intentionally narrows broader feature documents where this plan
   makes explicit v0 tradeoffs.
-- Phase 9 expanded planning should preserve the `StageContext` helper intent
-  for artifact-store, output-path, and save/register ergonomics without widening
-  v0 execution scope.
+- Phase 9 phase execution planning should preserve the `StageContext` helper
+  intent for artifact-store, output-path, and save/register ergonomics without
+  widening v0 execution scope.
 - Remaining blockers: none.
 
-Every expanded phase plan in `docs/phases/` must include:
+Every phase execution plan in `docs/phases/` must include:
 
 - Design impact.
 - Future compatibility.
 - Alternatives rejected.
 - Debt introduced.
 - Reviewability.
+- Draft/refine status.
 - Refinement and review budget status.
 
 Approved phase PRs target `develop`. The managing agent may mark a phase
@@ -754,7 +755,7 @@ Completion summary:
   pipeline, store, runner, remote backend, checksum, plugin, domain codec, or
   top-level `loom` export behavior was added.
 - Added package, unit, contract, and integration coverage for the Phase 3
-  public surface. The expanded phase plan explicitly defers e2e and opt-in
+  public surface. The phase execution plan explicitly defers e2e and opt-in
   suites because Phase 3 has no config composition, stores, runner, CLI,
   remote source, network, optional dependency, SLURM, or slow-test behavior.
 - Final PR-prep validation on 2026-05-03:
@@ -1570,7 +1571,7 @@ End-to-end tests should cover:
 - Persisting failure/status/provenance cleanly after stage failure.
 
 Phase agents should plan and implement tests during the phase rather than
-leaving coverage creation for PR preparation. Expanded phase plans must identify
+leaving coverage creation for PR preparation. Phase execution plans must identify
 required package, unit, contract, integration, e2e, and opt-in suite coverage,
 or explicitly defer suites that do not apply to the phase. PR preparation owns
 the final suite summary and validation evidence, not new test design.

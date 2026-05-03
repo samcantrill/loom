@@ -5,7 +5,7 @@
 - Phase:
 - Branch:
 - Worktree:
-- Expanded phase plan:
+- Phase execution plan:
 - Executor:
 - Handoff date:
 
@@ -53,4 +53,4 @@ result:
 
 - Areas most likely to need validation attention:
 - Failing or unavailable checks:
-- Completion notes added to expanded phase plan:
+- Completion notes added to phase execution plan:

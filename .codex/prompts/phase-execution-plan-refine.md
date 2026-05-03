@@ -1,31 +1,36 @@
-You are refining an expanded phase plan before implementation.
-This prompt is intended for the `loom_phase_plan_expander` custom agent.
+You are refining a phase execution plan before implementation.
+This prompt is intended for the `loom_phase_planner` custom agent.
+
+This is the lower-level "how" pass for the same durable phase artifact created
+by `.codex/prompts/phase-execution-plan-draft.md`. Work from the artifact plus
+the compacted or current context, not from hidden assumptions in the draft pass.
+Refine the same document until it is decision-complete for implementation.
 
 Read:
 
 - `AGENTS.md`
 - `docs/implementation-plans/implementation-plan-v0.md`
 - The assigned phase
-- The draft expanded phase plan in `docs/phases/`
-- `.codex/templates/expanded-phase-plan.md`
+- The draft phase execution plan in `docs/phases/`
+- `.codex/templates/phase-execution-plan.md`
 
 Task:
 
 1. Confirm you are inside the dedicated git worktree for this phase under
    `/home/samcantrill/work/loom-worktrees`.
-2. Review the draft phase plan against the canonical plan, source-tree
+2. Review the draft phase execution plan against the canonical plan, source-tree
    boundaries, current source/tests, and phase acceptance criteria.
-3. Refine the phase plan until it is decision-complete for implementation:
+3. Refine the phase execution plan until it is decision-complete for implementation:
    approach, interfaces, data flow, edge cases, tests by suite, validation,
    assumptions, and explicit out-of-scope work.
 4. Keep the plan limited to the assigned phase and preserve the durable
-   handoff sections from `.codex/templates/expanded-phase-plan.md`.
+   handoff sections from `.codex/templates/phase-execution-plan.md`.
 5. Add handoff notes for `loom_phase_executor`, including which implementation
    slices are safe for fast execution, which tests belong with each slice, and
    which choices must not be revisited.
-6. Preserve the phase plan's refinement and review budget status, leaving both
-   implementation refinement and PR review marked `unused`.
-7. Commit the refined plan with a `plan:` commit.
+6. Mark the artifact's refine pass complete while preserving both implementation
+   refinement and PR review budget status as `unused`.
+7. Commit the refined phase execution plan with a `plan:` commit.
 
 Rules:
 

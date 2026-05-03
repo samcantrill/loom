@@ -5,7 +5,7 @@
 - Phase:
 - Branch:
 - Worktree:
-- Expanded phase plan:
+- Phase execution plan:
 - Refiner:
 - Refinement date:
 - Phase implementation refinement budget status after this pass: used
@@ -35,7 +35,7 @@ result:
 
 ## PR Preparation Handoff
 
-- Completion notes updated in expanded phase plan:
+- Completion notes updated in phase execution plan:
 - Budget status updated:
 - Final validation recommended:
 - Suite evidence still needed:

@@ -9,7 +9,7 @@ budget.
 Read:
 
 - `AGENTS.md`
-- The expanded phase plan in `docs/phases/`
+- The phase execution plan in `docs/phases/`
 - The current diff
 - Test and validation output
 - `.codex/templates/phase-refinement-report.md`
@@ -25,7 +25,7 @@ Task:
 5. Add regression coverage when useful and phase-scoped.
 6. Re-run the relevant targeted suite commands and broader validation commands
    when practical.
-7. Update the phase plan completion notes using the sections from
+7. Update the phase execution plan completion notes using the sections from
    `.codex/templates/phase-refinement-report.md` and mark implementation
    refinement budget as `used`. If the manager asks for a separate artifact,
    write it to `docs/phases/<summary-of-feature>-refinement.md`.
@@ -39,7 +39,7 @@ Rules:
 - Do not paper over failures.
 - Do not weaken tests unless the test is clearly obsolete because of the intended phase behavior; if so, explain why.
 - Do not add broad future-phase package, integration, e2e, or opt-in tests that
-  were not required by the finalized phase plan.
+  were not required by the finalized phase execution plan.
 - Do not run a second refinement loop. If blockers remain after this pass,
   document them for the managing agent and stop.
 - Do not ask for a replacement fixer or another automated pass under a different

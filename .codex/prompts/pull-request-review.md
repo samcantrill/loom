@@ -11,7 +11,7 @@ Read:
 
 - `AGENTS.md`
 - `docs/implementation-plans/implementation-plan-v0.md`
-- The relevant expanded phase plan in `docs/phases/`
+- The relevant phase execution plan in `docs/phases/`
 - The PR body or prepared PR body
 - The current diff
 - Validation results, test-suite summary, or CI output
@@ -20,7 +20,7 @@ Read:
 Review against:
 
 1. The assigned phase scope and acceptance criteria.
-2. The expanded phase plan.
+2. The phase execution plan.
 3. The PR summary and implementation notes.
 4. The actual diff.
 5. Test coverage by suite, validation results, and any unavailable suite
@@ -30,7 +30,7 @@ Review against:
    non-`develop` base as blocking.
 7. Loom source-tree boundaries and domain-neutrality rules.
 8. Plan quality gate decisions, accepted debt, and revisit triggers.
-9. Maintainability and future compatibility claims in the phase plan.
+9. Maintainability and future compatibility claims in the phase execution plan.
 
 Use `.codex/templates/phase-pr-review-report.md` and lead with findings ordered
 by severity. Each finding should cite a concrete file and line where possible,

@@ -13,7 +13,7 @@ Read:
 - `docs/implementation-plans/implementation-plan-v0.md`
 - Relevant design docs referenced by the plan
 - Existing source and tests needed to verify current boundaries
-- Existing phase plans in `docs/phases/`, if any
+- Existing phase execution plans in `docs/phases/`, if any
 - `.codex/templates/plan-review-report.md`
 
 Review the plan for:

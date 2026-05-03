@@ -1042,7 +1042,7 @@ e2e tests for complete synthetic user-visible workflows
 opt-in tests for slow, SLURM, network, or optional dependency behavior
 ```
 
-The expanded phase plan should state which suites are required, which test paths
+The phase execution plan should state which suites are required, which test paths
 are expected, what behavior they must assert, and which suites are explicitly
 deferred because the phase does not expose that layer yet.
 

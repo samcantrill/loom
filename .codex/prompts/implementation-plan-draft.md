@@ -1,4 +1,8 @@
-You are converting a rough implementation plan into a structured phased plan for autonomous Codex implementation.
+You are drafting a structured implementation plan for autonomous Codex implementation.
+
+This is the high-level "what and sequence" pass for an implementation-plan
+artifact. A later refinement prompt makes the same artifact decision-complete
+for phase execution planning.
 
 Read existing repository files before editing:
 
@@ -7,12 +11,14 @@ Read existing repository files before editing:
 - README or project documentation
 - Existing tests and package/build configuration
 - Any user-provided plan or design document
+- `.codex/templates/implementation-plan.md`
 
 Task:
 
 1. Preserve existing files and project guidance.
-2. Do not overwrite `docs/implementation-plans/implementation-plan-v0.md` if it already exists.
-3. Add or align these plan-level sections when relevant:
+2. Use `.codex/templates/implementation-plan.md` for new implementation plans.
+3. Do not overwrite `docs/implementation-plans/implementation-plan-v0.md` if it already exists.
+4. Add or align these plan-level sections when relevant:
    - Goal
    - Context
    - Desired outcome
@@ -25,10 +31,10 @@ Task:
    - Extensibility assessment
    - Technical debt ledger
    - Plan quality gate
-4. Add or align a `## Phased implementation` section.
-5. Break the plan into small phases, each suitable for one PR.
-6. Assign each phase a branch using `codex/<summary-of-feature>`.
-7. For each phase, include:
+5. Add or align a `## Phased implementation` section.
+6. Break the plan into small phases, each suitable for one PR.
+7. Assign each phase a branch using `codex/<summary-of-feature>`.
+8. For each phase, include:
    - Status
    - Branch
    - PR
@@ -44,9 +50,9 @@ Task:
    - Reviewability
    - Notes
    - Completion summary
-8. Keep phases ordered so implementation can proceed from top to bottom.
-9. Separate refactors, behavior changes, migrations, and cleanup into distinct phases where practical.
-10. Mark the plan quality gate as requiring review by `loom_plan_reviewer` before the first implementation phase begins.
+9. Keep phases ordered so implementation can proceed from top to bottom.
+10. Separate refactors, behavior changes, migrations, and cleanup into distinct phases where practical.
+11. Mark the plan quality gate as requiring review by `loom_plan_reviewer` before the first implementation phase begins.
 
 Rules:
 

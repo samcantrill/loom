@@ -17,7 +17,7 @@
 - Validation or CI:
 - PR target confirmed:
 - Scope limited to assigned phase:
-- PR body and expanded plan accurate:
+- PR body and phase execution plan accurate:
 
 ## Implementation Summary
 

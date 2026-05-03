@@ -1,16 +1,18 @@
-# Phase <N> Expanded Plan: <Title>
+# Phase <N> Execution Plan: <Title>
 
 ## Metadata
 
-- Status: draft expanded plan
+- Status: draft phase execution plan
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
-- Expanded plan path: `docs/phases/<summary-of-feature>.md`
+- Phase execution plan path: `docs/phases/<summary-of-feature>.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Source phase:
 - Base branch:
 - Plan quality gate:
 - Plan quality gate loop budget:
+- Draft pass:
+- Refine pass:
 - Setup limitations:
 - Blockers:
 
@@ -159,7 +161,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan:
-- Final expanded plan:
+- Final phase execution plan:
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:

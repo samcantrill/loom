@@ -88,8 +88,12 @@ and project-scoped Codex workflow metadata.
   docs/
     loom.md
     structure.md
+    briefs/
+      <feature-brief>.md
     implementation-plans/
       implementation-plan-v0.md
+    phases/
+      <phase-execution-plan>.md
     features/
       core-model.md
       timestamps.md
@@ -135,6 +139,7 @@ and project-scoped Codex workflow metadata.
     agents/
     plans/
     prompts/
+    templates/
 ```
 
 ### 2.1 `src/loom`
@@ -146,6 +151,9 @@ typed, and cheap to import.
 
 Design and implementation specifications. These documents are not only prose;
 they define module boundaries, contracts, test expectations, and deferred work.
+Feature briefs capture approved intent before specification work. Phase
+execution plans under `docs/phases/` capture the decision-complete how for one
+implementation phase.
 
 ### 2.3 `tests`
 
@@ -161,8 +169,10 @@ public `loom` APIs, or downstream test helpers.
 
 ### 2.5 `.codex`
 
-Project-scoped agent definitions, prompts, and workflow plans. These files guide
-phase planning and review; they should not be imported by the runtime package.
+Project-scoped agent definitions, prompts, templates, and workflow plans. Custom
+agents define role authority, prompts define behavior, and templates define
+durable workflow artifacts. These files guide phase execution planning and
+review; they should not be imported by the runtime package.
 
 ---
 
@@ -757,9 +767,19 @@ features/testing.md
   Test layout, package tests, unit tests, integration tests, contract tests, and
   validation gates.
 
+briefs/
+  Durable feature briefs. A brief captures the problem, value, non-goals, done
+  criteria, constraints, risks, assumptions, and specification targets before
+  feature specification work begins.
+
 implementation-plans/implementation-plan-v0.md
   Review-gated v0 phase plan, phase status, accepted tradeoffs, and deferred
   v0 scope boundaries.
+
+phases/
+  Phase execution plans and phase-scoped PR bodies. A phase execution plan is
+  drafted at the what level, refined at the how level, and then used as the
+  implementation contract for one phase.
 ```
 
 ---
@@ -878,7 +898,7 @@ When adding modules:
    behavior is implemented.
 6. Preserve stable imports when splitting files into packages.
 7. Record accepted technical debt and revisit triggers in the relevant module
-   doc or phase plan.
+   doc or phase execution plan.
 
 The repository phase workflow in `AGENTS.md` and
 `docs/implementation-plans/implementation-plan-v0.md` controls large

@@ -5,7 +5,9 @@
 - Target: `develop`
 - Worktree:
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
-- Expanded phase plan:
+- Phase execution plan:
+- Draft pass:
+- Refine pass:
 
 ## Summary
 

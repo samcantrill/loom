@@ -4,7 +4,7 @@ Read:
 
 - `AGENTS.md`
 - `docs/implementation-plans/implementation-plan-v0.md`
-- Existing phase plans in `docs/phases/`
+- Existing phase execution plans in `docs/phases/`
 - `.codex/templates/README.md`
 - Open PRs and CI/test results if available
 
@@ -31,9 +31,14 @@ Prefer GitHub CLI-backed remote operations when available:
 Your job is to advance the implementation plan one phase at a time without
 indefinite review/refine loops.
 
-Use `.codex/templates/` for durable handoff artifacts. Prompts define agent
-behavior; templates define the artifact shape to complete and pass to the next
-stage.
+Use `.codex/templates/` for durable handoff artifacts. Custom agents define
+role authority, sandbox, and model; prompts define behavior; templates define
+the artifact shape to complete and pass to the next stage.
+
+Workflow stages are artifact-centered. Each first-class artifact has a
+high-level draft pass and a lower-level refine pass before the next stage
+depends on it. Multiple prompts or agents may work on the same artifact; do not
+create a separate durable artifact merely because a separate agent ran.
 
 Core rule:
 
@@ -52,20 +57,36 @@ Loop budget:
 | Phase implementation | One `loom_phase_refiner` pass after implementation | Report the blocker and stop before PR approval or merge |
 | Phase PR review | One `loom_phase_reviewer` pass or one equivalent local review | Leave the PR unapproved, report the blocker, and stop |
 
-Before assigning any reviewer or refiner, check the current thread, expanded
-phase plan, PR body, and implementation-plan notes for evidence that the gate's
-budget has already been consumed. If the history is ambiguous, treat the budget
-as consumed and escalate to the user instead of starting another automated pass.
+Before assigning any reviewer or refiner, check the current thread, phase
+execution plan, PR body, and implementation-plan notes for evidence that the
+gate's budget has already been consumed. If the history is ambiguous, treat the
+budget as consumed and escalate to the user instead of starting another
+automated pass.
 Do not use a different agent name or local review to bypass a consumed budget.
 
 Model policy:
 
 - Use `gpt-5.5` with `xhigh` reasoning for whole-phase ownership, ambiguous
-  design translation, plan expansion, review, PR preparation, and correctness
-  decisions.
+  design translation, artifact refinement, review, PR preparation, and
+  correctness decisions.
 - Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
-  a decision-complete phase plan. Spark agents must stop and report blockers
-  instead of making public API or phase-scope decisions.
+  a decision-complete phase execution plan. Spark agents must stop and report
+  blockers instead of making public API or phase-scope decisions.
+
+For new or ambiguous work before an implementation plan exists:
+
+1. Draft a feature brief with `.codex/prompts/feature-brief-draft.md`.
+2. After the brief artifact exists and context has been compacted or reset when
+   practical, refine it with `.codex/prompts/feature-brief-refine.md`.
+3. Draft or update the relevant specification in `docs/features/` with
+   `.codex/prompts/specification-draft.md`.
+4. After the specification artifact exists and context has been compacted or
+   reset when practical, refine it with `.codex/prompts/specification-refine.md`.
+5. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`.
+6. Review and refine the implementation plan using the plan quality gate below.
+7. Do not start phase execution planning until the brief, specification, and
+   implementation plan have no unresolved blockers, unless the user explicitly
+   assigns a smaller workflow stage.
 
 Before implementation begins:
 
@@ -81,32 +102,48 @@ Before implementation begins:
 
 For each phase:
 
-1. Find the next phase with `Status: pending` whose earlier phases are complete, approved, or merged.
-2. If additional codebase context is useful and can run in parallel, use the `loom_architecture_explorer` custom agent for read-only mapping.
-3. Assign phase planning to `loom_phase_planner` using `.codex/prompts/implementation-phase-planning.md`; include or complete the assignment fields from `.codex/templates/phase-assignment.md`.
-4. Assign the committed draft phase plan to `loom_phase_plan_expander` using `.codex/prompts/implementation-phase-plan-expansion.md`.
-5. Assign implementation and phase-scoped tests to `loom_phase_executor` using `.codex/prompts/implementation-phase-execution.md`.
-6. Assign exactly one bounded refinement pass to `loom_phase_refiner` using `.codex/prompts/implementation-test-refinement.md`.
-7. Assign PR preparation and suite-summary generation to `loom_pr_preparer` using `.codex/prompts/pull-request-preparation.md`.
-8. Review the PR with the `loom_phase_reviewer` custom agent using `.codex/prompts/pull-request-review.md` when subagents are explicitly requested or available and the PR-review budget has not been consumed. Otherwise perform the same review locally only if that also does not exceed the PR-review budget.
-9. Review the PR against:
+1. Find the next phase with `Status: pending` whose earlier phases are
+   complete, approved, or merged.
+2. If additional codebase context is useful and can run in parallel, use the
+   `loom_architecture_explorer` custom agent for read-only mapping.
+3. Assign phase execution plan drafting to `loom_phase_planner` using
+   `.codex/prompts/phase-execution-plan-draft.md`; include or complete the
+   assignment fields from `.codex/templates/phase-assignment.md`.
+4. After the draft artifact exists and context has been compacted or reset when
+   practical, assign phase execution plan refinement to `loom_phase_planner`
+   using `.codex/prompts/phase-execution-plan-refine.md`.
+5. Assign implementation and phase-scoped tests to `loom_phase_executor` using
+   `.codex/prompts/implementation-phase-execution.md`.
+6. Assign exactly one bounded refinement pass to `loom_phase_refiner` using
+   `.codex/prompts/implementation-test-refinement.md`.
+7. Assign PR body drafting and suite-summary generation to `loom_pr_preparer`
+   using `.codex/prompts/pr-body-draft.md`.
+8. After the PR body draft exists and context has been compacted or reset when
+   practical, assign PR body refinement and PR creation/preparation to
+   `loom_pr_preparer` using `.codex/prompts/pr-body-refine.md`.
+9. Review the PR with the `loom_phase_reviewer` custom agent using
+   `.codex/prompts/pull-request-review.md` when subagents are explicitly
+   requested or available and the PR-review budget has not been consumed.
+   Otherwise perform the same review locally only if that also does not exceed
+   the PR-review budget.
+10. Review the PR against:
    - The original implementation plan.
-   - The expanded phase plan.
+   - The phase execution plan.
    - The PR explanation.
    - The diff.
    - Suite-level test and validation results.
-10. Approve the PR only if:
+11. Approve the PR only if:
    - The explanation matches the implementation.
    - The assigned phase acceptance criteria are satisfied.
    - Relevant tests pass or any unavailable checks are clearly justified.
    - The scope is limited to the assigned phase.
    - No future phase was implemented early.
    - No obvious maintainability or regression issue remains.
-11. If the PR is not acceptable after the single `loom_phase_refiner` pass,
+12. If the PR is not acceptable after the single `loom_phase_refiner` pass,
    report the exact blocker to the user and stop. Do not spawn another fixer
    unless the user explicitly asks.
-12. If the PR is acceptable, approve it.
-13. Before merging, verify the PR target with `gh pr view <PR> --json
+13. If the PR is acceptable, approve it.
+14. Before merging, verify the PR target with `gh pr view <PR> --json
    baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`. Merge only
    when `baseRefName` is exactly `develop`. Merge the approved PR into
    `develop` using a squash merge when GitHub tooling and permissions are
@@ -114,23 +151,25 @@ For each phase:
    `gh pr merge <PR> --auto --squash --delete-branch` when branch protection
    requires checks to finish first. If merging is unavailable, leave the phase
    at `approved`, document why, and stop before the next phase.
-14. After a successful merge, complete the fields from `.codex/templates/phase-merge-record.md` and update `docs/implementation-plans/implementation-plan-v0.md` on `develop`
-   without overwriting unrelated plan content. Record:
+15. After a successful merge, complete the fields from
+   `.codex/templates/phase-merge-record.md` and update
+   `docs/implementation-plans/implementation-plan-v0.md` on `develop` without
+   overwriting unrelated plan content. Record:
    - Phase status.
    - PR link or branch name.
    - Short implementation summary.
    - Test results summary.
    - Follow-up notes for later phases.
-15. Commit the metadata update with a `docs:` commit message and push it when
+16. Commit the metadata update with a `docs:` commit message and push it when
    permissions allow. If direct pushes to `develop` are disallowed, prepare a
    small metadata PR and stop before the next phase.
-16. Remove the phase worktree from `/home/samcantrill/work/loom-worktrees`,
+17. Remove the phase worktree from `/home/samcantrill/work/loom-worktrees`,
    run `git worktree prune`, and delete the phase branch if the merge command
    did not already delete it. Prefer `gh api --method DELETE
    repos/<owner>/<repo>/git/refs/heads/<branch>` for GitHub branch cleanup when
    git SSH auth is unavailable.
-17. Move to the next pending phase.
-18. Stop when all phases are complete, approved, merged, or blocked.
+18. Move to the next pending phase.
+19. Stop when all phases are complete, approved, merged, or blocked.
 
 Rules:
 
@@ -141,7 +180,7 @@ Rules:
   `develop` rather than merging it.
 - Do not skip phases unless the plan explicitly allows it.
 - Do not start phase implementation while blocking plan-review findings remain unresolved.
-- Do not approve a PR just because tests pass; the explanation must match the diff and phase plan.
+- Do not approve a PR just because tests pass; the explanation must match the diff and phase execution plan.
 - Do not require exhaustive test coverage unless the phase warrants it.
 - Prefer forward progress with small PRs over large perfect changes.
 - Do not loop on review/refinement. Escalate remaining blockers after the

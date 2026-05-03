@@ -8,9 +8,10 @@
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
 - Base branch: `develop`
 - Target branch: `develop`
-- Expanded phase plan path: `docs/phases/<summary-of-feature>.md`
+- Phase execution plan path: `docs/phases/<summary-of-feature>.md`
 - Assigned agent:
 - Assigned prompt:
+- Artifact draft/refine status:
 
 ## Gate Status
 

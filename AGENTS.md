@@ -26,7 +26,7 @@ suite-level evidence.
 This repository uses a phase-based Codex workflow for larger implementation
 plans. The canonical v0 implementation plan lives in
 `docs/implementation-plans/implementation-plan-v0.md`.
-Individual expanded phase plans live in `docs/phases/`.
+Individual phase execution plans live in `docs/phases/`.
 Reusable project-scoped Codex plans live in `.codex/plans/`.
 
 When assigned a phase, implement only that phase.
@@ -36,12 +36,11 @@ When assigned a phase, implement only that phase.
 Project-scoped custom agents live in `.codex/agents/`:
 
 - `loom_phase_planner`: uses `gpt-5.5` with `xhigh` reasoning to create the
-  phase worktree/branch, draft the expanded phase plan, and commit that draft.
-- `loom_phase_plan_expander`: uses `gpt-5.5` with `xhigh` reasoning for a fresh
-  context pass that refines the expanded phase plan and commits the final plan.
+  phase worktree/branch, draft the phase execution plan, refine the same
+  artifact after context compaction or reset, and commit those planning passes.
 - `loom_phase_executor`: uses `gpt-5.3-codex-spark` with `high` reasoning to
-  execute well-specified implementation slices from the finalized phase plan
-  with multiple coherent commits.
+  execute well-specified implementation slices from the finalized phase
+  execution plan with multiple coherent commits.
 - `loom_phase_refiner`: uses `gpt-5.5` with `xhigh` reasoning to perform one
   bounded implementation/test refinement pass and commit fixes.
 - `loom_pr_preparer`: uses `gpt-5.5` with `xhigh` reasoning to inspect the final
@@ -56,25 +55,53 @@ Project-scoped custom agents live in `.codex/agents/`:
 
 Use `.codex/prompts/` for repeatable workflow prompts. Do not add extra
 agent-directory content outside the current custom-agent structure.
-Name prompt files with the workflow stage first using `<stage>-<substage>.md`,
-for example `implementation-plan-review.md`, `pull-request-review.md`, and
-`implementation-test-refinement.md`.
+Name prompt files with the artifact and action first using
+`<artifact>-<action>.md`, for example `feature-brief-draft.md`,
+`phase-execution-plan-refine.md`, and `pr-body-draft.md`.
 Use `.codex/templates/` for reusable handoff artifact templates that agents
-complete during the linear workflow. Prompts define role behavior; templates
-define the durable Markdown artifacts passed between stages.
+complete during the linear workflow. Custom agents define role authority,
+sandbox, and model. Prompts define behavior for a draft, refine, review,
+implementation, or preparation pass. Templates define durable Markdown
+artifacts passed between stages.
+
+### Artifact-Centered Workflow
+
+The workflow is organized around durable stage artifacts, not one file per
+agent invocation. Multiple prompts or agents may work on the same artifact.
+Each first-class artifact must have a high-level draft pass and a lower-level
+refine pass before the next stage depends on it.
+
+First-class artifacts:
+
+- Feature brief, usually in `docs/briefs/`.
+- Specification, usually in `docs/features/`.
+- Implementation plan, in `docs/implementation-plans/`.
+- Phase execution plan, in `docs/phases/`.
+- PR body, usually in `docs/phases/<summary>-pr-body.md`.
+- Merge notes, recorded in implementation-plan completion metadata.
+
+Testing plans are embedded by default in specifications, implementation plans,
+phase execution plans, and PR evidence. Create a standalone testing plan only
+when the assigned work is too large or cross-cutting for embedded suite
+obligations to remain reviewable.
+
+For new work, draft and refine the feature brief before drafting or changing a
+specification. Draft and refine the specification before drafting an
+implementation plan. Draft and refine the implementation plan, including its
+plan quality gate, before creating phase execution plans.
 
 ### Branches And Worktrees
 
 - Create a feature branch using `codex/<summary-of-feature>`.
 - Use lowercase kebab case for the branch summary.
-- Create phase branches from `develop` unless the phase plan explicitly says
+- Create phase branches from `develop` unless the phase execution plan explicitly says
   otherwise.
 - Do all phase work in a separate git worktree under
   `/home/samcantrill/work/loom-worktrees/`.
 - Name each worktree with the branch summary, without the `codex/` prefix, for
   example `/home/samcantrill/work/loom-worktrees/config-recipes`.
 - Do not implement phase work directly in the original checkout.
-- Record the branch and worktree path in the expanded phase plan.
+- Record the branch and worktree path in the phase execution plan.
 
 ### GitHub CLI And Remote Operations
 
@@ -116,19 +143,19 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
 - Read the full implementation plan before writing code.
 - Confirm the implementation plan has passed the plan quality gate before
   starting phase work.
-- Create an expanded phase plan before implementation.
+- Create and refine a phase execution plan before implementation.
 - Follow the linear phase handoff. Do not collapse planning, implementation,
   refinement, and PR preparation into one agent unless explicitly instructed.
 - Make frequent commits at coherent checkpoints.
 - Do not ask the user for feedback during the phase.
 - If something is ambiguous, make the smallest reasonable assumption, document
-  it in the phase plan and PR body, and continue.
+  it in the phase execution plan and PR body, and continue.
 - Do not implement future phases early.
 - Do not do broad refactors unless required by the assigned phase.
 - Prefer direct, maintainable code over clever abstractions.
 - Make maintainability, extensibility, conflicting design choices, accepted
   technical debt, and future compatibility explicit in plans.
-- Add or update tests for the behavior changed in the phase. Expanded phase
+- Add or update tests for the behavior changed in the phase. Phase execution
   plans must identify required package, unit, contract, integration, e2e, and
   opt-in test coverage, or explicitly defer suites that do not apply.
 - Run relevant checks before opening a PR.
@@ -141,11 +168,14 @@ Each phase uses this strict sequence:
 
 ```text
 manager selects next pending phase
-loom_phase_planner drafts and commits expanded phase plan with suite-level test obligations
-loom_phase_plan_expander refines and commits final phase plan with decision-complete test coverage
+loom_phase_planner drafts and commits the phase execution plan with suite-level test obligations
+context is compacted or reset for the refine pass when practical
+loom_phase_planner refines and commits the same phase execution plan with decision-complete implementation details
 loom_phase_executor implements and commits phase work and phase-scoped tests
 loom_phase_refiner performs one bounded refinement pass and commits fixes
-loom_pr_preparer runs checks, writes a suite summary, updates pr_open metadata, and opens/prepares PR
+loom_pr_preparer runs checks, drafts the PR body, and records suite evidence
+context is compacted or reset for the PR body refine pass when practical
+loom_pr_preparer refines the PR body, updates pr_open metadata, and opens/prepares PR
 loom_phase_reviewer or manager reviews PR
 manager approves and merges, or escalates to the user
 manager records merged metadata and cleans worktree/branch
@@ -165,24 +195,24 @@ attempt:
 
 The managing agent owns this loop budget. Before assigning any reviewer or
 refiner, confirm the relevant gate has not already consumed its allowed pass in
-the current thread, phase plan, PR body, or implementation-plan notes. If the
-history is unclear, assume the budget is consumed and escalate rather than
+the current thread, phase execution plan, PR body, or implementation-plan notes.
+If the history is unclear, assume the budget is consumed and escalate rather than
 starting another automated review/refine cycle. No phase agent may reassign
 itself, spawn a replacement fixer, or request another automated pass for the
 same gate without an explicit user instruction.
 
-Expanded phase plans must record the phase implementation refinement and PR
+Phase execution plans must record the phase implementation refinement and PR
 review budget status so later handoffs can see whether a pass is unused, used,
 or explicitly not needed.
 
 Model policy:
 
 - Use `gpt-5.5` with `xhigh` reasoning for whole-phase ownership, ambiguous
-  design translation, plan expansion, review, PR preparation, and correctness
-  decisions.
+  design translation, artifact refinement, review, PR preparation, and
+  correctness decisions.
 - Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
-  a decision-complete phase plan. Spark agents must stop and report blockers
-  instead of making public API or phase-scope decisions.
+  a decision-complete phase execution plan. Spark agents must stop and report
+  blockers instead of making public API or phase-scope decisions.
 
 ### Automatic Merge Policy
 
@@ -199,7 +229,7 @@ Before merging, the managing agent must confirm:
   clearly justified.
 - The PR implements only the assigned phase and does not include future phase
   work.
-- The PR body and expanded phase plan accurately summarize the implementation,
+- The PR body and phase execution plan accurately summarize the implementation,
   suite-level test evidence, assumptions, risks, branch, and worktree path.
 
 After merging, the managing agent must:
@@ -291,14 +321,14 @@ Agents may run narrower suite targets such as `make test-unit`,
 `make test-integration`, or direct `uv run pytest ...` commands during
 implementation, but PR preparation must report the final validation gate.
 
-If a command cannot be run, record why in the expanded phase plan and PR body.
+If a command cannot be run, record why in the phase execution plan and PR body.
 
 ### Commit Style
 
 Make frequent commits after coherent units of work. Recommended prefixes:
 
 ```text
-plan: add expanded phase plan
+plan: add phase execution plan
 feat: implement phase behavior
 test: add phase coverage
 fix: refine implementation after validation
@@ -309,10 +339,11 @@ docs: update implementation plan
 
 A phase is done when:
 
-- The expanded phase plan exists.
-- The expanded phase plan documents design impact, future compatibility,
+- The phase execution plan exists.
+- The phase execution plan documents design impact, future compatibility,
   alternatives rejected, debt introduced, and reviewability.
-- The expanded phase plan records refinement and review budget status.
+- The phase execution plan records draft/refine status and refinement/review
+  budget status.
 - The implementation matches the selected phase.
 - Relevant tests are added or updated.
 - Relevant checks have been run.

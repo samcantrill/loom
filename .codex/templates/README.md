@@ -1,26 +1,30 @@
 # Codex Handoff Templates
 
-These templates define durable Markdown artifacts for the phased implementation
-workflow. They complement `.codex/prompts/`: prompts tell an agent what to do,
-while templates define the document shape an agent completes for the next
-handoff.
+These templates define durable Markdown artifacts for the artifact-centered
+Codex workflow. They complement `.codex/prompts/`: prompts tell an agent what
+to do, while templates define the document shape that one or more agents draft,
+refine, and pass to the next stage.
 
+Each major workflow stage leaves one durable artifact. Multiple agents or prompt
+passes may work on the same artifact, but the artifact is the stage boundary.
 Per-phase artifacts should usually be written under `docs/phases/` with the
-phase summary in the filename. Review reports may be pasted into the managing
-thread, PR discussion, or a phase-scoped file when the manager needs a tracked
-artifact.
+phase summary in the filename. Review reports may annotate the stage artifact,
+be pasted into the managing thread, PR discussion, or a phase-scoped file when
+the manager needs a tracked blocker.
 
 ## Template Map
 
-| Workflow handoff | Template | Typical destination |
+| Workflow stage or handoff | Template | Typical destination |
 | --- | --- | --- |
+| Feature brief draft/refine | `feature-brief.md` | `docs/briefs/<summary>.md` |
+| Specification draft/refine | `specification.md` | `docs/features/<area>.md` |
+| Implementation plan draft/refine | `implementation-plan.md` | `docs/implementation-plans/implementation-plan-vN.md` |
 | Manager to planner | `phase-assignment.md` | manager message or `docs/phases/<summary>-assignment.md` |
 | Plan reviewer to manager/refiner | `plan-review-report.md` | manager thread or `docs/phases/<summary>-plan-review.md` |
 | Plan refiner to confirmation reviewer | `plan-refinement-summary.md` | manager thread or implementation-plan notes |
-| Planner to plan expander | `expanded-phase-plan.md` | `docs/phases/<summary>.md` |
-| Plan expander to executor | `expanded-phase-plan.md` | `docs/phases/<summary>.md` |
-| Executor to refiner | `phase-implementation-handoff.md` | phase plan completion notes or `docs/phases/<summary>-implementation-handoff.md` |
-| Refiner to PR preparer | `phase-refinement-report.md` | phase plan completion notes or `docs/phases/<summary>-refinement.md` |
+| Phase execution plan draft/refine | `phase-execution-plan.md` | `docs/phases/<summary>.md` |
+| Executor to refiner | `phase-implementation-handoff.md` | phase execution plan completion notes or `docs/phases/<summary>-implementation-handoff.md` |
+| Refiner to PR preparer | `phase-refinement-report.md` | phase execution plan completion notes or `docs/phases/<summary>-refinement.md` |
 | PR preparer to reviewer | `phase-pr-body.md` | `docs/phases/<summary>-pr-body.md` |
 | PR reviewer to manager | `phase-pr-review-report.md` | PR review comment or manager thread |
 | Manager after merge | `phase-merge-record.md` | implementation-plan completion metadata |
