@@ -1,20 +1,7 @@
-"""Config package skeleton."""
-
-from typing import NoReturn
+"""Config package."""
 
 from loom.errors import ConfigError
 
+from .api import ComposedConfig, compose_config, instantiate, register_recipe
 
-def compose_config(*_args: object, **_kwargs: object) -> NoReturn:
-    raise ConfigError("compose_config is not implemented in Phase 1; implement in Phase 4.")
-
-
-def instantiate(*_args: object, **_kwargs: object) -> NoReturn:
-    raise ConfigError("instantiate is not implemented in Phase 1; implement in Phase 4.")
-
-
-def register_recipe(*_args: object, **_kwargs: object) -> NoReturn:
-    raise ConfigError("register_recipe is not implemented in Phase 1; implement in Phase 5.")
-
-
-__all__ = ["ConfigError", "compose_config", "instantiate", "register_recipe"]
+__all__ = ["ConfigError", "ComposedConfig", "compose_config", "instantiate", "register_recipe"]
