@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from loom.artifacts import ArtifactRef
+
+if TYPE_CHECKING:
+    from .context import StageContext
 
 
 @runtime_checkable
@@ -15,9 +18,6 @@ class Stage(Protocol):
         context: "StageContext",
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]: ...
-
-
-from .context import StageContext
 
 
 __all__ = ["Stage"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import cast
 
 from loom.ids import ArtifactType, CodecKey, StageID
 from loom.serialization import PlainData, ensure_plain_data
@@ -176,6 +176,28 @@ class OutputSpec:
     schema_version: int | None = None
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "artifact_type",
+            _require_non_empty_string(self.artifact_type, path="OutputSpec.artifact_type"),
+        )
+        object.__setattr__(
+            self,
+            "codec_key",
+            _optional_string(self.codec_key, path="OutputSpec.codec_key"),
+        )
+        object.__setattr__(
+            self,
+            "schema_version",
+            _optional_schema_version(self.schema_version, path="OutputSpec.schema_version"),
+        )
+        object.__setattr__(
+            self,
+            "metadata",
+            _plain_mapping(self.metadata, path="OutputSpec.metadata"),
+        )
+
     @classmethod
     def from_config(cls, config: object, *, path: str = "$.output") -> "OutputSpec":
         mapping = _require_mapping(config, path=path)
@@ -207,6 +229,56 @@ class StageSpec:
     dependencies: tuple[StageID, ...] = field(default_factory=tuple)
     inputs: Mapping[str, str] = field(default_factory=dict)
     resources: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        name = _validate_identifier(
+            _require_non_empty_string(self.name, path="StageSpec.name"),
+            kind="stage name",
+            path="StageSpec.name",
+        )
+        object.__setattr__(self, "name", name)
+        object.__setattr__(
+            self,
+            "target_path",
+            _require_non_empty_string(self.target_path, path="StageSpec.target_path"),
+        )
+
+        outputs: dict[str, OutputSpec] = {}
+        if not isinstance(self.outputs, Mapping):
+            raise PipelineSpecError("StageSpec.outputs must be a mapping")
+        for output_name, output_spec in self.outputs.items():
+            normalized_name = _validate_identifier(
+                _require_non_empty_string(output_name, path="StageSpec.outputs key"),
+                kind="output name",
+                path=f"StageSpec.outputs['{output_name}']",
+            )
+            if not isinstance(output_spec, OutputSpec):
+                raise PipelineSpecError(f"StageSpec.outputs['{output_name}'] must be an OutputSpec")
+            outputs[normalized_name] = output_spec
+        if not outputs:
+            raise PipelineSpecError("StageSpec.outputs requires at least one output")
+        object.__setattr__(self, "outputs", outputs)
+
+        object.__setattr__(
+            self,
+            "stage_config",
+            _plain_mapping(self.stage_config, path="StageSpec.stage_config"),
+        )
+        object.__setattr__(
+            self,
+            "dependencies",
+            _parse_dependencies(self.dependencies, stage_name=name, path="StageSpec.dependencies"),
+        )
+        object.__setattr__(
+            self,
+            "inputs",
+            _parse_inputs(self.inputs, stage_name=name, path="StageSpec.inputs"),
+        )
+        object.__setattr__(
+            self,
+            "resources",
+            _plain_mapping(self.resources, path="StageSpec.resources"),
+        )
 
     @classmethod
     def from_config(cls, config: object, *, path: str = "$.stage") -> "StageSpec":
@@ -251,6 +323,40 @@ class PipelineSpec:
     description: str | None = None
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
     schema_version: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.stages, Sequence) or isinstance(self.stages, (bytes, str)):
+            raise PipelineSpecError("PipelineSpec.stages must be a non-empty sequence")
+
+        stages: list[StageSpec] = []
+        stage_names: set[str] = set()
+        for index, stage in enumerate(self.stages):
+            if not isinstance(stage, StageSpec):
+                raise PipelineSpecError(f"PipelineSpec.stages[{index}] must be a StageSpec")
+            if stage.name in stage_names:
+                raise PipelineSpecError(f"PipelineSpec.stages[{index}] has duplicate stage name '{stage.name}'")
+            stage_names.add(stage.name)
+            stages.append(stage)
+
+        if not stages:
+            raise PipelineSpecError("PipelineSpec.stages must be a non-empty sequence")
+        object.__setattr__(self, "stages", tuple(stages))
+        object.__setattr__(self, "name", _optional_string(self.name, path="PipelineSpec.name"))
+        object.__setattr__(
+            self,
+            "description",
+            _optional_string(self.description, path="PipelineSpec.description"),
+        )
+        object.__setattr__(
+            self,
+            "metadata",
+            _plain_mapping(self.metadata, path="PipelineSpec.metadata"),
+        )
+        object.__setattr__(
+            self,
+            "schema_version",
+            _optional_schema_version(self.schema_version, path="PipelineSpec.schema_version"),
+        )
 
     @classmethod
     def from_config(cls, config: object, *, path: str = "$.pipeline") -> "PipelineSpec":

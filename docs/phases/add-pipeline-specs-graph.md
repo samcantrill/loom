@@ -495,7 +495,7 @@ Do not add `PipelineRunner`, stores, planning helpers, execution helpers, CLI he
   - `tests/unit/loom/pipeline/test_context.py`
   - `tests/unit/loom/pipeline/test_stage.py`
   - `tests/unit/loom/pipeline/test_status.py`
-  - `tests/unit/loom/pipeline/test_errors.py`
+  - `tests/unit/loom/pipeline/test_pipeline_errors.py`
   - `tests/unit/loom/pipeline/graph/test_bindings.py`
   - `tests/unit/loom/pipeline/graph/test_dag.py`
   - `tests/unit/loom/pipeline/graph/test_topology.py`
@@ -557,12 +557,12 @@ make validate-pr
 make test-summary
 ```
 
-This refine pass intentionally did not run validation because no product implementation was performed and the manager requested planning only.
+The phase-plan refine pass intentionally did not run validation because no product implementation was performed and the manager requested planning only.
 
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices:
-  1. Errors and spec parsing: `src/loom/pipeline/errors.py`, `src/loom/pipeline/specs.py`, package exports, `tests/unit/loom/pipeline/test_specs.py`, `tests/unit/loom/pipeline/test_errors.py`, and package API/import tests.
+  1. Errors and spec parsing: `src/loom/pipeline/errors.py`, `src/loom/pipeline/specs.py`, package exports, `tests/unit/loom/pipeline/test_specs.py`, `tests/unit/loom/pipeline/test_pipeline_errors.py`, and package API/import tests.
   2. Stage contract and context: `src/loom/pipeline/stage.py`, `src/loom/pipeline/context.py`, `tests/unit/loom/pipeline/test_context.py`, `tests/unit/loom/pipeline/test_stage.py`, and `tests/contracts/test_stage_contract.py`.
   3. Status model: `src/loom/pipeline/status.py` and `tests/unit/loom/pipeline/test_status.py`.
   4. Bindings and graph: `src/loom/pipeline/graph/bindings.py`, `src/loom/pipeline/graph/dag.py`, `src/loom/pipeline/graph/topology.py`, graph exports, and graph unit tests.
@@ -575,16 +575,77 @@ This refine pass intentionally did not run validation because no product impleme
 
 - Phase execution plan draft: completed by `loom_phase_planner`; draft commit `fee127460ad171cc364485169575916a7acdcdee`.
 - Phase execution plan refine: completed by `loom_phase_planner` in this pass.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used by `loom_phase_refiner` on 2026-05-03 in the `fix: refine after validation` pass.
 - PR review: unused.
+
+## Implementation Refinement Report
+
+### Metadata
+
+- Phase: Phase 6 - Pipeline Specs And Graph.
+- Branch: `codex/add-pipeline-specs-graph`.
+- Worktree: `/home/samcantrill/work/loom-worktrees/add-pipeline-specs-graph`.
+- Expanded phase plan: `docs/phases/add-pipeline-specs-graph.md`.
+- Refiner: `loom_phase_refiner`.
+- Refinement date: 2026-05-03.
+- Phase implementation refinement budget status after this pass: used.
+
+### Refinement Scope
+
+- Validation output reviewed: manager preflight results for package, contract, integration, targeted pipeline unit tests, full unit collection failure, lint, pyright, and plan-conformance review.
+- Blocking issues caused by this phase: colliding unit test basename, three lint findings, pyright failures in new `StageContext` tests, `StageStatusRecord` shape drift from the refined plan, and direct-constructor normalization gaps in Phase 6 spec dataclasses.
+- Issues confirmed out of scope: none; no Phase 7+ store, runner, planning, CLI, or persistence behavior was changed.
+
+### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Unit collection collision | Renamed the new pipeline error test to `tests/unit/loom/pipeline/test_pipeline_errors.py`. | `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed, 227 passed. |
+| Lint findings | Removed unused imports and moved the `StageContext` reference behind type checking in `loom.pipeline.stage`. | `UV_CACHE_DIR=/tmp/uv-cache make lint` passed. |
+| Pyright failures in new tests | Adjusted tests to use typed `Path` values or explicit casts for intentional runtime validation cases. | `UV_CACHE_DIR=/tmp/uv-cache make typecheck` passed, 0 errors. |
+| Status record plan drift | Aligned `StageStatusRecord` with `stage_name`, `attempt`, `updated_at`, and the planned serialized key names. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline tests/unit/loom/pipeline/graph` passed, 38 passed. |
+| Direct constructor normalization gaps | Added focused `__post_init__` normalization for `OutputSpec`, `StageSpec`, and `PipelineSpec`, including tuple normalization and fresh plain-data mapping copies. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/test_context.py tests/package/test_pipeline_api.py` passed, 26 passed. |
+
+### Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/test_context.py tests/package/test_pipeline_api.py
+result: passed, 26 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache make lint
+result: passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache make typecheck
+result: passed, 0 errors
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-unit
+result: passed, 227 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-package
+result: passed, 16 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline tests/unit/loom/pipeline/graph
+result: passed, 38 passed
+```
+
+### Remaining Blockers
+
+- None known after this refinement pass.
+
+### PR Preparation Handoff
+
+- Completion notes updated in expanded phase plan: yes.
+- Budget status updated: yes, phase implementation refinement budget is used.
+- Final validation recommended: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and `UV_CACHE_DIR=/tmp/uv-cache make test-summary`.
+- Suite evidence still needed: PR-preparation pass should record final `make validate-pr` and `make test-summary` evidence.
 
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed with message `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner` in this pass.
-- Implementation summary: pending implementation pass.
-- Implementation validation: pending implementation and PR-preparation passes.
-- Refinement summary: pending implementation refinement pass; budget unused.
+- Implementation summary: completed by `loom_phase_executor` in commit `feat: add pipeline specs and graph primitives`, with Phase 6 static specs, context, stage protocol, status values, bindings, graph helpers, and phase-scoped tests.
+- Implementation validation: manager preflight passed package, contract, integration, and targeted pipeline checks; this refinement pass reran lint, typecheck, unit, package, and targeted pipeline checks successfully.
+- Refinement summary: completed by `loom_phase_refiner`; fixed validation failures, aligned `StageStatusRecord` with the refined plan, added direct-constructor spec normalization, renamed the colliding test file, and consumed the implementation refinement budget.
 - PR preparation: pending.
 - Stack maintenance: pending predecessor merge and retarget/rebase handling.
-- Remaining blockers: none recorded for local planning.
+- Remaining blockers: none known after local implementation refinement.

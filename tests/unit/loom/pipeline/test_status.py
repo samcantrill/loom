@@ -38,20 +38,23 @@ def test_run_status_round_trip() -> None:
 
 
 def test_stage_status_round_trip_and_owner_metadata() -> None:
-    created, updated = _common_ts()
+    _, updated = _common_ts()
     record = StageStatusRecord(
         run_id="run-1",
-        stage_id="build",
+        stage_name="build",
         status=StageStatus.SUCCEEDED,
-        created_at=created,
         updated_at=updated,
         message=None,
-        attempts=3,
+        attempt=3,
         owner={"owner": "agent"},
         metadata={"m": "n"},
     )
     payload = record.to_dict()
     assert payload["status"] == "SUCCEEDED"
+    assert payload["stage_name"] == "build"
+    assert payload["attempt"] == 3
+    assert "stage_id" not in payload
+    assert "attempts" not in payload
     assert StageStatusRecord.from_dict(payload) == record
 
 
@@ -69,32 +72,29 @@ def test_status_record_rejects_invalid_schema_version() -> None:
 
 
 def test_status_record_rejects_non_timestamp() -> None:
-    created, updated = _common_ts()
     with pytest.raises(StatusSerializationError, match="timestamp"):
         StageStatusRecord.from_dict(
             {
                 "run_id": "run-1",
-                "stage_id": "build",
+                "stage_name": "build",
                 "status": "SUCCEEDED",
-                "created_at": created,
                 "updated_at": "not-a-timestamp",
                 "schema_version": 1,
-                "attempts": 1,
+                "attempt": 1,
             },
         )
 
 
 def test_status_record_rejects_bad_attempts() -> None:
-    created, updated = _common_ts()
+    _, updated = _common_ts()
     with pytest.raises(StatusSerializationError, match="positive integer"):
         StageStatusRecord.from_dict(
             {
                 "run_id": "run-1",
-                "stage_id": "build",
+                "stage_name": "build",
                 "status": "SUCCEEDED",
-                "created_at": created,
                 "updated_at": updated,
                 "schema_version": 1,
-                "attempts": 0,
+                "attempt": 0,
             },
         )

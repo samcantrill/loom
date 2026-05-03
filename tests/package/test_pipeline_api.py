@@ -1,6 +1,5 @@
 """Package-level API tests for pipeline and pipeline.graph."""
 
-import loom
 import pytest
 
 
@@ -56,8 +55,10 @@ def test_pipeline_public_exports() -> None:
 
 
 def test_pipeline_imports_are_explicit() -> None:
-    import loom.pipeline
-    import loom.pipeline.graph
+    import loom as loom_package
+    import loom.pipeline as pipeline
+    import loom.pipeline.graph as graph
 
-    assert loom.pipeline
-    assert loom.pipeline.graph
+    assert "pipeline" not in loom_package.__all__
+    assert pipeline
+    assert graph

@@ -4,8 +4,9 @@ from typing import Any, cast
 
 import pytest
 
-from loom.pipeline import PipelineSpec, parse_pipeline_config, StageSpec
+from loom.pipeline import OutputSpec, PipelineSpec, parse_pipeline_config, StageSpec
 from loom.pipeline.errors import PipelineSpecError
+from loom.serialization import PlainData
 
 
 def _base_stage(stage_name: str, *, outputs: dict[str, Any] | None = None, depends_on: list[str] | tuple[str, ...] = (), inputs: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -150,3 +151,49 @@ def test_stage_spec_parsing_preserves_declared_dependencies_and_bindings() -> No
     assert stage.outputs["report"].artifact_type == "text"
     assert stage.outputs["report"].schema_version == 2
     assert cast(dict[str, Any], stage.stage_config)["nested"]["enabled"] is True
+
+
+def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> None:
+    output_metadata = cast(dict[str, PlainData], {"labels": ("raw",)})
+    output = OutputSpec(artifact_type="text", metadata=output_metadata)
+    output_metadata["changed"] = True
+
+    assert output.metadata == {"labels": ["raw"]}
+
+    stage_config: dict[str, PlainData] = {"threshold": 1}
+    outputs = {"result": output}
+    stage = StageSpec(
+        name="report",
+        target_path="tests.support.config_samples:concat",
+        outputs=outputs,
+        stage_config=stage_config,
+        dependencies=cast(tuple[str, ...], ["build"]),
+        inputs={"artifact": "build.result"},
+        resources={"slots": 1},
+    )
+    outputs["extra"] = OutputSpec(artifact_type="json")
+    stage_config["changed"] = True
+
+    assert stage.outputs == {"result": output}
+    assert stage.stage_config == {"threshold": 1}
+    assert stage.dependencies == ("build",)
+    assert stage.inputs == {"artifact": "build.result"}
+    assert stage.resources == {"slots": 1}
+
+    pipeline_metadata = cast(dict[str, PlainData], {"tags": ("static",)})
+    stages = [stage]
+    pipeline = PipelineSpec(
+        stages=cast(tuple[StageSpec, ...], stages),
+        metadata=pipeline_metadata,
+    )
+    stages.append(
+        StageSpec(
+            name="extra",
+            target_path="tests.support.config_samples:concat",
+            outputs={"extra": OutputSpec(artifact_type="json")},
+        ),
+    )
+    pipeline_metadata["changed"] = True
+
+    assert pipeline.stages == (stage,)
+    assert pipeline.metadata == {"tags": ["static"]}
