@@ -122,6 +122,27 @@ interpolation resolvers. If `ComposedConfig` needs new fields, prefer explicit
 data such as `composition_manifest` and `source_snapshots` over parallel
 private state hidden inside provenance.
 
+## Design Principles
+
+- Keep authoring explicit: `_include_`, `_replace_`, `_copy_`, and `+`
+  overrides are visible markers, not hidden search or schema behavior.
+- Preserve v0 composition semantics wherever possible. V1 adds only the
+  `_replace_` merge marker and stricter override add/update behavior.
+- Separate authoring operations from validation. Directive expansion produces
+  plain resolved config; typed models validate stable `loom` boundaries after
+  composition.
+- Fail on ambiguous component swaps. An include over existing mapping content
+  requires `_replace_: true` so stale lower-precedence keys cannot survive
+  silently.
+- Keep source metadata through every authoring operation. Errors, provenance,
+  fingerprints, and source snapshots depend on knowing which file, overlay,
+  include, copy, replacement, or override introduced a value.
+- Keep each phase reviewable. A phase should own one boundary or one runtime
+  behavior and should not implement future plugin, resolver, Hydra, CLI, or
+  sweep behavior.
+- Prefer data models and pure helpers over side effects. `compose_config`
+  returns composition data; persistence remains owned by the runner/run store.
+
 ## Include Syntax
 
 `_include_` is allowed only inside mappings:
@@ -523,55 +544,165 @@ V1 should preserve later roadmap stages:
 
 ## Phased Implementation
 
-### Phase 1 - Composition Directive Model And Resolution
+### Phase 1 - Directive Model, Overrides, And Merge Semantics
 
 Status: pending
-Branch: `codex/add-config-composition-directives`
+Branch: `codex/add-config-directive-model`
 PR: pending
 
 Goal:
 
-- Define composition provenance records, directive errors, source-location
-  metadata, `_replace_` merge behavior, include path resolution rules, and
-  source-aware validation expectations.
+- Establish the v1 authoring primitives without recursive include or copy
+  expansion.
+
+Scope:
+
+- Define internal data models for composition directives, source locations,
+  source stacks, directive errors, and directive provenance records.
+- Harden override parsing/application so `path=value` updates existing paths
+  and `+path=value` adds missing paths.
+- Add `_replace_` handling to the existing merge implementation.
+- Add include target resolution primitives for bare names, explicit paths, and
+  `file://` URIs.
+- Define source-aware validation error shapes, but do not yet integrate them
+  with full composition.
+
+Design principles:
+
+- Keep this phase mostly pure and unit-testable: parse, merge, resolve, and
+  error-shape helpers should not require `compose_config` integration.
+- Do not load included documents recursively in this phase.
+- Do not add custom resolver APIs or plugin hooks.
+- Preserve v0 public APIs unless adding fields to internal result/provenance
+  models is required for later phases.
 
 Acceptance criteria:
 
+- Override strings support `path=value` update semantics and `+path=value`
+  add-only semantics.
+- Update overrides fail on missing paths.
+- Add overrides fail on existing paths.
+- `_replace_` replaces destination mappings, strips the marker from merged
+  output, and rejects non-boolean-true values.
 - Bare-name, relative-path, absolute-path, and `file://` include values resolve
   deterministically.
 - Unsupported URI schemes fail clearly.
-- `_replace_` replaces destination mappings and is omitted from resolved config.
-- `_include_` over existing mapping content fails unless `_replace_: true` is
-  present in the same mapping.
-- Override strings support `path=value` update semantics and `+path=value`
-  add-only semantics.
 - YAML `_schema_` bindings and project schema imports are not interpreted as
-  composition behavior; unknown-key handling is limited to `loom`-owned schema
-  boundaries.
-- Unit tests cover key-path based default resolution.
+  composition directives.
+- Unit tests cover override parsing/application, `_replace_` merge semantics,
+  key-path based include resolution, unsupported URI errors, and directive
+  error serialization.
 
-### Phase 2 - Recursive Include And Copy Expansion
+Out of scope:
+
+- Recursive include loading.
+- `_copy_` expansion.
+- Composition manifests and source snapshots.
+- Changes to recipe expansion or `_target_` instantiation.
+
+### Phase 2 - Recursive Include Expansion
 
 Status: pending
-Branch: `codex/add-recursive-config-composition`
+Branch: `codex/add-recursive-config-includes`
 PR: pending
 
 Goal:
 
-- Expand `_include_` and `_copy_` recursively after authoring-level merge.
+- Load and expand `_include_` directives recursively using the Phase 1
+  resolution, merge, and source metadata primitives.
+
+Scope:
+
+- Load included YAML documents through existing config loading helpers.
+- Expand nested includes recursively.
+- Preserve source-location metadata when includes come from base configs,
+  overlays, or override mappings.
+- Enforce `_replace_: true` when an include is applied over existing
+  lower-precedence mapping content.
+- Produce include provenance records and include stacks for errors.
+- Support built-in local path and `file://` include sources only.
+
+Design principles:
+
+- Include expansion should produce plain config mappings with composition
+  markers removed.
+- Include loading should reuse existing YAML/config loading behavior instead of
+  introducing a parallel parser.
+- Error messages should explain both the authored include and the resolved
+  path or URI.
+- Include recursion must be deterministic and cycle-safe.
 
 Acceptance criteria:
 
 - Included mapping content merges with sibling overrides.
 - Include swaps over existing mapping content require `_replace_: true`.
 - Nested includes work.
-- Cycles fail with include-stack context.
+- Include cycles fail with include-stack context.
 - Missing or invalid include documents fail with path-aware errors.
+- Local path and `file://` includes load through the same source metadata and
+  hashing path.
+- Tests cover base-config includes, overlay includes, include target changes,
+  missing includes, unsupported URI schemes, non-mapping include content with
+  siblings, and include swap without `_replace_`.
+
+Out of scope:
+
+- `_copy_` expansion.
+- Source snapshot persistence.
+- Recipe or interpolation behavior changes.
+- Remote or plugin include sources.
+
+### Phase 3 - Copy Expansion And Source-Aware Validation
+
+Status: pending
+Branch: `codex/add-config-copy-validation`
+PR: pending
+
+Goal:
+
+- Add `_copy_` expansion and source-aware validation behavior on top of the
+  include-expanded config shape.
+
+Scope:
+
+- Resolve `_copy_` dot paths against the composed config after include
+  expansion.
+- Deep-copy source subtrees as plain data before applying copy-site sibling
+  overrides.
+- Detect copy cycles and missing copy sources.
+- Preserve source context for copied values and copy-site overrides.
+- Wire source-aware validation errors for existing `loom`-owned schema
+  boundaries after directives, recipes, and interpolation produce the resolved
+  config shape.
+- Preserve pass-through behavior for project-owned mappings.
+
+Design principles:
+
+- `_copy_` is data reuse, not aliasing. Mutating or overriding a copy site must
+  never mutate the copied source subtree.
+- Validation strictness is scoped: `loom` contracts can reject unknown keys;
+  project-owned subtrees remain plain data.
+- Do not introduce YAML `_schema_`, schema registries, or arbitrary project
+  schema imports.
+
+Acceptance criteria:
+
 - `_copy_` deep-copies composed subtrees and local siblings override copied
   values.
 - Copy cycles and missing copy sources fail with path-aware errors.
+- Source-aware validation errors include config path, authored source, schema
+  boundary when relevant, and expected/actual value shape.
+- Unknown keys are rejected only at `loom`-owned schema boundaries.
+- Tests prove copied values include prior include defaults and that
+  project-owned pass-through mappings are not globally rejected.
 
-### Phase 3 - Composition Integration, Provenance, And Snapshots
+Out of scope:
+
+- Source snapshot persistence.
+- CLI commands.
+- New typed schema authoring features.
+
+### Phase 4 - Compose Integration, Provenance, And Snapshots
 
 Status: pending
 Branch: `codex/integrate-config-composition`
@@ -579,16 +710,40 @@ PR: pending
 
 Goal:
 
-- Integrate `_include_`, `_replace_`, `_copy_`, composition manifests, and
-  source snapshots into `compose_config` and persisted provenance data.
+- Integrate v1 directives into `compose_config` end to end and expose
+  rebuildable composition data for the runner/run store.
+
+Scope:
+
+- Apply authoring-level merge order inside `compose_config`: base, overlays,
+  strict/add override mapping, include expansion, copy expansion, recipe
+  expansion, interpolation, validation, redaction, provenance, and fingerprint.
+- Extend `ComposedConfig` or its provenance payload with composition manifest
+  and source snapshot records as needed.
+- Generate content-addressed source snapshot records for base configs,
+  overlays, included files, and other authored sources that affect directive
+  expansion.
+- Ensure fingerprints include included source hashes, copied source subtrees,
+  replacement markers, override changes, and source snapshot inputs.
+- Keep persistence as returned data; do not write run directories from
+  `loom.config`.
+
+Design principles:
+
+- `compose_config` is the single public composition entrypoint.
+- The resolved config must be self-contained and free of `_include_`,
+  `_replace_`, and `_copy_` markers.
+- The composition manifest explains how the resolved config was produced; it is
+  not a second resolved config format.
+- Source snapshots should be content-addressed and deterministic.
 
 Acceptance criteria:
 
 - Base configs, overlays, and CLI overrides merge before include/copy expansion,
   with CLI as highest precedence.
 - Config fingerprints change when included files change.
-- Config fingerprints change when copied source subtrees or replacement markers
-  change.
+- Config fingerprints change when copied source subtrees, replacement markers,
+  overlays, or CLI overrides change.
 - Resolved/redacted config snapshots are self-contained.
 - Composition provenance records every included source, copy, replacement, and
   source hash.
@@ -596,8 +751,19 @@ Acceptance criteria:
   when existing `loom` validation models validate composed sections.
 - Source snapshot records are sufficient for the runner/run store to persist
   rebuildable config inputs.
+- Tests cover complete `compose_config` flows with base includes, overlay
+  includes, CLI include replacement, copy expansion, recipes after composition,
+  interpolation after composition, redaction, fingerprints, composition
+  manifest serialization, and source snapshot hashing.
 
-### Phase 4 - Hardening And Docs
+Out of scope:
+
+- Runner/run-store persistence implementation beyond returning serializable
+  data.
+- CLI formatting or commands.
+- Sweep planners.
+
+### Phase 5 - Hardening, Documentation, And End-To-End Coverage
 
 Status: pending
 Branch: `codex/harden-config-composition`
@@ -605,13 +771,35 @@ PR: pending
 
 Goal:
 
-- Document composition directives, add integration/e2e coverage, and harden
-  edge cases.
+- Harden the full v1 behavior, update docs, and close reviewability gaps after
+  the directive engine is integrated.
+
+Scope:
+
+- Update feature docs and examples for includes, replacement, copies,
+  strict/add overrides, source-aware errors, composition manifests, and source
+  snapshots.
+- Add end-to-end tests for realistic config composition flows using synthetic
+  domain-neutral configs.
+- Audit error messages for path, source, include/copy stack, and schema-boundary
+  context.
+- Add regression tests for edge cases found during implementation.
+- Run final repository validation gates and record suite-level evidence.
+
+Design principles:
+
+- Documentation examples must show supported v1 behavior only.
+- Edge-case hardening should fix v1 behavior, not introduce new composition
+  features.
+- Test evidence should map directly to v1 risks: stale key leakage,
+  accidental override creation, copy aliasing, missing source metadata, and
+  non-rebuildable manifests.
 
 Acceptance criteria:
 
 - Docs include examples for component includes, sibling overrides, explicit
-  paths, `file://` URIs, `_replace_`, `_copy_`, and source snapshots.
+  paths, `file://` URIs, `_replace_`, `_copy_`, strict/add overrides, and
+  source snapshots.
 - Tests cover overlays that contain includes, CLI overrides of included values,
   CLI replacement of component selections, interpolation with included/copied
   values, recipes after includes/copies, source snapshot manifests, and
@@ -620,47 +808,125 @@ Acceptance criteria:
   project-owned pass-through mappings are not globally rejected.
 - `make validate-pr` and `make test-summary` pass.
 
+Out of scope:
+
+- Public CLI behavior.
+- Plugin discovery.
+- Remote include sources.
+- Sweeps.
+
+## Test Structure And Fixtures
+
+V1 should avoid a monolithic `tests/unit/loom/config/test_config.py` style
+layout. Tests should mirror the config package and group behavior by ownership.
+
+Expected unit layout:
+
+```text
+tests/unit/loom/config/
+  test_overrides.py
+  test_merge.py
+  test_include_resolution.py
+  test_includes.py
+  test_copies.py
+  test_validation.py
+  test_provenance.py
+  test_source_snapshots.py
+  test_compose.py
+```
+
+If v0 already owns files such as `test_load.py`, `test_interpolation.py`,
+`test_redaction.py`, recipe tests, or instantiation tests, v1 should extend
+those existing source-mirrored files rather than creating duplicate coverage.
+
+Expected integration layout:
+
+```text
+tests/integration/config/
+  test_compose_includes.py
+  test_compose_copies.py
+  test_compose_overrides.py
+  test_compose_provenance.py
+  test_compose_validation.py
+```
+
+Use a hybrid fixture strategy:
+
+- Generated temporary YAML is the default. Unit tests should use helper
+  functions that write minimal config trees under `tmp_path` so each test owns
+  its authored inputs.
+- Checked-in golden fixture trees are allowed only when the file layout itself
+  is part of the behavior: bare-name include resolution, relative include
+  resolution, `file://` resolution, source snapshot hashing, and provenance
+  stack assertions.
+- Shared test helpers belong under `tests/support`, for example config tree
+  writers, domain-neutral config builders, source snapshot assertions, and
+  manifest/provenance assertions.
+- Fixture data must stay domain-neutral. Use generic names such as `model`,
+  `optimizer`, `dataset`, `runner`, `stage_configs`, and synthetic stage names.
+- No tests should import downstream project packages, use network access, depend
+  on plugin discovery, or require Hydra/OmegaConf behavior beyond the
+  explicitly supported interpolation surface.
+
 ## Overall Test Plan
 
 Unit tests:
 
-- include value validation;
-- bare-name resolution;
-- relative and absolute path resolution;
-- `file://` resolution;
-- unsupported schemes;
-- include swap without `_replace_` error;
-- update override missing-path error;
-- add override existing-path error;
-- add override creation for new variables and structured branches;
-- cycle detection;
-- `_replace_` merge behavior;
-- `_copy_` path resolution and deep-copy behavior;
-- copy cycle detection;
-- sibling override merge semantics;
-- composition provenance serialization;
-- source-aware validation error data;
-- scoped unknown-key behavior for `loom`-owned vs project-owned sections;
-- source snapshot hashing.
+- `test_overrides.py`: strict update overrides, `+` add overrides, parsed value
+  types, missing-path errors, existing-path add errors, ordering, and raw/parsed
+  provenance.
+- `test_merge.py`: recursive mapping merge, scalar replacement, whole-list
+  replacement, explicit `null`, `_replace_` marker stripping, invalid
+  `_replace_` values, and include swap errors when `_replace_` is missing.
+- `test_include_resolution.py`: bare-name key-path resolution, explicit
+  relative paths, absolute paths, `file://` URIs, extension policy,
+  unsupported schemes, path normalization, and path-aware failures.
+- `test_includes.py`: recursive include expansion, sibling overrides, nested
+  includes, include cycles, missing include documents, invalid include content,
+  local path/file URI loading, source stacks, and source hashes.
+- `test_copies.py`: `_copy_` path resolution, deep-copy behavior, copy-site
+  sibling overrides, copied include defaults, missing copy sources, copy cycles,
+  and no aliasing between source and copy site.
+- `test_validation.py`: source-aware validation errors, schema-boundary
+  reporting, unknown keys rejected only in `loom`-owned sections, project-owned
+  mapping pass-through, and unsupported YAML `_schema_` behavior.
+- `test_provenance.py`: directive provenance records for includes, replacements,
+  copies, overrides, schema boundaries, sibling overrides, and stable
+  serialization to plain data.
+- `test_source_snapshots.py`: content-addressed source snapshot records, stable
+  hashing, duplicate source handling, and changed-source hash changes.
+- `test_compose.py`: orchestration order with mocked or minimal collaborators
+  when full integration coverage would be too broad.
 
 Integration tests:
 
-- base config includes;
-- overlay includes;
-- overlay replacing an included component;
-- CLI override replacing an included component;
-- CLI add override introducing a new variable;
-- stage config reuse with `_copy_`;
-- CLI override of included values;
-- interpolation that references included and copied values;
-- stable schema validation after composition;
-- recipe expansion after include and copy expansion;
-- redaction of included secrets;
-- provenance for stable schema boundaries and schema versions;
-- fingerprint changes from included source edits;
-- fingerprint changes from copied source edits and replacement markers;
-- composition manifest plus source snapshots are sufficient to reconstruct
-  authored inputs.
+- Complete `compose_config` flow with base config, overlay config, strict
+  update overrides, `+` add overrides, includes, copies, recipes,
+  interpolation, validation, redaction, provenance, fingerprinting, composition
+  manifest, and source snapshots.
+- Base config includes and overlay includes resolve relative to the file where
+  they are authored.
+- CLI include replacement uses `+model._replace_=true` plus
+  `model._include_=...`; missing `_replace_` fails.
+- `_copy_` can reuse a stage config that itself contains included defaults.
+- Interpolation can reference included and copied values after expansion.
+- Recipe expansion happens after include/copy expansion and contributes recipe
+  provenance alongside composition provenance.
+- Redaction applies to included and copied secrets in resolved redacted views.
+- Fingerprints change when included files, copied source subtrees, replacement
+  markers, overlays, or overrides change.
+- Composition manifest plus source snapshots are enough to reconstruct authored
+  config inputs.
+
+End-to-end tests:
+
+- Use public `compose_config` with small synthetic config trees.
+- Assert the resolved config is self-contained and contains no `_include_`,
+  `_replace_`, or `_copy_` markers.
+- Assert path-aware errors for common user mistakes: missing include,
+  include cycle, missing copy source, add/update override misuse, and include
+  swap without `_replace_`.
+- Do not run stages or require CLI behavior in v1 config e2e tests.
 
 Validation gates:
 

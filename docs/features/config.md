@@ -1128,7 +1128,125 @@ with no constructor kwargs in v0.
 
 ---
 
-## 18. Implementation Plan Sketch
+## 18. Test Strategy
+
+Config tests should be broad enough to prove correctness, but organized by
+behavior and source ownership rather than collected into one monolithic config
+test directory.
+
+Recommended unit layout:
+
+```text
+tests/unit/loom/config/
+  test_load.py
+  test_merge.py
+  test_overrides.py
+  test_interpolation.py
+  test_validation.py
+  test_redaction.py
+  test_provenance.py
+  test_compose.py
+  test_include_resolution.py
+  test_includes.py
+  test_copies.py
+  test_source_snapshots.py
+  recipes/
+    test_catalog.py
+    test_expansion.py
+  instantiate/
+    test_targets.py
+    test_recursive.py
+    test_injection.py
+```
+
+Recommended integration layout:
+
+```text
+tests/integration/config/
+  test_compose_includes.py
+  test_compose_copies.py
+  test_compose_overrides.py
+  test_compose_recipes.py
+  test_compose_provenance.py
+  test_compose_validation.py
+```
+
+Reusable helpers belong under `tests/support`, not beside production code:
+
+```text
+tests/support/configs.py
+tests/support/config_assertions.py
+tests/support/config_trees/
+```
+
+Use a hybrid fixture strategy:
+
+```text
+generated temporary YAML:
+  default for most tests
+
+checked-in golden config trees:
+  only when file layout is the behavior under test
+```
+
+Generated fixtures should cover common composition shapes without creating
+large fixture directories. Golden config trees should be small and
+domain-neutral, and should be reserved for behavior where the authored file
+tree matters: bare include resolution, relative includes, `file://` includes,
+source snapshots, and provenance stacks.
+
+The unit suite should cover:
+
+```text
+load and parse errors
+recursive merge
+_replace_ marker behavior
+strict update overrides
+explicit + add overrides
+override value parsing
+OmegaConf-style interpolation
+redaction
+path-aware ConfigError data
+include path resolution
+recursive include expansion
+include cycle errors
+required _replace_ for include swaps
+_copy_ deep-copy behavior
+copy cycle errors
+scoped validation of loom-owned sections
+project-owned pass-through mappings
+composition provenance records
+source snapshot hashing
+recipe catalog and expansion
+_target_ import and recursive instantiation
+runtime dependency injection
+```
+
+The integration suite should cover complete `compose_config` flows:
+
+```text
+base config plus overlays
+strict and + CLI overrides
+base and overlay includes
+CLI replacement of included components
+copying included defaults
+interpolation after include/copy expansion
+recipe expansion after composition
+redaction after composition
+stable schema validation after composition
+resolved config without composition markers
+fingerprint changes from authored source changes
+composition manifest and source snapshots
+```
+
+End-to-end config tests should stay small and public-API focused. They should
+compose synthetic domain-neutral configs through `compose_config` and assert the
+resolved config, redacted view, provenance, manifests, and fingerprints. Full
+pipeline execution belongs to `loom.pipeline` and runner tests.
+
+---
+
+## 19. Implementation Plan Sketch
 
 Build in this order:
 
@@ -1150,7 +1268,7 @@ Each step should include tests before the next step depends on it.
 
 ---
 
-## 19. Summary
+## 20. Summary
 
 `loom.config` should be the narrow configuration layer inside `loom`.
 
