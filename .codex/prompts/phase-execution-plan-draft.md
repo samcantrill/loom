@@ -40,10 +40,17 @@ cd "$WORKTREE"
 
 If `gh` is authenticated but `git fetch` fails through SSH, use the HTTPS
 GitHub remote form `https://github.com/<owner>/<repo>.git` with the `gh`
-credential helper before retrying fetch. If remote synchronization is still
-unavailable, continue from the local recorded base branch and document the
-limitation in the phase execution plan. Do not silently fall back to `develop`
-when the assignment names a stack predecessor branch.
+credential helper before retrying fetch. In sandboxed Codex sessions,
+`gh auth status` can falsely report an invalid token when network access is
+restricted; rerun `gh auth status` with approved network access before treating
+credentials as unavailable. If authentication is still invalid with network
+access, ask the user to allow `gh auth logout -h github.com -u <user>`,
+`gh auth login -h github.com -p https -w`, and `gh auth setup-git`; the user
+may need to enter the printed device code at
+`https://github.com/login/device`. If remote synchronization is still
+unavailable after that setup, continue from the local recorded base branch and
+document the limitation in the phase execution plan. Do not silently fall back
+to `develop` when the assignment names a stack predecessor branch.
 
 The draft phase execution plan must preserve the template's durable handoff
 sections and include:

@@ -17,6 +17,21 @@ Prefer GitHub CLI-backed remote operations when available:
 
 - Check `gh auth status` before GitHub fetch, push, PR creation, PR inspection,
   merge, or remote branch cleanup.
+- Treat GitHub auth as a startup preflight for the managing session. In
+  sandboxed Codex sessions, `gh auth status` can falsely report the stored token
+  as invalid when network access is restricted. If it reports an invalid token,
+  rerun `gh auth status` with approved network access before marking GitHub
+  credentials unavailable.
+- If authentication is still invalid with network access, ask the user to allow
+  the repair flow before phase work that needs GitHub:
+  `gh auth logout -h github.com -u <user>`, then
+  `gh auth login -h github.com -p https -w`, then `gh auth setup-git`. The
+  device login may require the user to open `https://github.com/login/device`
+  manually and enter the one-time code printed by `gh`.
+- After successful login, run `gh auth setup-git` and verify both GitHub CLI and
+  Git HTTPS access before fetch, push, PR creation, PR inspection, merge, or
+  remote branch cleanup. Use `gh auth status` and a lightweight command such as
+  `git ls-remote --heads origin develop`.
 - If `gh` is authenticated but git remote operations fail through SSH, run
   `gh auth setup-git` and use the HTTPS remote form
   `https://github.com/<owner>/<repo>.git` for `origin`.
