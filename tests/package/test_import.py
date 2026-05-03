@@ -1,3 +1,5 @@
+"""Package-level import smoke tests."""
+
 from importlib.resources import files
 
 import pytest
@@ -12,7 +14,16 @@ def test_package_imports() -> None:
 
 
 def test_package_declares_public_exports() -> None:
-    assert loom.__all__ == ["__version__"]
+    assert loom.__all__ == [
+        "__version__",
+        "ResourceRef",
+        "InMemoryManifest",
+        "ManifestView",
+        "Record",
+        "ArtifactRef",
+        "Fingerprint",
+        "hash_mapping",
+    ]
 
 
 def test_package_includes_typing_marker() -> None:
