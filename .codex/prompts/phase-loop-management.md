@@ -11,6 +11,22 @@ Use `/home/samcantrill/work/loom-worktrees` as the root for all phase
 worktrees. Worktree names should match the lowercase kebab branch summary
 without the `codex/` prefix.
 
+Prefer GitHub CLI-backed remote operations when available:
+
+- Check `gh auth status` before GitHub fetch, push, PR creation, PR inspection,
+  merge, or remote branch cleanup.
+- If `gh` is authenticated but git remote operations fail through SSH, run
+  `gh auth setup-git` and use the HTTPS remote form
+  `https://github.com/<owner>/<repo>.git` for `origin`.
+- Use `gh pr create --base develop --head <branch> --body-file <body>` for
+  phase PRs. Never rely on GitHub's default base branch for phase PR creation.
+- Immediately verify each opened or discovered phase PR with `gh pr view <PR>
+  --json baseRefName,headRefName,state,url`; stop if `baseRefName` is not
+  exactly `develop`.
+- Use `gh api` for remote branch deletion when git SSH auth is unavailable, then
+  prune local remote-tracking refs with `git branch -dr origin/<branch>` when
+  present.
+
 Your job is to advance the implementation plan one phase at a time without
 indefinite review/refine loops.
 
@@ -85,9 +101,12 @@ For each phase:
    report the exact blocker to the user and stop. Do not spawn another fixer
    unless the user explicitly asks.
 12. If the PR is acceptable, approve it.
-13. Merge the approved PR into `develop` using a squash merge when GitHub tooling
-   and permissions are available. Prefer `gh pr merge --squash --delete-branch`;
-   use `gh pr merge --auto --squash --delete-branch` when branch protection
+13. Before merging, verify the PR target with `gh pr view <PR> --json
+   baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`. Merge only
+   when `baseRefName` is exactly `develop`. Merge the approved PR into
+   `develop` using a squash merge when GitHub tooling and permissions are
+   available. Prefer `gh pr merge <PR> --squash --delete-branch`; use
+   `gh pr merge <PR> --auto --squash --delete-branch` when branch protection
    requires checks to finish first. If merging is unavailable, leave the phase
    at `approved`, document why, and stop before the next phase.
 14. After a successful merge, update `docs/implementation-plans/implementation-plan-v0.md` on `develop`
@@ -102,7 +121,9 @@ For each phase:
    small metadata PR and stop before the next phase.
 16. Remove the phase worktree from `/home/samcantrill/work/loom-worktrees`,
    run `git worktree prune`, and delete the phase branch if the merge command
-   did not already delete it.
+   did not already delete it. Prefer `gh api --method DELETE
+   repos/<owner>/<repo>/git/refs/heads/<branch>` for GitHub branch cleanup when
+   git SSH auth is unavailable.
 17. Move to the next pending phase.
 18. Stop when all phases are complete, approved, merged, or blocked.
 
@@ -111,6 +132,8 @@ Rules:
 - Only the managing agent may merge phase PRs.
 - Merge only after phase review approval and passing validation or CI.
 - Merge phase PRs into `develop`, not directly into `main`.
+- Stop immediately if a phase PR targets `main`; close or recreate it against
+  `develop` rather than merging it.
 - Do not skip phases unless the plan explicitly allows it.
 - Do not start phase implementation while blocking plan-review findings remain unresolved.
 - Do not approve a PR just because tests pass; the explanation must match the diff and phase plan.
