@@ -1217,9 +1217,9 @@ Completion summary:
 
 ### Phase 7 — Local Stores And Run Layout
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-local-stores-run-layout`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/11
 
 Goal:
 
@@ -1310,7 +1310,37 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Phase 7 local stores and run layout implemented on
+  `codex/add-local-stores-run-layout` in worktree
+  `/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout`.
+- GitHub PR #11 opened on 2026-05-04 and verified with
+  `gh pr view 11 --json baseRefName,headRefName,state,url`;
+  `baseRefName` is `develop`, `headRefName` is
+  `codex/add-local-stores-run-layout`, and state is `OPEN`.
+- Implemented store-layer-only behavior: `ArtifactStore`/`RunStore`
+  protocols, local artifact and run stores, atomic write helpers, artifact
+  index helpers, checksum validation, local artifact registration, and the
+  inspectable v0 run directory layout. Future Phase 8 planning/resume,
+  Phase 9 execution/runner behavior, and Phase 10 hardening/docs behavior
+  remain out of scope.
+- Validation before PR open:
+  - Targeted Phase 7 pytest passed with 38 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright
+    reported 0 errors, default pytest passed with 302 tests, and build
+    succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed; package passed with
+    19 tests, unit passed with 257 tests, contract passed with 15 tests,
+    integration passed with 11 tests, and e2e was not present.
+- Phase implementation refinement budget: used by `loom_phase_refiner` in
+  commit `d487c2a`. PR review budget: unused.
+- PR body prepared at
+  `docs/phases/add-local-stores-run-layout-pr-body.md` in the phase branch.
+- Stack maintenance: Phase 8 should branch from
+  `codex/add-local-stores-run-layout` and target
+  `codex/add-local-stores-run-layout` while Phase 7 remains unmerged. If Phase
+  7 lands before Phase 8 starts, Phase 8 should instead branch from latest
+  `develop` and target `develop`.
+- Remaining blockers: none known after PR preparation.
 
 ### Phase 8 — Planning, Resume, And Selectors
 
