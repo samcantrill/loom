@@ -16,7 +16,8 @@ Task:
 1. Confirm you are inside the dedicated git worktree for this phase under
    `/home/samcantrill/work/loom-worktrees`.
 2. Confirm the branch name follows `codex/<summary-of-feature>`.
-3. Confirm the PR targets `develop`.
+3. Confirm the PR targets `develop`. Use explicit GitHub CLI flags and checks;
+   never rely on GitHub's default base branch.
 4. Confirm the implementation matches the assigned phase.
 5. Confirm future phases were not implemented early.
 6. Confirm relevant tests were added or updated.

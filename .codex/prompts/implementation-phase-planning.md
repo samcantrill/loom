@@ -19,6 +19,8 @@ docs/phases/<summary-of-feature>.md
 Worktree setup:
 
 ```bash
+gh auth status
+gh auth setup-git
 git fetch origin
 BRANCH="codex/<summary-of-feature>"
 BASE_BRANCH="develop"
@@ -29,8 +31,11 @@ git worktree add -b "$BRANCH" "$WORKTREE" "$BASE_BRANCH"
 cd "$WORKTREE"
 ```
 
-If `git fetch` is unavailable, continue from the local `develop` branch and
-document the limitation in the phase plan.
+If `gh` is authenticated but `git fetch` fails through SSH, use the HTTPS
+GitHub remote form `https://github.com/<owner>/<repo>.git` with the `gh`
+credential helper before retrying fetch. If remote synchronization is still
+unavailable, continue from the local `develop` branch and document the
+limitation in the phase plan.
 
 The draft phase plan must preserve the template's durable handoff sections and
 include:

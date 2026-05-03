@@ -76,6 +76,41 @@ define the durable Markdown artifacts passed between stages.
 - Do not implement phase work directly in the original checkout.
 - Record the branch and worktree path in the expanded phase plan.
 
+### GitHub CLI And Remote Operations
+
+- Prefer GitHub CLI-backed authentication for GitHub operations when available.
+  Before fetch, push, PR creation, PR inspection, merge, or remote branch
+  cleanup, check `gh auth status`. If `gh` is authenticated but git remote
+  operations fail through SSH, run `gh auth setup-git` and use the HTTPS remote
+  form `https://github.com/<owner>/<repo>.git` for `origin`.
+- Use `git` for local worktree and commit operations. Use `gh` wherever it
+  provides safer GitHub state checks or avoids SSH-only behavior.
+- Create phase PRs with an explicit base and head:
+
+```sh
+gh pr create --base develop --head codex/<summary-of-feature> --body-file <body>
+```
+
+- Immediately verify the created or existing PR with:
+
+```sh
+gh pr view <PR> --json baseRefName,headRefName,state,url
+```
+
+  Stop if `baseRefName` is not exactly `develop`. Do not approve or merge a
+  phase PR targeting `main` or any branch other than `develop`.
+- Before every merge, verify the PR target again with `gh pr view <PR>
+  --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
+  The managing agent must record this check in the review or merge notes.
+- Prefer `gh pr merge <PR> --squash --delete-branch` for phase merges. Use
+  `gh pr merge <PR> --auto --squash --delete-branch` only when branch
+  protection requires queued/auto merge.
+- If a merged phase branch is not deleted by `gh pr merge`, prefer deleting the
+  GitHub branch through `gh api --method DELETE
+  repos/<owner>/<repo>/git/refs/heads/<branch>` before falling back to
+  `git push origin --delete <branch>`. Then remove stale local tracking refs
+  with `git branch -dr origin/<branch>` when present.
+
 ### Phase Rules
 
 - Read the full implementation plan before writing code.
@@ -156,7 +191,8 @@ approval.
 
 Before merging, the managing agent must confirm:
 
-- The PR targets `develop`.
+- The PR targets `develop`, verified with `gh pr view <PR> --json
+  baseRefName,headRefName,state,url`.
 - The phase PR has passed `loom_phase_reviewer` review, or the managing agent
   has performed the same review locally.
 - Required validation commands or CI checks pass, or any unavailable checks are
@@ -177,18 +213,20 @@ After merging, the managing agent must:
   small metadata PR and stop before starting the next phase.
 - Remove the phase worktree from `/home/samcantrill/work/loom-worktrees/` and
   prune stale worktree metadata with `git worktree prune`.
-- Delete the phase branch if it was not deleted by the merge command.
+- Delete the phase branch if it was not deleted by the merge command. Prefer
+  `gh api --method DELETE repos/<owner>/<repo>/git/refs/heads/<branch>` when git
+  SSH auth is unavailable, then remove stale local tracking refs.
 
 Prefer GitHub squash merges with branch deletion when available:
 
 ```sh
-gh pr merge --squash --delete-branch
+gh pr merge <PR> --squash --delete-branch
 ```
 
 If branch protection requires checks to finish first, use:
 
 ```sh
-gh pr merge --auto --squash --delete-branch
+gh pr merge <PR> --auto --squash --delete-branch
 ```
 
 ### Plan Quality Gate

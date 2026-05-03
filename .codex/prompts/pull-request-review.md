@@ -25,7 +25,9 @@ Review against:
 4. The actual diff.
 5. Test coverage by suite, validation results, and any unavailable suite
    justification.
-6. The PR target branch, which must be `develop`.
+6. The PR target branch, which must be `develop`. Verify with `gh pr view <PR>
+   --json baseRefName,headRefName,state,url` when a GitHub PR exists; treat any
+   non-`develop` base as blocking.
 7. Loom source-tree boundaries and domain-neutrality rules.
 8. Plan quality gate decisions, accepted debt, and revisit triggers.
 9. Maintainability and future compatibility claims in the phase plan.
