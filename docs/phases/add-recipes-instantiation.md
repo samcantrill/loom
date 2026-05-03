@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft expanded plan.
+- Status: final expanded plan.
 - Branch: `codex/add-recipes-instantiation`.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-recipes-instantiation`.
 - Expanded plan path: `docs/phases/add-recipes-instantiation.md`.
@@ -12,7 +12,9 @@
 - Target branch: `develop`.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no remaining blockers are recorded in the canonical v0 plan.
 - Plan quality gate loop budget: initial plan review used, automated plan refinement pass used, confirmation review used. Do not rerun the plan-quality gate for this phase.
-- Draft/refine status: draft expanded plan completed in this pass; final expanded-plan refinement is pending the next workflow stage.
+- Draft/refine status: draft expanded plan was committed as
+  `fd6b04cae25432cd57a06e8a7543d9c8300e535a`; final expanded-plan refinement
+  is completed by the plan expansion pass recorded in this branch.
 - Setup limitations: the original checkout has unrelated uncommitted workflow and docs edits, including deleted or renamed prompt/template files. This worktree was created from committed local `develop`, and this plan uses the committed Phase 5 prompt/template files from this worktree. The first sandboxed worktree creation attempt could not create the nested `codex/add-recipes-instantiation` ref because the sandbox exposed `.git/refs/heads` as read-only; the approved escalated rerun created the branch and worktree successfully. Remote synchronization and GitHub authentication checks were not repeated in this draft pass because the manager assignment supplied the current pushed `develop` commit and remote preflight.
 - Prior phase state: Phase 1, Phase 2, Phase 3, and Phase 4 are recorded as merged. Phase 5 is the next pending phase.
 - Setup blockers: none for local planning.
@@ -139,14 +141,19 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 5 is
 - `src/loom/config/interpolation.py` owns all OmegaConf usage and returns plain
   data. Recipe argument pre-resolution should reuse this boundary or add a
   neighboring config-owned helper; no other subsystem should import OmegaConf.
+- `src/loom/config/validation.py` currently owns Phase 4
+  `validate_no_recipe_keys()`. Phase 5 should remove that call from the normal
+  composition path, keep top-level validation focused on stable config fields,
+  and move recipe/reserved-key validation into the recipe and instantiation
+  modules that know the directive context.
 - `src/loom/config/provenance.py` has `ConfigSource`, `ParsedOverride`,
   `ConfigProvenance`, and `build_config_fingerprint()`. It records
   `recipe_manifest_count` but does not yet include recipe manifest records in
   the fingerprint payload.
 - `src/loom/config/errors.py` has Phase 4 errors, including
-  `UnsupportedRecipeError`. Phase 5 should keep existing errors import-safe and
-  add recipe, target-import, instantiation, and injection errors rooted in
-  `ConfigError`.
+  `UnsupportedRecipeError`. Phase 5 should keep existing error imports safe,
+  stop using `UnsupportedRecipeError` for successful recipe-capable composition,
+  and add the concrete Phase 5 errors named in the decision-complete contract.
 - `src/loom/config/recipes/` and `src/loom/config/instantiate/` do not exist yet.
   `docs/structure.md` reserves those subpackages for this phase's work.
 - Existing package tests assert `import loom` does not import `loom.config`,
@@ -168,23 +175,24 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 5 is
   - `base.py`
   - `catalog.py`
   - `expansion.py`
-  - `errors.py`, or recipe errors consolidated through `loom.config.errors`
-    with stable exports
+  - `errors.py`, re-exporting the recipe errors defined in
+    `loom.config.errors`
 - Add `src/loom/config/instantiate/` modules aligned with `docs/structure.md`:
   - `__init__.py`
   - `targets.py`
   - `recursive.py`
   - `injection.py`
-  - `errors.py`, or instantiation errors consolidated through
-    `loom.config.errors` with stable exports
+  - `errors.py`, re-exporting the target/instantiation errors defined in
+    `loom.config.errors`
 - Add a local `ConfigRecipe` protocol in `loom.config.recipes.base` and a public
   Pydantic-backed `Recipe` base model path for typed recipe inputs.
 - Add an explicit `RecipeCatalog` class with deterministic registration,
   lookup, duplicate detection, unknown-recipe errors, optional explicit
   replacement, deterministic iteration, and no entry-point discovery.
 - Implement the public default recipe registry through `register_recipe()`.
-  Tests that touch this default registry must isolate it with a fresh catalog or
-  unique registered names.
+  Tests should prefer fresh explicit catalogs; tests that touch the public
+  default registry must use unique registered names or monkeypatch the private
+  default.
 - Make `compose_config(..., recipe_catalog=...)` accept an explicit
   `RecipeCatalog`; when omitted, use the public default catalog.
 - Replace unsupported `_recipe_` rejection with deterministic recursive recipe
@@ -234,7 +242,7 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 5 is
   pushed to origin.
 - `RecipeCatalog` refers to an explicit catalog object. Registered recipe
   implementations are recipe classes/factories or plain function recipes, not
-  long-lived configured recipe instances.
+  non-callable long-lived configured recipe instances.
 - `Recipe` is a convenience base for typed recipes using Pydantic v2. Recipes do
   not need to inherit from it if they satisfy the local `ConfigRecipe` protocol
   or function recipe contract accepted by `RecipeCatalog`.
@@ -245,12 +253,22 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 5 is
 - A Phase 5 recipe block has `_recipe_` plus keyword argument keys. `_target_`,
   `_args_`, `_partial_`, and `_inject_` are invalid inside the same mapping
   because they are instantiation directives, not recipe arguments.
+- A mapping containing `_recipe_` is atomic for expansion. Its non-reserved
+  fields are recipe inputs, not child config nodes. If a recipe input value
+  itself contains a nested `_recipe_` mapping, fail as ambiguous recipe nesting in
+  v0; recipes that need nested recipes should return those `_recipe_` blocks from
+  `expand()` so the manifest order remains parent before child.
 - A recipe's `expand()` result must be a mapping normalized to plain data. Static
   fan-out recipes that return sequences are deferred until a later phase defines
   splicing, naming, and provenance semantics.
 - Recipe manifest `path` and `expanded_path` are the same in v0 because recipes
   replace their authored block in place. Both fields are recorded so later
   fan-out or relocation behavior can evolve without changing the record shape.
+- New Phase 5 path strings should use user-facing config path notation:
+  top-level keys as `data`, nested identifier keys as `data.source`, sequence
+  items as `pipeline.stages[0]`, non-identifier mapping keys as
+  `settings['not-an-id']`, and `$` only for the root mapping. Manifest `path`
+  points to the recipe block, not to the `_recipe_` key inside it.
 - Recipe argument pre-resolution resolves arguments against the composed
   base/overlay/override config before expansion. It does not require references
   produced only by the recipe's own expansion to resolve early.
@@ -280,9 +298,12 @@ stop and report the blocker instead of widening the phase.
   - `compose_config`
   - `instantiate`
   - `register_recipe`
-- `RecipeCatalog` is also importable from `loom.config.recipes`.
+- `src/loom/config/recipes/__init__.py` exports `ConfigRecipe`, `Recipe`, and
+  `RecipeCatalog`.
+- `src/loom/config/instantiate/__init__.py` exports `import_target` and the
+  internal recursive `instantiate` implementation used by `loom.config.api`.
 - `ConfigRecipe` is importable from `loom.config.recipes` for structural typing,
-  but it does not need to be re-exported from `loom.config`.
+  but it is intentionally not re-exported from `loom.config`.
 - `compose_config` keeps the Phase 4 signature shape:
 
   ```python
@@ -294,7 +315,9 @@ stop and report the blocker instead of widening the phase.
   ) -> ComposedConfig: ...
   ```
 
-  Passing `recipe_catalog=None` uses the public default recipe catalog.
+  Passing `recipe_catalog=None` uses the public default recipe catalog. Passing
+  any non-`None` object that is not a `RecipeCatalog` raises
+  `ConfigValidationError` before loading files.
 - `instantiate` has this public shape:
 
   ```python
@@ -319,34 +342,96 @@ stop and report the blocker instead of widening the phase.
 - Do not modify `src/loom/__init__.py`; top-level `loom.__all__` remains the
   existing foundational export list.
 
+### Error Classes And Exports
+
+- Define these concrete Phase 5 errors in `loom.config.errors` and include them
+  in that module's `__all__`:
+  - `RecipeRegistrationError(ConfigError)`
+  - `DuplicateRecipeError(RecipeRegistrationError)`
+  - `UnknownRecipeError(ConfigError)`
+  - `RecipeExpansionError(ConfigError)`
+  - `InvalidRecipeOutputError(RecipeExpansionError)`
+  - `ReservedConfigKeyError(ConfigValidationError)`
+  - `TargetImportError(ConfigError)`
+  - `TargetInstantiationError(ConfigError)`
+  - `RuntimeInjectionError(TargetInstantiationError)`
+- Keep `UnsupportedRecipeError` importable for Phase 4 compatibility, but Phase
+  5 success paths must not raise it for `_recipe_` blocks or explicit
+  `RecipeCatalog` usage.
+- Recipe-specific modules may re-export recipe errors from
+  `loom.config.recipes.errors`; instantiation modules may re-export
+  target/import errors from `loom.config.instantiate.errors`. The canonical class
+  definitions stay in `loom.config.errors` so callers can catch all config errors
+  from one module.
+- Every new error message must include the relevant config path when known.
+  Recipe errors also include the recipe name and implementation target when
+  available. Target import and constructor errors include the target import path.
+  Wrapped recipe, import, and constructor exceptions must be chained with
+  `raise ... from exc`.
+
 ### Recipe Contracts And Catalogs
 
-- `ConfigRecipe` is a local structural protocol requiring:
+- `ConfigRecipe` is a local structural protocol in
+  `loom.config.recipes.base`. Do not add it to `loom.protocols`. It requires:
 
   ```python
   def expand(self) -> Mapping[str, object]: ...
   ```
 
 - `Recipe` is a Pydantic v2 `BaseModel` subclass for typed recipe inputs. It
-  sets model config to reject unknown extra fields by default and exposes an
-  abstract or clearly failing `expand()` method that subclasses override.
+  sets `model_config = ConfigDict(extra="forbid")` and exposes a clearly failing
+  `expand()` method that subclasses override.
 - `RecipeImplementation` accepts exactly these forms:
   - a class or factory callable that accepts recipe keyword arguments and returns
-    an object satisfying `ConfigRecipe`;
+    an object with a callable zero-argument `expand()` method;
   - a plain function recipe that accepts recipe keyword arguments and directly
     returns an expanded mapping.
+- Do not accept non-callable preconfigured recipe instances in
+  `RecipeCatalog.register()`. Register classes, factories, or function-style
+  recipes only.
+- For every recipe expansion, call the registered implementation with
+  pre-resolved keyword arguments. If the call returns a mapping, treat it as a
+  function-style expansion. Otherwise, require a callable `expand()` method and
+  call it with no arguments.
+- Manifest target strings for registered classes and functions are
+  `implementation.__module__ + ":" + implementation.__qualname__`. If a callable
+  object is accepted as a factory, use its class module and qualname. Tests must
+  avoid local closures because their target strings are not stable enough for
+  review.
+- `RecipeCatalog` has this public instance API:
+
+  ```python
+  class RecipeCatalog:
+      def register(
+          self,
+          name: str,
+          recipe: RecipeImplementation,
+          *,
+          replace: bool = False,
+      ) -> None: ...
+
+      def get(self, name: str) -> RecipeImplementation: ...
+      def names(self) -> tuple[str, ...]: ...
+      def items(self) -> tuple[tuple[str, RecipeImplementation], ...]: ...
+      def __contains__(self, name: object) -> bool: ...
+      def __len__(self) -> int: ...
+  ```
+
 - `RecipeCatalog.register(name, recipe, *, replace=False)` validates:
   - `name` is a non-empty string;
   - `recipe` is a class or callable accepted by the recipe implementation
     contract;
-  - duplicate names fail unless `replace=True`;
-  - replacement is explicit and deterministic.
+  - duplicate names raise `DuplicateRecipeError` unless `replace=True`;
+  - replacement preserves the original registration order for an existing name;
+  - registering a new name appends it to the deterministic order.
 - `RecipeCatalog.get(name)` returns the registered implementation or raises an
-  unknown-recipe error with the recipe name.
-- The catalog preserves deterministic iteration in registration order.
-- The public default registry is a convenience only. Core composition should
-  accept explicit catalogs so tests and downstream setup code can avoid hidden
-  global state.
+  `UnknownRecipeError` with the recipe name.
+- `names()` and `items()` return tuples in registration order so callers cannot
+  mutate catalog internals.
+- The public default registry is a private module-level catalog used only by
+  `register_recipe()` and `compose_config(..., recipe_catalog=None)`. Do not add
+  a public reset API in Phase 5. Tests should prefer explicit catalogs and use
+  unique names or monkeypatch the private default for the one public default path.
 
 ### Recipe Expansion
 
@@ -355,25 +440,31 @@ stop and report the blocker instead of widening the phase.
 - Other non-reserved keys in the block are recipe keyword arguments after
   recipe-argument pre-resolution.
 - `_target_`, `_args_`, `_partial_`, and `_inject_` are invalid in a recipe
-  block and raise a path-aware recipe expansion error.
-- Unknown recipes, duplicate catalog registrations, invalid recipe names, recipe
+  block and raise `ReservedConfigKeyError` with the offending key path.
+- `_recipe_` mappings nested inside recipe argument values are invalid in v0 and
+  raise `RecipeExpansionError`; this avoids ambiguous authored parent/child
+  ordering before a later fan-out or nested-argument policy exists.
+- Unknown recipes raise `UnknownRecipeError`. Invalid recipe names, recipe
   construction failures, recipe validation failures, non-mapping expansion
   results, non-plain expansion results, and nested expansion failures raise
-  concrete config errors rooted in `ConfigError`.
-- Expansion walks mappings in insertion order and sequences by index. This
-  preserves deterministic manifest order across repeated runs.
+  `RecipeExpansionError` or `InvalidRecipeOutputError` with path/name/target
+  context.
+- Expansion walks ordinary mappings in insertion order and sequences by index.
+  A mapping with `_recipe_` is replaced atomically by one mapping.
 - When a recipe expands to a mapping containing nested `_recipe_` blocks, nested
-  recipes are expanded recursively. Manifest records are deterministic and use
-  parent-before-child order at the authored path.
+  recipes are expanded recursively before the parent replacement is returned.
+  Manifest records are emitted in parent-before-child order. Child paths are
+  derived from the parent insertion path plus the child key or index inside the
+  expanded mapping.
 - Each manifest record is a plain-data dictionary with exactly these required
   fields:
   - `path`: authored config path of the `_recipe_` mapping.
   - `name`: recipe name.
-  - `target`: stable implementation target string, preferably
-    `module:qualname`.
+  - `target`: stable implementation target string in `module:qualname` form.
   - `arguments`: plain-data mapping of pre-resolved recipe arguments.
   - `expanded_hash`: deterministic `hash_mapping()` digest of the fully expanded
-    replacement mapping.
+    replacement mapping after nested recipe expansion and before final
+    interpolation.
   - `expanded_path`: path where the expanded mapping was inserted. This equals
     `path` in v0.
   - `loom_version`: current `loom.__version__`.
@@ -382,6 +473,8 @@ stop and report the blocker instead of widening the phase.
   `len(ComposedConfig.recipe_manifest)`.
 - The config fingerprint payload includes resolved config, source records,
   overrides, schema version, and recipe manifest records.
+- A recipe expansion must not mutate the original merged config tree, the
+  selected `RecipeCatalog`, or any manifest record after it has been emitted.
 
 ### Recipe Argument Pre-Resolution
 
@@ -389,10 +482,17 @@ stop and report the blocker instead of widening the phase.
   recipe expansion.
 - It resolves interpolation only for recipe argument values and only against the
   composed base/overlay/override config available at that point.
+- It must reuse `loom.config.interpolation` or a neighboring config-owned helper
+  so OmegaConf does not leak outside `loom.config`.
+- It must not call `resolve_interpolation()` on the entire config before recipe
+  expansion. Resolve only the selected recipe argument value or argument subtree
+  against the full current config context.
 - It must support recipe arguments referencing values introduced by the base
   file, overlays, and CLI overrides.
 - It must not require interpolation references in non-recipe config or in future
   expanded recipe output to resolve before expansion.
+- References to values that do not exist until the recipe's own expansion fail
+  during pre-resolution with `ConfigInterpolationError` at the argument path.
 - Resolver-style interpolation such as `${env:VAR}`, `${oc.env:VAR}`, and custom
   resolver tokens remain unsupported and should use the existing
   `ConfigInterpolationError` path.
@@ -405,14 +505,18 @@ stop and report the blocker instead of widening the phase.
   - `package.module:function`
   - `package.module:Class`
 - Colon form splits once at `:`. The module part and object part must both be
-  non-empty.
+  non-empty, and the object part must not contain `.` in v0.
 - Dotted form imports the module formed by all path segments before the final
-  dot and then loads the final attribute.
-- Attribute chains after the target object are deferred; support only one object
-  attribute after the module path in v0.
-- Module import failures, missing attributes, empty module/object path segments,
-  and non-callable target use in construction produce path-aware target import
-  or instantiation errors with the target path and config path when available.
+  dot and then loads the final attribute. Dotted paths must contain at least one
+  module segment and one attribute segment.
+- Attribute chains after the target object are deferred; support exactly one
+  object attribute after the module path in v0.
+- Empty path strings, empty module/object segments, unsupported colon object
+  chains, module import failures, and missing attributes raise
+  `TargetImportError`.
+- `import_target()` returns the imported object without enforcing callability.
+  `instantiate()` raises `TargetInstantiationError` if a target block resolves to
+  a non-callable object.
 
 ### Recursive Instantiation
 
@@ -420,35 +524,43 @@ stop and report the blocker instead of widening the phase.
   - mappings with `_target_` as target construction blocks;
   - mappings without `_target_` as ordinary dictionaries with recursively
     instantiated values;
-  - sequences as lists with recursively instantiated items;
+  - non-string sequences as lists with recursively instantiated items;
   - scalar values as themselves.
 - In a target block:
   - `_target_` is required and must be a non-empty string.
-  - `_args_`, when present, must be a sequence and is recursively instantiated
-    before being passed as positional arguments.
+  - `_args_`, when present, must be a non-string sequence and is recursively
+    instantiated before being passed as positional arguments.
   - `_partial_`, when present, must be a boolean. If true, return
     `functools.partial(target, *args, **kwargs)` without invoking the target.
   - `_inject_`, when present, must be a mapping of constructor keyword names to
     runtime dependency keys. Both names and keys must be non-empty strings.
   - non-reserved keys are recursively instantiated and passed as keyword
     arguments.
+- Validation of `_target_`, `_args_`, `_partial_`, and `_inject_` value types
+  happens before importing the target or invoking nested constructors at that
+  block.
+- Nested `_target_` blocks inside `_args_`, keyword values, mappings, and
+  sequences are instantiated before the parent target is called.
 - Runtime injection:
   - `runtime=None` is treated as an empty mapping.
+  - a non-`None` `runtime` value must be a mapping or fail with
+    `RuntimeInjectionError`;
   - each `_inject_` runtime key must exist in the runtime mapping;
   - injected keyword names must not duplicate authored keyword names;
   - injected values are passed through unchanged and are not plain-data checked;
   - injected values are not recorded in resolved config, recipe manifest,
     provenance, or fingerprints.
 - Reserved-key misuse:
-  - `_recipe_` anywhere in `instantiate()` input fails with a message directing
-    callers to compose configs before instantiation.
+  - `_recipe_` anywhere in `instantiate()` input raises `ReservedConfigKeyError`
+    with a message directing callers to compose configs before instantiation;
+  - a mapping containing both `_target_` and `_recipe_` fails because `_recipe_`
+    is never valid input to `instantiate()`;
   - `_args_`, `_partial_`, or `_inject_` in a mapping without `_target_` fails
-    as reserved-key misuse.
+    as `ReservedConfigKeyError`;
   - invalid `_args_`, `_partial_`, or `_inject_` value types fail before target
     import or constructor invocation.
-- Constructor failures are wrapped in `TargetInstantiationError` or an
-  equivalent config-rooted error while preserving the original exception as the
-  cause.
+- Constructor failures are wrapped in `TargetInstantiationError` while
+  preserving the original exception as the cause.
 
 ### Composition Behavior
 
@@ -465,6 +577,11 @@ stop and report the blocker instead of widening the phase.
   compatible with Phase 4 except for accepting explicit recipe catalogs.
 - If a config has recipes, expansion happens before final interpolation and the
   final `resolved` output contains no `_recipe_` keys.
+- `resolved_fingerprint` in `ConfigProvenance` remains the hash of the validated
+  resolved config. The top-level config `fingerprint` additionally hashes the
+  recipe manifest records so a recipe implementation/name/argument/expansion
+  change affects the composed fingerprint even when resolved config happens to
+  match.
 - `_target_` blocks remain plain data during composition. `compose_config` must
   not import targets or instantiate objects.
 
@@ -599,28 +716,32 @@ stop and report the blocker instead of widening the phase.
 1. Update public API and errors.
    - Add `Recipe`, `RecipeCatalog`, and real `register_recipe()` exports.
    - Replace the `instantiate()` stub with the public wrapper.
-   - Add concrete recipe, catalog, target import, instantiation, reserved-key,
-     and injection errors rooted in `ConfigError`.
+   - Add `RecipeRegistrationError`, `DuplicateRecipeError`,
+     `UnknownRecipeError`, `RecipeExpansionError`, `InvalidRecipeOutputError`,
+     `ReservedConfigKeyError`, `TargetImportError`,
+     `TargetInstantiationError`, and `RuntimeInjectionError`.
    - Update package tests for new imports and signatures.
 
 2. Add recipe contracts and catalog behavior.
    - Add `ConfigRecipe`, `Recipe`, recipe implementation typing, target-string
      helpers, and `RecipeCatalog`.
    - Implement duplicate detection, unknown lookup errors, explicit replacement,
-     deterministic iteration, and default registry registration.
+     replacement-order preservation, deterministic `names()`/`items()`, and
+     default registry registration.
    - Tests: recipe catalog unit tests and recipe contract tests.
 
 3. Add recipe manifest record helpers.
    - Define a frozen internal record type or helper that emits the exact
      plain-data manifest dictionary shape.
    - Compute `expanded_hash` with `hash_mapping()` over fully expanded recipe
-     output.
+     output after nested recipe expansion and before final interpolation.
    - Include `loom.__version__` in records.
    - Tests: record shape, hash determinism, and plain-data validation.
 
 4. Implement recipe argument pre-resolution.
    - Add a config-owned helper that resolves interpolation for recipe arguments
      against the composed base/overlay/override config.
+   - Resolve only recipe argument values, not the whole config, before expansion.
    - Preserve unsupported resolver behavior and path-aware
      `ConfigInterpolationError`.
    - Tests: args reference base, overlay, and override values; unresolved
@@ -629,8 +750,10 @@ stop and report the blocker instead of widening the phase.
 5. Implement recursive recipe expansion.
    - Walk mappings/sequences deterministically.
    - Expand `_recipe_` blocks through the selected catalog.
-   - Validate reserved-key misuse in recipe blocks.
-   - Recursively expand nested recipes returned by recipes.
+   - Validate reserved-key misuse in recipe blocks and ambiguous `_recipe_`
+     mappings inside recipe arguments.
+   - Recursively expand nested recipes returned by recipes using parent-before
+     child manifest order.
    - Return expanded config plus deterministic manifest records.
    - Tests: nested recipes, unknown recipes, recipe construction errors,
      non-mapping/non-plain outputs, path-aware errors, and deterministic record
@@ -649,12 +772,16 @@ stop and report the blocker instead of widening the phase.
 7. Add target import helpers.
    - Implement dotted and colon import forms with clear distinction between
      invalid path syntax, module import failure, and missing attributes.
+   - Reject colon object parts containing dots and dotted forms without both a
+     module and final attribute.
    - Tests: import class/function targets from domain-neutral test support
      modules and assert path-aware failures.
 
 8. Implement recursive instantiation.
    - Add mapping/sequence recursion, target construction, `_args_`, `_partial_`,
      `_inject_`, and reserved-key validation.
+   - Validate reserved directives before importing a target; recursively
+     instantiate nested args/kwargs before invoking the parent target.
    - Ensure constructor errors preserve causes and include config path and target
      path.
    - Tests: nested object graphs, positional args, partials, injected runtime
@@ -717,21 +844,30 @@ stop and report the blocker instead of widening the phase.
   - `tests/unit/loom/config/instantiate/test_injection.py`
 - Required assertions:
   - New concrete errors inherit from `ConfigError` and preserve wrapped causes.
+  - Error modules expose the exact Phase 5 error classes named in this plan, and
+    `UnsupportedRecipeError` remains importable but is no longer raised for valid
+    recipe-capable composition.
   - `Recipe` validates typed inputs through Pydantic and rejects unknown fields
     by default.
   - Structural recipe implementations do not need to subclass `Recipe`.
   - `RecipeCatalog` registers, looks up, iterates deterministically, rejects
-    duplicate names, supports explicit replacement, rejects invalid names, and
-    reports unknown recipes.
+    duplicate names, supports explicit replacement without moving an existing
+    name's order, rejects invalid names, returns immutable `names()`/`items()`
+    tuples, and reports unknown recipes.
   - The public default registry path through `register_recipe()` is isolated in
     tests and does not leak state across tests.
   - Recipe argument pre-resolution can reference base, overlay, and override
-    values.
+    values without forcing unrelated non-recipe interpolation to resolve early.
+  - Recipe argument references to values produced only by the recipe expansion
+    fail during pre-resolution with an argument-path error.
   - Recipe blocks reject `_target_`, `_args_`, `_partial_`, and `_inject_` as
     ambiguous reserved keys.
+  - `_recipe_` mappings nested inside recipe argument values fail as ambiguous
+    recipe nesting in v0.
   - Recipe expansion replaces `_recipe_` mappings, recursively expands nested
     recipes, returns no `_recipe_` keys in final resolved config, and records
-    deterministic manifest records.
+    deterministic manifest records with `data`, `data.child`, and
+    `pipeline.stages[0]` style paths.
   - Recipe expansion wraps recipe construction, validation, non-mapping output,
     non-plain output, unknown recipe, and nested expansion errors with useful
     path/name/target context.
@@ -740,7 +876,8 @@ stop and report the blocker instead of widening the phase.
     records, or expanded resolved config change.
   - Target import supports `package.module.Class`, `package.module:function`,
     and `package.module:Class`.
-  - Target import errors include target path and config path when available.
+  - Target import rejects empty segments and unsupported attribute chains; errors
+    include target path and config path when available.
   - `instantiate()` recursively constructs nested mappings/sequences, preserves
     scalars, passes keyword arguments, passes `_args_` positional arguments,
     returns `functools.partial` for `_partial_=true`, and does not call the
@@ -750,6 +887,8 @@ stop and report the blocker instead of widening the phase.
     check injected objects.
   - Reserved-key misuse in `instantiate()` fails before import or constructor
     invocation.
+  - `_recipe_` anywhere in `instantiate()` input fails with guidance to call
+    `compose_config()` before instantiation.
   - Constructor errors are wrapped with original causes preserved.
   - `compose_config` writes no files.
 
@@ -788,10 +927,10 @@ stop and report the blocker instead of widening the phase.
     the final interpolation pass.
   - Nested recipes expand deterministically and produce a useful manifest with
     paths, names, targets, arguments, expanded hashes, expanded paths, and loom
-    version.
+    version; nested recipe records appear parent before child.
   - Redacted output still masks secret-like values after recipe expansion.
   - Provenance records the correct recipe manifest count and fingerprints change
-    when recipe-related inputs change.
+    when recipe-related inputs or manifest records change.
   - Unknown recipes in realistic config trees fail clearly without partial
     expansion being returned.
   - `compose_config` does not instantiate `_target_` blocks and creates no files
@@ -888,6 +1027,8 @@ make test-summary
   - no pipeline parsing, stores, runners, or stage execution;
   - no config writes;
   - no static fan-out sequence splicing;
+  - no nested `_recipe_` expansion inside recipe argument values before invoking
+    the parent recipe;
   - no top-level `loom` config exports;
   - no serialization of runtime injection objects.
 - Conditions that require stopping for the manager:
@@ -903,15 +1044,18 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Plan expansion/refinement: unused; next workflow stage should refine this same
-  expanded plan once before implementation.
+- Plan expansion/refinement: used by this final expanded-plan pass. Do not run
+  another automated plan expansion/refinement pass unless the manager explicitly
+  reopens the budget.
 - Phase implementation refinement: unused.
 - PR review: unused.
 
 ## Completion Notes
 
-- Draft plan: created by `loom_phase_planner` in this planning pass.
-- Final expanded plan: pending.
+- Draft plan: created by `loom_phase_planner` and committed as
+  `fd6b04cae25432cd57a06e8a7543d9c8300e535a`.
+- Final expanded plan: completed in this pass and ready for
+  `loom_phase_executor` handoff after the `plan:` commit.
 - Implementation summary: pending.
 - Implementation validation: pending.
 - Refinement summary: pending.
