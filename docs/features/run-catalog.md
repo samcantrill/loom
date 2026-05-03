@@ -1,0 +1,490 @@
+# loom Run Catalog, Comparison, and Export Specification
+
+## Purpose
+
+The run catalog is a lightweight index over many local `loom` run directories.
+
+It helps users inspect, search, compare, export, and import runs without turning
+the core runtime into a database-backed experiment tracking service.
+
+The catalog is derived from run-store metadata. It is not the source of truth.
+
+## Scope
+
+This component owns:
+
+```text
+discovering local run directories
+building a rebuildable local index
+listing runs by metadata
+filtering runs by status, tag, commit, config hash, and artifact identity
+summarizing run records for CLI output
+comparing two runs from persisted metadata
+exporting a run into a portable bundle
+inspecting an exported bundle
+importing a bundle into a local run collection
+```
+
+This component does not own:
+
+```text
+canonical run state
+artifact serialization formats
+stage execution
+remote tracking services
+dashboards
+authorization
+distributed indexes
+```
+
+The run store remains authoritative for an individual run.
+
+## Design Goals
+
+The design should:
+
+```text
+work with plain filesystem run directories
+be rebuildable from existing run metadata
+avoid a required database dependency for v0
+avoid loading large artifact payloads for listing or comparison
+support both human CLI output and machine-readable output
+preserve enough metadata for archive and review workflows
+```
+
+## Local Run Collection
+
+A run collection is a directory containing run directories.
+
+Example:
+
+```text
+runs/
+  20260503T021409Z-a13f7c/
+  20260503T031501Z-c82de1/
+  20260504T004233Z-91caa0/
+```
+
+The catalog should be able to scan this layout and identify valid `loom` runs
+based on run-store marker files or metadata files.
+
+Invalid or partial directories should be reported as warnings, not fatal errors,
+unless strict mode is requested.
+
+## Catalog Index
+
+The initial catalog index should be a local sidecar file that can be rebuilt.
+
+Possible location:
+
+```text
+runs/.loom_catalog/index.json
+```
+
+The index should contain summaries only:
+
+```text
+run ID
+run directory
+status
+created_at
+started_at
+finished_at
+config fingerprint
+pipeline fingerprint
+git commit when available
+tags
+notes summary
+stage status counts
+logical artifact identities
+```
+
+The index should not copy large state files or artifact manifests wholesale.
+
+## Rebuildability
+
+The catalog must be rebuildable from run directories.
+
+Required command shape:
+
+```bash
+loom runs index runs/
+```
+
+or:
+
+```bash
+loom runs rebuild-index runs/
+```
+
+The exact command name belongs to the CLI design, but the behavior should be
+clear:
+
+```text
+scan known run directories
+read authoritative run-store metadata
+write a local sidecar index
+report unreadable or invalid runs
+```
+
+If the index is missing, listing commands may scan directly or prompt the user
+to rebuild depending on performance.
+
+## Run Summary Model
+
+Recommended summary shape:
+
+```python
+@dataclass(frozen=True)
+class RunSummary:
+    run_id: str
+    run_dir: Path
+    status: str
+    created_at: str | None
+    started_at: str | None
+    finished_at: str | None
+    config_fingerprint: str | None
+    pipeline_fingerprint: str | None
+    git_commit: str | None
+    tags: Mapping[str, str]
+    stage_counts: Mapping[str, int]
+    artifacts: tuple[ArtifactSummary, ...]
+```
+
+Summaries should contain only JSON-serializable values.
+
+## Listing Runs
+
+Potential commands:
+
+```bash
+loom runs list runs/
+loom runs list runs/ --status failed
+loom runs list runs/ --tag project=demo
+loom runs list runs/ --commit abc123
+loom runs list runs/ --json
+```
+
+Useful filters:
+
+```text
+status
+created time range
+started time range
+finished time range
+tag
+config fingerprint
+pipeline fingerprint
+git commit
+stage status
+logical artifact identity
+```
+
+The first implementation can support a small subset and keep the result model
+ready for the rest.
+
+## Catalog Consistency
+
+The catalog is allowed to be stale.
+
+Listing commands should make staleness visible:
+
+```text
+index missing
+index older than run metadata
+run directory disappeared
+run metadata unreadable
+```
+
+The catalog should never silently override authoritative run-store records.
+
+## Comparison
+
+Run comparison explains why two runs differ using metadata.
+
+Potential command:
+
+```bash
+loom diff RUN_A RUN_B
+```
+
+Comparison should include:
+
+```text
+run status
+resolved config summaries
+config fingerprints
+pipeline fingerprints
+stage actions and statuses
+stage fingerprints
+input artifact identities
+output artifact identities
+selected provenance facts
+executor identities
+environment summaries
+```
+
+Comparison should not require loading domain artifact payloads.
+
+## Comparison Result Model
+
+Recommended shape:
+
+```python
+@dataclass(frozen=True)
+class RunComparison:
+    left_run_id: str
+    right_run_id: str
+    sections: tuple[ComparisonSection, ...]
+
+@dataclass(frozen=True)
+class ComparisonEntry:
+    path: str
+    left: object
+    right: object
+    status: str
+```
+
+Statuses:
+
+```text
+same
+different
+left_only
+right_only
+unknown
+```
+
+Path examples:
+
+```text
+config.training.learning_rate
+stages.train.fingerprint
+artifacts.evaluate.metrics.checksum
+provenance.git.commit
+```
+
+## Comparison Boundaries
+
+Comparison should be explicit about what it can and cannot compare.
+
+It can compare:
+
+```text
+metadata values
+fingerprint values
+checksums
+artifact logical names
+stage status records
+```
+
+It should not compare by default:
+
+```text
+large artifact payloads
+domain-specific metrics semantics
+binary file diffs
+notebook rendering
+```
+
+Domain-specific comparison can be added through plugins later.
+
+## Export
+
+Run export creates a portable bundle from an existing run.
+
+Potential command:
+
+```bash
+loom export RUN_DIR run.tar.zst
+```
+
+The initial format may be:
+
+```text
+tar archive
+optional compression
+manifest file
+run metadata
+state files
+provenance files
+artifact metadata
+selected artifact payloads
+logs
+```
+
+Compression choices should avoid adding a required heavyweight dependency.
+Standard library tar support is enough for an initial uncompressed or gzip
+bundle.
+
+## Export Manifest
+
+Every bundle should include a manifest.
+
+Example:
+
+```json
+{
+  "format": "loom.run_bundle.v1",
+  "created_at": "2026-05-03T02:14:09Z",
+  "run_id": "20260503T021409Z-a13f7c",
+  "entries": [
+    {
+      "path": "state/run.json",
+      "kind": "run_state",
+      "sha256": "..."
+    }
+  ]
+}
+```
+
+The manifest should allow inspection without trusting arbitrary bundle paths.
+
+## Export Safety
+
+Export must guard against:
+
+```text
+path traversal
+symlink surprises
+partially written runs
+missing artifact payloads
+large unexpected files
+```
+
+The export command should have explicit flags for payload selection:
+
+```text
+--metadata-only
+--include-artifacts
+--include-logs
+--exclude-temp
+```
+
+The default should be conservative and documented.
+
+## Inspect
+
+Bundle inspection should read the manifest and summaries.
+
+Potential command:
+
+```bash
+loom inspect run.tar.gz
+```
+
+It should report:
+
+```text
+bundle format
+run ID
+run status
+created_at
+stage summary
+artifact summary
+included payload count and size
+checksum validation status when requested
+```
+
+Inspection should not extract files into the current directory.
+
+## Import
+
+Run import copies a bundle into a local run collection.
+
+Potential command:
+
+```bash
+loom import run.tar.gz --runs-dir runs/
+```
+
+Import should:
+
+```text
+validate the bundle manifest
+reject unsafe paths
+create a new run directory or preserve the original run ID when safe
+write imported metadata
+verify checksums when requested
+update or mark the catalog index stale
+```
+
+Import should not execute project code.
+
+## Run Store Boundary
+
+The run store is authoritative for:
+
+```text
+run state
+stage state
+attempt records
+artifact records
+provenance records
+```
+
+The catalog reads these records and writes derived summaries. If there is a
+conflict, the run store wins.
+
+## Artifact Store Boundary
+
+Export/import must use artifact store APIs when possible.
+
+For local artifact stores, export can copy payload files after validating they
+belong to the run. For future remote stores, export may need a staging step or a
+metadata-only mode.
+
+The catalog should not assume all artifact payloads are local files.
+
+## Testing
+
+Tests should cover:
+
+```text
+scan empty run collection
+scan collection with valid runs
+scan collection with invalid directories
+build and rebuild local index
+filter by status
+filter by tag
+filter by fingerprint
+compare identical metadata
+compare different stage fingerprints
+metadata-only export
+export manifest checksums
+inspect bundle without extraction
+reject path traversal on import
+import into temporary run collection
+stale index detection
+```
+
+Tests should use temporary directories and small fixture files.
+
+## Implementation Plan
+
+1. Define run summary and catalog index models.
+2. Implement run directory discovery from run-store markers.
+3. Implement index rebuild and direct scan fallback.
+4. Add listing and JSON output.
+5. Implement metadata-only run comparison.
+6. Implement safe export manifest creation.
+7. Implement inspect and import around the manifest.
+
+## Deferred Work
+
+Deferred catalog features:
+
+```text
+SQLite-backed local catalog
+remote run catalog service
+dashboard UI
+domain-specific artifact diffs
+large payload deduplication
+signed bundles
+incremental catalog watchers
+cross-machine catalog synchronization
+```
+
+These should wait until local run-store metadata and artifact manifests are
+stable.
+
