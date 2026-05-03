@@ -421,9 +421,10 @@ phase worktree has been removed.
 
 ### Phase 1 — Foundation
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-foundation-skeleton`
-PR: pending
+PR: body prepared at `docs/phases/add-foundation-skeleton-pr-body.md`; not
+opened locally because `gh` is unavailable.
 
 Goal:
 
@@ -514,7 +515,23 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Phase 1 foundation skeleton implemented on
+  `codex/add-foundation-skeleton` in worktree
+  `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`.
+- Added import-safe Phase 1 package boundaries, shared ID aliases, broad
+  catchable errors, UTC timestamp helpers, and explicit unsupported config
+  stubs without adding runtime dependencies or future-phase behavior.
+- Added package and unit coverage for imports, import boundaries, public
+  surfaces, deferred stubs, errors, IDs, and timestamps.
+- Final PR-prep validation on 2026-05-03:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright
+  reported 0 errors, default tests passed with 24 passed, and build succeeded.
+- Suite summary on 2026-05-03:
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+  `build/test-summary.md`; package and unit suites passed, while contract,
+  integration, and e2e suites are not present for this phase.
+- Implementation refinement budget: used. PR review budget: unused.
+- Remaining blockers: none for manager-side PR submission or review.
 
 ### Phase 2 — Primitives And Serialization
 
