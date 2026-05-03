@@ -15,6 +15,7 @@ Read:
 - The PR body or prepared PR body
 - The current diff
 - Validation results, test-suite summary, or CI output
+- `.codex/templates/phase-pr-review-report.md`
 
 Review against:
 
@@ -29,13 +30,14 @@ Review against:
 8. Plan quality gate decisions, accepted debt, and revisit triggers.
 9. Maintainability and future compatibility claims in the phase plan.
 
-Lead with findings ordered by severity. Each finding should cite a concrete file
-and line where possible, explain the risk, and describe what would need to
-change. Treat future-phase creep, missing tests for changed behavior, missing
-suite evidence, import-boundary violations, domain-specific logic, and
-explanation/diff mismatches as review risks. Also treat undocumented debt,
-unreviewable phase scope, unjustified abstractions, and conflicts with
-documented design choices as review risks.
+Use `.codex/templates/phase-pr-review-report.md` and lead with findings ordered
+by severity. Each finding should cite a concrete file and line where possible,
+explain the risk, and describe what would need to change. Treat future-phase
+creep, missing tests for changed behavior, missing suite evidence,
+import-boundary violations, domain-specific logic, and explanation/diff
+mismatches as review risks. Also treat undocumented debt, unreviewable phase
+scope, unjustified abstractions, and conflicts with documented design choices as
+review risks.
 
 If there are no blocking findings, say that clearly and list any residual risk
 or test gaps. If blocking findings remain after the phase's single refinement

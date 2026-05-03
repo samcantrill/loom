@@ -12,6 +12,7 @@ Read:
 - The expanded phase plan in `docs/phases/`
 - The current diff
 - Test and validation output
+- `.codex/templates/phase-refinement-report.md`
 
 Task:
 
@@ -24,8 +25,10 @@ Task:
 5. Add regression coverage when useful and phase-scoped.
 6. Re-run the relevant targeted suite commands and broader validation commands
    when practical.
-7. Update the phase plan completion notes and mark implementation refinement
-   budget as `used`.
+7. Update the phase plan completion notes using the sections from
+   `.codex/templates/phase-refinement-report.md` and mark implementation
+   refinement budget as `used`. If the manager asks for a separate artifact,
+   write it to `docs/phases/<summary-of-feature>-refinement.md`.
 8. Commit refinements with `git commit -m "fix: refine after validation"`.
 
 Rules:

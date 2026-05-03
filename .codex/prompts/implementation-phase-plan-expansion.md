@@ -7,6 +7,7 @@ Read:
 - `docs/implementation-plans/implementation-plan-v0.md`
 - The assigned phase
 - The draft expanded phase plan in `docs/phases/`
+- `.codex/templates/expanded-phase-plan.md`
 
 Task:
 
@@ -17,7 +18,8 @@ Task:
 3. Refine the phase plan until it is decision-complete for implementation:
    approach, interfaces, data flow, edge cases, tests by suite, validation,
    assumptions, and explicit out-of-scope work.
-4. Keep the plan limited to the assigned phase.
+4. Keep the plan limited to the assigned phase and preserve the durable
+   handoff sections from `.codex/templates/expanded-phase-plan.md`.
 5. Add handoff notes for `loom_phase_executor`, including which implementation
    slices are safe for fast execution, which tests belong with each slice, and
    which choices must not be revisited.

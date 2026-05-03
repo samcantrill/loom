@@ -59,6 +59,9 @@ agent-directory content outside the current custom-agent structure.
 Name prompt files with the workflow stage first using `<stage>-<substage>.md`,
 for example `implementation-plan-review.md`, `pull-request-review.md`, and
 `implementation-test-refinement.md`.
+Use `.codex/templates/` for reusable handoff artifact templates that agents
+complete during the linear workflow. Prompts define role behavior; templates
+define the durable Markdown artifacts passed between stages.
 
 ### Branches And Worktrees
 

@@ -11,6 +11,7 @@ Read:
 - `docs/implementation-plans/implementation-plan-v0.md`
 - Relevant design docs referenced by the plan
 - The findings from `loom_plan_reviewer`
+- `.codex/templates/plan-refinement-summary.md`
 
 Task:
 
@@ -38,6 +39,9 @@ Task:
 6. Split phases that are too broad for one reviewable PR.
 7. Separate behavior-preserving refactors from behavior changes where practical.
 8. Document accepted tradeoffs instead of hiding them.
+9. Produce a refinement summary using
+   `.codex/templates/plan-refinement-summary.md` for the confirmation reviewer
+   and managing agent.
 
 Rules:
 

@@ -9,6 +9,7 @@ Read:
 - `AGENTS.md`
 - `docs/implementation-plans/implementation-plan-v0.md`
 - The expanded phase plan in `docs/phases/`
+- `.codex/templates/phase-implementation-handoff.md`
 
 Task:
 
@@ -25,7 +26,10 @@ Task:
 6. Make frequent commits after coherent units of work.
 7. Run relevant targeted suite commands when practical, then broader validation
    commands as the phase stabilizes.
-8. Record results in the phase plan completion notes.
+8. Record results in the phase plan completion notes using the sections from
+   `.codex/templates/phase-implementation-handoff.md`. If the manager asks for
+   a separate artifact, write it to
+   `docs/phases/<summary-of-feature>-implementation-handoff.md`.
 
 Commit guidance:
 

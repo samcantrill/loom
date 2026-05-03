@@ -5,6 +5,7 @@ Read:
 - `AGENTS.md`
 - `docs/implementation-plans/implementation-plan-v0.md`
 - Existing phase plans in `docs/phases/`
+- `.codex/templates/README.md`
 - Open PRs and CI/test results if available
 
 Use `/home/samcantrill/work/loom-worktrees` as the root for all phase
@@ -13,6 +14,10 @@ without the `codex/` prefix.
 
 Your job is to advance the implementation plan one phase at a time without
 indefinite review/refine loops.
+
+Use `.codex/templates/` for durable handoff artifacts. Prompts define agent
+behavior; templates define the artifact shape to complete and pass to the next
+stage.
 
 Core rule:
 
@@ -62,7 +67,7 @@ For each phase:
 
 1. Find the next phase with `Status: pending` whose earlier phases are complete, approved, or merged.
 2. If additional codebase context is useful and can run in parallel, use the `loom_architecture_explorer` custom agent for read-only mapping.
-3. Assign phase planning to `loom_phase_planner` using `.codex/prompts/implementation-phase-planning.md`.
+3. Assign phase planning to `loom_phase_planner` using `.codex/prompts/implementation-phase-planning.md`; include or complete the assignment fields from `.codex/templates/phase-assignment.md`.
 4. Assign the committed draft phase plan to `loom_phase_plan_expander` using `.codex/prompts/implementation-phase-plan-expansion.md`.
 5. Assign implementation and phase-scoped tests to `loom_phase_executor` using `.codex/prompts/implementation-phase-execution.md`.
 6. Assign exactly one bounded refinement pass to `loom_phase_refiner` using `.codex/prompts/implementation-test-refinement.md`.
@@ -90,7 +95,7 @@ For each phase:
    use `gh pr merge --auto --squash --delete-branch` when branch protection
    requires checks to finish first. If merging is unavailable, leave the phase
    at `approved`, document why, and stop before the next phase.
-14. After a successful merge, update `docs/implementation-plans/implementation-plan-v0.md` on `develop`
+14. After a successful merge, complete the fields from `.codex/templates/phase-merge-record.md` and update `docs/implementation-plans/implementation-plan-v0.md` on `develop`
    without overwriting unrelated plan content. Record:
    - Phase status.
    - PR link or branch name.

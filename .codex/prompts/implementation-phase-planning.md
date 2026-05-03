@@ -6,9 +6,11 @@ Read:
 - `AGENTS.md`
 - `docs/implementation-plans/implementation-plan-v0.md`
 - The assigned phase
+- `.codex/templates/expanded-phase-plan.md`
 
-Create the phase branch/worktree, then create a draft expanded phase plan in
-`docs/phases/` using this filename pattern:
+Create the phase branch/worktree, then create a draft expanded phase plan from
+`.codex/templates/expanded-phase-plan.md` in `docs/phases/` using this filename
+pattern:
 
 ```text
 docs/phases/<summary-of-feature>.md
@@ -30,7 +32,8 @@ cd "$WORKTREE"
 If `git fetch` is unavailable, continue from the local `develop` branch and
 document the limitation in the phase plan.
 
-The draft phase plan must include:
+The draft phase plan must preserve the template's durable handoff sections and
+include:
 
 1. Branch name using `codex/<summary-of-feature>`.
 2. Worktree path.

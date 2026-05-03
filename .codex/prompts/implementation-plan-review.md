@@ -14,6 +14,7 @@ Read:
 - Relevant design docs referenced by the plan
 - Existing source and tests needed to verify current boundaries
 - Existing phase plans in `docs/phases/`, if any
+- `.codex/templates/plan-review-report.md`
 
 Review the plan for:
 
@@ -42,7 +43,7 @@ Review the plan for:
    - missing test expectations by suite
    - unclear validation or PR test-summary evidence
 
-Output:
+Output using `.codex/templates/plan-review-report.md`:
 
 - Findings first, ordered by severity.
 - For each finding, cite the plan section or file path, explain the risk, and

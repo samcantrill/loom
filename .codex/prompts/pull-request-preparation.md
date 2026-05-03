@@ -9,6 +9,7 @@ Read:
 - The current diff
 - Validation results
 - `.github/PULL_REQUEST_TEMPLATE.md`
+- `.codex/templates/phase-pr-body.md`
 
 Task:
 
@@ -27,7 +28,9 @@ Task:
 10. Run `make test-summary` when practical and use its Markdown output as the
     suite-level evidence in the PR body. If it cannot run, explain why and
     summarize available targeted suite results.
-11. Create a PR body using `.github/PULL_REQUEST_TEMPLATE.md`.
+11. Create a PR body at `docs/phases/<summary-of-feature>-pr-body.md` using
+    `.codex/templates/phase-pr-body.md`, which mirrors
+    `.github/PULL_REQUEST_TEMPLATE.md` and adds budget/creation-status fields.
 12. Open the PR if GitHub tooling and authentication are available. Otherwise, leave the PR body ready to use and document why the PR was not opened.
 
 Rules:
