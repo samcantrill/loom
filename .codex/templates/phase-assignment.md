@@ -6,8 +6,10 @@
 - Source plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
-- Base branch: `develop`
-- Target branch: `develop`
+- Stack predecessor:
+- Base branch:
+- Target branch:
+- Merge eligibility:
 - Phase execution plan path: `docs/phases/<summary-of-feature>.md`
 - Assigned agent:
 - Assigned prompt:
@@ -17,6 +19,7 @@
 
 - Plan quality gate:
 - Earlier phase status:
+- Stack state checked:
 - Phase implementation refinement budget:
 - PR review budget:
 - Evidence checked for consumed budgets:
@@ -33,6 +36,7 @@
 
 - Current branch/worktree state:
 - Existing branch, worktree, plan, or PR to resume:
+- Predecessor PR and successor branch dependencies:
 - Environment limitations:
 - Relevant docs or files to inspect:
 

@@ -22,14 +22,18 @@ Task:
 1. Confirm you are inside the dedicated git worktree for this phase under
    `/home/samcantrill/work/loom-worktrees`.
 2. Confirm the branch name follows `codex/<summary-of-feature>`.
-3. Confirm the PR targets `develop`. Use explicit GitHub CLI flags and checks;
-   never rely on GitHub's default base branch.
+3. Confirm the PR target branch matches the phase execution plan. Use explicit
+   GitHub CLI flags and checks; never rely on GitHub's default base branch.
+   Root PRs target `develop`; stacked PRs target their recorded predecessor
+   branch until retargeted.
 4. Confirm the implementation matches the assigned phase.
 5. Confirm future phases were not implemented early.
 6. Confirm relevant tests were added or updated.
 7. Confirm validation commands were run or explain why not. Prefer
    `make validate-pr` for the final local gate.
-8. Update `docs/implementation-plans/implementation-plan-v0.md` phase status to `pr_open` without overwriting unrelated content.
+8. Record PR facts, stack predecessor, target branch, and merge eligibility in
+   the phase plan and PR body. The managing agent owns mirroring the phase
+   status to `pr_open` in the control checkout.
 9. Ensure the phase execution plan has completion notes and records the
    implementation refinement budget as `used` or explicitly not needed.
 10. Run `make test-summary` when practical and use its Markdown output as the
@@ -48,5 +52,7 @@ Rules:
   missing, report it as a blocker for the manager.
 - Do not open the PR in this draft pass.
 - Do not start another phase.
+- Do not change workflow prompts, templates, `AGENTS.md`, or implementation-plan
+  process text from a product phase worktree unless explicitly assigned.
 - Do not route blockers back into another automated refinement loop. The
   manager decides whether the phase can proceed or must be escalated.

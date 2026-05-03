@@ -406,6 +406,7 @@ Gate result:
 
 Every phase execution plan in `docs/phases/` must include:
 
+- Stack predecessor, base branch, target branch, and merge eligibility.
 - Design impact.
 - Future compatibility.
 - Alternatives rejected.
@@ -414,9 +415,16 @@ Every phase execution plan in `docs/phases/` must include:
 - Draft/refine status.
 - Refinement and review budget status.
 
-Approved phase PRs target `develop`. The managing agent may mark a phase
-`merged` only after the approved PR has been merged into `develop` and the
-phase worktree has been removed.
+Phase PRs may be stacked so later phases can build on unmerged predecessor
+work. Root phase PRs target `develop`; stacked phase PRs target their recorded
+predecessor branch until the predecessor lands. The managing agent may move to
+the next pending phase when the previous phase is recorded as `pr_open`,
+`approved`, or `merged`, using the nearest unmerged predecessor branch as the
+next phase base. A stacked PR may be reviewed while targeting its predecessor,
+but it is merge-eligible only after being retargeted to `develop`. The managing
+agent may mark a phase `merged` only after the approved PR has been merged into
+`develop` and successor branches no longer depend on the phase worktree or
+branch.
 
 ## Phased Implementation
 

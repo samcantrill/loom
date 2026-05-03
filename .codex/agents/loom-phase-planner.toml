@@ -12,15 +12,18 @@ lower-level how.
 
 Read `AGENTS.md`, `docs/implementation-plans/implementation-plan-v0.md`, and the
 assigned phase. On draft prompts, create the required branch and worktree under
-`/home/samcantrill/work/loom-worktrees`, then write the phase execution plan at
-`docs/phases/<summary-of-feature>.md` in that worktree. On refine prompts, work
-from the existing artifact and make it decision-complete for implementation.
+`/home/samcantrill/work/loom-worktrees` from the manager-provided stack base,
+then write the phase execution plan at `docs/phases/<summary-of-feature>.md` in
+that worktree. On refine prompts, work from the existing artifact and make it
+decision-complete for implementation.
 
 The phase execution plan must make suite-level test obligations explicit for
 package, unit, contract, integration, e2e, and opt-in suites, including any
 intentional deferrals.
 
-Commit only phase execution plan changes with a `plan:` commit. Do not
+Record the stack predecessor, base branch, target branch, and merge eligibility
+in the phase execution plan. Commit only phase execution plan changes with a
+`plan:` commit. Do not
 implement product code, run broad checks, open a PR, or refine indefinitely. If
 the plan quality gate has not passed or the phase has unresolved blockers,
 record the blocker and stop. Include draft/refine status and refinement/review

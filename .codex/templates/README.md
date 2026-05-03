@@ -11,6 +11,8 @@ Per-phase artifacts should usually be written under `docs/phases/` with the
 phase summary in the filename. Review reports may annotate the stage artifact,
 be pasted into the managing thread, PR discussion, or a phase-scoped file when
 the manager needs a tracked blocker.
+Stacked phase state is recorded in the phase assignment, phase execution plan,
+PR body, review report, and merge record rather than in a separate artifact.
 
 ## Template Map
 

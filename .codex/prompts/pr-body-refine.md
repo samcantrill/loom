@@ -28,13 +28,21 @@ Task:
    are described as phase work.
 5. Mark the PR body refine pass complete.
 6. Open the PR if GitHub tooling and authentication are available. Use explicit
-   `--base develop` and `--head codex/<summary-of-feature>` flags. Otherwise,
-   leave the PR body ready to use and document the exact blocker.
+   `--base <target-branch>` and `--head codex/<summary-of-feature>` flags,
+   where `<target-branch>` is the branch recorded in the phase execution plan.
+   Otherwise, leave the PR body ready to use and document the exact blocker.
+7. Verify an opened PR with `gh pr view <PR>
+   --json baseRefName,headRefName,state,url` and confirm `baseRefName` matches
+   the recorded target branch. Document whether the PR is already
+   merge-eligible (`develop` target) or stacked for review only (predecessor
+   branch target).
 
 Rules:
 
 - Do not merge.
 - Do not perform implementation refinements.
 - Do not create new test coverage.
+- Do not retarget or rebase stack branches; the managing agent owns stack
+  maintenance after predecessor PRs land.
 - If the PR body cannot be made accurate from the artifact, diff, and validation
   evidence, report the blocker to the manager and stop.

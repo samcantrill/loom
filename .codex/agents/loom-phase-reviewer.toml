@@ -13,6 +13,9 @@ test-suite summary. Lead with concrete findings ordered by severity. Focus on
 correctness, behavioral regressions, missing suite evidence, missing tests,
 import-boundary violations, domain-specific leakage, future-phase creep, and
 discrepancies between the plan, PR explanation, and implementation.
+Confirm the PR base matches the recorded stack target. A predecessor branch base
+is acceptable for stacked review, but only a PR targeting `develop` is
+merge-eligible.
 
 Do not make code changes. Do not approve just because tests pass. If there are
 no blocking issues, say so clearly and note residual test or review risk. This

@@ -3,9 +3,10 @@ This prompt is intended for the `loom_phase_reviewer` custom agent.
 
 This is one bounded review pass. Do not request repeated automated refinement
 loops. If blocking findings remain, state them clearly so the managing agent can
-merge or escalate according to the linear workflow. Do not recommend re-running
-`loom_phase_refiner`, assigning a replacement fixer, or starting another PR
-review pass for the same phase unless the user explicitly authorizes it.
+merge, keep stacked, or escalate according to the stacked workflow. Do not
+recommend re-running `loom_phase_refiner`, assigning a replacement fixer, or
+starting another PR review pass for the same phase unless the user explicitly
+authorizes it.
 
 Read:
 
@@ -25,9 +26,11 @@ Review against:
 4. The actual diff.
 5. Test coverage by suite, validation results, and any unavailable suite
    justification.
-6. The PR target branch, which must be `develop`. Verify with `gh pr view <PR>
-   --json baseRefName,headRefName,state,url` when a GitHub PR exists; treat any
-   non-`develop` base as blocking.
+6. The PR target branch, which must match the phase execution plan. Verify with
+   `gh pr view <PR> --json baseRefName,headRefName,state,url` when a GitHub PR
+   exists. Treat `main` or any unrecorded base as blocking. A predecessor branch
+   base is acceptable for stacked review, but the review must state that the PR
+   is not merge-eligible until retargeted to `develop`.
 7. Loom source-tree boundaries and domain-neutrality rules.
 8. Plan quality gate decisions, accepted debt, and revisit triggers.
 9. Maintainability and future compatibility claims in the phase execution plan.
@@ -45,4 +48,5 @@ If there are no blocking findings, say that clearly and list any residual risk
 or test gaps. If blocking findings remain after the phase's single refinement
 pass, make the terminal blocker explicit for the managing agent. Do not make
 code changes. State in the review output that the PR-review budget has now been
-consumed for this phase.
+consumed for this phase, and state whether the PR is merge-eligible now or only
+review-approved within the stack.

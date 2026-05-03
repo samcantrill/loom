@@ -2,7 +2,9 @@
 
 - Phase:
 - Branch:
-- Target: `develop`
+- Target branch:
+- Stack predecessor:
+- Merge eligibility:
 - Worktree:
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Phase execution plan:
@@ -45,3 +47,8 @@ evidence.
 ## Risks / Follow-Ups
 
 List known risks, limitations, or follow-up work for later phases.
+
+## Stack Maintenance
+
+For stacked phase PRs, record the predecessor branch, retarget/rebase plan after
+the predecessor lands, and any successor branch cleanup constraints.

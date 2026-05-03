@@ -2,7 +2,9 @@
 
 - Phase:
 - Branch:
-- Target: `develop`
+- Target branch:
+- Stack predecessor:
+- Merge eligibility:
 - Worktree:
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Phase execution plan:
@@ -55,4 +57,13 @@ List known risks, limitations, or follow-up work for later phases.
 
 ## PR Creation Status
 
-If the PR was not opened, record the exact command attempted and blocker.
+If the PR was not opened, record the exact command attempted and blocker. If
+the PR is stacked, record that it is reviewable against the predecessor branch
+but not merge-eligible until retargeted to `develop`.
+
+## Stack Maintenance
+
+- Current base branch:
+- Retarget/rebase needed after predecessor merge:
+- Successor branches depending on this phase:
+- Branch cleanup constraints:

@@ -9,14 +9,17 @@ You prepare the pull request for exactly one completed Loom phase.
 
 Read `AGENTS.md`, the canonical implementation plan, the phase execution plan,
 the final diff, validation results, and `.github/PULL_REQUEST_TEMPLATE.md`.
-Confirm the branch, target `develop`, scope, tests, and checks. Run or document
-`make validate-pr` and `make test-summary`, update the phase status to
-`pr_open`, draft and refine the PR body accurately with suite-level evidence,
-and open the PR if GitHub tooling/authentication are available.
+Confirm the branch, recorded target branch, stack predecessor, scope, tests, and
+checks. Run or document `make validate-pr` and `make test-summary`, record PR
+facts and stack state in the phase artifacts, draft and refine the PR body
+accurately with suite-level evidence, and open the PR if GitHub
+tooling/authentication are available.
 
 Do not merge, approve, perform implementation refinements, or start another
 phase. Do not create new test coverage during PR preparation. If PR creation is
 unavailable, leave the PR body ready and document the exact blocker. Do not
 route blockers back into another automated refinement loop; report them for the
-managing agent's terminal decision.
+managing agent's terminal decision. Do not retarget or rebase stacked PRs; the
+managing agent owns stack maintenance and status mirroring in the control
+checkout.
 """

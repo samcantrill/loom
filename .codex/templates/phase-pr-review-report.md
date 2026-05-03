@@ -6,6 +6,8 @@
 - Branch:
 - PR:
 - Target branch:
+- Stack predecessor:
+- Merge eligibility:
 - Phase execution plan:
 - PR body:
 - Reviewer:
@@ -23,7 +25,8 @@ non-blocking findings.
 
 ## Review Checks
 
-- PR targets `develop`:
+- PR target matches recorded stack target:
+- PR merge eligibility correctly documented:
 - Scope matches assigned phase:
 - Future phases avoided:
 - PR body matches diff:
@@ -41,6 +44,9 @@ non-blocking findings.
 
 ## Manager Handoff
 
-- If approved, manager may approve/merge when checks and permissions allow.
+- If approved and targeting `develop`, manager may approve/merge when checks and
+  permissions allow.
+- If approved while stacked on a predecessor branch, manager may record approval
+  but must not merge until the PR is retargeted to `develop`.
 - If blocked after the allowed refinement pass, manager should escalate instead
   of starting another automated fixer.

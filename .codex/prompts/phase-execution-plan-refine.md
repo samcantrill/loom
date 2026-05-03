@@ -22,7 +22,8 @@ Task:
    boundaries, current source/tests, and phase acceptance criteria.
 3. Refine the phase execution plan until it is decision-complete for implementation:
    approach, interfaces, data flow, edge cases, tests by suite, validation,
-   assumptions, and explicit out-of-scope work.
+   assumptions, stack base/target branch, merge eligibility, and explicit
+   out-of-scope work.
 4. Keep the plan limited to the assigned phase and preserve the durable
    handoff sections from `.codex/templates/phase-execution-plan.md`.
 5. Add handoff notes for `loom_phase_executor`, including which implementation
@@ -40,6 +41,9 @@ Rules:
 - Do not consume the implementation refinement or PR-review budget; this role is
   a planning handoff, not a validation fixer or PR reviewer.
 - Do not expand the phase scope or implement future phases in the plan.
+- Do not change the recorded stack predecessor, base branch, or target branch
+  unless the manager assignment was internally inconsistent; if it was, record
+  the exact blocker and stop.
 - Do not leave missing package, unit, contract, integration, e2e, or opt-in
   suite decisions for implementation. Explicitly require or defer each suite.
 - If the plan cannot be made decision-complete, document the exact blocker and

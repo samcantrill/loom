@@ -8,7 +8,11 @@
 - Phase execution plan path: `docs/phases/<summary-of-feature>.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Source phase:
+- Stack predecessor:
 - Base branch:
+- Target branch:
+- Merge eligibility:
+- Successor dependency notes:
 - Plan quality gate:
 - Plan quality gate loop budget:
 - Draft pass:
@@ -24,6 +28,14 @@ State the phase objective in one or two paragraphs.
 
 Summarize how this phase fits into earlier and later phases. Name future-phase
 work that must remain out of scope.
+
+## Stack Context
+
+- Root or stacked phase:
+- Current predecessor branch or PR:
+- Why this base branch is correct:
+- Retarget/rebase plan after predecessor merge:
+- Branch cleanup constraints:
 
 ## Source Phase Summary
 
@@ -166,4 +178,5 @@ make test-summary
 - Implementation validation:
 - Refinement summary:
 - PR preparation:
+- Stack maintenance:
 - Remaining blockers:

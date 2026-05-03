@@ -44,7 +44,7 @@ Project-scoped custom agents live in `.codex/agents/`:
 - `loom_phase_refiner`: uses `gpt-5.5` with `xhigh` reasoning to perform one
   bounded implementation/test refinement pass and commit fixes.
 - `loom_pr_preparer`: uses `gpt-5.5` with `xhigh` reasoning to inspect the final
-  diff, run checks, update phase status to `pr_open`, prepare the PR body, and
+  diff, run checks, record PR facts and stack state, prepare the PR body, and
   open or prepare the PR.
 - `loom_phase_reviewer`: uses `gpt-5.5` with `xhigh` reasoning for read-only
   phase PR review.
@@ -59,7 +59,7 @@ Name prompt files with the artifact and action first using
 `<artifact>-<action>.md`, for example `feature-brief-draft.md`,
 `phase-execution-plan-refine.md`, and `pr-body-draft.md`.
 Use `.codex/templates/` for reusable handoff artifact templates that agents
-complete during the linear workflow. Custom agents define role authority,
+complete during the stacked workflow. Custom agents define role authority,
 sandbox, and model. Prompts define behavior for a draft, refine, review,
 implementation, or preparation pass. Templates define durable Markdown
 artifacts passed between stages.
@@ -94,14 +94,42 @@ plan quality gate, before creating phase execution plans.
 
 - Create a feature branch using `codex/<summary-of-feature>`.
 - Use lowercase kebab case for the branch summary.
-- Create phase branches from `develop` unless the phase execution plan explicitly says
-  otherwise.
+- Create phase branches from the current stack base:
+  - use `develop` when all earlier phases are merged;
+  - otherwise use the nearest earlier unmerged phase branch, usually the most
+    recent phase with status `pr_open` or `approved`.
 - Do all phase work in a separate git worktree under
   `/home/samcantrill/work/loom-worktrees/`.
 - Name each worktree with the branch summary, without the `codex/` prefix, for
   example `/home/samcantrill/work/loom-worktrees/config-recipes`.
 - Do not implement phase work directly in the original checkout.
-- Record the branch and worktree path in the phase execution plan.
+- Record the branch, stack predecessor, base branch, PR target branch, and
+  worktree path in the phase execution plan.
+
+### Stacked Phase PRs
+
+Phase work may continue before human review or merge of earlier phase PRs. Use
+stacked PRs to preserve small phase diffs while letting later phases build on
+unmerged work.
+
+- A root phase PR targets `develop`.
+- A phase that depends on an unmerged predecessor branches from that predecessor
+  branch and opens its PR against that predecessor branch.
+- The next phase may start once the current phase PR is open or prepared,
+  validated, and recorded as `pr_open`; human review and merge are not required
+  to start the next phase.
+- A stacked PR may be reviewed while it targets a predecessor branch, but it is
+  merge-eligible only after it is retargeted to `develop`.
+- When a predecessor PR lands, rebase or otherwise replay each immediate
+  successor branch onto its new base. Use updated `develop` when that successor
+  no longer has an unmerged predecessor; otherwise use the updated predecessor
+  branch. Retarget the successor PR as needed, rerun validation, and record the
+  stack maintenance in the phase artifacts.
+- Do not delete a phase branch until every successor branch has been retargeted
+  or rebased away from it.
+- Keep managing-agent workflow refinements in the original control checkout or
+  a dedicated workflow PR. Do not include workflow prompt, template, or
+  `AGENTS.md` refinements in product phase PR diffs unless explicitly assigned.
 
 ### GitHub CLI And Remote Operations
 
@@ -112,10 +140,12 @@ plan quality gate, before creating phase execution plans.
   form `https://github.com/<owner>/<repo>.git` for `origin`.
 - Use `git` for local worktree and commit operations. Use `gh` wherever it
   provides safer GitHub state checks or avoids SSH-only behavior.
-- Create phase PRs with an explicit base and head:
+- Create phase PRs with explicit base and head branches. Use `develop` only for
+  root PRs or PRs already rebased onto `develop`; use the stack predecessor
+  branch for stacked PRs:
 
 ```sh
-gh pr create --base develop --head codex/<summary-of-feature> --body-file <body>
+gh pr create --base <target-branch> --head codex/<summary-of-feature> --body-file <body>
 ```
 
 - Immediately verify the created or existing PR with:
@@ -124,19 +154,23 @@ gh pr create --base develop --head codex/<summary-of-feature> --body-file <body>
 gh pr view <PR> --json baseRefName,headRefName,state,url
 ```
 
-  Stop if `baseRefName` is not exactly `develop`. Do not approve or merge a
-  phase PR targeting `main` or any branch other than `develop`.
+  Stop if `baseRefName` is neither `develop` nor the recorded stack
+  predecessor branch. Do not approve or merge a phase PR targeting `main` or an
+  unrecorded branch.
 - Before every merge, verify the PR target again with `gh pr view <PR>
   --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
-  The managing agent must record this check in the review or merge notes.
-- Prefer `gh pr merge <PR> --squash --delete-branch` for phase merges. Use
-  `gh pr merge <PR> --auto --squash --delete-branch` only when branch
-  protection requires queued/auto merge.
-- If a merged phase branch is not deleted by `gh pr merge`, prefer deleting the
-  GitHub branch through `gh api --method DELETE
-  repos/<owner>/<repo>/git/refs/heads/<branch>` before falling back to
-  `git push origin --delete <branch>`. Then remove stale local tracking refs
-  with `git branch -dr origin/<branch>` when present.
+  The managing agent must record this check in the review or merge notes. Merge
+  only when `baseRefName` is exactly `develop`.
+- Prefer `gh pr merge <PR> --squash --delete-branch` for phase merges only
+  when no successor branch depends on the phase branch. If successors still
+  target or branch from it, use `gh pr merge <PR> --squash` and keep the
+  branch until stack maintenance retargets successors. Use the corresponding
+  `--auto` form only when branch protection requires queued/auto merge.
+- If a merged phase branch is not deleted by `gh pr merge` and no successor
+  branch depends on it, prefer deleting the GitHub branch through `gh api
+  --method DELETE repos/<owner>/<repo>/git/refs/heads/<branch>` before falling
+  back to `git push origin --delete <branch>`. Then remove stale local tracking
+  refs with `git branch -dr origin/<branch>` when present.
 
 ### Phase Rules
 
@@ -144,7 +178,7 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
 - Confirm the implementation plan has passed the plan quality gate before
   starting phase work.
 - Create and refine a phase execution plan before implementation.
-- Follow the linear phase handoff. Do not collapse planning, implementation,
+- Follow the stacked phase handoff. Do not collapse planning, implementation,
   refinement, and PR preparation into one agent unless explicitly instructed.
 - Make frequent commits at coherent checkpoints.
 - Do not ask the user for feedback during the phase.
@@ -159,15 +193,15 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
   plans must identify required package, unit, contract, integration, e2e, and
   opt-in test coverage, or explicitly defer suites that do not apply.
 - Run relevant checks before opening a PR.
-- Open or prepare a PR targeting `develop` and stop. Phase agents must not
-  merge phase PRs.
+- Open or prepare a PR targeting the recorded stack target branch and stop.
+  Phase agents must not merge phase PRs.
 
-### Linear Phase Handoff
+### Stacked Phase Handoff
 
 Each phase uses this strict sequence:
 
 ```text
-manager selects next pending phase
+manager selects next pending phase and stack base
 loom_phase_planner drafts and commits the phase execution plan with suite-level test obligations
 context is compacted or reset for the refine pass when practical
 loom_phase_planner refines and commits the same phase execution plan with decision-complete implementation details
@@ -175,10 +209,13 @@ loom_phase_executor implements and commits phase work and phase-scoped tests
 loom_phase_refiner performs one bounded refinement pass and commits fixes
 loom_pr_preparer runs checks, drafts the PR body, and records suite evidence
 context is compacted or reset for the PR body refine pass when practical
-loom_pr_preparer refines the PR body, updates pr_open metadata, and opens/prepares PR
+loom_pr_preparer refines the PR body, records PR metadata, and opens/prepares PR
+manager mirrors pr_open metadata in the control checkout
+manager applies any workflow refinements in the control checkout, outside product phase branches
+manager may move to the next pending phase using the current phase branch as stack base
 loom_phase_reviewer or manager reviews PR
-manager approves and merges, or escalates to the user
-manager records merged metadata and cleans worktree/branch
+manager approves, retargets/rebases stack children when predecessors land, merges merge-eligible PRs, or escalates to the user
+manager records merged metadata and cleans worktree/branch only after successor branches no longer depend on it
 ```
 
 Do not loop indefinitely. Each gate allows at most one automated refinement
@@ -223,6 +260,8 @@ Before merging, the managing agent must confirm:
 
 - The PR targets `develop`, verified with `gh pr view <PR> --json
   baseRefName,headRefName,state,url`.
+- Any successor phase branches have been rebased or are ready to be retargeted
+  after the merge.
 - The phase PR has passed `loom_phase_reviewer` review, or the managing agent
   has performed the same review locally.
 - Required validation commands or CI checks pass, or any unavailable checks are
@@ -237,27 +276,39 @@ After merging, the managing agent must:
 - Update the phase status in `docs/implementation-plans/implementation-plan-v0.md` on `develop` to
   `merged`.
 - Record the PR link or branch, implementation summary, checks, and follow-up
-  notes.
+  notes, including any stack rebase or retargeting work.
 - Commit the metadata update with a `docs:` commit message and push it when
   permissions allow. If direct pushes to `develop` are disallowed, prepare a
-  small metadata PR and stop before starting the next phase.
+  small metadata PR without blocking already-open successor phase work.
 - Remove the phase worktree from `/home/samcantrill/work/loom-worktrees/` and
-  prune stale worktree metadata with `git worktree prune`.
-- Delete the phase branch if it was not deleted by the merge command. Prefer
-  `gh api --method DELETE repos/<owner>/<repo>/git/refs/heads/<branch>` when git
-  SSH auth is unavailable, then remove stale local tracking refs.
+  prune stale worktree metadata only after successor branches no longer depend
+  on that worktree or branch.
+- Delete the phase branch if it was not deleted by the merge command and no
+  successor branch depends on it. Prefer `gh api --method DELETE
+  repos/<owner>/<repo>/git/refs/heads/<branch>` when git SSH auth is
+  unavailable, then remove stale local tracking refs.
 
-Prefer GitHub squash merges with branch deletion when available:
+Prefer GitHub squash merges with branch deletion only when no successor branch
+depends on the phase branch:
 
 ```sh
 gh pr merge <PR> --squash --delete-branch
 ```
 
+Keep the branch during the merge when successor branches still depend on it:
+
+```sh
+gh pr merge <PR> --squash
+```
+
 If branch protection requires checks to finish first, use:
 
 ```sh
-gh pr merge <PR> --auto --squash --delete-branch
+gh pr merge <PR> --auto --squash
 ```
+
+Add `--delete-branch` to the auto-merge command only when no successor branch
+depends on the phase branch.
 
 ### Plan Quality Gate
 
@@ -301,10 +352,13 @@ merged
 blocked
 ```
 
-`loom_pr_preparer` may update a phase from `pending` or `in_progress` to
-`pr_open` after opening or preparing the PR. The managing agent may update it
-to `approved` after review and to `merged` after the approved PR is merged into
-`develop`.
+The managing agent updates a phase from `pending` or `in_progress` to `pr_open`
+in the control checkout after the PR is opened or prepared. In stacked
+workflows, `pr_open` means the PR is submitted or ready against its recorded
+target branch and the phase branch is valid as a continuation base. The
+managing agent may update a phase to `approved` after review, even if the PR is
+still stacked on a predecessor branch, but may update it to `merged` only after
+the approved PR is retargeted to and merged into `develop`.
 
 ### Phase Checks
 

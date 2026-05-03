@@ -8,6 +8,8 @@
 - Merge commit:
 - Merge method:
 - Target branch: `develop`
+- Prior stack base:
+- Successor branches retargeted/rebased:
 - Manager:
 - Merge date:
 
@@ -16,6 +18,7 @@
 - PR review:
 - Validation or CI:
 - PR target confirmed:
+- Successor stack state checked:
 - Scope limited to assigned phase:
 - PR body and phase execution plan accurate:
 
@@ -36,6 +39,7 @@
 - Implementation plan status updated to `merged`:
 - Metadata update commit:
 - Metadata pushed or PR prepared:
+- Successor PRs retargeted or revalidated:
 - Phase worktree removed:
 - `git worktree prune` run:
 - Phase branch deleted:
