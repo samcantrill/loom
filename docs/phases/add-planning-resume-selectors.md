@@ -23,7 +23,7 @@
 - PR body draft pass: completed by `loom_pr_preparer` in commit `0f9c581`.
 - PR body refine/open pass: completed by `loom_pr_preparer` on 2026-05-04 local time.
 - PR verification: `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`
-- PR validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff, Pyright, default pytest `327 passed`, and build succeeded; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package, unit, contract, and integration suites passed and e2e not present.
+- PR validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff, Pyright, default pytest `327 passed`, and build succeeded; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package, unit, contract, and integration suites passed and e2e not present; GitHub CI check `checks` completed with conclusion `SUCCESS`.
 - Setup limitations: `gh auth status` initially reported an invalid token inside the sandbox, then succeeded with approved network access. `gh auth setup-git` and `git fetch origin` completed with approved access. The first sandboxed `git worktree add` could not create the branch ref under the control checkout `.git` directory and was rerun with approved filesystem access. No validation commands were run in the planning passes.
 - Blockers: none.
 
@@ -64,6 +64,7 @@ Future-phase work that must remain out of scope includes actual stage execution,
 - Live PR body: `gh pr edit --body-file docs/phases/add-planning-resume-selectors-pr-body.md` failed with the known GitHub Projects Classic deprecation GraphQL error; the body was updated with `gh api --method PATCH repos/samcantrill/loom/pulls/12 -F body=@docs/phases/add-planning-resume-selectors-pr-body.md`.
 - Validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after refinement with Ruff, Pyright, default pytest `327 passed`, and build succeeded.
 - Suite evidence: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed after refinement; package, unit, contract, and integration suites passed, and e2e is not present.
+- GitHub checks: PR #12 is not draft, mergeStateStatus is `CLEAN`, and CI check `checks` completed with conclusion `SUCCESS` at 2026-05-03T23:19:20Z.
 - Assumptions and risks: same-run-directory resume remains the only v0 reuse mode; Phase 9 owns execution and final lifecycle writes; this stacked PR must be rebased or replayed and retargeted to `develop` after Phase 7 lands before it is merge-eligible.
 - PR review budget: unused.
 - Blockers: none.

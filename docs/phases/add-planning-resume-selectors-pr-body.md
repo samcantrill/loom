@@ -74,6 +74,13 @@ command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
 result: passed; wrote build/test-summary.md.
 ```
 
+GitHub check evidence after opening:
+
+```text
+command: gh pr view 12 --json statusCheckRollup,mergeStateStatus,isDraft
+result: passed; PR is not draft, mergeStateStatus is CLEAN, and CI check "checks" completed with conclusion SUCCESS at 2026-05-03T23:19:20Z.
+```
+
 Earlier targeted evidence recorded in the phase execution plan:
 
 ```text
