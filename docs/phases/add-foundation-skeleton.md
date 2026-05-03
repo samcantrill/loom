@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: merged locally into `develop` after manager review.
+- Status: merged into `develop` by GitHub PR #1.
 - Branch: `codex/add-foundation-skeleton`.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`.
 - Expanded plan path: `docs/phases/add-foundation-skeleton.md`.
@@ -39,7 +39,8 @@ Key controlling constraints:
 From `docs/implementation-plans/implementation-plan-v0.md`, Phase 1 was
 `Status: pending` with branch `codex/add-foundation-skeleton` at plan
 expansion time. PR preparation updated the canonical phase status to `pr_open`;
-local manager review and squash merge later updated it to `merged`.
+GitHub PR #1 later merged the phase and updated the canonical phase status to
+`merged`.
 
 Goal:
 
@@ -323,7 +324,7 @@ make test-summary
 
 Implementation refinement was consumed on 2026-05-03 by the bounded
 `loom_phase_refiner` pass. PR review was consumed on 2026-05-03 by local
-manager review before the local squash merge.
+manager review before merge.
 
 ## Handoff Notes For Executor
 
@@ -380,6 +381,7 @@ stop and report the blocker rather than making a new design decision.
   - Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright passed with 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
   - PR-prep validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright reported 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
   - Pre-merge validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright reported 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
+  - GitHub PR #1 CI: `checks` passed.
 - Test-summary evidence:
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`.
   - Suite table: package passed, unit passed, contract not present, integration not present, e2e not present.
@@ -396,18 +398,16 @@ stop and report the blocker rather than making a new design decision.
   - Branch: `codex/add-foundation-skeleton`.
   - Worktree: `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`.
   - Body path: `docs/phases/add-foundation-skeleton-pr-body.md`.
-  - `gh pr create` was attempted on 2026-05-03 but failed because `gh` is not authenticated; no alternate authenticated GitHub PR tooling is configured.
-  - Local manager PR review passed on 2026-05-03.
-  - Locally squash-merged into `develop` as `61b76ac` on 2026-05-03.
+  - PR: https://github.com/samcantrill/loom/pull/1
+  - GitHub squash merge commit: `c054908620022a81240c4928599c84b0ed24672f`.
 - Budget status:
   - Phase implementation refinement: used.
   - PR review: used by local manager review.
 - Cleanup:
-  - Dedicated worktree removed.
-  - Stale worktree metadata pruned.
-  - Local `codex/add-foundation-skeleton` branch retained because deleting the
-    branch after a squash merge would discard the only refs to the unsquashed
-    phase commits and explicit deletion approval was not available.
-- Remaining blockers: none for local merge. Remote PR creation and push were
-  not performed because `gh` is not authenticated and the local `develop`
-  checkout also contains unrelated unpushed v1-plan work.
+  - Remote phase branch deleted by `gh pr merge --squash --delete-branch`.
+  - Dedicated local phase worktree had already been removed.
+  - Stale local worktree metadata had already been pruned.
+  - Local `codex/add-foundation-skeleton` branch retained because deleting it
+    after a squash merge would discard the only local refs to the unsquashed
+    phase commits.
+- Remaining blockers: none.

@@ -423,10 +423,7 @@ phase worktree has been removed.
 
 Status: merged
 Branch: `codex/add-foundation-skeleton`
-PR: body prepared at `docs/phases/add-foundation-skeleton-pr-body.md`; local
-GitHub PR creation attempted with `gh pr create` on 2026-05-03 but not opened
-because `gh` is not authenticated. Locally squash-merged into `develop` as
-`61b76ac` after manager review.
+PR: https://github.com/samcantrill/loom/pull/1
 
 Goal:
 
@@ -532,19 +529,17 @@ Completion summary:
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
   `build/test-summary.md`; package and unit suites passed, while contract,
   integration, and e2e suites are not present for this phase.
-- Local manager PR review passed on 2026-05-03: the PR body matched the diff,
-  Phase 1 acceptance criteria were satisfied, no future-phase implementation was
-  included, and validation evidence was current.
-- Locally squash-merged into `develop` as `61b76ac` on 2026-05-03.
+- GitHub PR #1 CI on 2026-05-03: `checks` passed.
+- GitHub PR #1 squash-merged into `develop` as
+  `c054908620022a81240c4928599c84b0ed24672f` on 2026-05-03.
 - Implementation refinement budget: used. PR review budget: used by local
   manager review.
-- Cleanup: removed the dedicated worktree and pruned stale worktree metadata.
-  The local `codex/add-foundation-skeleton` branch was retained because branch
-  deletion after a squash merge would discard the only refs to the unsquashed
-  phase commits and explicit deletion approval was not available.
-- Remaining blockers: none for the local merge. Remote PR creation and push
-  were not performed because `gh` is not authenticated and the local `develop`
-  checkout also contains unrelated unpushed v1-plan work.
+- Cleanup: remote phase branch deleted by `gh pr merge --squash
+  --delete-branch`; dedicated local phase worktree had already been removed and
+  stale worktree metadata pruned. The local `codex/add-foundation-skeleton`
+  branch was retained because deleting it after a squash merge would discard the
+  only local refs to the unsquashed phase commits.
+- Remaining blockers: none.
 
 ### Phase 2 — Primitives And Serialization
 
