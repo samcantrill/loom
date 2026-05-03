@@ -15,7 +15,8 @@ Task:
 1. Confirm you are inside the dedicated git worktree for this phase under
    `/home/samcantrill/work/loom-worktrees`.
 2. Confirm the branch name follows `codex/<summary-of-feature>`.
-3. Confirm the PR targets `develop`.
+3. Confirm the PR targets `develop`. Use explicit GitHub CLI flags and checks;
+   never rely on GitHub's default base branch.
 4. Confirm the implementation matches the assigned phase.
 5. Confirm future phases were not implemented early.
 6. Confirm relevant tests were added or updated.
@@ -28,7 +29,25 @@ Task:
     suite-level evidence in the PR body. If it cannot run, explain why and
     summarize available targeted suite results.
 11. Create a PR body using `.github/PULL_REQUEST_TEMPLATE.md`.
-12. Open the PR if GitHub tooling and authentication are available. Otherwise, leave the PR body ready to use and document why the PR was not opened.
+12. Open the PR if GitHub tooling and authentication are available. Prefer
+    `gh auth status`, `gh auth setup-git`, and HTTPS `origin` when git SSH auth
+    is unavailable. Push the branch, then create the PR with:
+
+```sh
+gh pr create --base develop --head codex/<summary-of-feature> --body-file <body>
+```
+
+13. After opening or finding an existing PR, run:
+
+```sh
+gh pr view <PR> --json baseRefName,headRefName,state,url
+```
+
+    Record the result in the expanded phase plan and PR body. If `baseRefName`
+    is not exactly `develop`, stop and report the blocker to the manager. Do
+    not leave a wrong-base PR as ready for review.
+14. If PR creation cannot run, leave the PR body ready to use and document the
+    exact reason the PR was not opened.
 
 Rules:
 
