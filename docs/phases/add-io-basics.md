@@ -637,7 +637,7 @@ The plan quality gate budget for the canonical v0 plan is already fully used and
 ## Completion Notes
 
 - Draft plan committed by `loom_phase_planner`: `9b05db8 plan: add phase plan`.
-- Final expanded plan committed by `loom_phase_plan_expander`: this `plan:` commit.
+- Final expanded plan committed by `loom_phase_plan_expander`: `7849c72 plan: refine io basics phase plan`.
 - Implementation summary:
   - Implemented the complete Phase 3 I/O surface under `src/loom/io` with concrete URI helpers, source protocol + local filesystem source, codec protocol + JSON/text/bytes codecs, codec registry, and package exports.
   - Added explicit error hierarchies for URI/source/codec failures and kept phase boundary constraints (standard-library only, no stores, no config/pipeline behavior).
@@ -667,6 +667,11 @@ The plan quality gate budget for the canonical v0 plan is already fully used and
   - Refinement targeted run: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/io tests/contracts tests/integration` passed with 57 tests.
   - Refinement lint/type checks: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors.
   - Refinement PR gate: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed, including Ruff, Pyright, default pytest (136 passed), and `uv build`.
-  - `make test-summary` was not run during refinement; PR preparation owns final suite-summary generation.
-- PR: pending.
-- Remaining blockers: none.
+  - Final PR-prep gate: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed on 2026-05-03; Ruff passed, Pyright reported 0 errors, default pytest passed with 136 tests, and `uv build` produced source and wheel distributions.
+  - Final PR-prep suite summary: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed on 2026-05-03 and wrote `build/test-summary.md`; package passed with 11 tests, unit passed with 119 tests, contract passed with 4 tests, integration passed with 2 tests, and e2e was not present as deferred.
+- PR body: prepared at `docs/phases/add-io-basics-pr-body.md`.
+- PR: not opened.
+- PR creation blocker:
+  - `git push -u origin codex/add-io-basics` failed after network escalation with `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`, `git@github.com: Permission denied (publickey).`, and `fatal: Could not read from remote repository.`
+  - `gh pr create --base develop --head codex/add-io-basics --title "Phase 3: I/O Basics" --body-file docs/phases/add-io-basics-pr-body.md` failed with `pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between develop and codex/add-io-basics, Head ref must be a branch (createPullRequest)`.
+- Remaining blockers: remote PR creation is unavailable until `codex/add-io-basics` can be pushed or created on GitHub.
