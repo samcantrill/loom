@@ -402,4 +402,12 @@ stop and report the blocker rather than making a new design decision.
 - Budget status:
   - Phase implementation refinement: used.
   - PR review: used by local manager review.
-- Remaining blockers: none for local merge. Remote PR creation and push were not performed because `gh` is not authenticated and the local `develop` checkout also contains unrelated unpushed v1-plan work.
+- Cleanup:
+  - Dedicated worktree removed.
+  - Stale worktree metadata pruned.
+  - Local `codex/add-foundation-skeleton` branch retained because deleting the
+    branch after a squash merge would discard the only refs to the unsquashed
+    phase commits and explicit deletion approval was not available.
+- Remaining blockers: none for local merge. Remote PR creation and push were
+  not performed because `gh` is not authenticated and the local `develop`
+  checkout also contains unrelated unpushed v1-plan work.
