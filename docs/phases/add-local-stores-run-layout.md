@@ -710,9 +710,21 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; recorded in the `plan: add phase execution plan` commit for this artifact.
 - Final phase execution plan: completed by `loom_phase_planner` in the refine pass; exact exports, method signatures, path/checksum behavior, document wrappers, and suite-level tests are recorded above.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary:
+  - Added local store errors, atomic helpers, artifact index helpers, protocol definitions, local artifact store, and local run store under `src/loom/pipeline/stores/`.
+  - Exported Phase 7 store API in `src/loom/pipeline/stores/__init__.py` only, including exact `__all__` list and error, helper, protocol, and index exports.
+  - Implemented local artifact save/register/load/validate/checksum behavior with local-only URI enforcement and register stage-root path validation.
+  - Implemented local run persistence for run metadata, status, plan, artifacts index, config snapshots, recipe manifest, provenance documents, stage inputs/outputs/failure/fingerprint/provenance/logs.
+  - Added/updated Phase 7-focused unit, contract, package, and integration tests under `tests/unit/loom/pipeline/stores`, `tests/contracts/test_store_contract.py`, and `tests/integration/pipeline/test_local_stores.py`.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache PYTHONPATH=/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout/src uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-package`
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-unit`
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-contract`
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-integration`
+  - All passing.
+- Refinement summary:
+  - Not used (as requested).
 - PR preparation: pending.
 - Stack maintenance: none required at draft time; root phase targets `develop`.
 - Remaining blockers: none.
