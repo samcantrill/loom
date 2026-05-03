@@ -64,7 +64,7 @@ Future-phase work that must remain out of scope includes actual stage execution,
 - Live PR body: `gh pr edit --body-file docs/phases/add-planning-resume-selectors-pr-body.md` failed with the known GitHub Projects Classic deprecation GraphQL error; the body was updated with `gh api --method PATCH repos/samcantrill/loom/pulls/12 -F body=@docs/phases/add-planning-resume-selectors-pr-body.md`.
 - Validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after refinement with Ruff, Pyright, default pytest `327 passed`, and build succeeded.
 - Suite evidence: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed after refinement; package, unit, contract, and integration suites passed, and e2e is not present.
-- GitHub checks: PR #12 is not draft, mergeStateStatus is `CLEAN`, and CI check `checks` completed with conclusion `SUCCESS` at 2026-05-03T23:19:20Z.
+- GitHub checks: PR #12 is not draft, mergeStateStatus is `CLEAN`, and CI check `checks` completed with conclusion `SUCCESS`.
 - Assumptions and risks: same-run-directory resume remains the only v0 reuse mode; Phase 9 owns execution and final lifecycle writes; this stacked PR must be rebased or replayed and retargeted to `develop` after Phase 7 lands before it is merge-eligible.
 - PR review budget: unused.
 - Blockers: none.

@@ -78,7 +78,7 @@ GitHub check evidence after opening:
 
 ```text
 command: gh pr view 12 --json statusCheckRollup,mergeStateStatus,isDraft
-result: passed; PR is not draft, mergeStateStatus is CLEAN, and CI check "checks" completed with conclusion SUCCESS at 2026-05-03T23:19:20Z.
+result: passed; PR is not draft, mergeStateStatus is CLEAN, and CI check "checks" completed with conclusion SUCCESS.
 ```
 
 Earlier targeted evidence recorded in the phase execution plan:
