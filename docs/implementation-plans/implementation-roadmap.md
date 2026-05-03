@@ -80,7 +80,7 @@ written.
 | Version | Theme | Primary outcome |
 | --- | --- | --- |
 | v0 | Local runtime kernel | Local Python API for composing, running, tracing, and resuming static artifact DAGs in one run directory. |
-| v1 | Config includes and recursive composition | Explicit `_include_` composition for nested config files with URI resolution, deterministic merge, provenance, and cycle checks. |
+| v1 | Rebuildable config composition | Explicit `_include_`, `_replace_`, and `_copy_` composition for nested config files, component swaps, reusable stage configs, provenance, and source snapshots. |
 | v2 | CLI core | Thin `loom` CLI for validate, plan, and run over the v0 local runtime. |
 | v3 | Local diagnostics and preflight | Preflight checks plus status, logs, and artifact inspection for local runs. |
 | v4 | Runtime options and resources | Typed invocation, resume, execution, profile, and resource models shared by later executors. |
@@ -147,39 +147,59 @@ Primary feature docs:
   `pipeline.md`, `pipeline-graph.md`, `run-store.md`, `artifacts.md`,
   `state.md`, `resume.md`, `provenance.md`, `execution.md`, and `testing.md`.
 
-## v1 - Config Includes And Recursive Composition
+## v1 - Rebuildable Config Composition
 
 Goal:
 
-- Add explicit recursive config-file composition so large project configs can be
-  factored into nested, reusable files without adopting Hydra defaults,
-  launchers, sweepers, or an arbitrary YAML expression language.
+- Add explicit recursive config composition so large project configs can be
+  factored into nested files, whole components can be swapped for rapid
+  experimentation, repeated stage configs can reuse templates, and runs can
+  preserve enough authored inputs to rebuild composition without adopting Hydra
+  defaults, launchers, sweepers, custom resolvers, or an arbitrary YAML
+  expression language.
 
 Implement:
 
 - `_include_` blocks inside mappings.
+- `_replace_` blocks inside mappings for whole-section replacement during
+  overlay, CLI, and sweep-generated override merges.
+- `_copy_` blocks inside mappings for deep-copying another composed config
+  subtree before local sibling overrides are applied.
+- Strict override semantics where `path=value` updates an existing path and
+  `+path=value` explicitly adds a new variable or structured branch.
 - Relative include resolution based on the including file and the mapping key
   path. For example, `model: {_include_: resnet50}` in
   `configs/experiment.yaml` resolves to `configs/model/resnet50.yaml`.
-- Explicit URI include resolution, starting with local paths and `file://`
-  URIs. The detailed plan may define a small include-resolver registry for
-  additional trusted URI schemes without automatic plugin loading.
-- Recursive include expansion before overlay merge and CLI overrides.
+- Explicit URI include resolution limited to local paths and `file://` URIs in
+  v1.
+- Authoring-level merge of base config, overlays, and CLI override mappings
+  before include/copy expansion, while preserving source-location metadata for
+  path-aware include resolution.
 - Deterministic merge semantics where the included mapping loads first and
   sibling keys in the including mapping override it.
-- Include stack tracking, cycle detection, duplicate/include provenance, source
-  hashes, and path-aware errors.
+- Path-aware errors when an `_include_` swaps over existing mapping content
+  without `_replace_: true`.
+- Include and copy stack tracking, cycle detection, composition provenance,
+  source hashes, replacement records, and path-aware errors.
+- Composition manifests and source snapshots for base configs, overlays, and
+  included files so run directories can preserve rebuildable config inputs.
 - Tests for relative includes, nested includes, URI includes, sibling
-  overrides, overlays containing includes, cycle errors, missing includes, and
-  provenance.
+  overrides, `_replace_`, `_copy_`, strict update overrides, `+` add overrides,
+  overlays containing includes, CLI component replacement, cycle errors,
+  missing includes/copies, source snapshots, and provenance.
 
 Exit criteria:
 
-- Users can split a config into nested component files and compose them through
-  `_include_` without hidden global search behavior.
+- Users can split a config into nested component files, swap components, and
+  reuse stage config templates without hidden global search behavior.
+- Component swaps cannot accidentally merge stale lower-precedence keys because
+  `_include_` over existing mapping content requires `_replace_: true`.
+- Override strings catch typos by default and require `+` for intentional
+  additions.
 - Resolved config snapshots are complete, deterministic, and contain enough
-  provenance to identify every included file or URI.
-- Include expansion composes cleanly with v0 overlays, dot-path overrides,
+  provenance to identify every included file or URI, copy source, replacement,
+  and source snapshot.
+- Composition directives compose cleanly with v0 overlays, dot-path overrides,
   interpolation, recipe expansion, redaction, and fingerprints.
 
 Defer:
@@ -187,7 +207,10 @@ Defer:
 - Hydra-compatible defaults lists, config groups, launchers, sweepers, advanced
   list patching, broad registry aliases, arbitrary YAML expression languages,
   automatic target schema inference, untrusted config sandboxing, and automatic
-  plugin-discovered include resolvers.
+  plugin-discovered composition extensions.
+- Implicit global config search paths. V1 starts with including-file-relative
+  resolution plus explicit URI resolution.
+- Custom include resolvers beyond built-in local path and `file://` behavior.
 - Custom OmegaConf-style interpolation resolvers. Revisit when there is a
   concrete need and a clear provenance/error model.
 
@@ -1006,19 +1029,19 @@ Before turning any roadmap version into a full implementation plan:
 | `core-model.md` | v0 | Foundational vocabulary for refs, records, manifests, filters, identifiers, timestamps, and hashing terminology. |
 | `timestamps.md` | v0 | UTC helpers are needed by status, stores, provenance, logs, and generated IDs. |
 | `protocols.md` | v0 | Tiny shared protocols and import-boundary rules come before subsystem contracts. |
-| `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; include errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
-| `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and include provenance. |
-| `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, and included-config provenance. |
-| `io.md` | v0, v1, v11, v12, v13 | Local sources/codecs in v0; include URI resolution begins in v1; plugin source/codec loading in v11; remote hooks and operations in v12/v13. |
+| `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
+| `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
+| `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
+| `io.md` | v0, v1, v11, v12, v13 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v11; remote hooks and operations in v12/v13. |
 | `artifacts.md` | v0, v3, v9, v12, v13, v17 | Local artifact refs/stores in v0; inspection in v3; bundles in v9; remote capabilities in v12/v13; retention in v17. |
-| `config.md` | v0, v1, v2, v10, v11 | Composition, recipes, and instantiation in v0; recursive includes in v1; CLI exposure in v2; sweep overrides in v10; recipe plugins in v11. |
+| `config.md` | v0, v1, v2, v10, v11 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v10; recipe plugins in v11. |
 | `pipeline.md` | v0, v2, v10 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI and sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
 | `runtime-resources.md` | v4, v6, v7, v14, v15 | Shared runtime/resource objects arrive before executor-specific mapping. |
 | `execution.md` | v0, v4, v5, v6, v7, v14, v15, v16 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; reliability in v16. |
 | `run-store.md` | v0, v3, v5, v8, v9, v16, v17 | Local layout in v0; inspection/failures/catalog/bundles/reliability/cleanup build on it. |
 | `state.md` | v0, v5, v7, v16 | Basic statuses in v0; attempts/failures, scheduler state, and reliability records mature later. |
-| `provenance.md` | v0, v1, v6, v7, v11, v14, v15, v16 | Generic provenance in v0; include provenance in v1; submission, plugin, container, and event facts added with those capabilities. |
+| `provenance.md` | v0, v1, v6, v7, v11, v14, v15, v16 | Generic provenance in v0; config composition provenance in v1; submission, plugin, container, and event facts added with those capabilities. |
 | `resume.md` | v0, v2, v3, v10, v16 | Same-run-directory resume in v0; CLI/preflight/sweeps expose it; retry policies remain later. |
 | `preflight.md` | v3, v4, v5, v6, v7, v11, v12, v13, v14, v15, v16, v17 | Core check runner in v3; new checks arrive with each operational feature. |
 | `run-catalog.md` | v8, v9, v10, v13, v17 | Catalog/comparison in v8; bundles in v9; sweeps integrate in v10; remote refs and cleanup later. |

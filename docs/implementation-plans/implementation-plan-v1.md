@@ -2,734 +2,665 @@
 
 ## Goal
 
-Implement `loom` v1 as the first functional command-line layer over the v0
-local runtime kernel.
+Implement `loom` v1 as explicit, rebuildable config composition over the v0
+configuration system.
 
-The v1 target is a thin, domain-neutral `argparse` CLI that lets users validate,
-plan, and run v0 pipelines from scripts and terminals without duplicating config,
-pipeline, planning, store, resume, or execution logic in CLI modules.
+The v1 target is a deterministic composition layer with `_include_`,
+`_replace_`, `_copy_`, and composition source snapshots. It lets users split
+large configs into nested component files, replace whole components during
+experiments and sweeps, reuse stage/component config templates, and rebuild the
+authored composition inputs that produced a run. This is not Hydra
+compatibility and does not introduce Hydra defaults, launchers, sweepers,
+custom interpolation resolvers, plugin extension hooks, or an arbitrary YAML
+expression language.
 
 ## Context
 
-The roadmap defines v1 as "CLI core":
+V0 config composition supports:
 
-- Functional `loom` entry point using the standard library.
-- `loom --help`, `loom --version`, top-level exception handling, and exit-code
-  mapping.
-- `loom validate CONFIG` over v0 config composition and pipeline validation.
-- `loom plan CONFIG` over v0 planning, selectors, resume, and dry-run
-  explanations.
-- `loom run CONFIG` over the v0 local executor and `PipelineRunner`.
-- Shared CLI parsing helpers that convert arguments into public Python API
-  objects.
-- CLI tests and small end-to-end tests using synthetic local pipelines.
+- YAML loading.
+- Base config plus ordered overlays.
+- Dot-path overrides.
+- OmegaConf-style interpolation.
+- Named `_recipe_` expansion.
+- Recursive `_target_` instantiation.
+- Redaction, provenance, and fingerprints.
 
-V1 should be planned and implemented only after v0 has landed or after the v0
-public APIs named below are otherwise available. V1 is intentionally narrow:
-it is a presentation and invocation layer, not a new runtime model.
+V0 explicitly defers recursive include graphs. V1 fills that gap with a narrow,
+explicit composition feature:
+
+```yaml
+model:
+  _include_: resnet50
+```
+
+For `configs/experiment.yaml`, this resolves by default to:
+
+```text
+configs/model/resnet50.yaml
+```
+
+The included content loads first, then local sibling keys override it through
+the same merge semantics used elsewhere in config composition.
+
+V1 also adds whole-section replacement:
+
+```yaml
+model:
+  _replace_: true
+  _include_: vit_b16
+```
+
+and in-document subtree reuse:
+
+```yaml
+pipeline:
+  stages:
+    train_alt:
+      config:
+        _copy_: stage_configs.train_base
+        optimizer:
+          lr: 0.0001
+```
 
 ## Desired Outcome
 
 After v1 is complete:
 
-- Installing `loom` exposes a `loom` console command.
-- `loom --help` and command help are import-safe and do not load project stage
-  modules, plugins, optional executor backends, or heavy operational adapters.
-- `loom validate CONFIG` composes config, validates the pipeline, and reports
-  success or structured errors.
-- `loom plan CONFIG` shows ordered stage decisions and reasons without executing
-  stages.
-- `loom run CONFIG` executes through the v0 local runner and prints a concise
-  summary.
-- Commands intended for automation support JSON output from structured result
-  objects.
-- CLI modules remain the outermost layer and are not imported by config,
-  pipeline, stores, artifacts, provenance, or execution internals.
+- Config authors can split nested config components into separate files.
+- `_include_` works recursively inside mappings.
+- `_replace_` lets overlays, override mappings, and sweep-generated configs
+  replace whole mapping sections without stale sibling keys leaking through.
+- `_copy_` deep-copies a composed subtree and lets local sibling keys override
+  the copied values.
+- Override strings distinguish strict updates from explicit `+` additions.
+- Relative includes are resolved from the including file and mapping key path.
+- Explicit local paths and `file://` URIs are supported.
+- Include and copy expansion are deterministic, cycle-safe, and
+  provenance-rich.
+- Overlays and CLI overrides can replace included values predictably.
+- Runs can persist a composition manifest and source snapshots sufficient to
+  rebuild the authored composition inputs even if project files later change.
+- Validation remains scoped to existing `loom` boundaries and reports
+  composition-aware source context for failures.
+- Resolved config snapshots are complete and do not require include expansion at
+  read time.
 
 ## Non-Goals
 
-- No `loom status`, `loom logs`, or `loom artifacts` commands. Those belong to
-  v2 diagnostics and preflight.
-- No `loom stage run` worker command. That belongs to v4 subprocess execution.
-- No typed `RunOptions`, `ResumeOptions`, `ExecutionOptions`,
-  `ResourceRequest`, or runtime profile model. Those belong to v3.
-- No subprocess, SLURM, Docker, Apptainer, remote store, plugin, sweep, catalog,
-  bundle, retry, timeout, cleanup, dashboard, shell completion, or rich progress
+- No Hydra-compatible defaults lists or config groups.
+- No Hydra launchers, sweepers, or runtime composition behavior.
+- No arbitrary expression language in YAML.
+- No advanced list patching, list insertion, deletion, or splice operators.
+- No broad registry aliases for every component.
+- No automatic schema inference for arbitrary `_target_` classes.
+- No YAML `_schema_` directive, structured-config registry, or automatic import
+  of project schema classes from config files.
+- No untrusted config sandboxing or import allow-list mode.
+- No plugin-discovered composition extensions.
+- No custom include resolvers beyond built-in local path and `file://`
   behavior.
-- No new config composition, pipeline validation, planning, resume, or runner
-  algorithms inside `loom.cli`.
-- No new heavyweight runtime dependency such as Click, Typer, Rich, or Pydantic
-  beyond whatever v0 already introduced.
-- No domain-specific commands, schemas, stages, codecs, reports, datasets, or
-  project import assumptions.
+- No custom OmegaConf-style interpolation resolvers.
 
-## Prerequisites
+## Public Config Surface
 
-V1 depends on v0 public Python APIs or equivalent stable facades:
+V1 should preserve the v0 public entrypoint:
 
-- `loom.config.compose_config`
-- pipeline spec parsing and validation from resolved config
-- stage selector construction or normalized selector inputs
-- execution planning and same-run-directory resume decisions
-- local run/artifact store opening where planning and running need existing
-  state
-- `PipelineRunner` local execution
-- shared `LoomError` roots and broad subsystem errors
-- result/status/plan models that can be converted to plain data
-
-If v0 exposes the behavior but not a small CLI-friendly facade, v1 may add the
-minimal facade in the owning package. For example, pipeline validation helpers
-belong in `loom.pipeline`, not `loom.cli`; runner request helpers belong in
-`loom.pipeline.execution`, not `loom.cli`.
-
-## Constraints
-
-- Preserve the source-tree boundaries in `docs/structure.md`.
-- Keep `loom` domain-neutral.
-- Keep `loom.__init__` cheap and safe. It must not import `loom.cli`.
-- Use `argparse` from the standard library.
-- Do not add runtime dependencies for CLI ergonomics in v1.
-- CLI JSON output must be generated from structured data, not by parsing human
-  text.
-- CLI errors must use shared `LoomError` context where available.
-- Commands must be testable through `main(argv)` without shelling out.
-- Run validation commands before PR review:
-
-```sh
-make validate-pr
-make test-summary
+```python
+cfg = compose_config(
+    config_path="configs/experiment.yaml",
+    overlays=["configs/local.yaml"],
+    overrides=["run.seed=123"],
+)
 ```
 
-## Design Principles
+Composition directive expansion is part of `compose_config`; callers should not
+need a separate public step for normal use.
 
-- The CLI parses arguments, calls Python APIs, formats results, and returns exit
-  codes.
-- Business logic remains in config, pipeline, planning, execution, stores, and
-  artifacts.
-- Human output should be concise and stable.
-- Machine output should be explicit, versioned, and structured.
-- Parser options should use names that can later map cleanly to v3 runtime
-  option objects, even though v1 does not implement those objects.
-- Future commands should reuse common parser, error, option, and formatting
-  helpers rather than inventing a separate CLI style per feature.
+V1 should not add public extension hooks for custom include resolvers or custom
+interpolation resolvers. If `ComposedConfig` needs new fields, prefer explicit
+data such as `composition_manifest` and `source_snapshots` over parallel
+private state hidden inside provenance.
 
-## Key Design Choices
+## Include Syntax
 
-- `argparse` is the v1 CLI framework. It is enough for validate/plan/run and
-  avoids adding dependencies before the command surface proves it needs them.
-- V1 adds a console script:
+`_include_` is allowed only inside mappings:
 
-```toml
-[project.scripts]
-loom = "loom.cli.main:main"
+```yaml
+model:
+  _include_: resnet50
+  dropout: 0.2
 ```
 
-- `main(argv: Sequence[str] | None = None) -> int` is the testable entry point.
-  The console script exits with its return code.
-- CLI option dataclasses are adapters only. They preserve parsed command-line
-  intent and convert to existing v0 API inputs. They do not define canonical
-  runtime semantics.
-- `--executor` is accepted by `loom run` to establish the future shape, but v1
-  supports only `local`. Unsupported executors fail clearly without importing
-  optional backends.
-- `--dry-run` on `loom run` delegates to the same planning path as
-  `loom plan`.
-- JSON result envelopes include a CLI schema version. These schemas are
-  automation-facing output contracts, not persisted run-store schemas.
-- CLI import-boundary tests are part of the acceptance criteria because later
-  roadmap stages add plugin discovery and optional backends that must not become
-  import-time side effects.
-
-## Public CLI Surface
-
-### Top Level
+The included value must resolve to a config document. After expansion, the node
+is equivalent to:
 
 ```text
-loom --help
-loom --version
-loom [--traceback] COMMAND ...
+recursive_merge(load(configs/model/resnet50.yaml), {"dropout": 0.2})
 ```
 
-Top-level options:
+Siblings override included values. Normal v0 merge rules apply:
 
-- `--version`: print the installed `loom` version and exit 0.
-- `--traceback`: show full tracebacks for unexpected errors and for known errors
-  when debugging.
+- mappings recursively merge;
+- scalars replace;
+- lists replace as whole lists;
+- explicit `null` remains explicit `null`.
 
-### `loom validate`
+If an `_include_` is applied at a config path that already has
+lower-precedence mapping content, the same mapping must also contain
+`_replace_: true`. This is intentionally stricter than normal recursive merge:
+component swaps should fail loudly unless the author explicitly discards the
+previous component mapping. An include at a new path does not need `_replace_`
+because there is no prior mapping to discard.
 
-Command:
+Multiple includes in one mapping are out of scope for v1. If a user needs to
+combine multiple components, they should compose through an overlay or a recipe
+until a later plan defines list-valued includes.
+
+## Replace Syntax
+
+`_replace_` is allowed only inside mappings:
+
+```yaml
+model:
+  _replace_: true
+  _include_: vit_b16
+```
+
+When the mapping is merged over an existing destination mapping, the
+destination mapping is discarded before the marker mapping is applied. The final
+resolved config omits `_replace_`.
+
+This is primarily for component swaps in overlays, override mappings, and later
+sweep-generated trial configs. It prevents values from the previous component
+from surviving through normal recursive merge semantics.
+
+When `_include_` appears while replacing an existing mapping, `_replace_: true`
+is required in the same mapping. If the marker is missing, composition should
+fail with a path-aware config error rather than merge the new included content
+with existing keys.
+
+If `_replace_: true` appears where there is no existing destination value, the
+marker is stripped and the mapping is used as written. `_replace_` must be a
+boolean true value; other values fail with a path-aware config error.
+
+## Copy Syntax
+
+`_copy_` is allowed only inside mappings:
+
+```yaml
+stage_configs:
+  train_base:
+    batch_size: 64
+    epochs: 20
+    optimizer:
+      _include_: adam
+
+pipeline:
+  stages:
+    train_small:
+      config:
+        _copy_: stage_configs.train_base
+        optimizer:
+          lr: 0.0003
+```
+
+The `_copy_` value is an explicit dot path to another subtree in the composed
+config. The source subtree is deep-copied as plain config data, then local
+sibling keys merge over it. The copied result is not a live alias.
+
+Copy expansion should happen after include expansion so copied templates already
+contain included defaults. Copy expansion must detect cycles and should reject
+missing source paths, non-mapping copy sites with sibling overrides, and copies
+that would require implicit global name lookup.
+
+## Include Resolution
+
+Resolution rules:
+
+- If `_include_` has a URI scheme, only `file://` is supported in v1.
+- `file://` is built in.
+- If `_include_` is an explicit relative or absolute path, resolve it relative
+  to the including file directory unless absolute.
+- If `_include_` is a bare name, resolve it using the mapping key path below the
+  including file directory and append `.yaml`.
+
+Examples:
+
+```yaml
+# configs/experiment.yaml
+model:
+  _include_: resnet50
+```
+
+resolves to:
 
 ```text
-loom validate CONFIG
+configs/model/resnet50.yaml
 ```
 
-Options:
+```yaml
+# configs/experiment.yaml
+model:
+  encoder:
+    _include_: small
+```
 
-- `--overlay PATH`, repeatable.
-- `--set KEY=VALUE`, repeatable.
-- `--format text|json`, default `text`.
-- `--strict`, accepted only if a v0 validation API already defines strict
-  behavior; otherwise omit it from the implemented parser rather than inventing
-  semantics.
-
-Behavior:
-
-- Compose the config through `loom.config`.
-- Build and validate the pipeline through public `loom.pipeline` APIs.
-- Print success with the config path and stage count.
-- On failure, return the matching config or pipeline exit code.
-- Do not execute stages.
-- Do not write run state.
-- Do not directly instantiate stage targets unless v0 validation explicitly
-  requires that.
-
-### `loom plan`
-
-Command:
+resolves to:
 
 ```text
-loom plan CONFIG
+configs/model/encoder/small.yaml
 ```
 
-Options:
+```yaml
+optimizer:
+  _include_: ../shared/optimizer.yaml
+```
 
-- `--overlay PATH`, repeatable.
-- `--set KEY=VALUE`, repeatable.
-- `--run-dir RUN_DIR`.
-- `--resume`.
-- `--from-stage STAGE`.
-- `--only-stage STAGE`, repeatable.
-- `--force-stage STAGE`, repeatable.
-- `--skip-stage STAGE`, repeatable.
-- `--explain STAGE`.
-- `--format text|json`, default `text`.
-
-Behavior:
-
-- Compose config and build the pipeline spec through v0 APIs.
-- Convert selector flags into the v0 selector model or equivalent planner
-  inputs.
-- Open existing run state read-only when resume planning needs it.
-- Compute stage decisions through public planning APIs.
-- Print ordered stage actions and reasons.
-- If `--explain STAGE` is supplied, include the available explanation details
-  for that stage.
-- Do not execute stages.
-- Do not mutate prior run state unless v0 already has an explicit non-execution
-  plan persistence option. V1 should default to read-only planning.
-
-### `loom run`
-
-Command:
+resolves relative to the including file directory:
 
 ```text
-loom run CONFIG
+shared/optimizer.yaml
 ```
 
-Options:
-
-- `--overlay PATH`, repeatable.
-- `--set KEY=VALUE`, repeatable.
-- `--run-dir RUN_DIR`.
-- `--run-id RUN_ID`.
-- `--executor local`, default `local`.
-- `--resume`.
-- `--dry-run`.
-- `--from-stage STAGE`.
-- `--only-stage STAGE`, repeatable.
-- `--force-stage STAGE`, repeatable.
-- `--skip-stage STAGE`, repeatable.
-- `--format text|json`, default `text`.
-
-Behavior:
-
-- Reject non-`local` executor values with a clear unsupported-executor error.
-- For `--dry-run`, call the same planning path as `loom plan` and return the
-  planning exit code.
-- For execution, compose config, build runner inputs, call `PipelineRunner`, and
-  format the run result.
-- Return nonzero if the run fails.
-- Do not write status files directly from CLI modules.
-- Do not compute fingerprints, resume, graph binding, or artifact validation in
-  CLI modules.
-
-## Result And JSON Output
-
-Text output should be concise and stable. JSON output should use plain data
-objects shaped like this:
-
-```json
-{
-  "schema_version": "loom.cli.plan.v1",
-  "ok": true,
-  "result": {}
-}
+```yaml
+optimizer:
+  _include_: file:///abs/project/configs/optimizer/adam.yaml
 ```
 
-Errors should use:
+resolves through built-in `file://` handling.
 
-```json
-{
-  "schema_version": "loom.cli.error.v1",
-  "ok": false,
-  "error": {
-    "type": "PipelineError",
-    "message": "unknown stage",
-    "path": "pipeline.stages[1].depends_on[0]",
-    "context": {}
-  }
-}
-```
+The detailed phase plan should define exact path normalization, accepted file
+extensions, and whether extensionless explicit paths try `.yaml` before failing.
+The default should be conservative and deterministic.
 
-Recommended result payloads:
+Other URI schemes and custom include resolvers are out of scope for v1.
 
-- `ValidationCliResult`: config path, pipeline name if available, stage count,
-  warnings if v0 exposes them.
-- `PlanCliResult`: config path, run directory if selected, resume enabled,
-  ordered stage actions, reasons, and optional stage explanation.
-- `RunCliResult`: run ID, run directory, final run status, stage summaries,
-  failure summary if present, and plan summary.
+## Composition Order
 
-If v0 already exposes result dataclasses with plain-data conversion, CLI result
-dataclasses may wrap or directly format those instead of creating a parallel
-model.
-
-## Error And Exit-Code Policy
-
-Use small conventional exit codes:
+V1 should treat base files, overlays, and CLI dot-path overrides as
+authoring-level inputs before expanding composition directives:
 
 ```text
-0    success
-1    command completed but requested operation failed
-2    CLI usage error or argument parse error
-3    config validation or composition error
-4    pipeline validation or planning error
-5    run execution failed
-6    run state or inspection error, reserved for v2
-7    executor or scheduler error
-130  interrupted by Ctrl-C
+load base config
+load overlays
+parse CLI dot-path overrides into a highest-precedence override mapping
+recursive merge overlays and override mapping into base config, honoring _replace_
+recursively expand includes
+recursively expand copies
+resolve enough interpolation for recipe args
+expand recipes
+resolve interpolation again
+validate
+redact
+compute config provenance and fingerprint
 ```
 
-Known `LoomError` values should print concise messages by default. Unknown
-exceptions should print a concise internal-error message and mention
-`--traceback`. With `--traceback`, print the full traceback.
+For ordinary values, CLI overrides remain the highest-precedence authoring
+input. Representing them as an override mapping before directive expansion lets
+users and later sweep planners change component selections with overrides such
+as `model._include_=vit_b16`, or replace a section by adding
+`+model._replace_=true` alongside the include override.
 
-Warnings and errors go to stderr. Normal command output and machine JSON go to
-stdout.
+Override strings should distinguish updates from intentional additions:
+
+```text
+path=value:
+  update an existing path; fail if the path does not exist
+
++path=value:
+  add a new path; fail if the path already exists
+```
+
+This lets users introduce variables or structured override branches explicitly,
+for example `+vars.learning_rate=0.0003`, while ordinary overrides catch typos.
+The same add form is used to add a replacement marker from CLI overrides:
+`+model._replace_=true`.
+
+The implementation must preserve source-location metadata through the merge so
+an include authored in an overlay resolves relative to that overlay file. A
+bare include authored by CLI override should resolve relative to the root config
+file directory and the overridden config path unless the value is an explicit
+path or `file://` URI.
+
+Copy expansion happens after include expansion so copied templates contain
+their included defaults before local copy-site overrides are applied.
+
+## Correctness And Validation
+
+V1 should harden validation around the existing composition model rather than
+introducing a new schema authoring feature.
+
+Typed models should remain internal correctness contracts for stable `loom`
+boundaries:
+
+- pipeline specs;
+- stage specs;
+- artifact/input/output specs;
+- recipe arguments;
+- composition manifest records;
+- provenance records.
+
+Project-owned config subtrees should remain plain data unless they are recipe
+arguments, `_target_` constructor inputs, or part of a `loom`-owned schema.
+There should be no YAML `_schema_` directive and no Hydra-style structured
+config registry in v1.
+
+Directive validation happens during expansion:
+
+- `_include_`, `_replace_`, and `_copy_` placement;
+- directive value types;
+- `_include_` over existing mapping content without `_replace_: true`;
+- missing include targets;
+- missing copy sources;
+- include and copy cycles;
+- non-mapping content when sibling overrides require a mapping.
+
+Stable schema validation happens after composition directives, recipes, and
+interpolation have produced the resolved config shape. Unknown keys should be
+rejected only where a `loom` schema owns the section. Unknown keys in
+project-owned pass-through mappings should not fail globally.
+
+Validation and composition errors should carry source context:
+
+- config path;
+- source file, overlay, included file, copied source, replacement mapping, or
+  CLI override;
+- include/copy stack when relevant;
+- schema boundary when relevant;
+- expected value shape and actual value shape.
+
+## Provenance And Fingerprints
+
+Composition provenance should record:
+
+- config path where `_include_`, `_replace_`, or `_copy_` appeared;
+- raw directive value;
+- resolved URI or path;
+- built-in resolution mode;
+- source hash;
+- included document schema version, if present;
+- include stack;
+- copy source path and destination path;
+- replacement path and replaced value hash, when available;
+- source snapshot identifier for every authored source document;
+- stable schema boundary and schema version when a `loom` schema validates a
+  composed section;
+- schema defaults or coercions that affect the resolved config, if any;
+- loom version;
+- whether local sibling keys overrode included values.
+
+Config fingerprints must change when:
+
+- an included file changes;
+- an include target changes;
+- a copied source subtree changes;
+- a replacement marker or replacement value changes;
+- sibling overrides change;
+- overlays or CLI overrides change included values.
+
+Resolved config snapshots should be self-contained. Reading
+`config/resolved.yaml` from a run directory should not require the original
+included files to still exist.
+
+To rebuild the authored composition process, v1 should also produce data for
+the runner/run store to persist:
+
+```text
+config/composition_manifest.json
+config/source_snapshots/
+```
+
+The composition manifest should reference content-addressed source snapshots
+for the base config, overlays, included files, and any other authored sources
+whose content affects directive expansion. The source snapshots and manifest
+are separate from `resolved.yaml`: `resolved.yaml` is the final value snapshot,
+while the manifest and source snapshots explain and preserve the inputs that
+produced it.
+
+## Errors
+
+V1 should add path-aware config errors for:
+
+- `_include_` outside a mapping;
+- `_replace_` outside a mapping or not boolean `true`;
+- `_copy_` outside a mapping;
+- invalid include value type;
+- invalid copy path type;
+- `_include_` over an existing mapping without `_replace_: true`;
+- update override for a missing path;
+- add override for an existing path;
+- missing include target;
+- missing copy source;
+- unsupported include URI scheme;
+- non-mapping include content when sibling overrides are present;
+- non-mapping copy source when sibling overrides are present;
+- recursive include cycle;
+- recursive copy cycle;
+- stable schema validation failure after composition;
+- unknown key in a `loom`-owned schema boundary;
+- duplicate or ambiguous resolution if the detailed plan allows extension
+  probing.
+
+Cycle errors should include the include stack. Missing file errors should show
+both the authored include value and the resolved path. Copy errors should show
+both the source path and the destination path. Validation errors should show the
+schema boundary and the authored source that produced the failing value when
+that source metadata is available.
 
 ## Source Structure
 
-V1 should complete the CLI package with this structure:
+Expected additions or updates under `src/loom/config/`:
 
 ```text
-src/loom/cli/
-  __init__.py
-  main.py
-  errors.py
-  options.py
-  formatting.py
-  results.py
-  validate.py
-  plan.py
-  run.py
+composition.py
+includes.py
+copies.py
+source_snapshots.py
+merge.py or equivalent existing merge module
+overrides.py or equivalent existing override module
+validation.py or equivalent existing validation module
 ```
-
-Deferred command modules such as `stage.py`, `sweep.py`, `status.py`, `logs.py`,
-or `artifacts.py` should not be added unless an import-safe unsupported stub is
-already present from v0 and needed for public import compatibility.
-
-### `main.py`
 
 Responsibilities:
 
-- Build the top-level parser.
-- Register v1 subcommands.
-- Handle `--version`.
-- Handle top-level `--traceback`.
-- Dispatch to command handlers.
-- Convert `argparse` exits into return codes for `main(argv)` tests.
-- Catch `KeyboardInterrupt`, `LoomError`, and unknown exceptions.
+- `composition.py`: directive expansion orchestration, source-location metadata,
+  and integration with existing compose flow.
+- `includes.py`: recursive tree walk, merge of included content with sibling
+  overrides, cycle detection, provenance record creation.
+- `copies.py`: `_copy_` path resolution, deep-copy expansion, copy cycle
+  detection, and copy provenance.
+- `source_snapshots.py`: content-addressed source snapshot records for base,
+  overlay, and included config documents.
+- `merge.py` or the existing merge module: `_replace_` marker handling and
+  replacement provenance hooks.
+- `overrides.py` or the existing override module: strict update override and
+  explicit `+` add override parsing/application.
+- `validation.py` or the existing validation module: source-aware validation
+  errors for stable `loom` schema boundaries after composition.
 
-Core functions:
+These modules may use existing config load, merge, errors, serialization,
+fingerprint, and provenance helpers. They must not import pipeline execution,
+stores, CLI modules, plugin discovery, or project code.
 
-```python
-def build_parser() -> argparse.ArgumentParser: ...
-
-def main(argv: Sequence[str] | None = None) -> int: ...
-```
-
-### `errors.py`
-
-Responsibilities:
-
-- Define CLI exit-code constants.
-- Map known exceptions to exit codes.
-- Render text and JSON error output.
-- Preserve traceback behavior without moving subsystem error semantics into the
-  CLI.
-
-Core objects:
-
-```python
-class ExitCode(IntEnum): ...
-
-def exit_code_for(error: BaseException) -> ExitCode: ...
-
-def format_error(
-    error: BaseException,
-    *,
-    traceback_enabled: bool,
-    output_format: OutputFormat,
-) -> str: ...
-```
-
-### `options.py`
-
-Responsibilities:
-
-- Parse command argument namespaces into small typed adapter objects.
-- Normalize repeated flags into tuples or frozensets.
-- Preserve raw `--set` strings for config override parsing by `loom.config`.
-- Convert selector flags into the v0 selector model or planner input shape.
-
-Core objects:
-
-```python
-@dataclass(frozen=True)
-class ConfigCliOptions:
-    config_path: Path
-    overlays: tuple[Path, ...]
-    overrides: tuple[str, ...]
-
-@dataclass(frozen=True)
-class SelectorCliOptions:
-    from_stage: str | None
-    only_stages: frozenset[str]
-    force_stages: frozenset[str]
-    skip_stages: frozenset[str]
-
-@dataclass(frozen=True)
-class RunCliOptions:
-    run_dir: Path | None
-    run_id: str | None
-    executor: str
-    resume: bool
-    dry_run: bool
-
-class OutputFormat(StrEnum): ...
-```
-
-### `formatting.py`
-
-Responsibilities:
-
-- Format validation, plan, and run results as stable text.
-- Format JSON envelopes.
-- Keep table/string formatting separate from command handlers.
-
-Core functions:
-
-```python
-def format_validation_text(result: ValidationCliResult) -> str: ...
-
-def format_plan_text(result: PlanCliResult) -> str: ...
-
-def format_run_text(result: RunCliResult) -> str: ...
-
-def format_json_envelope(
-    *,
-    schema_version: str,
-    ok: bool,
-    payload: Mapping[str, object],
-) -> str: ...
-```
-
-### `results.py`
-
-Responsibilities:
-
-- Define CLI-facing result wrappers only when existing v0 result types are not
-  directly suitable for presentation.
-- Provide plain-data conversion for JSON output.
-
-Core objects:
-
-```python
-@dataclass(frozen=True)
-class ValidationCliResult: ...
-
-@dataclass(frozen=True)
-class PlanCliResult: ...
-
-@dataclass(frozen=True)
-class RunCliResult: ...
-```
-
-### Command Modules
-
-Each command module owns only command registration and orchestration:
-
-```python
-def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None: ...
-
-def handle(args: argparse.Namespace) -> int: ...
-```
-
-Command modules may import public config, pipeline, planning, execution, and
-store APIs. They must not import downstream project packages, optional
-executor-specific modules, plugin discovery, or private run-layout constants
-when public APIs exist.
+`_replace_` should live with the existing merge implementation rather than in a
+separate directive-expansion module because it changes mapping merge semantics.
 
 ## Integration With V0
 
-V1 should integrate with v0 by using public API seams:
+V1 should modify config composition, not downstream pipeline behavior:
 
-- Config: pass `CONFIG`, overlays, and raw override strings to
-  `compose_config`.
-- Pipeline validation: use public pipeline spec parsing and graph validation
-  helpers. If v0 lacks a single validation facade, add one in `loom.pipeline`.
-- Selectors: convert CLI stage selector flags into the v0 selector model:
-  `from_stage`, `only_stages`, `force_stages`, and `skip_stages`.
-- Planning: call the v0 planner to compute stage actions, resume decisions,
-  invalidation, and explanations.
-- Run store: let v0 planner/runner open or create run state. CLI modules should
-  not hard-code run layout paths.
-- Execution: call `PipelineRunner`; do not invoke stages directly.
-- Errors: catch shared `LoomError` roots and use structured context where
-  available.
-- Serialization: use v0 plain-data helpers if available for JSON output.
+- Config loading still owns file parsing.
+- Merge semantics stay unchanged except for the explicit `_replace_` mapping
+  marker.
+- Dot-path overrides remain the same user-facing mechanism, but v1 hardens them
+  into strict update overrides and explicit `+` add overrides.
+- Interpolation still uses the existing wrapped OmegaConf behavior.
+- Recipes still expand after include and copy expansion.
+- Typed validation still applies only at existing `loom`-owned boundaries and
+  recipe inputs.
+- `_target_` instantiation remains separate from composition.
+- Persistence still belongs to the runner and run store.
 
-V1 may expose small public helper functions in owning packages if that improves
-the CLI without coupling it to internals. Examples:
-
-- `loom.pipeline.validate_pipeline_config(resolved: Mapping[str, object])`
-- `loom.pipeline.planning.plan_pipeline(...)`
-- `loom.pipeline.execution.run_pipeline(...)`
-
-Those helpers should be added only if the corresponding v0 classes already
-exist but are awkward to use directly from CLI code.
+If existing v0 config provenance models cannot represent included source files,
+copies, replacements, or source snapshots, extend those models in
+`loom.config.provenance` rather than adding parallel directive-only provenance
+formats.
 
 ## Future Compatibility
 
-V1 decisions must preserve the later roadmap:
+V1 should preserve later roadmap stages:
 
-- V2 diagnostics should reuse CLI error formatting, JSON envelopes, parser
-  conventions, and output format handling for `preflight`, `status`, `logs`,
-  and `artifacts`.
-- V3 runtime options should be able to replace CLI adapter-to-v0 conversions
-  with adapter-to-`RunOptions` conversions without changing user-facing flag
-  names.
-- V4 stage-worker support should add `loom stage run` as a new command group
-  using the same parser and exit-code policy.
-- V5 and v6 SLURM support should add executor-specific commands and output
-  through executor APIs, not by parsing scheduler behavior in CLI modules.
-- V7 and v8 run catalog and bundle commands should reuse JSON envelope and
-  formatting helpers.
-- V9 sweeps should reuse config options and selector conventions.
-- V10 plugin discovery must remain explicit. The v1 CLI must not load plugins
-  during `loom --help` or top-level import.
-- V11 and v12 remote stores must remain optional adapters. V1 should not bake
-  local-path assumptions into formatting except when reporting v0 local-run
-  results supplied by stores.
-- V13 and v14 container executors should integrate through executor selection
-  and later runtime options, not through special-case v1 command logic.
-- V15 and v16 reliability and cleanup commands should build on shared error,
-  event, and deletion-intent policies rather than ad hoc CLI behavior.
-
-## Conflicts And Tradeoffs
-
-- Immediate CLI usefulness vs future runtime options: v1 accepts familiar flags
-  but keeps their canonical semantics in v0 planner/runner inputs until v3
-  introduces typed runtime models.
-- Human readability vs automation stability: v1 supports compact text output
-  and versioned JSON output rather than rich terminal rendering.
-- Thin CLI vs convenient helper APIs: if command modules need internal details,
-  add small public facades in owning packages instead of duplicating logic in
-  `loom.cli`.
-- Early executor flag vs unsupported backends: v1 accepts `--executor local`
-  and rejects other executor names so scripts have a future-compatible option
-  shape without pretending subprocess/SLURM exist.
-
-## Technical Debt Ledger
-
-- CLI option adapter dataclasses are accepted as a bridge until v3 runtime
-  option models exist. Revisit in v3 and convert them to runtime model
-  constructors.
-- JSON envelopes are v1 output contracts but not a full diagnostics schema.
-  Revisit in v2 when preflight/status/log/artifact inspection adds richer
-  machine-readable outputs.
-- Unsupported executor handling is intentionally minimal. Revisit in v3/v4 when
-  executor registries and stage-worker contracts land.
-- `argparse` is sufficient for v1. Revisit only if the command tree becomes
-  large enough to justify a CLI framework dependency.
+- V2 CLI commands should get composition behavior automatically through
+  `compose_config`.
+- V10 sweeps should generate trial override mappings that flow through
+  `compose_config` without implementing their own include, copy, or replacement
+  behavior.
+- V11 plugin discovery may later provide explicit composition extensions, but
+  v1 should not load plugins automatically or define the extension API early.
+- V12 and v13 remote store work may influence future URI resolvers, but v1
+  should start with local and `file://` behavior.
 
 ## Phased Implementation
 
-### Phase 1 - CLI Foundation
+### Phase 1 - Composition Directive Model And Resolution
 
 Status: pending
-Branch: `codex/add-cli-foundation`
+Branch: `codex/add-config-composition-directives`
 PR: pending
 
 Goal:
 
-- Add the console script, top-level parser, version/help behavior, exit codes,
-  traceback handling, and import-boundary guardrails.
-
-Scope:
-
-- Add or complete `src/loom/cli/main.py`, `src/loom/cli/errors.py`, and shared
-  parser registration.
-- Add `[project.scripts]` entry for `loom`.
-- Keep `import loom` free of `loom.cli`.
+- Define composition provenance records, directive errors, source-location
+  metadata, `_replace_` merge behavior, include path resolution rules, and
+  source-aware validation expectations.
 
 Acceptance criteria:
 
-- `loom --help` and `loom --version` work.
-- `main(argv)` returns integer exit codes.
-- Usage errors return 2.
-- `KeyboardInterrupt` returns 130.
-- Known and unknown errors are formatted according to `--traceback`.
-- Import-boundary tests prove top-level import does not load CLI or project
-  code.
+- Bare-name, relative-path, absolute-path, and `file://` include values resolve
+  deterministically.
+- Unsupported URI schemes fail clearly.
+- `_replace_` replaces destination mappings and is omitted from resolved config.
+- `_include_` over existing mapping content fails unless `_replace_: true` is
+  present in the same mapping.
+- Override strings support `path=value` update semantics and `+path=value`
+  add-only semantics.
+- YAML `_schema_` bindings and project schema imports are not interpreted as
+  composition behavior; unknown-key handling is limited to `loom`-owned schema
+  boundaries.
+- Unit tests cover key-path based default resolution.
 
-### Phase 2 - Shared Options, Formatting, And Validate
+### Phase 2 - Recursive Include And Copy Expansion
 
 Status: pending
-Branch: `codex/add-cli-validate`
+Branch: `codex/add-recursive-config-composition`
 PR: pending
 
 Goal:
 
-- Add shared CLI option adapters, result formatting, JSON envelopes, and
-  `loom validate`.
-
-Scope:
-
-- Add `options.py`, `formatting.py`, `results.py`, and `validate.py`.
-- Wire validate to public config and pipeline validation APIs.
-- Add parser and command tests for config options and validation output.
+- Expand `_include_` and `_copy_` recursively after authoring-level merge.
 
 Acceptance criteria:
 
-- Repeated `--overlay` and `--set` values are preserved in order.
-- Validate succeeds for a synthetic valid v0 pipeline config.
-- Validate fails with config or pipeline exit codes for invalid inputs.
-- Text and JSON outputs are stable and tested.
-- Validate does not execute stages or write run state.
+- Included mapping content merges with sibling overrides.
+- Include swaps over existing mapping content require `_replace_: true`.
+- Nested includes work.
+- Cycles fail with include-stack context.
+- Missing or invalid include documents fail with path-aware errors.
+- `_copy_` deep-copies composed subtrees and local siblings override copied
+  values.
+- Copy cycles and missing copy sources fail with path-aware errors.
 
-### Phase 3 - Plan Command
+### Phase 3 - Composition Integration, Provenance, And Snapshots
 
 Status: pending
-Branch: `codex/add-cli-plan`
+Branch: `codex/integrate-config-composition`
 PR: pending
 
 Goal:
 
-- Add `loom plan` over v0 planning, selector, and resume APIs.
-
-Scope:
-
-- Add `plan.py`.
-- Convert selector flags into v0 selector inputs.
-- Format ordered stage actions, reasons, and optional explanation output.
-- Support JSON output.
+- Integrate `_include_`, `_replace_`, `_copy_`, composition manifests, and
+  source snapshots into `compose_config` and persisted provenance data.
 
 Acceptance criteria:
 
-- Planning a fresh synthetic pipeline reports runnable stages in deterministic
-  order.
-- Resume planning against an existing run directory reports `REUSE` or rerun
-  decisions from v0 planner output.
-- Selector flags affect plan decisions through v0 planner APIs.
-- `--explain STAGE` reports available explanation details.
-- Plan command does not execute stages and does not mutate run state.
+- Base configs, overlays, and CLI overrides merge before include/copy expansion,
+  with CLI as highest precedence.
+- Config fingerprints change when included files change.
+- Config fingerprints change when copied source subtrees or replacement markers
+  change.
+- Resolved/redacted config snapshots are self-contained.
+- Composition provenance records every included source, copy, replacement, and
+  source hash.
+- Composition provenance records stable schema boundaries and schema versions
+  when existing `loom` validation models validate composed sections.
+- Source snapshot records are sufficient for the runner/run store to persist
+  rebuildable config inputs.
 
-### Phase 4 - Run Command
+### Phase 4 - Hardening And Docs
 
 Status: pending
-Branch: `codex/add-cli-run`
+Branch: `codex/harden-config-composition`
 PR: pending
 
 Goal:
 
-- Add `loom run` for v0 local execution.
-
-Scope:
-
-- Add `run.py`.
-- Wire config, selectors, run directory, run ID, resume, and local executor
-  selection into `PipelineRunner`.
-- Implement `--dry-run` by delegating to the plan path.
-- Reject unsupported executors clearly.
+- Document composition directives, add integration/e2e coverage, and harden
+  edge cases.
 
 Acceptance criteria:
 
-- A synthetic v0 pipeline can run from the command line.
-- The command prints run directory, final run status, and stage summary.
-- Failed runs return execution failure exit code and concise failure output.
-- `--dry-run` produces a plan and does not execute stages.
-- Non-local executor names return executor error without optional backend import.
-
-### Phase 5 - Hardening, Docs, And E2E Coverage
-
-Status: pending
-Branch: `codex/harden-cli-core`
-PR: pending
-
-Goal:
-
-- Harden v1 behavior, document validate/plan/run, and add end-to-end coverage.
-
-Scope:
-
-- Update README and CLI docs for v1 commands only.
-- Add stable examples for validate, plan, run, resume, selectors, text output,
-  and JSON output.
-- Add e2e tests through `main(argv)` or the console entry point.
-- Confirm import boundaries after all command modules exist.
-
-Acceptance criteria:
-
-- Docs describe only v1-supported commands and clearly defer later commands.
-- E2E tests cover validate, plan, run, failed run, dry-run, and JSON output.
-- `make validate-pr` passes.
-- `make test-summary` records suite-level evidence.
+- Docs include examples for component includes, sibling overrides, explicit
+  paths, `file://` URIs, `_replace_`, `_copy_`, and source snapshots.
+- Tests cover overlays that contain includes, CLI overrides of included values,
+  CLI replacement of component selections, interpolation with included/copied
+  values, recipes after includes/copies, source snapshot manifests, and
+  redaction of included secrets.
+- Tests cover source-aware validation errors after composition and prove
+  project-owned pass-through mappings are not globally rejected.
+- `make validate-pr` and `make test-summary` pass.
 
 ## Overall Test Plan
 
-Package tests:
-
-- `import loom` remains cheap and does not import `loom.cli`.
-- `import loom.cli` does not load project code, plugin discovery, optional
-  backends, or heavy executor modules.
-- Console script metadata exists after build.
-
 Unit tests:
 
-- Parser construction, help, version, subcommand registration, and invalid
-  commands.
-- Config, selector, run, executor, and output-format option adapters.
-- Exit-code mapping.
-- Text and JSON formatting for validation, plan, run, and known errors.
+- include value validation;
+- bare-name resolution;
+- relative and absolute path resolution;
+- `file://` resolution;
+- unsupported schemes;
+- include swap without `_replace_` error;
+- update override missing-path error;
+- add override existing-path error;
+- add override creation for new variables and structured branches;
+- cycle detection;
+- `_replace_` merge behavior;
+- `_copy_` path resolution and deep-copy behavior;
+- copy cycle detection;
+- sibling override merge semantics;
+- composition provenance serialization;
+- source-aware validation error data;
+- scoped unknown-key behavior for `loom`-owned vs project-owned sections;
+- source snapshot hashing.
 
-Command tests:
+Integration tests:
 
-- Validate calls config and pipeline validation APIs.
-- Plan calls planner APIs and never calls executor or runner execution methods.
-- Run calls `PipelineRunner` and does not write run state directly.
-- `--dry-run` uses planning behavior.
-- Unsupported executor handling is clear and import-safe.
-
-End-to-end tests:
-
-- Validate a synthetic local pipeline config.
-- Plan a synthetic local pipeline config.
-- Run a synthetic local pipeline config with the local executor.
-- Resume or plan against an existing run directory when v0 fixtures support it.
-- Return nonzero and print useful output for failed synthetic stages.
-- Produce parseable JSON for validate, plan, and run.
+- base config includes;
+- overlay includes;
+- overlay replacing an included component;
+- CLI override replacing an included component;
+- CLI add override introducing a new variable;
+- stage config reuse with `_copy_`;
+- CLI override of included values;
+- interpolation that references included and copied values;
+- stable schema validation after composition;
+- recipe expansion after include and copy expansion;
+- redaction of included secrets;
+- provenance for stable schema boundaries and schema versions;
+- fingerprint changes from included source edits;
+- fingerprint changes from copied source edits and replacement markers;
+- composition manifest plus source snapshots are sufficient to reconstruct
+  authored inputs.
 
 Validation gates:
 
@@ -744,30 +675,28 @@ Status: pending
 
 Before implementation starts, review this v1 plan for:
 
-- maintainability;
-- extensibility;
-- future roadmap compatibility;
-- conflicting design choices;
-- accepted technical debt;
-- test strategy; and
-- reviewability as one coherent v1 project plan.
-
-If blocking findings remain after the bounded review/refinement process, mark
-the plan or first phase `blocked` rather than starting implementation.
+- deterministic resolution;
+- provenance completeness;
+- source-aware validation behavior;
+- scoped typed validation boundaries;
+- compatibility with v0 config composition;
+- rebuildability of composition manifests and source snapshots;
+- future compatibility with CLI, sweeps, plugins, and remote URI work;
+- accepted technical debt; and
+- test strategy.
 
 ## Assumptions And Defaults
 
-- V1 begins after v0 local runtime APIs are available.
-- Python remains `>=3.12`.
-- `argparse` is the only CLI framework in v1.
-- No new runtime dependencies are required for v1.
-- `--format text` is the default for all v1 commands.
-- JSON output is newline-terminated UTF-8 written to stdout.
-- `--set` values stay raw until passed to the config override parser.
-- Repeated stage selector flags are normalized deterministically.
-- `local` is the only supported executor in v1.
-- Non-local executor names fail explicitly and are not silently ignored.
-- CLI modules may import public v0 APIs, but v0 internals may not import CLI
-  modules.
-- Later roadmap commands must extend the CLI package without changing the v1
-  command contracts unless a separate compatibility plan approves it.
+- V1 begins after v0 config composition, merge, provenance, redaction,
+  fingerprints, and recipe expansion are available.
+- `_include_` is trusted project config, consistent with the v0 trusted-config
+  model.
+- Local filesystem and `file://` include resolution are required.
+- Other URI schemes and custom include resolvers are deferred.
+- Include and copy expansion do not add new merge semantics.
+- `_replace_` is the only new merge marker in v1.
+- Normal overrides update existing paths; `+` overrides add missing paths.
+- Typed models remain internal validation contracts for `loom`-owned sections,
+  not a YAML schema authoring feature.
+- Lists still replace as whole lists.
+- Custom OmegaConf-style resolvers are deferred.
