@@ -16,8 +16,23 @@ Run the local quality gate before committing:
 make check
 ```
 
-`make check` runs Ruff, Pyright, and Pytest. Use `make build` to verify the
-package can be built.
+`make check` runs Ruff, Pyright, and the default Pytest suite. Use
+`make validate-pr` before opening a PR to run Ruff, Pyright, the default test
+suite, and the package build.
+
+Focused test targets are available for phase work:
+
+```sh
+make test-package
+make test-unit
+make test-contract
+make test-integration
+make test-e2e
+make test-summary
+```
+
+`make test-summary` writes a Markdown suite summary under `build/` for PR
+review.
 
 ## Scope
 

@@ -12,14 +12,14 @@ running, and tracing reproducible research pipelines.
 
 ## Local Checks
 
-Use these commands before committing setup or implementation changes:
+Use this command before committing setup or implementation changes:
 
 ```sh
-uv run ruff check .
-uv run pyright
-uv run pytest
-uv build
+make validate-pr
 ```
+
+Use `make test-summary` before preparing a PR so the review body has
+suite-level evidence.
 
 ## Codex Phase Implementation Workflow
 
@@ -35,8 +35,18 @@ When assigned a phase, implement only that phase.
 
 Project-scoped custom agents live in `.codex/agents/`:
 
-- `loom_phase_implementer`: uses `gpt-5.5` with `high` reasoning for one-phase
-  implementation work in a writable worktree.
+- `loom_phase_planner`: uses `gpt-5.5` with `xhigh` reasoning to create the
+  phase worktree/branch, draft the expanded phase plan, and commit that draft.
+- `loom_phase_plan_expander`: uses `gpt-5.5` with `xhigh` reasoning for a fresh
+  context pass that refines the expanded phase plan and commits the final plan.
+- `loom_phase_executor`: uses `gpt-5.3-codex-spark` with `high` reasoning to
+  execute well-specified implementation slices from the finalized phase plan
+  with multiple coherent commits.
+- `loom_phase_refiner`: uses `gpt-5.5` with `xhigh` reasoning to perform one
+  bounded implementation/test refinement pass and commit fixes.
+- `loom_pr_preparer`: uses `gpt-5.5` with `xhigh` reasoning to inspect the final
+  diff, run checks, update phase status to `pr_open`, prepare the PR body, and
+  open or prepare the PR.
 - `loom_phase_reviewer`: uses `gpt-5.5` with `xhigh` reasoning for read-only
   phase PR review.
 - `loom_plan_reviewer`: uses `gpt-5.5` with `xhigh` reasoning for read-only
@@ -44,8 +54,8 @@ Project-scoped custom agents live in `.codex/agents/`:
 - `loom_architecture_explorer`: uses `gpt-5.4-mini` with `medium` reasoning for
   read-only architecture and boundary exploration.
 
-Use `.codex/prompts/` for repeatable workflow prompts. Do not add legacy
-agent-directory content.
+Use `.codex/prompts/` for repeatable workflow prompts. Do not add extra
+agent-directory content outside the current custom-agent structure.
 Name prompt files with the workflow stage first using `<stage>-<substage>.md`,
 for example `implementation-plan-review.md`, `pull-request-review.md`, and
 `implementation-test-refinement.md`.
@@ -69,6 +79,8 @@ for example `implementation-plan-review.md`, `pull-request-review.md`, and
 - Confirm the implementation plan has passed the plan quality gate before
   starting phase work.
 - Create an expanded phase plan before implementation.
+- Follow the linear phase handoff. Do not collapse planning, implementation,
+  refinement, and PR preparation into one agent unless explicitly instructed.
 - Make frequent commits at coherent checkpoints.
 - Do not ask the user for feedback during the phase.
 - If something is ambiguous, make the smallest reasonable assumption, document
@@ -78,10 +90,61 @@ for example `implementation-plan-review.md`, `pull-request-review.md`, and
 - Prefer direct, maintainable code over clever abstractions.
 - Make maintainability, extensibility, conflicting design choices, accepted
   technical debt, and future compatibility explicit in plans.
-- Add or update tests for the behavior changed in the phase.
+- Add or update tests for the behavior changed in the phase. Expanded phase
+  plans must identify required package, unit, contract, integration, e2e, and
+  opt-in test coverage, or explicitly defer suites that do not apply.
 - Run relevant checks before opening a PR.
-- Open or prepare a PR targeting `develop` and stop. Implementation agents must
-  not merge phase PRs.
+- Open or prepare a PR targeting `develop` and stop. Phase agents must not
+  merge phase PRs.
+
+### Linear Phase Handoff
+
+Each phase uses this strict sequence:
+
+```text
+manager selects next pending phase
+loom_phase_planner drafts and commits expanded phase plan with suite-level test obligations
+loom_phase_plan_expander refines and commits final phase plan with decision-complete test coverage
+loom_phase_executor implements and commits phase work and phase-scoped tests
+loom_phase_refiner performs one bounded refinement pass and commits fixes
+loom_pr_preparer runs checks, writes a suite summary, updates pr_open metadata, and opens/prepares PR
+loom_phase_reviewer or manager reviews PR
+manager approves and merges, or escalates to the user
+manager records merged metadata and cleans worktree/branch
+```
+
+Do not loop indefinitely. Each gate allows at most one automated refinement
+attempt:
+
+- Plan quality gate: one `loom_plan_reviewer` review, one refinement pass, and
+  one confirmation review. If blocking findings remain, mark the plan `blocked`
+  or leave the phase unstarted and report the blocker to the user.
+- Phase implementation: one `loom_phase_refiner` pass after implementation. If
+  the PR is still unacceptable, the managing agent must report the blocker to
+  the user instead of spawning another fixer.
+- Phase PR review: one reviewer pass. The managing agent may merge only if no
+  blocking findings remain and checks pass or unavailable checks are justified.
+
+The managing agent owns this loop budget. Before assigning any reviewer or
+refiner, confirm the relevant gate has not already consumed its allowed pass in
+the current thread, phase plan, PR body, or implementation-plan notes. If the
+history is unclear, assume the budget is consumed and escalate rather than
+starting another automated review/refine cycle. No phase agent may reassign
+itself, spawn a replacement fixer, or request another automated pass for the
+same gate without an explicit user instruction.
+
+Expanded phase plans must record the phase implementation refinement and PR
+review budget status so later handoffs can see whether a pass is unused, used,
+or explicitly not needed.
+
+Model policy:
+
+- Use `gpt-5.5` with `xhigh` reasoning for whole-phase ownership, ambiguous
+  design translation, plan expansion, review, PR preparation, and correctness
+  decisions.
+- Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
+  a decision-complete phase plan. Spark agents must stop and report blockers
+  instead of making public API or phase-scope decisions.
 
 ### Automatic Merge Policy
 
@@ -98,7 +161,7 @@ Before merging, the managing agent must confirm:
 - The PR implements only the assigned phase and does not include future phase
   work.
 - The PR body and expanded phase plan accurately summarize the implementation,
-  tests, assumptions, risks, branch, and worktree path.
+  suite-level test evidence, assumptions, risks, branch, and worktree path.
 
 After merging, the managing agent must:
 
@@ -167,20 +230,25 @@ merged
 blocked
 ```
 
-The implementation agent may update a phase from `pending` to `pr_open` after
-opening or preparing the PR. The managing agent may update it to `approved`
-after review and to `merged` after the approved PR is merged into `develop`.
+`loom_pr_preparer` may update a phase from `pending` or `in_progress` to
+`pr_open` after opening or preparing the PR. The managing agent may update it
+to `approved` after review and to `merged` after the approved PR is merged into
+`develop`.
 
 ### Phase Checks
 
-Use the repository's existing commands:
+Use the repository's existing PR gate commands:
 
 ```sh
-uv run ruff check .
-uv run pyright
-uv run pytest
-uv build
+make validate-pr
+make test-summary
 ```
+
+`make validate-pr` wraps the required Ruff, Pyright, default Pytest, and build
+commands. `make test-summary` writes the suite evidence used in PR bodies.
+Agents may run narrower suite targets such as `make test-unit`,
+`make test-integration`, or direct `uv run pytest ...` commands during
+implementation, but PR preparation must report the final validation gate.
 
 If a command cannot be run, record why in the expanded phase plan and PR body.
 
@@ -203,8 +271,10 @@ A phase is done when:
 - The expanded phase plan exists.
 - The expanded phase plan documents design impact, future compatibility,
   alternatives rejected, debt introduced, and reviewability.
+- The expanded phase plan records refinement and review budget status.
 - The implementation matches the selected phase.
 - Relevant tests are added or updated.
 - Relevant checks have been run.
 - Failing checks are fixed or clearly explained.
-- The PR body summarizes implementation, tests, assumptions, and risks.
+- The PR body summarizes implementation, suite-level test evidence, validation,
+  assumptions, and risks.

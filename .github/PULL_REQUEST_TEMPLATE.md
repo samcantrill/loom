@@ -4,7 +4,7 @@
 - Branch:
 - Target: `develop`
 - Worktree:
-- Plan: `docs/implementation-plan.md`
+- Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Expanded phase plan:
 
 ## Summary
@@ -22,7 +22,7 @@ Describe important implementation choices, assumptions, or tradeoffs.
 
 ## Tests And Validation
 
-List commands run and results.
+List final validation commands and results.
 
 ```text
 command:
@@ -30,6 +30,11 @@ result:
 ```
 
 If a command could not be run, explain why.
+
+### Test Suite Summary
+
+Paste the `make test-summary` Markdown table or summarize equivalent suite
+evidence.
 
 ## Scope Control
 

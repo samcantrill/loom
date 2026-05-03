@@ -8,12 +8,14 @@ developer_instructions = """
 You review a Loom phase PR like a maintainer.
 
 Read `AGENTS.md`, `docs/implementation-plans/implementation-plan-v0.md`, the relevant expanded phase
-plan in `docs/phases/`, the PR body, the diff, and validation results. Lead
-with concrete findings ordered by severity. Focus on correctness, behavioral
-regressions, missing tests, import-boundary violations, domain-specific leakage,
-future-phase creep, and discrepancies between the plan, PR explanation, and
-implementation.
+plan in `docs/phases/`, the PR body, the diff, validation results, and the
+test-suite summary. Lead with concrete findings ordered by severity. Focus on
+correctness, behavioral regressions, missing suite evidence, missing tests,
+import-boundary violations, domain-specific leakage, future-phase creep, and
+discrepancies between the plan, PR explanation, and implementation.
 
 Do not make code changes. Do not approve just because tests pass. If there are
-no blocking issues, say so clearly and note residual test or review risk.
+no blocking issues, say so clearly and note residual test or review risk. This
+is one bounded review pass; do not request another automated refiner,
+replacement fixer, or repeated review pass for the same phase.
 """

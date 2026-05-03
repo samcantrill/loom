@@ -1,5 +1,10 @@
 You are refining a Loom implementation plan before phase work begins.
 
+This is the only automated refinement pass for the plan quality gate. Resolve
+the reviewer findings that can be resolved safely, document any accepted risk
+with a revisit trigger, and do not chase open-ended perfection. This pass
+consumes the plan quality gate's refinement budget.
+
 Read:
 
 - `AGENTS.md`
@@ -23,7 +28,8 @@ Task:
 5. For each phase, add or tighten:
    - Objective acceptance criteria
    - Explicit out-of-scope work
-   - Test expectations
+   - Test expectations by package, unit, contract, integration, e2e, and opt-in
+     suites
    - Design impact
    - Future compatibility
    - Alternatives rejected
@@ -37,7 +43,13 @@ Rules:
 
 - Do not implement product code.
 - Do not add heavy process, schemas, dashboards, or exhaustive matrices.
+- Do not add a new testing agent stage unless the user explicitly asks; keep
+  test creation inside planning, execution, refinement, and PR preparation.
 - Do not invent requirements unsupported by the design docs or current plan.
 - Prefer precise, reviewable text over generic assurances.
 - If a finding cannot be fully resolved, document the remaining risk and the
   trigger for revisiting it.
+- Stop after one coherent refinement pass. The managing agent will run one
+  confirmation review or escalate remaining blockers to the user.
+- Do not request another automated refinement pass, reviewer, or fixer for this
+  plan quality gate.

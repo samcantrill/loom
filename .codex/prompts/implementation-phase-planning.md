@@ -1,5 +1,5 @@
 You are planning the assigned phase before implementation.
-This prompt is intended for the `loom_phase_implementer` custom agent.
+This prompt is intended for the `loom_phase_planner` custom agent.
 
 Read:
 
@@ -7,13 +7,30 @@ Read:
 - `docs/implementation-plans/implementation-plan-v0.md`
 - The assigned phase
 
-Create an expanded phase plan in `docs/phases/` using this filename pattern:
+Create the phase branch/worktree, then create a draft expanded phase plan in
+`docs/phases/` using this filename pattern:
 
 ```text
 docs/phases/<summary-of-feature>.md
 ```
 
-The phase plan must include:
+Worktree setup:
+
+```bash
+git fetch origin
+BRANCH="codex/<summary-of-feature>"
+BASE_BRANCH="develop"
+WORKTREE_ROOT="/home/samcantrill/work/loom-worktrees"
+WORKTREE="$WORKTREE_ROOT/<summary-of-feature>"
+mkdir -p "$WORKTREE_ROOT"
+git worktree add -b "$BRANCH" "$WORKTREE" "$BASE_BRANCH"
+cd "$WORKTREE"
+```
+
+If `git fetch` is unavailable, continue from the local `develop` branch and
+document the limitation in the phase plan.
+
+The draft phase plan must include:
 
 1. Branch name using `codex/<summary-of-feature>`.
 2. Worktree path.
@@ -30,10 +47,17 @@ The phase plan must include:
 13. Reviewability.
 14. Files and areas to inspect.
 15. Implementation steps.
-16. Test plan.
+16. Test plan, grouped by package, unit, contract, integration, e2e, and opt-in
+    suites. For each suite, state required coverage, expected test paths,
+    assertions, or the explicit reason it is deferred for this phase.
 17. Risks.
-18. Validation commands.
-19. Completion notes placeholder.
+18. Validation commands, including targeted suite commands for development and
+    `make validate-pr` plus `make test-summary` before PR preparation.
+19. Refinement and review budget status:
+   - phase implementation refinement: unused
+   - PR review: unused
+20. Handoff notes for the plan expansion agent.
+21. Completion notes placeholder.
 
 Planning rules:
 
@@ -46,4 +70,8 @@ Planning rules:
 - Avoid introducing technical debt. If debt is unavoidable, name it, justify it, and add a revisit trigger.
 - Do not start implementation if the full plan has unresolved blocking findings from `loom_plan_reviewer`.
 - Use repository validation commands from `AGENTS.md`.
+- Do not leave test-suite choices for the executor to invent. If a suite is not
+  relevant, document that deferral in the phase plan.
 - Commit the phase plan from inside the worktree with `git commit -m "plan: add phase plan"`.
+- Stop after committing the draft phase plan. Do not implement code, run full
+  validation, open a PR, or refine the plan repeatedly.
