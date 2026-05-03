@@ -6,7 +6,7 @@
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Expanded phase plan: `docs/phases/add-foundation-skeleton.md`
-- PR status: body prepared locally; not opened because `gh` is unavailable in this environment and no alternate authenticated GitHub PR tooling is configured.
+- PR status: merged as https://github.com/samcantrill/loom/pull/1.
 
 ## Summary
 
@@ -27,7 +27,8 @@ Phase 1 adds `loom.ids`, `loom.errors`, and `loom.timestamps`, plus import-safe 
 
 `loom.__init__` remains limited to `__version__` and `__all__ == ["__version__"]`. No runtime dependencies were added. `pyproject.toml` now points Pyright at the repository `.venv` so the existing uv-managed validation environment resolves consistently.
 
-Implementation refinement budget is used. PR review budget remains unused.
+Implementation refinement budget is used. PR review budget was used by local
+manager review before merge.
 
 ## Tests And Validation
 
@@ -67,4 +68,5 @@ Package suite output recorded 7 passed tests. Unit suite output recorded 17 pass
 - Empty skeleton packages are accepted temporary structure until each owning future phase adds behavior.
 - Contract, integration, and e2e suites are intentionally absent because Phase 1 has no runtime contracts, cross-component behavior, or end-to-end workflow.
 - The branch is based on local `develop` at `4878e95eda64c3d8d969fcfcc658d6b082a7f310`; earlier fetch attempts were unavailable because GitHub SSH authentication failed.
-- Local PR opening is blocked by missing GitHub tooling: `gh` is not installed.
+- GitHub PR #1 was squash-merged into `develop` as
+  `c054908620022a81240c4928599c84b0ed24672f`.

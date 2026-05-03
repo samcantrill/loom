@@ -421,10 +421,9 @@ phase worktree has been removed.
 
 ### Phase 1 — Foundation
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-foundation-skeleton`
-PR: body prepared at `docs/phases/add-foundation-skeleton-pr-body.md`; not
-opened locally because `gh` is unavailable.
+PR: https://github.com/samcantrill/loom/pull/1
 
 Goal:
 
@@ -530,8 +529,17 @@ Completion summary:
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
   `build/test-summary.md`; package and unit suites passed, while contract,
   integration, and e2e suites are not present for this phase.
-- Implementation refinement budget: used. PR review budget: unused.
-- Remaining blockers: none for manager-side PR submission or review.
+- GitHub PR #1 CI on 2026-05-03: `checks` passed.
+- GitHub PR #1 squash-merged into `develop` as
+  `c054908620022a81240c4928599c84b0ed24672f` on 2026-05-03.
+- Implementation refinement budget: used. PR review budget: used by local
+  manager review.
+- Cleanup: remote phase branch deleted by `gh pr merge --squash
+  --delete-branch`; dedicated local phase worktree had already been removed and
+  stale worktree metadata pruned. The local `codex/add-foundation-skeleton`
+  branch was retained because deleting it after a squash merge would discard the
+  only local refs to the unsquashed phase commits.
+- Remaining blockers: none.
 
 ### Phase 2 — Primitives And Serialization
 
