@@ -926,9 +926,9 @@ Completion summary:
 
 ### Phase 5 — Recipes And Instantiation
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-recipes-instantiation`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/8
 
 Goal:
 
@@ -1014,7 +1014,46 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Implemented trusted Phase 5 recipe expansion and explicit object
+  instantiation on `codex/add-recipes-instantiation` in worktree
+  `/home/samcantrill/work/loom-worktrees/add-recipes-instantiation`.
+- Added recipe contracts/catalogs, public `Recipe`, `RecipeCatalog`, and
+  `register_recipe` exports, recursive `_recipe_` expansion with deterministic
+  manifest records, recipe-aware config provenance/fingerprints, target import
+  helpers, and public recursive `instantiate()` support for `_args_`,
+  `_partial_`, and `_inject_`.
+- Kept future phases out of scope: no pipeline parsing, stage construction
+  policy, runner/store behavior, config persistence, plugin discovery,
+  entry-point recipe loading, sandbox or allow-list mode, domain recipes, or
+  domain targets in runtime code.
+- Added package, unit, contract, and integration coverage for the Phase 5
+  public API, import boundaries, catalog/recipe contracts, expansion and
+  manifests, config composition integration, target imports, recursive
+  instantiation, runtime injection, reserved-key failures, and fingerprint
+  behavior. E2e remains not present for this phase.
+- Final PR-prep validation on 2026-05-03:
+  - `make validate-pr`: passed after rerunning with approved access to the
+    existing `uv` cache outside the workspace; Ruff passed, Pyright reported 0
+    errors, default pytest passed with `221 passed`, and `uv build` produced
+    source and wheel distributions.
+  - `make test-summary`: passed after rerunning with approved access to the
+    existing `uv` cache outside the workspace and wrote `build/test-summary.md`;
+    package suite passed with 14 tests, unit suite passed with 189 tests,
+    contract suite passed with 9 tests, integration suite passed with 9 tests,
+    and e2e was not present.
+- Phase implementation refinement budget: used by `loom_phase_refiner` in
+  commit `f88d16a`. PR review budget: unused.
+- PR body prepared at
+  `docs/phases/add-recipes-instantiation-pr-body.md`.
+- GitHub PR #8 opened on 2026-05-03 and verified with
+  `gh pr view 8 --json baseRefName,headRefName,state,url`; `baseRefName` is
+  `develop`, `headRefName` is `codex/add-recipes-instantiation`, and state is
+  `OPEN`.
+- Accepted risks and follow-ups: default recipe registry convenience, no
+  recipe sequence fan-out, trusted target imports without sandbox/allow-list,
+  pipeline parsing and stage construction deferred to later phases, and runtime
+  injection values intentionally excluded from fingerprints.
+- Remaining product blockers: none known after PR preparation.
 
 ### Phase 6 — Pipeline Specs And Graph
 

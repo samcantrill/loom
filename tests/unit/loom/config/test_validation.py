@@ -31,6 +31,6 @@ def test_validate_keeps_unknown_top_level_keys() -> None:
     assert "_copy_" in validated
 
 
-def test_validate_rejects_recipe_key_anywhere() -> None:
+def test_validate_no_recipe_check_remains_present() -> None:
     with pytest.raises(UnsupportedRecipeError):
         validate_no_recipe_keys({"name": "demo", "pipeline": {}, "top": {"_recipe_": {"k": 1}}})

@@ -5,27 +5,39 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from loom.fingerprints import Fingerprint, hash_mapping
+from loom.fingerprints import Fingerprint
+from loom.serialization import PlainData
 
-from .api import ComposedConfig
-from .errors import ConfigValidationError, UnsupportedRecipeError
+from .api import ComposedConfig, _get_default_recipe_catalog
+from .errors import ConfigValidationError
 from .interpolation import resolve_interpolation
 from .load import load_config
 from .merge import merge_configs
 from .overrides import apply_overrides, parse_overrides
-from .provenance import SCHEMA_VERSION, ConfigProvenance, ParsedOverride, ConfigSource, build_config_fingerprint
+from .provenance import (
+    SCHEMA_VERSION,
+    ConfigProvenance,
+    ParsedOverride,
+    ConfigSource,
+    build_config_fingerprint,
+)
 from .redaction import redact_secrets
-from .validation import validate_no_recipe_keys, validate_top_level_fields
+from .recipes import RecipeCatalog
+from .recipes.expansion import expand_recipes, resolve_recipe_argument_interpolation
+from .validation import validate_top_level_fields
 
 
 def compose_config(
     config_path: str | Path,
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
-    recipe_catalog: object | None = None,
+    recipe_catalog: RecipeCatalog | None = None,
 ) -> ComposedConfig:
-    if recipe_catalog is not None:
-        raise UnsupportedRecipeError("recipe_catalog is not supported until Phase 5")
+    if recipe_catalog is None:
+        recipe_catalog = _get_default_recipe_catalog()
+    elif not isinstance(recipe_catalog, RecipeCatalog):
+        raise ConfigValidationError("recipe_catalog must be a RecipeCatalog or None")
+
     if overlays is None:
         raise ConfigValidationError("overlays may not be None")
     if overrides is None:
@@ -43,22 +55,26 @@ def compose_config(
     parsed_overrides = parse_overrides(overrides)
     merged = apply_overrides(merged, parsed_overrides)
 
-    resolved = resolve_interpolation(merged)
-    validate_no_recipe_keys(resolved)
+    resolved_recipe_args = resolve_recipe_argument_interpolation(merged, path="$")
+    expanded, recipe_manifest = expand_recipes(resolved_recipe_args, catalog=recipe_catalog, path="$")
+    resolved = resolve_interpolation(expanded, path="$")
+
     validated = validate_top_level_fields(resolved)
     redacted = redact_secrets(validated)
 
-    resolved_fingerprint = hash_mapping(validated)
+    resolved_fingerprint = build_resolved_fingerprint(validated)
     provenance = _build_provenance(
         config_path=str(base_source.path),
         sources=tuple(sources),
         overrides=parsed_overrides,
         resolved_fingerprint=resolved_fingerprint,
+        recipe_manifest_count=len(recipe_manifest),
     )
     fingerprint = build_config_fingerprint(
         resolved=validated,
         sources=provenance.sources,
         overrides=provenance.overrides,
+        recipe_manifest=recipe_manifest,
         schema_version=provenance.schema_version,
     )
 
@@ -66,7 +82,7 @@ def compose_config(
         resolved=validated,
         redacted=redacted,
         provenance=provenance,
-        recipe_manifest=(),
+        recipe_manifest=tuple(recipe_manifest),
         fingerprint=fingerprint,
     )
 
@@ -77,6 +93,7 @@ def _build_provenance(
     sources: tuple[ConfigSource, ...],
     overrides: tuple[ParsedOverride, ...],
     resolved_fingerprint: Fingerprint,
+    recipe_manifest_count: int,
 ) -> ConfigProvenance:
     return ConfigProvenance(
         schema_version=SCHEMA_VERSION,
@@ -84,6 +101,12 @@ def _build_provenance(
         sources=tuple(sources),
         overrides=overrides,
         resolved_fingerprint=resolved_fingerprint,
-        recipe_manifest_count=0,
+        recipe_manifest_count=recipe_manifest_count,
         metadata={},
     )
+
+
+def build_resolved_fingerprint(validated: dict[str, PlainData]) -> str:
+    from loom.fingerprints import hash_mapping
+
+    return hash_mapping(validated)
