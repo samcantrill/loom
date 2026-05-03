@@ -129,21 +129,26 @@ diff, acceptance criteria, scope boundaries, risks, and refreshed suite
 evidence. No Phase 8 planning/resume/selector behavior, Phase 9 runner/executor
 behavior, or Phase 10 hardening/documentation behavior is included early.
 
-PR creation is pending the refine/open pass GitHub authentication, branch push,
-and explicit base/head command:
+PR opened successfully with explicit base/head:
 
 ```sh
 gh pr create --base develop --head codex/add-local-stores-run-layout --body-file docs/phases/add-local-stores-run-layout-pr-body.md --title "Phase 7: Local Stores And Run Layout"
 ```
 
-After creation, verify with:
+PR URL: https://github.com/samcantrill/loom/pull/11
+
+Verification:
 
 ```sh
 gh pr view <PR> --json baseRefName,headRefName,state,url
 ```
 
-The PR must have `baseRefName` set to `develop` and `headRefName` set to
-`codex/add-local-stores-run-layout`.
+```json
+{"baseRefName":"develop","headRefName":"codex/add-local-stores-run-layout","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/11"}
+```
+
+The verified `baseRefName` is `develop`; this is a root phase PR and is
+reviewable and merge-eligible while it remains targeted to `develop`.
 
 ## Stack Maintenance
 

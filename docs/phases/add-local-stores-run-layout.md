@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: PR body refine complete; PR opening pending
+- Status: PR open
 - Branch: `codex/add-local-stores-run-layout`
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout`
 - Phase execution plan path: `docs/phases/add-local-stores-run-layout.md`
@@ -11,6 +11,7 @@
 - Stack predecessor: none
 - Base branch: `develop` at `e9407f427314f88aec0324946f125529d4cd93ce`
 - Target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/11
 - Merge eligibility: root phase PR; reviewable and merge-eligible only while targeting `develop`.
 - Successor dependency notes: no successor branch is recorded yet. Keep this phase branch until the PR is merged and any future successor has been rebased or retargeted away from it.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 plan.
@@ -757,6 +758,10 @@ make test-summary
   - Future-phase scope check: no Phase 8 planning/resume/selector behavior, Phase 9 runner/executor behavior, or Phase 10 hardening/documentation behavior was implemented early.
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed in the PR body refine pass; Ruff passed, Pyright passed, default pytest passed with 302 passed, and `uv build` produced source and wheel distributions.
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed in the PR body refine pass and wrote `build/test-summary.md`: package passed, unit passed, contract passed, integration passed, e2e not present.
-  - PR creation pending GitHub authentication, branch push, and explicit `gh pr create --base develop --head codex/add-local-stores-run-layout --body-file docs/phases/add-local-stores-run-layout-pr-body.md --title "Phase 7: Local Stores And Run Layout"`.
+  - GitHub authentication verified outside the sandbox with `gh auth status`; `origin/develop` resolved to `e9407f427314f88aec0324946f125529d4cd93ce`.
+  - Branch pushed to `origin/codex/add-local-stores-run-layout`.
+  - PR opened with `gh pr create --base develop --head codex/add-local-stores-run-layout --body-file docs/phases/add-local-stores-run-layout-pr-body.md --title "Phase 7: Local Stores And Run Layout"`.
+  - PR URL: https://github.com/samcantrill/loom/pull/11.
+  - PR verification JSON from `gh pr view 11 --json baseRefName,headRefName,state,url`: `{"baseRefName":"develop","headRefName":"codex/add-local-stores-run-layout","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/11"}`.
 - Stack maintenance: none required at refine time; root phase targets `develop`.
 - Remaining blockers: none.
