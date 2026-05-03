@@ -13,6 +13,10 @@ class ContractError(LoomError):
     """Error raised for protocol or contract violations."""
 
 
+class ResourceError(LoomError):
+    """Error raised for invalid resource references."""
+
+
 class ArtifactError(LoomError):
     """Error raised for artifact-level failures."""
 
@@ -25,8 +29,20 @@ class PipelineError(LoomError):
     """Error raised for pipeline-level failures."""
 
 
+class SerializationError(LoomError):
+    """Error raised for serialization and de-serialization failures."""
+
+
+class FingerprintError(LoomError):
+    """Error raised for fingerprint or digest failures."""
+
+
 class ExecutionError(LoomError):
     """Error raised for execution-level failures."""
+
+
+class ProvenanceError(LoomError):
+    """Error raised for provenance capture or provenance data errors."""
 
 
 class IOErrorBase(LoomError):
@@ -37,9 +53,13 @@ __all__ = [
     "LoomError",
     "ValidationError",
     "ContractError",
+    "ResourceError",
     "ArtifactError",
     "ConfigError",
+    "SerializationError",
+    "FingerprintError",
     "PipelineError",
     "ExecutionError",
+    "ProvenanceError",
     "IOErrorBase",
 ]
