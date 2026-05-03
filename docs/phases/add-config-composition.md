@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft expanded plan.
+- Status: final expanded plan.
 - Branch: `codex/add-config-composition`.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-config-composition`.
 - Expanded plan path: `docs/phases/add-config-composition.md`.
@@ -12,7 +12,7 @@
 - Target branch: `develop`.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no remaining blockers are recorded in the canonical v0 plan.
 - Plan quality gate loop budget: initial plan review used, automated plan refinement pass used, confirmation review used. Do not start another plan-quality review loop for this phase unless the manager explicitly instructs it.
-- Setup limitations: `gh auth status` reports the configured GitHub token for `samcantrill` is invalid, so GitHub PR inspection, push, and PR creation are unavailable until authentication is refreshed. Manager preflight recorded that sandboxed network access cannot resolve GitHub and that escalated remote checks were used previously. This draft uses the manager-approved local `develop` base.
+- Setup limitations: `gh auth status` reports the configured GitHub token for `samcantrill` is invalid, so GitHub PR inspection, push, and PR creation are unavailable until authentication is refreshed. Manager preflight recorded that sandboxed network access cannot resolve GitHub and that escalated remote checks were used previously. This final plan uses the manager-approved local `develop` base.
 - Worktree creation note: the first sandboxed `git worktree add` attempt could not create the nested `codex/add-config-composition` ref; the approved escalated rerun created the branch and worktree successfully. This is an environment limitation, not a product blocker.
 - Prior phase state: Phase 1, Phase 2, and Phase 3 are recorded as merged. Phase 4 is the next pending phase.
 - Setup blockers: none for local planning. Remote PR inspection remains unavailable until GitHub authentication is refreshed.
@@ -85,11 +85,11 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 4 is `Status: 
   - `pydantic>=2`
   - `pyyaml>=6`
 - Replace the `compose_config` stub with a real public API and keep `instantiate` and `register_recipe` as explicit unsupported Phase 5 stubs.
-- Add a frozen `ComposedConfig` value object with:
-  - `resolved: Mapping[str, PlainData]`
-  - `redacted: Mapping[str, PlainData]`
+- Add a frozen slots `ComposedConfig` value object with:
+  - `resolved: dict[str, PlainData]`
+  - `redacted: dict[str, PlainData]`
   - `provenance: ConfigProvenance`
-  - `recipe_manifest: tuple[Mapping[str, PlainData], ...]`
+  - `recipe_manifest: tuple[dict[str, PlainData], ...]`
   - `fingerprint: Fingerprint`
 - Add config modules aligned with `docs/structure.md`:
   - `src/loom/config/api.py`
@@ -102,13 +102,13 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 4 is `Status: 
   - `src/loom/config/redaction.py`
   - `src/loom/config/provenance.py`
   - `src/loom/config/errors.py`
-- Load YAML files with safe YAML parsing and no Python object construction.
+- Load YAML files by reading raw bytes, digesting those bytes before parsing, decoding as UTF-8, and using `yaml.safe_load` or `yaml.load(..., Loader=yaml.SafeLoader)` only. Do not use `FullLoader`, `UnsafeLoader`, arbitrary YAML object tags, or Python object construction.
 - Compose one base config plus zero or more overlay config files in order.
 - Apply dot-path overrides after overlays.
-- Support override forms `path=value` for existing paths and `+path=value` for new paths. Path segments are dot-separated mapping keys; list indexing, key escaping, and path segments containing literal dots are deferred.
-- Parse override values as booleans, nulls, integers, floats, JSON arrays/objects, and strings, then validate parsed values as plain data.
+- Support override forms `path=value` for existing paths and `+path=value` for new paths. Path segments are dot-separated mapping keys; list indexing, key escaping, and path segments containing literal dots are deferred. `+path=value` creates missing intermediate mapping parents and fails if it encounters an existing non-mapping parent or if the final path already exists.
+- Parse override values as exact lowercase booleans, exact lowercase `null`, decimal integers, finite floats, strict JSON arrays/objects, and fallback strings, then validate parsed values as plain data.
 - Resolve interpolation through local `loom.config.interpolation` wrapper functions. The rest of `loom` must not receive or depend on OmegaConf objects.
-- Keep interpolation support limited to ordinary OmegaConf config-node interpolation and missing-value detection unless the plan expander decides that a documented built-in resolver can be supported without global resolver leakage. Do not add custom expression language, Hydra resolvers, `now`, or arbitrary resolver registration in this phase.
+- Keep interpolation support limited to ordinary OmegaConf config-node interpolation such as `${paths.root}` and missing-value detection. Reject resolver-style interpolation containing `:` inside the interpolation token, including `${env:...}`, `${oc.env:...}`, `${now:...}`, and any custom resolver syntax. Do not register, clear, or mutate global OmegaConf resolvers.
 - Validate minimal top-level config ownership:
   - Top-level document must be a mapping.
   - `name` is required and must be a non-empty string.
@@ -117,6 +117,7 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 4 is `Status: 
   - Unknown project-owned top-level keys pass through unchanged.
 - Recursively reject `_recipe_` keys anywhere in the resolved config with an unsupported-recipe `ConfigError` that includes the config path and Phase 5 handoff note.
 - Leave `_target_` blocks as plain config data; do not import or instantiate target objects.
+- Leave `_include_`, `_copy_`, and `_replace_` as ordinary project-owned keys in Phase 4. They must not be interpreted, stripped, required, rejected, or recorded as composition directives; they still participate in normal merge, override, interpolation, validation pass-through, redaction, provenance, and fingerprint behavior.
 - Redact secret-like keys recursively in the returned `redacted` mapping without mutating `resolved`.
 - Record config source provenance for base file, overlay files, raw override strings, parsed overrides, source content digests, and config fingerprint payload metadata.
 - Compute `ComposedConfig.fingerprint` from a stable mapping that includes resolved config, base/overlay source paths and content digests, raw and parsed overrides, and the config provenance schema version so fingerprints change when source inputs change.
@@ -128,7 +129,7 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 4 is `Status: 
 - No `_target_` target import, recursive object construction, `_args_`, `_partial_`, `_inject_`, constructor validation, or instantiated object graph.
 - No pipeline spec parsing, stage schema validation, DAG validation, stage target import, runner behavior, stage context, artifact binding, selectors, planning, resume, execution, or stores.
 - No config persistence to run directories, source snapshots, composition manifests, `raw.yaml`, `overlays.yaml`, `cli_overrides.yaml`, `resolved.yaml`, or `resolved.redacted.yaml`. Persistence belongs to later run-store/runner phases.
-- No `_include_`, `_copy_`, `_replace_`, Hydra defaults, include graphs, component search paths, list patch operators, automatic schema inference, YAML `_schema_` bindings, or plugin-discovered composition extensions.
+- No `_include_`, `_copy_`, or `_replace_` directive behavior; these key names pass through as ordinary project-owned keys in Phase 4. No Hydra defaults, include graphs, component search paths, list patch operators, automatic schema inference, YAML `_schema_` bindings, or plugin-discovered composition extensions.
 - No config sandbox, import allow-list mode, or security policy beyond safe YAML parsing and no object construction side effects.
 - No domain-specific recipes, configs, schemas, stages, codecs, datasets, models, metrics, report helpers, or fixtures.
 - No top-level `loom.__init__` config exports.
@@ -140,16 +141,27 @@ From `docs/implementation-plans/implementation-plan-v0.md`, Phase 4 is `Status: 
 - Local `develop` at `066e210ab915ff35e13bb194a9a9d75d6a405804` is the manager-approved Phase 4 base because manager preflight confirmed local `origin/develop` matched and GitHub authentication is currently invalid.
 - Authored configs are trusted project code, but YAML loading should still use safe parsing because Phase 4 must not construct Python objects.
 - Public returned config data must be plain-data-compatible. Internal OmegaConf/Pydantic/YAML objects must not escape public APIs.
-- `compose_config` accepts `config_path: str | Path`, `overlays: Sequence[str | Path] = ()`, `overrides: Sequence[str] = ()`, and `recipe_catalog: object | None = None`. Passing a non-`None` `recipe_catalog` raises an unsupported-recipe `ConfigError` until Phase 5.
-- `overlays=None` and `overrides=None` are not accepted in the public contract; callers should use the default empty sequences. If implementation chooses to tolerate `None`, tests must still cover the documented sequence path.
+- `compose_config` has exactly this public signature:
+
+  ```python
+  def compose_config(
+      config_path: str | Path,
+      overlays: Sequence[str | Path] = (),
+      overrides: Sequence[str] = (),
+      recipe_catalog: object | None = None,
+  ) -> ComposedConfig: ...
+  ```
+
+  Passing a non-`None` `recipe_catalog` raises `UnsupportedRecipeError` until Phase 5.
+- `overlays=None` and `overrides=None` are not accepted in the public contract; they fail with a config-specific error rather than being treated as empty.
 - Base and overlay YAML documents must load as mappings. Empty YAML files, YAML `null`, sequences, and scalars at document root fail with path-aware config load or validation errors.
 - Overlay mappings may introduce new keys through normal recursive merge. Strict add/update rules apply only to CLI-style overrides.
 - Dot-path overrides target mapping keys only. The path syntax splits on `.` and rejects empty segments. Escaping dots in key names and list element updates are deferred until concrete need appears.
-- `path=value` must fail if any path segment is missing. `+path=value` must fail if the full target path already exists; intermediate parent mappings must already exist unless the plan expander intentionally narrows or expands this rule.
-- Override value parsing should prefer deterministic standard parsing: exact lowercase `true`, `false`, and `null`; integer and finite float syntax; JSON arrays/objects via `json.loads`; otherwise raw string.
-- Interpolation resolution must fail clearly for unresolved references, missing values, unsupported resolver syntax, and OmegaConf parse errors, with config path when available.
-- Redaction key matching is case-insensitive and based on normalized key names. Normalize by lowercasing and removing `_`, `-`, and spaces. Default patterns are `token`, `secret`, `password`, `apikey`, `credential`, and `privatekey`.
-- Redacted leaves should use the exact string `"***REDACTED***"`. Redaction preserves container shape and does not mutate `resolved`.
+- `path=value` must fail if any path segment is missing. `+path=value` must create missing intermediate mapping parents, fail if an existing parent is not a mapping, and fail if the final target path already exists.
+- Override value parsing is deterministic: exact lowercase `true`, `false`, and `null`; decimal integer syntax; finite float syntax; strict JSON arrays/objects via `json.loads` with non-finite constants rejected; otherwise the original value text after `=` is a raw string. If the stripped value starts with `[` or `{`, invalid JSON is an `OverrideParseError`, not a fallback string.
+- Interpolation resolution must fail clearly for unresolved references, OmegaConf `???` missing values, resolver-style syntax, and OmegaConf parse errors, with config path when available.
+- Redaction key matching is case-insensitive and based on normalized key names. Normalize by lowercasing and removing `_`, `-`, and spaces. A key is secret-like when one of the default patterns appears in the normalized key: `token`, `secret`, `password`, `apikey`, `credential`, or `privatekey`.
+- A secret-like key's associated value is replaced with the exact string `"***REDACTED***"` regardless of original type. Nonmatching mapping keys and list items are traversed recursively. Redaction does not mutate `resolved`.
 - Config provenance may include full raw override values because it is returned in process and later persisted locally by run stores. Error messages and redacted config must not print secret values.
 - `ComposedConfig.recipe_manifest` is always an empty tuple in Phase 4.
 - The implementation should use Pydantic v2 where it protects stable `loom` boundaries, especially top-level validation and provenance model validation. It should not impose Pydantic schemas on arbitrary project-owned subtrees.
@@ -167,7 +179,18 @@ The executor must treat this section as the implementation contract. If a requir
   - `compose_config`
   - `instantiate`
   - `register_recipe`
-- `compose_config` is implemented and returns `ComposedConfig`.
+- `compose_config` is implemented with this exact signature and returns `ComposedConfig`:
+
+  ```python
+  def compose_config(
+      config_path: str | Path,
+      overlays: Sequence[str | Path] = (),
+      overrides: Sequence[str] = (),
+      recipe_catalog: object | None = None,
+  ) -> ComposedConfig: ...
+  ```
+
+  `config_path`, `overlays`, and `overrides` may be passed positionally or by keyword. `recipe_catalog` exists only to preserve the canonical future call shape; any non-`None` value raises `UnsupportedRecipeError`.
 - `instantiate` remains an unsupported Phase 5 stub that raises `ConfigError` and performs no imports or object construction.
 - `register_recipe` remains an unsupported Phase 5 stub that raises `ConfigError` and mutates no global registry.
 - Do not add `Recipe` in Phase 4. Phase 5 owns the public recipe contract.
@@ -175,21 +198,63 @@ The executor must treat this section as the implementation contract. If a requir
 
 ### Data Shapes
 
-- `ComposedConfig` is a frozen slots dataclass.
-- `resolved` is a plain-data `dict[str, PlainData]` representing the fully resolved config.
-- `redacted` is a plain-data `dict[str, PlainData]` with secret-like values replaced by `"***REDACTED***"`.
-- `provenance` is a config-owned frozen dataclass with `to_dict()` and `from_dict()` helpers. It should include:
-  - `schema_version: int = 1`
-  - `config_path: str`
-  - `sources: tuple[ConfigSource, ...]`, where the first source is base and later sources are overlays
-  - `overrides: tuple[ParsedOverride, ...]`
-  - `resolved_fingerprint: Fingerprint`
-  - `recipe_manifest_count: int = 0`
-  - optional plain-data `metadata`
-- `ConfigSource` should include source kind (`base` or `overlay`), path string, order, and content digest.
-- `ParsedOverride` should include raw text, config path, operation (`update` or `add`), parsed value as plain data, and order.
-- `recipe_manifest` is an empty tuple of plain-data mappings.
+- `ComposedConfig` is a frozen slots dataclass:
+
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class ComposedConfig:
+      resolved: dict[str, PlainData]
+      redacted: dict[str, PlainData]
+      provenance: ConfigProvenance
+      recipe_manifest: tuple[dict[str, PlainData], ...]
+      fingerprint: Fingerprint
+  ```
+
+- `resolved` is a normalized plain-data dict representing the fully resolved config.
+- `redacted` is a normalized plain-data dict with secret-like values replaced by `"***REDACTED***"`.
+- `recipe_manifest` is always `()` in Phase 4.
 - `fingerprint` is a canonical digest string produced by `hash_mapping`.
+- `ConfigSource` is a config-owned frozen slots dataclass with `to_dict()` and `from_dict()` helpers:
+
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class ConfigSource:
+      kind: Literal["base", "overlay"]
+      path: str
+      order: int
+      content_digest: Digest
+      size_bytes: int
+  ```
+
+  `path` is the strict resolved filesystem path string from `Path(...).expanduser().resolve(strict=True)`. `content_digest` is computed with `hash_bytes` over the exact raw bytes read from disk before YAML parsing.
+- `ParsedOverride` is a config-owned frozen slots dataclass with `to_dict()` and `from_dict()` helpers:
+
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class ParsedOverride:
+      raw: str
+      path: str
+      operation: Literal["update", "add"]
+      value: PlainData
+      order: int
+  ```
+
+  `path` is the dotted path without the leading `+`; `raw` is the original override string exactly as supplied.
+- `ConfigProvenance` is a config-owned frozen slots dataclass with `to_dict()` and `from_dict()` helpers:
+
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class ConfigProvenance:
+      schema_version: int
+      config_path: str
+      sources: tuple[ConfigSource, ...]
+      overrides: tuple[ParsedOverride, ...]
+      resolved_fingerprint: Fingerprint
+      recipe_manifest_count: int
+      metadata: dict[str, PlainData]
+  ```
+
+  `schema_version` is always `1`; `config_path` equals the base source resolved path; `sources[0]` is the base source with `order=0`; overlay sources follow the provided order with `order=1..n`; `recipe_manifest_count` is always `0`; `metadata` is a plain-data dict and may be empty.
 
 ### Error Behavior
 
@@ -203,7 +268,7 @@ The executor must treat this section as the implementation contract. If a requir
   - `ConfigRedactionError`
   - `ConfigProvenanceError`
   - `UnsupportedRecipeError`
-- Error messages must include config path, file path, overlay order, override text, or operation context when available.
+- Error messages must include config path, file path, overlay order, override path, or operation context when available. Include a raw override string only when doing so does not expose a parsed secret-like key/value; otherwise redact the value portion.
 - Preserve lower-level causes when wrapping YAML parser errors, file read errors, JSON override parse errors, OmegaConf errors, Pydantic validation errors, plain-data validation errors, and fingerprint input errors.
 - Do not add structured `ErrorContext`, error codes, CLI formatting, or a diagnostics framework in this phase.
 - Do not include raw secret values in error messages.
@@ -219,17 +284,49 @@ The executor must treat this section as the implementation contract. If a requir
 - Apply overrides after all overlays.
 - Resolve interpolation after overrides and before recipe detection/validation.
 - Detect `_recipe_` keys after interpolation and fail before returning.
+- Treat `_include_`, `_copy_`, and `_replace_` as ordinary project-owned keys during this phase. They are not composition directives, and their presence must not trigger validation failures unless they violate another documented Phase 4 rule.
 - Validate top-level fields after interpolation and unsupported-recipe detection.
 - Redact after validation.
 - Build provenance and fingerprint from the same normalized source data used for composition.
 - Return the `ComposedConfig`.
 - Do not write files at any point.
 
+### YAML Loading Contract
+
+- Loading uses `Path(...).expanduser().resolve(strict=True)` for each base and overlay path.
+- The loader reads exact bytes once for digesting and parsing. It computes `content_digest` with `hash_bytes(raw_bytes)` and `size_bytes` from `len(raw_bytes)`.
+- The loader decodes as UTF-8 and parses only with PyYAML safe parsing: `yaml.safe_load` or `yaml.load(..., Loader=yaml.SafeLoader)`.
+- Missing files, unreadable files, invalid UTF-8, invalid YAML, unsafe Python object tags, empty documents, YAML `null`, root sequences, and root scalars raise `ConfigLoadError` with file path and source kind/order context.
+- YAML mapping keys must be strings after parsing. Non-string keys raise `ConfigLoadError` or `ConfigValidationError` with the failing config path.
+- Loaded values are normalized through `ensure_plain_data` before merge. Non-finite floats, timestamps, bytes, sets, Python objects, and other non-plain values fail before composition continues.
+- The loader and composer must not create, modify, delete, or snapshot files.
+
+### Override Contract
+
+- An override string is split at the first `=`. Missing `=`, empty path, empty path segments, and a bare `+` path raise `OverrideParseError`.
+- A leading `+` on the path selects `operation="add"`; otherwise the operation is `update`.
+- Path segments are mapping keys. No list-index syntax exists. If traversal reaches a list, scalar, `None`, or any non-mapping parent, override application raises `OverrideApplyError`.
+- `path=value` updates only an already existing final key. Missing parents or missing final key fail.
+- `+path=value` creates missing intermediate mapping parents, but fails if an existing parent is not a mapping or the final key already exists.
+- Explicit `null` override values set the target to `None`; they do not delete keys.
+- Value parsing:
+  - exact `true` and `false` parse to booleans;
+  - exact `null` parses to `None`;
+  - decimal integer syntax parses to `int`;
+  - finite float syntax parses to `float` and rejects non-finite results;
+  - values whose stripped text starts with `[` or `{` parse as strict JSON arrays/objects and reject `NaN`, `Infinity`, and `-Infinity`;
+  - any other value remains the original string text after `=`.
+- Parsed values are normalized through `ensure_plain_data` before application and before provenance recording.
+
 ### Interpolation Boundary
 
 - `loom.config.interpolation` owns all OmegaConf usage.
-- The wrapper should accept plain data and return plain data.
-- The wrapper should translate OmegaConf exceptions into `ConfigInterpolationError`.
+- The wrapper accepts plain data and returns plain data.
+- The only supported interpolation behavior is ordinary config-node interpolation resolved by OmegaConf, for example `${paths.root}` and strings containing `${paths.root}`.
+- Resolver-style syntax is unsupported. Before resolving, the wrapper must reject interpolation tokens containing `:` so `${env:VAR}`, `${oc.env:VAR}`, `${now:%Y%m%d}`, `${oc.select:...}`, and custom resolver syntax all raise `ConfigInterpolationError`.
+- The wrapper must not call OmegaConf resolver registration, resolver clearing, or any other global resolver mutation.
+- The wrapper translates OmegaConf exceptions into `ConfigInterpolationError`.
+- Missing values represented by OmegaConf `???` fail as `ConfigInterpolationError`.
 - Other config modules may call the wrapper but must not expose OmegaConf containers or require callers to import OmegaConf.
 - Non-config modules must not import OmegaConf.
 
@@ -244,7 +341,7 @@ The executor must treat this section as the implementation contract. If a requir
 
 - Maintainability: splitting config behavior by load, merge, overrides, interpolation, validation, redaction, provenance, and compose keeps tests source-mirrored and prevents one monolithic composition module from owning every edge case.
 - Extensibility: local wrappers for interpolation and provenance make future backend changes, recipes, and stricter config modes additive without leaking OmegaConf details across the codebase.
-- Domain neutrality: validation is limited to `loom`-owned top-level boundaries and reserved directives. Project-owned keys pass through as plain data.
+- Domain neutrality: validation is limited to `loom`-owned top-level boundaries and the Phase 4 `_recipe_` unsupported directive. Project-owned keys pass through as plain data.
 - Source-tree boundaries: config may depend on serialization, fingerprints, errors, and standard primitives, but must not depend on pipeline execution, stores, CLI, plugins, or domain packages.
 
 ## Future Compatibility
@@ -264,7 +361,8 @@ The executor must treat this section as the implementation contract. If a requir
 | Use OmegaConf objects as public `resolved` config | Public config data must stay plain-data-compatible for stable hashing, redaction, provenance, and later persistence. |
 | Implement recipes in Phase 4 | Phase 5 owns recipe contracts, expansion, recipe provenance, and catalogs. Phase 4 must fail `_recipe_` blocks clearly. |
 | Implement `_target_` instantiation in Phase 4 | Object construction side effects are explicitly out of scope and belong to Phase 5. |
-| Add Hydra defaults, include graphs, `_include_`, `_copy_`, or `_replace_` | These are deferred composition features and would widen the PR beyond the approved Phase 4 acceptance criteria. |
+| Interpret `_include_`, `_copy_`, or `_replace_` as composition directives | These are deferred post-v0 composition features and would widen the PR beyond the approved Phase 4 acceptance criteria. |
+| Explicitly reject `_include_`, `_copy_`, or `_replace_` in Phase 4 | The canonical Phase 4 acceptance criteria require `_recipe_` rejection only. Treating these names as ordinary project-owned keys preserves scope and avoids prematurely reserving future directive semantics. |
 | Add list patch operators or list-index override syntax | The plan requires list replacement only. Complex list behavior is deferred until there is concrete recurring need. |
 | Validate arbitrary project-owned config schemas with Pydantic | `loom` owns only stable boundaries. Project-specific schemas belong to recipes or downstream code. |
 | Compute fingerprints from resolved config only | The acceptance criteria require fingerprints to change when source inputs change, so source paths/digests and overrides must participate. |
@@ -277,6 +375,7 @@ The executor must treat this section as the implementation contract. If a requir
 | Hard config dependencies after Phase 4 | Accepted by the v0 implementation plan to avoid an early optional extras matrix. | After Phase 10, revisit if downstream users need a primitives-only install. |
 | Dot-path overrides support mapping keys only, with no escaping or list indexing | Keeps the first override implementation deterministic and reviewable. | Revisit when real configs need dotted key literals or list element updates. |
 | Interpolation wrapper is intentionally narrow and does not add custom resolvers | Avoids nondeterministic or hidden fingerprint inputs before the provenance model is explicit. | Revisit when env/time/custom resolver semantics are documented with provenance and fingerprint policy. |
+| `_include_`, `_copy_`, and `_replace_` pass through as ordinary keys | Phase 4 owns only base/overlay/override composition and `_recipe_` rejection. | Revisit in the post-v0 composition-directive phase that defines include/copy/replace semantics and migration notes. |
 | Config provenance does not include source snapshots or composition manifests | Phase 4 writes no files and later run-store phases own persisted snapshots. | Revisit in run-store/runner phases or a post-v0 composition-manifest phase. |
 | Recipe manifest is always empty | Required bridge behavior until Phase 5. | Phase 5 replaces this debt with deterministic recipe expansion records. |
 
@@ -295,7 +394,7 @@ The executor must treat this section as the implementation contract. If a requir
 - Scope-control checks:
   - No recipes or target instantiation.
   - No pipeline spec parsing or runner/store writes.
-  - No Hydra/defaults/include/copy/replace behavior.
+  - No Hydra/defaults/include/copy/replace directive behavior; `_include_`, `_copy_`, and `_replace_` pass through as ordinary keys.
   - No domain-specific config keys or fixtures.
   - No top-level `loom` config re-exports.
 
@@ -324,8 +423,8 @@ The executor must treat this section as the implementation contract. If a requir
 
 1. Add hard config dependencies.
    - Update `pyproject.toml` runtime dependencies.
-   - Update `uv.lock` with the new default runtime dependency graph.
-   - If dependency resolution requires network/cache access that is unavailable, stop and record the exact blocker.
+   - Update `uv.lock` with the new default runtime dependency graph in the same implementation slice.
+   - If dependency resolution requires network/cache access that is unavailable, stop and record the exact blocker before editing product code that depends on those packages.
 
 2. Add config error and public API scaffolding.
    - Add `src/loom/config/errors.py`.
@@ -334,32 +433,33 @@ The executor must treat this section as the implementation contract. If a requir
    - Tests: package public API and config error inheritance.
 
 3. Implement YAML loading.
-   - Add safe YAML loading with path-aware file and parser errors.
-   - Validate that loaded documents are mappings.
-   - Record source path, source kind, source order, and source content digest.
+   - Add safe YAML loading with path-aware file, UTF-8 decode, unsafe-tag, non-string-key, non-plain-data, and parser errors.
+   - Validate that loaded documents are mappings and reject empty/null, sequence, and scalar roots.
+   - Record resolved source path, source kind, source order, raw byte content digest, and byte size.
    - Tests: `tests/unit/loom/config/test_load.py`.
 
 4. Implement recursive merge.
    - Add pure merge helpers for mapping recursion, scalar replacement, list replacement, and explicit `None`.
-   - Avoid include/copy/replace directive behavior and list patching.
+   - Treat `_include_`, `_copy_`, and `_replace_` like any other mapping keys; avoid directive behavior and list patching.
    - Tests: `tests/unit/loom/config/test_merge.py`.
 
 5. Implement override parsing and application.
    - Parse `path=value` and `+path=value`.
-   - Parse supported scalar and structured values.
-   - Apply to mapping-only dot paths with strict update/add behavior and path-aware failures.
+   - Parse supported scalar and structured values with strict JSON object/list behavior and finite floats only.
+   - Apply to mapping-only dot paths with strict update/add behavior, missing intermediate parent creation for `+`, and path-aware failures.
    - Tests: `tests/unit/loom/config/test_overrides.py`.
 
 6. Implement interpolation wrapper.
    - Add local wrapper around OmegaConf creation/resolution/to-container behavior.
-   - Translate unresolved references, missing values, unsupported resolver syntax, and OmegaConf failures into `ConfigInterpolationError`.
+   - Reject resolver-style interpolation before OmegaConf resolution and do not mutate global OmegaConf resolvers.
+   - Translate unresolved references, `???` missing values, unsupported resolver syntax, and OmegaConf failures into `ConfigInterpolationError`.
    - Return plain data only.
    - Tests: `tests/unit/loom/config/test_interpolation.py`.
 
 7. Implement validation and unsupported recipe detection.
    - Add Pydantic v2 models or validators for top-level `name`, `pipeline`, and optional `schema_version`.
    - Add recursive `_recipe_` detection with config path reporting.
-   - Preserve unknown project-owned keys.
+   - Preserve unknown project-owned keys, including `_include_`, `_copy_`, `_replace_`, and `_target_`.
    - Tests: `tests/unit/loom/config/test_validation.py` and recipe-rejection cases in `test_compose.py`.
 
 8. Implement redaction.
@@ -407,6 +507,7 @@ The executor must treat this section as the implementation contract. If a requir
   - `import loom` does not eagerly import `loom.config`, `omegaconf`, `pydantic`, `yaml`, `loom.pipeline`, `loom.cli`, stores, plugins, or downstream project packages.
   - `import loom.config` succeeds after hard config dependencies are installed.
   - `from loom.config import ConfigError, ComposedConfig, compose_config, instantiate, register_recipe` works.
+  - `inspect.signature(compose_config)` matches `config_path, overlays=(), overrides=(), recipe_catalog=None` in that order.
   - `compose_config` is callable and no longer raises the Phase 1 unsupported message for valid inputs.
   - `instantiate` and `register_recipe` still raise clear Phase 5 `ConfigError` stubs without importing targets or mutating registries.
   - `loom.__all__` remains unchanged and does not include config exports.
@@ -427,20 +528,24 @@ The executor must treat this section as the implementation contract. If a requir
   - `tests/unit/loom/config/test_compose.py`
 - Required assertions:
   - Concrete config errors inherit from `ConfigError` and preserve wrapped causes.
-  - YAML loading reads mappings safely, rejects missing files, invalid YAML, empty documents, root sequences, and root scalars with file/path context.
-  - Base and overlay source digests are stable and change when file content changes.
+  - YAML loading reads mappings safely, uses safe parsing only, rejects missing files, invalid UTF-8, invalid YAML, unsafe Python object tags, empty documents, root sequences, root scalars, non-string mapping keys, and non-plain values with file/path context.
+  - Base and overlay source digests are computed from raw bytes, are stable, and change when file content changes.
   - Recursive merge preserves nested mappings and replaces scalars, lists, and explicit nulls.
-  - Override parsing handles booleans, nulls, integers, floats, JSON arrays, JSON objects, and fallback strings.
-  - Override application updates existing mapping paths, adds new mapping keys only through `+`, rejects missing update paths, rejects duplicate add paths, rejects empty path segments, and reports the failing path.
+  - Recursive merge treats `_include_`, `_copy_`, and `_replace_` as ordinary keys.
+  - Override parsing handles booleans, nulls, integers, finite floats, strict JSON arrays, strict JSON objects, and fallback strings.
+  - Override parsing rejects malformed overrides, invalid JSON arrays/objects, JSON non-finite constants, empty paths, and empty path segments.
+  - Override application updates existing mapping paths, adds new mapping keys only through `+`, creates missing intermediate mapping parents for `+`, rejects missing update paths, rejects duplicate add paths, rejects traversal through lists/scalars/nulls, and reports the failing path.
   - Interpolation resolves ordinary config references after overlays and overrides.
-  - Interpolation failures for unresolved references, missing values, unsupported resolver syntax, or OmegaConf errors become `ConfigInterpolationError` with useful path/context.
-  - Validation requires top-level `name` and `pipeline`, rejects invalid `schema_version`, and preserves unknown project-owned keys.
+  - Interpolation rejects resolver syntax such as `${env:VAR}`, `${oc.env:VAR}`, `${now:%Y}`, and `${oc.select:missing,default}` without registering or mutating global resolvers.
+  - Interpolation failures for unresolved references, `???` missing values, unsupported resolver syntax, or OmegaConf errors become `ConfigInterpolationError` with useful path/context.
+  - Validation requires top-level `name` and `pipeline`, rejects invalid `schema_version`, and preserves unknown project-owned keys including `_include_`, `_copy_`, and `_replace_`.
   - `_recipe_` keys at root or nested paths raise `UnsupportedRecipeError` with the exact config path and Phase 5 unsupported message.
   - `_target_` keys remain plain data and do not trigger imports or object construction.
-  - Redaction recursively masks secret-like keys, handles case and separator variants, preserves non-secret values, and does not mutate resolved data.
-  - Config provenance `to_dict`/`from_dict` round-trips as plain data and records sources and overrides deterministically.
-  - `ComposedConfig.fingerprint` changes when base file content, overlay file content, overlay order, raw overrides, parsed override values, or resolved config changes.
+  - Redaction recursively masks secret-like keys by replacing the associated value with `"***REDACTED***"`, handles case and separator variants, preserves non-secret values, and does not mutate resolved data.
+  - `ConfigSource`, `ParsedOverride`, and `ConfigProvenance` `to_dict`/`from_dict` round-trip as plain data and record sources and overrides deterministically.
+  - `ComposedConfig.fingerprint` changes when base file content, base path, overlay file content, overlay path, overlay order, raw overrides, parsed override values, or resolved config changes.
   - `compose_config` returns resolved, redacted, provenance, empty recipe manifest, and fingerprint for valid configs.
+  - `compose_config` rejects non-`None` `recipe_catalog`, `overlays=None`, and `overrides=None` with config-specific errors.
   - `compose_config` writes no files in the config directory or current working directory.
 
 ### Contract Suite
@@ -467,6 +572,7 @@ The executor must treat this section as the implementation contract. If a requir
   - Interpolation can reference values introduced by base files, overlays, and overrides.
   - Required top-level validation runs after interpolation.
   - Redacted output masks nested secret-like keys while resolved output retains full values.
+  - `_include_`, `_copy_`, and `_replace_` remain in resolved output as ordinary authored keys when present.
   - Provenance records the base source, overlay sources in order, and override records.
   - Fingerprints differ when a source file changes, overlay order changes, or an override changes.
   - `_recipe_` in a realistic config tree fails clearly without partial expansion.
@@ -521,15 +627,6 @@ make validate-pr
 make test-summary
 ```
 
-## Handoff Notes For `loom_phase_plan_expander`
-
-- Confirm whether Phase 4 should support any documented OmegaConf built-in resolvers beyond ordinary config-node interpolation. If adding resolver support would require global resolver registration or hidden nondeterministic inputs, keep it deferred and record that explicitly.
-- Recheck the `compose_config` signature against the current canonical plan. The draft keeps `recipe_catalog=None` as a future-compatible but unsupported bridge.
-- Validate whether `_include_`, `_copy_`, and `_replace_` should be explicitly rejected in Phase 4 or left as ordinary project-owned keys. The draft keeps implementation scope focused on `_recipe_` rejection because that is the Phase 4 acceptance criterion.
-- Tighten the exact `ConfigProvenance` dataclass fields if the plan expander finds existing provenance model helpers that should be reused directly.
-- Confirm that no contract-suite test is needed for Phase 4. The draft defers new contract coverage because no structural extension protocol is introduced.
-- Preserve the branch, worktree, setup limitations, and unused budget metadata.
-
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices:
@@ -551,7 +648,10 @@ make test-summary
   - no pipeline/store/runner behavior;
   - no persistence writes from composition;
   - no top-level `loom` config exports;
-  - no include/copy/replace/list-patch behavior.
+  - no include/copy/replace directive behavior; `_include_`, `_copy_`, and `_replace_` are ordinary project-owned keys for this phase;
+  - no list-patch or list-index override behavior;
+  - no resolver-style interpolation or OmegaConf global resolver mutation;
+  - no changes to `loom.__init__`.
 - Conditions that require stopping for the manager:
   - dependency resolution cannot update `uv.lock`;
   - OmegaConf cannot satisfy the documented interpolation wrapper without leaking OmegaConf objects;
@@ -567,7 +667,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: created by `loom_phase_planner` in this planning pass.
-- Final expanded plan: pending `loom_phase_plan_expander`.
+- Final expanded plan: refined by `loom_phase_plan_expander` in this pass.
 - Implementation summary: pending `loom_phase_executor`.
 - Implementation validation: pending.
 - Refinement summary: pending.
