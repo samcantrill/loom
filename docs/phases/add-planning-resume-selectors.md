@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Branch: `codex/add-planning-resume-selectors`
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-planning-resume-selectors`
 - Phase execution plan path: `docs/phases/add-planning-resume-selectors.md`
@@ -16,8 +16,8 @@
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 plan.
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time.
-- Refine pass: pending.
-- Setup limitations: `gh auth status` initially reported an invalid token inside the sandbox, then succeeded with approved network access. `gh auth setup-git` and `git fetch origin` completed with approved access. The first sandboxed `git worktree add` could not create the branch ref under the control checkout `.git` directory and was rerun with approved filesystem access. No validation commands were run in this draft pass.
+- Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time.
+- Setup limitations: `gh auth status` initially reported an invalid token inside the sandbox, then succeeded with approved network access. `gh auth setup-git` and `git fetch origin` completed with approved access. The first sandboxed `git worktree add` could not create the branch ref under the control checkout `.git` directory and was rerun with approved filesystem access. No validation commands were run in the planning passes.
 - Blockers: none.
 
 ## Objective
@@ -98,7 +98,7 @@ Future-phase work that must remain out of scope includes actual stage execution,
 - Add downstream invalidation across linear, branching, diamond, and fan-in DAGs.
 - Add a `plan_pipeline()` API that returns an `ExecutionPlan` and optionally persists it through `RunStore.write_plan()`.
 - Export the Phase 8 public planning API from `loom.pipeline.planning` only.
-- Add focused package, unit, contract, and integration tests for planner imports, models, fingerprints, selectors, resume, invalidation, store collaboration, and plan persistence.
+- Add focused package, unit, and integration tests for planner imports, models, fingerprints, selectors, resume, invalidation, store collaboration, and plan persistence. Defer the contract suite because Phase 8 must not add a new public structural protocol.
 
 ## Out-of-Scope Work
 
@@ -127,24 +127,555 @@ Future-phase work that must remain out of scope includes actual stage execution,
 
 ## Decision-Complete Contract
 
-This draft identifies the intended contract but leaves exact dataclass names, field order, and module splits for the refine pass. The refine pass must make those decisions concrete before implementation begins.
+### Module Boundaries And Public Exports
 
-The public behavior should be:
+Implement the public planning API under `src/loom/pipeline/planning/` with these files and ownership:
 
-- `plan_pipeline(...)` accepts a validated `PipelineSpec`, a `RunStore`, an `ArtifactStore`, a run ID, selector inputs, resume policy, and explicit fingerprint context.
-- It returns an `ExecutionPlan` with one `StagePlan` per stage in topological order.
-- Each stage plan records stage name, action, base reuse outcome when useful, reason codes/messages, bound input `ArtifactRef`s, declared outputs, expected fingerprint record, upstream/downstream dependencies, and selector/invalidation explanation details.
-- Actions use the vocabulary `RUN`, `REUSE`, `SKIP`, `STALE`, and `BLOCKED`.
-- Plan actions are separate from persisted `StageStatus` values.
-- The planner never imports config composition, CLI, executors, or user target-loading code.
-- A persisted plan is plain-data-compatible and can be round-tripped through `RunStore.write_plan()` and `RunStore.read_plan()`.
+- `__init__.py`: public re-export surface only. It must not export through root `loom` or `loom.pipeline` in this phase.
+- `models.py`: frozen dataclasses, `StrEnum` values, constants, and plain-data `to_dict()` / `from_dict()` helpers.
+- `errors.py`: planning-specific exception hierarchy.
+- `fingerprints.py`: deterministic stage fingerprint payload construction and hashing.
+- `selectors.py`: selector normalization, validation, eligibility, and conflict checks.
+- `resume.py`: prior-state loading and direct same-run reuse checks over `RunStore`/`ArtifactStore`.
+- `planner.py`: `plan_pipeline(...)`, topological planning flow, downstream invalidation, and optional plan persistence.
+
+`loom.pipeline.planning` public `__all__` must be exactly:
+
+```python
+[
+    "DEFAULT_FINGERPRINT_ALGORITHM",
+    "PLAN_SCHEMA_VERSION",
+    "STAGE_FINGERPRINT_POLICY_NAME",
+    "STAGE_FINGERPRINT_POLICY_VERSION",
+    "STAGE_FINGERPRINT_SCHEMA_VERSION",
+    "BoundInput",
+    "ExecutionPlan",
+    "FingerprintContext",
+    "FingerprintStatus",
+    "PendingInput",
+    "PlanAction",
+    "PlanPersistenceError",
+    "PlanReason",
+    "PlanReasonCode",
+    "PlanSerializationError",
+    "PlanSelectors",
+    "PlanningError",
+    "PlanningValidationError",
+    "ResumeCheck",
+    "ResumeOptions",
+    "ResumeStateError",
+    "SelectorValidationError",
+    "StageFingerprintError",
+    "StageFingerprintPayload",
+    "StageFingerprintRecord",
+    "StagePlan",
+    "build_stage_fingerprint",
+    "plan_pipeline",
+]
+```
+
+Planning modules may import `PipelineSpec`, `StageSpec`, `OutputSpec`, graph helpers, `StageStatus`, `ArtifactRef`, direct store protocol modules `loom.pipeline.stores.run_store` and `loom.pipeline.stores.artifact_store`, store error classes, `loom.fingerprints`, `loom.serialization`, `loom.timestamps`, and cheap package metadata. They must not import config composition, CLI, executors, stage target instantiation, runner/lifecycle code, local store implementations from the planning public surface, project packages, or remote-store code.
+
+### Constants, Actions, Reasons, And Errors
+
+Define these constants:
+
+```python
+PLAN_SCHEMA_VERSION = 1
+STAGE_FINGERPRINT_SCHEMA_VERSION = 1
+STAGE_FINGERPRINT_POLICY_NAME = "loom.stage.v1"
+STAGE_FINGERPRINT_POLICY_VERSION = 1
+DEFAULT_FINGERPRINT_ALGORITHM = "sha256"
+```
+
+Use `StrEnum` for public action/status-like planning values:
+
+```python
+class PlanAction(StrEnum):
+    RUN = "RUN"
+    REUSE = "REUSE"
+    SKIP = "SKIP"
+    STALE = "STALE"
+    BLOCKED = "BLOCKED"
+
+class FingerprintStatus(StrEnum):
+    COMPUTED = "COMPUTED"
+    PENDING_INPUTS = "PENDING_INPUTS"
+```
+
+Use `PlanReasonCode(StrEnum)` with these v0 values. Tests may assert these literal values:
+
+```python
+RESUME_DISABLED = "RESUME_DISABLED"
+NO_PRIOR_STATUS = "NO_PRIOR_STATUS"
+PRIOR_STATUS_NOT_SUCCEEDED = "PRIOR_STATUS_NOT_SUCCEEDED"
+PRIOR_STATUS_RUNNING = "PRIOR_STATUS_RUNNING"
+MISSING_FINGERPRINT = "MISSING_FINGERPRINT"
+MISSING_INPUTS = "MISSING_INPUTS"
+MISSING_OUTPUTS = "MISSING_OUTPUTS"
+MISSING_OUTPUT_REF = "MISSING_OUTPUT_REF"
+OUTPUT_SPEC_MISMATCH = "OUTPUT_SPEC_MISMATCH"
+FINGERPRINT_MATCH = "FINGERPRINT_MATCH"
+FINGERPRINT_CHANGED = "FINGERPRINT_CHANGED"
+FINGERPRINT_POLICY_CHANGED = "FINGERPRINT_POLICY_CHANGED"
+ARTIFACT_VALIDATED = "ARTIFACT_VALIDATED"
+ARTIFACT_MISSING = "ARTIFACT_MISSING"
+ARTIFACT_CHECKSUM_MISMATCH = "ARTIFACT_CHECKSUM_MISMATCH"
+ARTIFACT_VALIDATION_FAILED = "ARTIFACT_VALIDATION_FAILED"
+ARTIFACT_INDEX_CONFLICT = "ARTIFACT_INDEX_CONFLICT"
+FORCED_BY_SELECTOR = "FORCED_BY_SELECTOR"
+FROM_STAGE_SELECTED = "FROM_STAGE_SELECTED"
+ONLY_STAGE_SELECTED = "ONLY_STAGE_SELECTED"
+OUTSIDE_ONLY_SELECTION = "OUTSIDE_ONLY_SELECTION"
+SKIPPED_BY_SELECTOR = "SKIPPED_BY_SELECTOR"
+BLOCKED_BY_UPSTREAM = "BLOCKED_BY_UPSTREAM"
+UPSTREAM_WILL_RUN = "UPSTREAM_WILL_RUN"
+UPSTREAM_SKIPPED = "UPSTREAM_SKIPPED"
+UPSTREAM_BLOCKED = "UPSTREAM_BLOCKED"
+UPSTREAM_STALE = "UPSTREAM_STALE"
+UNAVAILABLE_UPSTREAM_INPUT = "UNAVAILABLE_UPSTREAM_INPUT"
+PENDING_UPSTREAM_INPUT = "PENDING_UPSTREAM_INPUT"
+```
+
+Use this error hierarchy:
+
+```python
+class PlanningError(PipelineError): ...
+class PlanningValidationError(PlanningError, ValidationError): ...
+class SelectorValidationError(PlanningValidationError): ...
+class PlanSerializationError(PlanningValidationError): ...
+class StageFingerprintError(PlanningValidationError): ...
+class ResumeStateError(PlanningError): ...
+class PlanPersistenceError(PlanningError): ...
+```
+
+Selector errors, invalid public dataclass fields, unsupported plan/fingerprint schema versions, and malformed planner-owned plain data raise `PlanningValidationError` subclasses. Corrupt or internally inconsistent prior run state that cannot safely be degraded to a rerun raises `ResumeStateError`. A `RunStore.write_plan()` or `RunStore.read_plan()` failure while persisting or verifying plan persistence raises `PlanPersistenceError` with the original store error as `__cause__`.
+
+### Public Dataclass Shapes
+
+All public dataclasses are frozen and slot-based. Mapping fields must be copied to plain `dict` objects in `__post_init__`; sequence fields must be normalized to tuples in deterministic pipeline order where a `PipelineSpec` is available.
+
+`PlanReason`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class PlanReason:
+    code: PlanReasonCode
+    message: str
+    stage_name: str | None = None
+    upstream_stage: str | None = None
+    input_name: str | None = None
+    output_name: str | None = None
+    details: Mapping[str, PlainData] = field(default_factory=dict)
+```
+
+`PlanSelectors`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class PlanSelectors:
+    force_stages: tuple[str, ...] = ()
+    from_stage: str | None = None
+    only_stages: tuple[str, ...] = ()
+    skip_stages: tuple[str, ...] = ()
+```
+
+`ResumeOptions`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class ResumeOptions:
+    enabled: bool = True
+```
+
+Keep additional strict/lenient modes out of scope. V0 normal mode always validates artifacts through the provided `ArtifactStore.validate()` before `REUSE`.
+
+`FingerprintContext`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class FingerprintContext:
+    python_version: str | None = None
+    loom_version: str | None = None
+    git: Mapping[str, PlainData] = field(default_factory=dict)
+    dependencies: Mapping[str, str] = field(default_factory=dict)
+    extra: Mapping[str, PlainData] = field(default_factory=dict)
+    algorithm: str = DEFAULT_FINGERPRINT_ALGORITHM
+    policy_name: str = STAGE_FINGERPRINT_POLICY_NAME
+    policy_version: int = STAGE_FINGERPRINT_POLICY_VERSION
+```
+
+`python_version` and `loom_version` default to the current interpreter and `loom.__version__` during fingerprint payload construction. `git`, `dependencies`, and `extra` are included only when callers provide them; planning must not scan git, installed packages, or environment variables by default.
+
+`BoundInput` and `PendingInput`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class BoundInput:
+    input_name: str
+    source_stage: str
+    source_output: str
+    artifact_ref: ArtifactRef
+
+@dataclass(frozen=True, slots=True)
+class PendingInput:
+    input_name: str
+    source_stage: str
+    source_output: str
+    reason: PlanReason
+```
+
+`StageFingerprintPayload` contains the canonical inputs that are hashed:
+
+```python
+@dataclass(frozen=True, slots=True)
+class StageFingerprintPayload:
+    schema_version: int
+    policy_name: str
+    policy_version: int
+    stage_name: str
+    target_path: str
+    stage_config: Mapping[str, PlainData]
+    declared_inputs: Mapping[str, str]
+    bound_inputs: Mapping[str, Mapping[str, PlainData]]
+    declared_outputs: Mapping[str, Mapping[str, PlainData]]
+    python_version: str
+    loom_version: str
+    git: Mapping[str, PlainData]
+    dependencies: Mapping[str, str]
+    extra: Mapping[str, PlainData]
+```
+
+`StageFingerprintRecord`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class StageFingerprintRecord:
+    schema_version: int
+    algorithm: str
+    policy_name: str
+    policy_version: int
+    fingerprint: str
+    payload: StageFingerprintPayload
+    inputs_summary: Mapping[str, PlainData]
+```
+
+`ResumeCheck` records direct same-stage reuse before selector and downstream invalidation:
+
+```python
+@dataclass(frozen=True, slots=True)
+class ResumeCheck:
+    stage_name: str
+    action: PlanAction
+    status: str | None
+    attempt: int | None
+    prior_fingerprint: StageFingerprintRecord | None
+    current_fingerprint: StageFingerprintRecord | None
+    inputs: Mapping[str, ArtifactRef]
+    outputs: Mapping[str, ArtifactRef]
+    reasons: tuple[PlanReason, ...]
+```
+
+`StagePlan`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class StagePlan:
+    stage_name: str
+    action: PlanAction
+    base_action: PlanAction
+    fingerprint_status: FingerprintStatus
+    fingerprint: StageFingerprintRecord | None
+    resume_check: ResumeCheck | None
+    reasons: tuple[PlanReason, ...]
+    bound_inputs: Mapping[str, BoundInput]
+    pending_inputs: tuple[PendingInput, ...]
+    reusable_outputs: Mapping[str, ArtifactRef]
+    declared_outputs: Mapping[str, Mapping[str, PlainData]]
+    upstream_stages: tuple[str, ...]
+    downstream_stages: tuple[str, ...]
+    selected_by: tuple[PlanReasonCode, ...]
+    invalidated_by: tuple[PlanReason, ...]
+```
+
+`ExecutionPlan`:
+
+```python
+@dataclass(frozen=True, slots=True)
+class ExecutionPlan:
+    schema_version: int
+    run_id: str
+    pipeline_name: str | None
+    selectors: PlanSelectors
+    resume: ResumeOptions
+    fingerprint_context: FingerprintContext
+    stage_order: tuple[str, ...]
+    stage_plans: tuple[StagePlan, ...]
+    reasons: tuple[PlanReason, ...]
+    summary: Mapping[str, int]
+```
+
+`ExecutionPlan.stage_plans` must be in graph topological order. `summary` maps each `PlanAction.value` to its count. `ExecutionPlan.to_dict()` returns the inner plain-data document passed to `RunStore.write_plan()`. `ExecutionPlan.from_dict()` parses the inner mapping returned by `RunStore.read_plan()`.
+
+### Public Function Signatures
+
+The planner entrypoint signature is:
+
+```python
+def plan_pipeline(
+    spec: PipelineSpec,
+    *,
+    run_id: str,
+    run_store: RunStore,
+    artifact_store: ArtifactStore,
+    selectors: PlanSelectors | None = None,
+    resume: ResumeOptions | None = None,
+    fingerprint_context: FingerprintContext | None = None,
+    persist: bool = False,
+) -> ExecutionPlan: ...
+```
+
+`selectors`, `resume`, and `fingerprint_context` default to empty selectors, enabled resume, and default fingerprint context. `persist=True` writes `execution_plan.to_dict()` through `run_store.write_plan(run_id, ...)`; it must not write run status, stage status, stage inputs, stage outputs, or stage fingerprints.
+
+The public fingerprint helper signature is:
+
+```python
+def build_stage_fingerprint(
+    stage: StageSpec,
+    *,
+    bound_inputs: Mapping[str, ArtifactRef],
+    fingerprint_context: FingerprintContext | None = None,
+) -> StageFingerprintRecord: ...
+```
+
+This helper requires all declared inputs to be present in `bound_inputs`. If any input is pending because an upstream stage will run, the helper raises `StageFingerprintError`; `plan_pipeline()` records `fingerprint_status=PENDING_INPUTS` and `fingerprint=None` for that stage instead of calling the helper.
+
+### Fingerprint Payload Inputs And Exclusions
+
+`StageFingerprintPayload.to_hash_input()` must be the only mapping passed to `loom.fingerprints.hash_mapping()`. Include:
+
+- stage name;
+- target import path;
+- `StageSpec.stage_config`;
+- authored `StageSpec.inputs` as `declared_inputs`;
+- bound input identity for each input;
+- output declarations for every output;
+- Python version;
+- `loom` version;
+- caller-provided git facts;
+- caller-provided dependency versions;
+- caller-provided extra plain-data fields;
+- policy name/version and schema version.
+
+Bound input identity must be normalized as:
+
+```python
+{
+    "source_stage": source_stage,
+    "source_output": source_output,
+    "artifact_id": ref.artifact_id,
+    "artifact_type": ref.artifact_type,
+    "codec_key": ref.codec_key,
+    "schema_version": ref.schema_version,
+    "checksum": ref.checksum,
+    "fingerprint": ref.fingerprint,
+    "producer_stage": ref.producer_stage,
+    "metadata": dict(ref.metadata),
+}
+```
+
+Output declarations must be normalized as:
+
+```python
+{
+    output_name: {
+        "artifact_type": output_spec.artifact_type,
+        "codec_key": output_spec.codec_key,
+        "schema_version": output_spec.schema_version,
+        "metadata": dict(output_spec.metadata),
+    }
+}
+```
+
+Exclude these values from the default fingerprint payload: `StageSpec.resources`, wall-clock timestamps, run ID, run directory, stage directory, artifact URI/path, log paths, temp paths, host/user/process data, random IDs, `ArtifactRef.created_at`, and any git/dependency/environment facts not explicitly supplied in `FingerprintContext`.
+
+### Persisted Fingerprint Shape
+
+`StageFingerprintRecord.to_dict()` is the inner mapping passed to Phase 7:
+
+```python
+run_store.write_stage_fingerprint(
+    run_id,
+    stage_name,
+    stage_fingerprint_record.to_dict(),
+    attempt=attempt,
+)
+```
+
+Phase 7 wraps that mapping as `{"schema_version", "run_id", "stage_name", "attempt", "created_at", "fingerprint"}`. The inner `fingerprint` mapping must be:
+
+```json
+{
+  "schema_version": 1,
+  "algorithm": "sha256",
+  "policy_name": "loom.stage.v1",
+  "policy_version": 1,
+  "fingerprint": "sha256:<hex>",
+  "payload": { "...": "canonical hash input" },
+  "inputs_summary": {
+    "stage_name": "train",
+    "target_path": "project.stages.Train",
+    "input_names": ["dataset"],
+    "output_names": ["model"],
+    "input_artifacts": {
+      "dataset": {
+        "source": "build.dataset",
+        "artifact_id": "build/dataset",
+        "checksum": "sha256:<hex-or-null>",
+        "fingerprint": "sha256:<hex-or-null>"
+      }
+    },
+    "python_version": "3.12.x",
+    "loom_version": "0.1.0",
+    "git": {},
+    "dependency_names": [],
+    "extra_keys": []
+  }
+}
+```
+
+`payload` is allowed to contain stage config and metadata because it is stage-local plan state. `inputs_summary` must stay compact and assertion-friendly. `created_at` remains the Phase 7 store wrapper timestamp and is never part of the hash input.
+
+### Persisted Plan Shape
+
+`ExecutionPlan.to_dict()` is the inner mapping passed to Phase 7:
+
+```python
+run_store.write_plan(run_id, execution_plan.to_dict())
+```
+
+Phase 7 wraps it as `{"schema_version", "run_id", "updated_at", "plan"}` and `read_plan(run_id)` returns only the inner `plan` mapping. The inner plan mapping must be:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "loom.execution_plan",
+  "run_id": "run-1",
+  "pipeline_name": "pipeline-name-or-null",
+  "selectors": {
+    "force_stages": [],
+    "from_stage": null,
+    "only_stages": [],
+    "skip_stages": []
+  },
+  "resume": {
+    "enabled": true
+  },
+  "fingerprint_context": {
+    "python_version": "3.12.x",
+    "loom_version": "0.1.0",
+    "git": {},
+    "dependencies": {},
+    "extra": {},
+    "algorithm": "sha256",
+    "policy_name": "loom.stage.v1",
+    "policy_version": 1
+  },
+  "stage_order": ["build", "train"],
+  "stage_plans": [
+    {
+      "stage_name": "build",
+      "action": "REUSE",
+      "base_action": "REUSE",
+      "fingerprint_status": "COMPUTED",
+      "fingerprint": { "...": "StageFingerprintRecord" },
+      "resume_check": { "...": "ResumeCheck" },
+      "reasons": [{ "...": "PlanReason" }],
+      "bound_inputs": {},
+      "pending_inputs": [],
+      "reusable_outputs": { "dataset": { "...": "ArtifactRef" } },
+      "declared_outputs": { "dataset": { "...": "OutputSpec plain data" } },
+      "upstream_stages": [],
+      "downstream_stages": ["train"],
+      "selected_by": [],
+      "invalidated_by": []
+    }
+  ],
+  "reasons": [],
+  "summary": {
+    "RUN": 0,
+    "REUSE": 1,
+    "SKIP": 0,
+    "STALE": 0,
+    "BLOCKED": 0
+  }
+}
+```
+
+Round-trip tests must assert `ExecutionPlan.from_dict(plan.to_dict()).to_dict() == plan.to_dict()` and that `LocalRunStore.write_plan()` / `read_plan()` preserves the same inner mapping.
+
+### Selector Semantics And Conflict Rules
+
+Selector validation runs before any store reads. Unknown stage names raise `SelectorValidationError` naming the selector field and stage. Duplicate names inside a selector field collapse to one stage and then normalize to pipeline topological order.
+
+Default selector behavior:
+
+- With no selectors, every stage is eligible to run. Stages directly reusable become `REUSE`; non-reusable stages become `RUN`; downstream consumers of any stage that will `RUN` become `RUN` with `UPSTREAM_WILL_RUN` and pending inputs until execution produces artifacts.
+- `force_stages` forces listed stages to `RUN` even if direct reuse is valid, records `FORCED_BY_SELECTOR`, and invalidates all transitive downstream stages.
+- `from_stage` forces that stage to `RUN`, marks it with `FROM_STAGE_SELECTED`, makes the selected stage and all downstream stages eligible to run, and treats upstream stages as reuse providers only. If an upstream required by the `from_stage` closure is not directly reusable, that upstream becomes `BLOCKED` and the selected closure becomes `BLOCKED` with `UNAVAILABLE_UPSTREAM_INPUT`.
+- `only_stages` makes only the named stages eligible to run. Transitive upstream stages are reuse providers only: reusable upstreams are `REUSE`; unavailable upstreams are `BLOCKED`, and selected consumers are `BLOCKED`. Downstream stages outside `only_stages` become `SKIP` with `OUTSIDE_ONLY_SELECTION`.
+- `skip_stages` makes listed stages `SKIP` with `SKIPPED_BY_SELECTOR`. Direct and transitive downstream stages that depend on skipped stages by data or control edge become `BLOCKED` with `UPSTREAM_SKIPPED` unless they were already skipped. V0 has no alternate input satisfaction rule.
+
+Combined selector rules:
+
+- `skip_stages` intersecting `force_stages`, `only_stages`, or `from_stage` is a `SelectorValidationError`.
+- `from_stage` and `only_stages` are mutually exclusive in v0; combining them raises `SelectorValidationError`. This avoids ambiguous "closure versus exact set" semantics until CLI UX is designed.
+- `force_stages` may combine with `from_stage` only when every forced stage is in the `from_stage` transitive downstream closure, including the selected `from_stage` itself.
+- `force_stages` may combine with `only_stages` only when every forced stage is also listed in `only_stages`.
+- `skip_stages` may skip downstream branches of a `from_stage` plan or unrelated stages in an `only_stages` plan as long as it does not intersect selected/forced stages; skipped dependencies still block their dependents.
+- Selector validation happens before store reads, so selector conflicts are reported deterministically even if the run directory is corrupt.
+
+### Store Error Handling, Direct Reuse, And Invalidation
+
+Direct reuse checks call `RunStore.read_stage_status()`, `read_stage_inputs()`, `read_stage_fingerprint()`, `read_stage_outputs()`, and `read_artifact_index()` only. Planning never writes stage state. Missing optional documents represented by `None` become plan reasons, not exceptions.
+
+Direct reuse results:
+
+- `ResumeOptions(enabled=False)`: eligible stages return `RUN` with `RESUME_DISABLED`; reuse-provider-only stages return `BLOCKED` if their outputs are needed because reuse is disabled.
+- Missing prior status: eligible stage returns `RUN` with `NO_PRIOR_STATUS`; reuse-provider-only stage returns `BLOCKED`.
+- Prior status other than `SUCCEEDED`: eligible stage returns `RUN` with `PRIOR_STATUS_NOT_SUCCEEDED`, except `RUNNING` uses `PRIOR_STATUS_RUNNING`; reuse-provider-only stage returns `BLOCKED`.
+- Prior `SUCCEEDED` with missing inputs, missing fingerprint, or missing outputs: base action is `STALE`; final action is `RUN` if the stage is eligible, otherwise `BLOCKED`.
+- Prior fingerprint policy/schema/algorithm mismatch or fingerprint digest mismatch: base action is `STALE`; final action is `RUN` if eligible, otherwise `BLOCKED`.
+- Missing required output ref, output name mismatch, artifact type mismatch, or declared codec mismatch: base action is `STALE`; final action is `RUN` if eligible, otherwise `BLOCKED`.
+- `ArtifactStore.validate()` success for every required output plus matching fingerprint/status produces `REUSE`.
+- `ArtifactStore.validate()` failures for missing artifacts, checksum mismatches, unsupported URI validation, or artifact type errors do not produce `REUSE`; eligible stages become `RUN`, reuse-provider-only stages become `BLOCKED`, and reasons preserve the validation error class/message in `details`.
+
+Raise `ResumeStateError` instead of returning `RUN`/`STALE`/`BLOCKED` when:
+
+- a run-store read raises `CorruptStoreDocumentError`;
+- a prior fingerprint document cannot parse as `StageFingerprintRecord`;
+- store output data contains invalid `ArtifactRef` payloads;
+- the run-level artifact index conflicts with stage outputs for the same logical key (`stage.output`) by pointing at a different `ArtifactRef`;
+- a store method raises a non-validation `StoreError` indicating the planner cannot know whether state is safe.
+
+Do not automatically repair missing or stale `artifacts.json`; if the index is missing, direct reuse may still rely on valid stage `outputs.json` and artifact validation. If the index is present and conflicts with stage outputs, raise `ResumeStateError`.
+
+Downstream invalidation:
+
+- A stage with final action `RUN`, `STALE`, `SKIP`, or `BLOCKED` invalidates direct and transitive consumers.
+- A consumer with any upstream `RUN` records `UPSTREAM_WILL_RUN`, gets final action `RUN` when otherwise eligible, and records affected inputs in `pending_inputs`; it cannot compute a final fingerprint until execution produces upstream artifacts.
+- A consumer with any upstream `SKIP` or `BLOCKED` becomes `BLOCKED`.
+- A consumer with an upstream base action `STALE` but final action `RUN` is invalidated as `UPSTREAM_STALE`.
+- Fan-in stages record one reason per invalidating upstream up to all direct invalidating inputs; tests should assert exact reasons for two-input diamonds rather than relying on a summary string.
+
+This phase must not implement runner behavior for rebinding pending inputs during execution. Phase 9 will consume `pending_inputs` and recompute/write fingerprints when upstream outputs exist.
 
 ## Design Impact
 
 - Maintainability: keeps planning as a pure policy layer over already validated specs, graph helpers, and store protocols, avoiding runner shortcuts that would duplicate resume logic later.
 - Extensibility: structured selectors, actions, reasons, fingerprints, and plan records leave room for future CLI display, remote stores, alternate executors, and stricter policies without changing stage specs.
 - Domain neutrality: planner decisions are based on generic configs, artifact refs, fingerprints, checksums, and graph relationships. It does not inspect domain files, checkpoints, metrics, datasets, or models.
-- Source-tree boundaries: implementation should stay under `src/loom/pipeline/planning` and related tests. It may import pipeline specs/graph/status, stores protocols, artifacts, fingerprints, provenance capture models/helpers, serialization, timestamps, and ids. It must not import CLI, executors, runner behavior, or downstream project modules.
+- Source-tree boundaries: implementation should stay under `src/loom/pipeline/planning` and related tests. It may import pipeline specs/graph/status, direct store protocol modules, store errors, artifacts, fingerprints, serialization, timestamps, ids, and cheap package metadata. It must not import config composition, CLI, executors, runner behavior, target instantiation, local store implementations through the planning public surface, or downstream project modules.
 
 ## Future Compatibility
 
@@ -172,6 +703,7 @@ The public behavior should be:
 | --- | --- | --- |
 | Same-run-directory reuse only | This is an explicit v0 tradeoff to make local resume semantics correct before cache discovery exists. | After Phase 9/10 local execution and invalidation tests are stable and a new plan defines cross-run cache behavior. |
 | Plan persistence stores only the current computed plan | Phase 7 run store exposes one `plan.json` document; attempt history is not part of v0. | If users need audit history or concurrent planning attempts. |
+| Downstream fingerprints with pending upstream outputs are deferred until execution | Phase 8 cannot know artifact refs/checksums for stages that have not run, and inventing placeholders would make unsafe reuse easier. | Phase 9 runner binds produced upstream outputs before invoking downstream stages and writes the final stage fingerprint. |
 | Detailed fingerprint diff rendering deferred | Phase 8 needs structured reasons and summaries, not CLI-grade verbose diff output. | When a CLI/status phase needs `loom plan --explain`-style output. |
 
 ## Reviewability
@@ -182,7 +714,7 @@ The public behavior should be:
   - `src/loom/pipeline/planning/__init__.py`
   - package API/import-boundary tests for planning
   - `tests/unit/loom/pipeline/planning/`
-  - `tests/contracts/` if a planning or policy protocol is added
+  - existing store/stage contract suites only to confirm no new planning protocol was introduced
   - `tests/integration/pipeline/` for planner plus Phase 7 store behavior
 - Scope-control checks:
   - no root `loom.__init__` planning exports;
@@ -194,16 +726,15 @@ The public behavior should be:
 
 ## Implementation Steps
 
-1. Define planning error types, action/reason enums or constants, selector/resume policy models, fingerprint record/payload models, reuse result models, `StagePlan`, and `ExecutionPlan`.
-2. Implement plain-data serialization and deserialization for plan and fingerprint records, including validation of action values, selector fields, and fingerprint metadata.
-3. Implement selector validation against `PipelineSpec.stage_names`, including conflicts between `skip_stages`, `force_stages`, `from_stage`, and `only_stages`.
-4. Implement stage fingerprint payload construction from deterministic stage/spec/input/context fields, then hash with existing `hash_mapping`.
-5. Implement prior stage state loading through `RunStore`, with explicit missing, incomplete, corrupt, failed, stale, and succeeded summaries.
-6. Implement direct reuse checks for one stage using prior status, prior/current fingerprint comparison, prior outputs, output specs, artifact index consistency as appropriate, and `ArtifactStore.validate()`.
-7. Implement topological `plan_pipeline()` flow: build graph, resolve bindings, compute or load upstream input refs, evaluate reuse, apply selectors, propagate downstream invalidation/blocking, and produce ordered plans.
-8. Persist the computed execution plan through `RunStore.write_plan()` when requested and verify `RunStore.read_plan()` returns a plain-data equivalent.
-9. Export the public planning API from `loom.pipeline.planning` and add import-boundary/package tests.
-10. Add targeted unit, contract as needed, and integration tests before PR preparation runs the full validation gate.
+1. Add `errors.py` and `models.py` with the exact constants, enums, dataclasses, normalization, and plain-data serialization/deserialization named in the decision-complete contract.
+2. Add `fingerprints.py` with `build_stage_fingerprint(...)`, canonical bound-input/output-spec normalization, exclusions for resources/paths/timestamps, and hashing via `loom.fingerprints.hash_mapping`.
+3. Add `selectors.py` with `PlanSelectors` normalization against `PipelineSpec.stage_names`, deterministic topological ordering, and the conflict/combination rules for `force_stages`, `from_stage`, `only_stages`, and `skip_stages`.
+4. Add `resume.py` with direct reuse checks over `RunStore`/`ArtifactStore`, including `REUSE` positive evidence, `RUN`/`STALE`/`BLOCKED` degradation for incomplete or unverifiable reusable state, and `ResumeStateError` for corrupt/inconsistent state.
+5. Add `planner.py` with `plan_pipeline(...)`: build the stage graph, compute topological order, resolve input bindings, compute fingerprints when all inputs are bound, preserve pending inputs when upstreams will run, apply selectors, propagate downstream invalidation/blocking, and build an ordered `ExecutionPlan`.
+6. Implement optional `persist=True` by calling only `RunStore.write_plan(run_id, execution_plan.to_dict())`; do not write stage status, inputs, outputs, fingerprints, failures, lifecycle state, or runner-owned files.
+7. Export exactly the planned public API from `loom.pipeline.planning.__init__`; keep `loom.__init__` and `loom.pipeline.__init__` unchanged unless an import-boundary test needs a narrow negative assertion.
+8. Add package, unit, and integration tests named below. Do not add a new public protocol or contract suite unless implementation discovers an unavoidable structural protocol, in which case stop and record the scope change for the manager.
+9. Run targeted test commands for changed slices during implementation. Leave final `make validate-pr` and `make test-summary` to PR preparation after implementation/refinement.
 
 ## Test Plan
 
@@ -214,9 +745,10 @@ The public behavior should be:
   - `tests/package/test_pipeline_planning_api.py`
   - update `tests/package/test_import_boundaries.py` if needed.
 - Required assertions or deferral reason:
-  - `loom.pipeline.planning` exports only the Phase 8 public planning API.
+  - `loom.pipeline.planning.__all__` exactly matches the public export list in this plan.
   - Importing `loom` remains cheap and does not import planning.
-  - Importing `loom.pipeline.planning` does not import CLI, executors, config composition, or project modules.
+  - Importing `loom.pipeline.planning` does not import `loom.cli`, `loom.config`, `loom.pipeline.execution`, `loom.pipeline.executors`, or downstream project modules.
+  - Planning exports are available only from `loom.pipeline.planning`; root `loom.__all__` and `loom.pipeline.__all__` do not grow planning names in this phase.
 
 ### Unit Suite
 
@@ -229,20 +761,21 @@ The public behavior should be:
   - `tests/unit/loom/pipeline/planning/test_planner.py`
   - `tests/unit/loom/pipeline/planning/test_errors.py`
 - Required assertions or deferral reason:
-  - plan/fingerprint serialization round-trips through plain data;
-  - mapping order does not affect fingerprints, list order does, and stage config/target/output/input changes affect fingerprints;
-  - noisy values and `StageSpec.resources` are excluded from default fingerprints;
-  - selector conflict and unknown-stage errors are path/stage aware;
-  - prior missing, failed, running, missing outputs, missing fingerprints, checksum mismatch, and missing artifact states do not produce `REUSE`;
-  - linear, branching, diamond, and fan-in invalidation decisions are deterministic.
+  - `test_models.py`: `PlanReason`, `PlanSelectors`, `ResumeOptions`, `FingerprintContext`, `BoundInput`, `PendingInput`, `StageFingerprintRecord`, `ResumeCheck`, `StagePlan`, and `ExecutionPlan` reject unknown enum values, unsupported schema versions, non-plain details, and round-trip exactly through `to_dict()`/`from_dict()`.
+  - `test_fingerprints.py`: mapping order does not affect fingerprints, list order does, and changes to stage name, target path, stage config, declared inputs, bound input checksum/fingerprint, output spec, Python version, `loom` version, git facts, dependency versions, and `extra` fields change fingerprints.
+  - `test_fingerprints.py`: `StageSpec.resources`, run ID, artifact URI/path, `ArtifactRef.created_at`, timestamps, log paths, temp paths, and omitted git/dependency/environment data are excluded from the default payload.
+  - `test_selectors.py`: unknown stages and conflicts raise `SelectorValidationError`; duplicates normalize once in topological order; allowed `force_stages` combinations behave as recorded; `from_stage` plus `only_stages` raises; `skip_stages` blocks downstream dependencies.
+  - `test_resume.py`: missing status, failed/cancelled/running statuses, missing inputs, missing outputs, missing fingerprints, fingerprint policy mismatch, fingerprint digest mismatch, missing output refs, output spec mismatch, artifact validation failure, checksum mismatch, and artifact index conflicts never produce `REUSE`.
+  - `test_resume.py`: corrupt run-store documents and malformed prior fingerprint records raise `ResumeStateError`, while missing optional state files become structured plan reasons.
+  - `test_planner.py`: linear, branching, diamond, and fan-in DAGs produce deterministic topological `StagePlan`s, bound reusable inputs, pending inputs for upstream `RUN`, and exact invalidation/blocking reasons.
+  - `test_errors.py`: `PlanPersistenceError` wraps `write_plan`/`read_plan` store failures when `persist=True`.
 
 ### Contract Suite
 
-- Status: required if Phase 8 introduces a public structural protocol; otherwise deferred.
-- Expected paths:
-  - `tests/contracts/test_planning_contract.py` if a public planning/fingerprint policy protocol is added.
+- Status: deferred for this phase.
+- Expected paths: none.
 - Required assertions or deferral reason:
-  - If no protocol is added, existing store and stage contract suites cover the extension points Phase 8 consumes. The phase should document this deferral in the PR body.
+  - Phase 8 must not introduce a new public structural protocol. Existing `tests/contracts/test_store_contract.py` and `tests/contracts/test_stage_contract.py` cover the protocols the planner consumes. If implementation proves a planning protocol is unavoidable, stop for the manager instead of adding a contract surface during executor work.
 
 ### Integration Suite
 
@@ -251,11 +784,12 @@ The public behavior should be:
   - `tests/integration/pipeline/test_planning_resume.py`
   - `tests/integration/pipeline/test_plan_persistence.py`
 - Required assertions or deferral reason:
-  - planner collaborates with `LocalRunStore` and `LocalArtifactStore` over temporary run directories;
-  - valid prior succeeded state with matching fingerprints and valid artifacts produces `REUSE`;
-  - corrupt store JSON raises a planning/store error;
-  - plan files persist and read through `LocalRunStore`;
-  - selectors behave with stored upstream outputs and blocked downstream stages.
+  - `test_planning_resume.py`: planner collaborates with `LocalRunStore` and `LocalArtifactStore` over temporary run directories without direct local-path assumptions in planning code.
+  - `test_planning_resume.py`: valid prior `SUCCEEDED` state with matching `StageFingerprintRecord`, required `outputs.json`, matching output specs, and valid artifacts produces `REUSE`.
+  - `test_planning_resume.py`: missing artifact files, checksum mismatches, unsupported validation, and changed fingerprints produce rerun/block reasons but no reuse.
+  - `test_planning_resume.py`: corrupt store JSON and artifact index conflicts raise `ResumeStateError`.
+  - `test_planning_resume.py`: `from_stage`, `only_stages`, `force_stages`, and `skip_stages` behave with stored upstream outputs and blocked downstream stages.
+  - `test_plan_persistence.py`: `persist=True` writes only `plan.json`, `LocalRunStore.read_plan()` returns the inner plan mapping, and `ExecutionPlan.from_dict()` reconstructs an equivalent plan.
 
 ### E2E Suite
 
@@ -271,7 +805,7 @@ The public behavior should be:
 
 ## Risks
 
-- Selector semantics can become ambiguous when multiple selectors combine. The refine pass must lock conflict rules before implementation.
+- Selector semantics can still be misimplemented if code drifts from this plan's conflict matrix. Tests must cover every allowed and rejected selector combination listed above.
 - Fingerprint payloads can accidentally include noisy data or omit meaningful inputs. Tests should assert both included and excluded fields.
 - Planning may be tempted to repair stale artifact indexes or corrupt state. V0 should fail or rerun conservatively rather than silently repair.
 - `only_stages` can be unsafe if upstream inputs are neither runnable nor reusable. The planner must block clearly instead of implicitly widening scope.
@@ -285,7 +819,6 @@ Targeted development commands:
 ```sh
 make test-package
 make test-unit
-make test-contract
 make test-integration
 uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline -q
 ```
@@ -310,9 +843,15 @@ make test-summary
 - Tests to run with each slice:
   - model/fingerprint changes: `uv run pytest tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/planning/test_fingerprints.py -q`;
   - selector/planner changes: `uv run pytest tests/unit/loom/pipeline/planning/test_selectors.py tests/unit/loom/pipeline/planning/test_planner.py -q`;
+  - resume/error changes: `uv run pytest tests/unit/loom/pipeline/planning/test_resume.py tests/unit/loom/pipeline/planning/test_errors.py -q`;
   - store collaboration: `uv run pytest tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q`;
   - exports/import boundaries: `make test-package`.
 - Decisions the executor must not revisit:
+  - use the exact public export names, dataclass fields, constants, reason codes, and function signatures in this plan;
+  - `from_stage` and `only_stages` are mutually exclusive in v0;
+  - `force_stages` cannot widen `from_stage` or `only_stages` eligibility;
+  - corrupt or conflicting persisted state raises `ResumeStateError` instead of silently becoming rerunnable state;
+  - pending upstream outputs produce `FingerprintStatus.PENDING_INPUTS`; Phase 8 does not invent artifact refs for stages that have not executed;
   - no execution, runner, executor, CLI, target instantiation, remote store, or cross-run cache behavior;
   - same-run-directory resume only;
   - `StageSpec.resources` excluded from default semantic fingerprints;
@@ -321,7 +860,7 @@ make test-summary
 - Conditions that require stopping for the manager:
   - Phase 7 store APIs prove insufficient and would require changing the predecessor branch contract;
   - an acceptance criterion cannot be met without implementing Phase 9 runner/executor behavior;
-  - selector conflict semantics remain ambiguous after the refine pass;
+  - implementation discovers a contradiction in the selector conflict matrix recorded here;
   - broad product or workflow files outside the Phase 8 planning scope would need edits.
 
 ## Refinement And Review Budget Status
@@ -332,7 +871,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` in this branch.
-- Final phase execution plan: pending refine pass.
+- Final phase execution plan: refined and decision-complete for implementation on 2026-05-04 local time.
 - Implementation summary: pending.
 - Implementation validation: pending.
 - Refinement summary: pending.
