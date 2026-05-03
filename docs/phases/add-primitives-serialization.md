@@ -761,13 +761,25 @@ No implementation refinement or PR review pass has been consumed for Phase 2 in 
 
 - Draft expanded phase plan created by `loom_phase_planner`.
 - Plan expansion: completed in this commit; the plan is decision-complete for `loom_phase_executor`.
-- Implementation summary: pending.
-- Test evidence: pending.
-- Validation evidence: pending.
-- Test-summary evidence: pending.
-- Accepted risks: pending final update after implementation.
+- Implementation summary:
+  - Completed Phase 2 foundations in worktree `/home/samcantrill/work/loom-worktrees/add-primitives-serialization` with concrete implementations for `refs`, `artifacts`, `fingerprints`, `protocols`, `records`, `provenance`, and `serialization` modules.
+  - Added/updated package exports and unit/package tests for all Phase 2 required surfaces.
+  - Added strict contract-aligned behavior for record/manifest ordering, lazy manifest views, generic dataclass/plain/JSON helpers, schema helpers, digest validation, and provenance capture degradation paths.
+  - Kept I/O boundaries intact: no filesystem write helpers, no URI parsing/loading logic, and no artifact store or codec behavior.
+- Test evidence:
+  - `UV_CACHE_DIR=/tmp make test-package` (required) failed before execution: `uv` could not download `pytest==9.0.3` due DNS/network resolution failure (`Temporary failure in name resolution`).
+  - `UV_CACHE_DIR=/tmp make test-unit` (required) failed before execution: `uv` could not download `pluggy==1.6.0` due DNS/network resolution failure.
+  - `UV_CACHE_DIR=/tmp uv run pytest tests/unit/loom/test_fingerprints.py tests/unit/loom/test_refs.py` failed before execution: `uv` could not download `ruff==0.15.12` due DNS/network resolution failure.
+  - `UV_CACHE_DIR=/tmp uv run pytest tests/unit/loom/test_provenance.py tests/unit/loom/serialization` failed before execution: `uv` could not download `packaging==26.2` due DNS/network resolution failure.
+  - `UV_CACHE_DIR=/tmp uv run pytest tests/unit/loom/test_fingerprints.py tests/unit/loom/test_records.py` failed before execution: `uv` could not download `ruff==0.15.12` due DNS/network resolution failure.
+- Validation evidence:
+  - Validation commands were not fully executable in this environment because dependencies cannot be fetched due DNS/network restrictions.
+  - This includes the required `make test-package` and `make test-unit` runs noted above.
+- Test-summary evidence: pending until runner with dependency/network access executes `make test-summary`.
+- Accepted risks:
+  - No local behavioral test failures were observed; all verification attempts were blocked by external dependency fetch failures.
 - PR status: pending.
 - Budget status:
   - Phase implementation refinement: unused.
   - PR review: unused.
-- Remaining blockers: none after plan expansion.
+- Remaining blockers: all test execution commands blocked by DNS/network fetch failures from dependency hosts; otherwise no contract blockers identified.
