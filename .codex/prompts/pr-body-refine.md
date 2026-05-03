@@ -9,7 +9,7 @@ draft-pass context.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The source implementation plan recorded in the phase execution plan
 - The phase execution plan in `docs/phases/`
 - The draft PR body at `docs/phases/<summary-of-feature>-pr-body.md`
 - The current diff

@@ -6,7 +6,7 @@
 - Stack predecessor:
 - Merge eligibility:
 - Worktree:
-- Plan: `docs/implementation-plans/implementation-plan-v0.md`
+- Plan: `docs/implementation-plans/implementation-plan-v<N>.md`
 - Phase execution plan:
 - Draft pass:
 - Refine pass:

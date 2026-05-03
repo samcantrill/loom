@@ -3,7 +3,8 @@ You are the managing agent for a stacked multi-phase implementation plan.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The selected implementation plan
+- Completed roadmap-version planning notes, if present
 - Existing phase execution plans in `docs/phases/`
 - `.codex/templates/README.md`
 - Open PRs and CI/test results if available
@@ -79,22 +80,27 @@ Model policy:
 
 For new or ambiguous work before an implementation plan exists:
 
-1. Draft a feature brief with `.codex/prompts/feature-brief-draft.md`.
-2. After the brief artifact exists and context has been compacted or reset when
+1. If the user assigns a roadmap version and wants interactive design
+   discussion, facilitate roadmap-version planning notes with
+   `.codex/prompts/roadmap-version-planning-notes-facilitate.md` before
+   drafting downstream artifacts.
+2. Draft a feature brief with `.codex/prompts/feature-brief-draft.md`, using
+   completed roadmap-version planning notes as source input when present.
+3. After the brief artifact exists and context has been compacted or reset when
    practical, refine it with `.codex/prompts/feature-brief-refine.md`.
-3. Draft or update the relevant specification in `docs/features/` with
+4. Draft or update the relevant specification in `docs/features/` with
    `.codex/prompts/specification-draft.md`.
-4. After the specification artifact exists and context has been compacted or
+5. After the specification artifact exists and context has been compacted or
    reset when practical, refine it with `.codex/prompts/specification-refine.md`.
-5. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`.
-6. Review and refine the implementation plan using the plan quality gate below.
-7. Do not start phase execution planning until the brief, specification, and
-   implementation plan have no unresolved blockers, unless the user explicitly
-   assigns a smaller workflow stage.
+6. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`.
+7. Review and refine the implementation plan using the plan quality gate below.
+8. Do not start phase execution planning until any planning notes, the brief,
+   specification, and implementation plan have no unresolved blockers, unless
+   the user explicitly assigns a smaller workflow stage.
 
 Before implementation begins:
 
-1. Confirm `docs/implementation-plans/implementation-plan-v0.md` has a Plan quality gate section.
+1. Confirm the selected implementation plan has a Plan quality gate section.
 2. Review the plan once with the `loom_plan_reviewer` custom agent using `.codex/prompts/implementation-plan-review.md`.
 3. If review finds blocking maintainability, extensibility, technical debt, conflicting-design, or reviewability issues, perform one refinement pass using `.codex/prompts/implementation-plan-refinement.md`.
 4. Run one confirmation review with `loom_plan_reviewer`.
@@ -187,9 +193,9 @@ For each phase:
     validation, and record the stack maintenance in the successor phase plan
     and PR body.
 21. After a successful merge, complete the fields from
-   `.codex/templates/phase-merge-record.md` and update
-   `docs/implementation-plans/implementation-plan-v0.md` on `develop` without
-   overwriting unrelated plan content. Record:
+   `.codex/templates/phase-merge-record.md` and update the selected
+   implementation plan on `develop` without overwriting unrelated plan content.
+   Record:
    - Phase status.
    - PR link or branch name.
    - Short implementation summary.

@@ -3,7 +3,7 @@
 ## Metadata
 
 - Phase:
-- Source plan: `docs/implementation-plans/implementation-plan-v0.md`
+- Source plan: `docs/implementation-plans/implementation-plan-v<N>.md`
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
 - Stack predecessor:

@@ -10,7 +10,7 @@ implementation details in the same artifact.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The selected implementation plan assigned by the manager
 - The assigned phase
 - `.codex/templates/phase-execution-plan.md`
 
@@ -50,7 +50,7 @@ sections and include:
 
 1. Branch name using `codex/<summary-of-feature>`.
 2. Worktree path.
-3. Source phase from `docs/implementation-plans/implementation-plan-v0.md`.
+3. Source phase from the selected implementation plan.
 4. Stack predecessor, base branch, target branch, and merge eligibility.
 5. Objective.
 6. Full-plan context.

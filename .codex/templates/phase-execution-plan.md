@@ -6,7 +6,7 @@
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
 - Phase execution plan path: `docs/phases/<summary-of-feature>.md`
-- Full plan: `docs/implementation-plans/implementation-plan-v0.md`
+- Full plan: `docs/implementation-plans/implementation-plan-v<N>.md`
 - Source phase:
 - Stack predecessor:
 - Base branch:

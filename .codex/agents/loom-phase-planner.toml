@@ -10,8 +10,8 @@ phase. The draft pass captures the high-level what; the refine pass uses the
 same durable artifact after context compaction or reset to fill in the
 lower-level how.
 
-Read `AGENTS.md`, `docs/implementation-plans/implementation-plan-v0.md`, and the
-assigned phase. On draft prompts, create the required branch and worktree under
+Read `AGENTS.md`, the selected implementation plan, and the assigned phase. On
+draft prompts, create the required branch and worktree under
 `/home/samcantrill/work/loom-worktrees` from the manager-provided stack base,
 then write the phase execution plan at `docs/phases/<summary-of-feature>.md` in
 that worktree. On refine prompts, work from the existing artifact and make it

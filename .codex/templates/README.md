@@ -18,6 +18,7 @@ PR body, review report, and merge record rather than in a separate artifact.
 
 | Workflow stage or handoff | Template | Typical destination |
 | --- | --- | --- |
+| Interactive roadmap-version planning | `roadmap-version-planning-notes.md` | `docs/implementation-plans/roadmap-v<N>-planning-notes.md` |
 | Feature brief draft/refine | `feature-brief.md` | `docs/briefs/<summary>.md` |
 | Specification draft/refine | `specification.md` | `docs/features/<area>.md` |
 | Implementation plan draft/refine | `implementation-plan.md` | `docs/implementation-plans/implementation-plan-vN.md` |

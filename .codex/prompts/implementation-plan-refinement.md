@@ -8,7 +8,8 @@ consumes the plan quality gate's refinement budget.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The target implementation plan assigned by the manager
+- Completed roadmap-version planning notes, if present
 - Relevant design docs referenced by the plan
 - The findings from `loom_plan_reviewer`
 - `.codex/templates/implementation-plan.md`
@@ -16,7 +17,7 @@ Read:
 
 Task:
 
-1. Update `docs/implementation-plans/implementation-plan-v0.md` to resolve the plan review findings.
+1. Update the target implementation plan to resolve the plan review findings.
 2. Preserve existing project-specific guidance and plan intent.
 3. Keep the plan Markdown-based and lightweight.
 4. Add or update these plan-level sections when relevant:

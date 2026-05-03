@@ -11,7 +11,7 @@ authorizes it.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The source implementation plan recorded in the phase execution plan
 - The relevant phase execution plan in `docs/phases/`
 - The PR body or prepared PR body
 - The current diff

@@ -9,7 +9,7 @@ Refine the same document until it is decision-complete for implementation.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The selected implementation plan assigned by the manager
 - The assigned phase
 - The draft phase execution plan in `docs/phases/`
 - `.codex/templates/phase-execution-plan.md`
@@ -18,7 +18,7 @@ Task:
 
 1. Confirm you are inside the dedicated git worktree for this phase under
    `/home/samcantrill/work/loom-worktrees`.
-2. Review the draft phase execution plan against the canonical plan, source-tree
+2. Review the draft phase execution plan against the selected plan, source-tree
    boundaries, current source/tests, and phase acceptance criteria.
 3. Refine the phase execution plan until it is decision-complete for implementation:
    approach, interfaces, data flow, edge cases, tests by suite, validation,

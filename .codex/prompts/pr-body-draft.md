@@ -10,7 +10,7 @@ plan before PR creation or final handoff.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The source implementation plan recorded in the phase execution plan
 - The phase execution plan in `docs/phases/`
 - The current diff
 - Validation results

@@ -7,7 +7,9 @@ for phase execution planning.
 Read existing repository files before editing:
 
 - `AGENTS.md`, if present
-- `docs/implementation-plans/implementation-plan-v0.md`, if present
+- The target implementation plan, if updating one
+- Adjacent or previous implementation plans, if relevant
+- Completed roadmap-version planning notes, if present
 - README or project documentation
 - Existing tests and package/build configuration
 - Any user-provided plan or design document
@@ -17,7 +19,8 @@ Task:
 
 1. Preserve existing files and project guidance.
 2. Use `.codex/templates/implementation-plan.md` for new implementation plans.
-3. Do not overwrite `docs/implementation-plans/implementation-plan-v0.md` if it already exists.
+3. Do not overwrite an existing implementation plan unless the manager assigns
+   that target plan explicitly.
 4. Add or align these plan-level sections when relevant:
    - Goal
    - Context

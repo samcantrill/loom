@@ -7,7 +7,7 @@ do not redesign phase scope or make new public API decisions.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The source implementation plan recorded in the phase execution plan
 - The phase execution plan in `docs/phases/`
 - `.codex/templates/phase-implementation-handoff.md`
 

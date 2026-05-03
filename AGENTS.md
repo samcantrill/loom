@@ -73,6 +73,10 @@ refine pass before the next stage depends on it.
 
 First-class artifacts:
 
+- Roadmap-version planning notes, usually in
+  `docs/implementation-plans/roadmap-v<N>-planning-notes.md`, when a roadmap
+  version needs interactive human discussion before feature or implementation
+  planning.
 - Feature brief, usually in `docs/briefs/`.
 - Specification, usually in `docs/features/`.
 - Implementation plan, in `docs/implementation-plans/`.
@@ -85,6 +89,8 @@ phase execution plans, and PR evidence. Create a standalone testing plan only
 when the assigned work is too large or cross-cutting for embedded suite
 obligations to remain reviewable.
 
+For roadmap-version work that needs human discussion, facilitate and complete
+roadmap-version planning notes before drafting or changing downstream artifacts.
 For new work, draft and refine the feature brief before drafting or changing a
 specification. Draft and refine the specification before drafting an
 implementation plan. Draft and refine the implementation plan, including its
@@ -135,9 +141,21 @@ unmerged work.
 
 - Prefer GitHub CLI-backed authentication for GitHub operations when available.
   Before fetch, push, PR creation, PR inspection, merge, or remote branch
-  cleanup, check `gh auth status`. If `gh` is authenticated but git remote
-  operations fail through SSH, run `gh auth setup-git` and use the HTTPS remote
-  form `https://github.com/<owner>/<repo>.git` for `origin`.
+  cleanup, check `gh auth status`. In sandboxed Codex sessions,
+  `gh auth status` can falsely report the stored token as invalid when network
+  access is restricted. If the command reports an invalid token, rerun
+  `gh auth status` with approved network access before treating credentials as
+  unavailable. If authentication is still invalid outside the sandbox, ask the
+  user to allow `gh auth logout -h github.com -u <user>` followed by
+  `gh auth login -h github.com -p https -w`, then run
+  `gh auth setup-git`.
+- After a successful `gh auth login`, run `gh auth setup-git` before GitHub
+  fetch, push, PR creation, PR inspection, merge, or remote branch cleanup.
+  Verify both `gh` and Git access with `gh auth status` and a lightweight remote
+  command such as `git ls-remote --heads origin develop`. If `gh` is
+  authenticated but git remote operations fail through SSH, run
+  `gh auth setup-git` and use the HTTPS remote form
+  `https://github.com/<owner>/<repo>.git` for `origin`.
 - Use `git` for local worktree and commit operations. Use `gh` wherever it
   provides safer GitHub state checks or avoids SSH-only behavior.
 - Create phase PRs with explicit base and head branches. Use `develop` only for
@@ -273,7 +291,7 @@ Before merging, the managing agent must confirm:
 
 After merging, the managing agent must:
 
-- Update the phase status in `docs/implementation-plans/implementation-plan-v0.md` on `develop` to
+- Update the phase status in the selected implementation plan on `develop` to
   `merged`.
 - Record the PR link or branch, implementation summary, checks, and follow-up
   notes, including any stack rebase or retargeting work.
@@ -312,8 +330,8 @@ depends on the phase branch.
 
 ### Plan Quality Gate
 
-Before any phase implementation begins,
-`docs/implementation-plans/implementation-plan-v0.md` must be reviewed for
+Before any phase implementation begins, the selected implementation plan must be
+reviewed for
 maintainability, extensibility, future compatibility, conflicting design
 choices, technical debt, test strategy, and reviewability.
 
@@ -341,7 +359,7 @@ revisiting it.
 
 ### Phase Statuses
 
-Use only these status values in `docs/implementation-plans/implementation-plan-v0.md`:
+Use only these status values in implementation plans:
 
 ```text
 pending

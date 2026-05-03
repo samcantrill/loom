@@ -10,7 +10,8 @@ findings.
 Read:
 
 - `AGENTS.md`
-- `docs/implementation-plans/implementation-plan-v0.md`
+- The target implementation plan assigned by the manager
+- Completed roadmap-version planning notes, if present
 - Relevant design docs referenced by the plan
 - Existing source and tests needed to verify current boundaries
 - Existing phase execution plans in `docs/phases/`, if any
