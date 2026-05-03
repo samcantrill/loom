@@ -1,21 +1,15 @@
-"""Unit tests for unsupported Phase 5 stubs."""
+"""Unit tests for APIs promoted from deferred Phase 5 stubs."""
 
 import loom.config
-import loom.errors
+import loom.config.api as config_api
+
+from tests.support.config_samples import function_recipe
 
 
-def test_loom_config_stubs_raise_config_error() -> None:
-    expected_messages = {
-        loom.config.instantiate: "Phase 5",
-        loom.config.register_recipe: "Phase 5",
-    }
-    for stub in (loom.config.instantiate, loom.config.register_recipe):
-        try:
-            stub()
-        except Exception as exc:  # noqa: BLE001
-            assert isinstance(exc, loom.errors.ConfigError)
-            assert isinstance(exc, loom.errors.LoomError)
-            assert "not supported" in str(exc)
-            assert expected_messages[stub] in str(exc)
-            continue
-        raise AssertionError(f"Expected {stub.__name__} to raise ConfigError")
+def test_phase5_config_apis_are_live(monkeypatch) -> None:
+    monkeypatch.setattr(config_api, "__default_recipe_catalog", loom.config.RecipeCatalog())
+
+    assert loom.config.instantiate({"value": ("a", "b")}) == {"value": ["a", "b"]}
+
+    loom.config.register_recipe("unit-live", function_recipe)
+    assert config_api._get_default_recipe_catalog().get("unit-live") is function_recipe

@@ -55,3 +55,34 @@ def test_fingerprint_reflects_override_content() -> None:
     assert first != second
     assert isinstance(first, str)
     assert isinstance(second, str)
+
+
+def test_fingerprint_reflects_recipe_manifest_records() -> None:
+    source = ConfigSource(kind="base", path="/tmp/base.yaml", order=0, content_digest="sha256:abcd", size_bytes=1)
+    resolved = {"name": "demo", "pipeline": {"value": "same"}}
+    manifest = {
+        "path": "pipeline",
+        "name": "a",
+        "target": "tests.support.config_samples:function_recipe",
+        "arguments": {"value": "same"},
+        "expanded_hash": "sha256:1111",
+        "expanded_path": "pipeline",
+        "loom_version": "0.1.0",
+    }
+
+    first = build_config_fingerprint(
+        resolved=resolved,
+        sources=(source,),
+        overrides=(),
+        recipe_manifest=(manifest,),
+        schema_version=SCHEMA_VERSION,
+    )
+    second = build_config_fingerprint(
+        resolved=resolved,
+        sources=(source,),
+        overrides=(),
+        recipe_manifest=({**manifest, "name": "b"},),
+        schema_version=SCHEMA_VERSION,
+    )
+
+    assert first != second

@@ -5,8 +5,9 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config.errors import ConfigValidationError, UnsupportedRecipeError
-from loom.config import compose_config
+from loom.config import RecipeCatalog, compose_config
+from loom.config.errors import ConfigValidationError
+from tests.support.config_samples import argument_recipe
 
 
 def test_compose_base_overlay_override_flow(tmp_path: Path) -> None:
@@ -44,16 +45,22 @@ def test_compose_preserves_include_like_keys(tmp_path: Path) -> None:
     assert result.resolved["_replace_"] is True
 
 
-def test_compose_rejects_recipe_key(tmp_path: Path) -> None:
+def test_compose_expands_recipe_key(tmp_path: Path) -> None:
     path = tmp_path / "base.yaml"
-    path.write_text("name: demo\npipeline: {}\nrecipe: 1\n_recipe_: {x: y}\n", encoding="utf-8")
-    with pytest.raises(UnsupportedRecipeError):
-        compose_config(path)
+    path.write_text("name: demo\npipeline:\n  _recipe_: arg\n  value: one\n", encoding="utf-8")
+    catalog = RecipeCatalog()
+    catalog.register("arg", argument_recipe)
+    composed = compose_config(path, recipe_catalog=catalog)
+
+    assert composed.recipe_manifest
+    assert composed.resolved["pipeline"] == {"value": "one:0"}
+    assert composed.recipe_manifest[0]["name"] == "arg"
+    assert composed.recipe_manifest[0]["path"] == "pipeline"
 
 
 def test_compose_rejects_recipe_catalog() -> None:
-    with pytest.raises(UnsupportedRecipeError):
-        compose_config("does-not-exist.yaml", recipe_catalog=object())
+    with pytest.raises(ConfigValidationError):
+        compose_config("does-not-exist.yaml", recipe_catalog=cast(Any, object()))
 
 
 def test_compose_rejects_none_overlays() -> None:
