@@ -60,6 +60,13 @@ def test_parse_timestamp_accepts_z_and_utc_offsets() -> None:
     assert parsed_from_offset == parsed_from_z
 
 
+def test_parse_timestamp_rejects_invalid_and_path_safe_strings() -> None:
+    with pytest.raises(ValueError, match="Unable to parse loom timestamp"):
+        parse_timestamp("not-a-timestamp")
+    with pytest.raises(ValueError, match="extended UTC metadata form"):
+        parse_timestamp("20260503T123456Z")
+
+
 def test_parse_timestamp_rejects_naive_or_non_utc_strings() -> None:
     with pytest.raises(ValueError, match="naive"):
         parse_timestamp("2026-05-03T12:34:56.123456")

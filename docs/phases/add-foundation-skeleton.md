@@ -315,10 +315,11 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used.
 - PR review: unused.
 
-No implementation refinement or PR review has been consumed during planning or plan expansion.
+Implementation refinement was consumed on 2026-05-03 by the bounded
+`loom_phase_refiner` pass. PR review remains unused.
 
 ## Handoff Notes For Executor
 
@@ -364,12 +365,14 @@ stop and report the blocker rather than making a new design decision.
   - Added import-safe package skeletons for all Phase 1 paths.
   - Added Phase 1 config stubs in `src/loom/config/__init__.py` with unsupported-feature `ConfigError` raises.
   - Added package-level and unit tests at `tests/package` and `tests/unit/loom` to validate imports, boundaries, aliases, errors, timestamps, and deferred-call failure modes.
+  - Refinement pass constrained `parse_timestamp` to the authored extended UTC metadata form so path-safe timestamp strings remain out of scope, added focused coverage for empty skeleton exports, invalid timestamp strings, and absence of a public `IOError` alias, and configured Pyright to resolve the uv-managed `.venv` used by the repository validation target.
 - Test evidence:
-  - `make test-package` (attempted): blocked by offline dependency/tooling resolution before test execution (`Could not download pytest... dns error`).
-  - `make test-unit` (attempted): blocked by offline dependency/tooling resolution before test execution (`Could not download pyright... dns error`).
-  - Direct `python3 -m pytest ...` (attempted): `pytest` module not installed in environment.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/test_timestamps.py`: passed, 9 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-package`: passed, 7 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-unit`: passed, 17 passed.
 - Validation evidence:
-  - `UV_CACHE_DIR=/tmp/uv-cache make test-package` attempted and failed with the same offline `dns error` fetching `pytest`.
-  - `UV_CACHE_DIR=/tmp/uv-cache make test-unit` attempted and failed with the same offline `dns error` fetching `pyright`.
-  - Original make target `make test-package` also failed on `Could not acquire lock` (`Could not create temporary file` in uv cache path) before dependency resolution.
+  - Manager rerun before refinement: `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed, 6 passed.
+  - Manager rerun before refinement: `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed, 15 passed.
+  - Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright passed with 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
+- Remaining blockers: none.
 - PR: pending.

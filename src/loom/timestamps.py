@@ -1,9 +1,13 @@
 """Timestamp helpers for loom metadata."""
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 _TIMESPEC = Literal["seconds", "milliseconds", "microseconds"]
+_METADATA_TIMESTAMP_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)"
+)
 
 
 def utc_now() -> datetime:
@@ -54,6 +58,8 @@ def parse_timestamp(value: str) -> datetime:
         raise ValueError(f"Unable to parse loom timestamp: naive datetime {value!r} is not supported")
     if parsed.tzinfo.utcoffset(parsed) != timedelta(0):
         raise ValueError("Only UTC loom timestamps are supported")
+    if _METADATA_TIMESTAMP_RE.fullmatch(value) is None:
+        raise ValueError(f"Unable to parse loom timestamp: expected extended UTC metadata form {value!r}")
     return parsed.astimezone(timezone.utc)
 
 

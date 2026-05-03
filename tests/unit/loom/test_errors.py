@@ -25,3 +25,7 @@ def test_error_export_surface() -> None:
         "ExecutionError",
         "IOErrorBase",
     ]
+
+
+def test_error_module_does_not_export_ioerror_alias() -> None:
+    assert not hasattr(errors, "IOError")

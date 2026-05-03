@@ -1,5 +1,7 @@
 """Package-level API smoke tests."""
 
+from types import ModuleType
+
 import pytest
 
 
@@ -51,3 +53,34 @@ def test_phase_one_modules_are_importable_via_from_import() -> None:
     assert parse_timestamp("2026-05-03T12:34:56Z")
     assert safe_timestamp_for_path(utc_now())
     assert utc_timestamp(utc_now())
+
+
+def test_empty_skeleton_packages_export_no_public_names() -> None:
+    import loom.cli
+    import loom.io
+    import loom.pipeline
+    import loom.pipeline.execution
+    import loom.pipeline.executors
+    import loom.pipeline.graph
+    import loom.pipeline.planning
+    import loom.pipeline.stores
+    import loom.provenance
+    import loom.records
+    import loom.serialization
+
+    skeletons: tuple[ModuleType, ...] = (
+        loom.cli,
+        loom.io,
+        loom.pipeline,
+        loom.pipeline.execution,
+        loom.pipeline.executors,
+        loom.pipeline.graph,
+        loom.pipeline.planning,
+        loom.pipeline.stores,
+        loom.provenance,
+        loom.records,
+        loom.serialization,
+    )
+
+    for module in skeletons:
+        assert module.__all__ == []
