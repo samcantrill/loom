@@ -194,6 +194,7 @@ def build_config_fingerprint(
     resolved: dict[str, PlainData],
     sources: tuple[ConfigSource, ...],
     overrides: tuple[ParsedOverride, ...],
+    recipe_manifest: tuple[Mapping[str, PlainData], ...] | None = None,
     schema_version: int,
 ) -> Fingerprint:
     payload = {
@@ -201,6 +202,7 @@ def build_config_fingerprint(
         "resolved": resolved,
         "sources": [source.to_dict() for source in sources],
         "overrides": [override.to_dict() for override in overrides],
+        "recipe_manifest": list(recipe_manifest or ()),
     }
     try:
         return hash_mapping(payload)
