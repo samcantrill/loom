@@ -1057,9 +1057,12 @@ Completion summary:
 
 ### Phase 6 — Pipeline Specs And Graph
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-pipeline-specs-graph`
-PR: pending
+PR: prepared locally; not opened because GitHub CLI credentials are invalid.
+Stack predecessor: `codex/add-recipes-instantiation`
+Target branch: `codex/add-recipes-instantiation`
+Worktree: `/home/samcantrill/work/loom-worktrees/add-pipeline-specs-graph`
 
 Goal:
 
@@ -1160,7 +1163,49 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Implemented Phase 6 static pipeline specs and graph primitives on
+  `codex/add-pipeline-specs-graph`, stacked on
+  `codex/add-recipes-instantiation`, in worktree
+  `/home/samcantrill/work/loom-worktrees/add-pipeline-specs-graph`.
+- Added frozen `OutputSpec`, `StageSpec`, `PipelineSpec`, minimal
+  `StageContext`, structural `Stage` protocol, `RunStatus` and `StageStatus`
+  enums, serializable status records, strict `stage.output` input binding
+  helpers, graph edge/node primitives, graph construction, cycle detection,
+  dependency traversal, and deterministic topological sorting.
+- Kept future phases out of scope: no persistent stores, run layout, artifact
+  path allocation, resume planning, selectors, runner/execution behavior, stage
+  target instantiation, CLI behavior, config persistence, Phase 7+ helpers,
+  domain-specific behavior, or root `loom.__init__` pipeline exports.
+- Added package, unit, contract, and integration coverage for pipeline public
+  exports, import boundaries, spec parsing and validation, context validation,
+  status serialization, structural stage contract, bindings, graph helpers, and
+  composed-config-to-pipeline integration. E2e remains not present for this
+  phase.
+- Final PR-prep validation on 2026-05-03:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: passed; Ruff passed,
+    Pyright reported 0 errors, default pytest passed with 264 tests, and
+    `uv build` produced source and wheel distributions.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`: passed and wrote
+    `build/test-summary.md`; package, unit, contract, and integration suites
+    passed, and e2e was not present.
+- Phase execution plan drafted in commit `fee1274` and refined in commit
+  `d1e0e3a`. Phase implementation refinement budget was used by
+  `loom_phase_refiner` in commit `5dbd6af`; PR review budget remains unused.
+- PR body prepared at
+  `docs/phases/add-pipeline-specs-graph-pr-body.md` and finalized in commit
+  `ba65fa6`.
+- PR creation status: prepared but not opened. `gh auth status` reports the
+  configured `samcantrill` token in
+  `/home/samcantrill/.config/gh/hosts.yml` is invalid, so remote push, PR
+  creation, and PR verification are unavailable until credentials are
+  refreshed. After authentication is restored, open the stacked PR with
+  `--base codex/add-recipes-instantiation --head codex/add-pipeline-specs-graph`
+  and verify `baseRefName` is `codex/add-recipes-instantiation`.
+- Merge eligibility: reviewable as a stacked prepared PR against
+  `codex/add-recipes-instantiation`; not merge-eligible until Phase 5 lands and
+  Phase 6 is retargeted or rebased onto `develop`.
+- Remaining product blockers: none known after local validation. Remote PR
+  opening is blocked by unavailable GitHub credentials.
 
 ### Phase 7 — Local Stores And Run Layout
 
