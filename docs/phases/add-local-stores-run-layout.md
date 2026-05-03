@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: PR body draft complete; refine pending
 - Branch: `codex/add-local-stores-run-layout`
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout`
 - Phase execution plan path: `docs/phases/add-local-stores-run-layout.md`
@@ -17,6 +17,9 @@
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time.
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time.
+- PR body path: `docs/phases/add-local-stores-run-layout-pr-body.md`
+- PR body draft pass: completed by `loom_pr_preparer` on 2026-05-04 local time.
+- PR body refine pass: pending.
 - Setup limitations: manager verified the control checkout was clean and synced to `origin/develop` at `e9407f427314f88aec0324946f125529d4cd93ce` before assignment. The draft pass created the worktree from local `develop`; an initial sandboxed `git worktree add` could not create the branch ref and was rerun with approved filesystem access. No remote synchronization or validation commands were run in this draft pass.
 - Blockers: none
 
@@ -744,6 +747,12 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff passed, Pyright passed, default test suite passed with 302 passed, and `uv build` produced source and wheel distributions.
   - Remaining blockers: none known after this refinement pass.
   - PR preparation handoff: completion notes and budget status updated here; `make test-summary` remains the PR-preparer suite evidence command.
-- PR preparation: pending.
+- PR preparation:
+  - Draft pass completed by `loom_pr_preparer` on 2026-05-04 local time.
+  - PR body path: `docs/phases/add-local-stores-run-layout-pr-body.md`.
+  - PR facts recorded for refine/open pass: base/target `develop`, head `codex/add-local-stores-run-layout`, stack predecessor none.
+  - Merge eligibility: root phase PR; reviewable and merge-eligible only while targeting `develop`.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed during PR body draft and wrote `build/test-summary.md`: package passed, unit passed, contract passed, integration passed, e2e not present.
+  - PR body refine pass remains pending; PR creation was not attempted in this draft pass per `.codex/prompts/pr-body-draft.md`.
 - Stack maintenance: none required at draft time; root phase targets `develop`.
 - Remaining blockers: none.
