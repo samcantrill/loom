@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final expanded plan; ready for `loom_phase_executor`.
+- Status: `pr_open` metadata prepared; PR body ready for manager submission.
 - Branch: `codex/add-foundation-skeleton`.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`.
 - Expanded plan path: `docs/phases/add-foundation-skeleton.md`.
@@ -36,7 +36,10 @@ Key controlling constraints:
 
 ## Source Phase Summary
 
-From `docs/implementation-plans/implementation-plan-v0.md`, Phase 1 is `Status: pending` with branch `codex/add-foundation-skeleton`.
+From `docs/implementation-plans/implementation-plan-v0.md`, Phase 1 was
+`Status: pending` with branch `codex/add-foundation-skeleton` at plan
+expansion time. PR preparation has updated the canonical phase status to
+`pr_open`.
 
 Goal:
 
@@ -374,5 +377,24 @@ stop and report the blocker rather than making a new design decision.
   - Manager rerun before refinement: `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed, 6 passed.
   - Manager rerun before refinement: `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed, 15 passed.
   - Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright passed with 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
-- Remaining blockers: none.
-- PR: pending.
+  - PR-prep validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright reported 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
+- Test-summary evidence:
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`.
+  - Suite table: package passed, unit passed, contract not present, integration not present, e2e not present.
+  - Package suite passed with 7 tests; unit suite passed with 17 tests.
+- Accepted risks:
+  - Unsupported config stubs remain temporary debt until Phase 4 (`compose_config`, `instantiate`) and Phase 5 (`register_recipe`).
+  - Empty skeleton packages remain temporary structure until each owning future phase adds behavior.
+  - Contract, integration, and e2e suites remain intentionally absent because Phase 1 contains no runtime contracts or cross-component behavior.
+  - This branch remains based on local `develop` at `4878e95eda64c3d8d969fcfcc658d6b082a7f310`; earlier `git fetch origin` failed because SSH authentication was unavailable.
+  - `pyproject.toml` now points Pyright at the repository `.venv` so the existing uv-managed validation environment resolves consistently.
+- PR status:
+  - Target: `develop`.
+  - Branch: `codex/add-foundation-skeleton`.
+  - Worktree: `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`.
+  - Body path: `docs/phases/add-foundation-skeleton-pr-body.md`.
+  - Not opened locally because `gh` is unavailable in this environment and no alternate authenticated GitHub PR tooling is configured.
+- Budget status:
+  - Phase implementation refinement: used.
+  - PR review: unused.
+- Remaining blockers: none for manager-side PR submission or review.
