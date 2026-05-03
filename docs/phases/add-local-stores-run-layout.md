@@ -703,7 +703,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -724,7 +724,26 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache make test-integration`
   - All passing.
 - Refinement summary:
-  - Not used (as requested).
+  - Phase implementation refinement budget consumed by `loom_phase_refiner` on 2026-05-04 local time.
+  - Validation output reviewed: executor's passing Phase 7 targeted package/unit/contract/integration checks and manager-reported `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` failure at `uv run ruff check .`.
+  - Blocking issues caused by this phase:
+    - Ruff F401 failures from unused `RunStore`, `ArtifactRef`, and `LocalArtifactStore` imports.
+    - Pyright failures in local store metadata normalization, JSON payload narrowing, and one unit-test plan payload annotation surfaced after Ruff was fixed.
+    - Directory-artifact checksum coverage was unreachable because it was nested under an earlier expected checksum failure.
+    - Local artifact directory loads and corrupt run-store artifact/stage wrapper shapes could leak unclear or cross-store errors instead of Phase 7 store-boundary errors.
+  - Issues confirmed out of scope: no planning, resume, selectors, fingerprint calculation, runner lifecycle, CLI behavior, remote stores, lock manager, or cross-run cache behavior was changed.
+  - Fixes made:
+    - Removed unused imports reported by Ruff.
+    - Added typed metadata normalization in `LocalArtifactStore`, clear `ArtifactTypeMismatchError` for non-file artifact loads, and restored directory checksum/load regression coverage.
+    - Narrowed `LocalRunStore` JSON document reads for Pyright and corrupt-document behavior, wrapped malformed artifact index refs as `CorruptStoreDocumentError`, and aligned public run-store protocol metadata typing with the finalized phase plan.
+    - Added regression tests for non-mapping stage document payloads and malformed artifact-index refs.
+  - Tests or validation re-run:
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` — passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache PYTHONPATH=/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout/src uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py` — passed, 38 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` — passed, 0 errors.
+    - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff passed, Pyright passed, default test suite passed with 302 passed, and `uv build` produced source and wheel distributions.
+  - Remaining blockers: none known after this refinement pass.
+  - PR preparation handoff: completion notes and budget status updated here; `make test-summary` remains the PR-preparer suite evidence command.
 - PR preparation: pending.
 - Stack maintenance: none required at draft time; root phase targets `develop`.
 - Remaining blockers: none.

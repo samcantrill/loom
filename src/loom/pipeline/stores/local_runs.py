@@ -23,9 +23,15 @@ from ._paths import (
     validate_stage_name,
 )
 from .atomic import atomic_write_json, atomic_write_text
-from .errors import CorruptStoreDocumentError, MissingStoreDocumentError, RunAlreadyExistsError, RunNotFoundError, UnsafeStorePathError
+from .errors import (
+    ArtifactStoreError,
+    CorruptStoreDocumentError,
+    MissingStoreDocumentError,
+    RunAlreadyExistsError,
+    RunNotFoundError,
+    UnsafeStorePathError,
+)
 from .indexes import artifact_index_from_dict, artifact_index_to_dict
-from .run_store import RunStore
 
 _SCHEMA_VERSION = 1
 
@@ -94,7 +100,7 @@ class LocalRunStore:
     def read_run_metadata(self, run_id: str) -> dict[str, PlainData]:
         return self._read_run_wrapper(validate_run_id(run_id, field="run_id"))
 
-    def write_run_metadata(self, run_id: str, metadata: Mapping[str, PlainData] | None) -> None:
+    def write_run_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
         run_dir = self.get_run_dir(run_id_text)
         if not run_dir.exists():
@@ -172,7 +178,10 @@ class LocalRunStore:
             raise CorruptStoreDocumentError(f"artifact index run_id mismatch at {run_dir / 'artifacts.json'}")
         if data.get("schema_version") != _SCHEMA_VERSION:
             raise CorruptStoreDocumentError(f"Unsupported artifact index schema at {run_dir / 'artifacts.json'}")
-        return artifact_index_from_dict(data.get("artifacts", {}))
+        try:
+            return artifact_index_from_dict(data.get("artifacts", {}))
+        except ArtifactStoreError as exc:
+            raise CorruptStoreDocumentError(f"Malformed artifact index at {run_dir / 'artifacts.json'}: {exc}") from exc
 
     def write_artifact_index(self, run_id: str, index: Mapping[str, ArtifactRef]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
@@ -217,7 +226,7 @@ class LocalRunStore:
                 raise CorruptStoreDocumentError(f"recipe_manifest entries must be mappings for {run_id}")
         return tuple(dict(item) for item in manifest)  # type: ignore[arg-type]
 
-    def write_recipe_manifest(self, run_id: str, records: Sequence[dict[str, PlainData]]) -> None:
+    def write_recipe_manifest(self, run_id: str, records: Sequence[Mapping[str, PlainData]]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
         normalized = ensure_plain_data(records, path="recipe_manifest")
         if not isinstance(normalized, list):
@@ -339,8 +348,13 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
+        if not isinstance(data, dict):
+            raise CorruptStoreDocumentError(f"stage fingerprint for {run_id}/{stage_name} must be an object")
         _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "fingerprint")
-        return ensure_plain_data(data.get("fingerprint", {}), path=f"{run_id}/{stage_name}/fingerprint")
+        return self._ensure_plain_mapping(
+            data["fingerprint"],
+            path=f"{run_id}/{stage_name}/fingerprint",
+        )
 
     def write_stage_fingerprint(
         self,
@@ -365,8 +379,13 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
+        if not isinstance(data, dict):
+            raise CorruptStoreDocumentError(f"stage failure for {run_id}/{stage_name} must be an object")
         _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "failure")
-        return ensure_plain_data(data.get("failure", {}), path=f"{run_id}/{stage_name}/failure")
+        return self._ensure_plain_mapping(
+            data["failure"],
+            path=f"{run_id}/{stage_name}/failure",
+        )
 
     def write_stage_failure(
         self,
@@ -392,8 +411,13 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
+        if not isinstance(data, dict):
+            raise CorruptStoreDocumentError(f"stage provenance for {run_id}/{stage_name} must be an object")
         _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "provenance")
-        return ensure_plain_data(data["provenance"], path=f"{run_id}/{stage_name}/provenance")
+        return self._ensure_plain_mapping(
+            data["provenance"],
+            path=f"{run_id}/{stage_name}/provenance",
+        )
 
     def write_stage_provenance(
         self,
@@ -437,9 +461,12 @@ class LocalRunStore:
         if not path.is_file():
             raise CorruptStoreDocumentError(f"Expected file at {path}")
         try:
-            return json_loads(path.read_text(encoding="utf-8"), path=str(path))
+            value = json_loads(path.read_text(encoding="utf-8"), path=str(path))
         except DeserializationError as exc:
             raise CorruptStoreDocumentError(f"Malformed JSON at {path}: {exc}") from exc
+        if not isinstance(value, (dict, list)):
+            raise CorruptStoreDocumentError(f"Store JSON at {path} must be an object or array")
+        return value
 
     def _read_run_wrapper(self, run_id: str) -> dict[str, PlainData]:
         path = self.get_run_dir(run_id) / "run.json"
@@ -510,9 +537,10 @@ class LocalRunStore:
         if field_name not in payload:
             raise CorruptStoreDocumentError(f"stage payload missing {field_name!r} for {run_id}/{stage_name}")
         if field_name in {"inputs", "outputs"}:
-            if not isinstance(payload[field_name], dict):
+            field_value = payload[field_name]
+            if not isinstance(field_value, dict):
                 raise CorruptStoreDocumentError(f"stage payload {field_name!r} for {run_id}/{stage_name} must be an object")
-            for key in payload[field_name]:
+            for key in field_value:
                 validate_output_name(key, field=f"{field_name}_key")
 
     def _validate_run_identifier_for_status(self, run_id: str, status_run_id: str) -> None:
@@ -524,6 +552,12 @@ class LocalRunStore:
             raise UnsafeStorePathError(f"run id mismatch for stage status: {status.run_id} != {run_id}")
         if status.stage_name != stage_name:
             raise UnsafeStorePathError(f"stage name mismatch for stage status: {status.stage_name} != {stage_name}")
+
+    def _ensure_plain_mapping(self, value: object, *, path: str) -> dict[str, PlainData]:
+        normalized = ensure_plain_data(value, path=path)
+        if not isinstance(normalized, dict):
+            raise CorruptStoreDocumentError(f"{path} must be a mapping")
+        return normalized
 
 
 def _serialize_stage_artifact_index(index: Mapping[str, ArtifactRef]) -> dict[str, PlainData]:

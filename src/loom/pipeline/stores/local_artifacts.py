@@ -62,7 +62,7 @@ class LocalArtifactStore:
         validate_stage_name(stage_name, field="stage_name")
         validate_output_name(name, field="name")
 
-        normalized_metadata = ensure_plain_data(dict(metadata or {}), path="metadata")
+        normalized_metadata = self._normalize_metadata(metadata)
         data = self._encode(obj, codec_key=codec_key, metadata=normalized_metadata)
         path = self.allocate_path(run_id=run_id, stage_name=stage_name, name=name, codec_key=codec_key)
         atomic_write_bytes(path, data)
@@ -100,7 +100,7 @@ class LocalArtifactStore:
         validate_stage_name(stage_name, field="stage_name")
         validate_output_name(name, field="name")
 
-        normalized_metadata = ensure_plain_data(dict(metadata or {}), path="metadata")
+        normalized_metadata = self._normalize_metadata(metadata)
         if not self._is_supported_uri(uri):
             raise UnsupportedArtifactURIError(f"Unsupported URI scheme for artifact registration: {uri!r}")
         try:
@@ -166,9 +166,12 @@ class LocalArtifactStore:
             )
 
         path = self.local_path(ref)
+        if not path.is_file():
+            raise ArtifactTypeMismatchError(f"Cannot load non-file artifact path {path}")
         data = path.read_bytes()
+        metadata = self._normalize_metadata(ref.metadata)
         try:
-            return self._registry.decode(selected_codec, data, metadata=ensure_plain_data(ref.metadata, path="artifact metadata"))
+            return self._registry.decode(selected_codec, data, metadata=metadata)
         except Exception as exc:
             if isinstance(exc, CodecError):
                 raise ArtifactStoreError(
@@ -277,6 +280,12 @@ class LocalArtifactStore:
             return validate_digest(checksum)
         except Exception as exc:
             raise ArtifactChecksumMismatchError(f"Invalid checksum syntax {checksum!r}: {exc}") from exc
+
+    def _normalize_metadata(self, metadata: Mapping[str, PlainData] | None) -> dict[str, PlainData]:
+        normalized = ensure_plain_data(dict(metadata or {}), path="metadata")
+        if not isinstance(normalized, dict):
+            raise ArtifactStoreError(f"artifact metadata must be a mapping, got {type(normalized)!r}")
+        return normalized
 
     def _encode(self, obj: object, *, codec_key: str, metadata: Mapping[str, PlainData]) -> bytes:
         try:

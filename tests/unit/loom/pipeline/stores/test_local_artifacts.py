@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from loom.artifacts import ArtifactRef
 from loom.pipeline.stores import (
     ArtifactChecksumMismatchError,
     ArtifactChecksumUnsupportedError,
@@ -112,20 +111,37 @@ def test_local_artifact_checksum_behavior(tmp_path: Path) -> None:
             stage_name="stage",
             name="bad",
             artifact_type="bytes",
-            checksum="sha256:0123456789",
+            checksum=f"sha256:{'0' * 64}",
         )
 
-        with pytest.raises(ArtifactChecksumUnsupportedError):
-            directory = tmp_path / "run" / "stage" / "dir"
-            directory.mkdir(parents=True, exist_ok=True)
-            store.register(
-                directory,
-                run_id="run1",
-                stage_name="stage",
-                name="dir",
+    directory = tmp_path / "run" / "stage" / "dir"
+    directory.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(ArtifactChecksumUnsupportedError):
+        store.register(
+            directory,
+            run_id="run1",
+            stage_name="stage",
+            name="dir",
             artifact_type="tree",
-            checksum="sha256:abcdef",
+            checksum=f"sha256:{'a' * 64}",
         )
+
+
+def test_local_artifact_load_rejects_directory_artifacts(tmp_path: Path) -> None:
+    store = LocalArtifactStore(root=tmp_path / "run")
+    directory = tmp_path / "run" / "stage" / "dir"
+    directory.mkdir(parents=True, exist_ok=True)
+    registered = store.register(
+        directory,
+        run_id="run1",
+        stage_name="stage",
+        name="dir",
+        artifact_type="tree",
+        codec_key="json.v1",
+    )
+
+    with pytest.raises(ArtifactTypeMismatchError):
+        store.load(registered)
 
 
 def test_local_artifact_type_mismatch_raises(tmp_path: Path) -> None:

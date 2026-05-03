@@ -2,10 +2,13 @@
 
 from pathlib import Path
 
+import pytest
+
 from loom.artifacts import ArtifactRef
 from loom.pipeline import RunStatus, StageStatus
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import CorruptStoreDocumentError, LocalRunStore, atomic_write_json
+from loom.serialization import PlainData
 
 
 def test_local_run_creation_writes_layout(tmp_path: Path) -> None:
@@ -49,7 +52,7 @@ def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
     store.write_run_status("run1", status)
     assert store.read_run_status("run1") == status
 
-    plan_payload = {"stage": ["a", "b"]}
+    plan_payload: dict[str, PlainData] = {"stage": ["a", "b"]}
     store.write_plan("run1", plan_payload)
     assert store.read_plan("run1") == plan_payload
 
@@ -131,3 +134,45 @@ def test_local_run_stage_docs_and_logs(tmp_path: Path) -> None:
 
     store.write_stage_log("run1", "stage", "stdout", "line1\n")
     assert store.read_stage_log("run1", "stage", "stdout") == "line1\n"
+
+
+def test_local_run_rejects_corrupt_stage_plain_mapping(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    atomic_write_json(
+        store.get_stage_dir("run1", "stage") / "fingerprint.json",
+        {
+            "schema_version": 1,
+            "run_id": "run1",
+            "stage_name": "stage",
+            "attempt": 1,
+            "created_at": "2020-01-01T00:00:00Z",
+            "fingerprint": ["not", "a", "mapping"],
+        },
+    )
+
+    with pytest.raises(CorruptStoreDocumentError):
+        store.read_stage_fingerprint("run1", "stage")
+
+
+def test_local_run_rejects_corrupt_artifact_index_refs(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_dir = store.create_run("run1")
+    atomic_write_json(
+        run_dir / "artifacts.json",
+        {
+            "schema_version": 1,
+            "run_id": "run1",
+            "updated_at": "2020-01-01T00:00:00Z",
+            "artifacts": {
+                "stage.output": {
+                    "artifact_id": "",
+                    "uri": "file:///tmp/out.json",
+                    "artifact_type": "json",
+                },
+            },
+        },
+    )
+
+    with pytest.raises(CorruptStoreDocumentError):
+        store.read_artifact_index("run1")
