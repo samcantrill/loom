@@ -81,6 +81,20 @@ def test_local_source_exists_and_stat(tmp_path: Path) -> None:
         source.stat("missing.txt")
 
 
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://example.com/data.txt",
+        "file://server/share/file.txt",
+        "file:///tmp/file.txt?download=1",
+    ],
+)
+def test_local_source_exists_unsupported_uri_raises(tmp_path: Path, uri: str) -> None:
+    source = LocalFileSystemSource(root=tmp_path)
+    with pytest.raises(UnsupportedSourceOperationError):
+        source.exists(uri)
+
+
 def test_local_source_glob_returns_sorted_file_uris(tmp_path: Path) -> None:
     source = LocalFileSystemSource(root=tmp_path)
     with source.open("b.txt", "wt", encoding="utf-8") as handle:

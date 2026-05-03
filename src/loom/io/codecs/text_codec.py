@@ -5,11 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from loom.io.codecs.errors import CodecDecodeError, CodecEncodeError
-
-from loom.io.codecs.base import Codec
-from loom.serialization.plain import ensure_plain_data
-
 from loom.serialization import PlainData
+from loom.serialization.plain import ensure_plain_data
 
 
 class TextCodec:

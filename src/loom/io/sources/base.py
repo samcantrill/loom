@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import BinaryIO, Mapping, TextIO, runtime_checkable, Protocol
+from typing import BinaryIO, Literal, Mapping, Protocol, TextIO, overload, runtime_checkable
 
 from loom.serialization import PlainData
 
@@ -17,6 +17,18 @@ class DataSource(Protocol):
     def supports(self, uri: str | Path) -> bool: ...
 
     def resolve(self, uri: str | Path) -> Path: ...
+
+    @overload
+    def open(self, uri: str | Path, mode: Literal["rb"] = "rb", *, encoding: str = "utf-8") -> BinaryIO: ...
+
+    @overload
+    def open(self, uri: str | Path, mode: Literal["wb"], *, encoding: str = "utf-8") -> BinaryIO: ...
+
+    @overload
+    def open(self, uri: str | Path, mode: Literal["rt", "wt"], *, encoding: str = "utf-8") -> TextIO: ...
+
+    @overload
+    def open(self, uri: str | Path, mode: str = "rb", *, encoding: str = "utf-8") -> BinaryIO | TextIO: ...
 
     def open(self, uri: str | Path, mode: str = "rb", *, encoding: str = "utf-8") -> BinaryIO | TextIO: ...
 

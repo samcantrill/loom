@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from loom.io.codecs.base import Codec
 from loom.io.codecs.errors import CodecDecodeError, CodecEncodeError
-from loom.serialization.plain import ensure_plain_data
-
 from loom.serialization import PlainData
+from loom.serialization.plain import ensure_plain_data
 
 
 class BytesCodec:
@@ -25,7 +23,12 @@ class BytesCodec:
             )
         return bytes(obj)
 
-    def decode(self, data: bytes, *, metadata: Mapping[str, PlainData] | None = None) -> bytes:
+    def decode(
+        self,
+        data: bytes | bytearray | memoryview,
+        *,
+        metadata: Mapping[str, PlainData] | None = None,
+    ) -> bytes:
         if metadata is not None:
             ensure_plain_data(metadata, path="$")
         if not isinstance(data, (bytes, bytearray, memoryview)):

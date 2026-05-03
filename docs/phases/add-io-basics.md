@@ -629,10 +629,10 @@ Implementation choices that must not be revisited by the executor:
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used on 2026-05-03 by `loom_phase_refiner` for the bounded post-implementation validation pass.
 - PR review: unused.
 
-The plan quality gate budget for the canonical v0 plan is already fully used and passed with no remaining blockers. This planning pass does not consume the implementation refinement or PR-review budget.
+The plan quality gate budget for the canonical v0 plan is already fully used and passed with no remaining blockers. The implementation refinement budget is now consumed; do not run another automated implementation refinement pass for Phase 3 unless the manager receives explicit user instruction. The PR-review budget remains unused.
 
 ## Completion Notes
 
@@ -653,11 +653,20 @@ The plan quality gate budget for the canonical v0 plan is already fully used and
     - `tests/package/test_public_api.py`
     - `tests/package/test_import_boundaries.py`
   - `make test-package`, `make test-unit`, `make test-contract`, and `make test-integration` were executed and passed after adjusting the io error test module name to avoid pytest import collision.
+- Implementation refinement summary:
+  - Fixed validation-blocking Ruff findings by removing unused codec/test imports and adding the missing `PlainData` import for `JSONCodec` annotations.
+  - Aligned `LocalFileSystemSource.exists()` with the finalized source contract: missing local resources return `False`, while unsupported remote schemes, non-local file authorities, and file URI query/fragment cases raise `UnsupportedSourceOperationError`.
+  - Added focused unit coverage for the unsupported `exists()` cases.
+  - Resolved Phase 3 Pyright failures exposed by `make validate-pr` by adding mode-specific source `open()` overloads, preserving bytes-like `BytesCodec.decode()` behavior in its public type, and tightening codec test protocol annotations.
 - Validation evidence:
   - `make test-package`: passed
   - `make test-unit`: passed
   - `make test-contract`: passed
   - `make test-integration`: passed
   - Targeted run used: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/io tests/contracts tests/integration` also passed.
+  - Refinement targeted run: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/io tests/contracts tests/integration` passed with 57 tests.
+  - Refinement lint/type checks: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors.
+  - Refinement PR gate: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed, including Ruff, Pyright, default pytest (136 passed), and `uv build`.
+  - `make test-summary` was not run during refinement; PR preparation owns final suite-summary generation.
 - PR: pending.
 - Remaining blockers: none.

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
-from loom.serialization import DeserializationError, PlainDataError
+from loom.serialization import DeserializationError, PlainData, PlainDataError
 from loom.serialization.json import json_dumps_pretty, json_loads
 from loom.serialization.plain import ensure_plain_data
 
-from loom.io.codecs.base import Codec
 from loom.io.codecs.errors import CodecDecodeError, CodecEncodeError
 
 

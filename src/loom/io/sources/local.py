@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from glob import glob as _glob
 from pathlib import Path
-from typing import BinaryIO, Mapping, TextIO
-from datetime import datetime, timezone
+from typing import BinaryIO, Literal, Mapping, TextIO, cast, overload
 
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
@@ -56,6 +56,18 @@ class LocalFileSystemSource:
         except Exception as exc:
             raise UnsupportedSourceOperationError(f"{self.name} source failed to resolve {uri!r}") from exc
 
+    @overload
+    def open(self, uri: str | Path, mode: Literal["rb"] = "rb", *, encoding: str = "utf-8") -> BinaryIO: ...
+
+    @overload
+    def open(self, uri: str | Path, mode: Literal["wb"], *, encoding: str = "utf-8") -> BinaryIO: ...
+
+    @overload
+    def open(self, uri: str | Path, mode: Literal["rt", "wt"], *, encoding: str = "utf-8") -> TextIO: ...
+
+    @overload
+    def open(self, uri: str | Path, mode: str = "rb", *, encoding: str = "utf-8") -> BinaryIO | TextIO: ...
+
     def open(self, uri: str | Path, mode: str = "rb", *, encoding: str = "utf-8") -> BinaryIO | TextIO:
         if not self.supports(uri):
             raise UnsupportedSourceOperationError(f"{self.name} source does not support URI {uri!r}")
@@ -67,8 +79,8 @@ class LocalFileSystemSource:
         path = self.resolve(uri)
         try:
             if "b" in mode:
-                return open(path, mode)
-            return open(path, mode, encoding=encoding)
+                return cast(BinaryIO, open(path, mode))
+            return cast(TextIO, open(path, mode, encoding=encoding))
         except FileNotFoundError as exc:
             raise SourceNotFoundError(f"{self.name} source cannot open missing resource: {path}") from exc
         except PermissionError as exc:
@@ -78,11 +90,8 @@ class LocalFileSystemSource:
 
     def exists(self, uri: str | Path) -> bool:
         if not self.supports(uri):
-            return False
-        try:
-            return self.resolve(uri).exists()
-        except UnsupportedSourceOperationError:
-            return False
+            raise UnsupportedSourceOperationError(f"{self.name} source does not support URI {uri!r}")
+        return self.resolve(uri).exists()
 
     def stat(self, uri: str | Path) -> Mapping[str, PlainData]:
         if not self.supports(uri):

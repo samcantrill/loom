@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import cast
+
 import pytest
 
 from loom.io.codecs import (
@@ -9,20 +12,20 @@ from loom.io.codecs import (
     CodecRegistry,
     CodecRegistrationError,
     JSONCodec,
-    TextCodec,
     create_default_codec_registry,
     UnknownCodecError,
 )
+from loom.serialization import PlainData
 
 
 class DummyCodec:
     key = "dummy.v1"
 
-    def encode(self, obj: object, *, metadata: dict | None = None) -> bytes:
+    def encode(self, obj: object, *, metadata: Mapping[str, PlainData] | None = None) -> bytes:
         del metadata
         return b"ok"
 
-    def decode(self, data: bytes, *, metadata: dict | None = None) -> str:
+    def decode(self, data: bytes, *, metadata: Mapping[str, PlainData] | None = None) -> str:
         del metadata
         if data != b"ok":
             raise ValueError("bad")
@@ -42,7 +45,7 @@ def test_registry_register_invalid_codec_object() -> None:
 
     registry = CodecRegistry()
     with pytest.raises(CodecRegistrationError):
-        registry.register(_NotCodec())
+        registry.register(cast(Codec, _NotCodec()))
 
 
 def test_registry_get_unknown_key_lists_registered() -> None:
@@ -74,4 +77,3 @@ def test_default_codec_registry_is_fresh() -> None:
     second = create_default_codec_registry()
     assert first is not second
     assert first.keys() == second.keys()
-

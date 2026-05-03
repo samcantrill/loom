@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, runtime_checkable, Protocol
+from typing import Protocol, runtime_checkable
 
 from loom.serialization import PlainData
 
@@ -20,4 +20,3 @@ class Codec(Protocol):
 
 
 __all__ = ["Codec"]
-
