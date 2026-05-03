@@ -786,9 +786,10 @@ Completion summary:
 
 ### Phase 4 — Config Composition
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-config-composition`
-PR: pending
+PR: prepared at `docs/phases/add-config-composition-pr-body.md`; GitHub
+opening is blocked by invalid `gh` authentication.
 
 Goal:
 
@@ -874,7 +875,43 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Implemented trusted Phase 4 YAML config composition on
+  `codex/add-config-composition` in worktree
+  `/home/samcantrill/work/loom-worktrees/add-config-composition`.
+- Added hard runtime config dependencies (`omegaconf`, `pydantic`, and
+  `pyyaml`), config loading, recursive merge, dot-path overrides,
+  interpolation, top-level validation, unsupported `_recipe_` rejection,
+  recursive redaction, config provenance, deterministic fingerprints, and the
+  public `compose_config` API.
+- Kept future phases out of scope: no recipe expansion, no `_target_`
+  construction, no pipeline/store/runner behavior, no config persistence, and
+  no top-level `loom` config exports.
+- Added package, unit, and integration coverage for the Phase 4 public API,
+  import boundaries, config helpers, provenance/fingerprints, composition
+  behavior, and deferred stubs. Contract coverage remains the existing Phase 3
+  contracts; e2e remains not present for this phase.
+- Final PR-prep validation on 2026-05-03:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: passed; Ruff passed,
+    Pyright reported 0 errors, default pytest passed with 175 tests, and
+    `uv build` produced source and wheel distributions.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`: passed and wrote
+    `build/test-summary.md`; package suite passed with 13 tests, unit suite
+    passed with 153 tests, contract suite passed with 4 tests, integration
+    suite passed with 5 tests, and e2e was not present.
+- Phase implementation refinement budget: used by `loom_phase_refiner` in
+  commit `429f2ee`. PR review budget: unused.
+- PR body prepared at
+  `docs/phases/add-config-composition-pr-body.md`.
+- PR creation blocker: `gh auth status` reports the configured GitHub token for
+  `samcantrill` is invalid. After authentication is refreshed, open the PR with:
+
+  ```sh
+  gh pr create --base develop --head codex/add-config-composition --title "Phase 4: Config Composition" --body-file docs/phases/add-config-composition-pr-body.md
+  gh pr view <PR> --json baseRefName,headRefName,state,url
+  ```
+
+  Verify `baseRefName` is exactly `develop`.
+- Remaining product blockers: none known.
 
 ### Phase 5 — Recipes And Instantiation
 

@@ -672,10 +672,30 @@ make test-summary
 - Dependency lock update: manager reran `UV_CACHE_DIR=/tmp/uv-cache uv lock` with network escalation after implementation; `uv.lock` now includes `omegaconf`, `pydantic`, `pyyaml`, and transitive runtime dependencies and is included in the refinement commit.
 - Implementation validation: Phase 4 targeted pytest, package, unit, integration, contract, Pyright, and `make validate-pr` passed locally during the refinement pass.
 - Refinement summary: completed by `loom_phase_refiner` on 2026-05-03 in the single allowed implementation/test refinement pass.
-- PR preparation: deferred to `loom_pr_preparer`.
-- Remaining blockers: none known after this refinement pass.
-- Refiner handoff items:
-  - Run `make test-summary` in `loom_pr_preparer` for PR body suite evidence.
+- PR preparation: completed by `loom_pr_preparer` on 2026-05-03. The canonical
+  plan status was updated to `pr_open`, and the PR body was prepared at
+  `docs/phases/add-config-composition-pr-body.md`.
+- Final PR-prep validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: passed; Ruff passed,
+    Pyright reported 0 errors, default pytest passed with 175 tests, and
+    `uv build` produced sdist and wheel artifacts.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`: passed and wrote
+    `build/test-summary.md`; package passed with 13 tests, unit passed with
+    153 tests, contract passed with 4 tests, integration passed with 5 tests,
+    and e2e was not present.
+- PR creation status: not opened during PR preparation because `gh auth status`
+  reports the configured GitHub token for `samcantrill` is invalid. After
+  authentication is refreshed, run:
+
+  ```sh
+  gh pr create --base develop --head codex/add-config-composition --title "Phase 4: Config Composition" --body-file docs/phases/add-config-composition-pr-body.md
+  gh pr view <PR> --json baseRefName,headRefName,state,url
+  ```
+
+  Verify `baseRefName` is exactly `develop`.
+- Remaining product blockers: none known after this refinement and PR-prep
+  validation pass. The only known blocker is GitHub authentication for remote PR
+  creation.
 
 ### Phase Refinement Report
 
@@ -753,5 +773,7 @@ result: passed; Ruff passed, Pyright passed, default pytest passed with 175 test
 
 - Completion notes updated in expanded phase plan: yes.
 - Budget status updated: yes, phase implementation refinement is `used`; PR review remains `unused`.
-- Final validation recommended: `make test-summary` for PR body suite evidence.
-- Suite evidence still needed: PR preparer should record `make test-summary` output in the PR body.
+- Final validation completed by `loom_pr_preparer`: `make validate-pr` and
+  `make test-summary` passed with `UV_CACHE_DIR=/tmp/uv-cache`.
+- Suite evidence recorded: yes, in
+  `docs/phases/add-config-composition-pr-body.md`.
