@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft plan.
+- Status: final expanded plan.
 - Branch: `codex/add-primitives-serialization`.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-primitives-serialization`.
 - Expanded plan path: `docs/phases/add-primitives-serialization.md`.
@@ -79,22 +79,24 @@ Acceptance criteria:
 ## In-Scope Work
 
 - Add `src/loom/refs.py` with `ResourceRef` as a frozen slots dataclass.
-  - Fields should include `uri`, `resource_type`, optional `codec_key`, `schema_version`, optional `checksum`, optional `fingerprint`, and generic `metadata`.
-  - `codec_key` must be able to distinguish omitted input from explicit `None` during deserialization while normalizing the object field to `None`.
+  - Fields are exactly `uri`, `resource_type`, `codec_key`, `schema_version`, `checksum`, and `metadata`, with defaults documented below.
+  - `ResourceRef` does not have a `fingerprint` field in Phase 2. Resource checksums identify referenced bytes; later stage fingerprint policy decides how to hash resource refs as semantic inputs.
+  - `codec_key` deserialization must accept set, omitted, and explicit `None` inputs while normalizing the object field to `None` for omitted/null cases. Canonical serialization always emits the `codec_key` key.
   - Provide explicit `to_dict` and `from_dict` helpers that validate required fields and plain metadata.
   - Do not add `load`, `open`, `exists`, `save`, URI parsing, or codec behavior.
 - Add `src/loom/artifacts.py` with `ArtifactRef` as a frozen slots dataclass.
-  - Fields should include `artifact_id`, `uri`, `artifact_type`, optional `codec_key`, `schema_version`, optional `checksum`, optional `fingerprint`, optional `producer_stage`, optional `created_at`, and generic `metadata`.
+  - Fields are exactly `artifact_id`, `uri`, `artifact_type`, `codec_key`, `schema_version`, `checksum`, `fingerprint`, `producer_stage`, `created_at`, and `metadata`, with defaults documented below.
   - Preserve checksum as stored-byte identity and fingerprint as semantic production-input identity.
   - Provide explicit `to_dict` and `from_dict` helpers only; stores/codecs own save/load behavior.
-- Expand `src/loom/ids.py` with the additional aliases needed by Phase 2, including `ResourceType`, `Checksum`, and `Fingerprint` if the implementation chooses to keep digest aliases centralized. Keep aliases as `str`.
+- Expand `src/loom/ids.py` with exactly these additional aliases: `ResourceType`, `Checksum`, and `Fingerprint`. Keep aliases as `str`; do not introduce `NewType` or wrapper IDs.
 - Add `src/loom/fingerprints.py`.
   - Provide `Digest`, `Checksum`, `Fingerprint`, `HashAlgorithm`, `ParsedDigest`, `hash_bytes`, `hash_text`, `hash_plain_data`, `hash_mapping`, `parse_digest`, `validate_digest`, `format_digest`, and `compare_digests`.
   - Use `sha256` as the default and only required v0 algorithm.
   - Use `hashlib` and canonical JSON from `loom.serialization`; never use Python `hash()`, `repr()` fallbacks, current time, git state, environment, path normalization, or hidden inputs.
-  - Keep file/stream hashing out of Phase 2 unless the plan expansion agent finds a direct blocker; I/O and store phases own file access.
+  - Keep file/stream hashing out of Phase 2; I/O and store phases own file access.
 - Add `src/loom/protocols.py`.
-  - Include only tiny package-wide protocols that are genuinely generic: `Validatable`, `Fingerprintable`, and `PlainSerializable` if explicit `to_dict` support is used broadly.
+  - Include only tiny package-wide protocols that are genuinely generic: `Validatable` and `Fingerprintable`.
+  - Defer `PlainSerializable`; public object conversion remains explicit through `to_dict`/`from_dict` methods in this phase.
   - Keep subsystem protocols such as `Stage`, `Codec`, `DataSource`, `ArtifactStore`, `RunStore`, and `Executor` out of this module.
 - Replace `src/loom/records/__init__.py` skeleton exports with real records package exports.
   - Expected files: `base.py`, `manifest.py`, `views.py`, `filters.py`, and `errors.py`.
@@ -109,14 +111,14 @@ Acceptance criteria:
   - Default remote URL capture to off to avoid token leakage.
 - Replace `src/loom/serialization/__init__.py` skeleton exports with plain-data, dataclass, JSON, schema, and error helpers.
   - Expected files: `plain.py`, `dataclasses.py`, `json.py`, `schema.py`, and `errors.py`.
-  - Define `PlainData`, `is_plain_data`, `ensure_plain_data`, `to_plain_data`, dataclass conversion helpers, `stable_json_dumps`, optional `stable_json_bytes`, `json_dumps_pretty`, `json_loads`, `get_schema_version`, `require_schema_version`, and `check_supported_schema`.
+  - Define `PlainData`, `is_plain_data`, `ensure_plain_data`, `to_plain_data`, dataclass conversion helpers, `stable_json_dumps`, `stable_json_bytes`, `json_dumps_pretty`, `json_loads`, `get_schema_version`, `require_schema_version`, and `check_supported_schema`.
   - Allow only JSON/YAML-compatible plain data: `None`, `bool`, finite `int`/`float`, `str`, `list`, and `dict[str, plain]`.
   - Normalize tuples to lists and mappings to dicts only when keys are strings.
   - Reject non-finite floats, non-string mapping keys, sets, bytes, `Path`, `datetime`, callables, and arbitrary objects without explicit conversion.
   - Provide path-aware errors.
   - Do not add write helpers in Phase 2. Local file reads are not required either; JSON string parsing/dumping is sufficient for this phase and avoids blurring the I/O boundary.
 - Update `src/loom/errors.py` only as needed for Phase 2 root error names.
-  - Add `ResourceError`, `SerializationError`, `FingerprintError`, and `ProvenanceError` only if public modules need broad catchable roots.
+  - Add `ResourceError`, `SerializationError`, `FingerprintError`, and `ProvenanceError`.
   - Keep concrete subsystem exceptions near their modules and rooted in the broad hierarchy.
 - Update `src/loom/__init__.py` only with cheap, implemented public primitive exports allowed by the canonical plan.
   - Expected exports after Phase 2: `__version__`, `ResourceRef`, `InMemoryManifest`, `ManifestView`, `Record`, `ArtifactRef`, `Fingerprint`, and `hash_mapping`.
@@ -132,7 +134,7 @@ Acceptance criteria:
 - No schema migrations; Phase 2 schema helpers validate versions only.
 - No domain-specific resource classes, artifact classes, manifest filters, metadata schemas, dataset adapters, model/report/checkpoint helpers, or downstream fixtures.
 - No strong ID wrapper classes, closed enums for resource/artifact types, or global registries for records/resources/artifacts.
-- No file hashing helper that opens paths, no stream hashing unless plan expansion finds a concrete need, no remote URI reading, and no filesystem-backed manifests.
+- No file hashing helper that opens paths, no stream hashing, no remote URI reading, and no filesystem-backed manifests.
 - No automatic dependency scanning, `pip freeze`, SBOM generation, full import graph scanning, environment-variable dumps, remote metadata discovery, network access, or heavy provenance inspection.
 - No YAML helpers requiring optional dependencies in this phase. If a YAML module stub is added to preserve package shape, importing core serialization must not require YAML dependencies and no YAML behavior should be tested as Phase 2 acceptance.
 - No broad refactors, roadmap/status updates, PR body creation, full validation, or PR opening during this planning stage.
@@ -140,18 +142,223 @@ Acceptance criteria:
 ## Assumptions
 
 - The local `develop` commit `af9bb3ebe64943343425735d2b84c0ba6a0c0cc7` is the manager-approved Phase 2 base because remote synchronization is unavailable in this environment.
-- Public primitives should use `@dataclass(frozen=True, slots=True)` unless the implementation discovers a Python typing limitation that the plan expansion agent records.
+- Public primitives should use `@dataclass(frozen=True, slots=True)` unless the executor discovers a Python typing limitation; if so, the executor must stop and report the blocker rather than silently changing public shapes.
 - Public persisted shapes should use explicit `to_dict`/`from_dict` methods rather than generic magic reconstruction.
 - `schema_version` on `ResourceRef` and `ArtifactRef` describes the referenced resource/artifact payload schema, not the document schema for the ref object itself.
 - Provenance model `schema_version` fields describe the provenance document shape.
 - Metadata, annotations, and provenance extension fields are project-owned but must be plain-data compatible.
-- `ResourceRef.codec_key` should serialize with a `codec_key` key whose value may be `None`; `from_dict` should also accept older or author-supplied data where `codec_key` is absent and treat it as `None`.
-- `Record.resources` should be keyed by `ResourceKey` and hold `ResourceRef` values. If plan expansion chooses to permit serialized plain resource dicts in `from_dict`, it must still reconstruct them explicitly through `ResourceRef.from_dict`.
+- `ResourceRef.codec_key` should serialize with a `codec_key` key whose value may be `None`; `from_dict` should also accept older or author-supplied data where `codec_key` is absent and treat it as `None`. Omission is not preserved after canonical serialization.
+- `Record.resources` should be keyed by `ResourceKey` and hold `ResourceRef` values. `Record.from_dict` must reconstruct serialized resource dicts explicitly through `ResourceRef.from_dict`.
 - `Record.provenance` can remain generic plain-data metadata in Phase 2 rather than depending on full `RunProvenance` or `StageProvenance`; later pipeline phases decide which provenance records are attached to runtime records.
-- `ManifestView` should compose filters lazily over an underlying manifest iterable; materialization is not required unless tests need a stable helper such as `to_list`.
+- `InMemoryManifest` iteration preserves constructor input order after normalization to a tuple. It must not sort records by `record_id`; tests must prove input order is preserved and duplicate IDs fail.
+- `ManifestView` composes filters lazily over an underlying manifest iterable and preserves source iteration order for passing records. It must provide `materialize() -> InMemoryManifest`; `to_dict()` serializes the materialized manifest, and serializable filter definitions are out of scope.
 - Provenance capture helpers are allowed to execute local `git` commands through `subprocess` because they gather explicit local facts, but they must not require git to be installed and must not access the network.
 - `loom.fingerprints` may import `loom.serialization`; `loom.serialization` must not import `loom.fingerprints` to avoid cycles.
 - Existing Phase 1 config stubs remain unsupported and unchanged except for any import-boundary tests that need to verify they still do not load new primitive modules eagerly.
+
+## Decision-Complete Public Contract
+
+The executor must treat this section as the implementation contract. If a needed public shape conflicts with this section, stop and report the blocker instead of widening the phase.
+
+### Module Layout And Exports
+
+- `src/loom/refs.py`
+  - Public `__all__`: `["ResourceRef", "ResourceRefError"]`.
+- `src/loom/artifacts.py`
+  - Public `__all__`: `["ArtifactRef", "ArtifactValidationError"]`.
+- `src/loom/fingerprints.py`
+  - Public `__all__`: `["Digest", "Checksum", "Fingerprint", "HashAlgorithm", "ParsedDigest", "FingerprintError", "UnsupportedHashAlgorithmError", "InvalidDigestError", "FingerprintInputError", "FingerprintComparisonError", "hash_bytes", "hash_text", "hash_plain_data", "hash_mapping", "parse_digest", "validate_digest", "format_digest", "compare_digests"]`.
+- `src/loom/protocols.py`
+  - Public `__all__`: `["Validatable", "Fingerprintable"]`.
+- `src/loom/records/__init__.py`
+  - Public `__all__`: `["Record", "Manifest", "InMemoryManifest", "ManifestView", "RecordFilter", "HasResource", "MetadataEquals", "MetadataIn", "RecordError", "RecordNotFoundError", "ManifestError", "DuplicateRecordError"]`.
+- `src/loom/provenance/__init__.py`
+  - Public `__all__`: `["GitProvenance", "CodeProvenance", "EnvironmentProvenance", "DependencyProvenance", "CommandProvenance", "ArtifactLineage", "StageProvenance", "RunProvenance", "ProvenanceCaptureOptions", "ProvenanceError", "ProvenanceCaptureError", "ProvenanceValidationError", "ProvenanceRedactionError", "capture_git_provenance", "capture_code_provenance", "capture_environment_provenance", "capture_dependency_provenance", "capture_command_provenance", "capture_artifact_lineage", "capture_run_provenance"]`.
+- `src/loom/serialization/__init__.py`
+  - Public `__all__`: `["PlainData", "SerializationError", "DeserializationError", "PlainDataError", "SchemaVersionError", "is_plain_data", "ensure_plain_data", "to_plain_data", "dataclass_to_dict", "dataclass_from_dict", "stable_json_dumps", "stable_json_bytes", "json_dumps_pretty", "json_loads", "get_schema_version", "require_schema_version", "check_supported_schema"]`.
+- `src/loom/__init__.py`
+  - Public `__all__`: `["__version__", "ResourceRef", "InMemoryManifest", "ManifestView", "Record", "ArtifactRef", "Fingerprint", "hash_mapping"]`.
+  - These top-level imports must stay cheap and must not import config, pipeline, CLI, I/O, stores, plugins, or optional dependencies.
+
+### Error Hierarchy
+
+- Update `loom.errors` to export exactly:
+  `LoomError`, `ValidationError`, `ContractError`, `ResourceError`, `ArtifactError`, `ConfigError`, `SerializationError`, `FingerprintError`, `PipelineError`, `ExecutionError`, `ProvenanceError`, and `IOErrorBase`.
+- Keep `IOErrorBase` for Phase 1 compatibility; do not rename it to `LoomIOError` in Phase 2.
+- Do not implement the richer `ErrorContext` design in this phase. Path-aware errors must be expressed through concise messages; local error attributes are allowed only when a unit test asserts them.
+- Concrete Phase 2 errors:
+  - `ResourceRefError(ResourceError, ValidationError)` in `loom.refs`.
+  - `ArtifactValidationError(ArtifactError, ValidationError)` in `loom.artifacts`.
+  - `RecordError(ValidationError)`, `RecordNotFoundError(RecordError)`, `ManifestError(RecordError)`, and `DuplicateRecordError(ManifestError)` in `loom.records.errors`.
+  - `loom.serialization.errors` re-exports the shared `SerializationError` root and defines `DeserializationError(SerializationError)`, `PlainDataError(SerializationError)`, and `SchemaVersionError(DeserializationError)`. Do not create a second incompatible `SerializationError` class.
+  - `loom.fingerprints` re-exports the shared `FingerprintError` root and defines `UnsupportedHashAlgorithmError(FingerprintError)`, `InvalidDigestError(FingerprintError)`, `FingerprintInputError(FingerprintError)`, and `FingerprintComparisonError(FingerprintError)`.
+  - `loom.provenance.errors` re-exports the shared `ProvenanceError` root and defines `ProvenanceCaptureError(ProvenanceError)`, `ProvenanceValidationError(ProvenanceError)`, and `ProvenanceRedactionError(ProvenanceError)`.
+
+### Primitive Dataclasses And Serialized Shapes
+
+- Use `@dataclass(frozen=True, slots=True)` for public value objects. If a Python typing limitation makes that impossible, stop and report the blocker instead of changing the public shape.
+- Validate structural invariants during construction and deserialization. Copy incoming mappings/sequences into new containers so later caller mutation cannot alter object state. Deep-freezing nested plain data is not required unless the implementation chooses it consistently.
+- `ResourceRef` fields and defaults:
+  - `uri: str` required, non-empty.
+  - `resource_type: ResourceType` required, non-empty.
+  - `codec_key: CodecKey | None = None`; if present it must be a non-empty string.
+  - `schema_version: int = 1`; must be a positive integer and means referenced resource payload schema, not the `ResourceRef` object schema.
+  - `checksum: Checksum | None = None`; if present it must pass digest validation.
+  - `metadata: Mapping[str, PlainData] = field(default_factory=dict)`.
+- `ResourceRef.to_dict()` canonical shape always includes every key:
+
+```python
+{
+    "uri": "file:///data/project/input.jsonl",
+    "resource_type": "jsonl",
+    "codec_key": "jsonl.v1",
+    "schema_version": 1,
+    "checksum": "sha256:<64 lowercase hex>",
+    "metadata": {"split": "train"},
+}
+```
+
+- `ResourceRef.from_dict()` rejects unknown fields, requires `uri` and `resource_type`, accepts missing optional/default fields, and specifically handles:
+  - set `codec_key`: returns the string and `to_dict()` emits the string.
+  - explicit `{"codec_key": None}`: returns `codec_key is None` and `to_dict()` emits `"codec_key": None`.
+  - omitted `codec_key`: returns `codec_key is None` and `to_dict()` emits canonical `"codec_key": None`; omission is accepted for compatibility but not preserved.
+- `ArtifactRef` fields and defaults:
+  - `artifact_id: ArtifactID` required, non-empty.
+  - `uri: str` required, non-empty. Do not parse or normalize URIs in Phase 2.
+  - `artifact_type: ArtifactType` required, non-empty.
+  - `codec_key: CodecKey | None = None`.
+  - `schema_version: int = 1`; must be positive and means artifact payload schema, not the `ArtifactRef` object schema.
+  - `checksum: Checksum | None = None`; stored-byte identity.
+  - `fingerprint: Fingerprint | None = None`; semantic production identity.
+  - `producer_stage: StageID | None = None`.
+  - `created_at: str | None = None`; if present, validate with existing UTC timestamp parsing.
+  - `metadata: Mapping[str, PlainData] = field(default_factory=dict)`.
+- `ArtifactRef.to_dict()` canonical shape always includes every key:
+
+```python
+{
+    "artifact_id": "train/best_checkpoint",
+    "uri": "file:///runs/example/artifacts/train/best.ckpt",
+    "artifact_type": "checkpoint",
+    "codec_key": None,
+    "schema_version": 1,
+    "checksum": "sha256:<64 lowercase hex>",
+    "fingerprint": "sha256:<64 lowercase hex>",
+    "producer_stage": "train",
+    "created_at": "2026-05-02T05:30:00Z",
+    "metadata": {"epoch": 42},
+}
+```
+
+- `ArtifactRef.from_dict()` rejects unknown fields, accepts missing optional/default fields, validates checksum and fingerprint with the same digest syntax, and keeps their field names and assertions separate.
+- `Record` fields and defaults:
+  - `record_id: RecordID` required, non-empty.
+  - `resources: Mapping[ResourceKey, ResourceRef] = field(default_factory=dict)`.
+  - `metadata: Mapping[str, PlainData] = field(default_factory=dict)`.
+  - `annotations: Mapping[str, PlainData] = field(default_factory=dict)`.
+  - `provenance: Mapping[str, PlainData] = field(default_factory=dict)`.
+- `Record.to_dict()` canonical shape:
+
+```python
+{
+    "record_id": "sample-001",
+    "resources": {"input": ResourceRef(...).to_dict()},
+    "metadata": {"split": "train"},
+    "annotations": {},
+    "provenance": {},
+}
+```
+
+- `Record.from_dict()` rejects unknown fields, reconstructs resources only through `ResourceRef.from_dict()`, and supports helper methods `has_resource(key)`, `get_resource(key, default=None)`, and `require_resource(key)`.
+- `InMemoryManifest` fields:
+  - `records: Iterable[Record]` accepted by construction and normalized to `tuple[Record, ...]`.
+  - `metadata: Mapping[str, PlainData] = field(default_factory=dict)`.
+  - It rejects duplicate `record_id` values at construction with `DuplicateRecordError`.
+  - Iteration order is constructor/serialized record order, not sorted order.
+  - `get(record_id)` returns `Record | None`; `require(record_id)` raises `RecordNotFoundError`; `__len__` returns record count.
+- `InMemoryManifest.to_dict()` canonical shape:
+
+```python
+{
+    "schema_version": 1,
+    "records": [record.to_dict(), ...],
+    "metadata": {},
+}
+```
+
+- `InMemoryManifest.from_dict()` requires supported `schema_version == 1`, rejects unknown fields, reconstructs records in listed order, and rejects duplicate IDs.
+- `ManifestView` fields:
+  - `source: Manifest`.
+  - `filters: tuple[RecordFilter, ...] = ()`.
+  - `metadata: Mapping[str, PlainData] = field(default_factory=dict)`.
+  - Iteration applies filters in order and preserves source order for records that pass.
+  - `filter(predicate)` returns a new `ManifestView` with the predicate appended.
+  - `get(record_id)` returns the matching source record only if it passes filters; `require(record_id)` raises `RecordNotFoundError`; `__len__` may count by scanning.
+  - `materialize()` returns an `InMemoryManifest` with passing records in view order and view metadata.
+  - `to_dict()` serializes the materialized manifest. Do not implement serializable filter definitions.
+- Record filters:
+  - `RecordFilter` is a structural protocol with `__call__(record: Record) -> bool`.
+  - `HasResource(key: str)` validates a non-empty key and checks resource presence.
+  - `MetadataEquals(key: str, value: PlainData)` validates a non-empty key and plain value, then compares `record.metadata.get(key) == value`.
+  - `MetadataIn(key: str, values: Iterable[PlainData])` validates a non-empty key, normalizes values to `tuple[PlainData, ...]`, and uses equality membership. Use a tuple instead of a set so unhashable plain data remains valid and ordering is deterministic.
+
+### Serialization Contract
+
+- `PlainData` includes only `None`, `bool`, finite `int`/`float`, `str`, `list[PlainData]`, and `dict[str, PlainData]`.
+- `to_plain_data` conversion precedence is: already-valid plain leaves, mappings, lists/tuples, objects with public zero-argument `to_dict()`, dataclass instances, then error. Return new containers and never mutate inputs.
+- Reject non-string mapping keys, non-finite floats, sets/frozensets, bytes/bytearray, `Path`, `datetime`, callables, arbitrary objects without `to_dict()`, and all NumPy/Pydantic-specific special cases.
+- `stable_json_dumps(value)` must call `to_plain_data`, use `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`, `allow_nan=False`, and return no trailing newline.
+- `stable_json_bytes(value)` encodes `stable_json_dumps(value)` as UTF-8.
+- `json_dumps_pretty(value, *, sort_keys=True)` must call `to_plain_data`, use two-space indentation, `ensure_ascii=False`, `allow_nan=False`, and include one trailing newline.
+- `json_loads(text, *, path="<string>")` parses JSON text only, wraps invalid JSON in `DeserializationError`, and validates through `ensure_plain_data`.
+- Do not implement `read_json`, `write_json`, YAML helpers, path opening, URI handling, or atomic writes in Phase 2.
+- Schema helpers:
+  - `get_schema_version(data, *, field="schema_version", path="$") -> int` requires mapping input, present integer field, and positive value.
+  - `require_schema_version(data, expected, *, field="schema_version", path="$") -> None` raises `SchemaVersionError` when actual differs.
+  - `check_supported_schema(data, *, supported, field="schema_version", path="$") -> int` returns the actual version only when it is in `supported`.
+  - No migrations or compatibility rewriting.
+
+### Digest And Fingerprint Contract
+
+- Type aliases: `Digest = str`, `Checksum = str`, `Fingerprint = str`, and `HashAlgorithm = str`.
+- `ParsedDigest` is a frozen slots dataclass with fields `algorithm: str` and `hexdigest: str`.
+- Persisted digest syntax is exactly `sha256:<64 lowercase hex characters>` for Phase 2.
+- Supported algorithms are exactly `{"sha256"}`. `sha256` is the default.
+- `validate_digest(value, *, algorithms=None)` requires a string, algorithm prefix, supported algorithm, lowercase hex, and the expected length for sha256; it returns the unchanged normalized digest string.
+- `parse_digest(value)` validates then returns `ParsedDigest(algorithm="sha256", hexdigest="<hex>")`.
+- `format_digest(algorithm, hexdigest)` validates supported algorithm and hex length, normalizes algorithm and hex to lowercase, and returns canonical `algorithm:hex`.
+- `compare_digests(left, right)` returns `False` when either side is `None`, validates both non-`None` values, and compares canonical strings with `hmac.compare_digest`.
+- `hash_bytes(data, *, algorithm="sha256")` accepts `bytes` only and returns a canonical digest.
+- `hash_text(text, *, algorithm="sha256", encoding="utf-8")` requires `str`, encodes with the explicit encoding, and delegates to `hash_bytes`.
+- `hash_plain_data(value, *, algorithm="sha256")` uses `stable_json_bytes(value)` and `hash_bytes`.
+- `hash_mapping(mapping, *, algorithm="sha256")` first requires a top-level mapping, then delegates to `hash_plain_data`.
+- Do not add `hash_file` or `hash_stream` in Phase 2.
+
+### Provenance Contract
+
+- Provenance models are frozen slots dataclasses with explicit `to_dict()` and `from_dict()` where persisted.
+- Every provenance model `to_dict()` emits `schema_version`, `kind`, and all public fields. Every `from_dict()` requires supported `schema_version == 1`, validates the exact `kind`, rejects unknown fields, and reconstructs nested provenance models explicitly.
+- Provenance `kind` values are exactly `loom.git_provenance`, `loom.code_provenance`, `loom.environment_provenance`, `loom.dependency_provenance`, `loom.command_provenance`, `loom.artifact_lineage`, `loom.stage_provenance`, and `loom.run_provenance`.
+- Provenance timestamp fields such as `created_at`, `started_at`, and `finished_at` must be UTC metadata strings accepted by `parse_timestamp`.
+- Model fields:
+  - `GitProvenance`: `repository_root: str | None = None`, `commit: str | None = None`, `branch: str | None = None`, `is_dirty: bool | None = None`, `has_untracked: bool | None = None`, `remote_url: str | None = None`, `capture_error: str | None = None`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`.
+  - `CodeProvenance`: `git: GitProvenance | None = None`, `package_name: str | None = None`, `package_version: str | None = None`, `source_paths: tuple[str, ...] = ()`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`.
+  - `EnvironmentProvenance`: `python_version: str` required, `python_executable: str | None = None`, `platform: str | None = None`, `machine: str | None = None`, `processor: str | None = None`, `hostname: str | None = None`, `user: str | None = None`, `selected_env: Mapping[str, str] = field(default_factory=dict)`, `container: Mapping[str, PlainData] = field(default_factory=dict)`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`.
+  - `DependencyProvenance`: `packages: Mapping[str, str] = field(default_factory=dict)`, `missing_packages: tuple[str, ...] = ()`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`. Do not add lockfile reading in Phase 2.
+  - `CommandProvenance`: `argv: tuple[str, ...] = ()`, `cwd: str | None = None`, `launcher: str | None = None`, `command_string: str | None = None`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`. Capture does not derive `command_string`; callers may supply it later through explicit construction.
+  - `ArtifactLineage`: `artifact_id: ArtifactID` required, `artifact_type: ArtifactType | None = None`, `uri: str | None = None`, `artifact_schema_version: int | None = None`, `producer_stage: StageID | None = None`, `producer_fingerprint: Fingerprint | None = None`, `checksum: Checksum | None = None`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`.
+  - `StageProvenance`: `run_id: RunID` required, `stage_name: StageID` required, `status: str` required, `attempt: int` required and positive, `target: str | None = None`, `started_at: str | None = None`, `finished_at: str | None = None`, `duration_seconds: float | None = None`, `fingerprint: Mapping[str, PlainData] | None = None`, `input_artifacts: Mapping[str, PlainData] = field(default_factory=dict)`, `output_artifacts: Mapping[str, PlainData] = field(default_factory=dict)`, `executor_metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `code: CodeProvenance | None = None`, `environment: EnvironmentProvenance | None = None`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`.
+  - `RunProvenance`: `run_id: RunID` required, `created_at: str` required, `run_dir: str | None = None`, `command: CommandProvenance | None = None`, `code: CodeProvenance | None = None`, `environment: EnvironmentProvenance | None = None`, `dependencies: DependencyProvenance | None = None`, `config: Mapping[str, PlainData] = field(default_factory=dict)`, `stages: Mapping[str, PlainData] = field(default_factory=dict)`, `artifacts: Mapping[str, PlainData] = field(default_factory=dict)`, `metadata: Mapping[str, PlainData] = field(default_factory=dict)`, `schema_version: int = 1`.
+  - `ProvenanceCaptureOptions`: `capture_git: bool = True`, `git_root: str | None = None`, `include_git_remote: bool = False`, `capture_environment: bool = True`, `env_keys: tuple[str, ...] = ()`, `include_user: bool = False`, `capture_dependencies: bool = True`, `packages: tuple[str, ...] = ("loom",)`, `capture_command: bool = True`, `strict: bool = False`.
+- `capture_git_provenance(path, *, include_remote=False, strict=False)` may run bounded local `git` subprocess commands only. It must not fetch, push, contact remotes, or require git. Missing git, non-repository paths, command failures, and timeouts return `GitProvenance(capture_error=...)` unless `strict=True`, in which case they raise `ProvenanceCaptureError`.
+- Dirty-state policy: `is_dirty` is `True` when `git status --porcelain` has tracked-file changes; `has_untracked` is `True` when any porcelain line starts with `??`. Do not persist full diffs.
+- Remote URL policy: default `remote_url` is `None`. Capture `remote.origin.url` only when `include_remote=True`, and redact credentials before storing.
+- `capture_code_provenance(project_root=None, package_name=None, include_git_remote=False, strict=False)` captures git only when `project_root` is supplied, captures package version only with `importlib.metadata.version(package_name)`, never imports the package, and records a missing package as `package_version=None` plus metadata/capture context unless strict mode raises.
+- `capture_environment_provenance(env_keys=(), include_user=False)` captures standard-library Python/platform facts, selected allow-listed environment keys only, user only when requested, and redacts selected env values for secret-like key names containing `token`, `secret`, `password`, `api_key`, `credential`, or `private_key`.
+- `capture_dependency_provenance(packages=("loom",), strict=False)` captures explicitly named package versions through `importlib.metadata.version`, records missing names in `missing_packages`, and does not run `pip freeze`, scan imports, inspect lockfiles, or import packages.
+- `capture_command_provenance(argv=None, cwd=None, launcher=None)` uses explicit values when supplied, otherwise `sys.argv` and `Path.cwd()`, and writes no files.
+- `capture_artifact_lineage(ref: ArtifactRef, *, metadata=None)` copies only ref fields into `ArtifactLineage`; it must not check existence or read artifact content.
+- `capture_run_provenance(run_id, run_dir=None, options=None, command=None, config=None, metadata=None)` aggregates selected capture helpers, fills `created_at` with `utc_timestamp()`, writes nothing, and does not import config, pipeline, stores, or I/O. A supplied `command` is used as-is; otherwise command capture runs only when `options.capture_command` is true.
 
 ## Design Impact
 
@@ -264,13 +471,15 @@ Avoid mixing this work with config, I/O, store, pipeline, or CLI implementation.
   - `tests/package/test_import.py`
   - `tests/package/test_public_api.py`
   - `tests/package/test_import_boundaries.py`
-- Expected new unit tests:
+- Expected new or updated unit tests:
   - `tests/unit/loom/test_refs.py`
   - `tests/unit/loom/test_artifacts.py`
   - `tests/unit/loom/test_records.py`
   - `tests/unit/loom/test_fingerprints.py`
   - `tests/unit/loom/test_protocols.py`
   - `tests/unit/loom/test_provenance.py`
+  - `tests/unit/loom/test_ids.py`
+  - `tests/unit/loom/test_errors.py`
   - `tests/unit/loom/serialization/test_plain.py`
   - `tests/unit/loom/serialization/test_dataclasses.py`
   - `tests/unit/loom/serialization/test_json.py`
@@ -287,7 +496,7 @@ Avoid mixing this work with config, I/O, store, pipeline, or CLI implementation.
 2. Add dataclass and JSON helpers.
    - Implement `dataclass_to_dict`, `dataclass_from_dict`, required-field checks, unknown-field checks, and frozen/slots compatibility.
    - Implement `stable_json_dumps` using sorted keys, compact separators, UTF-8 text, and `allow_nan=False`.
-   - Implement `stable_json_bytes` if used by fingerprints.
+   - Implement `stable_json_bytes` because fingerprints must consume canonical UTF-8 bytes from serialization.
    - Implement `json_dumps_pretty` with two-space indentation, sorted keys by default, and trailing newline.
    - Implement `json_loads` with invalid-JSON wrapping and plain-data validation.
    - Do not implement `write_json`; avoid file writes in Phase 2.
@@ -303,7 +512,7 @@ Avoid mixing this work with config, I/O, store, pipeline, or CLI implementation.
    - Validate required string fields and positive integer schema versions.
    - Validate `metadata`, `checksum`, and `fingerprint` shape without opening URIs or verifying bytes.
    - Use fingerprint digest validation for checksum/fingerprint fields if present, but keep semantic naming distinct in fields and docs.
-   - Add `to_dict`/`from_dict` round-trip tests, optional `codec_key` tests for set/absent/explicit `None`, immutability tests, no-loading-method tests, and plain-data conversion tests.
+   - Add `to_dict`/`from_dict` round-trip tests, required `codec_key` tests for set/absent/explicit `None`, immutability tests, no-loading-method tests, and plain-data conversion tests.
 
 5. Add digest and fingerprint helpers.
    - Implement `Digest`, `Checksum`, `Fingerprint`, `HashAlgorithm`, `ParsedDigest`, formatting, parsing, validation, comparison, and hashing helpers.
@@ -313,21 +522,22 @@ Avoid mixing this work with config, I/O, store, pipeline, or CLI implementation.
 
 6. Add records, manifest, views, and filters.
    - Implement `Record` and its explicit conversion helpers.
-   - Implement manifest lookup and iteration behavior that sorts or preserves deterministic record order by `record_id`. The plan expansion agent should choose one exact policy and tests must lock it down.
+   - Implement manifest lookup and iteration behavior that preserves constructor/serialized record order. Do not sort by `record_id`; tests must lock down input-order preservation.
    - Reject duplicate record IDs at `InMemoryManifest` construction.
    - Implement lazy `ManifestView` that applies composed `RecordFilter` predicates during iteration.
-   - Implement `HasResource`, `MetadataEquals`, and `MetadataIn`. Optional filters such as `AnnotationHasKey` or `RecordIDIn` may be added only if they stay generic and small.
+   - Implement only `HasResource`, `MetadataEquals`, and `MetadataIn`. Do not add `AnnotationHasKey`, `RecordIDIn`, regex filters, or serializable filter specs in Phase 2.
    - Add tests for duplicate rejection, deterministic iteration, lookup, length if supported, lazy filtering, filter composition, generic metadata matching, and no domain-specific assumptions.
 
 7. Add generic package-wide protocols.
-   - Implement `Validatable`, `Fingerprintable`, and `PlainSerializable` only if used. Keep runtime-checkable decoration limited to protocols where tests genuinely need `isinstance`.
+   - Implement only `Validatable` and `Fingerprintable`.
+   - Do not decorate them with `@runtime_checkable` unless the implementation adds an explicit public runtime-check use, which is not expected for this phase.
    - Add tests for structural satisfaction and import cheapness.
    - Do not add subsystem protocols.
 
 8. Add provenance models and capture helpers.
-   - Implement frozen models for `GitProvenance`, `CodeProvenance`, `EnvironmentProvenance`, `DependencyProvenance`, `CommandProvenance`, `ArtifactLineage`, `StageProvenance`, `RunProvenance`, and `ProvenanceCaptureOptions` if options are useful.
+   - Implement frozen models for `GitProvenance`, `CodeProvenance`, `EnvironmentProvenance`, `DependencyProvenance`, `CommandProvenance`, `ArtifactLineage`, `StageProvenance`, `RunProvenance`, and `ProvenanceCaptureOptions`.
    - Keep each model plain-data-convertible and schema-versioned.
-   - Implement `capture_git_provenance`, `capture_code_provenance`, `capture_environment_provenance`, `capture_dependency_provenance`, `capture_command_provenance`, `capture_artifact_lineage`, and a small `capture_run_provenance` aggregator if it does not require pipeline/config behavior.
+   - Implement `capture_git_provenance`, `capture_code_provenance`, `capture_environment_provenance`, `capture_dependency_provenance`, `capture_command_provenance`, `capture_artifact_lineage`, and `capture_run_provenance` exactly as bounded in the Provenance Contract.
    - Keep package capture based on `importlib.metadata.version` for explicitly selected package names.
    - Keep environment capture based on standard-library facts and allow-listed environment keys only; redact obvious secret-like env keys if selected.
    - Add tests with monkeypatch/fakes for git success/failure, missing package capture, selected env capture/redaction, command capture, artifact lineage from `ArtifactRef`, and plain-data conversion.
@@ -358,7 +568,7 @@ Avoid mixing this work with config, I/O, store, pipeline, or CLI implementation.
   - `tests/package/test_import_boundaries.py`
 - Required coverage:
   - `import loom` succeeds and remains cheap.
-  - `loom.__all__` includes exactly the implemented cheap top-level public names chosen by Phase 2 plan expansion, expected to include `__version__`, `ResourceRef`, `InMemoryManifest`, `ManifestView`, `Record`, `ArtifactRef`, `Fingerprint`, and `hash_mapping`.
+  - `loom.__all__` is exactly `["__version__", "ResourceRef", "InMemoryManifest", "ManifestView", "Record", "ArtifactRef", "Fingerprint", "hash_mapping"]`.
   - `from loom.refs import ResourceRef`, `from loom.artifacts import ArtifactRef`, `from loom.records import Record, InMemoryManifest, ManifestView`, `from loom.fingerprints import Fingerprint, hash_mapping`, `from loom.serialization import ...`, `from loom.provenance import ...`, and `from loom.protocols import ...` work.
   - `py.typed` remains included.
   - Top-level `import loom` does not eagerly import `loom.config`, `loom.pipeline`, `loom.cli`, `loom.io`, `loom.pipeline.stores`, plugin discovery, or downstream project packages.
@@ -387,6 +597,7 @@ make test-package
 - Required coverage:
   - `ResourceRef` and `ArtifactRef` are frozen, typed, equality-stable dataclasses with explicit `to_dict`/`from_dict` round trips.
   - `ResourceRef.codec_key` round-trips for set, absent, and explicit `None` cases.
+  - `ResourceRef.to_dict()` has no `fingerprint` key; `ArtifactRef.to_dict()` keeps `checksum` and `fingerprint` as separate keys.
   - Metadata and annotations must be plain-data compatible; invalid nested values raise path-aware errors.
   - Refs and artifacts expose no loading/opening/saving/filesystem methods.
   - Checksums and fingerprints remain separate fields and use digest-format validation where supplied.
@@ -402,6 +613,8 @@ make test-package
   - Provenance models convert to/from plain data where implemented, include schema versions, preserve metadata, and stay generic.
   - Provenance capture helpers degrade gracefully for missing git or missing packages and do not require network access or heavy imports.
   - Package-wide protocols remain tiny and structural.
+  - `ids.__all__` includes `ResourceType`, `Checksum`, and `Fingerprint`; all ID aliases remain plain `str`.
+  - `errors.__all__` includes the Phase 2 root errors listed in the Error Hierarchy section while retaining `IOErrorBase`.
 - Targeted command:
 
 ```sh
@@ -460,7 +673,7 @@ may report `not present`.
 - Public API could become too broad by exporting future subsystem contracts. Mitigation: export only implemented Phase 2 names and keep subsystem protocols local to future phases.
 - Digest validation may incorrectly conflate checksum and fingerprint. Mitigation: keep field names and tests separate, while sharing only generic digest format helpers.
 - Generic dataclass reconstruction could become too magical. Mitigation: use explicit `from_dict` methods for public types and keep generic reconstruction target-explicit.
-- Manifest iteration policy ambiguity could create flaky downstream behavior. Mitigation: plan expansion must choose and test a deterministic policy.
+- Manifest iteration could become flaky if implementation sorts or materializes unexpectedly. Mitigation: preserve constructor/serialized order and test that policy directly.
 - Provenance capture could be fragile or leak sensitive data. Mitigation: return explicit unavailable/error fields, keep remote URL capture opt-in, capture only selected packages/env vars, and redact obvious secret-like env keys.
 - Top-level imports could become expensive as modules start doing real work. Mitigation: keep capture helpers side-effect-free at import time and add subprocess import-boundary tests.
 - Feature docs describe post-v0 behavior. Mitigation: use the canonical implementation plan as controlling scope and record deferrals.
@@ -505,28 +718,49 @@ make test-summary
 
 No implementation refinement or PR review pass has been consumed for Phase 2 in this planning handoff.
 
-## Handoff Notes For Plan Expansion Agent
+## Handoff Notes For `loom_phase_executor`
 
-- Confirm the branch and worktree metadata still match:
+- Branch and worktree:
   - Branch: `codex/add-primitives-serialization`.
   - Worktree: `/home/samcantrill/work/loom-worktrees/add-primitives-serialization`.
   - Base: local `develop` at `af9bb3ebe64943343425735d2b84c0ba6a0c0cc7`.
-- Review this draft for decision completeness before implementation. Focus especially on exact serialized shapes, export lists, manifest iteration policy, error hierarchy names, and provenance model field names.
-- Preserve the hard boundaries:
-  - Serialization must not import or perform I/O.
-  - Refs and artifacts must not load/open/save.
-  - Provenance capture must be explicit and degrade gracefully.
-  - Fingerprints must use stable JSON and `hashlib`, never Python `hash()`.
-- Keep suite obligations explicit. If the expansion agent changes any test-suite decision, record the changed reason in the plan.
+- Do not revisit these plan decisions:
+  - `ResourceRef` has no `fingerprint` field.
+  - `ResourceRef.codec_key` omission is accepted on input but canonical output always emits `"codec_key": None`.
+  - `InMemoryManifest` and `ManifestView` preserve constructor/source order; they do not sort by `record_id`.
+  - `MetadataIn.values` normalizes to a tuple, not a set.
+  - `PlainSerializable`, file/stream hashing, JSON file read/write helpers, YAML helpers, serializable filters, lockfile capture, subsystem protocols, and future pipeline/I/O/store behavior are out of scope.
+  - Digest validation is strict lowercase `sha256:<64 hex>` for persisted input; `format_digest` authors canonical lowercase output.
+  - `IOErrorBase` remains the shared I/O root name in Phase 2.
+- Safe implementation slices:
+  1. Serialization and shared error roots.
+     - Owns `src/loom/errors.py` and `src/loom/serialization/*`.
+     - Add/update `tests/unit/loom/test_errors.py` and `tests/unit/loom/serialization/*`.
+     - Run targeted `uv run pytest tests/unit/loom/test_errors.py tests/unit/loom/serialization`.
+  2. Fingerprints and ID aliases.
+     - Owns `src/loom/ids.py` and `src/loom/fingerprints.py`.
+     - Add/update `tests/unit/loom/test_ids.py` and `tests/unit/loom/test_fingerprints.py`.
+     - Run targeted `uv run pytest tests/unit/loom/test_ids.py tests/unit/loom/test_fingerprints.py`.
+  3. Refs, artifacts, and records.
+     - Owns `src/loom/refs.py`, `src/loom/artifacts.py`, and `src/loom/records/*`.
+     - Add `tests/unit/loom/test_refs.py`, `tests/unit/loom/test_artifacts.py`, and `tests/unit/loom/test_records.py`.
+     - Run targeted `uv run pytest tests/unit/loom/test_refs.py tests/unit/loom/test_artifacts.py tests/unit/loom/test_records.py`.
+  4. Protocols and provenance.
+     - Owns `src/loom/protocols.py` and `src/loom/provenance/*`.
+     - Add `tests/unit/loom/test_protocols.py` and `tests/unit/loom/test_provenance.py`.
+     - Run targeted `uv run pytest tests/unit/loom/test_protocols.py tests/unit/loom/test_provenance.py`.
+  5. Public exports and import boundaries.
+     - Owns `src/loom/__init__.py`, package `__init__.py` exports, and `tests/package/*`.
+     - Run targeted `make test-package` and `make test-unit`.
 - Keep implementation refinement and PR review budget status marked `unused`; those budgets are for later workflow stages.
-- Do not update Phase 2 status in the canonical implementation plan during plan expansion unless the manager explicitly asks for status metadata work.
+- Do not update Phase 2 status in the canonical implementation plan during execution unless the manager explicitly asks for status metadata work.
 - Do not rely on the original checkout's unrelated uncommitted documentation edits.
-- If plan expansion finds a blocking public API ambiguity that cannot be resolved from the canonical plan and feature docs, record the blocker and stop instead of making a scope-widening decision.
+- If implementation exposes a blocking conflict in the public contract above, stop and report the blocker instead of widening scope.
 
 ## Completion Notes
 
 - Draft expanded phase plan created by `loom_phase_planner`.
-- Plan expansion: pending.
+- Plan expansion: completed in this commit; the plan is decision-complete for `loom_phase_executor`.
 - Implementation summary: pending.
 - Test evidence: pending.
 - Validation evidence: pending.
@@ -536,4 +770,4 @@ No implementation refinement or PR review pass has been consumed for Phase 2 in 
 - Budget status:
   - Phase implementation refinement: unused.
   - PR review: unused.
-- Remaining blockers: none known at draft-planning time.
+- Remaining blockers: none after plan expansion.
