@@ -788,8 +788,7 @@ Completion summary:
 
 Status: pr_open
 Branch: `codex/add-config-composition`
-PR: prepared at `docs/phases/add-config-composition-pr-body.md`; GitHub
-opening is blocked by invalid `gh` authentication.
+PR: https://github.com/samcantrill/loom/pull/7
 
 Goal:
 
@@ -902,15 +901,10 @@ Completion summary:
   commit `429f2ee`. PR review budget: unused.
 - PR body prepared at
   `docs/phases/add-config-composition-pr-body.md`.
-- PR creation blocker: `gh auth status` reports the configured GitHub token for
-  `samcantrill` is invalid. After authentication is refreshed, open the PR with:
-
-  ```sh
-  gh pr create --base develop --head codex/add-config-composition --title "Phase 4: Config Composition" --body-file docs/phases/add-config-composition-pr-body.md
-  gh pr view <PR> --json baseRefName,headRefName,state,url
-  ```
-
-  Verify `baseRefName` is exactly `develop`.
+- GitHub PR #7 opened on 2026-05-03 and verified with
+  `gh pr view 7 --json baseRefName,headRefName,state,url`; `baseRefName` is
+  `develop`, `headRefName` is `codex/add-config-composition`, and state is
+  `OPEN`.
 - Remaining product blockers: none known.
 
 ### Phase 5 — Recipes And Instantiation

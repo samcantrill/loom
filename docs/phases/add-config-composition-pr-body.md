@@ -97,23 +97,14 @@ tests, and integration collected 5 tests.
 
 ## PR Creation Status
 
-PR was not opened during preparation because GitHub authentication is
-unavailable in this environment.
+PR opened successfully:
 
 ```text
-command: gh auth status
-result:
-github.com
-  X Failed to log in to github.com account samcantrill (/home/samcantrill/.config/gh/hosts.yml)
-  - Active account: true
-  - The token in /home/samcantrill/.config/gh/hosts.yml is invalid.
-  - To re-authenticate, run: gh auth login -h github.com
-  - To forget about this account, run: gh auth logout -h github.com -u samcantrill
+command: gh pr create --base develop --head codex/add-config-composition --title "Phase 4: Config Composition" --body-file docs/phases/add-config-composition-pr-body.md
+result: https://github.com/samcantrill/loom/pull/7
 ```
 
-After authentication is refreshed, use:
-
-```sh
-gh pr create --base develop --head codex/add-config-composition --title "Phase 4: Config Composition" --body-file docs/phases/add-config-composition-pr-body.md
-gh pr view <PR> --json baseRefName,headRefName,state,url
+```text
+command: gh pr view 7 --json baseRefName,headRefName,state,url
+result: {"baseRefName":"develop","headRefName":"codex/add-config-composition","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/7"}
 ```

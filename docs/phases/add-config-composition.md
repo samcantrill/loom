@@ -683,19 +683,13 @@ make test-summary
     `build/test-summary.md`; package passed with 13 tests, unit passed with
     153 tests, contract passed with 4 tests, integration passed with 5 tests,
     and e2e was not present.
-- PR creation status: not opened during PR preparation because `gh auth status`
-  reports the configured GitHub token for `samcantrill` is invalid. After
-  authentication is refreshed, run:
-
-  ```sh
-  gh pr create --base develop --head codex/add-config-composition --title "Phase 4: Config Composition" --body-file docs/phases/add-config-composition-pr-body.md
-  gh pr view <PR> --json baseRefName,headRefName,state,url
-  ```
-
-  Verify `baseRefName` is exactly `develop`.
+- PR creation status: opened as
+  https://github.com/samcantrill/loom/pull/7. Verified with
+  `gh pr view 7 --json baseRefName,headRefName,state,url`; `baseRefName` is
+  `develop`, `headRefName` is `codex/add-config-composition`, and state is
+  `OPEN`.
 - Remaining product blockers: none known after this refinement and PR-prep
-  validation pass. The only known blocker is GitHub authentication for remote PR
-  creation.
+  validation pass.
 
 ### Phase Refinement Report
 
