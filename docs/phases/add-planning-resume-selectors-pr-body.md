@@ -175,6 +175,12 @@ Verified immediately after creation:
 {"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}
 ```
 
+Live PR body update used a direct `gh api --method PATCH
+repos/samcantrill/loom/pulls/12 -F
+body=@docs/phases/add-planning-resume-selectors-pr-body.md` fallback after
+`gh pr edit --body-file docs/phases/add-planning-resume-selectors-pr-body.md`
+failed with the GitHub Projects Classic deprecation GraphQL error.
+
 When Phase 7 lands, the managing agent should rebase or replay this branch onto
 updated `develop`, retarget the PR to `develop`, rerun validation, and record
 stack maintenance before the PR becomes merge-eligible.
