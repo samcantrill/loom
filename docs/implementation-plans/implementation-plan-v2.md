@@ -66,24 +66,43 @@ After v2 is complete:
 
 ## Prerequisites
 
-V2 depends on v0/v1 public Python APIs or equivalent stable facades:
+V2 is blocked until v0/v1 public Python APIs or equivalent stable facades are
+available. A v2 phase may add a missing facade only in the package that owns the
+behavior; it must not fill the gap with CLI-local business logic.
 
-- `loom.config.compose_config`
-- config include, replacement, copy, and source snapshot behavior as part of
-  composition
-- pipeline spec parsing and validation from resolved config
-- stage selector construction or normalized selector inputs
-- execution planning and same-run-directory resume decisions
-- local run/artifact store opening where planning and running need existing
-  state
-- `PipelineRunner` local execution
-- shared `LoomError` roots and broad subsystem errors
-- result/status/plan models that can be converted to plain data
+API readiness checklist:
 
-If v0 exposes the behavior but not a small CLI-friendly facade, v2 may add the
-minimal facade in the owning package. For example, pipeline validation helpers
-belong in `loom.pipeline`, not `loom.cli`; runner request helpers belong in
-`loom.pipeline.execution`, not `loom.cli`.
+- `loom.config.compose_config`, including v1 include, replacement, copy, and
+  source snapshot behavior as part of composition.
+- Pipeline spec parsing and validation from a resolved config mapping, exposed
+  through `loom.pipeline` rather than `loom.cli`.
+- Stage selector construction or normalized selector inputs exposed by
+  `loom.pipeline` or `loom.pipeline.planning`.
+- Execution planning and same-run-directory resume decisions exposed by
+  `loom.pipeline.planning`, including action reasons and optional stage
+  explanations.
+- Local run/artifact store opening where planning and running need existing
+  state, exposed by `loom.pipeline.stores` or by planner/runner facades that
+  own the store interaction.
+- `PipelineRunner`, `RunRequest` or an equivalent public run facade, and local
+  executor wiring exposed by `loom.pipeline.execution` and
+  `loom.pipeline.executors`.
+- Structured validation, plan, and run result models, or plain-data conversion
+  helpers suitable for CLI JSON output.
+- Shared `LoomError` roots and broad subsystem errors, with `to_dict()` or an
+  equivalent structured error helper when machine output is requested.
+
+If an implementation phase discovers that CLI code would otherwise parse
+pipeline config, inspect run-layout paths, compute selectors, compute resume
+decisions, construct fingerprints, bind artifacts, or build runner internals
+manually, that phase must add the minimal public facade in the owning package
+and use it from the CLI. Examples:
+
+- pipeline validation helpers belong in `loom.pipeline`, not `loom.cli`;
+- planning helpers belong in `loom.pipeline.planning`, not `loom.cli`;
+- run-store path and open helpers belong in `loom.pipeline.stores`, not
+  `loom.cli`;
+- runner request helpers belong in `loom.pipeline.execution`, not `loom.cli`.
 
 ## Constraints
 
@@ -134,9 +153,14 @@ loom = "loom.cli.main:main"
   runtime semantics.
 - `--executor` is accepted by `loom run` to establish the future shape, but v2
   supports only `local`. Unsupported executors fail clearly without importing
-  optional backends.
+  optional backends. The parser should accept a string and the run handler
+  should reject non-`local` values so unsupported executors return the executor
+  exit code rather than an argparse usage error.
 - `--dry-run` on `loom run` delegates to the same planning path as
   `loom plan`.
+- `--format text|json` is the v2 output format surface for validate, plan, and
+  run. Text output may include simple fixed-width tables; later diagnostics may
+  add table-specific formatting if needed.
 - JSON result envelopes include a CLI schema version. These schemas are
   automation-facing output contracts, not persisted run-store schemas.
 - CLI import-boundary tests are part of the acceptance criteria because later
@@ -200,7 +224,9 @@ Options:
 - `--overlay PATH`, repeatable.
 - `--set KEY=VALUE`, repeatable.
 - `--run-dir RUN_DIR`.
+- `--run-id RUN_ID`.
 - `--resume`.
+- `--strict`.
 - `--from-stage STAGE`.
 - `--only-stage STAGE`, repeatable.
 - `--force-stage STAGE`, repeatable.
@@ -213,6 +239,12 @@ Behavior:
 - Compose config and build the pipeline spec through v0 APIs.
 - Convert selector flags into the v0 selector model or equivalent planner
   inputs.
+- Map `--strict` to strict resume checking in the planner when resume is
+  enabled. It must not invent unrelated validation semantics.
+- Reject `--strict` without `--resume` as a CLI usage error because v2 defines
+  strictness only for resume checks on plan/run.
+- Pass `--run-id` and `--run-dir` through public planner or store APIs. If both
+  are omitted, the planner/store layer owns the default run identity policy.
 - Open existing run state read-only when resume planning needs it.
 - Compute stage decisions through public planning APIs.
 - Print ordered stage actions and reasons.
@@ -220,7 +252,8 @@ Behavior:
   for that stage.
 - Do not execute stages.
 - Do not mutate prior run state unless v0 already has an explicit non-execution
-  plan persistence option. V1 should default to read-only planning.
+  plan persistence API and v2 adds an explicit persistence option. V2 defaults
+  to read-only planning.
 
 ### `loom run`
 
@@ -236,8 +269,9 @@ Options:
 - `--set KEY=VALUE`, repeatable.
 - `--run-dir RUN_DIR`.
 - `--run-id RUN_ID`.
-- `--executor local`, default `local`.
+- `--executor EXECUTOR`, default `local`.
 - `--resume`.
+- `--strict`.
 - `--dry-run`.
 - `--from-stage STAGE`.
 - `--only-stage STAGE`, repeatable.
@@ -248,6 +282,10 @@ Options:
 Behavior:
 
 - Reject non-`local` executor values with a clear unsupported-executor error.
+- Map `--strict` to strict resume checking in the planner when resume is
+  enabled. It must not invent unrelated validation semantics.
+- Reject `--strict` without `--resume` as a CLI usage error because v2 defines
+  strictness only for resume checks on plan/run.
 - For `--dry-run`, call the same planning path as `loom plan` and return the
   planning exit code.
 - For execution, compose config, build runner inputs, call `PipelineRunner`, and
@@ -279,18 +317,28 @@ Errors should use:
   "error": {
     "type": "PipelineError",
     "message": "unknown stage",
-    "path": "pipeline.stages[1].depends_on[0]",
-    "context": {}
+    "code": "pipeline.unknown_stage",
+    "context": {
+      "config_path": "pipeline.stages[1].depends_on[0]"
+    },
+    "hint": null,
+    "details": {}
   }
 }
 ```
+
+When a caught `LoomError` exposes `to_dict()` or an equivalent structured
+helper, JSON error envelopes should use that payload. The CLI may normalize the
+payload to plain data, but it should not parse human error strings or invent a
+parallel error schema.
 
 Recommended result payloads:
 
 - `ValidationCliResult`: config path, pipeline name if available, stage count,
   warnings if v0 exposes them.
-- `PlanCliResult`: config path, run directory if selected, resume enabled,
-  ordered stage actions, reasons, and optional stage explanation.
+- `PlanCliResult`: config path, run ID or run directory if selected, resume
+  enabled, strict resume enabled, ordered stage actions, reasons, and optional
+  stage explanation.
 - `RunCliResult`: run ID, run directory, final run status, stage summaries,
   failure summary if present, and plan summary.
 
@@ -323,7 +371,7 @@ stdout.
 
 ## Source Structure
 
-V1 should complete the CLI package with this structure:
+V2 should complete the CLI package with this structure:
 
 ```text
 src/loom/cli/
@@ -413,14 +461,23 @@ class SelectorCliOptions:
     skip_stages: frozenset[str]
 
 @dataclass(frozen=True)
+class PlanCliOptions:
+    run_dir: Path | None
+    run_id: str | None
+    resume: bool
+    strict: bool
+    explain_stage: str | None
+
+@dataclass(frozen=True)
 class RunCliOptions:
     run_dir: Path | None
     run_id: str | None
     executor: str
     resume: bool
+    strict: bool
     dry_run: bool
 
-class OutputFormat(StrEnum): ...
+class OutputFormat(StrEnum): ...  # text, json
 ```
 
 ### `formatting.py`
@@ -492,14 +549,16 @@ V2 should integrate with v0 and v1 by using public API seams:
   `compose_config`; include, replacement, copy, and source snapshot behavior is
   handled by the config package, not CLI modules.
 - Pipeline validation: use public pipeline spec parsing and graph validation
-  helpers. If v0 lacks a single validation facade, add one in `loom.pipeline`.
+  helpers. If v0 lacks a single validation facade from resolved config, add one
+  in `loom.pipeline`.
 - Selectors: convert CLI stage selector flags into the v0 selector model:
   `from_stage`, `only_stages`, `force_stages`, and `skip_stages`.
 - Planning: call the v0 planner to compute stage actions, resume decisions,
-  invalidation, and explanations.
+  invalidation, strict resume checks, and explanations.
 - Run store: let v0 planner/runner open or create run state. CLI modules should
-  not hard-code run layout paths.
-- Execution: call `PipelineRunner`; do not invoke stages directly.
+  not hard-code run layout paths or invent run ID/run directory normalization.
+- Execution: build `RunRequest` through public execution APIs where possible and
+  call `PipelineRunner`; do not invoke stages directly.
 - Errors: catch shared `LoomError` roots and use structured context where
   available.
 - Serialization: use v0 plain-data helpers if available for JSON output.
@@ -551,9 +610,10 @@ V2 decisions must preserve the later roadmap:
 - Thin CLI vs convenient helper APIs: if command modules need internal details,
   add small public facades in owning packages instead of duplicating logic in
   `loom.cli`.
-- Early executor flag vs unsupported backends: v2 accepts `--executor local`
-  and rejects other executor names so scripts have a future-compatible option
-  shape without pretending subprocess/SLURM exist.
+- Early executor flag vs unsupported backends: v2 accepts `--executor EXECUTOR`
+  with `local` as the only supported value and rejects other executor names so
+  scripts have a future-compatible option shape without pretending
+  subprocess/SLURM exist.
 
 ## Technical Debt Ledger
 
@@ -613,6 +673,9 @@ Scope:
 
 - Add `options.py`, `formatting.py`, `results.py`, and `validate.py`.
 - Wire validate to public config and pipeline validation APIs.
+- Add a minimal `loom.pipeline` validation facade if validate would otherwise
+  need to parse resolved pipeline config or validate DAG details directly.
+- Format JSON errors from structured `LoomError` payloads when available.
 - Add parser and command tests for config options and validation output.
 
 Acceptance criteria:
@@ -621,6 +684,7 @@ Acceptance criteria:
 - Validate succeeds for a synthetic valid v0 pipeline config.
 - Validate fails with config or pipeline exit codes for invalid inputs.
 - Text and JSON outputs are stable and tested.
+- JSON errors preserve structured error fields when available.
 - Validate does not execute stages or write run state.
 
 ### Phase 3 - Plan Command
@@ -636,7 +700,10 @@ Goal:
 Scope:
 
 - Add `plan.py`.
-- Convert selector flags into v0 selector inputs.
+- Convert run identity, strict resume, and selector flags into v0 planner
+  inputs.
+- Use public store/planner APIs for read-only resume planning; add owning
+  package helpers if CLI code would otherwise inspect run-layout paths.
 - Format ordered stage actions, reasons, and optional explanation output.
 - Support JSON output.
 
@@ -647,6 +714,9 @@ Acceptance criteria:
 - Resume planning against an existing run directory reports `REUSE` or rerun
   decisions from v0 planner output.
 - Selector flags affect plan decisions through v0 planner APIs.
+- `--run-id`, `--run-dir`, and `--strict` are passed to planner/store APIs
+  without CLI-local normalization or resume semantics.
+- `--strict` without `--resume` returns usage error 2.
 - `--explain STAGE` reports available explanation details.
 - Plan command does not execute stages and does not mutate run state.
 
@@ -663,10 +733,12 @@ Goal:
 Scope:
 
 - Add `run.py`.
-- Wire config, selectors, run directory, run ID, resume, and local executor
-  selection into `PipelineRunner`.
+- Wire config, selectors, run directory, run ID, strict resume, and local
+  executor selection into `RunRequest` or the equivalent public execution
+  facade.
 - Implement `--dry-run` by delegating to the plan path.
-- Reject unsupported executors clearly.
+- Reject unsupported executors in command handling, not argparse choices, so
+  they return executor exit code 7 without optional backend imports.
 
 Acceptance criteria:
 
@@ -674,7 +746,9 @@ Acceptance criteria:
 - The command prints run directory, final run status, and stage summary.
 - Failed runs return execution failure exit code and concise failure output.
 - `--dry-run` produces a plan and does not execute stages.
-- Non-local executor names return executor error without optional backend import.
+- `--strict` without `--resume` returns usage error 2.
+- Non-local executor names return executor error code 7 without optional backend
+  import and without being treated as usage errors.
 
 ### Phase 5 - Hardening, Docs, And E2E Coverage
 
@@ -691,6 +765,9 @@ Scope:
 - Update README and CLI docs for v2 commands only.
 - Add stable examples for validate, plan, run, resume, selectors, text output,
   and JSON output.
+- Clearly identify `status`, `logs`, `artifacts`, `stage run`, subprocess,
+  SLURM, sweep, catalog, bundle, plugin, remote store, container, reliability,
+  and cleanup commands as deferred outside v2.
 - Add e2e tests through `main(argv)` or the console entry point.
 - Confirm import boundaries after all command modules exist.
 
@@ -714,7 +791,8 @@ Unit tests:
 
 - Parser construction, help, version, subcommand registration, and invalid
   commands.
-- Config, selector, run, executor, and output-format option adapters.
+- Config, plan, selector, run, strict-resume, executor, and output-format option
+  adapters.
 - Exit-code mapping.
 - Text and JSON formatting for validation, plan, run, and known errors.
 
@@ -722,9 +800,12 @@ Command tests:
 
 - Validate calls config and pipeline validation APIs.
 - Plan calls planner APIs and never calls executor or runner execution methods.
+- Plan maps `--run-id`, `--run-dir`, and `--strict` through planner/store APIs
+  without CLI-local resume or run-layout logic.
 - Run calls `PipelineRunner` and does not write run state directly.
 - `--dry-run` uses planning behavior.
-- Unsupported executor handling is clear and import-safe.
+- Unsupported executor handling is clear, import-safe, and returns exit code 7
+  rather than argparse usage code 2.
 
 End-to-end tests:
 
@@ -770,8 +851,14 @@ the plan or first phase `blocked` rather than starting implementation.
 - JSON output is newline-terminated UTF-8 written to stdout.
 - `--set` values stay raw until passed to the config override parser.
 - Repeated stage selector flags are normalized deterministically.
+- `--run-id` and `--run-dir` are passed to public planner/runner/store APIs;
+  the CLI does not invent default run identity policy.
+- `--strict` on `plan` and `run` means strict resume checking and requires
+  `--resume`.
 - `local` is the only supported executor in v2.
 - Non-local executor names fail explicitly and are not silently ignored.
+- Non-local executor names are rejected in command handling, not argparse
+  choices, so they map to executor exit code 7.
 - CLI modules may import public v0 APIs, but v0 internals may not import CLI
   modules.
 - Later roadmap commands must extend the CLI package without changing the v2
