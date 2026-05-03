@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: `pr_open` metadata prepared; PR body ready for manager submission.
+- Status: merged locally into `develop` after manager review.
 - Branch: `codex/add-foundation-skeleton`.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`.
 - Expanded plan path: `docs/phases/add-foundation-skeleton.md`.
@@ -38,8 +38,8 @@ Key controlling constraints:
 
 From `docs/implementation-plans/implementation-plan-v0.md`, Phase 1 was
 `Status: pending` with branch `codex/add-foundation-skeleton` at plan
-expansion time. PR preparation has updated the canonical phase status to
-`pr_open`.
+expansion time. PR preparation updated the canonical phase status to `pr_open`;
+local manager review and squash merge later updated it to `merged`.
 
 Goal:
 
@@ -319,10 +319,11 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used.
-- PR review: unused.
+- PR review: used.
 
 Implementation refinement was consumed on 2026-05-03 by the bounded
-`loom_phase_refiner` pass. PR review remains unused.
+`loom_phase_refiner` pass. PR review was consumed on 2026-05-03 by local
+manager review before the local squash merge.
 
 ## Handoff Notes For Executor
 
@@ -378,10 +379,12 @@ stop and report the blocker rather than making a new design decision.
   - Manager rerun before refinement: `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed, 15 passed.
   - Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright passed with 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
   - PR-prep validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright reported 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
+  - Pre-merge validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright reported 0 errors, default tests passed with 24 passed, and `uv build` produced sdist and wheel.
 - Test-summary evidence:
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`.
   - Suite table: package passed, unit passed, contract not present, integration not present, e2e not present.
   - Package suite passed with 7 tests; unit suite passed with 17 tests.
+  - Pre-merge rerun: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package passed, unit passed, and contract/integration/e2e not present.
 - Accepted risks:
   - Unsupported config stubs remain temporary debt until Phase 4 (`compose_config`, `instantiate`) and Phase 5 (`register_recipe`).
   - Empty skeleton packages remain temporary structure until each owning future phase adds behavior.
@@ -393,8 +396,10 @@ stop and report the blocker rather than making a new design decision.
   - Branch: `codex/add-foundation-skeleton`.
   - Worktree: `/home/samcantrill/work/loom-worktrees/add-foundation-skeleton`.
   - Body path: `docs/phases/add-foundation-skeleton-pr-body.md`.
-  - Not opened locally because `gh` is unavailable in this environment and no alternate authenticated GitHub PR tooling is configured.
+  - `gh pr create` was attempted on 2026-05-03 but failed because `gh` is not authenticated; no alternate authenticated GitHub PR tooling is configured.
+  - Local manager PR review passed on 2026-05-03.
+  - Locally squash-merged into `develop` as `61b76ac` on 2026-05-03.
 - Budget status:
   - Phase implementation refinement: used.
-  - PR review: unused.
-- Remaining blockers: none for manager-side PR submission or review.
+  - PR review: used by local manager review.
+- Remaining blockers: none for local merge. Remote PR creation and push were not performed because `gh` is not authenticated and the local `develop` checkout also contains unrelated unpushed v1-plan work.

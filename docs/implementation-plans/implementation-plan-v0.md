@@ -421,10 +421,12 @@ phase worktree has been removed.
 
 ### Phase 1 — Foundation
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-foundation-skeleton`
-PR: body prepared at `docs/phases/add-foundation-skeleton-pr-body.md`; not
-opened locally because `gh` is unavailable.
+PR: body prepared at `docs/phases/add-foundation-skeleton-pr-body.md`; local
+GitHub PR creation attempted with `gh pr create` on 2026-05-03 but not opened
+because `gh` is not authenticated. Locally squash-merged into `develop` as
+`61b76ac` after manager review.
 
 Goal:
 
@@ -530,8 +532,15 @@ Completion summary:
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
   `build/test-summary.md`; package and unit suites passed, while contract,
   integration, and e2e suites are not present for this phase.
-- Implementation refinement budget: used. PR review budget: unused.
-- Remaining blockers: none for manager-side PR submission or review.
+- Local manager PR review passed on 2026-05-03: the PR body matched the diff,
+  Phase 1 acceptance criteria were satisfied, no future-phase implementation was
+  included, and validation evidence was current.
+- Locally squash-merged into `develop` as `61b76ac` on 2026-05-03.
+- Implementation refinement budget: used. PR review budget: used by local
+  manager review.
+- Remaining blockers: none. Remote PR creation and push were not performed
+  because `gh` is not authenticated and the local `develop` checkout also
+  contains unrelated unpushed v1-plan work.
 
 ### Phase 2 — Primitives And Serialization
 
