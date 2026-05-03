@@ -661,7 +661,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used.
 - PR review: unused.
 
 ## Completion Notes
@@ -669,16 +669,89 @@ make test-summary
 - Draft plan: created by `loom_phase_planner` in this planning pass.
 - Final expanded plan: refined by `loom_phase_plan_expander` in this pass.
 - Implementation summary: completed in commits `d0a3857` (implementation) and `749355a` (tests).
-- Implementation validation: partial suite checks executed locally with `PYTHONPATH=src` due environment constraints.
-- Refinement summary: no separate refinement pass run (as instructed by assignment).
+- Dependency lock update: manager reran `UV_CACHE_DIR=/tmp/uv-cache uv lock` with network escalation after implementation; `uv.lock` now includes `omegaconf`, `pydantic`, `pyyaml`, and transitive runtime dependencies and is included in the refinement commit.
+- Implementation validation: Phase 4 targeted pytest, package, unit, integration, contract, Pyright, and `make validate-pr` passed locally during the refinement pass.
+- Refinement summary: completed by `loom_phase_refiner` on 2026-05-03 in the single allowed implementation/test refinement pass.
 - PR preparation: deferred to `loom_pr_preparer`.
-- Remaining blockers:
-  - `uv lock` could not be updated due network/DNS failures; `uv.lock` remains unchanged. Exact commands:
-    - `UV_CACHE_DIR=/tmp/uv-cache uv lock` failed with DNS `failed to lookup address information`.
-  - Runtime dependencies `omegaconf`, `pydantic`, and `pyyaml` are not installable in this sandbox (DNS failure), so tests requiring those modules are currently blocked:
-    - `PYTHONPATH=src pytest tests/unit/loom/config/test_load.py tests/unit/loom/config/test_interpolation.py tests/unit/loom/config/test_validation.py tests/unit/loom/config/test_compose.py tests/integration/config/test_compose_config.py ...`
-    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest ...` failed while creating a virtual environment due inability to fetch packages from `https://pypi.org/simple/ruff/`.
+- Remaining blockers: none known after this refinement pass.
 - Refiner handoff items:
-  - Run remaining config tests after dependency install (`tests/unit/loom/config/test_load.py`, `test_interpolation.py`, `test_validation.py`, `test_compose.py`, `tests/integration/config/test_compose_config.py`).
-  - Update `uv.lock` when network package resolution is available.
-  - Run required `make validate-pr` and `make test-summary` in `loom_pr_preparer`.
+  - Run `make test-summary` in `loom_pr_preparer` for PR body suite evidence.
+
+### Phase Refinement Report
+
+#### Metadata
+
+- Phase: `Phase 4 - Config Composition`.
+- Branch: `codex/add-config-composition`.
+- Worktree: `/home/samcantrill/work/loom-worktrees/add-config-composition`.
+- Expanded phase plan: `docs/phases/add-config-composition.md`.
+- Refiner: `loom_phase_refiner`.
+- Refinement date: 2026-05-03.
+- Phase implementation refinement budget status after this pass: used.
+
+#### Refinement Scope
+
+- Validation output reviewed: manager-provided Phase 4 pytest collection failure; local reruns of the Phase 4 targeted pytest command; `make test-unit`; `make validate-pr`.
+- Blocking issues caused by this phase:
+  - `src/loom/config/validation.py` imported a Pydantic model that generated a schema over the recursive `PlainData` alias at import time, causing `RecursionError` during test collection.
+  - New config tests had expectations that conflicted with the finalized Phase 4 override and interpolation order contract.
+  - New config unit test filenames collided with existing unit test module basenames during full unit-suite collection.
+  - Several Phase 4 helpers and tests did not narrow `PlainData` before returning or indexing mappings, causing Pyright failures.
+- Issues confirmed out of scope: none.
+
+#### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Pydantic recursive `PlainData` schema generation failed during collection. | Replaced the validation model with direct top-level checks for `name`, `pipeline`, and `schema_version` while preserving unknown project-owned keys and default `schema_version=1`. | Phase 4 targeted pytest passed. |
+| Phase 4 tests contradicted finalized override/interpolation semantics. | Updated tests to use `+` for added override keys and assert interpolation after overrides against the composed config. | Phase 4 targeted pytest passed. |
+| Full unit collection found duplicate test module basenames. | Renamed config test modules to `test_config_errors.py` and `test_config_provenance.py`. | `make test-unit` passed. |
+| Pyright could not prove plain-data mapping/list shapes. | Added runtime narrowing in config helpers and focused test assertions/casts without changing public behavior. | `uv run pyright` and `make validate-pr` passed. |
+
+#### Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config tests/integration/config tests/package/test_config_api.py tests/package/test_import_boundaries.py tests/unit/loom/test_deferred_stubs.py
+result: passed, 44 tests
+```
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache make test-package
+result: passed, 13 tests
+```
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache make test-unit
+result: passed, 153 tests
+```
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache make test-integration
+result: passed, 5 tests
+```
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache make test-contract
+result: passed, 4 tests
+```
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pyright
+result: passed, 0 errors
+```
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; Ruff passed, Pyright passed, default pytest passed with 175 tests, and `uv build` produced sdist and wheel
+```
+
+#### Remaining Blockers
+
+- None known.
+
+#### PR Preparation Handoff
+
+- Completion notes updated in expanded phase plan: yes.
+- Budget status updated: yes, phase implementation refinement is `used`; PR review remains `unused`.
+- Final validation recommended: `make test-summary` for PR body suite evidence.
+- Suite evidence still needed: PR preparer should record `make test-summary` output in the PR body.

@@ -19,7 +19,7 @@ _INTERPOLATION_PATTERN = re.compile(r"\$\{([^{}]+)\}")
 def resolve_interpolation(mapping: Mapping[str, Any], *, path: str = "$") -> dict[str, PlainData]:
     _validate_interpolation_syntax(mapping, path=path)
     try:
-        config = OmegaConf.create(mapping)
+        config = OmegaConf.create(dict(mapping))
     except OmegaConfBaseException as exc:
         raise ConfigInterpolationError(f"Failed to prepare interpolation context at {path}") from exc
 
@@ -29,9 +29,12 @@ def resolve_interpolation(mapping: Mapping[str, Any], *, path: str = "$") -> dic
         raise ConfigInterpolationError(f"Failed to resolve interpolation at {path}") from exc
 
     try:
-        return ensure_plain_data(resolved, path=path)
+        plain = ensure_plain_data(resolved, path=path)
     except Exception as exc:  # noqa: BLE001
         raise ConfigInterpolationError(f"Interpolation produced non-plain values at {path}") from exc
+    if not isinstance(plain, dict):
+        raise ConfigInterpolationError(f"Interpolation produced non-mapping root at {path}")
+    return plain
 
 
 def _validate_interpolation_syntax(value: Any, *, path: str) -> None:
@@ -53,4 +56,3 @@ def _validate_interpolation_syntax(value: Any, *, path: str) -> None:
         for index, child in enumerate(value):
             _validate_interpolation_syntax(child, path=f"{path}[{index}]")
         return
-

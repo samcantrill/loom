@@ -79,6 +79,11 @@ def _validate_root_mapping(value: object, path: Path, *, kind: ConfigKind, order
         )
 
     try:
-        return ensure_plain_data(value, path=f"{path}")
+        plain = ensure_plain_data(value, path=f"{path}")
     except Exception as exc:  # noqa: BLE001
         raise ConfigLoadError(f"Invalid {kind} config data in order {order} at {path}") from exc
+    if not isinstance(plain, dict):
+        raise ConfigLoadError(
+            f"Invalid {kind} config root in order {order} at {path}; expected mapping, got {type(value).__name__}"
+        )
+    return plain

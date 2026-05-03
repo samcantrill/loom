@@ -4,41 +4,27 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-
 from loom.serialization import PlainData
 
 from .errors import ConfigValidationError, UnsupportedRecipeError
 
 
-class _TopLevelConfig(BaseModel):
-    name: str
-    pipeline: dict[str, PlainData]
-    schema_version: int = Field(default=1)
-
-    model_config = ConfigDict(extra="allow")
-
-    @field_validator("schema_version")
-    @classmethod
-    def validate_schema_version(cls, value: int) -> int:
-        if value != 1:
-            raise ValueError("schema_version must be 1 when provided")
-        return value
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("name must be non-empty")
-        return value
-
-
 def validate_top_level_fields(config: Mapping[str, PlainData]) -> dict[str, PlainData]:
-    try:
-        model = _TopLevelConfig.model_validate(config)
-    except ValidationError as exc:
-        raise ConfigValidationError("Top-level config validation failed") from exc
-    return model.model_dump()
+    name = config.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ConfigValidationError("Top-level config validation failed: name must be a non-empty string")
+
+    pipeline = config.get("pipeline")
+    if not isinstance(pipeline, Mapping):
+        raise ConfigValidationError("Top-level config validation failed: pipeline must be a mapping")
+
+    schema_version = config.get("schema_version", 1)
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version != 1:
+        raise ConfigValidationError("Top-level config validation failed: schema_version must be 1 when provided")
+
+    validated = dict(config)
+    validated.setdefault("schema_version", 1)
+    return validated
 
 
 def validate_no_recipe_keys(config: Mapping[str, PlainData], *, path: str = "$") -> None:

@@ -174,6 +174,10 @@ class ConfigProvenance:
         sources = tuple(ConfigSource.from_dict(cast(Mapping[str, Any], item)) for item in sources_payload)
         overrides = tuple(ParsedOverride.from_dict(cast(Mapping[str, Any], item)) for item in overrides_payload)
 
+        plain_metadata = to_plain_data(metadata)
+        if not isinstance(plain_metadata, dict):
+            raise ConfigProvenanceError("Invalid metadata")
+
         return cls(
             schema_version=schema_version,
             config_path=config_path,
@@ -181,7 +185,7 @@ class ConfigProvenance:
             overrides=overrides,
             resolved_fingerprint=resolved_fingerprint,
             recipe_manifest_count=recipe_manifest_count,
-            metadata=to_plain_data(metadata),
+            metadata=plain_metadata,
         )
 
 

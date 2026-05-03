@@ -1,6 +1,7 @@
 """Unit tests for public compose_config behavior."""
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -17,13 +18,17 @@ def test_compose_base_overlay_override_flow(tmp_path: Path) -> None:
     overlay.write_text("pipeline:\n  stage: overlay\n", encoding="utf-8")
     overlay2.write_text("pipeline:\n  result: ${pipeline.stage}-done\n", encoding="utf-8")
 
-    result = compose_config(base, overlays=[overlay, overlay2], overrides=("+pipeline.extra=1", "pipeline.paths.child=child"))
+    result = compose_config(base, overlays=[overlay, overlay2], overrides=("+pipeline.extra=1", "+pipeline.paths.child=child"))
 
     assert result.resolved["name"] == "base"
-    assert result.resolved["pipeline"]["stage"] == "overlay"
-    assert result.resolved["pipeline"]["result"] == "overlay-done"
-    assert result.resolved["pipeline"]["paths"]["child"] == "child"
-    assert result.resolved["pipeline"]["extra"] == 1
+    pipeline = result.resolved["pipeline"]
+    assert isinstance(pipeline, dict)
+    paths = pipeline["paths"]
+    assert isinstance(paths, dict)
+    assert pipeline["stage"] == "overlay"
+    assert pipeline["result"] == "overlay-done"
+    assert paths["child"] == "child"
+    assert pipeline["extra"] == 1
     assert result.recipe_manifest == ()
     assert result.provenance.schema_version == 1
     assert result.provenance.config_path == str(base.resolve())
@@ -53,11 +58,11 @@ def test_compose_rejects_recipe_catalog() -> None:
 
 def test_compose_rejects_none_overlays() -> None:
     with pytest.raises(ConfigValidationError):
-        compose_config(Path("/tmp/base.yaml"), overlays=None)
+        compose_config(Path("/tmp/base.yaml"), overlays=cast(Any, None))
 
 
 def test_compose_rejects_none_overrides(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
     base.write_text("name: base\npipeline: {}\n", encoding="utf-8")
     with pytest.raises(ConfigValidationError):
-        compose_config(base, overrides=None)
+        compose_config(base, overrides=cast(Any, None))

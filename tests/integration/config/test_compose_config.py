@@ -16,7 +16,7 @@ def test_public_composition_with_overlays_and_overrides(tmp_path: Path) -> None:
     overlay = tmp_path / "overlay.yaml"
     overlay2 = tmp_path / "overlay2.yaml"
 
-    base.write_text("name: base\npipeline:\n  root: ${paths.root}\n  paths:\n    root: /tmp\n", encoding="utf-8")
+    base.write_text("name: base\npipeline:\n  root: ${pipeline.paths.root}\n  paths:\n    root: /tmp\n", encoding="utf-8")
     overlay.write_text("pipeline:\n  stage: overlay\n", encoding="utf-8")
     overlay2.write_text("pipeline:\n  nested:\n    value: ${pipeline.stage}\n", encoding="utf-8")
 
@@ -26,9 +26,17 @@ def test_public_composition_with_overlays_and_overrides(tmp_path: Path) -> None:
         overrides=("pipeline.stage=override", "+pipeline.secret_token=sauce"),
     )
 
-    assert composed.resolved["pipeline"]["stage"] == "override"
-    assert composed.resolved["pipeline"]["nested"]["value"] == "overlay"
-    assert composed.redacted["pipeline"]["secret_token"] == "***REDACTED***"
+    pipeline = composed.resolved["pipeline"]
+    assert isinstance(pipeline, dict)
+    nested = pipeline["nested"]
+    assert isinstance(nested, dict)
+    redacted_pipeline = composed.redacted["pipeline"]
+    assert isinstance(redacted_pipeline, dict)
+
+    assert pipeline["stage"] == "override"
+    assert nested["value"] == "override"
+    assert pipeline["root"] == "/tmp"
+    assert redacted_pipeline["secret_token"] == "***REDACTED***"
 
 
 def test_public_compose_rejects_recipes(tmp_path: Path) -> None:

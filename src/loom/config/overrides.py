@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
@@ -129,7 +129,7 @@ def _apply_add(config: dict[str, PlainData], override: ParsedOverride) -> None:
 
 
 def _walk_parent(
-    config: dict[str, object],
+    config: dict[str, PlainData],
     path: str,
     *,
     create: bool,
@@ -139,19 +139,16 @@ def _walk_parent(
     segments = path.split(".")
 
     for segment in segments[:-1]:
-        if not isinstance(parent, MutableMapping):
-            raise OverrideApplyError(f"Override path {path} hits non-mapping parent at {segment} (order={override.order})")
-
         if segment not in parent:
             if not create:
                 raise OverrideApplyError(f"Missing override path {path} (order={override.order})")
-            new_child: dict[str, object] = {}
+            new_child: dict[str, PlainData] = {}
             parent[segment] = new_child
             parent = new_child
             continue
 
         current = parent[segment]
-        if not isinstance(current, Mapping):
+        if not isinstance(current, dict):
             if create:
                 raise OverrideApplyError(
                     f"Cannot create parent for override {path}; {segment} is non-mapping at order={override.order}"
@@ -162,9 +159,6 @@ def _walk_parent(
 
         parent = current
 
-    if not isinstance(parent, dict):
-        # Ensure writeable dict for assignment.
-        raise OverrideApplyError(f"Override target parent is not mutable for {path} (order={override.order})")
     return parent
 
 
