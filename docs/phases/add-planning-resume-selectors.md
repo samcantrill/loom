@@ -2,8 +2,11 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: pr_open metadata recorded in phase branch; manager mirror pending in control checkout
 - Branch: `codex/add-planning-resume-selectors`
+- PR: https://github.com/samcantrill/loom/pull/12
+- PR title: `Phase 8: Planning, Resume, And Selectors`
+- PR body artifact: `docs/phases/add-planning-resume-selectors-pr-body.md`
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-planning-resume-selectors`
 - Phase execution plan path: `docs/phases/add-planning-resume-selectors.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0.md`
@@ -17,6 +20,10 @@
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time.
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time.
+- PR body draft pass: completed by `loom_pr_preparer` in commit `0f9c581`.
+- PR body refine/open pass: completed by `loom_pr_preparer` on 2026-05-04 local time.
+- PR verification: `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`
+- PR validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff, Pyright, default pytest `327 passed`, and build succeeded; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package, unit, contract, and integration suites passed and e2e not present.
 - Setup limitations: `gh auth status` initially reported an invalid token inside the sandbox, then succeeded with approved network access. `gh auth setup-git` and `git fetch origin` completed with approved access. The first sandboxed `git worktree add` could not create the branch ref under the control checkout `.git` directory and was rerun with approved filesystem access. No validation commands were run in the planning passes.
 - Blockers: none.
 
@@ -43,6 +50,23 @@ Future-phase work that must remain out of scope includes actual stage execution,
 - Why this base branch is correct: Phase 7 remains unmerged and Phase 8 depends on the Phase 7 run/artifact store contracts. The manager assignment explicitly makes the product stack base `codex/add-local-stores-run-layout` at `889a55d58a0d47f7f26b1ae05b071178bba6ecfc`.
 - Retarget/rebase plan after predecessor merge: once Phase 7 lands, replay or rebase this branch onto updated `develop`, retarget the Phase 8 PR to `develop`, rerun validation, and record stack maintenance in this artifact and the PR body.
 - Branch cleanup constraints: do not delete the Phase 7 predecessor branch while this branch still depends on it. Do not delete this branch until any successor branch has been retargeted or rebased away from it.
+
+## PR Preparation And Open Metadata
+
+- PR preparation/open pass: completed on 2026-05-04 local time from worktree `/home/samcantrill/work/loom-worktrees/add-planning-resume-selectors`.
+- Branch/head: `codex/add-planning-resume-selectors`.
+- Target/base: `codex/add-local-stores-run-layout`.
+- Stack predecessor: `codex/add-local-stores-run-layout`.
+- Predecessor verification: Phase 7 PR #11 was verified as `OPEN` with base `develop` and head `codex/add-local-stores-run-layout` before opening this PR.
+- Branch push: `git push -u origin codex/add-planning-resume-selectors` succeeded.
+- PR URL: https://github.com/samcantrill/loom/pull/12
+- PR metadata verification: `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`
+- Live PR body: updated from `docs/phases/add-planning-resume-selectors-pr-body.md`; no GitHub CLI project-deprecation fallback was required.
+- Validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after refinement with Ruff, Pyright, default pytest `327 passed`, and build succeeded.
+- Suite evidence: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed after refinement; package, unit, contract, and integration suites passed, and e2e is not present.
+- Assumptions and risks: same-run-directory resume remains the only v0 reuse mode; Phase 9 owns execution and final lifecycle writes; this stacked PR must be rebased or replayed and retargeted to `develop` after Phase 7 lands before it is merge-eligible.
+- PR review budget: unused.
+- Blockers: none.
 
 ## Source Phase Summary
 
@@ -886,6 +910,6 @@ make test-summary
   undeclared bound inputs. Added focused unit/integration coverage for these
   cases.
 - Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/planning/test_planner.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q` passed with 10 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/planning tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline -q` passed with 22 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors; `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed with 24 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed with 273 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-integration` passed with 15 tests.
-- PR preparation: pending.
-- Stack maintenance: pending Phase 7 merge/rebase or retarget decision.
+- PR preparation: completed on 2026-05-04 local time. The PR body artifact was refined, the branch was pushed, PR https://github.com/samcantrill/loom/pull/12 was opened against `codex/add-local-stores-run-layout`, and the verified PR metadata is `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`.
+- Stack maintenance: pending Phase 7 merge/rebase or retarget decision; do not retarget this PR to `develop` while Phase 7 PR #11 remains open.
 - Remaining blockers: none.

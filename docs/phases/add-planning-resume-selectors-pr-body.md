@@ -2,6 +2,7 @@
 
 - Phase: Phase 8 - Planning, Resume, And Selectors
 - Branch: `codex/add-planning-resume-selectors`
+- PR: https://github.com/samcantrill/loom/pull/12
 - Target branch: `codex/add-local-stores-run-layout`
 - Stack predecessor: `codex/add-local-stores-run-layout`
 - Merge eligibility: stacked phase PR; reviewable against `codex/add-local-stores-run-layout`; not merge-eligible until Phase 7 lands and this branch is retargeted or rebased onto `develop`
@@ -12,7 +13,7 @@
 - Phase execution plan refine pass: complete
 - PR body draft pass: complete
 - PR body refine pass: complete
-- PR open metadata: pending PR creation and verification in this pass
+- PR open metadata: complete; verified base/head/state on 2026-05-04 local time
 
 ## Summary
 
@@ -142,7 +143,7 @@ Suite output totals from `build/test-summary.md`:
 - PR review before this PR: unused.
 - PR body draft pass: complete in commit `0f9c581`.
 - PR body refine pass: complete for stacked PR creation.
-- PR open metadata: pending PR creation and verification in this pass.
+- PR open metadata: complete in this artifact.
 
 ## Assumptions
 
@@ -160,28 +161,23 @@ Suite output totals from `build/test-summary.md`:
 
 ## PR Creation Status
 
-This artifact is refined for stacked PR creation. Use an explicit base/head
-while Phase 7 remains open:
+Opened stacked PR: https://github.com/samcantrill/loom/pull/12
+
+Created with explicit base/head while Phase 7 remains open:
 
 ```sh
 gh pr create --base codex/add-local-stores-run-layout --head codex/add-planning-resume-selectors --body-file docs/phases/add-planning-resume-selectors-pr-body.md --title "Phase 8: Planning, Resume, And Selectors"
 ```
 
-Immediately verify the created PR:
-
-```sh
-gh pr view <PR> --json baseRefName,headRefName,state,url
-```
-
-Expected verification while stacked:
+Verified immediately after creation:
 
 ```json
-{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"<created PR URL>"}
+{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}
 ```
 
-If Phase 7 lands before PR creation, the managing agent should first rebase or
-replay this branch onto updated `develop`, retarget the PR to `develop`, rerun
-validation, and record stack maintenance before opening or updating the PR.
+When Phase 7 lands, the managing agent should rebase or replay this branch onto
+updated `develop`, retarget the PR to `develop`, rerun validation, and record
+stack maintenance before the PR becomes merge-eligible.
 
 ## Stack Maintenance
 
