@@ -43,6 +43,64 @@ def test_package_modules_import_cleanly() -> None:
     assert loom.timestamps
 
 
+def test_public_io_imports_are_explicit_and_stable() -> None:
+    from loom.io import (
+        ParsedURI,
+        parse_uri,
+        get_uri_scheme,
+        is_file_uri,
+        uri_to_path,
+        path_to_file_uri,
+        normalize_uri,
+        LoomIOError,
+        UnsupportedURIError,
+        DataSource,
+        LocalFileSystemSource,
+        DataSourceError,
+        SourceNotFoundError,
+        SourcePermissionError,
+        UnsupportedSourceOperationError,
+        Codec,
+        JSONCodec,
+        TextCodec,
+        BytesCodec,
+        CodecRegistry,
+        create_default_codec_registry,
+        CodecError,
+        CodecRegistrationError,
+        UnknownCodecError,
+        CodecEncodeError,
+        CodecDecodeError,
+    )
+
+    assert ParsedURI
+    assert parse_uri
+    assert get_uri_scheme
+    assert is_file_uri
+    assert uri_to_path
+    assert path_to_file_uri
+    assert normalize_uri
+    assert LoomIOError
+    assert UnsupportedURIError
+    assert DataSource
+    assert LocalFileSystemSource
+    assert DataSourceError
+    assert SourceNotFoundError
+    assert SourcePermissionError
+    assert UnsupportedSourceOperationError
+    assert Codec
+    assert JSONCodec
+    assert TextCodec
+    assert BytesCodec
+    assert CodecRegistry
+    assert create_default_codec_registry
+    assert CodecError
+    assert CodecRegistrationError
+    assert UnknownCodecError
+    assert CodecEncodeError
+    assert CodecDecodeError
+
+
 def test_public_import_paths() -> None:
     from loom.fingerprints import Fingerprint, hash_mapping
     from loom.ids import Checksum, Fingerprint as IdFingerprint, ResourceType

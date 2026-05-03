@@ -26,5 +26,11 @@ def test_package_declares_public_exports() -> None:
     ]
 
 
+def test_import_lom_io_package() -> None:
+    import loom.io
+
+    assert loom.io.__all__
+
+
 def test_package_includes_typing_marker() -> None:
     assert files("loom").joinpath("py.typed").is_file()
