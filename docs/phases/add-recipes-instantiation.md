@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final expanded plan.
+- Status: pr_open.
 - Branch: `codex/add-recipes-instantiation`.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-recipes-instantiation`.
 - Expanded plan path: `docs/phases/add-recipes-instantiation.md`.
@@ -1099,5 +1099,38 @@ make test-summary
   - Focused pytest before full validation:
     `tests/package/test_config_api.py tests/unit/loom/test_deferred_stubs.py tests/unit/loom/config/instantiate tests/unit/loom/config/recipes tests/unit/loom/config/test_config_provenance.py tests/unit/loom/config/test_config_errors.py tests/integration/config/test_compose_config.py`
     passed with `49 passed`.
-- PR preparation: pending.
-- Remaining blockers: none known after this bounded refinement pass.
+- PR preparation: completed on 2026-05-03. Final diff against `develop`
+  was reviewed for Phase 5 scope and matched the expanded plan: recipe
+  contracts/catalogs, recursive recipe expansion and manifests, config
+  fingerprint/provenance integration, target import helpers, explicit recursive
+  instantiation, and package/unit/contract/integration coverage. No Phase 6+
+  pipeline parsing, runner, store, plugin discovery, entry-point loading, or
+  domain behavior was found in the final diff.
+- Final PR-prep validation:
+  - `make validate-pr`: passed after rerunning with approved access to the
+    existing `uv` cache outside the workspace; includes `ruff check .`,
+    `pyright` with 0 errors, default pytest with `221 passed`, and `uv build`
+    producing source and wheel distributions.
+  - `make test-summary`: passed after rerunning with approved access to the
+    existing `uv` cache outside the workspace; wrote `build/test-summary.md`
+    with package `14 passed`, unit `189 passed`, contract `9 passed`,
+    integration `9 passed`, and e2e `not present`.
+- PR body prepared at
+  `docs/phases/add-recipes-instantiation-pr-body.md`.
+- PR creation status: pending branch push and GitHub PR creation from this
+  prepared body.
+- Accepted risks and follow-ups:
+  - The public default recipe registry remains a v0 convenience; explicit
+    catalogs are preferred for deterministic tests and future plugin loading.
+  - Recipe expansion returns mappings only; static sequence fan-out remains
+    deferred until a later phase defines splicing, generated names, and graph
+    provenance.
+  - Target imports remain trusted project-code imports with no sandbox or
+    allow-list mode in v0.
+  - Generic `instantiate()` is available for explicit object graphs, but Phase
+    6 and Phase 9 still own pipeline parsing and stage construction policy.
+  - Runtime injection values are intentionally excluded from resolved config,
+    recipe manifests, provenance, and fingerprints.
+- Budget/status evidence: plan expansion/refinement used; phase implementation
+  refinement used by commit `f88d16a`; PR review budget remains unused.
+- Remaining blockers: none known after PR preparation.
