@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Mapping, cast
 
 from loom.ids import RecordID, ResourceKey
 from loom.refs import ResourceRef
@@ -87,7 +87,7 @@ class Record:
         return cls(
             record_id=record_id,
             resources=resources,
-            metadata=ensure_plain_data(data.get("metadata", {}), path="metadata"),
-            annotations=ensure_plain_data(data.get("annotations", {}), path="annotations"),
-            provenance=ensure_plain_data(data.get("provenance", {}), path="provenance"),
+            metadata=cast(Mapping[str, PlainData], ensure_plain_data(data.get("metadata", {}), path="metadata")),
+            annotations=cast(Mapping[str, PlainData], ensure_plain_data(data.get("annotations", {}), path="annotations")),
+            provenance=cast(Mapping[str, PlainData], ensure_plain_data(data.get("provenance", {}), path="provenance")),
         )

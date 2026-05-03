@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from loom.errors import FingerprintError
 from loom.ids import Checksum, Fingerprint
 from loom.serialization.json import stable_json_bytes
-from loom.errors import FingerprintError
 
 Digest = str
 HashAlgorithm = str
@@ -76,7 +77,7 @@ def compare_digests(left: str | None, right: str | None) -> bool:
         return False
     left_normalized = validate_digest(left)
     right_normalized = validate_digest(right)
-    return hashlib.compare_digest(left_normalized, right_normalized)
+    return hmac.compare_digest(left_normalized, right_normalized)
 
 
 def hash_bytes(data: bytes, *, algorithm: str = "sha256") -> str:

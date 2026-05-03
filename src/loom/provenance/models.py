@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Mapping, cast
 
 from loom.fingerprints import validate_digest
 from loom.ids import ArtifactID, ArtifactType, Checksum, Fingerprint, RunID, StageID
@@ -72,7 +72,7 @@ def _require_mapping(value: object, field: str) -> Mapping[str, object]:
 
 def _require_plain_mapping(value: object, field: str) -> Mapping[str, PlainData]:
     mapping = _require_mapping(value, field)
-    return ensure_plain_data(dict(mapping), path=field)
+    return cast(dict[str, PlainData], ensure_plain_data(dict(mapping), path=field))
 
 
 def _normalize_int(value: object, field: str) -> int:
@@ -102,7 +102,7 @@ def _normalize_digest(value: object, field: str) -> str | None:
 def _normalize_timestamp(value: object, field: str) -> str | None:
     if value is None:
         return None
-    text = _require_str(value, field, required=True)
+    text = _require_non_empty_str(value, field)
     parse_timestamp(text)
     return text
 
@@ -369,7 +369,7 @@ class DependencyProvenance:
         _check_fields(data, KIND_DEP, allowed)
         check_supported_schema(data, supported=(1,))
         return cls(
-            packages=_require_mapping(data.get("packages", {}), "packages"),
+            packages=_normalize_mapping_optional_str(data.get("packages", {}), "packages"),
             missing_packages=_normalize_tuple(data.get("missing_packages", ()), "missing_packages"),
             metadata=_require_plain_mapping(data.get("metadata", {}), "metadata"),
             schema_version=_require_schema_version(data.get("schema_version", 1), "schema_version"),
@@ -606,7 +606,9 @@ class StageProvenance:
             started_at=_normalize_timestamp(data.get("started_at"), "started_at"),
             finished_at=_normalize_timestamp(data.get("finished_at"), "finished_at"),
             duration_seconds=_require_non_negative_duration(data.get("duration_seconds"), "duration_seconds"),
-            fingerprint=_require_mapping(data.get("fingerprint", {}), "fingerprint") if data.get("fingerprint") is not None else None,
+            fingerprint=_require_plain_mapping(data.get("fingerprint", {}), "fingerprint")
+            if data.get("fingerprint") is not None
+            else None,
             input_artifacts=_require_plain_mapping(data.get("input_artifacts", {}), "input_artifacts"),
             output_artifacts=_require_plain_mapping(data.get("output_artifacts", {}), "output_artifacts"),
             executor_metadata=_require_plain_mapping(data.get("executor_metadata", {}), "executor_metadata"),

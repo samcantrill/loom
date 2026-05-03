@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
-from loom.errors import ResourceError, ValidationError
+from loom.errors import FingerprintError, ResourceError, ValidationError
 from loom.fingerprints import validate_digest
 from loom.ids import Checksum, CodecKey, ResourceType
 from loom.serialization import PlainData, ensure_plain_data
@@ -36,7 +36,7 @@ class ResourceRef:
         if not isinstance(self.schema_version, int) or self.schema_version <= 0:
             raise ResourceRefError("schema_version must be a positive integer")
         if self.checksum is not None:
-            object.__setattr__(self, "checksum", validate_digest(self.checksum))
+            object.__setattr__(self, "checksum", _ensure_digest(self.checksum))
         object.__setattr__(self, "metadata", ensure_plain_data(dict(self.metadata), path="metadata"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -68,7 +68,7 @@ class ResourceRef:
             codec_key=_ensure_codec_key(data.get("codec_key", None)),
             schema_version=_require_schema_version(data.get("schema_version", 1)),
             checksum=_ensure_digest(data.get("checksum")),
-            metadata=ensure_plain_data(data.get("metadata", {}), path="metadata"),
+            metadata=cast(Mapping[str, PlainData], ensure_plain_data(data.get("metadata", {}), path="metadata")),
         )
 
 
@@ -99,7 +99,10 @@ def _require_schema_version(value: Any) -> int:
 def _ensure_digest(value: Any) -> str | None:
     if value is None:
         return None
-    return validate_digest(value)
+    try:
+        return validate_digest(value)
+    except FingerprintError as exc:
+        raise ResourceRefError(f"checksum must be a valid digest: {exc}") from exc
 
 
 __all__ = ["ResourceRef", "ResourceRefError"]

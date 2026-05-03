@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, cast
 
 from importlib.metadata import PackageNotFoundError, version as package_version
 
 from loom.artifacts import ArtifactRef
+from loom.serialization import PlainData, ensure_plain_data
 from loom.timestamps import utc_timestamp
-from loom.serialization import ensure_plain_data
 
 from .errors import ProvenanceCaptureError
 from .git import capture_git_provenance
@@ -18,6 +18,7 @@ from .models import (
     ArtifactLineage,
     CommandProvenance,
     CodeProvenance,
+    DependencyProvenance,
     EnvironmentProvenance,
     ProvenanceCaptureOptions,
     RunProvenance,
@@ -72,7 +73,6 @@ def capture_dependency_provenance(
 ) -> "DependencyProvenance":
     """Capture versions of explicitly requested packages."""
 
-    from .models import DependencyProvenance
     from .packages import capture_dependency_provenance as impl
 
     return impl(packages=packages, strict=strict)
@@ -96,11 +96,11 @@ def capture_artifact_lineage(
     *,
     metadata: Mapping[str, object] | None = None,
 ) -> ArtifactLineage:
-    lineage_metadata = ensure_plain_data(dict(ref.metadata), path="ref.metadata")
+    lineage_metadata = _plain_mapping(ref.metadata, "ref.metadata")
     if metadata:
         lineage_metadata = {
             **lineage_metadata,
-            **ensure_plain_data(dict(metadata), path="metadata"),
+            **_plain_mapping(metadata, "metadata"),
         }
     return ArtifactLineage(
         artifact_id=ref.artifact_id,
@@ -155,6 +155,10 @@ def capture_run_provenance(
         code=code,
         environment=environment,
         dependencies=dependencies,
-        config=ensure_plain_data(dict(config or {}), path="config"),
-        metadata=ensure_plain_data(dict(metadata or {}), path="metadata"),
+        config=_plain_mapping(config or {}, "config"),
+        metadata=_plain_mapping(metadata or {}, "metadata"),
     )
+
+
+def _plain_mapping(value: Mapping[str, object], path: str) -> dict[str, PlainData]:
+    return cast(dict[str, PlainData], ensure_plain_data(dict(value), path=path))

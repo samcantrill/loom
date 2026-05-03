@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
-from loom.errors import ArtifactError, ValidationError
+from loom.errors import ArtifactError, FingerprintError, ValidationError
 from loom.fingerprints import validate_digest
 from loom.ids import ArtifactID, ArtifactType, Checksum, CodecKey, Fingerprint, StageID
 from loom.serialization import PlainData, ensure_plain_data
@@ -43,13 +43,13 @@ class ArtifactRef:
         if not isinstance(self.schema_version, int) or self.schema_version <= 0:
             raise ArtifactValidationError("schema_version must be a positive integer")
         if self.checksum is not None:
-            object.__setattr__(self, "checksum", validate_digest(self.checksum))
+            object.__setattr__(self, "checksum", _ensure_digest(self.checksum, "checksum"))
         if self.fingerprint is not None:
-            object.__setattr__(self, "fingerprint", validate_digest(self.fingerprint))
+            object.__setattr__(self, "fingerprint", _ensure_digest(self.fingerprint, "fingerprint"))
         if self.producer_stage is not None and (not isinstance(self.producer_stage, str) or not self.producer_stage):
             raise ArtifactValidationError("producer_stage must be None or a non-empty string")
         if self.created_at is not None:
-            parse_timestamp(self.created_at)
+            _validate_timestamp(self.created_at, "created_at")
         object.__setattr__(self, "metadata", ensure_plain_data(dict(self.metadata), path="metadata"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,11 +93,11 @@ class ArtifactRef:
             artifact_type=_require_str(data.get("artifact_type"), "artifact_type"),
             codec_key=_ensure_codec_key(data.get("codec_key")),
             schema_version=_require_schema_version(data.get("schema_version", 1)),
-            checksum=_ensure_digest(data.get("checksum")),
-            fingerprint=_ensure_digest(data.get("fingerprint")),
+            checksum=_ensure_digest(data.get("checksum"), "checksum"),
+            fingerprint=_ensure_digest(data.get("fingerprint"), "fingerprint"),
             producer_stage=_ensure_stage_id(data.get("producer_stage")),
             created_at=_ensure_str_or_none(data.get("created_at"), "created_at", parse=True),
-            metadata=ensure_plain_data(data.get("metadata", {}), path="metadata"),
+            metadata=cast(Mapping[str, PlainData], ensure_plain_data(data.get("metadata", {}), path="metadata")),
         )
 
 
@@ -115,7 +115,7 @@ def _ensure_str_or_none(value: Any, field: str, *, parse: bool = False) -> str |
     if not isinstance(value, str):
         raise ArtifactValidationError(f"{field} must be a string")
     if parse and value:
-        parse_timestamp(value)
+        _validate_timestamp(value, field)
     return value
 
 
@@ -139,10 +139,20 @@ def _require_schema_version(value: Any) -> int:
     return value
 
 
-def _ensure_digest(value: Any) -> str | None:
+def _ensure_digest(value: Any, field: str) -> str | None:
     if value is None:
         return None
-    return validate_digest(value)
+    try:
+        return validate_digest(value)
+    except FingerprintError as exc:
+        raise ArtifactValidationError(f"{field} must be a valid digest: {exc}") from exc
+
+
+def _validate_timestamp(value: str, field: str) -> None:
+    try:
+        parse_timestamp(value)
+    except ValueError as exc:
+        raise ArtifactValidationError(f"{field} must be a valid UTC timestamp: {exc}") from exc
 
 
 __all__ = ["ArtifactRef", "ArtifactValidationError"]

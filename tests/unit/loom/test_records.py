@@ -2,7 +2,6 @@
 
 import pytest
 
-from loom.provenance import ArtifactLineage
 from loom.records import DuplicateRecordError, InMemoryManifest, ManifestView, Record, HasResource, MetadataEquals, MetadataIn, RecordNotFoundError
 from loom.refs import ResourceRef
 

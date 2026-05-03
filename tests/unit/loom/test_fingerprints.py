@@ -3,7 +3,6 @@
 import pytest
 
 from loom.fingerprints import (
-    FingerprintComparisonError,
     FingerprintInputError,
     InvalidDigestError,
     UnsupportedHashAlgorithmError,
@@ -25,7 +24,9 @@ def test_hash_functions_are_deterministic() -> None:
 
 
 def test_hash_text_and_mapping_inputs() -> None:
-    assert hash_text("hello") == hash_plain_data("hello")
+    assert hash_text("hello") == hash_bytes(b"hello")
+    assert hash_plain_data("hello") == hash_bytes(b'"hello"')
+    assert hash_text("hello") != hash_plain_data("hello")
     with pytest.raises(FingerprintInputError):
         hash_mapping([("a", 1)])  # type: ignore[arg-type]
 

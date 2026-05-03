@@ -713,10 +713,10 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used by the single allowed `loom_phase_refiner` pass on 2026-05-03.
 - PR review: unused.
 
-No implementation refinement or PR review pass has been consumed for Phase 2 in this planning handoff.
+The implementation refinement budget is consumed. The PR review budget remains available for the next workflow stage.
 
 ## Handoff Notes For `loom_phase_executor`
 
@@ -752,7 +752,7 @@ No implementation refinement or PR review pass has been consumed for Phase 2 in 
   5. Public exports and import boundaries.
      - Owns `src/loom/__init__.py`, package `__init__.py` exports, and `tests/package/*`.
      - Run targeted `make test-package` and `make test-unit`.
-- Keep implementation refinement and PR review budget status marked `unused`; those budgets are for later workflow stages.
+- Implementation refinement budget is now used; keep PR review budget status marked `unused` for the later PR review stage.
 - Do not update Phase 2 status in the canonical implementation plan during execution unless the manager explicitly asks for status metadata work.
 - Do not rely on the original checkout's unrelated uncommitted documentation edits.
 - If implementation exposes a blocking conflict in the public contract above, stop and report the blocker instead of widening scope.
@@ -766,20 +766,22 @@ No implementation refinement or PR review pass has been consumed for Phase 2 in 
   - Added/updated package exports and unit/package tests for all Phase 2 required surfaces.
   - Added strict contract-aligned behavior for record/manifest ordering, lazy manifest views, generic dataclass/plain/JSON helpers, schema helpers, digest validation, and provenance capture degradation paths.
   - Kept I/O boundaries intact: no filesystem write helpers, no URI parsing/loading logic, and no artifact store or codec behavior.
+- Refinement summary:
+  - Wrapped `ResourceRef` invalid checksum validation as `ResourceRefError` and `ArtifactRef` invalid digest/timestamp validation as `ArtifactValidationError`.
+  - Switched digest comparison to the standard-library constant-shape comparison helper and preserved the contract distinction between raw text hashing and stable JSON plain-data hashing.
+  - Cleaned Phase 2 lint/type blockers in protocol stubs, provenance/plain-data mapping narrowing, in-memory manifest stored-record narrowing, and unused test imports.
 - Test evidence:
-  - `UV_CACHE_DIR=/tmp make test-package` (required) failed before execution: `uv` could not download `pytest==9.0.3` due DNS/network resolution failure (`Temporary failure in name resolution`).
-  - `UV_CACHE_DIR=/tmp make test-unit` (required) failed before execution: `uv` could not download `pluggy==1.6.0` due DNS/network resolution failure.
-  - `UV_CACHE_DIR=/tmp uv run pytest tests/unit/loom/test_fingerprints.py tests/unit/loom/test_refs.py` failed before execution: `uv` could not download `ruff==0.15.12` due DNS/network resolution failure.
-  - `UV_CACHE_DIR=/tmp uv run pytest tests/unit/loom/test_provenance.py tests/unit/loom/serialization` failed before execution: `uv` could not download `packaging==26.2` due DNS/network resolution failure.
-  - `UV_CACHE_DIR=/tmp uv run pytest tests/unit/loom/test_fingerprints.py tests/unit/loom/test_records.py` failed before execution: `uv` could not download `ruff==0.15.12` due DNS/network resolution failure.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/test_artifacts.py::test_artifact_ref_rejects_invalid tests/unit/loom/test_fingerprints.py::test_hash_text_and_mapping_inputs tests/unit/loom/test_fingerprints.py::test_compare_digests tests/unit/loom/test_refs.py::test_resource_ref_rejects_invalid_inputs`: passed, 4 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/test_artifacts.py tests/unit/loom/test_fingerprints.py tests/unit/loom/test_refs.py`: passed, 16 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-package`: passed, 8 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-unit`: passed, 68 passed.
 - Validation evidence:
-  - Validation commands were not fully executable in this environment because dependencies cannot be fetched due DNS/network restrictions.
-  - This includes the required `make test-package` and `make test-unit` runs noted above.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 76 tests, and `uv build` produced source and wheel distributions.
 - Test-summary evidence: pending until runner with dependency/network access executes `make test-summary`.
 - Accepted risks:
-  - No local behavioral test failures were observed; all verification attempts were blocked by external dependency fetch failures.
+  - No refinement-scoped residual risks identified.
 - PR status: pending.
 - Budget status:
-  - Phase implementation refinement: unused.
+  - Phase implementation refinement: used.
   - PR review: unused.
-- Remaining blockers: all test execution commands blocked by DNS/network fetch failures from dependency hosts; otherwise no contract blockers identified.
+- Remaining blockers: none identified.
