@@ -47,3 +47,22 @@ def test_import_serialization_does_not_import_io() -> None:
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_import_io_does_not_import_config_or_pipeline() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.io
+
+        for forbidden in ("loom.config", "loom.pipeline", "loom.cli"):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.io")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"

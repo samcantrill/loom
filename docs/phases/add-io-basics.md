@@ -638,7 +638,26 @@ The plan quality gate budget for the canonical v0 plan is already fully used and
 
 - Draft plan committed by `loom_phase_planner`: `9b05db8 plan: add phase plan`.
 - Final expanded plan committed by `loom_phase_plan_expander`: this `plan:` commit.
-- Implementation summary: pending.
-- Validation evidence: pending.
+- Implementation summary:
+  - Implemented the complete Phase 3 I/O surface under `src/loom/io` with concrete URI helpers, source protocol + local filesystem source, codec protocol + JSON/text/bytes codecs, codec registry, and package exports.
+  - Added explicit error hierarchies for URI/source/codec failures and kept phase boundary constraints (standard-library only, no stores, no config/pipeline behavior).
+  - Added and aligned package/unit/contract/integration tests:
+    - `tests/unit/loom/io/codecs/test_*.py`
+    - `tests/unit/loom/io/sources/test_local.py`
+    - `tests/unit/loom/io/test_io_errors.py`
+    - `tests/unit/loom/io/test_uris.py`
+    - `tests/contracts/test_codec_contract.py`
+    - `tests/contracts/test_data_source_contract.py`
+    - `tests/integration/test_io_basics.py`
+    - `tests/package/test_import.py`
+    - `tests/package/test_public_api.py`
+    - `tests/package/test_import_boundaries.py`
+  - `make test-package`, `make test-unit`, `make test-contract`, and `make test-integration` were executed and passed after adjusting the io error test module name to avoid pytest import collision.
+- Validation evidence:
+  - `make test-package`: passed
+  - `make test-unit`: passed
+  - `make test-contract`: passed
+  - `make test-integration`: passed
+  - Targeted run used: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/io tests/contracts tests/integration` also passed.
 - PR: pending.
 - Remaining blockers: none.
