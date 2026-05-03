@@ -11,7 +11,8 @@
 - Phase execution plan draft pass: complete
 - Phase execution plan refine pass: complete
 - PR body draft pass: complete
-- PR body refine/open pass: pending
+- PR body refine pass: complete
+- PR open metadata: pending PR creation and verification in this pass
 
 ## Summary
 
@@ -139,15 +140,16 @@ Suite output totals from `build/test-summary.md`:
 
 - Phase implementation refinement: used on 2026-05-04 local time.
 - PR review before this PR: unused.
-- PR body draft pass: complete in this artifact.
-- PR body refine/open pass: pending by instruction.
+- PR body draft pass: complete in commit `0f9c581`.
+- PR body refine pass: complete for stacked PR creation.
+- PR open metadata: pending PR creation and verification in this pass.
 
 ## Assumptions
 
 - The correct PR target remains `codex/add-local-stores-run-layout` because Phase 7 PR #11 remains open and Phase 8 depends on Phase 7 store contracts.
 - Same-run-directory resume is the only v0 reuse mode. Cross-run cache lookup remains deferred.
 - Phase 9 will consume pending plan inputs, execute stages, validate returned outputs, and write final runner-owned lifecycle state.
-- This draft pass used the recorded stack state and provided current context; no GitHub PR inspection, push, or PR creation was performed.
+- Phase 7 PR #11 remains open against `develop`, so this PR must stay stacked on `codex/add-local-stores-run-layout` until the managing agent performs later stack maintenance.
 
 ## Risks / Follow-Ups
 
@@ -158,11 +160,8 @@ Suite output totals from `build/test-summary.md`:
 
 ## PR Creation Status
 
-PR creation was intentionally not performed in this draft pass. Do not push or
-open from this artifact-only pass.
-
-When the PR body refine/open pass is authorized, use an explicit stacked
-base/head while Phase 7 remains open:
+This artifact is refined for stacked PR creation. Use an explicit base/head
+while Phase 7 remains open:
 
 ```sh
 gh pr create --base codex/add-local-stores-run-layout --head codex/add-planning-resume-selectors --body-file docs/phases/add-planning-resume-selectors-pr-body.md --title "Phase 8: Planning, Resume, And Selectors"
