@@ -124,6 +124,13 @@ and project-scoped Codex workflow metadata.
     package/
       test_import.py
 
+  tools/
+    __init__.py
+    test_harness/
+      __init__.py
+      __main__.py
+      cli.py
+
   .codex/
     agents/
     plans/
@@ -146,7 +153,13 @@ Package, unit, integration, contract, and end-to-end tests. The initial tests ar
 package-level import checks. Additional tests should mirror the source layout as
 modules are implemented.
 
-### 2.4 `.codex`
+### 2.4 `tools`
+
+Repository-local development tools. These may use package-like structure when a
+tool needs a CLI entrypoint or room to grow, but they are not runtime modules,
+public `loom` APIs, or downstream test helpers.
+
+### 2.5 `.codex`
 
 Project-scoped agent definitions, prompts, and workflow plans. These files guide
 phase planning and review; they should not be imported by the runtime package.

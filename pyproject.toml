@@ -45,6 +45,7 @@ markers = [
 include = [
     "src",
     "tests",
+    "tools",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
@@ -53,5 +54,6 @@ typeCheckingMode = "standard"
 src = [
     "src",
     "tests",
+    "tools",
 ]
 target-version = "py312"
