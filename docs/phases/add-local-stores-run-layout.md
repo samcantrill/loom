@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Branch: `codex/add-local-stores-run-layout`
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout`
 - Phase execution plan path: `docs/phases/add-local-stores-run-layout.md`
@@ -16,7 +16,7 @@
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 plan.
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time.
-- Refine pass: pending
+- Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time.
 - Setup limitations: manager verified the control checkout was clean and synced to `origin/develop` at `e9407f427314f88aec0324946f125529d4cd93ce` before assignment. The draft pass created the worktree from local `develop`; an initial sandboxed `git worktree add` could not create the branch ref and was rerun with approved filesystem access. No remote synchronization or validation commands were run in this draft pass.
 - Blockers: none
 
@@ -82,6 +82,9 @@ Future-phase work that must remain out of scope includes actual stage execution,
 - `src/loom/fingerprints.py` already provides digest validation, `hash_bytes`, and digest comparison helpers suitable for local file checksums.
 - `src/loom/pipeline/status.py` already provides `RunStatusRecord` and `StageStatusRecord` serialization shapes. The run store should persist and read those records rather than inventing a parallel status model.
 - `src/loom/pipeline/specs.py` validates stage/output names and already rejects output `path`; Phase 7 should allocate physical artifact paths in `LocalArtifactStore`, not in specs.
+- `src/loom/serialization/json.py` already provides deterministic pretty JSON with trailing newlines. Atomic JSON helpers should call that serializer instead of adding another JSON formatting policy.
+- `src/loom/serialization.PlainData` and `ensure_plain_data` already define the accepted persisted plain-data surface. Store JSON wrappers and metadata should normalize through those helpers.
+- `src/loom/timestamps.py` already provides UTC timestamp formatting and parsing. Store-created wrapper timestamps should use `utc_timestamp()` with seconds precision.
 - `StageContext` currently has paths and plain-data config/provenance only. Store-backed context helper fields are not part of this phase.
 - Package import-boundary tests assert cheap root imports and that `loom.io` does not import config or pipeline. Store behavior belongs under `loom.pipeline.stores` and must not be exported from root `loom`.
 - Test suites currently include package, unit, contract, and integration tests. There is no e2e suite directory yet.
@@ -120,24 +123,382 @@ Future-phase work that must remain out of scope includes actual stage execution,
 - `LocalArtifactStore` should write regular files under the run's `artifacts/<stage>/` directory by default. External local registration, if supported in Phase 7, must be explicit and tested; otherwise it should fail clearly.
 - Directory artifacts may be registered and checked for existence, but tree checksums and generic directory loading remain deferred.
 - `RunStore` persists documents it is given. It does not compose configs, redact secrets, capture provenance, compute fingerprints, or decide stage/run lifecycle transitions.
-- YAML config snapshots can be persisted as supplied text or plain-data snapshots converted with existing config/YAML support; the refine pass should choose the smallest API that avoids making stores own config composition.
+- YAML config snapshots are persisted as caller-supplied UTF-8 text. `LocalRunStore` must not import `loom.config`, compose configs, redact secrets, or render YAML from Python objects.
 - Atomic writes are best-effort for local filesystems: write temp file in the same directory, flush, fsync where practical, replace, and fsync the parent directory where practical.
 
 ## Decision-Complete Contract
 
-This draft locks the Phase 7 behavioral contract and module ownership. The refine pass should make exact method signatures, record wrapper names, and path-normalization helpers decision-complete before implementation begins.
+This refined plan locks the Phase 7 behavioral contract and module ownership. The executor should implement these interfaces directly and stop for the manager if an acceptance criterion cannot be satisfied without changing an existing public value object.
 
-Public behavior:
+### Module Boundaries And Exports
 
-- `loom.pipeline.stores` is the public package for store protocols, local implementations, store errors, atomic helpers as needed, and index helpers.
-- Store APIs must accept and return existing value objects where they exist, especially `ArtifactRef`, `RunStatusRecord`, and `StageStatusRecord`.
-- Persisted machine state must be deterministic, plain JSON with trailing newlines where practical. Config snapshots and logs remain plain YAML/text files where applicable.
-- Missing optional documents should be distinguishable from corrupt documents. Corrupt JSON or invalid serialized records should raise a store-specific corrupt-state error with the path.
-- Artifact logical keys use `stage.output`. Duplicate logical keys are rejected when constructing or updating an index.
-- `LocalArtifactStore.save()` must allocate safe paths under `artifacts/<stage>/`, encode with a registered codec, write atomically, compute a `sha256` checksum for regular files, and return an `ArtifactRef`.
-- `LocalArtifactStore.register()` must normalize a local path or file URI, verify allowed location policy, compute or validate checksums for regular files when possible, preserve optional `codec_key`, and return an `ArtifactRef` without rewriting content.
-- `LocalArtifactStore.load()` must validate expected artifact type, resolve codec from the ref or explicit argument, verify local existence and checksum when present, and decode bytes through the selected codec.
-- `LocalRunStore` must centralize all local run layout paths so later phases do not format paths independently.
+- Public package: `loom.pipeline.stores`. Do not add store exports to `loom.__init__` or `loom.pipeline.__init__` in Phase 7.
+- Public modules to add:
+  - `src/loom/pipeline/stores/errors.py`: store error hierarchy.
+  - `src/loom/pipeline/stores/atomic.py`: atomic local filesystem write helpers.
+  - `src/loom/pipeline/stores/indexes.py`: logical artifact index helpers.
+  - `src/loom/pipeline/stores/artifact_store.py`: `ArtifactStore` protocol.
+  - `src/loom/pipeline/stores/local_artifacts.py`: `LocalArtifactStore`.
+  - `src/loom/pipeline/stores/run_store.py`: `RunStore` protocol.
+  - `src/loom/pipeline/stores/local_runs.py`: `LocalRunStore`.
+- Internal path/name validation helpers may live in `src/loom/pipeline/stores/_paths.py` if sharing is useful. Do not export them unless implementation tests prove a public helper is needed.
+- `loom.pipeline.stores.__all__` must export only the Phase 7 public API:
+  - protocols and implementations: `ArtifactStore`, `LocalArtifactStore`, `RunStore`, `LocalRunStore`;
+  - errors: `StoreError`, `ArtifactStoreError`, `RunStoreError`, `UnsafeStorePathError`, `UnsupportedArtifactURIError`, `ArtifactNotFoundError`, `MissingArtifactCodecError`, `ArtifactTypeMismatchError`, `ArtifactChecksumMismatchError`, `ArtifactChecksumUnsupportedError`, `RunAlreadyExistsError`, `RunNotFoundError`, `MissingStoreDocumentError`, `CorruptStoreDocumentError`, `StageStateNotFoundError`, `AtomicWriteError`;
+  - atomic helpers: `ensure_dir`, `unique_temp_path`, `atomic_write_bytes`, `atomic_write_text`, `atomic_write_json`, `replace_file`;
+  - index helpers: `format_artifact_key`, `parse_artifact_key`, `artifact_index_to_dict`, `artifact_index_from_dict`, `merge_artifact_index`.
+- `loom.pipeline.stores` may import `loom.artifacts`, `loom.fingerprints`, `loom.io.codecs`, `loom.io.uris`, `loom.pipeline.status`, `loom.serialization`, and `loom.timestamps`. It must not import `loom.config`, planner, executor, CLI, or user target-loading code.
+
+### Store Error Hierarchy
+
+Use this hierarchy, with errors including the relevant path, URI, artifact key, run ID, or stage name in their message:
+
+```python
+class StoreError(PipelineError): ...
+class ArtifactStoreError(StoreError, ArtifactError): ...
+class RunStoreError(StoreError): ...
+
+class UnsafeStorePathError(StoreError): ...
+class AtomicWriteError(StoreError): ...
+
+class UnsupportedArtifactURIError(ArtifactStoreError): ...
+class ArtifactNotFoundError(ArtifactStoreError): ...
+class MissingArtifactCodecError(ArtifactStoreError): ...
+class ArtifactTypeMismatchError(ArtifactStoreError): ...
+class ArtifactChecksumMismatchError(ArtifactStoreError): ...
+class ArtifactChecksumUnsupportedError(ArtifactStoreError): ...
+
+class RunAlreadyExistsError(RunStoreError): ...
+class RunNotFoundError(RunStoreError): ...
+class MissingStoreDocumentError(RunStoreError): ...
+class CorruptStoreDocumentError(RunStoreError): ...
+class StageStateNotFoundError(RunStoreError): ...
+```
+
+Wrap lower-level JSON decode errors, `ArtifactRef.from_dict()` errors, `RunStatusRecord.from_dict()` errors, `StageStatusRecord.from_dict()` errors, codec lookup/decode errors, and invalid wrapper shapes in store errors at the boundary. Do not let raw `json.JSONDecodeError`, `StatusSerializationError`, `ArtifactValidationError`, or `UnsupportedURIError` escape from public store methods.
+
+### Protocol Signatures
+
+Add `@runtime_checkable` structural protocols. Protocols should be method-only and should not require inheritance by downstream stores.
+
+```python
+class ArtifactStore(Protocol):
+    def save(
+        self,
+        obj: object,
+        *,
+        run_id: str,
+        stage_name: str,
+        name: str,
+        artifact_type: str,
+        codec_key: str,
+        schema_version: int = 1,
+        metadata: Mapping[str, PlainData] | None = None,
+        fingerprint: str | None = None,
+    ) -> ArtifactRef: ...
+
+    def register(
+        self,
+        uri: str | Path,
+        *,
+        run_id: str,
+        stage_name: str,
+        name: str,
+        artifact_type: str,
+        codec_key: str | None = None,
+        schema_version: int = 1,
+        metadata: Mapping[str, PlainData] | None = None,
+        fingerprint: str | None = None,
+        checksum: str | None = None,
+        allow_external: bool = False,
+    ) -> ArtifactRef: ...
+
+    def load(
+        self,
+        ref: ArtifactRef,
+        *,
+        expected_type: str | None = None,
+        codec_key: str | None = None,
+    ) -> object: ...
+
+    def exists(self, ref: ArtifactRef) -> bool: ...
+
+    def verify_checksum(self, ref: ArtifactRef) -> bool: ...
+
+    def validate(
+        self,
+        ref: ArtifactRef,
+        *,
+        expected_type: str | None = None,
+    ) -> None: ...
+```
+
+```python
+class RunStore(Protocol):
+    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None) -> Path: ...
+    def open_run(self, run_id: str) -> Path: ...
+    def get_run_dir(self, run_id: str) -> Path: ...
+    def get_stage_dir(self, run_id: str, stage_name: str) -> Path: ...
+    def get_artifact_root(self, run_id: str) -> Path: ...
+    def get_stage_artifact_dir(self, run_id: str, stage_name: str) -> Path: ...
+    def get_config_path(self, run_id: str, name: str) -> Path: ...
+    def get_provenance_path(self, run_id: str, name: str) -> Path: ...
+    def get_stage_log_path(self, run_id: str, stage_name: str, stream: str) -> Path: ...
+
+    def read_run_metadata(self, run_id: str) -> dict[str, PlainData]: ...
+    def write_run_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None: ...
+
+    def read_run_status(self, run_id: str) -> RunStatusRecord | None: ...
+    def write_run_status(self, run_id: str, status: RunStatusRecord) -> None: ...
+
+    def read_plan(self, run_id: str) -> dict[str, PlainData] | None: ...
+    def write_plan(self, run_id: str, plan: Mapping[str, PlainData]) -> None: ...
+
+    def read_artifact_index(self, run_id: str) -> dict[str, ArtifactRef]: ...
+    def write_artifact_index(self, run_id: str, index: Mapping[str, ArtifactRef]) -> None: ...
+
+    def read_config_snapshot(self, run_id: str, name: str) -> str | None: ...
+    def write_config_snapshot(self, run_id: str, name: str, content: str) -> None: ...
+    def read_recipe_manifest(self, run_id: str) -> tuple[dict[str, PlainData], ...] | None: ...
+    def write_recipe_manifest(self, run_id: str, records: Sequence[Mapping[str, PlainData]]) -> None: ...
+
+    def read_provenance_document(self, run_id: str, name: str) -> dict[str, PlainData] | None: ...
+    def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None: ...
+
+    def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None: ...
+    def write_stage_status(self, run_id: str, stage_name: str, status: StageStatusRecord) -> None: ...
+    def read_stage_inputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None: ...
+    def write_stage_inputs(self, run_id: str, stage_name: str, inputs: Mapping[str, ArtifactRef], *, attempt: int) -> None: ...
+    def read_stage_outputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None: ...
+    def write_stage_outputs(self, run_id: str, stage_name: str, outputs: Mapping[str, ArtifactRef], *, attempt: int) -> None: ...
+    def read_stage_fingerprint(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def write_stage_fingerprint(self, run_id: str, stage_name: str, fingerprint: Mapping[str, PlainData], *, attempt: int) -> None: ...
+    def read_stage_failure(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def write_stage_failure(self, run_id: str, stage_name: str, failure: Mapping[str, PlainData], *, attempt: int) -> None: ...
+    def read_stage_provenance(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def write_stage_provenance(self, run_id: str, stage_name: str, provenance: Mapping[str, PlainData], *, attempt: int) -> None: ...
+    def read_stage_log(self, run_id: str, stage_name: str, stream: str) -> str | None: ...
+    def write_stage_log(self, run_id: str, stage_name: str, stream: str, content: str) -> None: ...
+```
+
+### Local Implementations
+
+`LocalRunStore`:
+
+```python
+class LocalRunStore:
+    def __init__(self, root: str | Path) -> None: ...
+```
+
+- `root` is the directory containing run directories. `get_run_dir(run_id)` returns `root / run_id`.
+- `create_run()` creates the run directory and reserved subdirectories `config/`, `provenance/`, `stages/`, and `artifacts/`, then writes `run.json` using `write_run_metadata()`. It raises `RunAlreadyExistsError` if the run directory already exists.
+- `open_run()` returns an existing run directory and raises `RunNotFoundError` if absent. It validates `run.json` if present and raises `CorruptStoreDocumentError` for malformed content.
+- `get_artifact_root(run_id)` returns `get_run_dir(run_id) / "artifacts"`; `get_stage_artifact_dir(run_id, stage_name)` returns `get_artifact_root(run_id) / stage_name`.
+- All path helpers validate names before building paths and call `resolve(strict=False)` containment checks for paths under the run root.
+
+`LocalArtifactStore`:
+
+```python
+class LocalArtifactStore:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        codec_registry: CodecRegistry | None = None,
+    ) -> None: ...
+```
+
+- `root` is the artifact root for one run, normally `LocalRunStore.get_run_dir(run_id) / "artifacts"`.
+- `save()` writes under `root / stage_name` and does not include `run_id` in the filesystem path. `run_id` remains part of the protocol and may be recorded in metadata by future store implementations.
+- `LocalArtifactStore` uses `create_default_codec_registry()` when no registry is supplied.
+- It may expose implementation-specific `get_stage_dir(run_id, stage_name) -> Path`, `allocate_path(run_id, stage_name, name, codec_key) -> Path`, and `local_path(ref) -> Path` helpers, but these are not exported from `loom.pipeline.stores.__all__` unless they are methods on the class.
+
+### Path Allocation And Safe Names
+
+- Run IDs, stage names, output names, artifact names, config snapshot names, provenance document names, and log stream names must be validated before filesystem access.
+- Safe path components are non-empty strings, not `.` or `..`, with no `/`, `\`, NUL, control characters, or whitespace. Stage and output names also cannot contain `.` because logical artifact keys use `stage.output`.
+- Artifact logical keys are exactly `stage.output`. `format_artifact_key()` validates both parts; `parse_artifact_key()` rejects missing parts, extra dots, and unsafe parts.
+- `LocalArtifactStore.save()` allocates `root/<stage>/<name><suffix>` where suffix is `.json` for `json.v1`, `.txt` for `text.v1`, `.bin` for `bytes.v1`, and no suffix for other registered codecs. This phase does not implement output path templates or accept arbitrary save paths.
+- Saved artifacts use stable artifact IDs of `stage_name/name`, `file://` URIs for absolute paths, `producer_stage=stage_name`, `schema_version` from the argument, `created_at=utc_timestamp()`, and metadata normalized through `ensure_plain_data`.
+- Stable output paths may be atomically replaced by later writes in the same run. Attempt history remains deferred.
+- `register()` accepts only local filesystem paths or local `file://` URIs. Remote URI schemes raise `UnsupportedArtifactURIError`.
+- By default, `register()` requires the resolved path to be inside `root/<stage_name>/`. A per-call `allow_external=True` permits an absolute local file outside the run artifact root and records the absolute `file://` URI; it does not copy or rewrite the file. External local registration must be explicitly tested.
+- `register()` must reject missing paths, non-regular-file/non-directory paths, unsafe paths, or paths that escape the stage artifact directory when `allow_external=False`.
+
+### Checksum And Load Behavior
+
+- `save()` computes `sha256` over the exact stored bytes after encoding and writes the digest to `ArtifactRef.checksum`.
+- `register()` computes `sha256` for regular local files when `checksum` is not supplied. When `checksum` is supplied for a regular file, it validates the digest syntax and compares the file content before returning the ref. Mismatch raises `ArtifactChecksumMismatchError`.
+- Directory artifacts can be registered and checked for existence, but Phase 7 does not compute or accept directory checksums. A supplied checksum for a directory raises `ArtifactChecksumUnsupportedError`.
+- `verify_checksum(ref)` returns `True` only when `ref.checksum` is present and the local regular file matches it. It returns `False` when no checksum is present. It raises `ArtifactChecksumUnsupportedError` for directories with checksums and `ArtifactChecksumMismatchError` for mismatches.
+- `exists(ref)` supports local `file://` refs only. Unsupported URI schemes raise `UnsupportedArtifactURIError`.
+- `validate(ref, expected_type=None)` checks artifact type when supplied, URI support, existence, and checksum when present. It returns `None` on success and raises a store error on failure.
+- `load(ref, expected_type=None, codec_key=None)` calls `validate()` first, resolves `codec_key or ref.codec_key`, and raises `MissingArtifactCodecError` if neither is available. It then reads bytes and decodes through the registry. Codec decode/lookup failures are wrapped in `ArtifactStoreError` with the codec key and artifact URI.
+
+### Atomic Helpers
+
+Implement these public helpers in `atomic.py`:
+
+```python
+def ensure_dir(path: str | Path) -> Path: ...
+def unique_temp_path(path: str | Path) -> Path: ...
+def atomic_write_bytes(path: str | Path, data: bytes) -> None: ...
+def atomic_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> None: ...
+def atomic_write_json(path: str | Path, value: object) -> None: ...
+def replace_file(source: str | Path, target: str | Path) -> None: ...
+```
+
+`atomic_write_json()` must use `loom.serialization.json.json_dumps_pretty()` so state files are deterministic and newline-terminated. All atomic writers write a temp file in the target directory, flush and fsync where practical, replace with `os.replace()`, fsync the parent directory where practical, and remove the temp file on failure. Filesystem failures are wrapped as `AtomicWriteError`.
+
+### Artifact Index Helpers
+
+Use these exact signatures for index helpers:
+
+```python
+def format_artifact_key(stage_name: str, output_name: str) -> str: ...
+def parse_artifact_key(key: str) -> tuple[str, str]: ...
+def artifact_index_to_dict(index: Mapping[str, ArtifactRef]) -> dict[str, PlainData]: ...
+def artifact_index_from_dict(data: object) -> dict[str, ArtifactRef]: ...
+def merge_artifact_index(
+    index: Mapping[str, ArtifactRef],
+    updates: Mapping[str, ArtifactRef],
+    *,
+    replace: bool = False,
+) -> dict[str, ArtifactRef]: ...
+```
+
+`artifact_index_to_dict()` returns a plain-data mapping from logical keys to `ArtifactRef.to_dict()` payloads. `artifact_index_from_dict()` returns `dict[str, ArtifactRef]` and wraps invalid payloads in store errors. `merge_artifact_index()` returns a new dict, rejects duplicate logical keys with different refs by default, and permits replacement only when `replace=True`.
+
+### Persisted Document Shapes
+
+Do not add new public dataclasses for Phase 7 wrappers. Existing `ArtifactRef`, `RunStatusRecord`, `StageStatusRecord`, and plain-data mappings are enough. Wrapper construction/parsing should be internal helper functions in `local_runs.py` or a private helper module. `RunStore` read methods return the inner payloads named in their method, not the full wrapper, except status reads return the existing status record classes and artifact index reads return `dict[str, ArtifactRef]`.
+
+All machine-written JSON uses `schema_version: 1`, deterministic key order, and a trailing newline. Present-but-corrupt JSON, wrong wrapper kind, invalid serialized records, or non-plain-data payloads raise `CorruptStoreDocumentError` with the path. Missing optional documents return `None`; `read_artifact_index()` returns an empty dict when `artifacts.json` is absent. `read_run_metadata()` is the required root read and raises `MissingStoreDocumentError` when `run.json` is absent.
+
+Exact wrappers:
+
+```text
+run.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "created_at": "<UTC timestamp>",
+  "run_dir": "file:///absolute/run/dir",
+  "metadata": {}
+}
+```
+
+`status.json` is exactly `RunStatusRecord.to_dict()`. `stages/<stage>/status.json` is exactly `StageStatusRecord.to_dict()`.
+
+```text
+plan.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "updated_at": "<UTC timestamp>",
+  "plan": {}
+}
+
+artifacts.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "updated_at": "<UTC timestamp>",
+  "artifacts": {
+    "<stage>.<output>": { "...ArtifactRef.to_dict()": "..." }
+  }
+}
+
+stages/<stage>/inputs.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "stage_name": "<stage>",
+  "attempt": 1,
+  "created_at": "<UTC timestamp>",
+  "inputs": {
+    "<input_name>": { "...ArtifactRef.to_dict()": "..." }
+  }
+}
+
+stages/<stage>/outputs.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "stage_name": "<stage>",
+  "attempt": 1,
+  "created_at": "<UTC timestamp>",
+  "outputs": {
+    "<output_name>": { "...ArtifactRef.to_dict()": "..." }
+  }
+}
+
+stages/<stage>/fingerprint.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "stage_name": "<stage>",
+  "attempt": 1,
+  "created_at": "<UTC timestamp>",
+  "fingerprint": {}
+}
+
+stages/<stage>/failure.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "stage_name": "<stage>",
+  "attempt": 1,
+  "failed_at": "<UTC timestamp>",
+  "failure": {}
+}
+
+stages/<stage>/provenance.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "stage_name": "<stage>",
+  "attempt": 1,
+  "created_at": "<UTC timestamp>",
+  "provenance": {}
+}
+
+provenance/<name>.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "kind": "<environment|git|command|dependencies>",
+  "created_at": "<UTC timestamp>",
+  "provenance": {}
+}
+
+config/recipe_manifest.json:
+{
+  "schema_version": 1,
+  "run_id": "<run_id>",
+  "created_at": "<UTC timestamp>",
+  "recipe_manifest": []
+}
+```
+
+Config YAML snapshot files are deliberately unwrapped caller-supplied text:
+
+```text
+config/raw.yaml
+config/overlays.yaml
+config/cli_overrides.yaml
+config/resolved.yaml
+config/resolved.redacted.yaml
+```
+
+Stage log files are deliberately unwrapped caller-supplied UTF-8 text:
+
+```text
+stages/<stage>/logs/stdout.log
+stages/<stage>/logs/stderr.log
+```
+
+Valid config snapshot names are `raw`, `overlays`, `cli_overrides`, `resolved`, and `resolved_redacted`, mapped to the filenames above. Valid root provenance document names are `environment`, `git`, `command`, and `dependencies`. Valid log streams are `stdout` and `stderr`.
 
 Required local run layout:
 
@@ -169,10 +530,11 @@ artifacts/<stage>/
 
 Error behavior:
 
-- Unsafe run IDs, stage names, output names, artifact paths, or temp paths must fail before filesystem writes.
+- Unsafe run IDs, stage names, output names, artifact paths, config snapshot names, provenance document names, log stream names, or temp paths must fail before filesystem writes.
 - Unsupported remote URIs must fail clearly in local stores.
 - Missing codec keys on generic load must fail as artifact/store errors that name the artifact and state how to supply a codec.
 - Checksum mismatch must fail validation and should include the artifact URI and expected/actual digest.
+- Missing optional documents return `None` or an empty artifact index as specified above. Missing `run.json` raises `MissingStoreDocumentError`. Corrupt present documents always raise `CorruptStoreDocumentError`.
 - Atomic helper failures should clean up the temp path where possible and raise a store-specific atomic-write error.
 
 ## Design Impact
@@ -220,6 +582,7 @@ Error behavior:
   - `src/loom/pipeline/stores/run_store.py`
   - `src/loom/pipeline/stores/local_runs.py`
   - `src/loom/pipeline/stores/indexes.py`
+  - optional internal `src/loom/pipeline/stores/_paths.py`
   - `src/loom/pipeline/stores/__init__.py`
   - package import-boundary tests
   - unit tests for stores, atomic helpers, and indexes
@@ -234,14 +597,14 @@ Error behavior:
 
 ## Implementation Steps
 
-1. Add store error types and public exports under `loom.pipeline.stores`.
-2. Add atomic filesystem helpers with targeted tests for JSON/text/bytes writes, replacement, cleanup on failure, directory creation, and temp name uniqueness.
-3. Add artifact index helpers that serialize/deserialize logical `stage.output` keys and `ArtifactRef` values.
-4. Add `ArtifactStore` protocol and `LocalArtifactStore` path allocation, save, register, load, existence, checksum, and validation behavior.
-5. Add `RunStore` protocol and `LocalRunStore` root/stage/config/provenance/log/artifact path helpers.
-6. Add `LocalRunStore` read/write helpers for run metadata, statuses, plan, stage files, failures, artifact index, config snapshots, and provenance documents.
-7. Add package and contract tests for public store exports and structural protocol compatibility.
-8. Add integration tests that create a synthetic run directory, save/load/register artifacts, write/read state files, and assert the required layout without planning or executing stages.
+1. Add the store error hierarchy, optional internal path validators, and `loom.pipeline.stores.__all__` scaffolding without exporting stores from root `loom` or `loom.pipeline`.
+2. Add atomic filesystem helpers and unit tests for deterministic JSON/text/bytes writes, replacement, idempotent directory creation, temp path uniqueness, and cleanup on simulated write failure.
+3. Add artifact index helpers and unit tests for `stage.output` formatting/parsing, invalid key rejection, `ArtifactRef` round-trips, deterministic serialization, and duplicate-key rejection.
+4. Add `ArtifactStore` and `RunStore` protocols with package/contract tests proving runtime structural compatibility.
+5. Add `LocalArtifactStore` path allocation, codec-backed save/load, local registration, existence, checksum, validation, and URI normalization behavior.
+6. Add `LocalRunStore` create/open behavior and central path helpers for root, config, provenance, stage, log, and artifact directories.
+7. Add `LocalRunStore` JSON/YAML/text read/write helpers for run metadata, run status, plan, artifact index, config snapshots, recipe manifest, root provenance, stage status, stage inputs, stage outputs, stage fingerprints, stage failures, stage provenance, and logs.
+8. Add integration tests that create a synthetic run directory, instantiate `LocalArtifactStore` from `LocalRunStore.get_artifact_root(run_id)`, save/load/register artifacts, write/read every required document kind, and assert the exact v0 layout without planning or executing stages.
 9. Run targeted package, unit, contract, and integration checks during implementation, then leave final `make validate-pr` and `make test-summary` for PR preparation as required.
 
 ## Test Plan
@@ -250,25 +613,25 @@ Error behavior:
 
 - Status: required
 - Expected paths: `tests/package/test_pipeline_store_api.py` and existing import-boundary tests if public exports change.
-- Required assertions or deferral reason: `loom.pipeline.stores` exports the Phase 7 protocols, local stores, errors, and index helpers; root `loom` still does not import or export stores; importing `loom.io` still does not import `loom.pipeline`.
+- Required assertions or deferral reason: `loom.pipeline.stores.__all__` exactly matches the export list in this plan; direct `import loom.pipeline.stores` succeeds; root `loom` still does not import or export stores; `loom.pipeline.__all__` remains unchanged; importing `loom.io` still does not import `loom.pipeline`; importing `loom.pipeline.stores` does not import `loom.config`, `loom.cli`, planner, executor, or user-target modules.
 
 ### Unit Suite
 
 - Status: required
 - Expected paths: `tests/unit/loom/pipeline/stores/test_atomic.py`, `tests/unit/loom/pipeline/stores/test_indexes.py`, `tests/unit/loom/pipeline/stores/test_local_artifacts.py`, `tests/unit/loom/pipeline/stores/test_local_runs.py`, and `tests/unit/loom/pipeline/stores/test_store_errors.py`.
-- Required assertions or deferral reason: atomic writes are deterministic and clean up temp files; unsafe paths are rejected; checksums are computed and validated; codec-backed JSON/text/bytes saves round-trip; codec-less loads fail clearly without explicit codec; manual registration preserves content and metadata; run store read/write helpers handle optional, required, and corrupt files correctly.
+- Required assertions or deferral reason: atomic writes are deterministic and clean up temp files; unsafe path components and invalid logical artifact keys fail before writes; default codec suffix allocation is `name.json`, `name.txt`, `name.bin`, or `name`; saved artifacts compute `sha256` over stored bytes; JSON/text/bytes save/load round-trip through `CodecRegistry`; codec-less loads fail with `MissingArtifactCodecError` unless an explicit codec is supplied; external registration fails by default and succeeds only with `allow_external=True`; directory registration works without checksums and rejects supplied checksums; checksum mismatches raise `ArtifactChecksumMismatchError`; unsupported URI schemes raise `UnsupportedArtifactURIError`; run store read/write helpers produce the exact wrappers in this plan; missing optional documents return `None`, missing `artifacts.json` returns `{}`, missing `run.json` raises `MissingStoreDocumentError`, and corrupt present files raise `CorruptStoreDocumentError`.
 
 ### Contract Suite
 
 - Status: required
 - Expected paths: `tests/contracts/test_store_contract.py` or split store contract files if clearer.
-- Required assertions or deferral reason: downstream-style store implementations satisfy `ArtifactStore` and `RunStore` structurally without inheritance; `LocalArtifactStore` and `LocalRunStore` satisfy their protocols; contract tests avoid domain-specific artifacts.
+- Required assertions or deferral reason: downstream-style fake stores satisfy `ArtifactStore` and `RunStore` structurally without inheritance; `LocalArtifactStore` and `LocalRunStore` satisfy their protocols under `isinstance(..., Protocol)` runtime checks; the protocol tests cover method signatures but avoid remote stores, planning, execution, CLI behavior, and domain-specific artifacts.
 
 ### Integration Suite
 
 - Status: required
 - Expected paths: `tests/integration/pipeline/test_local_stores.py` or `tests/integration/test_local_stores.py`.
-- Required assertions or deferral reason: local run directory creation produces required directories and path helpers; artifact store and run store work together under one temp run directory; root and stage status, plan, inputs, outputs, fingerprints, failures, config snapshots, provenance files, logs, and artifact indexes can be written and read through store APIs; no planner or stage execution is involved.
+- Required assertions or deferral reason: local run directory creation produces `run.json`, `config/`, `provenance/`, `stages/`, and `artifacts/`; path helpers resolve inside the run root; artifact store and run store work together under one temp run directory; JSON/text/bytes artifacts save/load; an already-written file under `artifacts/<stage>/` can be registered; root status, plan, artifact index, stage status, inputs, outputs, fingerprints, failures, config snapshots, root provenance documents, stage provenance, and logs can be written and read through store APIs; artifact refs in `outputs.json` and root `artifacts.json` round-trip through `ArtifactRef.from_dict()`; no planner, selector, fingerprint calculation, runner lifecycle, stage execution, target construction, CLI, or remote store behavior is involved.
 
 ### E2E Suite
 
@@ -300,7 +663,7 @@ make test-package
 make test-unit
 make test-contract
 make test-integration
-uv run pytest tests/unit/loom/pipeline/stores tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py
+uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py
 ```
 
 Final PR-preparation commands:
@@ -313,33 +676,30 @@ make test-summary
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices:
-  - errors, exports, and protocols first
-  - atomic helpers and tests
-  - artifact index helpers and tests
-  - local artifact store and tests
-  - local run store and tests
-  - integration coverage for combined layout
-- Tests to run with each slice: run the nearest unit test file for the edited module, then `make test-package`, `make test-contract`, and `make test-integration` after public exports and integration helpers are in place.
+  - errors, export list, optional internal path validators, and package tests
+  - atomic helpers plus `tests/unit/loom/pipeline/stores/test_atomic.py`
+  - artifact index helpers plus `tests/unit/loom/pipeline/stores/test_indexes.py`
+  - protocols plus package/contract tests
+  - `LocalArtifactStore` plus `tests/unit/loom/pipeline/stores/test_local_artifacts.py`
+  - `LocalRunStore` path and document helpers plus `tests/unit/loom/pipeline/stores/test_local_runs.py`
+  - combined integration coverage plus `tests/integration/pipeline/test_local_stores.py`
+- Tests to run with each slice: run the nearest unit test file for the edited module; after public exports and protocols land, run `uv run pytest tests/package/test_pipeline_store_api.py tests/contracts/test_store_contract.py`; after local implementations land, run the focused integration test. Broad `make validate-pr` and `make test-summary` remain PR-preparer obligations.
 - Decisions the executor must not revisit:
   - no stage execution, planning, selectors, resume, CLI, remote stores, or lock manager by default
+  - public exports stay under `loom.pipeline.stores` only
+  - no new public wrapper dataclasses in Phase 7
   - physical local artifact paths are owned by `LocalArtifactStore`
   - run layout path formatting is centralized in `LocalRunStore`
   - logical artifact keys are `stage.output`
+  - `LocalArtifactStore.save()` uses the suffix allocation specified here and does not accept arbitrary save paths
+  - `register()` is local-only and external local registration is explicit per call
   - codec-less artifacts cannot be generically loaded without an explicit codec
+  - YAML config snapshots and logs are caller-supplied text, not parsed or composed by stores
 - Conditions that require stopping for the manager:
   - exact store protocol cannot cover the Phase 7 acceptance criteria without changing earlier public value objects
   - atomic-write tests prove a lock manager is required to satisfy the phase
   - existing Phase 6 status/spec contracts conflict with required persisted layout
   - final targeted suites expose failures that would require implementing Phase 8 or Phase 9 behavior
-
-## Handoff Notes For `phase-execution-plan-refine`
-
-- Finalize exact method signatures for `ArtifactStore`, `LocalArtifactStore`, `RunStore`, `LocalRunStore`, and artifact index helpers.
-- Decide the minimal config snapshot API for YAML/text persistence without making stores compose or redact configs.
-- Decide whether external local artifact registration is supported in Phase 7 and, if so, the explicit flag and tests.
-- Decide the precise error class hierarchy under `loom.pipeline.stores.errors`.
-- Decide JSON wrapper shapes for `run.json`, `plan.json`, `artifacts.json`, stage input/output/fingerprint/failure/provenance documents, and whether to add small dataclasses or keep wrapper helpers internal.
-- Confirm package export expectations before implementation changes `tests/package/test_pipeline_api.py` or adds a new package API test.
 
 ## Refinement And Review Budget Status
 
@@ -349,7 +709,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; recorded in the `plan: add phase execution plan` commit for this artifact.
-- Final phase execution plan: pending refine pass.
+- Final phase execution plan: completed by `loom_phase_planner` in the refine pass; exact exports, method signatures, path/checksum behavior, document wrappers, and suite-level tests are recorded above.
 - Implementation summary: pending.
 - Implementation validation: pending.
 - Refinement summary: pending.
