@@ -116,12 +116,6 @@ def _plan_stage(
         stage.name in selection.skipped_stages
         or stage.name in selection.outside_only_stages
     ):
-        code = (
-            PlanReasonCode.SKIPPED_BY_SELECTOR
-            if stage.name in selection.skipped_stages
-            else PlanReasonCode.OUTSIDE_ONLY_SELECTION
-        )
-        reason = selector_reason(code, stage.name)
         return _stage_plan(
             stage=stage,
             action=PlanAction.SKIP,
@@ -129,7 +123,7 @@ def _plan_stage(
             fingerprint_status=FingerprintStatus.PENDING_INPUTS,
             fingerprint=None,
             resume_check=None,
-            reasons=(*selector_reasons, reason),
+            reasons=selector_reasons,
             bound_inputs={},
             pending_inputs=(),
             reusable_outputs={},
@@ -154,6 +148,16 @@ def _plan_stage(
             PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT,
         }
     ]
+    blocking_reasons.extend(
+        reason
+        for reason in invalidated_by
+        if reason.code
+        in {
+            PlanReasonCode.UPSTREAM_SKIPPED,
+            PlanReasonCode.UPSTREAM_BLOCKED,
+            PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT,
+        }
+    )
     invalidating_reasons = [
         reason
         for reason in invalidated_by
@@ -169,10 +173,12 @@ def _plan_stage(
     force = stage.name in selection.forced_stages
 
     if blocking_reasons or (pending_inputs and not eligible):
-        reasons = (
-            *selector_reasons,
-            *tuple(pending.reason for pending in pending_inputs),
-            *tuple(invalidated_by),
+        reasons = _unique_reasons(
+            (
+                *selector_reasons,
+                *tuple(pending.reason for pending in pending_inputs),
+                *tuple(invalidated_by),
+            )
         )
         return _stage_plan(
             stage=stage,
@@ -193,10 +199,12 @@ def _plan_stage(
 
     if pending_inputs or invalidating_reasons:
         action = PlanAction.RUN if eligible else PlanAction.BLOCKED
-        reasons = (
-            *selector_reasons,
-            *tuple(pending.reason for pending in pending_inputs),
-            *tuple(invalidated_by),
+        reasons = _unique_reasons(
+            (
+                *selector_reasons,
+                *tuple(pending.reason for pending in pending_inputs),
+                *tuple(invalidated_by),
+            )
         )
         return _stage_plan(
             stage=stage,
@@ -235,13 +243,6 @@ def _plan_stage(
     if force:
         action = PlanAction.RUN
         reusable_outputs = {}
-        reasons.append(
-            PlanReason(
-                code=PlanReasonCode.FORCED_BY_SELECTOR,
-                message="stage forced by selector",
-                stage_name=stage.name,
-            ),
-        )
     return _stage_plan(
         stage=stage,
         action=action,
@@ -284,8 +285,12 @@ def _bind_inputs_and_invalidation(
                 artifact_ref=source_plan.reusable_outputs[source_output],
             )
             continue
-        reason = _upstream_reason(
-            stage.name, input_name, source_stage, source_output, source_plan.action
+        reason = _upstream_input_reason(
+            stage.name,
+            input_name,
+            source_stage,
+            source_output,
+            source_plan,
         )
         pending.append(
             PendingInput(
@@ -331,6 +336,56 @@ def _upstream_reason(
         input_name=input_name,
         output_name=source_output,
     )
+
+
+def _upstream_input_reason(
+    stage_name: str,
+    input_name: str,
+    upstream_stage: str,
+    source_output: str,
+    source_plan: StagePlan,
+) -> PlanReason:
+    if _is_unavailable_reuse_provider(source_plan):
+        return PlanReason(
+            code=PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT,
+            message=(
+                f"upstream input {upstream_stage}.{source_output} is not reusable"
+            ),
+            stage_name=stage_name,
+            upstream_stage=upstream_stage,
+            input_name=input_name,
+            output_name=source_output,
+        )
+    return _upstream_reason(
+        stage_name, input_name, upstream_stage, source_output, source_plan.action
+    )
+
+
+def _is_unavailable_reuse_provider(source_plan: StagePlan) -> bool:
+    return (
+        source_plan.action == PlanAction.BLOCKED
+        and source_plan.resume_check is not None
+        and source_plan.base_action in {PlanAction.RUN, PlanAction.STALE}
+    )
+
+
+def _unique_reasons(reasons: tuple[PlanReason, ...]) -> tuple[PlanReason, ...]:
+    seen: set[tuple[object, ...]] = set()
+    unique: list[PlanReason] = []
+    for reason in reasons:
+        key = (
+            reason.code,
+            reason.message,
+            reason.stage_name,
+            reason.upstream_stage,
+            reason.input_name,
+            reason.output_name,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(reason)
+    return tuple(unique)
 
 
 def _stage_plan(

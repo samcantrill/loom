@@ -865,7 +865,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used on 2026-05-04 local time by this bounded
+  `loom_phase_refiner` pass. Do not run another automated implementation
+  refinement for Phase 8 without explicit user instruction.
 - PR review: unused.
 
 ## Completion Notes
@@ -874,7 +876,16 @@ make test-summary
 - Final phase execution plan: refined and decision-complete for implementation on 2026-05-04 local time.
 - Implementation summary: completed locally after executor handoff attempts hit context-window tool failures before committing. Added the `loom.pipeline.planning` models, errors, fingerprinting, selector normalization, direct resume checks, topological planner, plan persistence, and exact planning exports. Added Phase 8-scoped package, unit, and integration coverage without runner/executor, CLI, remote store, or future-phase behavior.
 - Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache uv run python -m compileall src/loom/pipeline/planning` passed; focused Phase 8 pytest scope passed with 23 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/planning tests/package/test_pipeline_planning_api.py tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors; `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed with 24 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed with 271 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-integration` passed with 15 tests.
-- Refinement summary: pending.
+- Refinement summary: completed one bounded implementation/test refinement pass.
+  Fixed control-dependency invalidation so skipped or blocked upstream control
+  dependencies block downstream consumers; added the planned
+  `UNAVAILABLE_UPSTREAM_INPUT` reason for selected stages whose reuse-provider
+  inputs are unavailable; removed duplicate selector reasons for skipped,
+  outside-only, and forced stages; and added explicit `source_stage` and
+  `source_output` fields to bound-input fingerprint payloads while rejecting
+  undeclared bound inputs. Added focused unit/integration coverage for these
+  cases.
+- Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/planning/test_planner.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q` passed with 10 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/planning tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline -q` passed with 22 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors; `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed with 24 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed with 273 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-integration` passed with 15 tests.
 - PR preparation: pending.
 - Stack maintenance: pending Phase 7 merge/rebase or retarget decision.
 - Remaining blockers: none.

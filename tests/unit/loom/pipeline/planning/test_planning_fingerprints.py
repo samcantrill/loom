@@ -68,6 +68,8 @@ def test_fingerprint_changes_for_semantic_inputs_and_excludes_noisy_values() -> 
     assert resource_changed.fingerprint == base.fingerprint
     assert checksum_changed.fingerprint != base.fingerprint
     assert config_changed.fingerprint != base.fingerprint
+    assert base.payload.bound_inputs["data"]["source_stage"] == "build"
+    assert base.payload.bound_inputs["data"]["source_output"] == "data"
 
 
 def test_fingerprint_requires_all_declared_inputs() -> None:
@@ -77,3 +79,15 @@ def test_fingerprint_requires_all_declared_inputs() -> None:
         assert "pending input" in str(exc)
     else:
         raise AssertionError("missing declared input should fail fingerprinting")
+
+
+def test_fingerprint_rejects_undeclared_bound_inputs() -> None:
+    try:
+        build_stage_fingerprint(
+            _stage(),
+            bound_inputs={"data": _input_ref(), "unused": _input_ref()},
+        )
+    except StageFingerprintError as exc:
+        assert "undeclared bound input" in str(exc)
+    else:
+        raise AssertionError("undeclared bound input should fail fingerprinting")

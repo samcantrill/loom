@@ -7,6 +7,7 @@ import pytest
 from loom.pipeline import PipelineSpec, StageStatus, StageStatusRecord
 from loom.pipeline.planning import (
     PlanAction,
+    PlanReasonCode,
     PlanSelectors,
     ResumeStateError,
     build_stage_fingerprint,
@@ -110,6 +111,10 @@ def test_only_stage_blocks_when_upstream_provider_is_unavailable(
 
     assert plan.stage_plans[0].action == PlanAction.BLOCKED
     assert plan.stage_plans[1].action == PlanAction.BLOCKED
+    assert (
+        plan.stage_plans[1].pending_inputs[0].reason.code
+        == PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT
+    )
 
 
 def test_corrupt_store_json_raises_resume_state_error(tmp_path: Path) -> None:

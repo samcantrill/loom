@@ -39,9 +39,21 @@ def build_stage_fingerprint(
         raise StageFingerprintError(
             f"stage {stage.name!r} has pending input(s): {missing}"
         )
+    unexpected_inputs = tuple(
+        input_name for input_name in bound_inputs if input_name not in stage.inputs
+    )
+    if unexpected_inputs:
+        unexpected = ", ".join(sorted(unexpected_inputs))
+        raise StageFingerprintError(
+            f"stage {stage.name!r} received undeclared bound input(s): {unexpected}"
+        )
 
     normalized_inputs = {
-        input_name: _artifact_identity(ref)
+        input_name: _artifact_identity(
+            ref,
+            source_stage=stage.inputs[input_name].split(".", 1)[0],
+            source_output=stage.inputs[input_name].split(".", 1)[1],
+        )
         for input_name, ref in sorted(bound_inputs.items())
     }
     normalized_outputs = {
@@ -77,8 +89,12 @@ def build_stage_fingerprint(
     )
 
 
-def _artifact_identity(ref: ArtifactRef) -> dict[str, PlainData]:
+def _artifact_identity(
+    ref: ArtifactRef, *, source_stage: str, source_output: str
+) -> dict[str, PlainData]:
     return {
+        "source_stage": source_stage,
+        "source_output": source_output,
         "artifact_id": ref.artifact_id,
         "artifact_type": ref.artifact_type,
         "codec_key": ref.codec_key,

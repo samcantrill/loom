@@ -35,6 +35,31 @@ def _spec() -> PipelineSpec:
     )
 
 
+def _control_spec() -> PipelineSpec:
+    return PipelineSpec.from_config(
+        {
+            "name": "control-demo",
+            "stages": [
+                {
+                    "name": "prepare",
+                    "_target_": "project.Prepare",
+                    "outputs": {
+                        "ready": {"artifact_type": "json", "codec_key": "json.v1"}
+                    },
+                },
+                {
+                    "name": "publish",
+                    "_target_": "project.Publish",
+                    "depends_on": ["prepare"],
+                    "outputs": {
+                        "text": {"artifact_type": "text", "codec_key": "text.v1"}
+                    },
+                },
+            ],
+        },
+    )
+
+
 def _stores(tmp_path):
     run_store = LocalRunStore(tmp_path / "runs")
     run_store.create_run("run1")
@@ -68,8 +93,26 @@ def test_skip_selector_blocks_downstream_consumers(tmp_path) -> None:
     )
 
     assert plan.stage_plans[0].action == PlanAction.SKIP
+    assert [reason.code for reason in plan.stage_plans[0].reasons] == [
+        PlanReasonCode.SKIPPED_BY_SELECTOR
+    ]
     assert plan.stage_plans[1].action == PlanAction.BLOCKED
     assert (
         plan.stage_plans[1].pending_inputs[0].reason.code
         == PlanReasonCode.UPSTREAM_SKIPPED
     )
+
+
+def test_skip_selector_blocks_control_dependency_consumers(tmp_path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    plan = plan_pipeline(
+        _control_spec(),
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        selectors=PlanSelectors(skip_stages=("prepare",)),
+    )
+
+    assert plan.stage_plans[0].action == PlanAction.SKIP
+    assert plan.stage_plans[1].action == PlanAction.BLOCKED
+    assert plan.stage_plans[1].invalidated_by[0].code == PlanReasonCode.UPSTREAM_SKIPPED
