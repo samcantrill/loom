@@ -543,9 +543,10 @@ Completion summary:
 
 ### Phase 2 — Primitives And Serialization
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-primitives-serialization`
-PR: pending
+PR: pending; body prepared at
+`docs/phases/add-primitives-serialization-pr-body.md`
 
 Goal:
 
@@ -635,7 +636,29 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Implemented frozen `ResourceRef`, `ArtifactRef`, `Record`, manifest/view
+  helpers, generic filters, provenance models/capture helpers, deterministic
+  serialization helpers, digest/fingerprint helpers, package-wide protocols,
+  and public exports for the Phase 2 primitive surface.
+- Added focused package and unit coverage for refs, artifacts, records,
+  manifests, provenance, provenance capture, fingerprints, IDs, errors,
+  protocols, plain-data serialization, dataclass conversion, JSON helpers,
+  schema helpers, public imports, and import boundaries.
+- Final PR-prep validation on 2026-05-03:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: passed; Ruff passed,
+    Pyright reported 0 errors, default pytest passed with 76 tests, and
+    `uv build` produced source and wheel distributions.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`: passed; package suite
+    passed with 8 tests, unit suite passed with 68 tests, and contract,
+    integration, and e2e suites were not present.
+- Accepted risks: schema-version helpers remain validation-only; manifest
+  persistence beyond `InMemoryManifest`, stage fingerprint policy, file/stream
+  checksum helpers, fuller provenance capture, and YAML helpers remain deferred
+  to their owning future phases.
+- Phase implementation refinement budget: used. PR review budget: unused.
+- PR body prepared at
+  `docs/phases/add-primitives-serialization-pr-body.md`; remote PR creation
+  status is recorded in the expanded phase plan.
 
 ### Phase 3 — I/O Basics
 

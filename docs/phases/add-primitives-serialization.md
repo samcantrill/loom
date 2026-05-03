@@ -777,10 +777,23 @@ The implementation refinement budget is consumed. The PR review budget remains a
   - `UV_CACHE_DIR=/tmp/uv-cache make test-unit`: passed, 68 passed.
 - Validation evidence:
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 76 tests, and `uv build` produced source and wheel distributions.
-- Test-summary evidence: pending until runner with dependency/network access executes `make test-summary`.
+- PR-prep validation evidence:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`: re-run on 2026-05-03 from this worktree and passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 76 tests, and `uv build` produced source and wheel distributions.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`: passed on 2026-05-03 and wrote `build/test-summary.md`.
+- Test-summary evidence:
+  - package: passed, 8 tests.
+  - unit: passed, 68 tests.
+  - contract: not present.
+  - integration: not present.
+  - e2e: not present.
 - Accepted risks:
   - No refinement-scoped residual risks identified.
-- PR status: pending.
+  - Schema-version helpers remain validation-only until a persisted document shape needs migration support.
+  - Filesystem-backed or streaming manifests, stage fingerprint policy, file/stream checksum helpers, fuller provenance capture, and YAML helpers remain deferred to their owning future phases.
+- PR status:
+  - Canonical Phase 2 status updated to `pr_open`.
+  - PR body prepared at `docs/phases/add-primitives-serialization-pr-body.md`.
+  - Remote PR creation is pending branch push/open attempt.
 - Budget status:
   - Phase implementation refinement: used.
   - PR review: unused.
