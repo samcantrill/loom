@@ -359,7 +359,17 @@ stop and report the blocker rather than making a new design decision.
 - Draft expanded phase plan created by `loom_phase_planner`.
 - Final expansion completed by `loom_phase_plan_expander`.
 - Important refinements: exact public export lists, timestamp precision policy, config stub signatures/messages, explicit feature-document deferrals, and executor implementation slices.
-- Implementation summary: pending.
-- Test evidence: pending.
-- Validation evidence: pending.
+- Implementation summary:
+  - Added `src/loom/ids.py`, `src/loom/errors.py`, and `src/loom/timestamps.py`.
+  - Added import-safe package skeletons for all Phase 1 paths.
+  - Added Phase 1 config stubs in `src/loom/config/__init__.py` with unsupported-feature `ConfigError` raises.
+  - Added package-level and unit tests at `tests/package` and `tests/unit/loom` to validate imports, boundaries, aliases, errors, timestamps, and deferred-call failure modes.
+- Test evidence:
+  - `make test-package` (attempted): blocked by offline dependency/tooling resolution before test execution (`Could not download pytest... dns error`).
+  - `make test-unit` (attempted): blocked by offline dependency/tooling resolution before test execution (`Could not download pyright... dns error`).
+  - Direct `python3 -m pytest ...` (attempted): `pytest` module not installed in environment.
+- Validation evidence:
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-package` attempted and failed with the same offline `dns error` fetching `pytest`.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-unit` attempted and failed with the same offline `dns error` fetching `pyright`.
+  - Original make target `make test-package` also failed on `Could not acquire lock` (`Could not create temporary file` in uv cache path) before dependency resolution.
 - PR: pending.
