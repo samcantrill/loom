@@ -543,11 +543,9 @@ Completion summary:
 
 ### Phase 2 — Primitives And Serialization
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-primitives-serialization`
-PR: not opened; branch push to `origin` is blocked by SSH public-key
-authentication. Body prepared at
-`docs/phases/add-primitives-serialization-pr-body.md`.
+PR: https://github.com/samcantrill/loom/pull/2
 
 Goal:
 
@@ -656,14 +654,19 @@ Completion summary:
   persistence beyond `InMemoryManifest`, stage fingerprint policy, file/stream
   checksum helpers, fuller provenance capture, and YAML helpers remain deferred
   to their owning future phases.
-- Phase implementation refinement budget: used. PR review budget: unused.
+- Phase implementation refinement budget: used. PR review budget: used by
+  merge-time review for GitHub PR #2.
 - PR body prepared at
   `docs/phases/add-primitives-serialization-pr-body.md`.
-- Remote PR creation blocker on 2026-05-03:
+- GitHub PR #2 squash-merged into `develop` as
+  `9f195edf0e393bdcf5f132fb27b8b4db7e60d8ac` on 2026-05-03.
+- Earlier remote PR creation blocker recorded on 2026-05-03 was resolved before
+  merge:
   `git push -u origin codex/add-primitives-serialization` failed with
   `ssh_askpass: exec(/usr/bin/ssh-askpass): No such file or directory`,
   `git@github.com: Permission denied (publickey).`, and
   `fatal: Could not read from remote repository.`
+- Remaining blockers: none.
 
 ### Phase 3 — I/O Basics
 
