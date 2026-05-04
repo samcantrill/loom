@@ -2,9 +2,9 @@
 
 - Phase: Phase 10 - Hardening And Documentation
 - Branch: `codex/harden-v0-docs`
-- Target branch: `codex/add-local-execution`
-- Stack predecessor: `codex/add-local-execution`
-- Merge eligibility: stacked PR; reviewable against `codex/add-local-execution`; not merge-eligible until predecessor phases land and this branch is replayed or rebased onto the latest valid `develop` base, retargeted to `develop`, and revalidated.
+- Target branch: `develop`
+- Stack predecessor: none; Phase 9 has landed in `develop`
+- Merge eligibility: root phase PR after stack maintenance; PR #14 targets `develop`, has been replayed onto latest `develop`, and has been revalidated.
 - Worktree: `/home/samcantrill/work/loom-worktrees/harden-v0-docs`
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Phase execution plan: `docs/phases/harden-v0-docs.md`
@@ -66,27 +66,27 @@ command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/tes
 result: passed, 10 passed
 ```
 
-Final gate evidence:
+Final gate evidence after stack replay onto `develop`:
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
-result: passed during PR body refinement; Ruff passed, Pyright reported 0 errors, default pytest passed with 368 tests, and build succeeded.
+result: passed after stack replay; Ruff passed, Pyright reported 0 errors, default pytest passed with 376 tests, and build succeeded.
 
 command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
-result: passed during PR body refinement; package, unit, contract, integration, and e2e suites passed.
+result: passed after stack replay; package, unit, contract, integration, and e2e suites passed.
 ```
 
 ### Test Suite Summary
 
 | Suite | Status | Duration | Command |
 | --- | --- | ---: | --- |
-| package | passed | 2.24s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
-| unit | passed | 1.60s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
+| package | passed | 2.32s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
+| unit | passed | 1.80s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
 | contract | passed | 0.44s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
-| integration | passed | 2.43s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
-| e2e | passed | 0.81s | `uv run pytest tests/e2e -m "not slow and not slurm and not network and not optional_dependency"` |
+| integration | passed | 2.67s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
+| e2e | passed | 0.82s | `uv run pytest tests/e2e -m "not slow and not slurm and not network and not optional_dependency"` |
 
-Suite counts from `build/test-summary.md`: package 34 passed, unit 292 passed, contract 17 passed, integration 24 passed, e2e 1 passed.
+Suite counts from `build/test-summary.md`: package 34 passed, unit 298 passed, contract 17 passed, integration 26 passed, e2e 1 passed.
 
 ## Scope Control
 
@@ -98,11 +98,11 @@ Suite counts from `build/test-summary.md`: package 34 passed, unit 292 passed, c
 
 - Phase implementation refinement: used by `loom_phase_refiner` on 2026-05-04 local time.
 - PR review before this PR: unused.
+- Stack replay validation: completed on 2026-05-04 local time after Phase 9 landed.
 
 ## Risks / Follow-Ups
 
-- This PR is stacked on `codex/add-local-execution`; it is not merge-eligible while predecessor PRs remain unmerged or while the PR target is not `develop`.
-- Rebase or replay onto the latest valid base and rerun `make validate-pr` plus `make test-summary` before retargeting to `develop`.
+- This PR has been replayed onto latest `develop` and should remain targeted to `develop` before merge.
 - Error context remains message-oriented rather than a shared structured error framework, matching the accepted Phase 10 plan debt.
 - Documentation keeps functional CLI, remote stores, new executors, and cross-run reuse explicitly deferred.
 
@@ -112,9 +112,9 @@ PR opened during the PR body refine pass:
 
 - URL: https://github.com/samcantrill/loom/pull/14
 - State: `OPEN`
-- Base branch: `codex/add-local-execution`
+- Base branch: originally `codex/add-local-execution`; retargeted to `develop` after stack maintenance
 - Head branch: `codex/harden-v0-docs`
-- Merge eligibility: stacked for review only; not merge-eligible until retargeted to `develop` after predecessor phases land and validation is rerun.
+- Merge eligibility: root phase PR after stack maintenance; merge only while targeted to `develop` and after current checks are green.
 
 Creation command:
 
@@ -133,7 +133,20 @@ Remote preflight from the manager already confirmed GitHub authentication outsid
 
 ## Stack Maintenance
 
-- Current base branch: `codex/add-local-execution` at merge base `da3cb5f4547ccf01a56bc6dc33f742228d0ffd72`.
-- Retarget/rebase needed after predecessor merge: after Phase 7 PR #11, Phase 8 PR #12, and Phase 9 PR #13 land, replay or rebase `codex/harden-v0-docs` onto updated `develop`, retarget the PR to `develop`, rerun validation, and record stack maintenance in this artifact and the phase execution plan.
+- Current base branch: `develop` at `faff55a2afd5e403bce0536b29ec0d7736b95fe0`.
+- Retarget/rebase needed after predecessor merge: completed on 2026-05-04 local time. Replayed only Phase 10 commits onto updated `develop` using old Phase 9 tip `da3cb5f4547ccf01a56bc6dc33f742228d0ffd72` as the upstream boundary, retargeted PR #14 to `develop`, and reran validation.
 - Successor branches depending on this phase: none recorded.
-- Branch cleanup constraints: keep `codex/add-local-execution` while Phase 10 depends on it; keep `codex/harden-v0-docs` until any future successor branch has been retargeted or rebased away.
+- Branch cleanup constraints: no successor dependency recorded; `codex/harden-v0-docs` can be deleted by the squash merge if no new successor branch is created before merge.
+
+Stack-maintenance evidence:
+
+```text
+command: git rebase --onto origin/develop da3cb5f4547ccf01a56bc6dc33f742228d0ffd72 codex/harden-v0-docs
+result: completed without conflicts; resulting branch contains only Phase 10 commits on top of develop
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 376 tests, and build succeeded
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: passed; package 34 passed, unit 298 passed, contract 17 passed, integration 26 passed, e2e 1 passed
+```

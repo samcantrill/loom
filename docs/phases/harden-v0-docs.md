@@ -2,16 +2,16 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: PR open; stack maintenance to `develop` completed
 - Branch: `codex/harden-v0-docs`
 - Worktree: `/home/samcantrill/work/loom-worktrees/harden-v0-docs`
 - Phase execution plan path: `docs/phases/harden-v0-docs.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Source phase: `Phase 10 - Hardening And Documentation`
-- Stack predecessor: `codex/add-local-execution`
-- Base branch: `codex/add-local-execution` at `da3cb5f4547ccf01a56bc6dc33f742228d0ffd72`
-- Target branch: `codex/add-local-execution`
-- Merge eligibility: stacked PR; reviewable against `codex/add-local-execution`; not merge-eligible until Phase 7 PR #11, Phase 8 PR #12, and Phase 9 PR #13 land or the Phase 10 branch is replayed/rebased onto the latest valid base and retargeted to `develop`.
+- Stack predecessor: none; Phase 9 has landed in `develop`
+- Base branch: `develop` at `faff55a2afd5e403bce0536b29ec0d7736b95fe0`
+- Target branch: `develop`
+- Merge eligibility: root phase PR after stack maintenance; PR #14 targets `develop`, has been replayed onto latest `develop`, and has been revalidated.
 - Successor dependency notes: no successor phase is recorded. Keep `codex/harden-v0-docs` until any later branch has been retargeted or rebased away from it.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 implementation plan.
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
@@ -22,7 +22,7 @@
 - PR body draft/refine budget: draft completed on 2026-05-04 local time in
   `docs/phases/harden-v0-docs-pr-body.md`; refine completed on 2026-05-04
   local time by `loom_pr_preparer`.
-- Setup limitations: no remote operations or validation commands were run during the draft or refine planning passes. The worktree was created from the local recorded predecessor branch because the manager supplied the exact Phase 9 base head.
+- Setup limitations: no remote operations or validation commands were run during the draft or refine planning passes. The worktree was created from the local recorded predecessor branch because the manager supplied the exact Phase 9 base head. Stack maintenance later replayed the branch onto `develop` after Phase 9 landed.
 - Blockers: none.
 
 ## Objective
@@ -33,17 +33,17 @@ The resulting PR should make the v0 surface easier for downstream packages to ad
 
 ## Full-Plan Context
 
-Phases 1 through 6 are merged and provide the package skeleton, public primitives, serialization, local I/O/codecs, trusted config composition, recipes and instantiation, static pipeline specs, graph validation, status records, and pipeline imports. Phase 7 PR #11 adds local stores and the inspectable run layout. Phase 8 PR #12 adds planning, selectors, stage fingerprints, conservative same-run-directory resume, and downstream invalidation. Phase 9 PR #13 adds local in-process execution, runner lifecycle, output validation, failure persistence, and e2e local Python API coverage.
+Phases 1 through 9 are merged and provide the package skeleton, public primitives, serialization, local I/O/codecs, trusted config composition, recipes and instantiation, static pipeline specs, graph validation, status records, local stores, the inspectable run layout, planning, selectors, stage fingerprints, conservative same-run-directory resume, downstream invalidation, local in-process execution, runner lifecycle, output validation, failure persistence, and e2e local Python API coverage.
 
 Phase 10 builds on that full local stack. It should harden existing behavior and document existing contracts. It must not add functional CLI commands, new execution backends, remote stores, cross-run cache reuse, dashboards, domain codecs/stages/recipes, config sandboxing, plugin discovery, retries, lock managers, or other deferred features unless an existing Phase 10 acceptance criterion is impossible without the smallest supporting fix.
 
 ## Stack Context
 
-- Root or stacked phase: stacked phase.
-- Current predecessor branch or PR: `codex/add-local-execution`, GitHub PR #13, recorded as open against `codex/add-planning-resume-selectors`.
-- Why this base branch is correct: Phase 7 PR #11, Phase 8 PR #12, and Phase 9 PR #13 remain open, and Phase 10 must harden the local execution behavior introduced in Phase 9. The manager assignment explicitly requires branching from `codex/add-local-execution` at `da3cb5f4547ccf01a56bc6dc33f742228d0ffd72` and targeting `codex/add-local-execution`.
-- Retarget/rebase plan after predecessor merge: after Phase 7 lands, Phase 8 must be replayed or rebased onto updated `develop`; after Phase 8 lands, Phase 9 must be replayed or rebased onto the latest valid base; after Phase 9 lands, replay or rebase Phase 10 onto updated `develop`, retarget its PR to `develop`, rerun validation, and record stack maintenance in this artifact and the PR body.
-- Branch cleanup constraints: do not delete Phase 9 while Phase 10 depends on it. Do not delete Phase 10 until every successor branch has been retargeted or rebased away from it.
+- Root or stacked phase: root phase after stack maintenance.
+- Current predecessor branch or PR: none; Phase 9 PR #13 has landed in `develop`.
+- Why this base branch is correct: Phase 10 now targets updated `develop` because all predecessor phases have landed.
+- Retarget/rebase plan after predecessor merge: completed on 2026-05-04 local time by replaying Phase 10 commits only onto `origin/develop` with old Phase 9 tip `da3cb5f4547ccf01a56bc6dc33f742228d0ffd72` as the upstream boundary.
+- Branch cleanup constraints: no successor branch is recorded. `codex/harden-v0-docs` can be deleted by the squash merge if no new successor branch is created before merge.
 
 ## Source Phase Summary
 
@@ -396,13 +396,18 @@ make test-summary
   - Verification result: `{"baseRefName":"codex/add-local-execution","headRefName":"codex/harden-v0-docs","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/14"}`
   - Target check: passed; base branch matches recorded target branch
     `codex/add-local-execution`.
-- PR preparation validation:
+- Historical PR preparation validation:
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed during PR body
     refinement: Ruff passed, Pyright reported 0 errors, default pytest passed
     with 368 tests, and build succeeded.
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed during PR body
     refinement: package, unit, contract, integration, and e2e suites passed.
-- Stack maintenance: Phase 10 is stacked on `codex/add-local-execution` and targets `codex/add-local-execution`; retarget to `develop` only after predecessor phases land and validation is rerun.
+- Stack maintenance: completed on 2026-05-04 local time after Phase 9 landed in `develop`.
+  - Replayed `codex/harden-v0-docs` onto `origin/develop` using old Phase 9 tip `da3cb5f4547ccf01a56bc6dc33f742228d0ffd72` as the upstream boundary, so the resulting branch contains only Phase 10 commits on top of `develop`.
+  - Retargeted PR #14 to `develop`.
+  - Validation after stack replay passed:
+    - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 376 tests, and build succeeded.
+    - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` — passed; package passed with 34 tests, unit passed with 298 tests, contract passed with 17 tests, integration passed with 26 tests, e2e passed with 1 test.
 - Remaining blockers: none observed.
 
 ## Phase Refinement Report
