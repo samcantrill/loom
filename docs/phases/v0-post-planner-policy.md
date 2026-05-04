@@ -521,6 +521,28 @@ review harder.
 - Docs describe the implemented planner boundaries and continue to defer CLI,
   preflight command, runner lifecycle, and future executor behavior.
 
+## Slice Evidence (Phase 5)
+
+- Slice 1 (characterization): added and preserved helper-level tests for binding
+  extraction, invalidation reasons, action decisions, plan explanation round-trip,
+  and planner persistence separation.
+- Slice 2 (invalidation extraction): implemented in
+  `src/loom/pipeline/planning/invalidation.py` with typed
+  `ResolvedInputBinding` handling and deduplicated reason helpers.
+- Slice 3 (action-policy extraction): implemented in
+  `src/loom/pipeline/planning/actions.py` for selector/pending/invalidation and
+  resume-based final actions.
+- Slice 4 (explanation surface): implemented in
+  `src/loom/pipeline/planning/explanations.py` with typed models and
+  `PlanExplanation`/`StageExplanation` dataclasses.
+- Slice 5 (planner rewiring): preserved topological orchestration order in
+  `src/loom/pipeline/planning/planner.py` and retained existing persisted
+  `ExecutionPlan` shape during persistence.
+- Slice 6 (docs/API): added planning export updates and updated docs in
+  `docs/structure.md`, `docs/features/pipeline-graph.md`,
+  `docs/features/resume.md`, `docs/features/preflight.md`, and
+  `docs/features/fingerprints.md`.
+
 ## Design Impact
 
 This phase makes planning easier to extend without turning the public

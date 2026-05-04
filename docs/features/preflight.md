@@ -160,7 +160,9 @@ forced stages exist
 ```
 
 These checks should use the same validation and graph modules that execution
-uses.
+uses. For execution-planning diagnostics, preflight should call into
+`plan_pipeline()` and `explain_plan()` rather than duplicating selector,
+invalidation, or resume logic.
 
 ## Runtime Checks
 
@@ -417,4 +419,3 @@ organization-specific required checks
 
 These should remain opt-in because they can be slow, environment-specific, or
 network-dependent.
-
