@@ -844,6 +844,9 @@ briefs/
   criteria, constraints, risks, assumptions, and specification targets before
   feature specification work begins.
 
+briefs/v0_public_api_migration_notes.md
+  Migration notes from early v0 patterns to the hardened public API shapes.
+
 implementation-plans/implementation-plan-v0.md
   Review-gated v0 phase plan, phase status, accepted tradeoffs, and deferred
   v0 scope boundaries.

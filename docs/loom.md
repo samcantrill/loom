@@ -214,14 +214,16 @@ A pipeline spec describes stages and dependencies without executing them.
 pipeline:
   stages:
     - name: build_index
-      _target_: project.stages.BuildIndexStage
+      factory:
+        _target_: project.stages.BuildIndexStage
       outputs:
         index:
           artifact_type: json
           codec_key: json.v1
 
     - name: summarize
-      _target_: project.stages.SummarizeStage
+      factory:
+        _target_: project.stages.SummarizeStage
       depends_on: [build_index]
       inputs:
         index: build_index.index
@@ -235,7 +237,8 @@ pipeline:
 
 ### 6.5 Stage Context
 
-Each stage receives a `StageContext` with paths, config, artifacts, and run metadata.
+Each stage receives a `StageContext` with run metadata, config, and artifact
+helpers.
 
 ```python
 class Stage:
@@ -251,17 +254,16 @@ Phase 6 defines the minimal context shape:
 
 ```text
 run_id
-run_dir
 stage_name
-stage_dir
 resolved_config
 stage_config
 provenance
 metadata
 ```
 
-Store fields, loggers, artifact helpers, and bound input conveniences are wired
-once run/artifact stores and the local runner exist.
+Use local facade methods on the context for outputs, workspace paths, and artifact
+loading/saving. Pipeline internals remain the stable contract owner for path and
+state persistence.
 
 ---
 
@@ -282,14 +284,16 @@ data:
 pipeline:
   stages:
     - name: build_manifest
-      _target_: project.stages.BuildManifestStage
+      factory:
+        _target_: project.stages.BuildManifestStage
       config:
         source: ${data.source}
       outputs:
         manifest:
           artifact_type: manifest
     - name: summarize
-      _target_: project.stages.SummarizeStage
+      factory:
+        _target_: project.stages.SummarizeStage
       depends_on: [build_manifest]
       inputs:
         manifest: build_manifest.manifest
@@ -443,10 +447,19 @@ from loom.artifacts import ArtifactRef
 from loom.fingerprints import hash_mapping
 
 from loom.config import compose_config, instantiate, register_recipe
-from loom.pipeline import PipelineSpec, StageSpec, StageContext, PipelineRunner
+from loom.pipeline import (
+    PipelineSpec,
+    StageFactorySpec,
+    StageSpec,
+    StageContext,
+    PipelineRunner,
+)
 ```
 
 The public API should stay small until repeated usage shows that more helpers are worth carrying.
+
+Migration and rename notes for the v0 hardening closeout are in
+[v0 public API migration notes](briefs/v0_public_api_migration_notes.md).
 
 ---
 
