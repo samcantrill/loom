@@ -39,7 +39,9 @@ wheels = [
 name = "loom"
 version = "0.1.0"
 source = { editable = "." }
-dependencies = [
+
+[package.optional-dependencies]
+config = [
     { name = "omegaconf" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -54,10 +56,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "omegaconf", specifier = ">=2.3" },
-    { name = "pydantic", specifier = ">=2" },
-    { name = "pyyaml", specifier = ">=6" },
+    { name = "omegaconf", marker = "extra == 'config'", specifier = ">=2.3" },
+    { name = "pydantic", marker = "extra == 'config'", specifier = ">=2" },
+    { name = "pyyaml", marker = "extra == 'config'", specifier = ">=6" },
 ]
+provides-extras = ["config"]
 
 [package.metadata.requires-dev]
 dev = [
