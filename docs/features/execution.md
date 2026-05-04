@@ -1258,17 +1258,27 @@ the same status semantics.
 Events may include:
 
 ```text
-run started
-stage started
-stage succeeded
-stage failed
-run finished
-submission created
+run_started
+stage_started
+stage_succeeded
+stage_failed
+run_finished
+submission_created
 ```
 
 The execution layer should only produce structured event records or call a small
 callback interface. Service-specific notification delivery should live outside
 core `loom`.
+
+Lifecycle events should be emitted after the corresponding durable state change
+when one exists. For example, `stage_started` follows persisted `RUNNING`,
+`stage_succeeded` follows output commit and persisted `SUCCEEDED`, and
+`stage_failed` follows failure metadata and persisted `FAILED`.
+
+Callbacks are observe-only event sinks. They must not mutate plans, artifacts,
+stage results, status transitions, or run-store state. Plugin-discovered event
+sinks are loaded by `loom.plugins`; execution only emits structured runtime
+events and invokes already-registered sinks.
 
 ---
 

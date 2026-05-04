@@ -5,8 +5,8 @@
 `loom.plugins` centralizes optional extension discovery for `loom`.
 
 It exists so downstream packages can contribute recipes, codecs, executors, data
-sources, and other extension points without modifying the generic `loom` source
-tree.
+sources, event sinks, and other extension points without modifying the generic
+`loom` source tree.
 
 The plugin layer should answer:
 
@@ -25,6 +25,8 @@ It should not answer:
 How does a recipe expand?
 How does a codec decode bytes?
 How does an executor submit work?
+How is a runtime event defined or emitted?
+How does a notification backend deliver messages?
 How does config composition work?
 How does a CLI command run a pipeline?
 ```
@@ -41,8 +43,8 @@ Importing `loom` should not discover or import third-party plugins.
 
 [loom.md](../loom.md) keeps plugin behavior outside the minimum runtime kernel. This
 document describes the deferred extension layer that can connect downstream
-recipes, codecs, sources, executors, and CLI additions to explicit registries
-without making plugin discovery a side effect of importing `loom`.
+recipes, codecs, sources, executors, event sinks, and CLI additions to explicit
+registries without making plugin discovery a side effect of importing `loom`.
 
 ---
 
@@ -53,7 +55,7 @@ without making plugin discovery a side effect of importing `loom`.
 Recommended dependency shape:
 
 ```text
-config recipes / io codecs / executors / sources
+config recipes / io codecs / executors / sources / event sinks
         ^
         |
 plugins
@@ -71,6 +73,7 @@ loom.serialization
 loom.config recipe catalog APIs
 loom.io codec/source registry APIs
 loom.pipeline executor registry APIs, when implemented
+loom reliability event models, when implemented
 ```
 
 It should not import:
@@ -81,6 +84,7 @@ pipeline runner lifecycle
 SLURM command wrappers directly
 CLI modules
 large optional dependencies
+service-specific notification SDKs
 ```
 
 This keeps plugin discovery available to setup code without creating import-time
@@ -104,6 +108,7 @@ return structured plugin records
 report plugin load failures
 apply deterministic duplicate policy
 optionally register loaded objects into subsystem registries
+optionally register loaded event sinks with an event sink registry
 ```
 
 ### 3.2 `loom.config.recipes`
@@ -167,7 +172,30 @@ generate scheduler scripts
 run stages
 ```
 
-### 3.5 `loom.cli`
+### 3.5 Runtime Event Sinks
+
+Runtime event semantics belong to `loom` reliability and execution layers.
+
+Plugin responsibilities:
+
+```text
+discover event sink entry points, later
+load observe-only event sink callables, later
+register event sinks with a supplied event sink registry, later
+report event sink load or registration failures
+```
+
+Plugin non-responsibilities:
+
+```text
+define RuntimeEvent semantics
+emit lifecycle events
+deliver Slack, email, PagerDuty, webhook, or monitoring notifications
+decide whether a callback failure should fail a run
+mutate plans, configs, artifacts, or run-store state
+```
+
+### 3.6 `loom.cli`
 
 Owns command-line presentation.
 
@@ -206,6 +234,7 @@ tests with fake entry points
 ```text
 executor entry point loading
 source backend entry point loading
+event sink entry point loading after runtime event models are stable
 plugin provenance records
 CLI inspection command
 strict and best-effort discovery modes
@@ -261,6 +290,7 @@ loom.recipes
 loom.codecs
 loom.executors
 loom.sources
+loom.event_sinks
 ```
 
 ### 5.4 Entry Point Name
@@ -302,9 +332,29 @@ RecipeCatalog
 CodecRegistry
 SourceRegistry
 ExecutorRegistry
+EventSinkRegistry
 ```
 
 Plugins discover objects. Registries own runtime lookup.
+
+### 5.7 Event Sink
+
+An event sink is an observe-only callable that receives a structured runtime
+event emitted by the execution or reliability layer.
+
+Representative shape:
+
+```python
+EventSink = Callable[[RuntimeEvent], None]
+```
+
+Event sinks may send notifications, append audit logs, or forward events to an
+external system. They must not mutate `loom` plans, configs, artifacts, stage
+outputs, status transitions, retry decisions, or store records.
+
+Runtime event names, payload shape, persistence, and callback failure policy
+belong to the reliability and execution specifications. Plugin discovery only
+loads and registers sink objects when explicitly requested.
 
 ---
 
@@ -418,6 +468,34 @@ trust-score plugins
 
 Python packaging tools own installation.
 
+### 6.8 Keep Event Sinks Observe-Only
+
+Event sinks are observers of committed runtime facts.
+
+They may:
+
+```text
+receive RuntimeEvent records
+write external audit or notification side effects
+raise errors that are recorded as callback failures
+```
+
+They must not:
+
+```text
+change a pipeline plan
+change config composition
+change stage outputs
+change artifact commit behavior
+change retry, skip, or failure decisions
+change run-store status directly
+```
+
+By default, event sink failures should be recorded and execution should
+continue. A future strict mode may make callback failures fatal for audit-heavy
+workflows, but that policy belongs to reliability/runtime options rather than
+plugin loading.
+
 ---
 
 ## 7. Entry Point Groups
@@ -498,7 +576,38 @@ cluster = "project.executors:ClusterExecutorFactory"
 
 Defer until executor registry shape is stable.
 
-### 7.5 CLI Commands
+### 7.5 Event Sinks
+
+Future group:
+
+```text
+loom.event_sinks
+```
+
+Example:
+
+```toml
+[project.entry-points."loom.event_sinks"]
+audit_log = "project.audit:LoomAuditSink"
+```
+
+Loaded object should be:
+
+```text
+event sink callable
+event sink class with no-arg constructor
+factory returning an event sink callable
+```
+
+The sink receives `RuntimeEvent` records from execution or reliability
+infrastructure. It should return `None` and must not mutate the event or runtime
+state.
+
+Programmatic registration should come first. Entry point loading for
+`loom.event_sinks` should wait until the `RuntimeEvent` model and event sink
+registry contract are stable.
+
+### 7.6 CLI Commands
 
 Do not support arbitrary third-party CLI command injection in v0.
 
@@ -523,6 +632,13 @@ from loom.plugins import (
     load_recipe_entry_points,
     load_codec_entry_points,
 )
+```
+
+Future event sink helpers should be exported only after the runtime event model
+is stable:
+
+```python
+from loom.plugins import load_event_sink_entry_points
 ```
 
 ### 8.2 Initial Files
@@ -861,9 +977,126 @@ Keep them explicit until real use cases shape the API.
 
 ---
 
-## 14. Duplicate Handling
+## 14. Event Sink Plugins
 
-### 14.1 Duplicate Entry Point Names
+### 14.1 Purpose
+
+Event sink plugin loading connects installed trusted packages to runtime event
+observation.
+
+The plugin layer discovers and loads sinks. The reliability and execution layers
+define events, emit events, persist event records, and decide callback failure
+policy.
+
+Representative future signature:
+
+```python
+def load_event_sink_entry_points(
+    registry: EventSinkRegistry,
+    *,
+    group: str = "loom.event_sinks",
+    strict: bool = True,
+    replace: bool = False,
+) -> PluginLoadResult: ...
+```
+
+Programmatic registration should be available before entry point loading:
+
+```python
+event_sinks = EventSinkRegistry()
+event_sinks.register("audit_log", ProjectAuditSink())
+```
+
+Exact registry naming can follow the runtime event implementation, but the
+registration path should stay explicit and instance-local for deterministic
+tests.
+
+### 14.2 Accepted Shapes
+
+Recommended accepted shapes:
+
+```text
+callable event sink:
+  register directly
+
+event sink class:
+  instantiate with no arguments
+
+factory function:
+  call with no arguments, register returned callable
+```
+
+Anything requiring configuration should be built through `loom.config`
+`_target_` or project setup code, then registered programmatically.
+
+### 14.3 Event Semantics Boundary
+
+Runtime event records are facts emitted by `loom`.
+
+Event sink plugins may observe:
+
+```text
+run_started
+stage_started
+stage_succeeded
+stage_failed
+run_finished
+submission_created
+retry_scheduled
+cleanup_performed
+```
+
+The event list, event payload, persistence behavior, and timing of emission are
+owned by the reliability and execution specifications. Event sinks should see
+events only after the corresponding durable state transition has been recorded
+where a durable transition exists.
+
+### 14.4 Callback Failure Policy
+
+Default behavior:
+
+```text
+record callback failure
+continue execution
+preserve the original callback exception through chaining or failure context
+```
+
+Callback failures should be visible in run metadata or event records when event
+persistence is enabled. A strict failure policy may be added later, but plugin
+loading should not make observer failures part of run correctness by default.
+
+### 14.5 Event Persistence
+
+When event sinks are configured, event persistence should be enabled by default
+unless the caller explicitly disables it.
+
+Persisted event records should be plain-data-compatible and should not include
+loaded Python sink objects, callback closure state, raw credentials, or large
+payloads.
+
+### 14.6 Notification Boundary
+
+Core `loom` should not provide service-specific notification backends.
+
+Examples that belong in plugins or external wrappers:
+
+```text
+Slack
+email
+Teams
+PagerDuty
+generic webhook delivery
+monitoring service SDKs
+```
+
+Core only needs the structured event record and observe-only sink registration
+surface.
+
+---
+
+## 15. Duplicate Handling
+
+### 15.1 Duplicate Entry Point Names
 
 Within the same group, duplicate entry point names should be errors by default.
 
@@ -873,7 +1106,7 @@ Reason:
 installation order should not decide which plugin wins
 ```
 
-### 14.2 Duplicate Runtime Keys
+### 15.2 Duplicate Runtime Keys
 
 Some plugins load objects that expose runtime keys:
 
@@ -881,11 +1114,12 @@ Some plugins load objects that expose runtime keys:
 codec.key
 executor.name
 source scheme
+event sink name
 ```
 
 Duplicate runtime keys should also be errors by default.
 
-### 14.3 Replacement
+### 15.3 Replacement
 
 Allow replacement only when caller explicitly requests it:
 
@@ -899,7 +1133,7 @@ Prefer explicit project setup for overrides:
 registry.register(ProjectJSONCodec(), replace=True)
 ```
 
-### 14.4 Error Messages
+### 15.4 Error Messages
 
 Duplicate errors should include:
 
@@ -913,9 +1147,9 @@ distributions
 
 ---
 
-## 15. Failure Policy
+## 16. Failure Policy
 
-### 15.1 Strict Mode
+### 16.1 Strict Mode
 
 Strict mode:
 
@@ -928,7 +1162,7 @@ raise on registry registration failure
 
 Use strict mode for reproducible production runs.
 
-### 15.2 Best-Effort Mode
+### 16.2 Best-Effort Mode
 
 Best-effort mode:
 
@@ -940,7 +1174,7 @@ do not hide failures
 
 Use best-effort mode for plugin inspection commands.
 
-### 15.3 Load Failures
+### 16.3 Load Failures
 
 Load failures can come from:
 
@@ -951,15 +1185,16 @@ constructor error
 invalid object shape
 duplicate registration
 registry validation error
+event sink callback registration error
 ```
 
 Errors should preserve the original exception through chaining.
 
 ---
 
-## 16. Security and Trust
+## 17. Security and Trust
 
-### 16.1 Trusted Installed Packages
+### 17.1 Trusted Installed Packages
 
 Loading an entry point imports installed Python code.
 
@@ -969,7 +1204,7 @@ Treat plugin loading like importing a package:
 only load plugins from trusted environments
 ```
 
-### 16.2 No Sandbox
+### 17.2 No Sandbox
 
 V0 should not attempt to sandbox plugin code.
 
@@ -981,7 +1216,7 @@ configs are already trusted project code
 entry points are installed code
 ```
 
-### 16.3 Secret Handling
+### 17.3 Secret Handling
 
 Plugin metadata normally should not contain secrets.
 
@@ -993,7 +1228,7 @@ credentials in URLs
 large object reprs
 ```
 
-### 16.4 Import-Time Side Effects
+### 17.4 Import-Time Side Effects
 
 The best mitigation for plugin side effects is explicit loading.
 
@@ -1004,15 +1239,16 @@ loom --help
 import loom
 import loom.io
 import loom.config
+import loom.pipeline
 ```
 
 unless a user command explicitly asks for plugin discovery.
 
 ---
 
-## 17. Provenance
+## 18. Provenance
 
-### 17.1 Plugin Provenance
+### 18.1 Plugin Provenance
 
 When plugins are loaded for a run, provenance can record:
 
@@ -1024,20 +1260,39 @@ distribution name
 distribution version
 loaded runtime key, when relevant
 load status
+registered event sink name, when relevant
 ```
 
-### 17.2 Why It Matters
+### 18.2 Event Sink Provenance
+
+When event sink plugins are loaded for a run, provenance can record:
+
+```text
+entry point group
+entry point name
+entry point value
+distribution name
+distribution version
+registered sink name
+callback failure policy
+event persistence setting
+```
+
+Do not persist loaded callback objects or service credentials.
+
+### 18.3 Why It Matters
 
 Plugin provenance helps answer:
 
 ```text
 which package supplied this codec?
 which recipe implementation expanded this config?
+which package supplied this event sink?
 did this run use entry point discovery or explicit registration?
 which plugin version was installed?
 ```
 
-### 17.3 Boundary
+### 18.4 Boundary
 
 `loom.provenance` owns persisted provenance document shapes.
 
@@ -1045,19 +1300,20 @@ which plugin version was installed?
 
 ---
 
-## 18. CLI Integration
+## 19. CLI Integration
 
-### 18.1 Possible Commands
+### 19.1 Possible Commands
 
 Future commands:
 
 ```bash
 loom plugins list
 loom plugins list --group loom.codecs
+loom plugins list --group loom.event_sinks
 loom plugins check
 ```
 
-### 18.2 `loom plugins list`
+### 19.2 `loom plugins list`
 
 Should:
 
@@ -1068,7 +1324,7 @@ support --load to verify loading explicitly
 support --format json
 ```
 
-### 18.3 `loom plugins check`
+### 19.3 `loom plugins check`
 
 Should:
 
@@ -1079,16 +1335,25 @@ report duplicates
 return non-zero when checks fail
 ```
 
-### 18.4 Deferred
+### 19.4 Event Sink Inspection
+
+Plugin inspection commands may list event sink entry points without loading
+them. Loading event sink targets should require an explicit `--load` or check
+command because targets may import service SDKs or project packages.
+
+Runtime event streaming or event-record inspection belongs to the CLI/runtime
+event feature, not to generic plugin listing.
+
+### 19.5 Deferred
 
 Plugin CLI commands are not required for v0 pipeline execution. They are useful
 once third-party plugins are common.
 
 ---
 
-## 19. Error Model
+## 20. Error Model
 
-### 19.1 Error Types
+### 20.1 Error Types
 
 Recommended hierarchy:
 
@@ -1104,7 +1369,7 @@ class PluginRegistrationError(PluginError): ...
 If `LoomError` does not exist yet, start with `Exception` and move under shared
 errors later.
 
-### 19.2 Error Context
+### 20.2 Error Context
 
 Errors should include:
 
@@ -1115,9 +1380,10 @@ entry point value
 distribution
 runtime key, when available
 target registry
+event sink name, when available
 ```
 
-### 19.3 Example Errors
+### 20.3 Example Errors
 
 Load failure:
 
@@ -1144,11 +1410,27 @@ Expected Codec instance, no-argument Codec class, or no-argument factory.
 Actual object: project.codecs:ArrayNpyCodecConfig.
 ```
 
+Invalid event sink:
+
+```text
+Invalid event sink plugin "audit_log".
+Expected a callable sink, no-argument sink class, or no-argument factory.
+Actual object: project.audit:AuditConfig.
+```
+
+Callback registration failure:
+
+```text
+Could not register event sink "audit_log" from group "loom.event_sinks".
+Target: project.audit:LoomAuditSink.
+Reason: event sink name is already registered.
+```
+
 ---
 
-## 20. Testing Strategy
+## 21. Testing Strategy
 
-### 20.1 Discovery Tests
+### 21.1 Discovery Tests
 
 Test:
 
@@ -1160,7 +1442,7 @@ missing distribution metadata does not fail
 empty groups return empty tuple
 ```
 
-### 20.2 Loading Tests
+### 21.2 Loading Tests
 
 Use fake entry point objects.
 
@@ -1174,7 +1456,7 @@ best-effort mode records load failure
 original exceptions are chained
 ```
 
-### 20.3 Duplicate Tests
+### 21.3 Duplicate Tests
 
 Test:
 
@@ -1185,7 +1467,7 @@ replace=True allows explicit replacement where registry supports it
 duplicate error includes both sources
 ```
 
-### 20.4 Recipe Plugin Tests
+### 21.4 Recipe Plugin Tests
 
 Test:
 
@@ -1196,7 +1478,7 @@ invalid recipe object raises InvalidPluginError
 catalog registration error is wrapped with plugin context
 ```
 
-### 20.5 Codec Plugin Tests
+### 21.5 Codec Plugin Tests
 
 Test:
 
@@ -1209,7 +1491,25 @@ missing codec key is invalid
 duplicate runtime key is rejected
 ```
 
-### 20.6 Import Boundary Tests
+### 21.6 Event Sink Plugin Tests
+
+Test:
+
+```text
+event sink callable registers
+event sink class with no args instantiates and registers
+factory function returns callable and registers
+invalid non-callable sink raises InvalidPluginError
+duplicate sink name is rejected
+callback failure policy records and continues by default
+event persistence setting is represented in plain data
+```
+
+Runtime event emission tests belong to reliability and execution suites. Plugin
+tests should use fake `RuntimeEvent` records and fake registries rather than
+running a pipeline.
+
+### 21.7 Import Boundary Tests
 
 Test:
 
@@ -1217,11 +1517,12 @@ Test:
 import loom does not discover plugins
 import loom.io does not discover plugins
 import loom.config does not discover plugins
+import loom.pipeline does not discover plugins
 loom --help does not load plugin modules
 explicit load call imports plugin target
 ```
 
-### 20.7 CLI Tests
+### 21.8 CLI Tests
 
 When plugin CLI exists, test:
 
@@ -1230,13 +1531,14 @@ loom plugins list does not load targets by default
 loom plugins list --load reports load results
 loom plugins check returns non-zero on failures
 JSON output includes group/name/value/distribution
+event sink entry points are listed without loading targets by default
 ```
 
 ---
 
-## 21. Implementation Plan
+## 22. Implementation Plan
 
-### 21.1 Phase 1: Errors and Records
+### 22.1 Phase 1: Errors and Records
 
 Create:
 
@@ -1257,7 +1559,7 @@ PluginRecord
 PluginLoadResult
 ```
 
-### 21.2 Phase 2: Generic Discovery
+### 22.2 Phase 2: Generic Discovery
 
 Implement:
 
@@ -1271,7 +1573,7 @@ duplicate entry point name detection
 
 Use `importlib.metadata.entry_points`.
 
-### 21.3 Phase 3: Recipe Integration
+### 22.3 Phase 3: Recipe Integration
 
 Implement:
 
@@ -1282,7 +1584,7 @@ recipe plugin validation
 recipe plugin tests
 ```
 
-### 21.4 Phase 4: Codec Integration
+### 22.4 Phase 4: Codec Integration
 
 Implement:
 
@@ -1293,7 +1595,7 @@ codec instance/class/factory handling
 runtime codec key duplicate reporting
 ```
 
-### 21.5 Phase 5: Provenance Support
+### 22.5 Phase 5: Provenance Support
 
 Add:
 
@@ -1303,7 +1605,7 @@ PluginLoadResult summary conversion
 loaded plugin provenance summaries
 ```
 
-### 21.6 Phase 6: CLI Support
+### 22.6 Phase 6: CLI Support
 
 Add when useful:
 
@@ -1312,7 +1614,7 @@ loom plugins list
 loom plugins check
 ```
 
-### 21.7 Phase 7: Future Extension Points
+### 22.7 Phase 7: Future Extension Points
 
 After registries stabilize:
 
@@ -1321,11 +1623,23 @@ load_source_entry_points
 load_executor_entry_points
 ```
 
+### 22.8 Phase 8: Event Sink Plugins
+
+After runtime event models and an event sink registry stabilize:
+
+```text
+load_event_sink_entry_points
+event sink registration adapter
+observe-only sink validation
+callback failure record integration
+event sink provenance summaries
+```
+
 ---
 
-## 22. Open Questions
+## 23. Open Questions
 
-### 22.1 Should Plugin Discovery Be Enabled by Default?
+### 23.1 Should Plugin Discovery Be Enabled by Default?
 
 Recommended v0 answer:
 
@@ -1336,18 +1650,21 @@ yes only when an explicit setup path asks for discovery.
 
 For example, a CLI `--plugins` or config field can request plugin loading later.
 
-### 22.2 Should Entry Point Names or Object Keys Win?
+### 23.2 Should Entry Point Names or Object Keys Win?
 
 Recommended answer:
 
 ```text
 recipes: entry point name wins
 codecs: object codec.key wins
+event sinks: entry point name wins unless the registry defines explicit names
 ```
 
 Recipe names are catalog names. Codec keys are part of the codec contract.
+Event sink names are observer registration names and should be deterministic in
+debug output.
 
-### 22.3 Should Plugin Loading Instantiate Classes?
+### 23.3 Should Plugin Loading Instantiate Classes?
 
 Recommended answer:
 
@@ -1358,7 +1675,7 @@ yes only for no-argument classes/factories at simple extension points.
 Anything requiring configuration should be built through `loom.config`
 `_target_`.
 
-### 22.4 Should Plugins Be Version-Constrained?
+### 23.4 Should Plugins Be Version-Constrained?
 
 Recommended v0 answer:
 
@@ -1369,7 +1686,7 @@ record distribution versions but do not solve constraints.
 Python packaging owns dependency compatibility. Plugin validation can fail
 clearly when an object is incompatible.
 
-### 22.5 Should Third-Party CLI Commands Be Supported?
+### 23.5 Should Third-Party CLI Commands Be Supported?
 
 Recommended answer:
 
@@ -1380,9 +1697,23 @@ not initially
 Project packages can expose their own console scripts. Adding command injection
 to `loom` should wait for a concrete need.
 
+### 23.6 Should Event Sinks Be Enabled by Default?
+
+Recommended answer:
+
+```text
+no for imports;
+no for ordinary runs unless explicitly registered;
+yes for event persistence when event sinks are explicitly configured, unless disabled.
+```
+
+Event sink registration is trusted code setup. Runtime event persistence should
+default to inspectability once sinks are configured, but callers may disable it
+when event volume becomes a problem.
+
 ---
 
-## 23. Summary
+## 24. Summary
 
 `loom.plugins` should be a small, explicit entry-point discovery layer.
 
@@ -1394,6 +1725,7 @@ load selected entry points
 return structured load results
 register recipes with recipe catalogs
 register codecs with codec registries
+register event sinks with event sink registries, later
 detect duplicates deterministically
 report plugin failures clearly
 support provenance and optional CLI inspection
@@ -1408,8 +1740,9 @@ a dependency resolver
 a sandbox
 a global import-time registry mutator
 a domain-specific extension framework
+a service-specific notification package
 ```
 
 Keeping plugin discovery explicit lets `loom` remain cheap to import,
 deterministic in tests, and extensible for downstream packages that need recipes,
-codecs, executors, or source backends.
+codecs, executors, source backends, or event sinks.

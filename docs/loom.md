@@ -47,6 +47,7 @@ local execution
 post-v0 subprocess/SLURM execution
 sweep orchestration
 provenance capture
+generic runtime events for external observers
 clear error handling
 ```
 
@@ -500,7 +501,8 @@ Build `loom` in small, testable layers:
 6. Hardening, docs, and import-safe unsupported CLI stubs for v0.
 
 Roadmap versions after v0 add functional CLI wrappers, subprocess execution,
-SLURM execution, containers, sweeps, remote stores, and reliability policies.
+SLURM execution, containers, sweeps, remote stores, plugin-discovered event
+sinks, and reliability policies.
 
 Each layer should include focused tests before the next layer depends on it.
 

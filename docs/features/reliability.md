@@ -340,8 +340,14 @@ retry_scheduled
 cleanup_performed
 ```
 
-Core `loom` should emit generic event records or call registered callbacks. It
-should not ship service-specific notification backends initially.
+Core `loom` should emit generic event records or call registered callbacks.
+Callbacks are observe-only event sinks. They receive committed runtime facts and
+must not mutate plans, configs, artifacts, stage outputs, status transitions,
+retry decisions, or store records.
+
+Plugin-discovered event sinks are owned by `loom.plugins`; this document owns
+event names, event payloads, persistence policy, and callback failure behavior.
+Core `loom` should not ship service-specific notification backends initially.
 
 ## Event Record Shape
 
@@ -377,6 +383,10 @@ CLI commands that stream or inspect event records
 
 Service-specific delivery belongs in plugins or external wrappers.
 
+Programmatic callback registration should be available before entry point
+discovery. Future plugin discovery should reserve the `loom.event_sinks` entry
+point group for observe-only sinks.
+
 ## Run Store Integration
 
 The run store should persist:
@@ -390,6 +400,9 @@ cleanup records
 retention metadata
 event records when event persistence is enabled
 ```
+
+When event sinks are configured, event persistence should be enabled by default
+unless the caller explicitly disables it.
 
 State transitions must remain atomic enough that a controller crash leaves a
 recoverable record.
@@ -427,6 +440,10 @@ event hook registration failures
 
 Warnings should be explicit because reliability features are often
 environment-dependent.
+
+Callback failures should be recorded and execution should continue by default.
+A future strict mode may treat callback failures as fatal for audit-heavy
+workflows, but observer failure must not silently alter run correctness.
 
 ## Testing
 
@@ -477,4 +494,3 @@ full run collection garbage collection
 ```
 
 These should be added after local and SLURM failure records are stable.
-
