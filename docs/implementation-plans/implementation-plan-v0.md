@@ -1474,9 +1474,9 @@ Completion summary:
 
 ### Phase 9 — Local Execution
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-local-execution`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/13
 
 Goal:
 
@@ -1569,7 +1569,46 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Phase 9 local execution implemented on `codex/add-local-execution` in
+  worktree `/home/samcantrill/work/loom-worktrees/add-local-execution`.
+- GitHub PR #13 opened on 2026-05-04 and verified with
+  `gh pr view 13 --json baseRefName,headRefName,state,url`;
+  `baseRefName` is `codex/add-planning-resume-selectors`, `headRefName` is
+  `codex/add-local-execution`, and state is `OPEN`.
+- Implemented local in-process execution behavior: execution errors/models,
+  lifecycle helpers, log helpers, output validation, executor protocol,
+  `LocalExecutor`, store-backed `StageContext` helpers, lazy
+  `loom.pipeline` runner exports, `PipelineRunner`, and `run_pipeline`.
+  Added package, unit, contract, integration, e2e, and shared dummy-stage
+  coverage for successful local runs, same-run-directory resume, selector
+  skip, config-change invalidation, stage exceptions, invalid outputs,
+  context helpers, executor protocol behavior, and import boundaries. Future
+  CLI behavior, subprocess/SLURM/container execution, remote stores,
+  cross-run cache reuse, retries, constructor kwargs, and context-collected
+  outputs remain out of scope.
+- Validation before PR open:
+  - Focused Phase 9 pytest slice passed with 28 tests before refinement; the
+    bounded refinement pass then passed a focused subset with 12 tests and the
+    broader Phase 9 slice with 31 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright
+    reported 0 errors, default pytest passed with 353 tests, and build
+    succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed; package passed with
+    28 tests, unit passed with 285 tests, contract passed with 16 tests,
+    integration passed with 23 tests, and e2e passed with 1 test.
+  - GitHub PR #13 CI `checks` completed successfully against the stacked base.
+- Phase implementation refinement budget: used by `loom_phase_refiner` in
+  commit `68b8b93`. PR review budget: unused.
+- PR body prepared at `docs/phases/add-local-execution-pr-body.md` in the
+  phase branch. `gh pr edit --body-file` hit the known Projects Classic
+  deprecation GraphQL error, so the PR body was updated with a `gh api`
+  pull-request body patch and recorded in the phase artifacts.
+- Stack maintenance: Phase 10 should branch from
+  `codex/add-local-execution` and target `codex/add-local-execution` while
+  Phase 9 remains unmerged. If Phase 9 lands before Phase 10 starts, Phase 10
+  should instead branch from the latest valid predecessor according to the
+  stack state.
+- Remaining blockers: none known after PR preparation.
 
 ### Phase 10 — Hardening And Documentation
 
