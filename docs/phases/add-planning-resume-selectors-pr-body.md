@@ -3,9 +3,9 @@
 - Phase: Phase 8 - Planning, Resume, And Selectors
 - Branch: `codex/add-planning-resume-selectors`
 - PR: https://github.com/samcantrill/loom/pull/12
-- Target branch: `codex/add-local-stores-run-layout`
-- Stack predecessor: `codex/add-local-stores-run-layout`
-- Merge eligibility: stacked phase PR; reviewable against `codex/add-local-stores-run-layout`; not merge-eligible until Phase 7 lands and this branch is retargeted or rebased onto `develop`
+- Target branch: `develop`
+- Stack predecessor: none; Phase 7 has landed in `develop`
+- Merge eligibility: root phase PR after stack maintenance; reviewable against `develop`, but not approval-ready until the recorded Phase 8 review blocker is addressed and validation is rerun.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-planning-resume-selectors`
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Phase execution plan: `docs/phases/add-planning-resume-selectors.md`
@@ -23,10 +23,9 @@ stage fingerprints, selector normalization, same-run-directory resume checks,
 topological execution plans, downstream invalidation, structured plan reasons,
 and `RunStore.write_plan()` persistence.
 
-The stacked diff against `codex/add-local-stores-run-layout` adds the planning
-package implementation and focused package, unit, and integration coverage. It
-does not add runner, executor, CLI, remote-store, cross-run cache, target
-instantiation, or lifecycle behavior.
+The diff against `develop` adds the planning package implementation and focused
+package, unit, and integration coverage. It does not add runner, executor, CLI,
+remote-store, cross-run cache, target instantiation, or lifecycle behavior.
 
 ## Acceptance Criteria
 
@@ -154,10 +153,12 @@ Suite output totals from `build/test-summary.md`:
 
 ## Assumptions
 
-- The correct PR target remains `codex/add-local-stores-run-layout` because Phase 7 PR #11 remains open and Phase 8 depends on Phase 7 store contracts.
+- The correct PR target is now `develop` because Phase 7 PR #11 has landed and
+  Phase 8 was rebased onto updated `develop`.
 - Same-run-directory resume is the only v0 reuse mode. Cross-run cache lookup remains deferred.
 - Phase 9 will consume pending plan inputs, execute stages, validate returned outputs, and write final runner-owned lifecycle state.
-- Phase 7 PR #11 remains open against `develop`, so this PR must stay stacked on `codex/add-local-stores-run-layout` until the managing agent performs later stack maintenance.
+- Phase 7 PR #11 has landed in `develop`; this PR was retargeted to `develop`
+  during stack maintenance.
 
 ## Risks / Follow-Ups
 
@@ -168,9 +169,9 @@ Suite output totals from `build/test-summary.md`:
 
 ## PR Creation Status
 
-Opened stacked PR: https://github.com/samcantrill/loom/pull/12
+Opened PR: https://github.com/samcantrill/loom/pull/12
 
-Created with explicit base/head while Phase 7 remains open:
+Initially created with explicit base/head while Phase 7 was open:
 
 ```sh
 gh pr create --base codex/add-local-stores-run-layout --head codex/add-planning-resume-selectors --body-file docs/phases/add-planning-resume-selectors-pr-body.md --title "Phase 8: Planning, Resume, And Selectors"
@@ -188,15 +189,44 @@ body=@docs/phases/add-planning-resume-selectors-pr-body.md` fallback after
 `gh pr edit --body-file docs/phases/add-planning-resume-selectors-pr-body.md`
 failed with the GitHub Projects Classic deprecation GraphQL error.
 
-When Phase 7 lands, the managing agent should rebase or replay this branch onto
-updated `develop`, retarget the PR to `develop`, rerun validation, and record
-stack maintenance before the PR becomes merge-eligible.
+After Phase 7 landed, the managing agent rebased this branch onto updated
+`develop`, retargeted the PR to `develop`, reran validation, and recorded stack
+maintenance below.
 
 ## Stack Maintenance
 
-- Current predecessor branch: `codex/add-local-stores-run-layout`
-- Current target branch: `codex/add-local-stores-run-layout`
-- Predecessor PR: Phase 7 PR #11 remains open
-- Retarget/rebase needed after predecessor merge: yes; replay or rebase this branch onto updated `develop`, retarget to `develop`, and rerun validation
+- Current predecessor branch: none
+- Current target branch: `develop`
+- Predecessor PR: Phase 7 PR #11 has landed in `develop`
+- Retarget/rebase needed after predecessor merge: completed on 2026-05-04 local time
 - Successor branches depending on this phase: none recorded in the Phase 8 execution plan
-- Branch cleanup constraints: do not delete the Phase 7 predecessor branch while this branch depends on it; do not delete the Phase 8 branch until successor stack state is recorded or confirmed clear
+- Branch cleanup constraints: do not delete the Phase 8 branch until successor stack state is recorded or confirmed clear
+
+Stack-maintenance evidence after Phase 7 landed:
+
+```text
+command: git rebase origin/develop
+result: conflicts resolved by preserving merged Phase 7 files from develop and replaying Phase 8 planning/resume/selector commits
+
+command: git push --force-with-lease origin codex/add-planning-resume-selectors
+result: pushed rebased branch at 07f8a8f
+
+command: gh api --method PATCH repos/samcantrill/loom/pulls/12 -f base=develop
+result: PR #12 retargeted to develop after gh pr edit --base develop hit the known Projects Classic deprecation GraphQL error
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py -q
+result: passed, 25 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 331 tests, and build succeeded
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: passed; package 24 passed, unit 277 passed, contract 15 passed, integration 15 passed, e2e not present
+```
+
+Known review status:
+
+- Phase 8 PR review found a blocking `from_stage` selector bug that this
+  stack-maintenance pass did not address.
+- Do not approve or merge PR #12 until that blocker is fixed and validation is
+  rerun.

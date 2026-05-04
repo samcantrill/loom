@@ -11,10 +11,10 @@
 - Phase execution plan path: `docs/phases/add-planning-resume-selectors.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Source phase: `Phase 8 - Planning, Resume, And Selectors`
-- Stack predecessor: `codex/add-local-stores-run-layout`
-- Base branch: `codex/add-local-stores-run-layout` at `889a55d58a0d47f7f26b1ae05b071178bba6ecfc`
-- Target branch: `codex/add-local-stores-run-layout`
-- Merge eligibility: stacked PR; reviewable against `codex/add-local-stores-run-layout`; not merge-eligible until Phase 7 lands and this branch is retargeted or rebased onto `develop`.
+- Stack predecessor: none; Phase 7 has landed in `develop`.
+- Base branch: `develop` at `bafe79261f8b6a7303a36ba8d3a9b5039a9d4728`
+- Target branch: `develop`
+- Merge eligibility: root phase PR after stack maintenance; reviewable against `develop`, but not approval-ready until the recorded Phase 8 PR review blocker is addressed and validation is rerun.
 - Successor dependency notes: no successor branch is recorded yet. Keep this branch until the managing agent records any successor stack state or confirms it can be cleaned after merge.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 plan.
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
@@ -22,7 +22,7 @@
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time.
 - PR body draft pass: completed by `loom_pr_preparer` in commit `0f9c581`.
 - PR body refine/open pass: completed by `loom_pr_preparer` on 2026-05-04 local time.
-- PR verification: `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`
+- PR verification: initial stacked verification was `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`; after Phase 7 landed, stack maintenance retargeted PR #12 to `develop` with head `codex/add-planning-resume-selectors`.
 - PR validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff, Pyright, default pytest `327 passed`, and build succeeded; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package, unit, contract, and integration suites passed and e2e not present; GitHub CI check `checks` completed with conclusion `SUCCESS`.
 - Setup limitations: `gh auth status` initially reported an invalid token inside the sandbox, then succeeded with approved network access. `gh auth setup-git` and `git fetch origin` completed with approved access. The first sandboxed `git worktree add` could not create the branch ref under the control checkout `.git` directory and was rerun with approved filesystem access. No validation commands were run in the planning passes.
 - Blockers: none.
@@ -46,21 +46,22 @@ Future-phase work that must remain out of scope includes actual stage execution,
 ## Stack Context
 
 - Root or stacked phase: stacked phase.
-- Current predecessor branch or PR: `codex/add-local-stores-run-layout`, GitHub PR #11, recorded by the manager as `pr_open` with base `develop`, head `codex/add-local-stores-run-layout`, state `OPEN`.
-- Why this base branch is correct: Phase 7 remains unmerged and Phase 8 depends on the Phase 7 run/artifact store contracts. The manager assignment explicitly makes the product stack base `codex/add-local-stores-run-layout` at `889a55d58a0d47f7f26b1ae05b071178bba6ecfc`.
-- Retarget/rebase plan after predecessor merge: once Phase 7 lands, replay or rebase this branch onto updated `develop`, retarget the Phase 8 PR to `develop`, rerun validation, and record stack maintenance in this artifact and the PR body.
-- Branch cleanup constraints: do not delete the Phase 7 predecessor branch while this branch still depends on it. Do not delete this branch until any successor branch has been retargeted or rebased away from it.
+- Current predecessor branch or PR: none. Phase 7 PR #11 has landed in `develop`.
+- Why this base branch is correct: Phase 8 depends on the Phase 7 run/artifact store contracts, and those contracts are now present in `develop` after the Phase 7 squash merge.
+- Retarget/rebase plan after predecessor merge: completed on 2026-05-04 local time. This branch was rebased onto `origin/develop` at `bafe79261f8b6a7303a36ba8d3a9b5039a9d4728`, pushed with `--force-with-lease`, and PR #12 was retargeted to `develop` with the GitHub REST API after `gh pr edit --base develop` hit the known Projects Classic deprecation GraphQL error.
+- Branch cleanup constraints: do not delete this branch until successor stack state is recorded or confirmed clear.
 
 ## PR Preparation And Open Metadata
 
 - PR preparation/open pass: completed on 2026-05-04 local time from worktree `/home/samcantrill/work/loom-worktrees/add-planning-resume-selectors`.
 - Branch/head: `codex/add-planning-resume-selectors`.
-- Target/base: `codex/add-local-stores-run-layout`.
-- Stack predecessor: `codex/add-local-stores-run-layout`.
+- Initial target/base: `codex/add-local-stores-run-layout`.
+- Current target/base after stack maintenance: `develop`.
+- Stack predecessor: none after Phase 7 landed.
 - Predecessor verification: Phase 7 PR #11 was verified as `OPEN` with base `develop` and head `codex/add-local-stores-run-layout` before opening this PR.
 - Branch push: `git push -u origin codex/add-planning-resume-selectors` succeeded.
 - PR URL: https://github.com/samcantrill/loom/pull/12
-- PR metadata verification: `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`
+- PR metadata verification: initial stacked verification was `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`; after stack maintenance, PR #12 targets `develop`.
 - Live PR body: `gh pr edit --body-file docs/phases/add-planning-resume-selectors-pr-body.md` failed with the known GitHub Projects Classic deprecation GraphQL error; the body was updated with `gh api --method PATCH repos/samcantrill/loom/pulls/12 -F body=@docs/phases/add-planning-resume-selectors-pr-body.md`.
 - Validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after refinement with Ruff, Pyright, default pytest `327 passed`, and build succeeded.
 - Suite evidence: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed after refinement; package, unit, contract, and integration suites passed, and e2e is not present.
@@ -911,6 +912,14 @@ make test-summary
   undeclared bound inputs. Added focused unit/integration coverage for these
   cases.
 - Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/planning/test_planner.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q` passed with 10 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/planning tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline -q` passed with 22 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors; `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed with 24 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed with 273 tests; `UV_CACHE_DIR=/tmp/uv-cache make test-integration` passed with 15 tests.
-- PR preparation: completed on 2026-05-04 local time. The PR body artifact was refined, the branch was pushed, PR https://github.com/samcantrill/loom/pull/12 was opened against `codex/add-local-stores-run-layout`, and the verified PR metadata is `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`. Live PR body update used the direct GitHub API fallback after `gh pr edit --body-file` hit the GitHub Projects Classic deprecation GraphQL error.
-- Stack maintenance: pending Phase 7 merge/rebase or retarget decision; do not retarget this PR to `develop` while Phase 7 PR #11 remains open.
-- Remaining blockers: none.
+- PR preparation: completed on 2026-05-04 local time. The PR body artifact was refined, the branch was pushed, PR https://github.com/samcantrill/loom/pull/12 was opened against `codex/add-local-stores-run-layout`, and the initial verified PR metadata was `{"baseRefName":"codex/add-local-stores-run-layout","headRefName":"codex/add-planning-resume-selectors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/12"}`. Live PR body update used the direct GitHub API fallback after `gh pr edit --body-file` hit the GitHub Projects Classic deprecation GraphQL error.
+- Stack maintenance: completed on 2026-05-04 local time after Phase 7 landed in `develop`.
+  - Resolved Phase 8 rebase conflicts by preserving the merged Phase 7 store files, store tests, phase plan, and PR body artifacts from `develop`; the resulting diff against `origin/develop` contains only Phase 8 planning/resume/selector work and Phase 8 artifacts.
+  - Rebased `codex/add-planning-resume-selectors` onto `origin/develop` at `bafe79261f8b6a7303a36ba8d3a9b5039a9d4728`; cleanup commit `07f8a8f` removed accidental conflict-marker text from the Phase 7 phase artifact.
+  - Pushed the rebased branch with `git push --force-with-lease origin codex/add-planning-resume-selectors`.
+  - Retargeted PR #12 to `develop` with `gh api --method PATCH repos/samcantrill/loom/pulls/12 -f base=develop` after `gh pr edit 12 --base develop` hit the known Projects Classic deprecation GraphQL error.
+  - Rebase validation passed:
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py -q` — passed, 25 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 331 tests, and build succeeded.
+    - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` — passed; package passed with 24 tests, unit passed with 277 tests, contract passed with 15 tests, integration passed with 15 tests, e2e not present.
+- Remaining blockers: Phase 8 PR review found a blocking `from_stage` selector bug that this stack-maintenance pass did not address. PR #12 is retargeted to `develop` but should not be approved or merged until that blocker is fixed and validation is rerun.
