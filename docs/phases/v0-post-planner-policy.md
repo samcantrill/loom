@@ -560,6 +560,22 @@ Validation evidence:
 - `git diff --check`
   (pass)
 
+Manager validation evidence:
+
+- Fixed strict Pyright issues in `PlanExplanation.from_dict()` by adding
+  explicit sequence, schema-version, and summary mapping validation.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright`
+  (0 errors, 0 warnings, 0 informations)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py tests/package/test_import_boundaries.py`
+  (54 passed)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/planning/explanations.py tests/unit/loom/pipeline/planning tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py tests/package/test_import_boundaries.py`
+  (pass)
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  (Ruff pass; Pyright 0 errors; default harness 400 passed, 9 skipped;
+  config-extra harness 103 passed, 401 deselected; build pass)
+- `git diff --check`
+  (pass)
+
 ## Design Impact
 
 This phase makes planning easier to extend without turning the public

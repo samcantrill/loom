@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from loom.artifacts import ArtifactRef
 
+from .errors import PlanSerializationError
 from .models import (
     BoundInput,
     ExecutionPlan,
@@ -114,7 +116,8 @@ class StageExplanation:
             ),
             resume_reasons=reason_tuple(mapping["resume_reasons"], "resume_reasons"),
             pending_inputs=tuple(
-                PendingInput.from_dict(item) for item in mapping["pending_inputs"]
+                PendingInput.from_dict(item)
+                for item in _sequence(mapping["pending_inputs"], "pending_inputs")
             ),
             bound_inputs=bound_input_mapping(mapping["bound_inputs"], "bound_inputs"),
             reusable_outputs={
@@ -123,8 +126,11 @@ class StageExplanation:
                     mapping["reusable_outputs"], "reusable_outputs"
                 ).items()
             },
-            upstream_stages=tuple(mapping["upstream_stages"]),
-            downstream_stages=tuple(mapping["downstream_stages"]),
+            upstream_stages=_string_tuple(mapping["upstream_stages"], "upstream_stages"),
+            downstream_stages=_string_tuple(
+                mapping["downstream_stages"],
+                "downstream_stages",
+            ),
             prior_fingerprint=(
                 None
                 if mapping["prior_fingerprint"] is None
@@ -180,7 +186,7 @@ class PlanExplanation:
         reject_unknown(mapping, allowed, "PlanExplanation")
         require_fields(mapping, allowed, "PlanExplanation")
         return cls(
-            schema_version=int(mapping["schema_version"]),
+            schema_version=_schema_version(mapping["schema_version"]),
             kind=str(mapping["kind"]),
             run_id=str(mapping["run_id"]),
             pipeline_name=(
@@ -188,11 +194,12 @@ class PlanExplanation:
             ),
             selectors=PlanSelectors.from_dict(mapping["selectors"]),
             resume=ResumeOptions.from_dict(mapping["resume"]),
-            stage_order=tuple(str(value) for value in mapping["stage_order"]),
+            stage_order=_string_tuple(mapping["stage_order"], "stage_order"),
             stage_explanations=tuple(
-                StageExplanation.from_dict(item) for item in mapping["stages"]
+                StageExplanation.from_dict(item)
+                for item in _sequence(mapping["stages"], "stages")
             ),
-            summary={str(key): int(value) for key, value in mapping["summary"].items()},
+            summary=_int_mapping(mapping["summary"], "summary"),
         )
 
 
@@ -241,6 +248,37 @@ def _explain_stage(*, stage: StagePlan) -> StageExplanation:
             else None
         ),
     )
+
+
+def _schema_version(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PlanSerializationError("PlanExplanation.schema_version must be an integer")
+    if value != PLAN_EXPLANATION_SCHEMA_VERSION:
+        raise PlanSerializationError(
+            "PlanExplanation.schema_version must be "
+            f"{PLAN_EXPLANATION_SCHEMA_VERSION}, got {value!r}",
+        )
+    return value
+
+
+def _sequence(value: object, field: str) -> Sequence[object]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise PlanSerializationError(f"{field} must be a sequence")
+    return cast(Sequence[object], value)
+
+
+def _string_tuple(value: object, field: str) -> tuple[str, ...]:
+    return tuple(str(item) for item in _sequence(value, field))
+
+
+def _int_mapping(value: object, field: str) -> dict[str, int]:
+    mapping = require_mapping(value, field)
+    result: dict[str, int] = {}
+    for key, item in mapping.items():
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise PlanSerializationError(f"{field}[{key!r}] must be an integer")
+        result[str(key)] = item
+    return result
 
 
 __all__ = [
