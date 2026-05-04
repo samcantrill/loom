@@ -902,3 +902,21 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/locks.py src/loom/pipeline/stores/run_store.py src/loom/pipeline/stores/local_runs.py src/loom/pipeline/stores/__init__.py tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/integration/pipeline/test_local_stores.py`
     passed.
   - `git diff --check` passed.
+
+## Slice 5 Evidence
+
+- Slice 5 completed: durable `StageStatus.BLOCKED` support, status-only
+  `write_stage_blocked()` lifecycle helper, and local blocked status
+  read/write coverage without stage execution artifacts.
+- Files changed: `src/loom/pipeline/status.py`,
+  `src/loom/pipeline/execution/lifecycle.py`,
+  `tests/unit/loom/pipeline/test_status.py`,
+  `tests/unit/loom/pipeline/execution/test_lifecycle.py`,
+  `tests/unit/loom/pipeline/stores/test_local_runs.py`, and
+  `tests/integration/pipeline/test_local_stores.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/integration/pipeline/test_local_stores.py`
+    (30 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/status.py src/loom/pipeline/execution/lifecycle.py tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/integration/pipeline/test_local_stores.py`
+    passed.
+  - `git diff --check` passed.

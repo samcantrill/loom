@@ -31,6 +31,7 @@ class StageStatus(StrEnum):
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
     SKIPPED = "SKIPPED"
     STALE = "STALE"
     CANCELLED = "CANCELLED"

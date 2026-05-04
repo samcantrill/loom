@@ -249,6 +249,26 @@ def test_local_run_stage_docs_and_logs(tmp_path: Path) -> None:
     assert store.read_stage_log("run1", "stage", "stdout") == "line1\n"
 
 
+def test_local_run_reads_and_writes_blocked_stage_status_only(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    status = StageStatusRecord(
+        run_id="run1",
+        stage_name="blocked",
+        status=StageStatus.BLOCKED,
+        attempt=1,
+        updated_at="2020-01-01T00:00:00Z",
+        message="upstream failed",
+        metadata={"blocked_by": ["stage"], "reason_code": "upstream_failed"},
+    )
+
+    store.write_stage_status("run1", "blocked", status)
+
+    assert store.read_stage_status("run1", "blocked") == status
+    stage_dir = store.local_stage_dir("run1", "blocked")
+    assert sorted(path.name for path in stage_dir.iterdir()) == ["status.json"]
+
+
 def test_local_run_rejects_corrupt_stage_plain_mapping(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1")
