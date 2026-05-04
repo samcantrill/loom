@@ -25,6 +25,12 @@ def validate_stage_outputs(
             f"pipeline.stages.{stage.name}.outputs: returned outputs must be a mapping"
         )
 
+    for output_name in outputs:
+        if not isinstance(output_name, str) or not output_name:
+            raise OutputValidationError(
+                f"pipeline.stages.{stage.name}.outputs returned output names must be non-empty strings"
+            )
+
     declared = set(stage.outputs)
     returned = set(outputs)
     missing = declared - returned

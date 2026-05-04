@@ -26,6 +26,15 @@ class SkipStatusFailingRunStore(LocalRunStore):
         super().write_stage_status(run_id, stage_name, status)
 
 
+class FailedStatusFailingRunStore(LocalRunStore):
+    def write_stage_status(
+        self, run_id: str, stage_name: str, status: StageStatusRecord
+    ) -> None:
+        if status.status == StageStatus.FAILED:
+            raise CorruptStoreDocumentError("failed status write failed")
+        super().write_stage_status(run_id, stage_name, status)
+
+
 def _failure_config(target: str) -> dict[str, PlainData]:
     return cast(
         dict[str, PlainData],
@@ -94,6 +103,30 @@ def test_invalid_outputs_fail_with_inspectable_state(tmp_path: Path) -> None:
     assert status is not None
     assert status.started_at is not None
     assert (tmp_path / "runs" / "run1" / "stages" / "build" / "failure.json").is_file()
+
+
+def test_failed_status_commit_failure_marks_root_run_failed(
+    tmp_path: Path,
+) -> None:
+    run_store = FailedStatusFailingRunStore(tmp_path / "runs")
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            config=_failure_config(
+                "tests.support.pipeline_execution_stages.BadOutputStage"
+            ),
+            run_id="run1",
+        )
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.failure is not None
+    assert result.failure.failure_type == "store_commit"
+    persisted_failure = run_store.read_stage_failure("run1", "build")
+    assert persisted_failure is not None
+    assert persisted_failure["failure_type"] == "output_validation"
+    status = run_store.read_run_status("run1")
+    assert status is not None
+    assert status.status == RunStatus.FAILED
 
 
 def test_stage_contract_failure_uses_stage_contract_type(tmp_path: Path) -> None:

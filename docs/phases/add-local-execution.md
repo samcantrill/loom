@@ -9,23 +9,23 @@
 - Phase execution plan path: `docs/phases/add-local-execution.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Source phase: `Phase 9 - Local Execution`
-- Stack predecessor: `codex/add-planning-resume-selectors`
-- Base branch: `codex/add-planning-resume-selectors` at `98a5fd6725c979cd93f913efc0d2f2e2fc67b6d4`
-- Target branch: `codex/add-planning-resume-selectors`
-- Merge eligibility: stacked PR; reviewable against `codex/add-planning-resume-selectors`; not merge-eligible until Phase 7 and Phase 8 have landed or this branch has been rebased/replayed and retargeted to `develop`.
-- PR verification: `gh pr view 13 --json baseRefName,headRefName,state,url` returned `{"baseRefName":"codex/add-planning-resume-selectors","headRefName":"codex/add-local-execution","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/13"}`.
-- Successor dependency notes: no successor phase branch is recorded yet. Keep this branch until any later successor has been retargeted or rebased away from it.
+- Stack predecessor: none; Phase 8 has landed in `develop`.
+- Base branch: `develop` at `4cc3bc2`
+- Target branch: `develop`
+- Merge eligibility: root phase PR after stack maintenance; PR #13 targets `develop` and the recorded Phase 9 blockers have been fixed with validation rerun. Merge only after human approval and current checks; do not delete the branch while Phase 10 PR #14 depends on it.
+- PR verification: initial stacked verification was `{"baseRefName":"codex/add-planning-resume-selectors","headRefName":"codex/add-local-execution","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/13"}`; after Phase 8 landed, stack maintenance replayed this branch onto `develop`.
+- Successor dependency notes: Phase 10 PR #14, branch `codex/harden-v0-docs`, depends on this branch. Keep this branch until Phase 10 is retargeted or rebased away from it.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 implementation plan.
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time in commit `d117dfb993c66029bb985e1b4424d5333ee8a6c8`.
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time in this artifact update.
 - Phase implementation refinement budget: used on 2026-05-04 local time.
-- PR review budget: unused.
+- PR review budget: used. The reviewer found blocking output-validation, failure-persistence, and evidence findings; this user-authorized post-review fix addresses them. Do not consume a second automated PR review without explicit user instruction.
 - PR body draft pass: completed on 2026-05-04 local time in `docs/phases/add-local-execution-pr-body.md`.
-- PR body refine/open pass: completed on 2026-05-04 local time; PR #13 opened and verified against `codex/add-planning-resume-selectors`.
-- Final PR-preparation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after the implementation refinement; Ruff passed, Pyright passed with 0 errors, default pytest passed with 353 passed, and build succeeded.
-- Final suite evidence: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed after the implementation refinement; package, unit, contract, integration, and e2e suites passed and `build/test-summary.md` recorded package 28 passed, unit 285 passed, contract 16 passed, integration 23 passed, and e2e 1 passed.
-- PR-preparation limitations: no new validation command was rerun during this metadata-only refine/open pass; the final validation evidence above is from the recorded post-refinement PR-preparation run.
+- PR body refine/open pass: completed on 2026-05-04 local time; PR #13 initially opened and verified against `codex/add-planning-resume-selectors`, then stack maintenance replayed the branch onto `develop`.
+- Final PR-preparation validation: after the user-authorized post-review blocker fix and stack replay onto `develop`, `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright passed with 0 errors, default pytest passed with 361 passed, and build succeeded.
+- Final suite evidence: after the user-authorized post-review blocker fix and stack replay onto `develop`, `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and `build/test-summary.md` recorded package 28 passed, unit 291 passed, contract 16 passed, integration 25 passed, and e2e 1 passed.
+- PR-preparation limitations: none for the current post-review blocker fix; validation was rerun after stack replay onto `develop`.
 - Blockers: none.
 
 ## Objective
@@ -38,17 +38,17 @@ The runner must stay domain-neutral. Stages remain black boxes that satisfy the 
 
 Phases 1 through 6 are merged and provide the package skeleton, primitives, serialization, I/O/codecs, trusted config composition, recipe expansion, target import/instantiation helpers, static pipeline specs, graph validation, strict `stage.output` bindings, status records, and the minimal `StageContext`.
 
-Phase 7 PR #11 remains open against `develop` and provides the local run/artifact stores and inspectable file layout. Phase 8 PR #12 remains open against Phase 7 and provides deterministic planning, selectors, stage fingerprints, conservative resume checks, downstream invalidation, and `RunStore.write_plan()` persistence. Phase 9 must build on Phase 8 and consume the real `RunStore`, `ArtifactStore`, `ExecutionPlan`, `StagePlan`, `PlanAction`, `PlanSelectors`, `ResumeOptions`, `FingerprintContext`, `BoundInput`, `PendingInput`, and `build_stage_fingerprint()` APIs.
+Phases 7 and 8 have landed in `develop` and provide the local run/artifact stores, inspectable file layout, deterministic planning, selectors, stage fingerprints, conservative resume checks, downstream invalidation, and `RunStore.write_plan()` persistence. Phase 9 consumes the real `RunStore`, `ArtifactStore`, `ExecutionPlan`, `StagePlan`, `PlanAction`, `PlanSelectors`, `ResumeOptions`, `FingerprintContext`, `BoundInput`, `PendingInput`, and `build_stage_fingerprint()` APIs.
 
 Phase 10 remains out of scope. It will harden error message coverage, interrupted-run edge cases, extension contract breadth, and documentation after the local runner exists. Phase 9 should not absorb Phase 10 cleanup or documentation expansion unless directly required to make the local execution API testable.
 
 ## Stack Context
 
 - Root or stacked phase: stacked phase.
-- Current predecessor branch or PR: `codex/add-planning-resume-selectors`, GitHub PR #12, recorded as open against `codex/add-local-stores-run-layout`.
-- Why this base branch is correct: Phase 7 PR #11 is still open against `develop`, Phase 8 PR #12 is still open against Phase 7, and Phase 9 depends on Phase 8 planner/resume/selectors. The manager assignment explicitly requires the Phase 9 branch to remain based on `codex/add-planning-resume-selectors` at `98a5fd6725c979cd93f913efc0d2f2e2fc67b6d4`.
-- Retarget/rebase plan after predecessor merge: after Phase 7 lands, Phase 8 must be replayed or rebased onto updated `develop` and retargeted. After Phase 8 lands, replay or rebase this Phase 9 branch onto updated `develop`, retarget its PR to `develop`, rerun validation, and record stack maintenance in this artifact and the PR body.
-- Branch cleanup constraints: do not delete the Phase 8 predecessor branch while this branch depends on it. Do not delete this Phase 9 branch until every successor branch has been retargeted or rebased away from it.
+- Current predecessor branch or PR: none; Phase 8 PR #12 has landed in `develop`.
+- Why this base branch is correct: Phase 9 now starts from updated `develop` because all predecessor phases have landed.
+- Retarget/rebase plan after predecessor merge: completed on 2026-05-04 local time by replaying Phase 9 commits only onto `origin/develop` with old Phase 8 tip `98a5fd6` as the upstream boundary.
+- Branch cleanup constraints: do not delete this Phase 9 branch until Phase 10 PR #14 has been retargeted or rebased away from it.
 
 ## Source Phase Summary
 
@@ -902,7 +902,10 @@ This refine pass intentionally did not run those implementation checks because i
 - Draft phase execution plan: complete.
 - Plan refine pass: complete.
 - Phase implementation refinement: used on 2026-05-04 local time.
-- PR review: unused.
+- PR review: used. The reviewer found blocking output-validation,
+  failure-persistence, and evidence findings; this user-authorized post-review
+  fix addresses them. Do not consume a second automated PR review without
+  explicit user instruction.
 - PR body draft: complete on 2026-05-04 local time.
 - PR body refine/open: complete on 2026-05-04 local time; PR #13 opened and verified.
 
@@ -958,16 +961,16 @@ This refine pass intentionally did not run those implementation checks because i
   tests/integration/pipeline/test_local_execution_failures.py
   tests/e2e/test_local_pipeline_run.py -q` passed with 31 tests; and
   `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors.
-- PR preparation/open: completed on 2026-05-04 local time. Refined
+- Historical PR preparation/open: completed on 2026-05-04 local time. Refined
   `docs/phases/add-local-execution-pr-body.md`, confirmed GitHub authentication
-  and HTTPS Git access, confirmed Phase 8 PR #12 remains `OPEN` with head
+  and HTTPS Git access, confirmed Phase 8 PR #12 was `OPEN` with head
   `codex/add-planning-resume-selectors` and base
   `codex/add-local-stores-run-layout`, pushed `codex/add-local-execution`, and
   opened PR #13 with explicit base `codex/add-planning-resume-selectors` and
   head `codex/add-local-execution`.
 - PR open verification: `gh pr view 13 --json baseRefName,headRefName,state,url`
   returned `{"baseRefName":"codex/add-planning-resume-selectors","headRefName":"codex/add-local-execution","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/13"}`.
-- Final PR-prep validation evidence after implementation refinement:
+- Historical final PR-prep validation evidence after implementation refinement:
   `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff, Pyright,
   default pytest `353 passed`, and build success; `UV_CACHE_DIR=/tmp/uv-cache
   make test-summary` passed with package 28 passed, unit 285 passed, contract
@@ -979,5 +982,17 @@ This refine pass intentionally did not run those implementation checks because i
   repos/samcantrill/loom/pulls/13 -F
   body=@docs/phases/add-local-execution-pr-body.md` after recording PR-open
   metadata in this artifact.
-- Stack maintenance: pending Phase 7 and Phase 8 merge/rebase/retarget state.
-- Remaining blockers: none.
+- Stack maintenance: completed on 2026-05-04 local time after Phase 8 landed in `develop`.
+  - Replayed `codex/add-local-execution` onto `origin/develop` using old Phase 8 tip `98a5fd6` as the upstream boundary, so the resulting branch contains only Phase 9 commits on top of `develop`.
+  - The old Phase 7/Phase 8 conflict family was avoided by not replaying predecessor commits.
+  - Phase 10 PR #14 still depends on this Phase 9 branch, so do not delete `codex/add-local-execution` after merging PR #13 until Phase 10 is retargeted or rebased away from it.
+- Post-review blocker fix: completed on 2026-05-04 local time after explicit user authorization.
+  - Hardened output validation so malformed returned output mappings with non-string output names raise `OutputValidationError` instead of raw collection errors.
+  - Hardened failure persistence so root `status.json` is written as `FAILED` when failed-stage status persistence itself fails; the returned run failure records `store_commit`.
+  - Added unit and integration regressions for both cases.
+  - Validation after the blocker fix and stack replay passed:
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/execution/test_outputs.py tests/integration/pipeline/test_local_execution_failures.py -q` — passed, 8 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_executor_api.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/execution tests/unit/loom/pipeline/executors/test_local_executor.py tests/unit/loom/pipeline/test_context.py tests/contracts/test_executor_contract.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_resume.py tests/integration/pipeline/test_local_execution_failures.py tests/e2e/test_local_pipeline_run.py -q` — passed, 33 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 361 tests, and build succeeded.
+    - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` — passed; package passed with 28 tests, unit passed with 291 tests, contract passed with 16 tests, integration passed with 25 tests, e2e passed with 1 test.
+- Remaining blockers: none for the recorded Phase 9 review findings.

@@ -324,10 +324,15 @@ class PipelineRunner:
                     message="executor failed without failure metadata",
                     executor=str(getattr(self.executor, "name", "unknown")),
                 )
-                self._persist_stage_failure(
-                    run_id, stage.name, attempt, execution_result.started_at, failure
+                failure = self._record_stage_failure_and_failed_run(
+                    run_id=run_id,
+                    stage_name=stage.name,
+                    attempt=attempt,
+                    started_at=execution_result.started_at,
+                    created_at=created_at,
+                    run_started_at=run_started_at,
+                    failure=failure,
                 )
-                self._write_failed_run(run_id, created_at, run_started_at, failure)
                 return StageRunResult(
                     stage_name=stage.name,
                     action=PlanAction.RUN,
@@ -393,10 +398,15 @@ class PipelineRunner:
                     exc=exc,
                 )
             )
-            self._persist_stage_failure(
-                run_id, stage.name, attempt, stage_started_at, failure
+            failure = self._record_stage_failure_and_failed_run(
+                run_id=run_id,
+                stage_name=stage.name,
+                attempt=attempt,
+                started_at=stage_started_at,
+                created_at=created_at,
+                run_started_at=run_started_at,
+                failure=failure,
             )
-            self._write_failed_run(run_id, created_at, run_started_at, failure)
             return StageRunResult(
                 stage_name=stage.name,
                 action=PlanAction.RUN,
@@ -825,6 +835,32 @@ class PipelineRunner:
             message=failure.message,
             metadata={"failure_type": failure.failure_type},
         )
+
+    def _record_stage_failure_and_failed_run(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+        started_at: str | None,
+        created_at: str,
+        run_started_at: str,
+        failure: ExecutionFailure,
+    ) -> ExecutionFailure:
+        try:
+            self._persist_stage_failure(
+                run_id, stage_name, attempt, started_at, failure
+            )
+        except Exception as exc:
+            failure = self._failure_from_exception(
+                run_id=run_id,
+                stage_name=stage_name,
+                attempt=attempt,
+                failure_type="store_commit",
+                exc=exc,
+            )
+        self._write_failed_run(run_id, created_at, run_started_at, failure)
+        return failure
 
     def _write_failed_run(
         self,

@@ -1,6 +1,8 @@
 """Unit tests for execution output validation."""
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -53,4 +55,26 @@ def test_validate_stage_outputs_rejects_contract_errors(tmp_path: Path) -> None:
     with pytest.raises(OutputValidationError, match="artifact_type"):
         validate_stage_outputs(
             stage=_stage(), outputs={"data": ref}, artifact_store=store
+        )
+
+
+def test_validate_stage_outputs_rejects_non_string_output_names(
+    tmp_path: Path,
+) -> None:
+    store = LocalArtifactStore(tmp_path)
+    ref = store.save(
+        {"x": 1},
+        run_id="run1",
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+
+    malformed_outputs = cast(Mapping[str, object], {"data": ref, 1: ref})
+    with pytest.raises(OutputValidationError, match="non-empty strings"):
+        validate_stage_outputs(
+            stage=_stage(),
+            outputs=malformed_outputs,
+            artifact_store=store,
         )
