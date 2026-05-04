@@ -2,7 +2,7 @@
 
 - Phase: Phase 9 - Local Execution
 - Branch: `codex/add-local-execution`
-- PR: pending creation in this refine/open pass
+- PR: https://github.com/samcantrill/loom/pull/13
 - Target branch: `codex/add-planning-resume-selectors`
 - Stack predecessor: `codex/add-planning-resume-selectors`
 - Merge eligibility: stacked phase PR; reviewable against `codex/add-planning-resume-selectors`; not merge-eligible until Phase 7 and Phase 8 land and this branch is rebased or replayed onto `develop`
@@ -13,7 +13,7 @@
 - Phase execution plan refine pass: complete
 - PR body draft pass: complete
 - PR body refine pass: complete
-- PR open metadata: pending until PR creation and verification
+- PR open metadata: complete; `gh pr view 13 --json baseRefName,headRefName,state,url` returned `baseRefName=codex/add-planning-resume-selectors`, `headRefName=codex/add-local-execution`, `state=OPEN`, and `url=https://github.com/samcantrill/loom/pull/13`
 
 ## Summary
 
@@ -126,7 +126,7 @@ Suite output totals from `build/test-summary.md`:
 - PR review before this PR: unused.
 - PR body draft pass: complete in this artifact.
 - PR body refine pass: complete in this artifact.
-- PR open metadata: pending until PR creation and verification.
+- PR open metadata: complete; PR #13 is open and verified against `codex/add-planning-resume-selectors`.
 
 ## Assumptions
 
@@ -148,20 +148,30 @@ Suite output totals from `build/test-summary.md`:
 
 ## PR Creation Status
 
-This refine/open pass will create the stacked PR with the explicit recorded
-base and head:
+Opened the stacked PR with the explicit recorded base and head:
 
 ```sh
 gh pr create --base codex/add-planning-resume-selectors --head codex/add-local-execution --body-file docs/phases/add-local-execution-pr-body.md --title "Phase 9: Local Execution"
 ```
 
-After creation, verify the PR target immediately with:
+Result:
 
-```sh
-gh pr view <PR> --json baseRefName,headRefName,state,url
+```text
+https://github.com/samcantrill/loom/pull/13
 ```
 
-Stop if `baseRefName` is not `codex/add-planning-resume-selectors`.
+Immediate verification:
+
+```json
+{"baseRefName":"codex/add-planning-resume-selectors","headRefName":"codex/add-local-execution","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/13"}
+```
+
+Live body synchronization: `gh pr edit 13 --body-file
+docs/phases/add-local-execution-pr-body.md` hit GitHub CLI's known Projects
+Classic `repository.pullRequest.projectCards` deprecation path, so the live PR
+body was synchronized with `gh api --method PATCH
+repos/samcantrill/loom/pulls/13 -F
+body=@docs/phases/add-local-execution-pr-body.md`.
 
 ## Stack Maintenance
 

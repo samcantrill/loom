@@ -2,8 +2,9 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; decision-complete for implementation.
+- Status: Phase 9 PR opened; PR-open metadata recorded in this branch.
 - Branch: `codex/add-local-execution`
+- PR: https://github.com/samcantrill/loom/pull/13
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-local-execution`
 - Phase execution plan path: `docs/phases/add-local-execution.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0.md`
@@ -12,6 +13,7 @@
 - Base branch: `codex/add-planning-resume-selectors` at `98a5fd6725c979cd93f913efc0d2f2e2fc67b6d4`
 - Target branch: `codex/add-planning-resume-selectors`
 - Merge eligibility: stacked PR; reviewable against `codex/add-planning-resume-selectors`; not merge-eligible until Phase 7 and Phase 8 have landed or this branch has been rebased/replayed and retargeted to `develop`.
+- PR verification: `gh pr view 13 --json baseRefName,headRefName,state,url` returned `{"baseRefName":"codex/add-planning-resume-selectors","headRefName":"codex/add-local-execution","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/13"}`.
 - Successor dependency notes: no successor phase branch is recorded yet. Keep this branch until any later successor has been retargeted or rebased away from it.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 implementation plan.
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
@@ -20,8 +22,10 @@
 - Phase implementation refinement budget: used on 2026-05-04 local time.
 - PR review budget: unused.
 - PR body draft pass: completed on 2026-05-04 local time in `docs/phases/add-local-execution-pr-body.md`.
-- PR body refine/open pass: unused.
-- Setup limitations: no remote synchronization, broad checks, implementation validation, or PR checks were run during this planning-only refine pass.
+- PR body refine/open pass: completed on 2026-05-04 local time; PR #13 opened and verified against `codex/add-planning-resume-selectors`.
+- Final PR-preparation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after the implementation refinement; Ruff passed, Pyright passed with 0 errors, default pytest passed with 353 passed, and build succeeded.
+- Final suite evidence: `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed after the implementation refinement; package, unit, contract, integration, and e2e suites passed and `build/test-summary.md` recorded package 28 passed, unit 285 passed, contract 16 passed, integration 23 passed, and e2e 1 passed.
+- PR-preparation limitations: no new validation command was rerun during this metadata-only refine/open pass; the final validation evidence above is from the recorded post-refinement PR-preparation run.
 - Blockers: none.
 
 ## Objective
@@ -900,7 +904,7 @@ This refine pass intentionally did not run those implementation checks because i
 - Phase implementation refinement: used on 2026-05-04 local time.
 - PR review: unused.
 - PR body draft: complete on 2026-05-04 local time.
-- PR body refine/open: unused.
+- PR body refine/open: complete on 2026-05-04 local time; PR #13 opened and verified.
 
 ## Completion Notes
 
@@ -954,11 +958,26 @@ This refine pass intentionally did not run those implementation checks because i
   tests/integration/pipeline/test_local_execution_failures.py
   tests/e2e/test_local_pipeline_run.py -q` passed with 31 tests; and
   `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors.
-- PR preparation draft: completed in `docs/phases/add-local-execution-pr-body.md`;
-  final PR refine/open remains pending by explicit manager instruction. Live
-  stack-target verification during the draft pass confirmed Phase 8 PR #12 is
-  `OPEN` with head `codex/add-planning-resume-selectors` and base
-  `codex/add-local-stores-run-layout`, so the Phase 9 PR target remains
-  `codex/add-planning-resume-selectors`.
+- PR preparation/open: completed on 2026-05-04 local time. Refined
+  `docs/phases/add-local-execution-pr-body.md`, confirmed GitHub authentication
+  and HTTPS Git access, confirmed Phase 8 PR #12 remains `OPEN` with head
+  `codex/add-planning-resume-selectors` and base
+  `codex/add-local-stores-run-layout`, pushed `codex/add-local-execution`, and
+  opened PR #13 with explicit base `codex/add-planning-resume-selectors` and
+  head `codex/add-local-execution`.
+- PR open verification: `gh pr view 13 --json baseRefName,headRefName,state,url`
+  returned `{"baseRefName":"codex/add-planning-resume-selectors","headRefName":"codex/add-local-execution","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/13"}`.
+- Final PR-prep validation evidence after implementation refinement:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff, Pyright,
+  default pytest `353 passed`, and build success; `UV_CACHE_DIR=/tmp/uv-cache
+  make test-summary` passed with package 28 passed, unit 285 passed, contract
+  16 passed, integration 23 passed, and e2e 1 passed.
+- PR body live synchronization: `gh pr edit 13 --body-file
+  docs/phases/add-local-execution-pr-body.md` failed with GitHub CLI's known
+  Projects Classic `repository.pullRequest.projectCards` deprecation path, so
+  the live PR body was synchronized with `gh api --method PATCH
+  repos/samcantrill/loom/pulls/13 -F
+  body=@docs/phases/add-local-execution-pr-body.md` after recording PR-open
+  metadata in this artifact.
 - Stack maintenance: pending Phase 7 and Phase 8 merge/rebase/retarget state.
 - Remaining blockers: none.
