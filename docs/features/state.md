@@ -445,9 +445,10 @@ or be represented in persisted state as:
 BLOCKED
 ```
 
-Phase 4 provides the status record and status-only lifecycle writer. Runner
-failure paths that persist blocked descendants are owned by later execution
-lifecycle work.
+Phase 4 provides the status record and status-only lifecycle writer. The v0-post
+runner lifecycle now uses that writer to persist blocked descendants after the
+first failed stage, so failed local runs have durable downstream `BLOCKED`
+records rather than only in-memory blocked results.
 
 ---
 

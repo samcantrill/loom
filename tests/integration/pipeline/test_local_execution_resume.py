@@ -43,6 +43,16 @@ def test_same_run_rerun_reuses_unchanged_stages(tmp_path: Path) -> None:
     status = run_store.read_stage_status("run1", "build")
     assert status is not None
     assert status.status == StageStatus.SUCCEEDED
+    assert run_store.read_run_lock("run1") is None
+    events = run_store.read_events("run1")
+    reused_events = [
+        event for event in events if event.event_type == "stage.reused"
+    ]
+    assert [event.scope.stage_name for event in reused_events] == ["build", "report"]
+    opened_events = [
+        event for event in events if event.event_type == "run.opened"
+    ]
+    assert opened_events[-1].payload == {"open_existing": True}
 
 
 def test_changed_config_reruns_changed_stage_and_downstream(tmp_path: Path) -> None:
