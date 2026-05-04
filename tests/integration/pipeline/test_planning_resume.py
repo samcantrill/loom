@@ -44,7 +44,7 @@ def _spec() -> PipelineSpec:
 def _stores(tmp_path: Path) -> tuple[LocalRunStore, LocalArtifactStore]:
     run_store = LocalRunStore(tmp_path / "runs")
     run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.get_artifact_root("run1"))
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
     return run_store, artifact_store
 
 
@@ -66,7 +66,6 @@ def _seed_reusable_build(
     fingerprint = build_stage_fingerprint(build, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -146,7 +145,7 @@ def test_only_stage_blocks_when_upstream_provider_is_unavailable(
 
 def test_corrupt_store_json_raises_resume_state_error(tmp_path: Path) -> None:
     run_store, artifact_store = _stores(tmp_path)
-    status_path = run_store.get_stage_dir("run1", "build") / "status.json"
+    status_path = run_store.local_stage_dir("run1", "build") / "status.json"
     status_path.parent.mkdir(parents=True, exist_ok=True)
     status_path.write_text("{bad json", encoding="utf-8")
 

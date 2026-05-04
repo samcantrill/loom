@@ -5,7 +5,22 @@ from pathlib import Path
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline import RunStatusRecord, StageStatusRecord
-from loom.pipeline.stores import ArtifactStore, LocalArtifactStore, LocalRunStore, RunStore
+from loom.pipeline.stores import (
+    ArtifactStore,
+    LocalArtifactStore,
+    LocalRunStorePaths,
+    RunArtifactIndexStore,
+    RunConfigStore,
+    RunDocumentStore,
+    RunLifecycleStore,
+    RunProvenanceStore,
+    RunPlanStore,
+    RunStore,
+    RunStatusStore,
+    StageLogStore,
+    StageStateStore,
+    StageWorkspaceStore,
+)
 from loom.serialization import PlainData
 
 
@@ -14,7 +29,6 @@ class DummyArtifactStore:
         self,
         obj: object,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
@@ -27,9 +41,8 @@ class DummyArtifactStore:
 
     def register(
         self,
-        uri: str | Path,
+        uri: str,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
@@ -56,37 +69,19 @@ class DummyArtifactStore:
 
 
 class DummyRunStore:
-    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None):
-        return Path("run")
+    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None) -> None:
+        return None
 
-    def open_run(self, run_id: str) -> Path:
-        return Path(run_id)
+    def open_run(self, run_id: str) -> None:
+        return None
 
-    def get_run_dir(self, run_id: str) -> Path:
-        return Path(run_id)
-
-    def get_stage_dir(self, run_id: str, stage_name: str) -> Path:
-        return Path(run_id) / stage_name
-
-    def get_artifact_root(self, run_id: str) -> Path:
-        return Path(run_id) / "artifacts"
-
-    def get_stage_artifact_dir(self, run_id: str, stage_name: str) -> Path:
-        return Path(run_id) / "artifacts" / stage_name
-
-    def get_config_path(self, run_id: str, name: str) -> Path:
-        return Path(run_id) / f"{name}.yaml"
-
-    def get_provenance_path(self, run_id: str, name: str) -> Path:
-        return Path(run_id) / f"{name}.json"
-
-    def get_stage_log_path(self, run_id: str, stage_name: str, stream: str) -> Path:
-        return Path(run_id) / stage_name / f"{stream}.log"
-
-    def read_run_metadata(self, run_id: str) -> dict[str, PlainData]:
+    def read_run_document(self, run_id: str) -> dict[str, PlainData]:
         return {}
 
-    def write_run_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None:
+    def read_run_user_metadata(self, run_id: str) -> dict[str, PlainData]:
+        return {}
+
+    def write_run_user_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None:
         return None
 
     def read_run_status(self, run_id: str) -> RunStatusRecord | None:
@@ -120,7 +115,7 @@ class DummyRunStore:
         return None
 
     def read_provenance_document(self, run_id: str, name: str) -> dict[str, PlainData] | None:
-        return None
+        return {}
 
     def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None:
         return None
@@ -134,13 +129,27 @@ class DummyRunStore:
     def read_stage_inputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None:
         return None
 
-    def write_stage_inputs(self, run_id: str, stage_name: str, inputs: Mapping[str, ArtifactRef], *, attempt: int) -> None:
+    def write_stage_inputs(
+        self,
+        run_id: str,
+        stage_name: str,
+        inputs: Mapping[str, ArtifactRef],
+        *,
+        attempt: int,
+    ) -> None:
         return None
 
     def read_stage_outputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None:
         return None
 
-    def write_stage_outputs(self, run_id: str, stage_name: str, outputs: Mapping[str, ArtifactRef], *, attempt: int) -> None:
+    def write_stage_outputs(
+        self,
+        run_id: str,
+        stage_name: str,
+        outputs: Mapping[str, ArtifactRef],
+        *,
+        attempt: int,
+    ) -> None:
         return None
 
     def read_stage_fingerprint(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None:
@@ -159,19 +168,36 @@ class DummyRunStore:
     def read_stage_failure(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None:
         return None
 
-    def write_stage_failure(self, run_id: str, stage_name: str, failure: Mapping[str, PlainData], *, attempt: int) -> None:
+    def write_stage_failure(
+        self,
+        run_id: str,
+        stage_name: str,
+        failure: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None:
         return None
 
     def read_stage_provenance(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None:
         return None
 
-    def write_stage_provenance(self, run_id: str, stage_name: str, provenance: Mapping[str, PlainData], *, attempt: int) -> None:
+    def write_stage_provenance(
+        self,
+        run_id: str,
+        stage_name: str,
+        provenance: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None:
         return None
 
     def read_stage_log(self, run_id: str, stage_name: str, stream: str) -> str | None:
         return None
 
     def write_stage_log(self, run_id: str, stage_name: str, stream: str, content: str) -> None:
+        return None
+
+    def prepare_stage_workspace(self, run_id: str, stage_name: str) -> None:
         return None
 
 
@@ -181,8 +207,34 @@ class IncompleteArtifactStore:
 
 
 class IncompleteRunStore:
-    def create_run(self, run_id: str) -> object:
-        return run_id
+    def create_run(self, run_id: str) -> None:
+        return None
+
+
+class DummyRunStorePaths:
+    def local_run_dir(self, run_id: str) -> Path:
+        return Path(run_id)
+
+    def local_stage_dir(self, run_id: str, stage_name: str) -> Path:
+        return Path(run_id) / stage_name
+
+    def local_artifact_root(self, run_id: str) -> Path:
+        return Path(run_id) / "artifacts"
+
+    def local_stage_artifact_dir(self, run_id: str, stage_name: str) -> Path:
+        return Path(run_id) / "artifacts" / stage_name
+
+    def local_config_path(self, run_id: str, name: str) -> Path:
+        return Path(run_id) / f"{name}.yaml"
+
+    def local_provenance_path(self, run_id: str, name: str) -> Path:
+        return Path(run_id) / f"{name}.json"
+
+    def local_stage_log_path(self, run_id: str, stage_name: str, stream: str) -> Path:
+        return Path(run_id) / stage_name / f"{stream}.log"
+
+    def local_stage_workspace_dir(self, run_id: str, stage_name: str) -> Path:
+        return Path(run_id) / stage_name / "workspace"
 
 
 def test_local_artifact_store_satisfies_protocol() -> None:
@@ -193,16 +245,30 @@ def test_local_artifact_store_satisfies_protocol() -> None:
         assert isinstance(LocalArtifactStore(root=Path(run_root)), ArtifactStore)
 
 
-def test_local_run_store_satisfies_protocol(tmp_path: Path) -> None:
-    assert isinstance(LocalRunStore(root=tmp_path), RunStore)
-
-
 def test_fake_artifact_store_matches_protocol() -> None:
     assert isinstance(DummyArtifactStore(), ArtifactStore)
 
 
 def test_fake_run_store_matches_protocol() -> None:
+    assert isinstance(DummyRunStore(), RunLifecycleStore)
+    assert isinstance(DummyRunStore(), RunDocumentStore)
+    assert isinstance(DummyRunStore(), RunStatusStore)
+    assert isinstance(DummyRunStore(), RunPlanStore)
+    assert isinstance(DummyRunStore(), RunArtifactIndexStore)
+    assert isinstance(DummyRunStore(), RunConfigStore)
+    assert isinstance(DummyRunStore(), RunProvenanceStore)
+    assert isinstance(DummyRunStore(), StageStateStore)
+    assert isinstance(DummyRunStore(), StageLogStore)
+    assert isinstance(DummyRunStore(), StageWorkspaceStore)
     assert isinstance(DummyRunStore(), RunStore)
+
+
+def test_fake_run_store_does_not_satisfy_local_paths() -> None:
+    assert not isinstance(DummyRunStore(), LocalRunStorePaths)
+
+
+def test_fake_local_run_store_paths_matches_protocol() -> None:
+    assert isinstance(DummyRunStorePaths(), LocalRunStorePaths)
 
 
 def test_structural_protocol_rejects_incomplete_implementations() -> None:

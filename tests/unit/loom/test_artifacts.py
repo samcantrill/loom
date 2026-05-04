@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-from loom.artifacts import ArtifactRef, ArtifactValidationError
+from loom.artifacts import ArtifactAddress, ArtifactRef, ArtifactValidationError
 from loom.fingerprints import hash_text
 from loom.serialization import PlainData
 
@@ -95,3 +95,24 @@ def test_artifact_ref_metadata_is_immutable_and_to_dict_mutations_are_local() ->
 
     assert ref.metadata["labels"] == ("raw", "processed")
     assert "extra" not in ref.metadata
+
+
+def test_artifact_address_round_trip() -> None:
+    address = ArtifactAddress(run_id="run-1", artifact_id="artifact:best")
+    restored = ArtifactAddress.from_dict(address.to_dict())
+
+    assert restored == address
+    assert restored.to_dict() == {"run_id": "run-1", "artifact_id": "artifact:best"}
+
+
+def test_artifact_address_rejects_invalid_payloads() -> None:
+    with pytest.raises(ArtifactValidationError):
+        ArtifactAddress.from_dict({"run_id": "run-1"})
+    with pytest.raises(ArtifactValidationError):
+        ArtifactAddress.from_dict({"run_id": "run-1", "artifact_id": "artifact:best", "unexpected": 1})
+    with pytest.raises(ArtifactValidationError):
+        ArtifactAddress.from_dict("bad")
+    with pytest.raises(ArtifactValidationError):
+        ArtifactAddress(run_id="", artifact_id="artifact:best")
+    with pytest.raises(ArtifactValidationError):
+        ArtifactAddress.from_dict({"run_id": "run-1", "artifact_id": ""})

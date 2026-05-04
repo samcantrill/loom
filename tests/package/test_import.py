@@ -20,6 +20,7 @@ def test_package_declares_public_exports() -> None:
         "InMemoryManifest",
         "ManifestView",
         "Record",
+        "ArtifactAddress",
         "ArtifactRef",
         "Fingerprint",
         "hash_mapping",

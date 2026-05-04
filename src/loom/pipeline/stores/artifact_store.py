@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from loom.artifacts import ArtifactRef
@@ -16,7 +15,6 @@ class ArtifactStore(Protocol):
         self,
         obj: object,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
@@ -28,9 +26,8 @@ class ArtifactStore(Protocol):
 
     def register(
         self,
-        uri: str | Path,
+        uri: str,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,

@@ -2,7 +2,7 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-from loom.artifacts import ArtifactRef
+from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import Fingerprint, hash_mapping
 from loom.records import InMemoryManifest, ManifestView, Record
 from loom.refs import ResourceRef
@@ -18,6 +18,7 @@ __all__ = [
     "InMemoryManifest",
     "ManifestView",
     "Record",
+    "ArtifactAddress",
     "ArtifactRef",
     "Fingerprint",
     "hash_mapping",

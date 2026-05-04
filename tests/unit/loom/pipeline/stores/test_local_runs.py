@@ -23,7 +23,8 @@ def _artifact_ref(*, artifact_id: str = "stage/out") -> ArtifactRef:
 
 def test_local_run_creation_writes_layout(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
-    run_dir = store.create_run("run1", metadata={"project": "demo"})
+    store.create_run("run1", metadata={"project": "demo"})
+    run_dir = store.local_run_dir("run1")
 
     assert run_dir.exists()
     assert (run_dir / "config").is_dir()
@@ -35,14 +36,14 @@ def test_local_run_creation_writes_layout(tmp_path: Path) -> None:
 
 def test_open_run_validates_required_run_metadata(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
-    run_dir = store.create_run("run1")
-    assert store.open_run("run1") == run_dir
+    store.create_run("run1")
+    store.open_run("run1")
 
 
 def test_local_run_metadata_optional_reads(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1", metadata={"a": 1})
-    metadata = store.read_run_metadata("run1")
+    metadata = store.read_run_document("run1")
     assert metadata["run_id"] == "run1"
     assert metadata["metadata"] == {"a": 1}
     assert store.read_plan("run1") is None
@@ -150,7 +151,7 @@ def test_local_run_rejects_corrupt_stage_plain_mapping(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1")
     atomic_write_json(
-        store.get_stage_dir("run1", "stage") / "fingerprint.json",
+        store.local_stage_dir("run1", "stage") / "fingerprint.json",
         {
             "schema_version": 1,
             "run_id": "run1",
@@ -167,8 +168,9 @@ def test_local_run_rejects_corrupt_stage_plain_mapping(tmp_path: Path) -> None:
 
 def test_local_run_rejects_corrupt_wrapper_fields_with_document_path(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
-    run_dir = store.create_run("run1")
-    stage_dir = store.get_stage_dir("run1", "stage")
+    store.create_run("run1")
+    run_dir = store.local_run_dir("run1")
+    stage_dir = store.local_stage_dir("run1", "stage")
     valid_timestamp = "2020-01-01T00:00:00Z"
     cases: list[tuple[Path, dict[str, object], Callable[[], object]]] = [
         (
@@ -179,7 +181,7 @@ def test_local_run_rejects_corrupt_wrapper_fields_with_document_path(tmp_path: P
                 "created_at": valid_timestamp,
                 "run_dir": "file:///tmp/run1",
             },
-            lambda: store.read_run_metadata("run1"),
+            lambda: store.read_run_document("run1"),
         ),
         (
             run_dir / "plan.json",
@@ -211,7 +213,7 @@ def test_local_run_rejects_corrupt_wrapper_fields_with_document_path(tmp_path: P
             lambda: store.read_recipe_manifest("run1"),
         ),
         (
-            store.get_provenance_path("run1", "environment"),
+            store.local_provenance_path("run1", "environment"),
             {
                 "schema_version": 1,
                 "run_id": "run1",
@@ -256,7 +258,8 @@ def test_local_run_rejects_corrupt_wrapper_fields_with_document_path(tmp_path: P
 
 def test_local_run_rejects_corrupt_artifact_index_refs(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
-    run_dir = store.create_run("run1")
+    store.create_run("run1")
+    run_dir = store.local_run_dir("run1")
     path = run_dir / "artifacts.json"
     atomic_write_json(
         path,
@@ -281,7 +284,8 @@ def test_local_run_rejects_corrupt_artifact_index_refs(tmp_path: Path) -> None:
 
 def test_local_run_wraps_unsafe_root_artifact_index_keys_as_corrupt(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
-    run_dir = store.create_run("run1")
+    store.create_run("run1")
+    run_dir = store.local_run_dir("run1")
     path = run_dir / "artifacts.json"
     atomic_write_json(
         path,
@@ -301,7 +305,7 @@ def test_local_run_wraps_unsafe_root_artifact_index_keys_as_corrupt(tmp_path: Pa
 def test_local_run_wraps_stage_artifact_index_failures_as_corrupt(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1")
-    path = store.get_stage_dir("run1", "stage") / "outputs.json"
+    path = store.local_stage_dir("run1", "stage") / "outputs.json"
     wrapper = {
         "schema_version": 1,
         "run_id": "run1",

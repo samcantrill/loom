@@ -39,7 +39,7 @@ def _status(run_id: str) -> StageStatusRecord:
 def _stores(tmp_path: Path) -> tuple[LocalRunStore, LocalArtifactStore]:
     run_store = LocalRunStore(tmp_path / "runs")
     run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.get_artifact_root("run1"))
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
     return run_store, artifact_store
 
 
@@ -68,7 +68,6 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -100,7 +99,6 @@ def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -141,7 +139,6 @@ def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -182,7 +179,6 @@ def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -246,7 +242,6 @@ def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -268,7 +263,7 @@ def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
     run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
     with pytest.raises(ResumeStateError, match="corrupt"):
         # Corrupt the persisted output document, then attempt resume.
-        atomic_path = run_store.get_stage_dir("run1", "build") / "outputs.json"
+        atomic_path = run_store.local_stage_dir("run1", "build") / "outputs.json"
         atomic_path.write_text("[\"bad\"]", encoding="utf-8")
 
         check_stage_resume(
@@ -288,7 +283,6 @@ def test_direct_resume_rejects_corrupt_prior_fingerprint(tmp_path: Path) -> None
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -329,7 +323,6 @@ def test_direct_resume_checks_artifact_checksum(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -366,7 +359,6 @@ def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -396,10 +388,10 @@ def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
 
 def test_direct_resume_raises_on_corrupt_prior_state(tmp_path: Path) -> None:
     run_store, artifact_store = _stores(tmp_path)
-    (run_store.get_stage_dir("run1", "build") / "status.json").parent.mkdir(
+    (run_store.local_stage_dir("run1", "build") / "status.json").parent.mkdir(
         parents=True, exist_ok=True
     )
-    (run_store.get_stage_dir("run1", "build") / "status.json").write_text(
+    (run_store.local_stage_dir("run1", "build") / "status.json").write_text(
         "{bad json", encoding="utf-8"
     )
 

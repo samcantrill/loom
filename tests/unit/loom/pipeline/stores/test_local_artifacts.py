@@ -20,7 +20,6 @@ def test_local_artifact_save_load_json_text_and_bytes(tmp_path: Path) -> None:
 
     json_ref = store.save(
         {"b": 2, "a": 1},
-        run_id="run1",
         stage_name="stage",
         name="out",
         artifact_type="json",
@@ -32,7 +31,6 @@ def test_local_artifact_save_load_json_text_and_bytes(tmp_path: Path) -> None:
 
     text_ref = store.save(
         "hello",
-        run_id="run1",
         stage_name="stage",
         name="txt",
         artifact_type="text",
@@ -43,7 +41,6 @@ def test_local_artifact_save_load_json_text_and_bytes(tmp_path: Path) -> None:
 
     bytes_ref = store.save(
         b"abc",
-        run_id="run1",
         stage_name="stage",
         name="raw",
         artifact_type="bin",
@@ -60,7 +57,6 @@ def test_local_artifact_load_requires_codec(tmp_path: Path) -> None:
     artifact_path.write_text("hello")
     registered = store.register(
         artifact_path,
-        run_id="run1",
         stage_name="stage",
         name="out",
         artifact_type="text",
@@ -80,7 +76,6 @@ def test_local_artifact_register_external_controls(tmp_path: Path) -> None:
     with pytest.raises(ArtifactStoreError):
         store.register(
             external,
-            run_id="run1",
             stage_name="stage",
             name="out",
             artifact_type="text",
@@ -89,7 +84,6 @@ def test_local_artifact_register_external_controls(tmp_path: Path) -> None:
 
     registered = store.register(
         external,
-        run_id="run1",
         stage_name="stage",
         name="out",
         artifact_type="text",
@@ -107,7 +101,6 @@ def test_local_artifact_checksum_behavior(tmp_path: Path) -> None:
     with pytest.raises(ArtifactChecksumMismatchError):
         store.register(
             source,
-            run_id="run1",
             stage_name="stage",
             name="bad",
             artifact_type="bytes",
@@ -119,7 +112,6 @@ def test_local_artifact_checksum_behavior(tmp_path: Path) -> None:
     with pytest.raises(ArtifactChecksumUnsupportedError):
         store.register(
             directory,
-            run_id="run1",
             stage_name="stage",
             name="dir",
             artifact_type="tree",
@@ -133,7 +125,6 @@ def test_local_artifact_load_rejects_directory_artifacts(tmp_path: Path) -> None
     directory.mkdir(parents=True, exist_ok=True)
     registered = store.register(
         directory,
-        run_id="run1",
         stage_name="stage",
         name="dir",
         artifact_type="tree",
@@ -148,7 +139,6 @@ def test_local_artifact_type_mismatch_raises(tmp_path: Path) -> None:
     store = LocalArtifactStore(root=tmp_path / "run")
     ref = store.save(
         "hello",
-        run_id="run1",
         stage_name="stage",
         name="txt",
         artifact_type="text",
@@ -163,7 +153,6 @@ def test_local_artifact_rejects_unsupported_uri(tmp_path: Path) -> None:
     with pytest.raises(UnsupportedArtifactURIError):
         store.register(
             "https://example.com/x",
-            run_id="run1",
             stage_name="stage",
             name="out",
             artifact_type="text",

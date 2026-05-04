@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.io.uris import path_to_file_uri
@@ -48,9 +49,9 @@ class LocalRunStore:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
 
-    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None) -> Path:
+    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
-        run_dir = self.get_run_dir(run_id_text)
+        run_dir = self.local_run_dir(run_id_text)
         if run_dir.exists():
             raise RunAlreadyExistsError(f"run directory already exists: {run_dir}")
 
@@ -62,53 +63,63 @@ class LocalRunStore:
         except OSError as exc:
             raise CorruptStoreDocumentError(f"Unable to initialize run directory structure {run_dir}: {exc}") from exc
 
-        self.write_run_metadata(run_id_text, metadata or {})
-        return run_dir
+        self.write_run_user_metadata(run_id_text, metadata or {})
 
-    def open_run(self, run_id: str) -> Path:
+    def open_run(self, run_id: str) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
-        run_dir = self.get_run_dir(run_id_text)
+        run_dir = self.local_run_dir(run_id_text)
         if not run_dir.is_dir():
             raise RunNotFoundError(f"run not found: {run_id_text}")
         run_json = run_dir / "run.json"
         if not run_json.exists():
             raise MissingStoreDocumentError(f"Missing required run metadata at {run_json}")
         self._read_run_wrapper(run_id_text)
-        return run_dir
 
-    def get_run_dir(self, run_id: str) -> Path:
+    def local_run_dir(self, run_id: str) -> Path:
         return self.root / validate_run_id(run_id, field="run_id")
 
-    def get_stage_dir(self, run_id: str, stage_name: str) -> Path:
-        return self.get_run_dir(run_id) / "stages" / validate_stage_name(stage_name, field="stage_name")
+    def local_stage_dir(self, run_id: str, stage_name: str) -> Path:
+        return self.local_run_dir(run_id) / "stages" / validate_stage_name(stage_name, field="stage_name")
 
-    def get_artifact_root(self, run_id: str) -> Path:
-        return self.get_run_dir(run_id) / "artifacts"
+    def local_artifact_root(self, run_id: str) -> Path:
+        return self.local_run_dir(run_id) / "artifacts"
 
-    def get_stage_artifact_dir(self, run_id: str, stage_name: str) -> Path:
-        return self.get_artifact_root(run_id) / validate_stage_name(stage_name, field="stage_name")
+    def local_stage_artifact_dir(self, run_id: str, stage_name: str) -> Path:
+        return self.local_artifact_root(run_id) / validate_stage_name(stage_name, field="stage_name")
 
-    def get_config_path(self, run_id: str, name: str) -> Path:
+    def local_config_path(self, run_id: str, name: str) -> Path:
         run_id_text = validate_run_id(run_id, field="run_id")
         validated_name = validate_config_snapshot_name(name)
-        return self.get_run_dir(run_id_text) / "config" / VALID_CONFIG_SNAPSHOTS[validated_name]
+        return self.local_run_dir(run_id_text) / "config" / VALID_CONFIG_SNAPSHOTS[validated_name]
 
-    def get_provenance_path(self, run_id: str, name: str) -> Path:
+    def local_provenance_path(self, run_id: str, name: str) -> Path:
         run_id_text = validate_run_id(run_id, field="run_id")
         validated_name = validate_provenance_name(name)
-        return self.get_run_dir(run_id_text) / "provenance" / VALID_PROVENANCE_NAMES[validated_name]
+        return self.local_run_dir(run_id_text) / "provenance" / VALID_PROVENANCE_NAMES[validated_name]
 
-    def get_stage_log_path(self, run_id: str, stage_name: str, stream: str) -> Path:
+    def local_stage_log_path(self, run_id: str, stage_name: str, stream: str) -> Path:
         run_id_text = validate_run_id(run_id, field="run_id")
         validated_stream = validate_log_stream(stream)
-        return self.get_stage_dir(run_id_text, stage_name) / "logs" / f"{validated_stream}.log"
+        return self.local_stage_dir(run_id_text, stage_name) / "logs" / f"{validated_stream}.log"
 
-    def read_run_metadata(self, run_id: str) -> dict[str, PlainData]:
+    def local_stage_workspace_dir(self, run_id: str, stage_name: str) -> Path:
+        return self.local_stage_dir(run_id, stage_name) / "workspace"
+
+    def prepare_stage_workspace(self, run_id: str, stage_name: str) -> None:
+        self.local_stage_workspace_dir(run_id, stage_name).mkdir(parents=True, exist_ok=True)
+
+    def read_run_document(self, run_id: str) -> dict[str, PlainData]:
         return self._read_run_wrapper(validate_run_id(run_id, field="run_id"))
 
-    def write_run_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None:
+    def read_run_user_metadata(self, run_id: str) -> dict[str, PlainData]:
+        return cast(
+            dict[str, PlainData],
+            self._read_run_wrapper(validate_run_id(run_id, field="run_id"))["metadata"],
+        )
+
+    def write_run_user_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
-        run_dir = self.get_run_dir(run_id_text)
+        run_dir = self.local_run_dir(run_id_text)
         if not run_dir.exists():
             raise RunNotFoundError(f"run not found: {run_id_text}")
         normalized_metadata = ensure_plain_data(metadata, path="metadata")
@@ -131,7 +142,7 @@ class LocalRunStore:
         atomic_write_json(run_dir / "run.json", payload)
 
     def read_run_status(self, run_id: str) -> RunStatusRecord | None:
-        run_dir = self.get_run_dir(run_id)
+        run_dir = self.local_run_dir(run_id)
         status_path = run_dir / "status.json"
         data = self._read_optional_json(status_path)
         if data is None:
@@ -145,10 +156,10 @@ class LocalRunStore:
         self._validate_run_identifier_for_status(run_id, status.run_id)
         run_id_text = validate_run_id(run_id, field="run_id")
         payload = status.to_dict()
-        atomic_write_json(self.get_run_dir(run_id_text) / "status.json", payload)
+        atomic_write_json(self.local_run_dir(run_id_text) / "status.json", payload)
 
     def read_plan(self, run_id: str) -> dict[str, PlainData] | None:
-        run_dir = self.get_run_dir(run_id)
+        run_dir = self.local_run_dir(run_id)
         path = run_dir / "plan.json"
         data = self._read_optional_json(path)
         if data is None:
@@ -168,10 +179,10 @@ class LocalRunStore:
             "updated_at": utc_timestamp(),
             "plan": ensure_plain_data(plan, path="plan"),
         }
-        atomic_write_json(self.get_run_dir(run_id_text) / "plan.json", payload)
+        atomic_write_json(self.local_run_dir(run_id_text) / "plan.json", payload)
 
     def read_artifact_index(self, run_id: str) -> dict[str, ArtifactRef]:
-        run_dir = self.get_run_dir(run_id)
+        run_dir = self.local_run_dir(run_id)
         path = run_dir / "artifacts.json"
         data = self._read_optional_json(path)
         if data is None:
@@ -195,10 +206,10 @@ class LocalRunStore:
             "updated_at": utc_timestamp(),
             "artifacts": artifact_index_to_dict(index),
         }
-        atomic_write_json(self.get_run_dir(run_id_text) / "artifacts.json", payload)
+        atomic_write_json(self.local_run_dir(run_id_text) / "artifacts.json", payload)
 
     def read_config_snapshot(self, run_id: str, name: str) -> str | None:
-        path = self.get_config_path(run_id, name)
+        path = self.local_config_path(run_id, name)
         if not path.exists():
             return None
         if not path.is_file():
@@ -209,10 +220,10 @@ class LocalRunStore:
         validate_run_id(run_id, field="run_id")
         if not isinstance(content, str):
             raise UnsafeStorePathError(f"config snapshot content must be string, got {type(content)!r}")
-        atomic_write_text(self.get_config_path(run_id, name), content)
+        atomic_write_text(self.local_config_path(run_id, name), content)
 
     def read_recipe_manifest(self, run_id: str) -> tuple[dict[str, PlainData], ...] | None:
-        run_dir = self.get_run_dir(run_id)
+        run_dir = self.local_run_dir(run_id)
         path = run_dir / "config" / "recipe_manifest.json"
         data = self._read_optional_json(path)
         if data is None:
@@ -239,10 +250,10 @@ class LocalRunStore:
             "created_at": utc_timestamp(),
             "recipe_manifest": normalized,
         }
-        atomic_write_json(self.get_run_dir(run_id_text) / "config" / "recipe_manifest.json", payload)
+        atomic_write_json(self.local_run_dir(run_id_text) / "config" / "recipe_manifest.json", payload)
 
     def read_provenance_document(self, run_id: str, name: str) -> dict[str, PlainData] | None:
-        path = self.get_provenance_path(run_id, name)
+        path = self.local_provenance_path(run_id, name)
         data = self._read_optional_json(path)
         if data is None:
             return None
@@ -266,7 +277,7 @@ class LocalRunStore:
             "created_at": utc_timestamp(),
             "provenance": ensure_plain_data(document, path=f"provenance[{validated_name}]"),
         }
-        atomic_write_json(self.get_provenance_path(run_id_text, validated_name), payload)
+        atomic_write_json(self.local_provenance_path(run_id_text, validated_name), payload)
 
     def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
         path = self._stage_file_path(run_id, stage_name, "status.json")
@@ -282,7 +293,7 @@ class LocalRunStore:
 
     def write_stage_status(self, run_id: str, stage_name: str, status: StageStatusRecord) -> None:
         self._validate_stage_match(run_id, stage_name, status)
-        stage_dir = self.get_stage_dir(run_id, stage_name)
+        stage_dir = self.local_stage_dir(run_id, stage_name)
         stage_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_json(self._stage_file_path(run_id, stage_name, "status.json"), status.to_dict())
 
@@ -421,7 +432,7 @@ class LocalRunStore:
 
     def read_stage_log(self, run_id: str, stage_name: str, stream: str) -> str | None:
         validated_stream = validate_log_stream(stream)
-        path = self.get_stage_log_path(run_id, stage_name, validated_stream)
+        path = self.local_stage_log_path(run_id, stage_name, validated_stream)
         if not path.exists():
             return None
         return path.read_text(encoding="utf-8")
@@ -430,10 +441,10 @@ class LocalRunStore:
         validated_stream = validate_log_stream(stream)
         if not isinstance(content, str):
             raise UnsafeStorePathError(f"stage log content must be text, got {type(content)!r}")
-        atomic_write_text(self.get_stage_log_path(run_id, stage_name, validated_stream), content)
+        atomic_write_text(self.local_stage_log_path(run_id, stage_name, validated_stream), content)
 
     def _stage_file_path(self, run_id: str, stage_name: str, filename: str) -> Path:
-        stage_dir = self.get_stage_dir(run_id, stage_name)
+        stage_dir = self.local_stage_dir(run_id, stage_name)
         stage_dir.mkdir(parents=True, exist_ok=True)
         return stage_dir / filename
 
@@ -451,7 +462,7 @@ class LocalRunStore:
         return value
 
     def _read_run_wrapper(self, run_id: str) -> dict[str, PlainData]:
-        path = self.get_run_dir(run_id) / "run.json"
+        path = self.local_run_dir(run_id) / "run.json"
         if not path.is_file():
             raise MissingStoreDocumentError(f"run metadata missing at {path}")
         data = self._read_optional_json(path)
