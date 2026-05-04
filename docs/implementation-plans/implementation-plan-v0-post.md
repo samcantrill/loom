@@ -1006,26 +1006,34 @@ Future compatibility:
 
 ### Phase 3 - Stage Factory And Semantic Fingerprint Policy
 
-Status: pr_open
+Status: merged
 Branch: `codex/v0-post-stage-factory`
 PR: https://github.com/samcantrill/loom/pull/17
 
-PR gate notes:
+Merge notes:
 
-- Opened against `develop` on 2026-05-04 and verified as `OPEN` with base
-  `develop` and head `codex/v0-post-stage-factory`.
-- Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-stage-factory`.
+- Merged into `develop` on 2026-05-04 as squash commit `0f39e7e`.
+- Summary: added explicit `factory` stage construction specs and import-safe
+  pipeline-owned target resolution, wired runner construction through the stage
+  factory helper, migrated authored stage configs from top-level `_target_`,
+  introduced semantic stage fingerprint policy v2 with factory target/init and
+  explicit fingerprint fields, treated v1 fingerprints as policy-changed stale
+  state, and updated pipeline, execution, fingerprint, and structure docs.
 - Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
   PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package,
   unit, contract, integration, e2e, and config-extra rows; GitHub checks passed.
-- Reviewer notification: `gh pr edit 17 --add-reviewer samcantrill` was
+- Human merge gate: PR #17 reached `MERGED` on `develop`; Codex did not approve
+  or merge the PR. `gh pr edit 17 --add-reviewer samcantrill` was
   rejected by GitHub's Projects Classic GraphQL deprecation path and
   `reviewRequests` remained empty, so the required fallback comment mentioned
   `@samcantrill` at
   https://github.com/samcantrill/loom/pull/17#issuecomment-4370177330.
-- Serial human merge gate: do not start Phase 4 until PR #17 is approved,
-  merged into `develop`, updated `develop` has been fetched, and this plan
-  records Phase 3 as `merged`.
+- Stack maintenance: root serial phase, no successor branch was started before
+  merge, and no retargeting was required.
+- Follow-up notes: Phase 4 must continue from updated `develop`; concrete
+  runtime/resource/event/lock foundations remain Phase 4 work, while planner
+  decomposition, runner lifecycle decomposition, catalogs, bundles, sweeps,
+  remote stores, and non-local executors remain later phases.
 
 Goal:
 
