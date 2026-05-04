@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation refinement complete; ready for PR preparation
+- Status: PR preparation in progress; local validation passed, GitHub PR pending
 - Branch: `codex/v0-post-store-capabilities`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-store-capabilities`
 - Phase execution plan path: `docs/phases/v0-post-store-capabilities.md`
@@ -525,3 +525,28 @@ make test-summary
 - Stack maintenance: serial human merge gate active; no successor phase may start until this phase is approved and human-merged into `develop`.
 - Residual risks: none identified in this refinement pass. Phase 4 still owns concrete lock behavior; Phase 3+ work remains unstarted.
 - Remaining blockers: none.
+
+## PR Preparation Notes
+
+- PR body artifact: `docs/phases/v0-post-store-capabilities-pr-body.md`
+- PR body draft pass: complete in this PR-preparation pass.
+- PR body refine pass: complete in this PR-preparation pass.
+- Final diff scope check:
+  - Diff against `develop` is limited to Phase 2 store protocols, local stores, `ArtifactAddress`, `StageContext`, runner/planner call-site adaptation, focused tests, support stages, and affected docs.
+  - No concrete lock protocol, runtime/event foundations, stage factory or fingerprint policy change, planner decomposition, recipe catalog work, remote backend, executor expansion, retry/timeout behavior, or Phase 3 implementation was added.
+- PR validation:
+  - `git diff --check develop...HEAD` passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed, Pyright reported 0 errors, default harness passed with 308 passed and 9 skipped, config-extra harness passed with 102 passed and 309 deselected, and `uv build` produced source and wheel distributions.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`.
+- Suite evidence from `make test-summary`:
+  - package: passed, 32 passed and 1 skipped.
+  - unit: passed, 255 passed and 1 skipped.
+  - contract: passed, 13 passed and 1 skipped.
+  - integration: passed, 8 passed and 5 skipped.
+  - e2e: passed, 1 passed.
+  - config-extra: passed, 102 passed and 309 deselected.
+- PR creation: pending.
+- PR URL: pending.
+- PR target verification: pending.
+- Review notification: pending `samcantrill` reviewer request or `@samcantrill` fallback comment.
+- Serial merge gate state: active. Codex must not approve or merge this PR, and Phase 3 must not start until this PR is human-approved and human-merged into `develop`.
