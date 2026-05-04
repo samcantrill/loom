@@ -23,12 +23,36 @@ from .errors import (
 from .indexes import artifact_index_from_dict, artifact_index_to_dict, format_artifact_key, merge_artifact_index, parse_artifact_key
 from .local_artifacts import LocalArtifactStore
 from .local_runs import LocalRunStore
-from .run_store import RunStore
+from .run_store import (
+    LocalRunStorePaths,
+    RunArtifactIndexStore,
+    RunConfigStore,
+    RunDocumentStore,
+    RunLifecycleStore,
+    RunProvenanceStore,
+    RunPlanStore,
+    RunStore,
+    RunStatusStore,
+    StageLogStore,
+    StageStateStore,
+    StageWorkspaceStore,
+)
 
 __all__ = [
     "ArtifactStore",
     "LocalArtifactStore",
     "RunStore",
+    "RunLifecycleStore",
+    "RunDocumentStore",
+    "RunStatusStore",
+    "RunPlanStore",
+    "RunArtifactIndexStore",
+    "RunConfigStore",
+    "RunProvenanceStore",
+    "StageStateStore",
+    "StageLogStore",
+    "StageWorkspaceStore",
+    "LocalRunStorePaths",
     "LocalRunStore",
     "StoreError",
     "ArtifactStoreError",
