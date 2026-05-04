@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: implementation refinement complete
 - Branch: `codex/v0-post-stage-factory`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-stage-factory`
 - Phase execution plan path: `docs/phases/v0-post-stage-factory.md`
@@ -28,7 +28,7 @@
 - Draft pass: completed by `loom_phase_planner` in commit `ed907e7`.
 - Refine pass: completed by `loom_phase_planner` in this pass; this document is
   decision-complete for executor handoff.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used in this pass.
 - PR review budget: unused.
 - Setup limitations: local `develop` matched the manager-provided Phase 3 base
   commit. No remote synchronization was attempted during planning because the
@@ -756,7 +756,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -768,10 +768,14 @@ make test-summary
   factory specs/target resolution, runner construction wiring, semantic
   fingerprint policy v2, fixture/docs migration, and config-extra local
   execution validation for constructor/runtime separation.
-- Implementation validation: targeted package, unit, integration, e2e,
-  config-extra, Ruff, Pyright, and diff-check evidence recorded below. Final
-  `make validate-pr` and `make test-summary` remain for PR preparation.
-- Refinement summary: pending implementation refinement pass if used.
+- Implementation validation: targeted package, unit, contract, integration,
+  e2e, config-extra, Ruff, Pyright, build, and diff-check evidence recorded
+  below. `make validate-pr` passed during implementation refinement; final
+  `make test-summary` remains for PR preparation.
+- Refinement summary: completed in the single allowed implementation refinement
+  pass. Fixed phase-scoped documentation contract drift in `docs/structure.md`
+  and `docs/features/fingerprints.md`, and cleaned formatting regressions in
+  touched integration tests. No source behavior changes were required.
 - PR preparation: pending PR-preparer pass. The PR must target `develop` and
   request review from `samcantrill` or mention `@samcantrill` via the documented
   fallback.
@@ -843,3 +847,44 @@ make test-summary
     errors.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed.
   - `git diff --check` passed.
+
+## Implementation Refinement Evidence
+
+- Refinement completed: docs and test-formatting cleanup after review of the
+  Phase 3 diff against `develop`.
+- Files changed: `docs/structure.md`, `docs/features/fingerprints.md`,
+  `tests/integration/pipeline/test_pipeline_config.py`,
+  `tests/integration/pipeline/test_planning_resume.py`, and this phase
+  execution plan.
+- Fixes:
+  - Corrected `docs/structure.md` so `loom.pipeline` remains the owner of stage
+    factory construction and only config composition / recursive target
+    instantiation internals remain outside the pipeline import boundary.
+  - Aligned `docs/features/fingerprints.md` with the implemented v2
+    `StageFingerprintRecord` shape by removing a non-persisted top-level
+    `stage_name`, using `policy_name`, documenting persisted `payload`, and
+    clarifying that v0 stage fingerprints exclude artifact URI/location
+    metadata when stronger semantic identity is available.
+  - Restored readable indentation in two integration fixtures touched by the
+    implementation.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_planning_api.py`
+    (21 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/test_stage.py tests/unit/loom/pipeline/test_stage_factory.py tests/unit/loom/pipeline/execution/test_runner.py`
+    (31 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/planning/test_resume.py`
+    (18 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/pipeline/test_pipeline_config.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_resume.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py tests/integration/docs/test_v0_python_examples.py tests/integration/config/test_compose_config.py tests/e2e/test_local_pipeline_run.py`
+    (26 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_stage_contract.py tests/contracts/test_executor_contract.py tests/contracts/test_store_contract.py`
+    (9 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/pipeline/test_pipeline_config.py tests/integration/pipeline/test_planning_resume.py tests/integration/docs/test_v0_python_examples.py tests/integration/config/test_compose_config.py tests/e2e/test_local_pipeline_run.py`
+    (15 passed after the refinement patch).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/planning/test_resume.py tests/package/test_import_boundaries.py`
+    (29 passed after the refinement patch).
+  - `git diff --check` passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff, Pyright,
+    default no-extra harness (325 passed, 9 skipped), config-extra harness
+    (103 passed, 326 deselected), and build.
+- Residual risks: none identified within Phase 3 scope. PR preparation should
+  still run `make test-summary` for suite-level PR body evidence.

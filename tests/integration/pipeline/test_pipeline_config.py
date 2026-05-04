@@ -22,20 +22,20 @@ def pipeline_recipe(*, title: str | None = None, **_kwargs: Any) -> dict[str, An
     return {
         "name": "expanded",
         "stages": [
-                {
-                    "name": "build",
-                    "factory": {"_target_": "tests.support.config_samples:concat"},
-                    "outputs": {
-                        "text": {"artifact_type": "text"},
-                    },
+            {
+                "name": "build",
+                "factory": {"_target_": "tests.support.config_samples:concat"},
+                "outputs": {
+                    "text": {"artifact_type": "text"},
                 },
-                {
-                    "name": "report",
-                    "factory": {"_target_": "tests.support.config_samples:concat"},
-                    "depends_on": ["build"],
-                    "inputs": {"text": "build.text"},
-                    "outputs": {"report": {"artifact_type": "text"}},
-                },
+            },
+            {
+                "name": "report",
+                "factory": {"_target_": "tests.support.config_samples:concat"},
+                "depends_on": ["build"],
+                "inputs": {"text": "build.text"},
+                "outputs": {"report": {"artifact_type": "text"}},
+            },
         ],
     }
 

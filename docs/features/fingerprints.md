@@ -1118,7 +1118,7 @@ When a stage consumes an `ArtifactRef`, policy should usually include:
 ```text
 artifact ID
 artifact type
-artifact URI or logical ID
+logical artifact ID
 artifact fingerprint when present
 artifact checksum when present
 artifact schema version
@@ -1128,6 +1128,11 @@ producer stage identity when present
 Prefer upstream artifact fingerprint when it captures semantic production
 identity. Use checksum for strict integrity validation or when semantic
 fingerprint is unavailable.
+
+V0 stage fingerprints exclude artifact URIs, local paths, run directories, and
+other location metadata when checksum, artifact fingerprint, or logical artifact
+identity is available. Location can become semantic later only through an
+explicit policy change.
 
 ### 13.6 Runtime Resources
 
@@ -1188,7 +1193,6 @@ Recommended `fingerprint.json` shape:
   "algorithm": "sha256",
   "policy_name": "loom.stage.semantic",
   "policy_version": 2,
-  "stage_name": "build_manifest",
   "fingerprint": "sha256:abc123...",
   "payload": {
     "schema_version": 2,
@@ -1251,7 +1255,7 @@ input payload wrapper changes in a way that affects bytes
 
 ### 14.4 Policy Version
 
-`policy` and `policy_version` describe which semantic fields were included.
+`policy_name` and `policy_version` describe which semantic fields were included.
 
 Examples that may require policy version changes:
 
@@ -1270,8 +1274,8 @@ The full canonical input payload can be large.
 Recommended v0:
 
 ```text
+persist payload
 persist inputs_summary
-optionally persist inputs_full for debugging if not too large
 hash the exact payload before summarizing
 ```
 

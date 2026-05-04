@@ -420,7 +420,7 @@ refs / records / artifacts -> io
 serialization -> io
 io -> pipeline.runner
 config -> pipeline execution internals
-pipeline -> stage factory construction
+pipeline -> config composition or recursive target-instantiation internals
 executors -> config composition internals
 stores -> concrete project code
 loom -> downstream project packages
