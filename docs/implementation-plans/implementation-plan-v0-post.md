@@ -1006,9 +1006,26 @@ Future compatibility:
 
 ### Phase 3 - Stage Factory And Semantic Fingerprint Policy
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/v0-post-stage-factory`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/17
+
+PR gate notes:
+
+- Opened against `develop` on 2026-05-04 and verified as `OPEN` with base
+  `develop` and head `codex/v0-post-stage-factory`.
+- Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-stage-factory`.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package,
+  unit, contract, integration, e2e, and config-extra rows; GitHub checks passed.
+- Reviewer notification: `gh pr edit 17 --add-reviewer samcantrill` was
+  rejected by GitHub's Projects Classic GraphQL deprecation path and
+  `reviewRequests` remained empty, so the required fallback comment mentioned
+  `@samcantrill` at
+  https://github.com/samcantrill/loom/pull/17#issuecomment-4370177330.
+- Serial human merge gate: do not start Phase 4 until PR #17 is approved,
+  merged into `develop`, updated `develop` has been fetched, and this plan
+  records Phase 3 as `merged`.
 
 Goal:
 
