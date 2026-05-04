@@ -59,6 +59,11 @@ command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
 result: passed; wrote build/test-summary.md
 ```
 
+```text
+command: gh pr checks 16
+result: passed; checks pass in 36s
+```
+
 ### Test Suite Summary
 
 | Suite | Status | Duration | Command |
@@ -137,6 +142,7 @@ gh pr create --base develop --head codex/v0-post-store-capabilities --title "Pha
 ```
 
 - Target verification result: base is `develop`, matching the recorded target branch.
+- GitHub checks: `gh pr checks 16` reported `checks pass` in 36s.
 - Merge eligibility: root serial-gate PR targeting `develop`; human review and human merge are required. Codex must not approve or merge.
 - Current blocker: none.
 
