@@ -891,27 +891,33 @@ Future compatibility:
 
 ### Phase 2 - Store, Artifact, And Stage Context Capabilities
 
-Status: pr_open
+Status: merged
 Branch: `codex/v0-post-store-capabilities`
 PR: https://github.com/samcantrill/loom/pull/16
 
-PR gate notes:
+Merge notes:
 
-- Opened against `develop` on 2026-05-04 and verified as `OPEN` with base
-  `develop` and head `codex/v0-post-store-capabilities`.
-- Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-store-capabilities`.
+- Merged into `develop` on 2026-05-04 as squash commit `9c1ec9f`.
+- Summary: added `ArtifactAddress`, split run-store capability protocols,
+  renamed run-document and user-metadata APIs, made artifact stores explicitly
+  run-scoped, narrowed `StageContext` into a stage-author facade with explicit
+  local helpers, and updated store, artifact, pipeline, execution, and
+  structure docs.
 - Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
   PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package,
   unit, contract, integration, e2e, and config-extra rows; GitHub checks passed
   on final head `6a3896d`.
-- Reviewer notification: `gh pr edit 16 --add-reviewer samcantrill` was
+- Human merge gate: PR #16 reached `MERGED` on `develop`; Codex did not approve
+  or merge the PR. `gh pr edit 16 --add-reviewer samcantrill` was
   rejected by GitHub's Projects Classic GraphQL deprecation path and
   `reviewRequests` remained empty, so the required fallback comment mentioned
   `@samcantrill` at
   https://github.com/samcantrill/loom/pull/16#issuecomment-4369304096.
-- Serial human merge gate: do not start Phase 3 until PR #16 is approved,
-  merged into `develop`, updated `develop` has been fetched, and this plan
-  records Phase 2 as `merged`.
+- Stack maintenance: root serial phase, no successor branch was started before
+  merge, and no retargeting was required.
+- Follow-up notes: Phase 3 must continue from updated `develop`; concrete
+  locking remains Phase 4 work, and remote stores, executors, catalogs, bundles,
+  and sweeps remain future-phase work.
 
 Goal:
 
