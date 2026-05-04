@@ -60,7 +60,7 @@ result: passed during PR preparation; wrote build/test-summary.md.
 
 ```text
 command: gh pr view 21 --json baseRefName,headRefName,state,url,mergedAt,statusCheckRollup
-result: baseRefName=develop, headRefName=codex/v0-post-runner-lifecycle, state=OPEN, mergedAt=null, CI checks queued.
+result: baseRefName=develop, headRefName=codex/v0-post-runner-lifecycle, state=OPEN, mergedAt=null, CI checks completed with SUCCESS.
 ```
 
 ### Test Suite Summary

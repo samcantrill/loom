@@ -39,7 +39,7 @@
 - PR verification: `gh pr view 21 --json
   baseRefName,headRefName,state,url,mergedAt,statusCheckRollup` returned
   `baseRefName=develop`, `headRefName=codex/v0-post-runner-lifecycle`,
-  `state=OPEN`, `mergedAt=null`, and queued CI `checks`.
+  `state=OPEN`, `mergedAt=null`, and CI `checks` completed with `SUCCESS`.
 - Review request: `gh pr edit 21 --add-reviewer samcantrill` was attempted,
   but GitHub CLI/API rejected it with a GraphQL
   `repository.pullRequest.projectCards` deprecation error. Fallback comment
@@ -917,7 +917,7 @@ make test-summary
   unit, contract, integration, e2e, and config-extra suites passing. Opened
   PR #21 against `develop`, verified `baseRefName=develop`,
   `headRefName=codex/v0-post-runner-lifecycle`, `state=OPEN`, and
-  `mergedAt=null`; CI `checks` were queued at verification time. Reviewer
+  `mergedAt=null`; CI `checks` completed with `SUCCESS`. Reviewer
   request through `gh pr edit 21 --add-reviewer samcantrill` was rejected by
   GitHub CLI/API, so fallback comment
   https://github.com/samcantrill/loom/pull/21#issuecomment-4371996188 was
