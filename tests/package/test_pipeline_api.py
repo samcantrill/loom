@@ -32,6 +32,9 @@ def test_pipeline_public_exports() -> None:
         "PipelineCycleError",
         "StageContractError",
         "StatusSerializationError",
+        "PipelineRunner",
+        "RunRequest",
+        "RunResult",
     }
 
     assert set(graph.__all__) == {
