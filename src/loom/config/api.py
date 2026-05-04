@@ -38,6 +38,32 @@ def compose_config(
         raise ConfigValidationError("overlays may not be None")
     if overrides is None:
         raise ConfigValidationError("overrides may not be None")
+    if recipe_catalog is not None and not isinstance(recipe_catalog, RecipeCatalog):
+        raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
+
+    return _compose_config(
+        config_path=config_path,
+        overlays=tuple(overlays),
+        overrides=tuple(overrides),
+        recipe_catalog=recipe_catalog if recipe_catalog is not None else _get_default_recipe_catalog(),
+    )
+
+
+def compose_config_with_catalog(
+    config_path: str | Path,
+    *,
+    recipe_catalog: RecipeCatalog,
+    overlays: list[str | Path] | tuple[str | Path, ...] = (),
+    overrides: list[str] | tuple[str, ...] = (),
+) -> ComposedConfig:
+    from .compose import compose_config as _compose_config
+
+    if not isinstance(recipe_catalog, RecipeCatalog):
+        raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
+    if overlays is None:
+        raise ConfigValidationError("overlays may not be None")
+    if overrides is None:
+        raise ConfigValidationError("overrides may not be None")
 
     return _compose_config(
         config_path=config_path,
@@ -67,6 +93,7 @@ def _get_default_recipe_catalog() -> RecipeCatalog:
 __all__ = [
     "ComposedConfig",
     "compose_config",
+    "compose_config_with_catalog",
     "instantiate",
     "register_recipe",
 ]

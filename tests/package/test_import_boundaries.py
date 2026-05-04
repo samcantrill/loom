@@ -111,6 +111,12 @@ def test_config_symbol_access_without_optional_dependencies_mentions_config_extr
                 message = str(exc)
             else:
                 raise SystemExit(\"compose_config unexpectedly imported without optional deps\")
+            try:
+                _ = loom.config.compose_config_with_catalog
+            except Exception as exc:
+                message = str(exc)
+            else:
+                raise SystemExit(\"compose_config_with_catalog unexpectedly imported without optional deps\")
             if \"loom[config]\" not in message:
                 raise SystemExit(f\"Expected loom[config] in error message: {message!r}\")
         finally:

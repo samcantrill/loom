@@ -8,7 +8,7 @@ from pathlib import Path
 from loom.fingerprints import Fingerprint
 from loom.serialization import PlainData
 
-from .api import ComposedConfig, _get_default_recipe_catalog
+from .api import ComposedConfig
 from .errors import ConfigValidationError
 from .interpolation import resolve_interpolation
 from .load import load_config
@@ -29,14 +29,13 @@ from .validation import validate_top_level_fields
 
 def compose_config(
     config_path: str | Path,
+    *,
+    recipe_catalog: RecipeCatalog,
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
-    recipe_catalog: RecipeCatalog | None = None,
 ) -> ComposedConfig:
-    if recipe_catalog is None:
-        recipe_catalog = _get_default_recipe_catalog()
-    elif not isinstance(recipe_catalog, RecipeCatalog):
-        raise ConfigValidationError("recipe_catalog must be a RecipeCatalog or None")
+    if not isinstance(recipe_catalog, RecipeCatalog):
+        raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
 
     if overlays is None:
         raise ConfigValidationError("overlays may not be None")

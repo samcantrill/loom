@@ -743,11 +743,10 @@ config path.
 
 ## 10. Interpolation
 
-Use OmegaConf-style interpolation. Earlier design notes described a `config`
-extra, but the v0 implementation plan intentionally makes OmegaConf, Pydantic
-v2, and YAML support hard runtime dependencies when config composition ships so
-there is one tested installation shape for v0. Revisit optional config extras
-after v0 if downstream users need a primitives-only install.
+Use OmegaConf-style interpolation. OmegaConf, Pydantic v2, and YAML support are
+available through the `loom[config]` optional extra so core primitives, stores,
+serialization, and inspection paths remain importable without config-only
+dependencies.
 
 Examples:
 
@@ -815,9 +814,16 @@ targets above are project-provided examples, not built-in `loom` APIs.
 Recipes should be registered by name.
 
 ```python
-from loom.config import register_recipe
+from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
 
+# Reproducible composition path
+catalog = RecipeCatalog()
+catalog.register("local_jsonl_manifest", LocalJsonlManifestRecipe)
+cfg = compose_config_with_catalog("experiment.yaml", recipe_catalog=catalog)
+
+# Script / notebook / interactive path
 register_recipe("local_jsonl_manifest", LocalJsonlManifestRecipe)
+cfg = compose_config("experiment.yaml")
 ```
 
 Optional entry point discovery can be added later:
@@ -1031,7 +1037,9 @@ Recommended API:
 
 ```python
 from loom.config import (
+    RecipeCatalog,
     compose_config,
+    compose_config_with_catalog,
     instantiate,
     register_recipe,
     Recipe,
@@ -1049,6 +1057,22 @@ cfg = compose_config(
 )
 ```
 
+`compose_config_with_catalog`:
+
+```python
+from loom.config import RecipeCatalog, compose_config_with_catalog
+
+catalog = RecipeCatalog()
+catalog.register("local_jsonl_manifest", LocalJsonlManifestRecipe)
+
+cfg = compose_config_with_catalog(
+    config_path="experiment.yaml",
+    recipe_catalog=catalog,
+    overlays=["overlays/local.yaml"],
+    overrides=["run.seed=123"],
+)
+```
+
 `compose_config` returns a `ComposedConfig` with:
 
 ```text
@@ -1061,8 +1085,9 @@ source_snapshots after v1
 fingerprint
 ```
 
-Before Phase 5, `recipe_manifest` is empty and `_recipe_` blocks fail clearly as
-unsupported.
+`recipe_manifest` is empty when no recipes are expanded. When `_recipe_` blocks
+are present, composition expands them through the selected `RecipeCatalog` and
+records recipe provenance in the manifest.
 
 `instantiate`:
 

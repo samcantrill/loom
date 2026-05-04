@@ -21,13 +21,22 @@ pytestmark = [pytest.mark.package, pytest.mark.optional_dependency]
 
 
 def test_config_exports_and_signature() -> None:
-    from loom.config import ConfigError, Recipe, RecipeCatalog, compose_config, instantiate, register_recipe
+    from loom.config import (
+        ConfigError,
+        Recipe,
+        RecipeCatalog,
+        compose_config,
+        compose_config_with_catalog,
+        instantiate,
+        register_recipe,
+    )
 
     assert ConfigError
     assert ComposedConfig
     assert Recipe
     assert RecipeCatalog
     assert compose_config
+    assert compose_config_with_catalog
     assert instantiate
     assert register_recipe
 
@@ -41,6 +50,18 @@ def test_config_exports_and_signature() -> None:
     assert params[1].default == ()
     assert params[2].default == ()
     assert params[3].default is None
+
+    catalog_signature = inspect.signature(compose_config_with_catalog)
+    catalog_params = list(catalog_signature.parameters.values())
+    assert len(catalog_params) == 4
+    assert catalog_params[0].name == "config_path"
+    assert catalog_params[1].name == "recipe_catalog"
+    assert catalog_params[1].default is inspect.Signature.empty
+    assert catalog_params[2].name == "overlays"
+    assert catalog_params[3].name == "overrides"
+    assert catalog_params[1].kind is inspect.Parameter.KEYWORD_ONLY
+    assert catalog_params[2].default == ()
+    assert catalog_params[3].default == ()
 
     register_signature = inspect.signature(register_recipe)
     register_params = list(register_signature.parameters.values())
@@ -83,6 +104,7 @@ def test_import_config_module_only() -> None:
         assert hasattr(loom.config, 'Recipe')
         assert hasattr(loom.config, 'RecipeCatalog')
         assert hasattr(loom.config, 'compose_config')
+        assert hasattr(loom.config, 'compose_config_with_catalog')
         assert hasattr(loom.config, 'instantiate')
         assert hasattr(loom.config, 'register_recipe')
         assert hasattr(loom.config, 'ConfigError')

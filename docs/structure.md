@@ -414,7 +414,7 @@ serialization = Python objects <-> plain structured data
 io            = bytes, files, URIs, source backends, codecs
 stores        = run/artifact directory policy, atomic writes, indexes
 pipeline      = DAG validation, planning, stage orchestration, resume
-config        = config composition, recipe expansion, composition-only construction helpers
+config        = compose_config convenience API + explicit catalog composition
 cli           = presentation over Python APIs
 ```
 
@@ -446,7 +446,7 @@ from loom.refs import ResourceRef
 from loom.records import Record, InMemoryManifest, ManifestView
 from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import hash_mapping
-from loom.config import compose_config, instantiate, register_recipe
+from loom.config import compose_config, compose_config_with_catalog, instantiate, register_recipe
 from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext, PipelineRunner
 ```
 
