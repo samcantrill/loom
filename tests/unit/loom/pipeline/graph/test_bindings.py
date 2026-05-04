@@ -26,19 +26,19 @@ def _pipeline() -> PipelineSpec:
             "stages": [
                 {
                     "name": "build",
-                    "_target_": "tests.support.config_samples:concat",
+                    "factory": {"_target_": "tests.support.config_samples:concat"},
                     "outputs": {"result": {"artifact_type": "text"}},
                 },
                 {
                     "name": "report",
-                    "_target_": "tests.support.config_samples:concat",
+                    "factory": {"_target_": "tests.support.config_samples:concat"},
                     "depends_on": ["build"],
                     "inputs": {"first": "build.result"},
                     "outputs": {"report": {"artifact_type": "text"}},
                 },
                 {
                     "name": "final",
-                    "_target_": "tests.support.config_samples:concat",
+                    "factory": {"_target_": "tests.support.config_samples:concat"},
                     "inputs": {"r": "report.report"},
                     "outputs": {"value": {"artifact_type": "text"}},
                 },
@@ -61,10 +61,10 @@ def test_bind_stage_inputs_unknown_source_output() -> None:
     spec = PipelineSpec.from_config(
         {
             "stages": [
-                {"name": "build", "_target_": "tests.support.config_samples:concat", "outputs": {"result": {"artifact_type": "text"}}},
+                {"name": "build", "factory": {"_target_": "tests.support.config_samples:concat"}, "outputs": {"result": {"artifact_type": "text"}}},
                 {
                     "name": "report",
-                    "_target_": "tests.support.config_samples:concat",
+                    "factory": {"_target_": "tests.support.config_samples:concat"},
                     "inputs": {"first": "build.missing"},
                     "outputs": {"value": {"artifact_type": "text"}},
                 },

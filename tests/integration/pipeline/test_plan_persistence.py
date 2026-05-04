@@ -13,7 +13,7 @@ def test_plan_pipeline_persists_only_plan_document(tmp_path: Path) -> None:
             "stages": [
                 {
                     "name": "build",
-                    "_target_": "project.Build",
+                    "factory": {"_target_": "project.Build"},
                     "outputs": {"data": {"artifact_type": "json"}},
                 }
             ]

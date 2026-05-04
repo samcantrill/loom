@@ -239,13 +239,14 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
 def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> None:
     output = OutputSpec(artifact_type="text", metadata={"labels": ["raw", "final"]})
     outputs_input: dict[str, OutputSpec] = {"result": output}
+    factory_init: dict[str, Any] = {"labels": ["constructor"]}
     stage_config: dict[str, Any] = {"retry": {"max": 3}}
     inputs = {"artifact": "build.result"}
     resources: dict[str, Any] = {"slots": ["cpu"]}
 
     stage = StageSpec(
         name="report",
-        factory=StageFactorySpec("tests.support.config_samples:concat", {"alpha": 1}),
+        factory=StageFactorySpec("tests.support.config_samples:concat", factory_init),
         fingerprint_fields={"mode": "test"},
         outputs=outputs_input,
         stage_config=stage_config,
@@ -257,6 +258,7 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
     pipeline = PipelineSpec(stages=(stage,), metadata=pipeline_metadata)
 
     outputs_input["extra"] = OutputSpec(artifact_type="json")
+    factory_init["labels"].append("mutated")
     stage_config["retry"]["max"] = 4
     stage_config["retry"]["active"] = True
     inputs["artifact"] = "other.result"
@@ -264,6 +266,7 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
     pipeline_metadata["owner"]["labels"].append("secondary")
 
     assert stage.outputs == {"result": output}
+    assert stage.factory.init == {"labels": ("constructor",)}
     assert stage.stage_config == {"retry": {"max": 3}}
     assert stage.inputs == {"artifact": "build.result"}
     assert stage.resources == {"slots": ("cpu",)}
@@ -273,6 +276,8 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
 
     with pytest.raises(TypeError):
         cast(Any, stage.outputs)["result"] = OutputSpec(artifact_type="json")
+    with pytest.raises(TypeError):
+        cast(Any, stage.factory.init)["labels"][0] = "mutated"
     with pytest.raises(TypeError):
         cast(Any, stage.stage_config)["retry"]["active"] = False
     with pytest.raises(TypeError):

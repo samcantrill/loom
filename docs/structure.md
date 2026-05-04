@@ -408,7 +408,7 @@ serialization = Python objects <-> plain structured data
 io            = bytes, files, URIs, source backends, codecs
 stores        = run/artifact directory policy, atomic writes, indexes
 pipeline      = DAG validation, planning, stage orchestration, resume
-config        = config composition, recipe expansion, `_target_` construction
+config        = config composition, recipe expansion, composition-only construction helpers
 cli           = presentation over Python APIs
 ```
 
@@ -420,6 +420,7 @@ refs / records / artifacts -> io
 serialization -> io
 io -> pipeline.runner
 config -> pipeline execution internals
+pipeline -> stage factory construction
 executors -> config composition internals
 stores -> concrete project code
 loom -> downstream project packages
@@ -440,7 +441,7 @@ from loom.records import Record, InMemoryManifest, ManifestView
 from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import hash_mapping
 from loom.config import compose_config, instantiate, register_recipe
-from loom.pipeline import PipelineSpec, StageSpec, StageContext, PipelineRunner
+from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext, PipelineRunner
 ```
 
 `loom.__init__` should remain cheap. It may re-export stable, foundational types
@@ -551,8 +552,8 @@ need.
 
 Detailed specification: [config.md](features/config.md)
 
-`loom.config` composes trusted project configuration and constructs Python
-objects. It loads YAML, applies overlays and CLI overrides, resolves
+`loom.config` composes trusted project configuration and supports config-only
+object construction. It loads YAML, applies overlays and CLI overrides, resolves
 interpolation, expands named recipes, validates stable boundaries, instantiates
 `_target_` object graphs, records config provenance, and redacts secrets for
 safe persisted output.
@@ -575,7 +576,7 @@ errors.py              config-specific errors
 ```
 
 `loom.config` is not the workflow engine. It may produce or instantiate pipeline
-specs, but execution belongs to `loom.pipeline`.
+configs, but construction and execution belong to `loom.pipeline`.
 
 ### 6.5 Pipeline Model and Planning
 
@@ -584,14 +585,16 @@ Detailed specifications: [pipeline.md](features/pipeline.md),
 [runtime-resources.md](features/runtime-resources.md)
 
 `loom.pipeline` models static artifact DAGs, validates dependencies, binds
-upstream artifacts to downstream inputs, plans stage actions, and exposes the
-stage contract used by project code.
+upstream artifacts to downstream inputs, plans stage actions, owns pipeline stage
+factory parsing and construction, and exposes the stage contract used by project
+code.
 
 Expected modules:
 
 ```text
 specs.py          PipelineSpec and StageSpec
 stage.py          Stage protocol
+stage_factory.py  pipeline-owned import and stage construction helpers
 context.py        StageContext passed to stage implementations
 status.py         run and stage status values
 validation.py     spec and contract validation

@@ -32,12 +32,14 @@ def _artifact_ref() -> ArtifactRef:
 
 def _fingerprint() -> StageFingerprintRecord:
     payload = StageFingerprintPayload(
-        schema_version=1,
-        policy_name="loom.stage.v1",
-        policy_version=1,
+        schema_version=2,
+        policy_name="loom.stage.semantic",
+        policy_version=2,
         stage_name="build",
-        target_path="project.Build",
+        factory_target="project.Build",
+        factory_init={},
         stage_config={"limit": 1},
+        fingerprint_fields={},
         declared_inputs={},
         bound_inputs={},
         declared_outputs={
@@ -55,10 +57,10 @@ def _fingerprint() -> StageFingerprintRecord:
         extra={},
     )
     return StageFingerprintRecord(
-        schema_version=1,
+        schema_version=2,
         algorithm="sha256",
-        policy_name="loom.stage.v1",
-        policy_version=1,
+        policy_name="loom.stage.semantic",
+        policy_version=2,
         fingerprint="sha256:" + "2" * 64,
         payload=payload,
         inputs_summary={"stage_name": "build"},

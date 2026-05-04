@@ -354,15 +354,15 @@ Typical inputs:
 
 ```text
 stage name
-stage target import path
+factory target path
+factory init kwargs
 stage config
+explicit stage fingerprint fields
 input artifact references
 input artifact fingerprints
 input artifact checksums
 declared outputs
-relevant runtime resources
-relevant code provenance
-loom contract version
+environment identity (Python, loom version, git, package dependencies)
 project-provided extra fields
 ```
 
@@ -392,13 +392,13 @@ metadata needed for comparison and explanation.
 It should include:
 
 ```text
+schema_version
 fingerprint
 algorithm
-algorithm_version
-policy_name or policy_version
+policy_name
+policy_version
 inputs_summary
-created_at
-loom_version
+payload
 ```
 
 ---
@@ -1184,17 +1184,36 @@ Recommended `fingerprint.json` shape:
 
 ```json
 {
-  "schema_version": 1,
-  "kind": "loom.stage_fingerprint",
-  "stage": "build_manifest",
-  "fingerprint": "sha256:abc123...",
+  "schema_version": 2,
   "algorithm": "sha256",
-  "algorithm_version": 1,
-  "policy": "loom.stage.v1",
-  "policy_version": 1,
-  "inputs_summary": {},
-  "created_at": "2026-05-02T00:00:00Z",
-  "loom_version": "0.1.0"
+  "policy_name": "loom.stage.semantic",
+  "policy_version": 2,
+  "stage_name": "build_manifest",
+  "fingerprint": "sha256:abc123...",
+  "payload": {
+    "schema_version": 2,
+    "policy_name": "loom.stage.semantic",
+    "policy_version": 2,
+    "stage_name": "build_manifest",
+    "factory_target": "project.stages.BuildManifest",
+    "factory_init": {},
+    "stage_config": {},
+    "fingerprint_fields": {},
+    "declared_inputs": {},
+    "bound_inputs": {},
+    "declared_outputs": {},
+    "python_version": "3.12",
+    "loom_version": "0.0.0",
+    "git": {},
+    "dependencies": {},
+    "extra": {}
+  },
+  "inputs_summary": {
+    "stage_name": "build_manifest",
+    "factory_target": "project.stages.BuildManifest",
+    "input_names": [],
+    "output_names": []
+  }
 }
 ```
 
@@ -1214,11 +1233,12 @@ fingerprint file path
 
 unless those values genuinely affect outputs.
 
-### 14.3 Algorithm Version
+### 14.3 Algorithm and Policy Compatibility
 
 `algorithm` is the hash function.
 
-`algorithm_version` is the implementation policy version for hashing mechanics.
+The policy compatibility is expressed by `policy_name` and `policy_version` in both
+the record and payload.
 
 Examples that may require algorithm version changes:
 
@@ -1294,17 +1314,22 @@ Recommended:
 
 ```python
 payload = {
-    "kind": "loom.stage_fingerprint_input",
-    "schema_version": 1,
-    "policy": "loom.stage.v1",
-    "stage": {
-        "name": "build_manifest",
-        "target": "project.stages.BuildManifest",
-    },
-    "config": {...},
-    "inputs": {...},
-    "outputs": {...},
-    "runtime": {...},
+    "schema_version": 2,
+    "policy_name": "loom.stage.semantic",
+    "policy_version": 2,
+    "stage_name": "build_manifest",
+    "factory_target": "project.stages.BuildManifest",
+    "factory_init": {},
+    "stage_config": {},
+    "fingerprint_fields": {},
+    "declared_inputs": {},
+    "bound_inputs": {},
+    "declared_outputs": {},
+    "extra": {},
+    "python_version": "3.12",
+    "loom_version": "0.0.0",
+    "git": {},
+    "dependencies": {},
 }
 ```
 
@@ -1321,15 +1346,21 @@ future schema changes are clearer
 Use stable keys:
 
 ```text
-kind
 schema_version
-policy
-stage
-config
-inputs
-outputs
-runtime
-provenance
+policy_name
+policy_version
+stage_name
+factory_target
+factory_init
+stage_config
+fingerprint_fields
+declared_inputs
+bound_inputs
+declared_outputs
+python_version
+loom_version
+git
+dependencies
 extra
 ```
 
@@ -1341,30 +1372,33 @@ Example:
 
 ```python
 {
-    "kind": "loom.stage_fingerprint_input",
-    "schema_version": 1,
-    "policy": "loom.stage.v1",
-    "stage": {
-        "name": "summarize",
-        "target": "project.stages.SummarizeStage",
-    },
-    "config": {
+    "policy_name": "loom.stage.semantic",
+    "policy_version": 2,
+    "stage_name": "summarize",
+    "factory_target": "project.stages.SummarizeStage",
+    "factory_init": {},
+    "stage_config": {
         "max_items": 100,
     },
-    "inputs": {
+    "fingerprint_fields": {
+        "input_subset": ["checkpoint"]
+    },
+    "declared_inputs": {
+        "manifest": "build.manifest"
+    },
+    "bound_inputs": {
         "manifest": {
             "artifact_id": "build_manifest/output",
             "fingerprint": "sha256:111...",
             "checksum": "sha256:222...",
         }
     },
-    "outputs": {
+    "declared_outputs": {
         "summary": {
             "artifact_type": "json",
             "codec_key": "json.v1",
         }
     },
-    "runtime": {},
     "extra": {},
 }
 ```

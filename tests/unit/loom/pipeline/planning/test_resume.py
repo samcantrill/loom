@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from loom.io import uri_to_path
-from loom.pipeline import OutputSpec, StageSpec, StageStatus, StageStatusRecord
+from loom.pipeline import OutputSpec, StageFactorySpec, StageSpec, StageStatus, StageStatusRecord
 from loom.pipeline.planning import (
     PlanAction,
     PlanReasonCode,
@@ -21,7 +21,7 @@ from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 def _stage() -> StageSpec:
     return StageSpec(
         name="build",
-        target_path="project.Build",
+        factory=StageFactorySpec(target_path="project.Build", init={}),
         outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
     )
 
@@ -91,6 +91,78 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
 
     assert result.final_action == PlanAction.REUSE
     assert result.check.outputs == {"data": output}
+
+
+def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status("run1", "build", _status("run1"))
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(
+        "run1",
+        "build",
+        {
+            "schema_version": 1,
+            "algorithm": "sha256",
+            "policy_name": "loom.stage.v1",
+            "policy_version": 1,
+            "fingerprint": "sha256:" + "9" * 64,
+            "payload": {
+                "schema_version": 1,
+                "policy_name": "loom.stage.v1",
+                "policy_version": 1,
+                "stage_name": "build",
+                "target_path": "project.Build",
+                "stage_config": {},
+                "declared_inputs": {},
+                "bound_inputs": {},
+                "declared_outputs": {
+                    "data": {
+                        "artifact_type": "json",
+                        "codec_key": "json.v1",
+                        "schema_version": None,
+                        "metadata": {},
+                    }
+                },
+                "python_version": "3.12.0",
+                "loom_version": "0.1.0",
+                "git": {},
+                "dependencies": {},
+                "extra": {},
+            },
+            "inputs_summary": {
+                "stage_name": "build",
+                "factory_target": "project.Build",
+                "input_names": [],
+                "output_names": ["data"],
+            },
+        },
+        attempt=1,
+    )
+    run_store.write_artifact_index("run1", {"build.data": output})
+
+    result = check_stage_resume(
+        stage,
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        current_fingerprint=current,
+        resume=ResumeOptions(),
+        eligible_to_run=True,
+    )
+
+    assert result.base_action == PlanAction.STALE
+    assert result.final_action == PlanAction.RUN
+    assert result.check.reasons[0].code == PlanReasonCode.FINGERPRINT_POLICY_CHANGED
 
 
 def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:

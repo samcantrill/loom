@@ -11,10 +11,10 @@ def _diamond_spec() -> PipelineSpec:
     return PipelineSpec.from_config(
         {
             "stages": [
-                {"name": "a", "_target_": "tests.support.config_samples:concat", "outputs": {"value": {"artifact_type": "text"}}},
-                {"name": "b", "_target_": "tests.support.config_samples:concat", "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
-                {"name": "c", "_target_": "tests.support.config_samples:concat", "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
-                {"name": "d", "_target_": "tests.support.config_samples:concat", "depends_on": ["b", "c"], "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "a", "factory": {"_target_": "tests.support.config_samples:concat"}, "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "b", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "c", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "d", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["b", "c"], "outputs": {"value": {"artifact_type": "text"}}},
             ]
         }
     )

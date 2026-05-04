@@ -5,7 +5,8 @@ pipeline:
   description: Two local stages with JSON and text artifacts.
   stages:
     - name: seed
-      _target_: stages:SeedNumbersStage
+      factory:
+        _target_: stages:SeedNumbersStage
       config:
         values: [2, 4, 6, 8]
       outputs:
@@ -14,7 +15,8 @@ pipeline:
           codec_key: json.v1
 
     - name: summarize
-      _target_: stages:SummarizeNumbersStage
+      factory:
+        _target_: stages:SummarizeNumbersStage
       inputs:
         numbers: seed.numbers
       resources:
@@ -26,4 +28,3 @@ pipeline:
         note:
           artifact_type: text
           codec_key: text.v1
-

@@ -22,7 +22,9 @@ def local_execution_config(
                 "stages": [
                     {
                         "name": "build",
-                        "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                        },
                         "config": stage_config,
                         "outputs": {
                             "data": {"artifact_type": "json", "codec_key": "json.v1"}
@@ -30,7 +32,9 @@ def local_execution_config(
                     },
                     {
                         "name": "report",
-                        "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage"
+                        },
                         "inputs": {"data": "build.data"},
                         "outputs": {
                             "text": {"artifact_type": "text", "codec_key": "text.v1"}

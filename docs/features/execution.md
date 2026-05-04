@@ -201,10 +201,11 @@ provide generic object instantiation helpers outside pipeline stage specs
 produce resolved config/provenance data for the runner/run store to persist
 ```
 
-For v0, pipeline stage mappings are orchestration specs. Execution imports the
-stage `target_path`, calls the target with no constructor kwargs, then invokes
-`stage.run(context, inputs)`. It should not treat stage mappings as generic
-`_target_` object graphs or implement config loading rules.
+For v0, pipeline stage mappings are orchestration specs. Execution delegates stage
+construction to pipeline-owned helpers, then invokes
+`stage.run(context, inputs)`. `loom.config` should not be imported for stage
+construction, and it should not treat stage mappings as generic `_target_` object
+graphs or implement config loading rules there.
 
 ### 3.8 `loom.cli`
 

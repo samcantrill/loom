@@ -41,7 +41,7 @@ def test_plan_persistence_errors_wrap_store_failures() -> None:
             "stages": [
                 {
                     "name": "build",
-                    "_target_": "project.Build",
+                    "factory": {"_target_": "project.Build"},
                     "outputs": {"data": {"artifact_type": "json"}},
                 }
             ]

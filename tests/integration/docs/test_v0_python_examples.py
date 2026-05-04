@@ -47,8 +47,9 @@ name: demo
 pipeline:
   name: demo
   stages:
-    - name: build
-      _target_: tests.support.pipeline_execution_stages.JsonProducerStage
+      - name: build
+      factory:
+        _target_: tests.support.pipeline_execution_stages.JsonProducerStage
       config:
         value: 1
       outputs:
@@ -56,7 +57,8 @@ pipeline:
           artifact_type: json
           codec_key: json.v1
     - name: report
-      _target_: tests.support.pipeline_execution_stages.TextConsumerStage
+      factory:
+        _target_: tests.support.pipeline_execution_stages.TextConsumerStage
       inputs:
         data: build.data
       outputs:

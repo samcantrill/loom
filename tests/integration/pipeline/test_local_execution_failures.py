@@ -42,19 +42,21 @@ def _failure_config(target: str) -> dict[str, PlainData]:
     return cast(
         dict[str, PlainData],
         {
-            "pipeline": {
+        "pipeline": {
                 "name": "failure-demo",
                 "stages": [
                     {
                         "name": "build",
-                        "_target_": target,
+                        "factory": {"_target_": target},
                         "outputs": {
                             "data": {"artifact_type": "json", "codec_key": "json.v1"}
                         },
                     },
                     {
                         "name": "report",
-                        "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.TextConsumerStage"
+                        },
                         "inputs": {"data": "build.data"},
                         "outputs": {
                             "text": {"artifact_type": "text", "codec_key": "text.v1"}

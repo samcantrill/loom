@@ -797,3 +797,21 @@ make test-summary
     (10 passed).
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_api.py`
     (16 passed).
+
+## Slice 3 Evidence
+
+- Slice 3 completed: semantic fingerprint policy v2, v1 policy-changed resume
+  handling, in-scope fixture migration from top-level `_target_` to `factory`,
+  and public docs for the factory/fingerprint contract.
+- Files changed: `src/loom/pipeline/planning/fingerprints.py`,
+  `src/loom/pipeline/planning/models.py`, planning/graph/integration fixtures
+  and tests, `examples/pipelines/local-run/pipeline.yaml`,
+  `docs/structure.md`, `docs/features/pipeline.md`,
+  `docs/features/execution.md`, and `docs/features/fingerprints.md`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/planning/test_resume.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py`
+    (49 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_stage_factory.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/execution/test_execution_models.py tests/unit/loom/pipeline/graph/test_bindings.py tests/unit/loom/pipeline/graph/test_dag.py tests/unit/loom/pipeline/graph/test_topology.py tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/planning/test_planner.py tests/unit/loom/pipeline/planning/test_planning_errors.py tests/unit/loom/pipeline/planning/test_selectors.py tests/integration/pipeline/test_pipeline_config.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/pipeline/test_plan_persistence.py tests/integration/pipeline/test_planning_resume.py tests/integration/docs/test_v0_python_examples.py`
+    (43 passed, 3 skipped in the no-extra environment).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed.
+  - `git diff --check` passed.

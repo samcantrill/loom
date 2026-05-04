@@ -184,7 +184,10 @@ class StageFactorySpec:
         object.__setattr__(
             self,
             "init",
-            _plain_mapping(self.init, path="StageFactorySpec.init"),
+            freeze_plain_data(
+                _plain_mapping(self.init, path="StageFactorySpec.init"),
+                path="StageFactorySpec.init",
+            ),
         )
 
     @classmethod
@@ -278,6 +281,8 @@ class StageSpec:
             path="StageSpec.name",
         )
         object.__setattr__(self, "name", name)
+        if not isinstance(self.factory, StageFactorySpec):
+            raise PipelineSpecError("StageSpec.factory must be a StageFactorySpec")
 
         outputs: dict[str, OutputSpec] = {}
         if not isinstance(self.outputs, Mapping):
