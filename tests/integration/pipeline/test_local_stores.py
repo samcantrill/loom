@@ -83,6 +83,12 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
         "stage.started",
     ]
 
+    lock_record = run_store.acquire_run_lock(run_id, owner={"workflow": "integration"})
+    assert run_store.read_run_lock(run_id) == lock_record
+    assert (run_store.local_run_dir(run_id) / "lock.json").exists()
+    run_store.release_run_lock(run_id, lock_record.token)
+    assert run_store.read_run_lock(run_id) is None
+
     run_store.write_config_snapshot(run_id, "resolved", "alpha: 1\n")
     assert run_store.read_config_snapshot(run_id, "resolved") == "alpha: 1\n"
     run_store.write_config_snapshot(run_id, "raw", "a: b\n")

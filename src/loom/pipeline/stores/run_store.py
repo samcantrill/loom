@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.serialization import PlainData
 
@@ -72,6 +73,20 @@ class RunEventStore(Protocol):
     def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord: ...
 
     def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]: ...
+
+
+@runtime_checkable
+class RunLockStore(Protocol):
+    def acquire_run_lock(
+        self,
+        run_id: str,
+        *,
+        owner: Mapping[str, PlainData] | None = None,
+    ) -> RunLockRecord: ...
+
+    def read_run_lock(self, run_id: str) -> RunLockRecord | None: ...
+
+    def release_run_lock(self, run_id: str, token: str) -> None: ...
 
 
 @runtime_checkable
@@ -177,6 +192,7 @@ class RunStore(
     RunConfigStore,
     RunProvenanceStore,
     RunEventStore,
+    RunLockStore,
     StageStateStore,
     StageLogStore,
     StageWorkspaceStore,

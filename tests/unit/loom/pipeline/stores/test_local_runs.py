@@ -9,7 +9,14 @@ from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline import RunStatus, StageStatus
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
-from loom.pipeline.stores import CorruptStoreDocumentError, LocalRunStore, atomic_write_json
+from loom.pipeline.stores import (
+    CorruptStoreDocumentError,
+    LocalRunStore,
+    RunLockConflictError,
+    RunLockReleaseError,
+    RunNotFoundError,
+    atomic_write_json,
+)
 from loom.serialization import PlainData
 
 
@@ -90,6 +97,59 @@ def test_local_run_rejects_corrupt_event_log(tmp_path: Path) -> None:
 
     with pytest.raises(CorruptStoreDocumentError, match="sequence"):
         store.read_events("run1")
+
+
+def test_local_run_acquires_reads_and_releases_lock(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+
+    record = store.acquire_run_lock("run1", owner={"worker": "unit"})
+
+    assert record.run_id == "run1"
+    assert record.token
+    assert record.owner["metadata"] == {"worker": "unit"}
+    assert isinstance(record.owner["pid"], int)
+    assert isinstance(record.owner["hostname"], str)
+    assert store.read_run_lock("run1") == record
+    assert (store.local_run_dir("run1") / "lock.json").exists()
+
+    store.release_run_lock("run1", record.token)
+
+    assert store.read_run_lock("run1") is None
+    assert not (store.local_run_dir("run1") / "lock.json").exists()
+
+
+def test_local_run_lock_conflict_and_release_errors_preserve_lock(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    record = store.acquire_run_lock("run1")
+
+    with pytest.raises(RunLockConflictError):
+        store.acquire_run_lock("run1")
+
+    with pytest.raises(RunLockReleaseError, match="mismatch"):
+        store.release_run_lock("run1", "wrong-token")
+
+    assert store.read_run_lock("run1") == record
+
+
+def test_local_run_lock_requires_existing_run(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+
+    with pytest.raises(RunNotFoundError):
+        store.acquire_run_lock("missing")
+
+
+def test_local_run_rejects_corrupt_lock_document(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    lock_path = store.local_run_dir("run1") / "lock.json"
+    lock_path.write_text('{"schema_version":1,"run_id":"other"}\n', encoding="utf-8")
+
+    with pytest.raises(CorruptStoreDocumentError):
+        store.read_run_lock("run1")
+    with pytest.raises(RunLockReleaseError):
+        store.release_run_lock("run1", "token")
 
 
 def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:

@@ -17,6 +17,18 @@ class RunStoreError(StoreError):
     """Base error for run-store failures."""
 
 
+class RunLockError(RunStoreError):
+    """Base error for run lock failures."""
+
+
+class RunLockConflictError(RunLockError):
+    """Raised when a run lock already exists."""
+
+
+class RunLockReleaseError(RunLockError):
+    """Raised when a run lock cannot be released."""
+
+
 class UnsafeStorePathError(StoreError):
     """Raised when a filesystem path component is unsafe."""
 
@@ -73,6 +85,9 @@ __all__ = [
     "StoreError",
     "ArtifactStoreError",
     "RunStoreError",
+    "RunLockError",
+    "RunLockConflictError",
+    "RunLockReleaseError",
     "UnsafeStorePathError",
     "UnsupportedArtifactURIError",
     "ArtifactNotFoundError",

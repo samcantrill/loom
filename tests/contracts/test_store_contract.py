@@ -5,6 +5,7 @@ from pathlib import Path
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.locks import RunLockRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores import (
     ArtifactStore,
@@ -14,6 +15,7 @@ from loom.pipeline.stores import (
     RunConfigStore,
     RunDocumentStore,
     RunEventStore,
+    RunLockStore,
     RunLifecycleStore,
     RunProvenanceStore,
     RunPlanStore,
@@ -134,6 +136,25 @@ class DummyRunStore:
 
     def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]:
         return ()
+
+    def acquire_run_lock(
+        self,
+        run_id: str,
+        *,
+        owner: Mapping[str, PlainData] | None = None,
+    ) -> RunLockRecord:
+        return RunLockRecord(
+            run_id=run_id,
+            token="token",
+            acquired_at="2020-01-01T00:00:00Z",
+            owner=owner or {},
+        )
+
+    def read_run_lock(self, run_id: str) -> RunLockRecord | None:
+        return None
+
+    def release_run_lock(self, run_id: str, token: str) -> None:
+        return None
 
     def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
         return None
@@ -273,6 +294,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)
     assert isinstance(DummyRunStore(), RunEventStore)
+    assert isinstance(DummyRunStore(), RunLockStore)
     assert isinstance(DummyRunStore(), StageStateStore)
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)

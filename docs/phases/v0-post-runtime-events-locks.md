@@ -879,3 +879,26 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores src/loom/pipeline/events.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py tests/package/test_pipeline_store_api.py`
     passed.
   - `git diff --check` passed.
+
+## Slice 4 Evidence
+
+- Slice 4 completed: strict `loom.pipeline.locks` model foundations,
+  backend-neutral run lock store protocol, lock errors, and conservative local
+  `lock.json` acquire/read/release behavior with token-based release.
+- Files changed: `src/loom/pipeline/locks.py`,
+  `src/loom/pipeline/stores/run_store.py`,
+  `src/loom/pipeline/stores/local_runs.py`,
+  `src/loom/pipeline/stores/errors.py`,
+  `src/loom/pipeline/stores/__init__.py`,
+  `tests/unit/loom/pipeline/test_locks.py`,
+  `tests/unit/loom/pipeline/stores/test_local_runs.py`,
+  `tests/contracts/test_store_contract.py`,
+  `tests/package/test_pipeline_store_api.py`,
+  `tests/package/test_import_boundaries.py`, and
+  `tests/integration/pipeline/test_local_stores.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/integration/pipeline/test_local_stores.py`
+    (48 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/locks.py src/loom/pipeline/stores/run_store.py src/loom/pipeline/stores/local_runs.py src/loom/pipeline/stores/__init__.py tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/integration/pipeline/test_local_stores.py`
+    passed.
+  - `git diff --check` passed.

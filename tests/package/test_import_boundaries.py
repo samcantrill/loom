@@ -208,10 +208,11 @@ def test_import_runtime_resource_modules_do_not_import_forbidden_layers() -> Non
         import loom.pipeline.resources
         import loom.pipeline.runtime
         import loom.pipeline.events
+        import loom.pipeline.locks
 
         for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "project"):
             if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through runtime/resource/event modules")
+                raise SystemExit(f"{forbidden} was imported through runtime/resource/event/lock modules")
         print("ok")
         """
     )
