@@ -2,6 +2,7 @@
 
 - Phase: Phase 7 - Runner Lifecycle Decomposition
 - Branch: `codex/v0-post-runner-lifecycle`
+- PR: [#21](https://github.com/samcantrill/loom/pull/21)
 - Target branch: `develop`
 - Stack predecessor: none
 - Merge eligibility: serial human merge gate; human review and human merge into `develop` required
@@ -57,6 +58,11 @@ command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
 result: passed during PR preparation; wrote build/test-summary.md.
 ```
 
+```text
+command: gh pr view 21 --json baseRefName,headRefName,state,url,mergedAt,statusCheckRollup
+result: baseRefName=develop, headRefName=codex/v0-post-runner-lifecycle, state=OPEN, mergedAt=null, CI checks queued.
+```
+
 ### Test Suite Summary
 
 | Suite | Status | Duration | Command |
@@ -96,5 +102,10 @@ Root serial phase PR. There is no stack predecessor and the explicit target is
 `approved`; it may start only after this PR is human-merged into `develop` and
 the implementation plan records Phase 7 as `merged`.
 
-Review request note: `@samcantrill` please review this Phase 7 PR under the
-serial human merge gate. Codex must not approve or merge this PR.
+Review request note: `gh pr edit 21 --add-reviewer samcantrill` was attempted,
+but GitHub CLI/API rejected the reviewer request with a GraphQL
+`repository.pullRequest.projectCards` deprecation error. Fallback comment
+mentioning `@samcantrill` was added immediately:
+https://github.com/samcantrill/loom/pull/21#issuecomment-4371996188.
+
+Codex must not approve or merge this PR.

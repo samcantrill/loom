@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: final phase execution plan, ready for executor handoff
+- Status: `pr_open`; serial human merge gate active and awaiting human review
+  and human merge into `develop`
 - Branch: `codex/v0-post-runner-lifecycle`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-runner-lifecycle`
 - Phase execution plan path: `docs/phases/v0-post-runner-lifecycle.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 7 - Runner Lifecycle Decomposition`
-- PR: pending
+- PR: [#21](https://github.com/samcantrill/loom/pull/21)
 - Stack predecessor: none
 - Base branch: `develop` at `8741c73a6b0b2dd2f94213fbb143fe7400bd9257`
 - Target branch: `develop`
@@ -35,6 +36,15 @@
   document is decision-complete for executor handoff.
 - Phase implementation refinement budget: used by this bounded refinement pass.
 - PR review budget: unused.
+- PR verification: `gh pr view 21 --json
+  baseRefName,headRefName,state,url,mergedAt,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/v0-post-runner-lifecycle`,
+  `state=OPEN`, `mergedAt=null`, and queued CI `checks`.
+- Review request: `gh pr edit 21 --add-reviewer samcantrill` was attempted,
+  but GitHub CLI/API rejected it with a GraphQL
+  `repository.pullRequest.projectCards` deprecation error. Fallback comment
+  mentioning `@samcantrill` was added immediately:
+  https://github.com/samcantrill/loom/pull/21#issuecomment-4371996188.
 - Setup limitations: local `develop` matched the manager-provided Phase 7 base
   commit `8741c73`. No remote synchronization was attempted during planning
   because the assignment provided the updated base. Creating the
@@ -904,7 +914,14 @@ make test-summary
   default harness 406 passed / 9 skipped, config-extra 108 passed / 407
   deselected, build passed); and ran `UV_CACHE_DIR=/tmp/uv-cache make
   test-summary`, which passed and wrote `build/test-summary.md` with package,
-  unit, contract, integration, e2e, and config-extra suites passing.
+  unit, contract, integration, e2e, and config-extra suites passing. Opened
+  PR #21 against `develop`, verified `baseRefName=develop`,
+  `headRefName=codex/v0-post-runner-lifecycle`, `state=OPEN`, and
+  `mergedAt=null`; CI `checks` were queued at verification time. Reviewer
+  request through `gh pr edit 21 --add-reviewer samcantrill` was rejected by
+  GitHub CLI/API, so fallback comment
+  https://github.com/samcantrill/loom/pull/21#issuecomment-4371996188 was
+  added mentioning `@samcantrill`.
 - Stack maintenance: root serial phase; PR must target `develop`; Phase 8 must
   not start until Phase 7 is human-merged into `develop`.
 - Remaining blockers: none.
