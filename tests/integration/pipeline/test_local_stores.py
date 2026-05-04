@@ -19,7 +19,6 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
 
     json_ref = artifact_store.save(
         {"x": 1},
-        run_id=run_id,
         stage_name="stage",
         name="data",
         artifact_type="json",
@@ -27,7 +26,6 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     )
     text_ref = artifact_store.save(
         "hello",
-        run_id=run_id,
         stage_name="stage",
         name="report",
         artifact_type="text",
@@ -36,7 +34,13 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
 
     pre_written = tmp_path / "tmp_payload.bin"
     pre_written.write_text("already_here")
-    registered = artifact_store.register(pre_written, run_id=run_id, stage_name="stage", name="pre", artifact_type="text", allow_external=True)
+    registered = artifact_store.register(
+        pre_written,
+        stage_name="stage",
+        name="pre",
+        artifact_type="text",
+        allow_external=True,
+    )
 
     assert (artifact_root / "stage" / "data.json").exists()
     assert (artifact_root / "stage" / "report.txt").exists()

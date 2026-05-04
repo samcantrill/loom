@@ -125,7 +125,6 @@ class StageContext:
             )
         return self.artifact_store.save(
             obj,
-            run_id=self.run_id,
             stage_name=self.stage_name,
             name=name,
             artifact_type=artifact_type,
@@ -158,9 +157,9 @@ class StageContext:
             raise PipelineValidationError(
                 "StageContext.register_artifact requires artifact_store"
             )
+        source = path if isinstance(path, str) else str(path)
         return self.artifact_store.register(
-            path,
-            run_id=self.run_id,
+            source,
             stage_name=self.stage_name,
             name=name,
             artifact_type=artifact_type,

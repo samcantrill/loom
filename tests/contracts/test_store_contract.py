@@ -29,7 +29,6 @@ class DummyArtifactStore:
         self,
         obj: object,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
@@ -42,9 +41,8 @@ class DummyArtifactStore:
 
     def register(
         self,
-        uri: str | Path,
+        uri: str,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,

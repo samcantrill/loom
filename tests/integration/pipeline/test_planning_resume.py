@@ -66,7 +66,6 @@ def _seed_reusable_build(
     fingerprint = build_stage_fingerprint(build, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",

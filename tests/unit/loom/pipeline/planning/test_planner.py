@@ -82,7 +82,6 @@ def _seed_reusable_build(run_store, artifact_store) -> None:
     build = spec.get_stage("build")
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",

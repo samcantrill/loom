@@ -68,7 +68,6 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -100,7 +99,6 @@ def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -141,7 +139,6 @@ def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -182,7 +179,6 @@ def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -246,7 +242,6 @@ def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -288,7 +283,6 @@ def test_direct_resume_rejects_corrupt_prior_fingerprint(tmp_path: Path) -> None
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -329,7 +323,6 @@ def test_direct_resume_checks_artifact_checksum(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -366,7 +359,6 @@ def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",

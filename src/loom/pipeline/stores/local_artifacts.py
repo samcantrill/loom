@@ -12,7 +12,7 @@ from loom.io.uris import UnsupportedURIError, get_uri_scheme, path_to_file_uri, 
 from loom.serialization import PlainData, ensure_plain_data
 from loom.timestamps import utc_timestamp
 
-from ._paths import validate_output_name, validate_run_id, validate_stage_name
+from ._paths import validate_output_name, validate_stage_name
 from .atomic import atomic_write_bytes
 from .errors import (
     ArtifactChecksumMismatchError,
@@ -49,7 +49,6 @@ class LocalArtifactStore:
         self,
         obj: object,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
@@ -58,13 +57,16 @@ class LocalArtifactStore:
         metadata: Mapping[str, PlainData] | None = None,
         fingerprint: str | None = None,
     ) -> ArtifactRef:
-        validate_run_id(run_id, field="run_id")
         validate_stage_name(stage_name, field="stage_name")
         validate_output_name(name, field="name")
 
         normalized_metadata = self._normalize_metadata(metadata)
         data = self._encode(obj, codec_key=codec_key, metadata=normalized_metadata)
-        path = self.allocate_path(run_id=run_id, stage_name=stage_name, name=name, codec_key=codec_key)
+        path = self.local_artifact_path(
+            stage_name=stage_name,
+            name=name,
+            codec_key=codec_key,
+        )
         atomic_write_bytes(path, data)
         checksum = hash_bytes(data)
 
@@ -85,7 +87,6 @@ class LocalArtifactStore:
         self,
         uri: str | Path,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
@@ -96,7 +97,6 @@ class LocalArtifactStore:
         checksum: str | None = None,
         allow_external: bool = False,
     ) -> ArtifactRef:
-        validate_run_id(run_id, field="run_id")
         validate_stage_name(stage_name, field="stage_name")
         validate_output_name(name, field="name")
 
@@ -113,7 +113,7 @@ class LocalArtifactStore:
 
         path = path.resolve(strict=False)
         if not allow_external:
-            stage_dir = self.get_stage_dir(run_id=run_id, stage_name=stage_name)
+            stage_dir = self.local_stage_dir(stage_name=stage_name)
             self._ensure_within(stage_dir, path)
 
         if not path.exists():
@@ -228,23 +228,20 @@ class LocalArtifactStore:
         if ref.checksum is not None:
             self.verify_checksum(ref)
 
-    def get_stage_dir(self, run_id: str, stage_name: str) -> Path:
-        validate_run_id(run_id, field="run_id")
+    def local_stage_dir(self, stage_name: str) -> Path:
         validate_stage_name(stage_name, field="stage_name")
         return self.root / stage_name
 
-    def allocate_path(
+    def local_artifact_path(
         self,
-        run_id: str,
         stage_name: str,
         name: str,
         codec_key: str,
     ) -> Path:
-        validate_run_id(run_id, field="run_id")
         validate_stage_name(stage_name, field="stage_name")
         validate_output_name(name, field="name")
         suffix = self._SUFFIX_BY_CODEC.get(codec_key, "")
-        return self.get_stage_dir(run_id=run_id, stage_name=stage_name) / f"{name}{suffix}"
+        return self.local_stage_dir(stage_name=stage_name) / f"{name}{suffix}"
 
     def local_path(self, ref: ArtifactRef) -> Path:
         return self._require_local_path(ref.uri)
