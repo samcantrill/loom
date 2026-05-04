@@ -1,5 +1,6 @@
 """Unit tests for direct resume checks."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,88 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
     assert result.check.outputs == {"data": output}
 
 
+def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        run_id="run1",
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status(
+        "run1",
+        "build",
+        StageStatusRecord(
+            run_id="run1",
+            stage_name="build",
+            status=StageStatus.RUNNING,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+
+    result = check_stage_resume(
+        stage,
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        current_fingerprint=current,
+        resume=ResumeOptions(),
+        eligible_to_run=True,
+    )
+
+    assert result.final_action == PlanAction.RUN
+    assert result.check.reasons[0].code == PlanReasonCode.PRIOR_STATUS_RUNNING
+
+
+def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        run_id="run1",
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status(
+        "run1",
+        "build",
+        StageStatusRecord(
+            run_id="run1",
+            stage_name="build",
+            status=StageStatus.FAILED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+
+    result = check_stage_resume(
+        stage,
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        current_fingerprint=current,
+        resume=ResumeOptions(),
+        eligible_to_run=True,
+    )
+
+    assert result.final_action == PlanAction.RUN
+    assert result.check.reasons[0].code == PlanReasonCode.PRIOR_STATUS_NOT_SUCCEEDED
+
+
 def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
     run_store, artifact_store = _stores(tmp_path)
     stage = _stage()
@@ -123,6 +206,192 @@ def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
 
     assert result.final_action == PlanAction.RUN
     assert result.check.reasons[0].code == PlanReasonCode.ARTIFACT_MISSING
+
+
+def test_direct_resume_marks_missing_outputs_as_stale(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    run_store.write_stage_status(
+        "run1",
+        "build",
+        StageStatusRecord(
+            run_id="run1",
+            stage_name="build",
+            status=StageStatus.SUCCEEDED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+
+    result = check_stage_resume(
+        stage,
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        current_fingerprint=current,
+        resume=ResumeOptions(),
+        eligible_to_run=True,
+    )
+
+    assert result.final_action == PlanAction.RUN
+    assert result.check.reasons[0].code == PlanReasonCode.MISSING_OUTPUTS
+
+
+def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        run_id="run1",
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status(
+        "run1",
+        "build",
+        StageStatusRecord(
+            run_id="run1",
+            stage_name="build",
+            status=StageStatus.SUCCEEDED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    with pytest.raises(ResumeStateError, match="corrupt"):
+        # Corrupt the persisted output document, then attempt resume.
+        atomic_path = run_store.get_stage_dir("run1", "build") / "outputs.json"
+        atomic_path.write_text("[\"bad\"]", encoding="utf-8")
+
+        check_stage_resume(
+            stage,
+            run_id="run1",
+            run_store=run_store,
+            artifact_store=artifact_store,
+            current_fingerprint=current,
+            resume=ResumeOptions(),
+            eligible_to_run=True,
+        )
+
+
+def test_direct_resume_rejects_corrupt_prior_fingerprint(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        run_id="run1",
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status(
+        "run1",
+        "build",
+        StageStatusRecord(
+            run_id="run1",
+            stage_name="build",
+            status=StageStatus.SUCCEEDED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(
+        "run1", "build", {"schema_version": "bad"}, attempt=1
+    )
+
+    with pytest.raises(ResumeStateError, match="malformed prior fingerprint"):
+        check_stage_resume(
+            stage,
+            run_id="run1",
+            run_store=run_store,
+            artifact_store=artifact_store,
+            current_fingerprint=current,
+            resume=ResumeOptions(),
+            eligible_to_run=True,
+        )
+
+
+def test_direct_resume_checks_artifact_checksum(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        run_id="run1",
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status(
+        "run1",
+        "build",
+        _status("run1"),
+    )
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+    run_store.write_artifact_index("run1", {"build.data": output})
+
+    path = artifact_store.local_path(output)
+    path.write_text("corrupted", encoding="utf-8")
+    result = check_stage_resume(
+        stage,
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        current_fingerprint=current,
+        resume=ResumeOptions(),
+        eligible_to_run=True,
+    )
+    assert result.final_action == PlanAction.RUN
+    assert result.check.reasons[0].code == PlanReasonCode.ARTIFACT_CHECKSUM_MISMATCH
+
+
+def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        run_id="run1",
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status(
+        "run1",
+        "build",
+        _status("run1"),
+    )
+    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
+    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+    run_store.write_artifact_index("run1", {"build.data": replace(output, artifact_id="build.other")})
+
+    with pytest.raises(ResumeStateError, match="artifact index conflict for build.data"):
+        check_stage_resume(
+            stage,
+            run_id="run1",
+            run_store=run_store,
+            artifact_store=artifact_store,
+            current_fingerprint=current,
+            resume=ResumeOptions(),
+            eligible_to_run=True,
+        )
 
 
 def test_direct_resume_raises_on_corrupt_prior_state(tmp_path: Path) -> None:

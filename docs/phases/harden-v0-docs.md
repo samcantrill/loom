@@ -348,9 +348,29 @@ make test-summary
 
 - Draft plan: created by `loom_phase_planner` in `docs/phases/harden-v0-docs.md` on 2026-05-04 local time.
 - Final phase execution plan: refined by `loom_phase_planner` in `docs/phases/harden-v0-docs.md` on 2026-05-04 local time. The artifact is ready for `loom_phase_executor` unless stack state changes before implementation begins.
-- Implementation summary: pending implementation stage.
-- Implementation validation: pending implementation and PR-preparation stages.
-- Refinement summary: pending one bounded implementation refinement pass.
-- PR preparation: pending.
+- Implementation summary:
+  - Added hardening coverage for conservative resume edge cases in `tests/unit/loom/pipeline/planning/test_resume.py`:
+    - stale `RUNNING` and failed prior statuses,
+    - missing `outputs.json`,
+    - corrupt outputs/state documents,
+    - prior fingerprint corruption,
+    - artifact checksum mismatch,
+    - artifact index conflict.
+  - Strengthened import-boundary guardrails in `tests/package/test_import_boundaries.py` for `loom.config`, `loom.pipeline`, `loom.pipeline.stores`, `loom.pipeline.execution`, `loom.pipeline.executors`, and `loom.cli`.
+  - Added executor/store protocol structural guard tests in `tests/contracts/test_store_contract.py`.
+  - Added executable docs example in `tests/integration/docs/test_v0_python_examples.py` for README reuse semantics.
+  - Hardened import boundaries in implementation to support the phase:
+    - removed runtime execution-model type dependencies from `loom.pipeline.executors.base` and `loom.pipeline.executors.local`,
+    - converted `loom.pipeline.execution` to lazy `__getattr__` exports to avoid execution-time planning import side effects during executor import.
+  - Updated `README.md` and `docs/loom.md` for v0 run-layout, resume semantics, and same-run conservative reuse documentation.
+- Implementation validation:
+  - Focused slices:
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_resume.py tests/contracts/test_store_contract.py tests/package/test_import_boundaries.py tests/integration/docs/test_v0_python_examples.py -q`
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_executor_api.py tests/package/test_pipeline_planning_api.py tests/package/test_pipeline_store_api.py -q`
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning -q`
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q`
+  - Results: all passed in the commands above.
+- Refinement summary: implementation refinement pass remained unused per explicit instruction.
+- PR preparation: deferred to manager/next stage.
 - Stack maintenance: Phase 10 is stacked on `codex/add-local-execution` and targets `codex/add-local-execution`; retarget to `develop` only after predecessor phases land and validation is rerun.
-- Remaining blockers: none.
+- Remaining blockers: none observed.
