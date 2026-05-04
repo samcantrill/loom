@@ -1120,9 +1120,38 @@ Future compatibility:
 
 ### Phase 4 - Runtime, Resource, Event, And Lock Foundations
 
-Status: in_progress
+Status: merged
 Branch: `codex/v0-post-runtime-events-locks`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/18
+
+Merge notes:
+
+- Merged into `develop` on 2026-05-04 as squash commit `cb456cc`.
+- Summary: added strict runtime/resource foundation models with local-only
+  runtime vocabulary and supported `cpus`, `memory_mb`, `gpus`, and `custom`
+  resource fields; rejected deferred executor, retry, timeout, SLURM,
+  container, environment, and remote-store semantics; added strict pipeline
+  event records and append-only local `events.jsonl`; added backend-neutral
+  run event and run lock store capabilities; added strict run lock records and
+  conservative local `lock.json` acquire/read/release behavior; added durable
+  `StageStatus.BLOCKED` and a status-only blocked lifecycle writer; aligned
+  examples, package exports, contracts, and feature docs.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after
+  the refinement pass; PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed with package, unit, contract, integration, e2e, and config-extra rows;
+  GitHub checks passed.
+- Human merge gate: PR #18 reached `MERGED` on `develop`; Codex did not approve
+  or merge the PR. `gh pr edit 18 --add-reviewer samcantrill` was rejected by
+  GitHub's Projects Classic GraphQL deprecation path and `reviewRequests`
+  remained empty with `samcantrill` as the PR author, so the required fallback
+  comment mentioned `@samcantrill` at
+  https://github.com/samcantrill/loom/pull/18#issuecomment-4370606278.
+- Stack maintenance: root serial phase, no successor branch was started before
+  merge, and no retargeting was required.
+- Follow-up notes: Phase 5 must continue from updated `develop`; planner policy
+  decomposition remains Phase 5 work, while runner lifecycle decomposition,
+  catalogs, bundles, sweeps, remote stores, and non-local executors remain
+  later phases.
 
 Goal:
 
