@@ -1519,9 +1519,23 @@ Future compatibility:
 
 ### Phase 8 - Hardening, Docs, And Migration Notes
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/v0-post-hardening-docs`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/22
+
+PR notes:
+
+- Opened against `develop` as PR #22 with head
+  `codex/v0-post-hardening-docs` at `296cb4c`.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package,
+  unit, contract, integration, e2e, and config-extra rows.
+- Human merge gate: Codex did not approve or merge the PR. The PR
+  author/authenticated account is `samcantrill`, so the required fallback
+  comment mentioned `@samcantrill` at
+  https://github.com/samcantrill/loom/pull/22#issuecomment-4375429754.
+- Serial gate: V1 or other successor work must not start until PR #22 reaches
+  `MERGED` on `develop` and Phase 8 is recorded as `merged`.
 
 Goal:
 
