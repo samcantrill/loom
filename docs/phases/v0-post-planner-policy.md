@@ -30,9 +30,9 @@
 - Plan quality gate loop budget: initial plan review used, automated plan
   refinement pass used, confirmation review used. Do not consume another
   plan-quality review loop without explicit manager instruction.
-- Draft pass: completed by `loom_phase_planner` in this planning pass.
-- Refine pass: pending; the next planning commit must make this artifact
-  decision-complete before implementation starts.
+- Draft pass: completed by `loom_phase_planner` in commit `d5db52e`.
+- Refine pass: completed by `loom_phase_planner` in this planning pass. This
+  document is decision-complete for executor handoff.
 - Phase implementation refinement budget: unused.
 - PR review budget: unused.
 - Setup limitations: local `develop` matched the manager-provided Phase 5 start
@@ -126,21 +126,58 @@ future-phase work.
   construction, selector normalization, input binding, upstream invalidation,
   fingerprint computation, resume checks, action choice, `StagePlan`
   construction, and optional persistence.
+- `plan_pipeline()` currently writes only `ExecutionPlan.to_dict()` to
+  `plan.json` through `RunStore.write_plan()`. Phase 5 must preserve that
+  persistence behavior.
+- `_plan_stage()` has four distinct policies interleaved: selector-driven
+  skip/outside-only handling, upstream binding/invalidation, pending-input
+  action choice, and direct resume/fingerprint action choice.
+- `_bind_inputs_and_invalidation()` currently performs real typed work but is
+  annotated as `Mapping[str, object]` and accesses
+  `ResolvedInputBinding.source_stage_id` and `source_output_name` through
+  `type: ignore`. Removing this workaround is the primary typing cleanup for
+  this phase.
+- Upstream invalidation currently treats reusable upstream plans as providers,
+  treats non-reused dependencies as invalidating, and uses
+  `_is_unavailable_reuse_provider()` to distinguish a blocked upstream provider
+  from a normal pending upstream input. Those semantics must be preserved.
+- `_unique_reasons()` deduplicates repeated selector, pending-input, and
+  invalidation reasons by reason code, message, stage, upstream, input, and
+  output fields. Preserve the same ordered first-seen behavior unless a test
+  documents a deliberate change.
 - `src/loom/pipeline/planning/selectors.py` already owns selector
   normalization and eligibility state. This phase should reuse that boundary
   rather than invent a second selector model.
+- `Selection.is_reuse_provider()` is part of the selector result even though the
+  current planner mostly relies on `eligible_to_run=False` plus direct resume
+  decisions for provider-only stages. Preserve provider-only planning behavior
+  for `only_stages`.
 - `src/loom/pipeline/planning/resume.py` already owns direct same-run resume
   checks and returns `DirectResumeResult`. This phase should keep store reads
   and artifact validation there.
+- `check_stage_resume()` owns prior status/input/output/fingerprint reads,
+  artifact-index validation, artifact-store validation, and stale/reuse reason
+  construction. Do not move store IO into explanation or action helpers.
 - `src/loom/pipeline/planning/fingerprints.py` already owns semantic stage
   fingerprint construction. This phase may route calls through a planner helper
   but must not change semantic inputs or fingerprint policy constants.
+- `StageFingerprintPayload` is currently schema version 2 with policy
+  `loom.stage.semantic` version 2. Do not bump these constants, and do not add
+  runtime/resource hints or explanation metadata to the fingerprint payload.
 - `src/loom/pipeline/planning/models.py` already owns strict plan,
   fingerprint, reason, resume-check, and stage-plan serialization. Any
   explanation models should be separate from persisted `ExecutionPlan` records.
+- `ExecutionPlan.to_dict()` includes `kind: "loom.execution_plan"` and
+  `schema_version: 1`. Keep this stable unless a blocker is recorded and the
+  manager explicitly accepts a persistence change.
 - The current planner receives graph bindings as `Mapping[str, object]` and
   uses `# type: ignore[attr-defined]` to access binding fields. Phase 5 should
   use the `ResolvedInputBinding` type from `loom.pipeline.graph.bindings`.
+- `docs/structure.md` still describes a target `planning/` package with
+  `plan.py` and `invalidation.py`, while the current source package has
+  `models.py`, `planner.py`, `selectors.py`, `resume.py`, and
+  `fingerprints.py`. Phase 5 should align the structure document with the
+  implemented planner decomposition.
 - Package tests currently assert `loom.pipeline.planning.__all__` and import
   boundaries. Adding explanation exports requires matching package tests and
   must not import config, execution, executor, CLI, or project modules.
@@ -171,6 +208,219 @@ future-phase work.
   `docs/structure.md`, `docs/features/pipeline-graph.md`,
   `docs/features/resume.md`, `docs/features/preflight.md`, and
   `docs/features/fingerprints.md`.
+
+## Planned Module Boundaries
+
+- `src/loom/pipeline/planning/planner.py`
+  remains the orchestration entrypoint for `plan_pipeline()`. After extraction,
+  it should read as a topological loop that delegates selector facts, input
+  invalidation, fingerprint construction, resume checks, action choice, stage
+  plan assembly, and persistence.
+- `src/loom/pipeline/planning/selectors.py`
+  remains the selector normalization and eligibility module. Avoid duplicating
+  `Selection` or selector validation elsewhere.
+- `src/loom/pipeline/planning/invalidation.py`
+  should be added for typed upstream input binding and invalidation policy. It
+  owns converting `ResolvedInputBinding` plus prior `StagePlan` facts into
+  `BoundInput`, `PendingInput`, and upstream `PlanReason` values.
+- `src/loom/pipeline/planning/actions.py`
+  should be added for action-decision policy. It owns choosing `RUN`, `REUSE`,
+  `SKIP`, `STALE`, or `BLOCKED` from selector, invalidation, direct resume, and
+  force-selector facts. It should not read stores or compute fingerprints.
+- `src/loom/pipeline/planning/fingerprints.py`
+  continues to own stage fingerprint construction. Phase 5 may add a small
+  planner-facing wrapper only if it improves orchestration readability.
+- `src/loom/pipeline/planning/resume.py`
+  continues to own direct resume checks, prior persisted state reads, artifact
+  validation, and stale/reuse reason construction.
+- `src/loom/pipeline/planning/explanations.py`
+  should be added for typed diagnostics built from an existing
+  `ExecutionPlan`. It must not perform store IO, execute stages, or mutate plan
+  records.
+- `src/loom/pipeline/planning/models.py`
+  remains the persisted execution-plan and fingerprint model module. Add
+  explanation data classes here only if cyclic imports make a separate
+  `explanations.py` impossible; the preferred boundary is a separate module.
+
+## Detailed Implementation Slices
+
+### Slice 1: Characterize Existing Policy
+
+- Add focused tests before moving logic where coverage is thin:
+  - provider-only `only_stages` behavior when an upstream provider is reusable;
+  - provider-only `only_stages` behavior when the upstream provider is not
+    reusable and downstream becomes blocked with
+    `UNAVAILABLE_UPSTREAM_INPUT`;
+  - duplicate invalidation reasons remain first-seen ordered and deduplicated;
+  - `from_stage` force still turns a reusable selected stage into `RUN` while
+    preserving `base_action=REUSE`;
+  - persisted `plan.json` stays exactly `ExecutionPlan.to_dict()` and does not
+    include explanation records.
+- Prefer public `plan_pipeline()` assertions for characterization tests. Add
+  helper-module unit tests only after a helper exists.
+
+### Slice 2: Extract Typed Invalidation Policy
+
+- Add `src/loom/pipeline/planning/invalidation.py` with a small immutable result
+  type, for example:
+
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class InputInvalidationResult:
+      bound_inputs: Mapping[str, BoundInput]
+      pending_inputs: tuple[PendingInput, ...]
+      invalidated_by: tuple[PlanReason, ...]
+
+      @property
+      def blocking_reasons(self) -> tuple[PlanReason, ...]: ...
+
+      @property
+      def invalidating_reasons(self) -> tuple[PlanReason, ...]: ...
+  ```
+
+- Add a helper shaped like:
+
+  ```python
+  def evaluate_input_invalidation(
+      *,
+      stage: StageSpec,
+      bindings: Mapping[str, ResolvedInputBinding],
+      prior_plans: Mapping[str, StagePlan],
+  ) -> InputInvalidationResult: ...
+  ```
+
+- Move upstream reason construction, unavailable-provider classification, and
+  ordered deduplication into this module. Keep reason codes and messages stable
+  unless the characterization tests prove an existing message is wrong.
+- Type the helper with `ResolvedInputBinding` from
+  `loom.pipeline.graph.bindings` so `planner.py` no longer needs
+  `Mapping[str, object]` or `type: ignore[attr-defined]`.
+- Preserve these action-causing categories:
+  - blocking: `UPSTREAM_SKIPPED`, `UPSTREAM_BLOCKED`,
+    `UNAVAILABLE_UPSTREAM_INPUT`;
+  - invalidating: `UPSTREAM_WILL_RUN`, `UPSTREAM_STALE`,
+    `PENDING_UPSTREAM_INPUT`.
+
+### Slice 3: Extract Action-Decision Policy
+
+- Add `src/loom/pipeline/planning/actions.py` with a small decision type, for
+  example:
+
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class StageActionDecision:
+      action: PlanAction
+      base_action: PlanAction
+      fingerprint_status: FingerprintStatus
+      fingerprint: StageFingerprintRecord | None
+      resume_check: ResumeCheck | None
+      reasons: tuple[PlanReason, ...]
+      reusable_outputs: Mapping[str, ArtifactRef]
+  ```
+
+- Add helpers for the three current action branches:
+  - selector skip/outside-only decisions;
+  - pending-input or upstream-invalidation decisions before fingerprinting;
+  - direct resume decisions after fingerprinting, including force-selector
+    override.
+- Preserve the current force behavior exactly: forced selected stages run even
+  when direct resume says `REUSE`, keep `base_action` from the direct resume
+  result, clear `reusable_outputs`, and retain selector plus resume reasons.
+- Keep stage-plan assembly in `planner.py` unless moving it into `actions.py`
+  clearly improves readability. The action helper should not need
+  `PipelineSpec`, `RunStore`, or `ArtifactStore`.
+- Unit-test the action helper with simple `PlanReason`, `InputInvalidationResult`,
+  and `DirectResumeResult` values so future policy changes are localized.
+
+### Slice 4: Add Explanation Surface
+
+- Add `src/loom/pipeline/planning/explanations.py`.
+- Preferred public API:
+
+  ```python
+  PLAN_EXPLANATION_SCHEMA_VERSION = 1
+
+  @dataclass(frozen=True, slots=True)
+  class StageExplanation: ...
+
+  @dataclass(frozen=True, slots=True)
+  class PlanExplanation: ...
+
+  def explain_plan(plan: ExecutionPlan) -> PlanExplanation: ...
+  ```
+
+- `PlanExplanation` should include:
+  - `schema_version`;
+  - `kind`, using `loom.plan_explanation`;
+  - `run_id`;
+  - `pipeline_name`;
+  - `selectors`;
+  - `resume`;
+  - `stage_order`;
+  - per-stage explanations in plan order;
+  - `summary`.
+- `StageExplanation` should include enough typed facts for CLI/preflight to
+  report why a stage will run, reuse, skip, or block without parsing text:
+  - `stage_name`;
+  - `action`;
+  - `base_action`;
+  - `fingerprint_status`;
+  - ordered `reason_codes`;
+  - all `reasons`;
+  - selector reasons;
+  - invalidation reasons;
+  - resume reasons;
+  - `pending_inputs`;
+  - `bound_inputs`;
+  - reusable output names or refs;
+  - upstream and downstream stage names;
+  - prior and current fingerprint digest strings when available.
+- Build explanations from existing `StagePlan` and `ResumeCheck` facts only.
+  Do not read stores, rebuild fingerprints, re-run selector logic, or require
+  explanation construction during `plan_pipeline()`.
+- Add strict plain-data `to_dict()` / `from_dict()` helpers if practical in the
+  same style as existing planning models. At minimum, tests must prove
+  `explain_plan(plan).to_dict()` is deterministic and contains no
+  non-plain-data values.
+- Export `PlanExplanation`, `StageExplanation`, `explain_plan`, and the schema
+  constant from `loom.pipeline.planning` only after package tests are updated.
+  Do not export low-level invalidation/action helper types at package top level
+  unless a stable consumer exists.
+
+### Slice 5: Rewire Planner Orchestration
+
+- Update `plan_pipeline()` and `_plan_stage()` to use:
+  - `normalize_selectors()` for selector policy;
+  - `evaluate_input_invalidation()` for bound/pending inputs and upstream
+    invalidation;
+  - `build_stage_fingerprint()` for semantic fingerprint construction only
+    when all inputs are bound;
+  - `check_stage_resume()` for direct reuse/stale checks;
+  - action-decision helpers for final action and reasons;
+  - `_stage_plan()` or an equivalent focused constructor for `StagePlan`.
+- Remove the current planner `type: ignore` comments tied to input bindings.
+- Keep `_persist_plan()` behavior unchanged.
+- Keep `__all__` in `planner.py` limited to `plan_pipeline`.
+
+### Slice 6: Docs And Public API Alignment
+
+- Update `docs/structure.md` so the target/current planning package lists
+  `models.py`, `planner.py`, `selectors.py`, `invalidation.py`, `actions.py`,
+  `resume.py`, `fingerprints.py`, and `explanations.py` with accurate
+  responsibilities.
+- Update `docs/features/pipeline-graph.md` to state that graph binding returns
+  typed `ResolvedInputBinding` values consumed by planner invalidation policy.
+- Update `docs/features/resume.md` to replace the deferred
+  `planning.invalidation` note with the implemented Phase 5 boundary and to
+  state that `PlanExplanation` is derived beside `ExecutionPlan`.
+- Update `docs/features/preflight.md` to direct future preflight/CLI diagnostics
+  to `plan_pipeline()` plus `explain_plan()` instead of duplicating planner,
+  selector, resume, or fingerprint logic.
+- Update `docs/features/fingerprints.md` only to clarify that explanations may
+  summarize fingerprint policy/digest facts and later diff payloads, while
+  semantic fingerprint inputs and policy version remain unchanged.
+- Update package API tests to reflect new stable explanation exports and keep
+  root `loom` / `loom.pipeline` exports unchanged.
 
 ## Out-of-Scope Work
 
@@ -207,38 +457,26 @@ future-phase work.
   Future CLI work can depend on the public explanation builder rather than every
   lower-level helper.
 
-## Initial Implementation Slices
+## Implementation Commit Guidance
 
-1. Characterize current planning behavior.
-   Add focused tests for selected-by reasons, upstream invalidation reasons,
-   force-selector override after reusable state, and persisted plan stability
-   where current coverage is thin.
-2. Extract typed upstream input policy.
-   Move `_bind_inputs_and_invalidation`, upstream reason construction, and
-   duplicate-reason handling out of `planner.py`; type the helper around
-   `ResolvedInputBinding`, `BoundInput`, `PendingInput`, `PlanReason`, and
-   `StagePlan`.
-3. Extract action decision policy.
-   Move the pending-input, blocked, direct-resume, and force-selector action
-   branches into testable helper functions or a small decision object while
-   preserving the current `StagePlan` results.
-4. Add explanation models and builder.
-   Add a typed `PlanExplanation` surface beside `ExecutionPlan` and a builder
-   that derives explanations from an existing plan without store reads or CLI
-   formatting.
-5. Update package exports and import-boundary tests.
-   Export only stable explanation-facing symbols and keep planning imports
-   lightweight.
-6. Update docs and final validation evidence.
-   Document the planner module boundaries, explanation surface, and explicit
-   deferrals.
+- Commit 1: characterization tests for current planner outcomes and persistence
+  stability.
+- Commit 2: invalidation helper extraction and typing cleanup.
+- Commit 3: action-decision helper extraction.
+- Commit 4: explanation models, builder, package exports, and tests.
+- Commit 5: docs updates and any final cleanup from validation.
+
+This grouping is guidance, not a mandate. Keep commits coherent and avoid
+mixing docs-only cleanup with behavior-sensitive refactors when it would make
+review harder.
 
 ## Suite-Level Test Obligations
 
 - Package: update `tests/package/test_pipeline_planning_api.py` for any new
   public explanation exports and keep import-boundary tests proving
   `loom.pipeline.planning` does not import config, execution, executor, CLI, or
-  project modules.
+  project modules. Also keep `plan_pipeline` out of `loom.__all__` and
+  `loom.pipeline.__all__`.
 - Unit: add or update tests for invalidation helper output, action decision
   helper output, explanation model serialization, explanation derivation from
   stage plans, selector reasons, direct resume reasons, and unchanged semantic
@@ -256,9 +494,32 @@ future-phase work.
 - Opt-in suites: no optional dependency behavior is intentionally changed.
   Preserve no-extra import behavior and config-extra validation evidence through
   the existing `make validate-pr` and `make test-summary` gates.
+- Narrow implementation checks:
+  - `uv run pytest tests/unit/loom/pipeline/planning`
+  - `uv run pytest tests/integration/pipeline/test_planning_resume.py`
+  - `uv run pytest tests/integration/pipeline/test_plan_persistence.py`
+  - `uv run pytest tests/package/test_pipeline_planning_api.py`
+  - `uv run pytest tests/package/test_import_boundaries.py`
 - PR preparation: run `make validate-pr` before opening/preparing the Phase 5
   PR and run `make test-summary` so the PR body can report package, unit,
   contract, integration, e2e, and opt-in/config-extra evidence.
+
+## Acceptance Checklist
+
+- `planner.py` no longer owns upstream invalidation and action-decision policy
+  inline.
+- Planner binding types use `ResolvedInputBinding`; the current
+  binding-related `type: ignore` comments are gone.
+- `ExecutionPlan` schema version, kind, persisted fields, and `plan.json`
+  persistence behavior remain unchanged.
+- Stage fingerprint schema/policy constants remain unchanged and no
+  non-semantic runtime/resource hints enter fingerprint payloads.
+- `PlanExplanation` or the chosen equivalent is typed, deterministic, separate
+  from plan persistence, and derivable from an `ExecutionPlan`.
+- Package public exports and import-boundary tests reflect only stable
+  explanation-facing APIs.
+- Docs describe the implemented planner boundaries and continue to defer CLI,
+  preflight command, runner lifecycle, and future executor behavior.
 
 ## Design Impact
 
@@ -309,6 +570,14 @@ execution contract without learning diagnostic presentation concerns.
   stale, reuse, skipped, blocked, forced, and pending-input cases.
 - Public API review should focus on keeping `ExecutionPlan` stable while making
   explanation records easy for CLI/preflight to consume.
+- Review traps:
+  - explanation records accidentally persisted in `plan.json`;
+  - helper extraction changing provider-only `only_stages` behavior;
+  - action helpers importing stores or artifact stores;
+  - explanations rebuilding fingerprints or reading stores;
+  - public exports pulling in execution, executor, config, CLI, or project
+    modules;
+  - tests that assert helper internals instead of stable planner outcomes.
 
 ## Handoff Notes
 
@@ -323,3 +592,6 @@ execution contract without learning diagnostic presentation concerns.
   workflow/control files.
 - The later Phase 5 PR must target `develop`, notify `samcantrill`, and stop at
   the serial human merge gate.
+- Implementation refinement and PR review budgets are currently unused. Later
+  workflow stages get at most one automated implementation refinement pass and
+  one PR review pass unless the user explicitly resets the budget.
