@@ -7,11 +7,12 @@ pytestmark = pytest.mark.package
 
 
 def test_public_root_symbols() -> None:
-    from loom import ArtifactRef, Fingerprint, InMemoryManifest, ManifestView, Record, ResourceRef, __all__, __version__, hash_mapping
+    from loom import ArtifactAddress, ArtifactRef, Fingerprint, InMemoryManifest, ManifestView, Record, ResourceRef, __all__, __version__, hash_mapping
 
     assert __version__
     assert __all__
     assert ResourceRef
+    assert ArtifactAddress
     assert ArtifactRef
     assert InMemoryManifest
     assert ManifestView
@@ -105,7 +106,7 @@ def test_public_import_paths() -> None:
     from loom.fingerprints import Fingerprint, hash_mapping
     from loom.ids import Checksum, Fingerprint as IdFingerprint, ResourceType
     from loom.refs import ResourceRef, ResourceRefError
-    from loom.artifacts import ArtifactRef, ArtifactValidationError
+    from loom.artifacts import ArtifactAddress, ArtifactRef, ArtifactValidationError
     from loom.records import Record
     from loom.serialization import PlainData
     from loom.serialization import dataclass_to_dict
@@ -118,6 +119,7 @@ def test_public_import_paths() -> None:
     assert ResourceType
     assert ResourceRef
     assert ResourceRefError
+    assert ArtifactAddress
     assert ArtifactRef
     assert ArtifactValidationError
     assert Record

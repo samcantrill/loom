@@ -7,13 +7,47 @@ from typing import Any, Mapping, cast
 
 from loom.errors import ArtifactError, FingerprintError, ValidationError
 from loom.fingerprints import validate_digest
-from loom.ids import ArtifactID, ArtifactType, Checksum, CodecKey, Fingerprint, StageID
+from loom.ids import ArtifactID, ArtifactType, Checksum, CodecKey, Fingerprint, RunID, StageID
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
 
 class ArtifactValidationError(ArtifactError, ValidationError):
     """Error raised when an artifact reference is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactAddress:
+    """Address of a stored artifact."""
+
+    run_id: RunID
+    artifact_id: ArtifactID
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.run_id, str) or not self.run_id:
+            raise ArtifactValidationError("run_id must be a non-empty string")
+        if not isinstance(self.artifact_id, str) or not self.artifact_id:
+            raise ArtifactValidationError("artifact_id must be a non-empty string")
+
+    def to_dict(self) -> dict[str, str]:
+        return {"run_id": self.run_id, "artifact_id": self.artifact_id}
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ArtifactAddress":
+        if not isinstance(data, dict):
+            raise ArtifactValidationError("ArtifactAddress.from_dict expects mapping")
+        required = {"run_id", "artifact_id"}
+        unknown = set(data) - required
+        if unknown:
+            raise ArtifactValidationError(
+                f"ArtifactAddress.from_dict received unknown fields: {', '.join(sorted(unknown))}"
+            )
+        missing = required - set(data)
+        if missing:
+            raise ArtifactValidationError(
+                f"ArtifactAddress.from_dict missing required field(s): {', '.join(sorted(missing))}"
+            )
+        return cls(run_id=_require_str(data.get("run_id"), "run_id"), artifact_id=_require_str(data.get("artifact_id"), "artifact_id"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,4 +189,4 @@ def _validate_timestamp(value: str, field: str) -> None:
         raise ArtifactValidationError(f"{field} must be a valid UTC timestamp: {exc}") from exc
 
 
-__all__ = ["ArtifactRef", "ArtifactValidationError"]
+__all__ = ["ArtifactAddress", "ArtifactRef", "ArtifactValidationError"]
