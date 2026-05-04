@@ -191,6 +191,12 @@ class PipelineRunner:
                 request=request,
                 run_id=run_id,
                 run_dir=run_dir,
+                local_output_dir=local_run_store.local_stage_artifact_dir(
+                    run_id, stage.name
+                ),
+                local_workspace_dir=local_run_store.local_stage_workspace_dir(
+                    run_id, stage.name
+                ),
                 config_mapping=config_mapping,
                 spec=spec,
                 stage=stage,
@@ -254,6 +260,8 @@ class PipelineRunner:
         stage_plan,
         plan: ExecutionPlan,
         artifact_store: ArtifactStore,
+        local_output_dir: Path,
+        local_workspace_dir: Path,
         produced_outputs: Mapping[str, Mapping[str, ArtifactRef]],
         created_at: str,
         run_started_at: str,
@@ -287,13 +295,13 @@ class PipelineRunner:
             context = StageContext(
                 run_id=run_id,
                 stage_name=stage.name,
-                run_dir=run_dir,
-                stage_dir=self.run_store.local_stage_dir(run_id, stage.name),
                 resolved_config=config_mapping,
                 stage_config=stage.stage_config,
+                inputs=inputs,
+                local_output_dir=local_output_dir,
+                local_workspace_dir=local_workspace_dir,
                 provenance={},
                 metadata={"target_path": stage.target_path},
-                run_store=self.run_store,
                 artifact_store=artifact_store,
                 output_specs=stage.outputs,
             )

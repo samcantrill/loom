@@ -38,8 +38,7 @@ class TextConsumerStage:
         context: StageContext,
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]:
-        assert context.artifact_store is not None
-        data = context.artifact_store.load(inputs["data"], expected_type="json")
+        data = context.load_input("data", expected_type="json")
         return {
             "text": context.save_artifact(
                 "text",

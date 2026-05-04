@@ -43,10 +43,10 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
         context=StageContext(
             run_id="run1",
             stage_name="build",
-            run_dir=run_store.local_run_dir("run1"),
-            stage_dir=run_store.local_stage_dir("run1", "build"),
             resolved_config={},
             stage_config={},
+            local_output_dir=run_store.local_stage_artifact_dir("run1", "build"),
+            local_workspace_dir=run_store.local_stage_workspace_dir("run1", "build"),
             run_store=run_store,
             artifact_store=artifact_store,
             output_specs=stage.outputs,
