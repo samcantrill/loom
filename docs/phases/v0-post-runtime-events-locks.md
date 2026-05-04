@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: pr_open
 - Branch: `codex/v0-post-runtime-events-locks`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-runtime-events-locks`
 - Phase execution plan path: `docs/phases/v0-post-runtime-events-locks.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 4 - Runtime, Resource, Event, And Lock Foundations`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/18
 - Stack predecessor: none
 - Base branch: `develop` at `6c21f72fd777f48977f4d9e9822b7b7acd82d5b6`
 - Target branch: `develop`
@@ -16,7 +16,9 @@
   this planning pass. The implementation PR must target `develop` and must
   notify `samcantrill` by reviewer request when GitHub allows it, with an
   `@samcantrill` PR-body mention or immediate fallback PR comment recorded by
-  PR preparation.
+  PR preparation. PR preparation attempted the GitHub reviewer request; GitHub
+  rejected it for this author/account path, so the fallback comment was posted:
+  https://github.com/samcantrill/loom/pull/18#issuecomment-4370606278.
 - Merge eligibility: serial human merge gate. The Phase 4 PR must target
   `develop`, request review from `samcantrill` when GitHub allows it, and
   mention `@samcantrill` in the PR body or an immediate fallback PR comment.
@@ -846,7 +848,27 @@ make test-summary
   `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff, Pyright, default
   test harness (390 passed, 9 skipped), config-extra test harness (103 passed,
   391 deselected), and `uv build`.
-- PR preparation: pending PR-preparation pass.
+- PR preparation: completed by `loom_pr_preparer`. Added and refined
+  `docs/phases/v0-post-runtime-events-locks-pr-body.md`, ran
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` successfully, pushed
+  `codex/v0-post-runtime-events-locks`, opened
+  https://github.com/samcantrill/loom/pull/18 against `develop`, verified
+  `baseRefName=develop`, `headRefName=codex/v0-post-runtime-events-locks`,
+  `state=OPEN`, `mergedAt=null`, and GitHub CI `checks` queued at PR
+  verification.
+- PR review notification: attempted
+  `gh pr edit 18 --add-reviewer samcantrill`; GitHub returned the project-card
+  deprecation GraphQL error and recorded no review request. `gh pr view 18
+  --json reviewRequests,author,url` showed author `samcantrill` and no review
+  requests, so PR preparation posted the required fallback comment mentioning
+  `@samcantrill`:
+  https://github.com/samcantrill/loom/pull/18#issuecomment-4370606278.
+- PR-prep validation:
+  `git diff --check develop...HEAD` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+  `build/test-summary.md` with package (34 passed, 1 skipped), unit (334
+  passed, 1 skipped), contract (14 passed, 1 skipped), integration (8 passed,
+  5 skipped), e2e (1 passed), and config-extra (103 passed, 391 deselected).
 - Stack maintenance: serial human merge gate active; no successor phase may
   start until the Phase 4 PR is human-merged into `develop`.
 - Remaining blockers: none.

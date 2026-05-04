@@ -3,7 +3,7 @@
 - Phase: Phase 4 - Runtime, Resource, Event, And Lock Foundations
 - Branch: `codex/v0-post-runtime-events-locks`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/18
 - Stack predecessor: none
 - Merge eligibility: serial human merge gate. This PR must target `develop`,
   request review from `samcantrill` or mention `@samcantrill` if GitHub rejects
@@ -186,29 +186,38 @@ Scope check:
 
 ## PR Creation Status
 
-- PR opened: pending.
-- PR URL: pending.
-- Command to run:
+- PR opened: yes.
+- PR URL: https://github.com/samcantrill/loom/pull/18
+- Command run:
 
 ```sh
 gh pr create --base develop --head codex/v0-post-runtime-events-locks --title "Phase 4: Runtime, Resource, Event, and Lock Foundations" --body-file docs/phases/v0-post-runtime-events-locks-pr-body.md
 ```
 
-- Verification: pending.
-- Target verification result: pending.
+- Verification:
+
+```json
+{"baseRefName":"develop","headRefName":"codex/v0-post-runtime-events-locks","mergedAt":null,"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","completedAt":"0001-01-01T00:00:00Z","conclusion":"","detailsUrl":"https://github.com/samcantrill/loom/actions/runs/25316046379/job/74213698568","name":"checks","startedAt":"2026-05-04T11:19:25Z","status":"QUEUED","workflowName":"CI"}],"url":"https://github.com/samcantrill/loom/pull/18"}
+```
+
+- Target verification result: base is `develop`, matching the recorded target
+  branch.
+- CI status at PR verification: GitHub `checks` workflow was queued.
 - Merge eligibility: root serial-gate PR targeting `develop`; human review and
   human merge are required. Codex must not approve or merge.
 - Current blocker: none.
 
 ## Review Notification
 
-- Reviewer requested: pending.
-- Command to attempt: `gh pr edit <PR> --add-reviewer samcantrill`.
-- Fallback policy: if GitHub rejects the reviewer request because the
-  authenticated account or PR author is `samcantrill`, add an immediate PR
-  comment mentioning `@samcantrill` and record the fallback here and in the
-  phase execution plan.
-- Notification result: pending.
+- Reviewer requested: `samcantrill`.
+- Command attempted: `gh pr edit 18 --add-reviewer samcantrill`.
+- Command result: failed with GitHub GraphQL project-card deprecation output and
+  no review request was recorded; `gh pr view 18 --json
+  reviewRequests,author,url` showed PR author `samcantrill` and an empty
+  `reviewRequests` list.
+- Fallback used: added a PR comment mentioning `@samcantrill`.
+- Fallback comment: https://github.com/samcantrill/loom/pull/18#issuecomment-4370606278
+- Notification result: fallback comment posted; PR body records the fallback.
 
 ## Stack Maintenance
 
