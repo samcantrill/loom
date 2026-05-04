@@ -905,8 +905,25 @@ This refine pass intentionally did not run those implementation checks because i
 
 - Draft plan: completed by `loom_phase_planner` on `codex/add-local-execution`.
 - Refined phase execution plan: completed; exact API names, dataclass fields, result/status semantics, `StageContext` helper signatures, runner input contract, lifecycle ordering, output validation behavior, plan/rebind behavior, failure behavior, and suite-level test obligations are locked above.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed local in-process execution runtime in commits
+  `dd9c61c` and `8b89f1d`. Added execution errors, models, lifecycle helpers,
+  log helpers, output validation, executor protocol, `LocalExecutor`,
+  store-backed `StageContext` helpers, lazy root `loom.pipeline` runner
+  exports, `PipelineRunner`, and `run_pipeline`. Added package, unit,
+  contract, integration, e2e, and shared dummy-stage coverage for successful
+  local runs, same-run-directory resume, selector skip, config-change
+  invalidation, stage exceptions, invalid outputs, context helpers, executor
+  protocol behavior, and import boundaries. Kept CLI, subprocess/SLURM,
+  remote stores, cross-run cache reuse, retries, constructor kwargs, and
+  context-collected outputs out of scope.
+- Implementation validation: focused Phase 9 pytest slice passed with 28
+  tests; `UV_CACHE_DIR=/tmp/uv-cache make test-package` passed with 28 tests;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-unit` passed with 284 tests;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-contract` passed with 16 tests;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-integration` passed with 21 tests;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-e2e` passed with 1 test;
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed; and
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors.
 - Refinement summary: pending implementation refinement pass.
 - PR preparation: pending.
 - Stack maintenance: pending Phase 7 and Phase 8 merge/rebase/retarget state.
