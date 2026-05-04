@@ -478,6 +478,7 @@ make test-summary
 | Markdown insertion breakage | Moved Phase 1 doc additions into coherent sections and restored code-block/paragraph structure in structure, serialization, and config docs. | Markdown fence counts are balanced; targeted validation and summary checks passed. |
 | Pyright noise in dynamic PlainData regression tests | Added local casts around intentional nested PlainData mutation probes. | Targeted Pyright passed with 0 errors. |
 | Final PR validation Pyright blocker | Added type-checking-only config exports, explicit casts for thawed metadata, exported `DocumentMigration`, and cast intentional immutable-mutation probes in tests. | Full `make validate-pr` passed after the fix. |
+| CI raw no-extra Pyright blocker | Updated CI to run the repository PR gate and made `make typecheck` run Pyright with `loom[config]`; no-extra behavior remains covered by isolated `test-no-extra`. | Full `make validate-pr` passed locally after the CI wiring fix. |
 
 #### Tests Or Validation Re-Run
 

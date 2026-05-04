@@ -26,14 +26,5 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
-      - name: Ruff
-        run: uv run ruff check .
-
-      - name: Pyright
-        run: uv run pyright
-
-      - name: Pytest
-        run: uv run pytest
-
-      - name: Build
-        run: uv build
+      - name: Validate PR
+        run: make validate-pr

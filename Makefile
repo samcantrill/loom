@@ -37,7 +37,7 @@ lint:
 	uv run ruff check .
 
 typecheck:
-	uv run pyright
+	uv run --extra config pyright
 
 format:
 	uv run ruff format .

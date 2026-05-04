@@ -46,6 +46,11 @@ result: passed
 details: Ruff passed; Pyright passed with 0 errors; isolated no-extra default suite passed with 304 passed and 9 skipped; isolated config-extra suite passed with 102 passed and 305 deselected; source distribution and wheel built successfully.
 ```
 
+CI note: the first GitHub run failed because raw no-extra `uv run pyright`
+could not resolve optional config dependencies. The PR now routes CI through
+`make validate-pr`, and the `typecheck` target runs Pyright with
+`loom[config]` while no-extra behavior remains covered by `test-no-extra`.
+
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
 result: passed; wrote build/test-summary.md
