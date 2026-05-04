@@ -858,8 +858,25 @@ make test-summary
 - Draft plan: completed by `loom_phase_planner` in commit `0096ffe`.
 - Final phase execution plan: refined by `loom_phase_planner` in this planning
   pass; this document is decision-complete for executor handoff.
-- Implementation summary:
-- Implementation validation:
+- Implementation summary: added focused eventing and run-lock helpers, wired
+  `PipelineRunner` to acquire and release the run-store lock around mutating
+  execution, emit local lifecycle events after durable state commits, persist
+  status-only blocked descendant records after the first failure, keep reuse
+  and skip non-executing, and update Phase 7-owned execution, state,
+  reliability, and structure docs. The public `PipelineRunner` and
+  `run_pipeline` signatures remain unchanged.
+- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+  tests/unit/loom/pipeline/execution/test_eventing.py
+  tests/unit/loom/pipeline/execution/test_run_locks.py` passed with 5 tests;
+  `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest
+  tests/unit/loom/pipeline/execution
+  tests/integration/pipeline/test_local_execution.py
+  tests/integration/pipeline/test_local_execution_resume.py
+  tests/integration/pipeline/test_local_execution_failures.py
+  tests/contracts/test_store_contract.py tests/contracts/test_executor_contract.py
+  tests/package/test_import_boundaries.py` passed with 50 tests; and
+  `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` reported 0
+  errors, 0 warnings, and 0 informations.
 - Refinement summary:
 - PR preparation:
 - Stack maintenance: root serial phase; PR must target `develop`; Phase 8 must
