@@ -36,3 +36,16 @@ make validate-pr
 Empty future suite directories are reported as `not present` by suite-specific
 targets. Once a suite contains tests, target failures should be treated as phase
 blockers unless the phase plan or PR body explicitly justifies the limitation.
+
+## Validation split for optional dependencies
+
+Phase 1 splits validation into two install surfaces:
+
+- `test-no-extra` (default target): run baseline checks without `loom[config]`
+  extras in an isolated environment.
+- `test-config-extra`: run config-marked package/unit/integration/docs tests with
+  `--extra config` in a separate isolated environment.
+
+`make test-summary` documents both rows so reviewers can see executed config
+evidence versus default no-extra evidence. The summary e2e row runs with
+`loom[config]` when the public workflow under test is config-backed.

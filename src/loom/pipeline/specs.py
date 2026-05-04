@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import cast
 
 from loom.ids import ArtifactType, CodecKey, StageID
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data
 from loom.serialization.errors import PlainDataError
 
 from .errors import PipelineSpecError
@@ -75,14 +76,14 @@ def _validate_identifier(value: str, *, kind: str, path: str) -> str:
     return value
 
 
-def _plain_mapping(value: object, *, path: str) -> dict[str, PlainData]:
+def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     try:
         normalized = ensure_plain_data(value, path=path)
     except PlainDataError as exc:
         raise PipelineSpecError(f"{path} must be plain-data-compatible mapping: {exc}") from exc
-    if not isinstance(normalized, dict):
+    if not isinstance(normalized, Mapping):
         raise PipelineSpecError(f"{path} must be a mapping")
-    return normalized
+    return cast(Mapping[str, PlainData], normalized)
 
 
 def _parse_dependencies(
@@ -195,7 +196,7 @@ class OutputSpec:
         object.__setattr__(
             self,
             "metadata",
-            _plain_mapping(self.metadata, path="OutputSpec.metadata"),
+            freeze_plain_data(self.metadata, path="OutputSpec.metadata"),
         )
 
     @classmethod
@@ -257,12 +258,12 @@ class StageSpec:
             outputs[normalized_name] = output_spec
         if not outputs:
             raise PipelineSpecError("StageSpec.outputs requires at least one output")
-        object.__setattr__(self, "outputs", outputs)
+        object.__setattr__(self, "outputs", MappingProxyType(outputs))
 
         object.__setattr__(
             self,
             "stage_config",
-            _plain_mapping(self.stage_config, path="StageSpec.stage_config"),
+            freeze_plain_data(self.stage_config, path="StageSpec.stage_config"),
         )
         object.__setattr__(
             self,
@@ -272,12 +273,12 @@ class StageSpec:
         object.__setattr__(
             self,
             "inputs",
-            _parse_inputs(self.inputs, stage_name=name, path="StageSpec.inputs"),
+            freeze_plain_data(_parse_inputs(self.inputs, stage_name=name, path="StageSpec.inputs"), path="StageSpec.inputs"),
         )
         object.__setattr__(
             self,
             "resources",
-            _plain_mapping(self.resources, path="StageSpec.resources"),
+            freeze_plain_data(_plain_mapping(self.resources, path="StageSpec.resources"), path="StageSpec.resources"),
         )
 
     @classmethod
@@ -350,7 +351,7 @@ class PipelineSpec:
         object.__setattr__(
             self,
             "metadata",
-            _plain_mapping(self.metadata, path="PipelineSpec.metadata"),
+            freeze_plain_data(self.metadata, path="PipelineSpec.metadata"),
         )
         object.__setattr__(
             self,

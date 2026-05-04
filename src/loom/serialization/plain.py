@@ -67,6 +67,19 @@ def to_plain_data(value: Any, *, path: str = "$") -> PlainData:
     raise _value_error(path, value)
 
 
+def freeze_plain_data(value: Any, *, path: str = "$") -> Any:
+    """Convert plain data into an immutable representation."""
+
+    validated = ensure_plain_data(value, path=path)
+    return _freeze_plain_data(validated)
+
+
+def thaw_plain_data(value: Any, *, path: str = "$") -> PlainData:
+    """Convert frozen plain data into mutable dict/list structures."""
+
+    return _thaw_plain_data(value, path)
+
+
 def _convert_mapping(value: Mapping[Any, Any], path: str) -> dict[str, PlainData]:
     output: dict[str, PlainData] = {}
     for key, item in value.items():
@@ -128,3 +141,32 @@ def _takes_no_args(func: Callable[..., object]) -> bool:
         return len(signature.parameters) == 0
     except (ValueError, TypeError):
         return False
+
+
+def _freeze_plain_data(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_plain_data(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_plain_data(item) for item in value)
+    return value
+
+
+def _thaw_plain_data(value: Any, path: str) -> PlainData:
+    if isinstance(value, MappingProxyType):
+        return _thaw_mapping(value, path)
+    if isinstance(value, dict):
+        return _thaw_mapping(value, path)
+    if isinstance(value, list):
+        return [_thaw_plain_data(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    if isinstance(value, tuple):
+        return [_thaw_plain_data(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    return _to_plain(value, path)
+
+
+def _thaw_mapping(value: Mapping[Any, Any], path: str) -> dict[str, PlainData]:
+    output: dict[str, PlainData] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise PlainDataError(f"Invalid mapping key at {path}: keys must be strings")
+        output[key] = _thaw_plain_data(item, f"{path}[{key!r}]")
+    return output

@@ -1,9 +1,12 @@
 """Unit tests for artifact references."""
 
+from typing import Any, cast
+
 import pytest
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.fingerprints import hash_text
+from loom.serialization import PlainData
 
 
 def test_artifact_ref_to_dict_from_dict_round_trip() -> None:
@@ -14,7 +17,10 @@ def test_artifact_ref_to_dict_from_dict_round_trip() -> None:
         checksum="sha256:" + "b" * 64,
         fingerprint="sha256:" + "c" * 64,
         schema_version=1,
-        metadata={"epoch": 42},
+        metadata=cast(
+            dict[str, PlainData],
+            {"training": {"epoch": 42, "labels": ["best", "candidate"]}},
+        ),
     )
 
     restored = ArtifactRef.from_dict(ref.to_dict())
@@ -65,3 +71,27 @@ def test_artifact_ref_has_no_loading_behavior() -> None:
     ref = ArtifactRef(artifact_id="a", uri="file:///a", artifact_type="text")
     assert not hasattr(ref, "load")
     assert not hasattr(ref, "save")
+
+
+def test_artifact_ref_metadata_is_immutable_and_to_dict_mutations_are_local() -> None:
+    source_metadata: dict[str, Any] = {"labels": ["raw", "processed"]}
+    ref = ArtifactRef(
+        artifact_id="artifact:1",
+        uri="file:///artifact",
+        artifact_type="checkpoint",
+        metadata=cast(dict[str, PlainData], source_metadata),
+    )
+
+    source_metadata["labels"].append("archived")
+    assert ref.metadata["labels"] == ("raw", "processed")
+    with pytest.raises(TypeError):
+        cast(Any, ref.metadata["labels"])[0] = "manual"
+    with pytest.raises(TypeError):
+        cast(Any, ref.metadata)["new"] = "value"
+
+    snapshot = cast(dict[str, Any], ref.to_dict())
+    snapshot["metadata"]["labels"].append("archived")
+    snapshot["metadata"]["extra"] = "value"
+
+    assert ref.metadata["labels"] == ("raw", "processed")
+    assert "extra" not in ref.metadata

@@ -7,8 +7,8 @@ from enum import StrEnum
 from typing import Mapping, cast
 
 from loom.ids import RunID, StageID
-from loom.serialization import PlainData, ensure_plain_data
-from loom.serialization.errors import PlainDataError
+from loom.serialization import PlainData, ensure_plain_data, load_versioned_document
+from loom.serialization.errors import PlainDataError, SchemaVersionError
 from loom.timestamps import parse_timestamp
 
 from .errors import StatusSerializationError
@@ -155,30 +155,15 @@ class RunStatusRecord:
 
     @classmethod
     def from_dict(cls, data: object) -> "RunStatusRecord":
-        if not isinstance(data, Mapping):
-            raise StatusSerializationError("RunStatusRecord.from_dict expects a mapping")
-        allowed = {
-            "run_id",
-            "status",
-            "created_at",
-            "updated_at",
-            "schema_version",
-            "started_at",
-            "finished_at",
-            "message",
-            "metadata",
-        }
-        unknown = set(data) - allowed
-        if unknown:
-            raise StatusSerializationError(
-                f"RunStatusRecord.from_dict received unknown field(s): {', '.join(sorted(unknown))}",
+        try:
+            data = load_versioned_document(
+                data,
+                current_version=STATUS_SCHEMA_VERSION,
+                required={"run_id", "status", "created_at", "updated_at"},
+                optional={"started_at", "finished_at", "message", "metadata"},
             )
-        required = {"run_id", "status", "created_at", "updated_at", "schema_version"}
-        missing = required - set(data)
-        if missing:
-            raise StatusSerializationError(
-                f"RunStatusRecord.from_dict missing required field(s): {', '.join(sorted(missing))}",
-            )
+        except SchemaVersionError as exc:
+            raise StatusSerializationError(f"RunStatusRecord.from_dict: {exc}") from exc
 
         return cls(
             run_id=cast(str, data["run_id"]),
@@ -239,32 +224,15 @@ class StageStatusRecord:
 
     @classmethod
     def from_dict(cls, data: object) -> "StageStatusRecord":
-        if not isinstance(data, Mapping):
-            raise StatusSerializationError("StageStatusRecord.from_dict expects a mapping")
-        allowed = {
-            "run_id",
-            "stage_name",
-            "status",
-            "updated_at",
-            "schema_version",
-            "started_at",
-            "finished_at",
-            "attempt",
-            "message",
-            "owner",
-            "metadata",
-        }
-        unknown = set(data) - allowed
-        if unknown:
-            raise StatusSerializationError(
-                f"StageStatusRecord.from_dict received unknown field(s): {', '.join(sorted(unknown))}",
+        try:
+            data = load_versioned_document(
+                data,
+                current_version=STATUS_SCHEMA_VERSION,
+                required={"run_id", "stage_name", "status", "attempt", "updated_at"},
+                optional={"started_at", "finished_at", "message", "owner", "metadata"},
             )
-        required = {"run_id", "stage_name", "status", "attempt", "updated_at", "schema_version"}
-        missing = required - set(data)
-        if missing:
-            raise StatusSerializationError(
-                f"StageStatusRecord.from_dict missing required field(s): {', '.join(sorted(missing))}",
-            )
+        except SchemaVersionError as exc:
+            raise StatusSerializationError(f"StageStatusRecord.from_dict: {exc}") from exc
 
         return cls(
             run_id=cast(str, data["run_id"]),

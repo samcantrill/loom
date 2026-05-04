@@ -69,6 +69,39 @@ def test_execution_failure_round_trips_plain_data() -> None:
     assert ExecutionFailure.from_dict(failure.to_dict()) == failure
 
 
+def test_execution_failure_from_dict_rejects_unsupported_schema_version() -> None:
+    with pytest.raises(RunRequestError, match="unsupported schema version"):
+        ExecutionFailure.from_dict(
+            {
+                "schema_version": 999,
+                "run_id": "run1",
+                "stage_name": "build",
+                "attempt": 1,
+                "failed_at": "2020-01-01T00:00:00Z",
+                "executor": "local",
+                "failure_type": "stage_exception",
+                "message": "boom",
+            }
+        )
+
+
+def test_execution_failure_from_dict_rejects_unknown_fields() -> None:
+    with pytest.raises(RunRequestError, match="unknown field"):
+        ExecutionFailure.from_dict(
+            {
+                "schema_version": 1,
+                "run_id": "run1",
+                "stage_name": "build",
+                "attempt": 1,
+                "failed_at": "2020-01-01T00:00:00Z",
+                "executor": "local",
+                "failure_type": "stage_exception",
+                "message": "boom",
+                "unexpected": "field",
+            }
+        )
+
+
 def test_config_snapshot_inputs_validate_strings() -> None:
     with pytest.raises(RunRequestError):
         ConfigSnapshotInputs(raw=object())  # type: ignore[arg-type]

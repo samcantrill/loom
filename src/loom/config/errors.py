@@ -77,6 +77,10 @@ class RuntimeInjectionError(TargetInstantiationError):
     """Error resolving runtime injection references for `_inject_`."""
 
 
+class MissingConfigDependencyError(ConfigError):
+    """Error raised when optional config dependencies are missing."""
+
+
 __all__ = [
     "ConfigLoadError",
     "ConfigMergeError",
@@ -96,4 +100,5 @@ __all__ = [
     "TargetImportError",
     "TargetInstantiationError",
     "RuntimeInjectionError",
+    "MissingConfigDependencyError",
 ]

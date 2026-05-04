@@ -867,6 +867,10 @@ sequence indexes use brackets
 Normalization should return new containers.
 
 It should not mutate input mappings, lists, dataclasses, or metadata fields.
+Frozen core value objects use `freeze_plain_data()` to recursively convert
+mappings to `MappingProxyType` and sequences to tuples at construction time.
+Public output paths use `thaw_plain_data()` so callers receive independent
+mutable `dict` and `list` trees from `to_dict()` and related helpers.
 
 Reason:
 
@@ -1245,14 +1249,14 @@ Recommended functions:
 get_schema_version
 require_schema_version
 check_supported_schema
-ensure_mapping
-require_field
-optional_field
-require_str
-optional_str
+require_mapping
+validate_document_fields
+load_versioned_document
 ```
 
 The goal is clear failure, not a full schema-validation framework.
+Migrations are owned by each persisted-document module and passed into
+`load_versioned_document()` rather than registered in global process state.
 
 ### 13.2 Version Field Names
 

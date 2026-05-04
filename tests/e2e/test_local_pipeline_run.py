@@ -11,6 +11,10 @@ from loom.pipeline.stores import LocalRunStore
 from tests.support.pipeline_execution_configs import local_execution_config
 
 
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
+
 pytestmark = pytest.mark.e2e
 
 

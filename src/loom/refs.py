@@ -8,7 +8,7 @@ from typing import Any, Mapping, cast
 from loom.errors import FingerprintError, ResourceError, ValidationError
 from loom.fingerprints import validate_digest
 from loom.ids import Checksum, CodecKey, ResourceType
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 
 class ResourceRefError(ResourceError, ValidationError):
@@ -37,7 +37,7 @@ class ResourceRef:
             raise ResourceRefError("schema_version must be a positive integer")
         if self.checksum is not None:
             object.__setattr__(self, "checksum", _ensure_digest(self.checksum))
-        object.__setattr__(self, "metadata", ensure_plain_data(dict(self.metadata), path="metadata"))
+        object.__setattr__(self, "metadata", freeze_plain_data(self.metadata, path="metadata"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,7 +46,7 @@ class ResourceRef:
             "codec_key": self.codec_key,
             "schema_version": self.schema_version,
             "checksum": self.checksum,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -68,7 +68,7 @@ class ResourceRef:
             codec_key=_ensure_codec_key(data.get("codec_key", None)),
             schema_version=_require_schema_version(data.get("schema_version", 1)),
             checksum=_ensure_digest(data.get("checksum")),
-            metadata=cast(Mapping[str, PlainData], ensure_plain_data(data.get("metadata", {}), path="metadata")),
+            metadata=cast(Mapping[str, PlainData], data.get("metadata", {})),
         )
 
 

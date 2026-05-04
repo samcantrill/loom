@@ -8,7 +8,7 @@ from typing import Any, Mapping, cast
 from loom.errors import ArtifactError, FingerprintError, ValidationError
 from loom.fingerprints import validate_digest
 from loom.ids import ArtifactID, ArtifactType, Checksum, CodecKey, Fingerprint, StageID
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
 
@@ -50,7 +50,7 @@ class ArtifactRef:
             raise ArtifactValidationError("producer_stage must be None or a non-empty string")
         if self.created_at is not None:
             _validate_timestamp(self.created_at, "created_at")
-        object.__setattr__(self, "metadata", ensure_plain_data(dict(self.metadata), path="metadata"))
+        object.__setattr__(self, "metadata", freeze_plain_data(self.metadata, path="metadata"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,7 +63,7 @@ class ArtifactRef:
             "fingerprint": self.fingerprint,
             "producer_stage": self.producer_stage,
             "created_at": self.created_at,
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -97,7 +97,7 @@ class ArtifactRef:
             fingerprint=_ensure_digest(data.get("fingerprint"), "fingerprint"),
             producer_stage=_ensure_stage_id(data.get("producer_stage")),
             created_at=_ensure_str_or_none(data.get("created_at"), "created_at", parse=True),
-            metadata=cast(Mapping[str, PlainData], ensure_plain_data(data.get("metadata", {}), path="metadata")),
+            metadata=cast(Mapping[str, PlainData], data.get("metadata", {})),
         )
 
 

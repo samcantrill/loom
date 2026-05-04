@@ -1,9 +1,18 @@
 """Unit tests for APIs promoted from deferred Phase 5 stubs."""
 
+import pytest
+
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
+
 import loom.config
 import loom.config.api as config_api
 
 from tests.support.config_samples import function_recipe
+
+
+pytestmark = pytest.mark.optional_dependency
 
 
 def test_phase5_config_apis_are_live(monkeypatch) -> None:

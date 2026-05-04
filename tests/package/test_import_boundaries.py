@@ -90,6 +90,41 @@ def test_import_config_does_not_import_pipeline_or_execution() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_config_symbol_access_without_optional_dependencies_mentions_config_extra() -> None:
+    script = dedent(
+        """
+        import importlib
+        import loom.config
+
+        original_import_module = importlib.import_module
+
+        def fake_import_module(name, package=None):
+            if name in {"yaml", "omegaconf", "pydantic"}:
+                raise ModuleNotFoundError(f\"No module named {name!r}\")
+            return original_import_module(name, package=package)
+
+        importlib.import_module = fake_import_module
+        try:
+            try:
+                _ = loom.config.compose_config
+            except Exception as exc:
+                message = str(exc)
+            else:
+                raise SystemExit(\"compose_config unexpectedly imported without optional deps\")
+            if \"loom[config]\" not in message:
+                raise SystemExit(f\"Expected loom[config] in error message: {message!r}\")
+        finally:
+            importlib.import_module = original_import_module
+
+        print(\"ok\")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_pipeline_does_not_import_forbidden_runtime_layers() -> None:
     script = dedent(
         """
