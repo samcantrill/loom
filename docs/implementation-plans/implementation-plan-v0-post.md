@@ -1328,9 +1328,24 @@ Future compatibility:
 
 ### Phase 6 - Explicit Recipe Catalogs And Fresh Composition
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/v0-post-recipe-catalogs`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/20
+
+PR notes:
+
+- Opened against `develop` as PR #20 with head
+  `codex/v0-post-recipe-catalogs` at `cb70d12`.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after
+  the refinement pass; PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed with package, unit, contract, integration, e2e, and config-extra rows;
+  GitHub checks passed.
+- Human merge gate: Codex did not approve or merge the PR. `gh pr edit 20
+  --add-reviewer samcantrill` was rejected by GitHub's Projects Classic GraphQL
+  deprecation path, so the required fallback comment mentioned `@samcantrill`
+  at https://github.com/samcantrill/loom/pull/20#issuecomment-4371151613.
+- Serial gate: Phase 7 must not start until PR #20 reaches `MERGED` on
+  `develop` and Phase 6 is recorded as `merged`.
 
 Goal:
 
