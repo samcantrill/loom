@@ -350,9 +350,13 @@ make test-summary
 - PR body refine pass: pending.
 - PR creation: not attempted in the draft pass by instruction.
 - Final validation evidence:
-  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` failed at Pyright after Ruff
-    passed. Pyright reported 103 errors and 6 warnings; the blocker is recorded
-    in the PR body for the manager's terminal decision.
+  - Initial draft-pass `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` failed at
+    Pyright after Ruff passed. The blocker was resolved in
+    `fix: clear phase 1 pyright blockers`.
+  - Rerun `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed,
+    Pyright passed with 0 errors, isolated no-extra/default suite passed,
+    isolated config-extra suite passed, and source distribution plus wheel
+    built successfully.
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote suite
     evidence to ignored file `build/test-summary.md`; the suite table is copied
     into the PR body.
@@ -398,13 +402,13 @@ make test-summary
 - Final phase execution plan: completed in this artifact.
 - Implementation summary: completed in implementation commits `b511bb3`, `8327928`,
   `38cd4aa`, `9d104ba`, `df9d28e`, `efe74e6`, and `45ee6a6`.
-- Implementation validation: targeted refinement checks passed as recorded below;
-  final `make validate-pr` remains for PR preparation.
+- Implementation validation: targeted refinement checks and final PR validation
+  passed as recorded below.
 - Refinement summary: completed in `fix: refine after validation`.
-- PR preparation: PR body draft completed; refine pass pending; PR not opened.
+- PR preparation: PR body draft completed; validation blocker resolved in
+  `fix: clear phase 1 pyright blockers`; refine pass pending; PR not opened.
 - Stack maintenance: pending.
-- Remaining blockers: final `make validate-pr` fails at Pyright during PR
-  preparation draft pass.
+- Remaining blockers: none.
 
 ### Phase Refinement Report
 
@@ -447,6 +451,7 @@ make test-summary
 | Summary harness install-surface contamination | Made `summary` spawn isolated suite runs, made the config-extra row use `--extra config`, and made the config-backed e2e summary row run with `--extra config`. | `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra rows. |
 | Markdown insertion breakage | Moved Phase 1 doc additions into coherent sections and restored code-block/paragraph structure in structure, serialization, and config docs. | Markdown fence counts are balanced; targeted validation and summary checks passed. |
 | Pyright noise in dynamic PlainData regression tests | Added local casts around intentional nested PlainData mutation probes. | Targeted Pyright passed with 0 errors. |
+| Final PR validation Pyright blocker | Added type-checking-only config exports, explicit casts for thawed metadata, exported `DocumentMigration`, and cast intentional immutable-mutation probes in tests. | Full `make validate-pr` passed after the fix. |
 
 #### Tests Or Validation Re-Run
 
@@ -468,6 +473,12 @@ result: passed
 
 command: UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/refs.py src/loom/artifacts.py src/loom/records/base.py src/loom/records/manifest.py tools/test_harness/cli.py tests/unit/loom/test_refs.py tests/unit/loom/test_artifacts.py tests/unit/loom/test_records.py
 result: passed, 0 errors
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed after `fix: clear phase 1 pyright blockers`; Ruff passed, Pyright
+passed with 0 errors, isolated no-extra/default tests passed, isolated
+config-extra tests passed, and source distribution plus wheel built
+successfully
 ```
 
 #### Remaining Blockers

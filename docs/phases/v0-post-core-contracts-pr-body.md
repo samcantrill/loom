@@ -25,7 +25,7 @@ The diff also updates validation harnesses so default no-extra and config-extra 
 - [x] Older schema versions can route through explicit document-owned migrations in the shared schema-helper tests.
 - [x] `import loom` and core primitive/store/serialization/inspection imports work without config extras.
 - [x] Phase 1 suite evidence includes default no-extra package/unit/contract/integration rows and config-extra/e2e rows.
-- [ ] Final `make validate-pr` passes. Draft-pass validation is blocked by Pyright errors recorded below.
+- [x] Final `make validate-pr` passes.
 
 ## Implementation Notes
 
@@ -41,14 +41,8 @@ The diff also updates validation harnesses so default no-extra and config-extra 
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
-result: failed
-details: Ruff passed. Pyright failed before no-extra tests, config-extra tests, and build could run through the validate-pr target.
-pyright summary: 103 errors, 6 warnings, 0 informations.
-primary blockers:
-- `src/loom/config/__init__.py` lazy optional exports are listed in `__all__` but are not statically present, causing module export and config test import errors.
-- `src/loom/records/views.py` passes `thaw_plain_data()` output, typed as `PlainData`, where constructors expect `dict[str, PlainData]`.
-- Several immutable-data tests intentionally mutate or index `PlainData`/mapping values without enough local casts for Pyright.
-- `tests/unit/loom/serialization/test_schema.py` migration callables accept `dict[str, object]` where `DocumentMigration` expects `Mapping[str, object]`.
+result: passed
+details: Ruff passed; Pyright passed with 0 errors; isolated no-extra default suite passed with 304 passed and 9 skipped; isolated config-extra suite passed with 102 passed and 305 deselected; source distribution and wheel built successfully.
 ```
 
 ```text
@@ -61,11 +55,11 @@ result: passed; wrote build/test-summary.md
 | Suite | Status | Duration | Command |
 | --- | --- | ---: | --- |
 | package | passed | 2.65s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run package` |
-| unit | passed | 2.47s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run unit` |
-| contract | passed | 1.18s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run contract` |
-| integration | passed | 1.42s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run integration` |
-| e2e | passed | 1.79s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run e2e` |
-| config-extra | passed | 5.05s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run config-extra` |
+| unit | passed | 2.32s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run unit` |
+| contract | passed | 1.04s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run contract` |
+| integration | passed | 1.38s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run integration` |
+| e2e | passed | 1.85s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run e2e` |
+| config-extra | passed | 5.00s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run config-extra` |
 
 Suite counts from `make test-summary`:
 
@@ -98,7 +92,6 @@ Scope check:
 
 ## Risks / Follow-Ups
 
-- Blocking PR-readiness risk: final `make validate-pr` fails at Pyright. The manager needs a terminal decision before PR creation or an explicitly authorized refinement pass.
 - Selected schema-helper migration remains intentionally limited to manifest, status, and execution failure readers. Planning, provenance, local-store wrapper, and artifact-index readers remain documented debt for later edits to those document families.
 - Config package lazy-import behavior is transitional until later stage factory/import work; current intent is no-extra-safe package import plus clear missing-extra errors for config behavior.
 
@@ -112,7 +105,7 @@ Scope check:
 gh pr create --base develop --head codex/v0-post-core-contracts --body-file docs/phases/v0-post-core-contracts-pr-body.md
 ```
 
-- Current blocker: `make validate-pr` fails at Pyright. PR body refine pass is pending.
+- Current blocker: none. PR body refine pass is pending.
 
 ## Review Notification
 
