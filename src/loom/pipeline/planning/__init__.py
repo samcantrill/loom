@@ -1,3 +1,65 @@
-"""Pipeline planning package skeleton."""
+"""Pipeline planning API."""
 
-__all__ = []
+from loom.pipeline.planning.errors import (
+    PlanPersistenceError,
+    PlanSerializationError,
+    PlanningError,
+    PlanningValidationError,
+    ResumeStateError,
+    SelectorValidationError,
+    StageFingerprintError,
+)
+from loom.pipeline.planning.fingerprints import build_stage_fingerprint
+from loom.pipeline.planning.models import (
+    DEFAULT_FINGERPRINT_ALGORITHM,
+    PLAN_SCHEMA_VERSION,
+    STAGE_FINGERPRINT_POLICY_NAME,
+    STAGE_FINGERPRINT_POLICY_VERSION,
+    STAGE_FINGERPRINT_SCHEMA_VERSION,
+    BoundInput,
+    ExecutionPlan,
+    FingerprintContext,
+    FingerprintStatus,
+    PendingInput,
+    PlanAction,
+    PlanReason,
+    PlanReasonCode,
+    PlanSelectors,
+    ResumeCheck,
+    ResumeOptions,
+    StageFingerprintPayload,
+    StageFingerprintRecord,
+    StagePlan,
+)
+from loom.pipeline.planning.planner import plan_pipeline
+
+__all__ = [
+    "DEFAULT_FINGERPRINT_ALGORITHM",
+    "PLAN_SCHEMA_VERSION",
+    "STAGE_FINGERPRINT_POLICY_NAME",
+    "STAGE_FINGERPRINT_POLICY_VERSION",
+    "STAGE_FINGERPRINT_SCHEMA_VERSION",
+    "BoundInput",
+    "ExecutionPlan",
+    "FingerprintContext",
+    "FingerprintStatus",
+    "PendingInput",
+    "PlanAction",
+    "PlanPersistenceError",
+    "PlanReason",
+    "PlanReasonCode",
+    "PlanSerializationError",
+    "PlanSelectors",
+    "PlanningError",
+    "PlanningValidationError",
+    "ResumeCheck",
+    "ResumeOptions",
+    "ResumeStateError",
+    "SelectorValidationError",
+    "StageFingerprintError",
+    "StageFingerprintPayload",
+    "StageFingerprintRecord",
+    "StagePlan",
+    "build_stage_fingerprint",
+    "plan_pipeline",
+]
