@@ -400,6 +400,7 @@ Good:
 ```python
 catalog = RecipeCatalog()
 load_recipe_entry_points(catalog)
+config = compose_config_with_catalog("experiment.yaml", recipe_catalog=catalog)
 ```
 
 Bad:
