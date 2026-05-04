@@ -15,7 +15,7 @@ from loom.pipeline.planning import PlanAction
 from loom.pipeline.stores import LocalRunStore
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 EXAMPLES_ROOT = Path(__file__).resolve().parents[3] / "examples"
 REQUIRED_MANIFEST_FIELDS = {

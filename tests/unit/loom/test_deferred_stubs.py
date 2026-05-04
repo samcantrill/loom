@@ -2,8 +2,12 @@
 
 import loom.config
 import loom.config.api as config_api
+import pytest
 
 from tests.support.config_samples import function_recipe
+
+
+pytestmark = pytest.mark.optional_dependency
 
 
 def test_phase5_config_apis_are_live(monkeypatch) -> None:

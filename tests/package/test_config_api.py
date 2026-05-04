@@ -13,7 +13,7 @@ import pytest
 from loom.config import ComposedConfig
 
 
-pytestmark = pytest.mark.package
+pytestmark = [pytest.mark.package, pytest.mark.optional_dependency]
 
 
 def test_config_exports_and_signature() -> None:

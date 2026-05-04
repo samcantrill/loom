@@ -3,9 +3,14 @@
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from loom.config import RecipeCatalog, compose_config
 from loom.pipeline import PipelineSpec, parse_pipeline_config
 from loom.pipeline.graph import build_stage_graph, topological_sort
+
+
+pytestmark = pytest.mark.optional_dependency
 
 
 def pipeline_recipe(*, title: str | None = None, **_kwargs: Any) -> dict[str, Any]:
