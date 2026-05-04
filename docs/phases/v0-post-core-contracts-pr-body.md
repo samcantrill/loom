@@ -3,13 +3,14 @@
 - Phase: Phase 1 - Core Contracts, Schemas, And Packaging
 - Branch: `codex/v0-post-core-contracts`
 - Target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/15
 - Stack predecessor: none
 - Merge eligibility: serial human merge gate. This PR targets `develop`, must request review from `samcantrill` or mention `@samcantrill` if GitHub rejects the reviewer request, and must be approved and merged by a human. Codex must not approve or merge.
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-core-contracts`
 - Plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Phase execution plan: `docs/phases/v0-post-core-contracts.md`
 - Draft pass: complete, 2026-05-04
-- Refine pass: pending
+- Refine pass: complete, 2026-05-04
 
 ## Summary
 
@@ -54,12 +55,12 @@ result: passed; wrote build/test-summary.md
 
 | Suite | Status | Duration | Command |
 | --- | --- | ---: | --- |
-| package | passed | 2.65s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run package` |
+| package | passed | 2.81s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run package` |
 | unit | passed | 2.32s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run unit` |
-| contract | passed | 1.04s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run contract` |
-| integration | passed | 1.38s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run integration` |
-| e2e | passed | 1.85s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run e2e` |
-| config-extra | passed | 5.00s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run config-extra` |
+| contract | passed | 1.11s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run contract` |
+| integration | passed | 1.39s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m tools.test_harness run integration` |
+| e2e | passed | 2.20s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run e2e` |
+| config-extra | passed | 5.51s | `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run config-extra` |
 
 Suite counts from `make test-summary`:
 
@@ -97,21 +98,32 @@ Scope check:
 
 ## PR Creation Status
 
-- PR opened: no.
-- Command attempted: none. The draft pass explicitly must not open the PR.
-- Planned command after refine/blocker resolution:
+- PR opened: yes.
+- PR URL: https://github.com/samcantrill/loom/pull/15
+- Command run:
 
 ```sh
-gh pr create --base develop --head codex/v0-post-core-contracts --body-file docs/phases/v0-post-core-contracts-pr-body.md
+gh pr create --base develop --head codex/v0-post-core-contracts --title "Phase 1: Core contracts, schemas, and packaging" --body-file docs/phases/v0-post-core-contracts-pr-body.md
 ```
 
-- Current blocker: none. PR body refine pass is pending.
+- Verification:
+
+```json
+{"baseRefName":"develop","headRefName":"codex/v0-post-core-contracts","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/15"}
+```
+
+- Target verification result: base is `develop`, matching the recorded target branch.
+- Merge eligibility: root serial-gate PR targeting `develop`; human review and human merge are required. Codex must not approve or merge.
+- Current blocker: none.
 
 ## Review Notification
 
 - Reviewer requested: `samcantrill`
-- Command or fallback used: not attempted in draft pass.
-- Notification result: pending. After PR creation, request review with `gh pr edit <PR> --add-reviewer samcantrill`; if GitHub rejects the request because the authenticated account or PR author is `samcantrill`, add a PR comment mentioning `@samcantrill` and record that fallback.
+- Command attempted: `gh pr edit 15 --add-reviewer samcantrill`
+- Command result: failed with GitHub GraphQL project-card deprecation output and no review request was recorded; `gh pr view 15 --json reviewRequests,author,url` showed PR author `samcantrill` and an empty `reviewRequests` list.
+- Fallback used: added a PR comment mentioning `@samcantrill`.
+- Fallback comment: https://github.com/samcantrill/loom/pull/15#issuecomment-4368962175
+- Notification result: fallback comment posted; PR body also mentions `@samcantrill`.
 
 ## Stack Maintenance
 

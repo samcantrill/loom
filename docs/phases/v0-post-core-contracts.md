@@ -2,8 +2,9 @@
 
 ## Metadata
 
-- Status: refined phase execution plan, ready for implementation handoff
+- Status: PR open, awaiting serial human merge gate review
 - Branch: `codex/v0-post-core-contracts`
+- PR: https://github.com/samcantrill/loom/pull/15
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-core-contracts`
 - Phase execution plan path: `docs/phases/v0-post-core-contracts.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
@@ -17,6 +18,14 @@
 - Plan quality gate loop budget: initial plan review used, automated plan refinement pass used, confirmation review used. Do not consume another plan-quality review loop without explicit manager instruction.
 - Draft pass: completed by `loom_phase_planner` in draft commit `f0a9fdf258645960b78128e14accb40c3a86dcde`.
 - Refine pass: completed by `loom_phase_planner` in this pass.
+- PR body refine pass: completed by `loom_pr_preparer` on 2026-05-04.
+- PR verification: `gh pr view 15 --json baseRefName,headRefName,state,url`
+  returned base `develop`, head `codex/v0-post-core-contracts`, state `OPEN`,
+  and URL `https://github.com/samcantrill/loom/pull/15`.
+- Review notification: `gh pr edit 15 --add-reviewer samcantrill` failed with
+  GitHub GraphQL project-card deprecation output and no review request was
+  recorded; fallback comment mentioning `@samcantrill` posted at
+  https://github.com/samcantrill/loom/pull/15#issuecomment-4368962175.
 - Setup limitations: none for local planning. The assigned branch/worktree already existed at the requested `develop` base commit; no remote synchronization was needed for this refinement.
 - Blockers: none.
 
@@ -347,8 +356,22 @@ make test-summary
 
 - PR body draft pass: completed on 2026-05-04 in
   `docs/phases/v0-post-core-contracts-pr-body.md`.
-- PR body refine pass: pending.
-- PR creation: not attempted in the draft pass by instruction.
+- PR body refine pass: completed on 2026-05-04.
+- PR creation: opened https://github.com/samcantrill/loom/pull/15 against
+  `develop` with head `codex/v0-post-core-contracts`.
+- PR verification: passed. `gh pr view 15 --json
+  baseRefName,headRefName,state,url` returned:
+
+```json
+{"baseRefName":"develop","headRefName":"codex/v0-post-core-contracts","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/15"}
+```
+
+- Review notification: reviewer request command
+  `gh pr edit 15 --add-reviewer samcantrill` failed with GitHub GraphQL
+  project-card deprecation output and left no review request recorded. Because
+  the PR author is `samcantrill`, the serial-gate fallback was used: PR comment
+  https://github.com/samcantrill/loom/pull/15#issuecomment-4368962175 mentions
+  `@samcantrill`.
 - Final validation evidence:
   - Initial draft-pass `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` failed at
     Pyright after Ruff passed. The blocker was resolved in
@@ -406,8 +429,11 @@ make test-summary
   passed as recorded below.
 - Refinement summary: completed in `fix: refine after validation`.
 - PR preparation: PR body draft completed; validation blocker resolved in
-  `fix: clear phase 1 pyright blockers`; refine pass pending; PR not opened.
-- Stack maintenance: pending.
+  `fix: clear phase 1 pyright blockers`; refine pass completed; PR opened at
+  https://github.com/samcantrill/loom/pull/15 and verified against `develop`;
+  fallback review notification comment posted.
+- Stack maintenance: none required before the human merge gate; there is no
+  stack predecessor.
 - Remaining blockers: none.
 
 ### Phase Refinement Report
