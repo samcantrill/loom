@@ -793,9 +793,27 @@ choices selected above.
 
 ### Phase 1 - Core Contracts, Schemas, And Packaging
 
-Status: pr_open
+Status: merged
 Branch: `codex/v0-post-core-contracts`
 PR: https://github.com/samcantrill/loom/pull/15
+
+Merge notes:
+
+- Merged into `develop` on 2026-05-04.
+- Summary: added recursive plain-data freeze/thaw helpers, made in-scope frozen
+  refs/records/manifests/views/specs recursively immutable, added shared
+  strict schema helper APIs, migrated selected manifest/status/execution
+  failure readers, moved config dependencies behind `loom[config]`, and split
+  validation evidence into no-extra and config-extra surfaces.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; PR
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package, unit,
+  contract, integration, e2e, and config-extra rows; GitHub CI `checks` passed.
+- Stack maintenance: root serial phase, no successor branch was started before
+  merge, and no retargeting was required.
+- Follow-up notes: later persisted document families can adopt the shared
+  schema helpers when they change; Phase 2 must continue from updated
+  `develop` and must not reopen Phase 1 optional dependency or immutability
+  decisions.
 
 Goal:
 
