@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Branch: `codex/harden-v0-docs`
 - Worktree: `/home/samcantrill/work/loom-worktrees/harden-v0-docs`
 - Phase execution plan path: `docs/phases/harden-v0-docs.md`
@@ -15,12 +15,12 @@
 - Successor dependency notes: no successor phase is recorded. Keep `codex/harden-v0-docs` until any later branch has been retargeted or rebased away from it.
 - Plan quality gate: passed on 2026-05-03 by `loom_plan_reviewer` confirmation review; no blocking findings remain in the canonical v0 implementation plan.
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
-- Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time in this plan commit.
-- Refine pass: pending; the refine pass must make implementation choices decision-complete before executor work begins.
+- Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time in draft commit `91904e74207f89a8507573774470f1c23a6b7df9`.
+- Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time in this plan-only refinement commit.
 - Phase implementation refinement budget: unused.
 - PR review budget: unused.
 - PR body draft/refine budget: unused until PR-preparation workflow stages.
-- Setup limitations: no remote operations or validation commands were run during this draft pass. The worktree was created from the local recorded predecessor branch because the manager supplied the exact Phase 9 base head.
+- Setup limitations: no remote operations or validation commands were run during the draft or refine planning passes. The worktree was created from the local recorded predecessor branch because the manager supplied the exact Phase 9 base head.
 - Blockers: none.
 
 ## Objective
@@ -71,6 +71,8 @@ Phase 10 builds on that full local stack. It should harden existing behavior and
 - The shared root error hierarchy in `src/loom/errors.py` is intentionally small and has no structured `ErrorContext` implementation yet. Subsystem error modules contain concrete errors near the raising code.
 - Existing tests already cover package imports, public API stability, config behavior, recipes, pipeline specs/graph, stores, planning/resume, local execution, contracts, integration, and one e2e local pipeline run.
 - Contract tests currently exist for executor, store, codec, data source, stage, and recipe protocols. Phase 10 should extend or tighten these contracts with downstream-style dummy implementations rather than requiring inheritance.
+- Current resume unit coverage proves valid reuse, no-prior-state rerun, missing-artifact rerun, and corrupt status failure. Phase 10 must add the missing representative cases for stale `RUNNING`, missing `outputs.json`, corrupt `outputs.json`, partial artifacts, checksum mismatch, and failed prior stages.
+- Current local execution integration coverage proves same-run reuse, config-change rerun, stage exception persistence, invalid-output failure state, target contract failure, and skip-status store failure. Phase 10 should extend this coverage only where it proves hardening or docs examples, not retest every predecessor behavior.
 - `README.md` is minimal and points to design docs. Phase 10 should turn it into a useful v0 quickstart and contract overview without promising deferred CLI behavior.
 - `docs/loom.md` already names run directory, fingerprints/resume, public API, CLI deferral, and error model. It should be updated to match the implemented v0 Python API and final run layout.
 - `tests/README.md` documents suite names and Make targets. The suite-level obligations below must remain visible to PR preparation through `make test-summary`.
@@ -110,24 +112,89 @@ Phase 10 builds on that full local stack. It should harden existing behavior and
 - Conservative resume is more important than aggressive reuse. Any ambiguous, partial, corrupt, failed, or unverifiable state should produce `RUN`, `STALE`, `BLOCKED`, or a clear error rather than `REUSE`.
 - No lock manager is required unless targeted interrupted-run tests expose a concrete race that cannot be handled with atomic writes and conservative planning.
 - Import-boundary tests should not force `loom.__init__` to export runtime-heavy names.
+- Corrupt persisted JSON should fail planning or run opening with a clear store/resume error by default. Missing or unverifiable prior files can rerun when existing planner/store contracts support rerun without silent repair.
+- "Partial artifact" means a prior `outputs.json` or artifact index references an artifact whose file is missing, whose URI is unsupported for the local store, whose path is not a regular file when checksum validation is required, or whose checksum no longer matches stored bytes.
+- Documentation may mirror tested examples manually instead of adding a generic Markdown code-block extraction harness in this phase. A docs extraction harness is not required for v0.
 
 ## Implementation Boundaries
 
 - Allowed source areas: `src/loom/errors.py` only if a shared minimal helper is justified; targeted subsystem modules under `src/loom/config/`, `src/loom/io/`, `src/loom/pipeline/`, `src/loom/pipeline/stores/`, `src/loom/pipeline/planning/`, `src/loom/pipeline/execution/`, and `src/loom/pipeline/executors/` where error or recovery behavior is already owned.
-- Allowed docs areas: `README.md`, `docs/loom.md`, relevant `docs/features/*.md`, `tests/README.md`, and Phase 10 artifacts under `docs/phases/`.
+- Allowed docs areas: `README.md`, `docs/loom.md`, targeted sections in `docs/features/config.md`, `docs/features/errors.md`, `docs/features/run-store.md`, `docs/features/artifacts.md`, `docs/features/io.md`, `docs/features/fingerprints.md`, `docs/features/resume.md`, `docs/features/provenance.md`, `docs/features/testing.md`, `docs/features/cli.md`, `tests/README.md`, and Phase 10 artifacts under `docs/phases/`.
 - Allowed tests: `tests/package/`, `tests/unit/loom/`, `tests/contracts/`, `tests/integration/`, `tests/e2e/`, and generic support helpers under `tests/support/`.
 - Avoid changing public APIs unless required to expose already-implemented v0 behavior or preserve stable import paths. If a public contract change is needed, document it in this plan during refinement before implementation.
 - Keep all runtime and test examples domain-neutral; project-specific classes may appear only as illustrative docs placeholders, not in package code.
 
 ## Decision-Complete Contract
 
-The refine pass must turn this draft into exact implementation slices before executor work begins. The current draft contract is:
+The implementation handoff is decision-complete. Executor work should implement the exact targets below and stop if an acceptance criterion appears to require new public API, a broad error framework, a lock manager, a functional CLI, remote stores, cross-run cache reuse, new execution backends, or domain-specific runtime behavior.
 
-- Error behavior: representative high-traffic errors must include enough context for a user to locate the bad config key, stage, target, artifact, persisted document, or filesystem path. Messages must not print unredacted secret values.
-- Recovery behavior: same-run resume must refuse reuse for stale `RUNNING`, failed, missing, corrupt, partial, checksum-mismatched, or unverifiable prior state. It may rerun or fail clearly depending on whether the state is recoverable through existing store/planner contracts.
-- Extension contracts: protocols remain structural. Tests should instantiate downstream-style classes without inheriting from concrete `loom` classes and prove public APIs accept them where v0 promises protocol support.
-- Documentation: docs must describe the implemented Python API and v0 limitations. They must not imply that functional CLI commands, remote stores, cross-run reuse, or deferred config language features exist.
-- Import boundaries: `import loom` remains cheap and must not import config composition, pipeline runners, CLI modules, plugin discovery, project packages, or optional/heavy future paths.
+### Error-Hardening Targets
+
+The executor must add or tighten tests before changing behavior. Each row is representative; do not attempt to standardize every possible error message.
+
+| Area | Source files allowed | Test files to add or extend | Required representative assertions |
+| --- | --- | --- | --- |
+| Config load/merge/overrides/interpolation/redaction | `src/loom/config/load.py`, `merge.py`, `overrides.py`, `interpolation.py`, `validation.py`, `redaction.py`, `compose.py`, `errors.py` | `tests/unit/loom/config/test_config_errors.py`, `tests/unit/loom/config/test_compose.py`, `tests/unit/loom/config/test_overrides.py`, `tests/unit/loom/config/test_interpolation.py`, `tests/unit/loom/config/test_redaction.py`, `tests/integration/config/test_compose_config.py` | Invalid authored values identify a config path such as `$.pipeline.stages[2].config.limit`; override failures name the dot path supplied by the user; interpolation failures name the unresolved token and config path; redaction tests prove `password`, `secret`, `token`, and `api_key` values are not printed in error text. |
+| Recipes | `src/loom/config/recipes/catalog.py`, `expansion.py`, `errors.py`, `manifest.py` | `tests/unit/loom/config/recipes/test_catalog.py`, `tests/unit/loom/config/recipes/test_expansion.py`, `tests/contracts/test_recipe_contract.py`, `tests/integration/config/test_compose_recipes.py` | Unknown recipe, recipe exception, nested recipe rejection, and non-mapping recipe output include the recipe name and path such as `$.pipeline.stages[0]` without leaking raw secret arguments. |
+| Target import and recursive instantiation | `src/loom/config/instantiate/targets.py`, `recursive.py`, `injection.py`, `errors.py` | `tests/unit/loom/config/instantiate/test_targets.py`, `tests/unit/loom/config/instantiate/test_recursive.py`, `tests/unit/loom/config/instantiate/test_injection.py`, `tests/integration/pipeline/test_local_execution_failures.py` | Import failures include the target path and config path, especially `pipeline.stages[2]._target_`; constructor failures include the target path and nested parameter path; stage target failures include the stage name and do not imply constructor kwargs are supported in v0. |
+| Pipeline specs and graph bindings | `src/loom/pipeline/specs.py`, `src/loom/pipeline/graph/bindings.py`, `src/loom/pipeline/errors.py` | `tests/unit/loom/pipeline/test_specs.py`, `tests/unit/loom/pipeline/graph/test_bindings.py`, `tests/integration/pipeline/test_pipeline_config.py` | Missing or invalid `_target_`, duplicate stage names, malformed inputs, unknown stages, and unknown outputs include paths such as `$.pipeline.stages[2]._target_`, consumer stage names, input names, and logical artifact keys such as `train.best_checkpoint`. |
+| Artifact store | `src/loom/pipeline/stores/local_artifacts.py`, `indexes.py`, `_paths.py`, `errors.py` | `tests/unit/loom/pipeline/stores/test_local_artifacts.py`, `tests/unit/loom/pipeline/stores/test_indexes.py`, `tests/unit/loom/pipeline/stores/test_store_errors.py` | Missing files, unsupported URI schemes, outside-stage registration, codec-less load, directory checksum validation, and checksum mismatch include a filesystem path or URI and, when available through `ArtifactRef.artifact_id`, the logical artifact key. |
+| Run store documents | `src/loom/pipeline/stores/local_runs.py`, `run_store.py`, `errors.py` | `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/stores/test_store_errors.py`, `tests/integration/pipeline/test_local_stores.py` | Missing `run.json`, malformed `status.json`, corrupt `outputs.json`, malformed `fingerprint.json`, schema mismatch, stage/run id mismatch, and invalid artifact refs include the exact document path where the current implementation can know it, plus run id and stage name. |
+| Resume planner and plan persistence | `src/loom/pipeline/planning/resume.py`, `planner.py`, `models.py`, `errors.py` | `tests/unit/loom/pipeline/planning/test_resume.py`, `tests/unit/loom/pipeline/planning/test_planner.py`, `tests/unit/loom/pipeline/planning/test_planning_errors.py`, `tests/integration/pipeline/test_planning_resume.py`, `tests/integration/pipeline/test_plan_persistence.py` | Resume reasons name stage, output, artifact key, and reason code; corrupt persisted state raises `ResumeStateError` with document context; plan persistence failures name the run id and `plan.json` when available. |
+| Local runner and executor | `src/loom/pipeline/execution/runner.py`, `outputs.py`, `lifecycle.py`, `models.py`, `errors.py`, `src/loom/pipeline/executors/local.py` | `tests/unit/loom/pipeline/execution/test_outputs.py`, `tests/unit/loom/pipeline/executors/test_local_executor.py`, `tests/integration/pipeline/test_local_execution.py`, `tests/integration/pipeline/test_local_execution_failures.py`, `tests/e2e/test_local_pipeline_run.py` | Target construction, input binding, invalid returned outputs, artifact validation, stage exceptions, and store commit failures include stage name, target path, config path or output path, and persisted failure/log paths where available. |
+
+### Resume And Recovery Targets
+
+Use existing `StageStatus`, `PlanAction`, `PlanReasonCode`, `LocalRunStore`, and `LocalArtifactStore` contracts. Do not add repair commands, cleanup commands, retries, or locks.
+
+| Case | Required behavior | Required tests |
+| --- | --- | --- |
+| Prior stage status is `RUNNING` | Never `REUSE`; direct check returns `RUN` when eligible or `BLOCKED` when not eligible, with `PlanReasonCode.PRIOR_STATUS_RUNNING` and stage name. | Add to `tests/unit/loom/pipeline/planning/test_resume.py` and an integration rerun case in `tests/integration/pipeline/test_local_execution_resume.py`. |
+| Prior stage status is `FAILED`, `CANCELLED`, `STALE`, or `SKIPPED` | Never `REUSE`; use `PlanReasonCode.PRIOR_STATUS_NOT_SUCCEEDED` unless a more specific existing selector/blocking reason applies. | Add table-style unit coverage in `tests/unit/loom/pipeline/planning/test_resume.py`; add one failed-prior-stage integration case. |
+| `outputs.json` missing after prior `SUCCEEDED` status | Never `REUSE`; direct check returns stale/run-or-blocked with `PlanReasonCode.MISSING_OUTPUTS`. | Extend `tests/unit/loom/pipeline/planning/test_resume.py`; add same-run integration check if not already covered by unit. |
+| `outputs.json`, `fingerprint.json`, `inputs.json`, or `artifacts.json` contains malformed JSON or invalid serialized refs | Do not silently repair or ignore; raise `ResumeStateError` or a store error with the document path, run id, and stage name. | Extend `tests/unit/loom/pipeline/planning/test_resume.py`, `tests/unit/loom/pipeline/stores/test_local_runs.py`, and `tests/integration/pipeline/test_planning_resume.py`. |
+| Prior output artifact file is missing | Never `REUSE`; use `PlanReasonCode.ARTIFACT_MISSING` and include logical key `stage.output` plus file path/URI. | Existing missing-artifact unit test should be tightened for key/path assertions; add integration coverage if runner behavior is not already visible. |
+| Prior output artifact is partial or not a regular file when checksum is present | Never `REUSE`; use `PlanReasonCode.ARTIFACT_VALIDATION_FAILED` or a more specific existing store error, with path and `stage.output`. | Add unit coverage in `tests/unit/loom/pipeline/planning/test_resume.py` and store coverage in `tests/unit/loom/pipeline/stores/test_local_artifacts.py`. |
+| Prior output checksum mismatches stored bytes | Never `REUSE`; use `PlanReasonCode.ARTIFACT_CHECKSUM_MISMATCH` and include expected/actual digests plus `stage.output`. | Add unit coverage in `tests/unit/loom/pipeline/planning/test_resume.py` and an integration runner rerun or blocked case in `tests/integration/pipeline/test_local_execution_resume.py`. |
+| Artifact index conflicts with stage `outputs.json` | Fail planning clearly with `ResumeStateError`; do not pick one source of truth silently. | Add to `tests/unit/loom/pipeline/planning/test_resume.py` and keep `tests/integration/pipeline/test_plan_persistence.py` passing. |
+
+### Extension Contract Targets
+
+Protocols remain structural. Tests must prove downstream-style classes work without inheriting concrete `loom` implementations.
+
+- `tests/contracts/test_stage_contract.py`: add a stage that uses `StageContext.save_artifact` and a stage that manually writes/registers an artifact through `StageContext.register_artifact`; both should satisfy `Stage` and be accepted by a `PipelineRunner` synthetic config in an integration or e2e example.
+- `tests/contracts/test_codec_contract.py`: keep the current downstream codec and add one metadata-aware dummy codec that round-trips with `CodecRegistry` without subclassing `Codec`.
+- `tests/contracts/test_recipe_contract.py`: keep class/function/protocol recipe coverage and add a failing downstream recipe assertion that expansion preserves recipe name/path context.
+- `tests/contracts/test_store_contract.py`: keep structural `DummyArtifactStore`/`DummyRunStore` and add assertions that public planner/runner APIs accept protocol instances or fail with a clear protocol message when required methods are absent. Do not require dummy stores to inherit `LocalArtifactStore` or `LocalRunStore`.
+- Do not add new protocols or registry systems unless a current public API cannot express the existing v0 contract.
+
+### Documentation And Example Targets
+
+Update documentation only where it describes implemented v0 behavior or copyable examples. Keep postponed behavior explicitly deferred.
+
+| File | Required update scope | Executable vs illustrative |
+| --- | --- | --- |
+| `README.md` | Replace the minimal overview with a v0 Python API quickstart: trusted config composition, `_recipe_`, stage `_target_`, local `PipelineRunner`, same-run resume, artifact save/register, and validation commands. State that functional CLI, remote stores, and cross-run reuse are post-v0. | Import snippets and generic helper examples should be mirrored by tests. YAML using `project.stages.*` remains illustrative and must be labeled as project code. |
+| `docs/loom.md` sections 7-14 | Align config, execution model, run directory layout, fingerprints/resume, provenance, public API, CLI deferral, and error model with the implemented local Python API and current run layout. | Generic Python snippets should execute through tests if they use `tests.support` helpers or public APIs. Project package snippets remain illustrative. |
+| `docs/features/config.md` sections 14, 16, and 19 | Tighten trusted-config, redaction, `_target_`, `_recipe_`, and error-message language to match v0. Remove or mark post-v0 examples that imply include graphs, schema inference, CLI commands, or stage constructor kwargs. | Config composition examples that use in-repo helpers can execute in integration tests; project target snippets are illustrative. |
+| `docs/features/errors.md` sections 6, 12, 14, 18, and 19 | Document the Phase 10 message-oriented error policy, representative context expectations, cause preservation, and no-secret rule. Keep structured `ErrorContext`, error codes, and JSON CLI output as future work. | Error examples are illustrative unless directly mirrored by unit assertions. |
+| `docs/features/run-store.md` sections 14, 17, and 18 | Record actual run-store recovery behavior for opening existing runs, old `RUNNING` state, corrupt JSON, and no silent repair. | Layout snippets should match e2e assertions. Recovery examples should be mirrored by store/planning tests. |
+| `docs/features/artifacts.md` sections 7, 8, 11, 12, 18, and 21 | Clarify managed save vs manual register, optional `codec_key`, artifact type validation, checksum validation, directory checksum deferral, and output spec validation. | Save/register examples using `StageContext` should execute through tests. Domain artifact examples remain illustrative. |
+| `docs/features/io.md` codec/source sections and `docs/features/fingerprints.md` sections 6, 12, 18, and 19 | Ensure checksum vs fingerprint wording matches implemented `ArtifactRef`, local stores, and same-run resume. Do not introduce remote checksum behavior. | Hash helper snippets can remain illustrative unless already covered by unit tests. |
+| `docs/features/resume.md` sections 8, 9, 11, 13, and 19 | Align selector names with Python fields `force_stages`, `from_stage`, `only_stages`, `skip_stages`; document same-run-only reuse, corrupt-state failure, stale `RUNNING`, and missing/partial artifacts. | Resume examples should be mirrored by planning/integration tests where feasible. |
+| `docs/features/provenance.md` persistence and pipeline integration sections | Align persisted document names with current run layout and explain provenance as evidence, not a resume policy replacement. | Layout snippets should match e2e file checks. |
+| `docs/features/testing.md`, `tests/README.md`, and `docs/features/cli.md` v0 scope sections | Make suite obligations, import-boundary tests, and CLI deferral explicit. Do not add parser/command expectations for v0. | No new executable docs requirement unless the docs include public API snippets that are easy to mirror. |
+
+### Import-Boundary Guardrails
+
+Extend `tests/package/test_import_boundaries.py` and package API tests so they permanently cover the final v0 stack:
+
+- `import loom` must not import `loom.config`, `loom.pipeline`, `loom.cli`, `omegaconf`, `yaml`, `pydantic`, project packages, pipeline runners, stores, or executors.
+- `import loom.serialization` must not import `loom.io`, `loom.config`, `loom.pipeline`, or CLI modules.
+- `import loom.io` must not import `loom.config`, `loom.pipeline`, runners, stores, executors, or CLI modules.
+- `import loom.config` may import its hard config dependencies after Phase 4, but must not import `loom.pipeline`, execution modules, stores, executors, CLI modules, or project modules.
+- `import loom.pipeline` may expose static specs, stage/context/status/planning/store/execution public names that are intentionally exported, but must not import `loom.cli` or project modules. If current public exports require local runner/store imports, record the boundary as intentional in tests rather than weakening root import.
+- `import loom.cli` must remain import-safe and unsupported; it must not cause config composition, pipeline execution, project import, or remote/backend discovery side effects.
 
 ## Design Impact
 
@@ -161,6 +228,8 @@ The refine pass must turn this draft into exact implementation slices before exe
 | Error context may remain message-oriented rather than a structured shared model | Keeps Phase 10 focused on hardening behavior without a cross-cutting error framework rewrite. | Functional CLI, JSON error output, or multi-error aggregation needs stable machine-readable fields. |
 | Some docs examples may remain illustrative if they require downstream project code | `loom` must stay domain-neutral and cannot ship project stages. | Users need a runnable examples package or a future tutorial repository. |
 | No run lock manager unless tests prove one is required | The v0 implementation plan accepts atomic writes and conservative resume first. | Interrupted-run or concurrent-run tests expose duplicate execution, unsafe reuse, or unrecoverable state ambiguity. |
+| No Markdown code-block extraction harness in this phase | Manual mirrored docs/example tests keep Phase 10 focused and avoid adding tooling while docs are still stabilizing. | Multiple docs start carrying long runnable examples that drift from tested snippets. |
+| Corrupt state fails rather than auto-repairs | V0 favors explicit inspection and conservative correctness over silent mutation of ambiguous run state. | A future `loom repair` command or store-maintenance API is designed and tested. |
 
 ## Reviewability
 
@@ -170,53 +239,52 @@ The refine pass must turn this draft into exact implementation slices before exe
 
 ## Implementation Steps
 
-1. Inventory current high-traffic errors and select representative coverage targets across config, recipes, instantiation, specs/bindings, stores, planning/resume, output validation, and runner target construction.
-2. Add focused unit tests for missing path context, unsafe secret exposure, target/stage/artifact names, persisted document paths, and checksum/file-path failures before changing behavior.
-3. Improve local messages and wrapping in the owning subsystem modules, keeping changes narrow and preserving broad root inheritance.
-4. Add interrupted-run and partial-state tests for `RUNNING` prior status, missing `outputs.json`, corrupt JSON, partial artifact files, checksum mismatch, and failed prior stages; update planner/runner/store behavior only where tests expose unsafe reuse or unclear errors.
-5. Extend contract tests with downstream-style dummy stages, codecs, recipes, artifact stores, and run stores that satisfy protocols structurally without inheritance.
-6. Update package import-boundary tests so the final v0 stack permanently protects cheap imports and lower-layer independence from CLI, execution, config, and project modules.
-7. Update README and targeted docs for trusted configs, `_target_`, `_recipe_`, stage contract, artifacts, optional codec keys, run layout, checksums vs fingerprints, selectors, and same-run resume.
-8. Add docs/example execution coverage where feasible, or explicitly mark examples that require downstream project code and record the deferral.
-9. Run targeted suites during implementation, then leave final `make validate-pr` and `make test-summary` evidence for PR preparation.
+1. Add failing focused tests for the exact error-hardening targets above. Group them by subsystem so each source change has a narrow test signal: config/recipes/instantiate, pipeline specs/bindings, stores, planning/resume, execution/output validation.
+2. Implement only local message/wrapping fixes in the owning subsystem modules. Prefer adding path, stage, target, artifact id, document path, and cause text to existing exceptions over introducing shared error machinery. Preserve exception chaining with `from exc`.
+3. Add resume/recovery tests and fixes for the exact prior-state cases: `RUNNING`, non-succeeded statuses, missing `outputs.json`, corrupt stage docs, missing artifacts, partial artifacts, checksum mismatch, and artifact-index conflict. Keep behavior conservative and do not add repair, cleanup, retry, or locking features.
+4. Strengthen structural contract tests for stages, codecs, recipes, artifact stores, and run stores. Reuse existing `tests/support/pipeline_execution_*` helpers when possible; add support helpers only if they keep examples domain-neutral.
+5. Extend package import-boundary tests for root, serialization, I/O, config, pipeline, execution, executors, stores, planning, and CLI stub boundaries. Record any intentional `loom.pipeline` public import side effect explicitly in the test name or assertion comment.
+6. Update README and targeted docs/feature sections listed above. Keep examples Python-API-first, same-run-local-only, and domain-neutral; mark downstream project snippets as illustrative.
+7. Add or extend executable example coverage by mirroring copyable public API snippets in `tests/e2e/test_local_pipeline_run.py`, `tests/integration/pipeline/test_local_execution.py`, or a new `tests/integration/docs/test_v0_python_examples.py`. Do not build a generic docs parser.
+8. Run narrow tests after each slice. Run suite-level commands before handing to PR preparation when practical, and leave final `make validate-pr` and `make test-summary` evidence for the PR-preparation stage.
 
 ## Test Plan
 
 ### Package Suite
 
 - Status: required.
-- Expected paths: `tests/package/test_import.py`, `tests/package/test_import_boundaries.py`, `tests/package/test_public_api.py`, and package API tests for pipeline/config/store/planning/execution imports.
-- Required assertions: `import loom` remains cheap; root import does not load config, pipeline runners, CLI, plugin discovery, or project modules; public import paths remain stable; CLI modules are import-safe unsupported stubs only.
+- Expected paths: `tests/package/test_import.py`, `tests/package/test_import_boundaries.py`, `tests/package/test_public_api.py`, `tests/package/test_config_api.py`, `tests/package/test_pipeline_api.py`, `tests/package/test_pipeline_store_api.py`, `tests/package/test_pipeline_planning_api.py`, `tests/package/test_pipeline_execution_api.py`, and `tests/package/test_pipeline_executor_api.py`.
+- Required assertions: `import loom` remains cheap; root import does not load config, pipeline, pipeline runners, stores, executors, CLI, plugin discovery, project modules, or config dependencies; serialization and I/O imports preserve lower-layer boundaries; config import does not import pipeline/execution/CLI; CLI imports remain unsupported and side-effect free; public import paths remain stable after all v0 subsystems exist.
 
 ### Unit Suite
 
 - Status: required.
-- Expected paths: `tests/unit/loom/config/`, `tests/unit/loom/pipeline/`, `tests/unit/loom/pipeline/planning/`, `tests/unit/loom/pipeline/stores/`, `tests/unit/loom/pipeline/execution/`, `tests/unit/loom/io/`, `tests/unit/loom/test_errors.py`, and any focused docs/example unit helpers added in refinement.
-- Required assertions: representative errors include config paths, target paths, stage names, artifact keys, document names, and file paths; secrets are not leaked in error text; resume helpers refuse unsafe prior state; output validation and target construction failures are path-aware.
+- Expected paths: `tests/unit/loom/config/test_config_errors.py`, `tests/unit/loom/config/test_compose.py`, `tests/unit/loom/config/test_overrides.py`, `tests/unit/loom/config/test_interpolation.py`, `tests/unit/loom/config/test_redaction.py`, `tests/unit/loom/config/recipes/test_catalog.py`, `tests/unit/loom/config/recipes/test_expansion.py`, `tests/unit/loom/config/instantiate/test_targets.py`, `tests/unit/loom/config/instantiate/test_recursive.py`, `tests/unit/loom/pipeline/test_specs.py`, `tests/unit/loom/pipeline/graph/test_bindings.py`, `tests/unit/loom/pipeline/planning/test_resume.py`, `tests/unit/loom/pipeline/planning/test_planner.py`, `tests/unit/loom/pipeline/planning/test_planning_errors.py`, `tests/unit/loom/pipeline/stores/test_local_artifacts.py`, `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/stores/test_store_errors.py`, `tests/unit/loom/pipeline/execution/test_outputs.py`, `tests/unit/loom/pipeline/executors/test_local_executor.py`, `tests/unit/loom/io/`, and `tests/unit/loom/test_errors.py`.
+- Required assertions: representative errors include config paths, target paths, stage names, artifact keys, document names, and file paths; secrets are not leaked in error text; resume helpers refuse every unsafe prior-state case listed in this plan; output validation and target construction failures are path-aware; store errors include document paths and logical artifact ids where available.
 
 ### Contract Suite
 
 - Status: required.
-- Expected paths: `tests/contracts/test_stage_contract.py`, `tests/contracts/test_codec_contract.py`, `tests/contracts/test_recipe_contract.py`, `tests/contracts/test_store_contract.py`, and existing executor/data-source contracts where import or protocol changes touch them.
-- Required assertions: downstream-style dummy stages, codecs, recipes, artifact stores, and run stores satisfy protocols structurally without inheriting concrete `loom` classes; public APIs accept those structural implementations where v0 promises protocol support.
+- Expected paths: `tests/contracts/test_stage_contract.py`, `tests/contracts/test_codec_contract.py`, `tests/contracts/test_recipe_contract.py`, `tests/contracts/test_store_contract.py`, plus existing `tests/contracts/test_executor_contract.py` and `tests/contracts/test_data_source_contract.py` if import or protocol changes touch them.
+- Required assertions: downstream-style dummy stages, codecs, recipes, artifact stores, and run stores satisfy protocols structurally without inheriting concrete `loom` classes; public APIs accept those structural implementations where v0 promises protocol support; failure cases preserve recipe/stage/store context without requiring subclass-specific behavior.
 
 ### Integration Suite
 
 - Status: required.
-- Expected paths: `tests/integration/config/`, `tests/integration/pipeline/test_pipeline_config.py`, `tests/integration/pipeline/test_planning_resume.py`, `tests/integration/pipeline/test_local_stores.py`, `tests/integration/pipeline/test_plan_persistence.py`, `tests/integration/pipeline/test_local_execution*.py`, and any new docs/example integration tests.
-- Required assertions: config-to-pipeline errors preserve useful paths; store/planner/runner collaboration refuses stale `RUNNING`, failed, corrupt, missing-output, partial-artifact, and checksum-mismatched state; same-run resume stays conservative and inspectable.
+- Expected paths: `tests/integration/config/test_compose_config.py`, `tests/integration/config/test_compose_recipes.py`, `tests/integration/pipeline/test_pipeline_config.py`, `tests/integration/pipeline/test_planning_resume.py`, `tests/integration/pipeline/test_local_stores.py`, `tests/integration/pipeline/test_plan_persistence.py`, `tests/integration/pipeline/test_local_execution.py`, `tests/integration/pipeline/test_local_execution_failures.py`, `tests/integration/pipeline/test_local_execution_resume.py`, and optional new `tests/integration/docs/test_v0_python_examples.py`.
+- Required assertions: config-to-pipeline errors preserve useful paths; store/planner/runner collaboration refuses stale `RUNNING`, failed, corrupt, missing-output, partial-artifact, and checksum-mismatched state; same-run resume stays conservative and inspectable; docs-mirrored examples use public APIs and generic support stages only.
 
 ### E2E Suite
 
 - Status: required.
-- Expected paths: `tests/e2e/test_local_pipeline_run.py` plus any new e2e docs/example coverage added during refinement.
-- Required assertions: public Python API examples run a synthetic local pipeline, inspect the run directory, rerun the same run directory with `REUSE`, exercise selectors where feasible, and fail clearly for representative invalid outputs or corrupted reusable artifacts.
+- Expected paths: `tests/e2e/test_local_pipeline_run.py` plus only tightly scoped additional e2e coverage if integration tests cannot exercise a copyable docs example.
+- Required assertions: public Python API examples run a synthetic local pipeline, inspect the run directory, rerun the same run directory with `REUSE`, exercise selectors where feasible through `PlanSelectors`, and fail clearly for one representative invalid output or corrupted reusable artifact if that behavior is not already covered at integration level.
 
 ### Opt-In Suites
 
 - Status: deferred.
 - Markers affected: `slow`, `network`, `slurm`, `optional_dependency`, and any future remote/external markers.
-- Required assertions or deferral reason: Phase 10 is local-only hardening and documentation. It must not require network services, SLURM, remote stores, optional executor dependencies, or slow external fixtures. If any new opt-in marker is introduced, the phase plan must be refined with a concrete reason before implementation.
+- Required assertions or deferral reason: Phase 10 is local-only hardening and documentation. It must not require network services, SLURM, remote stores, optional executor dependencies, slow external fixtures, or a functional CLI. Do not introduce new opt-in markers. If an opt-in marker appears necessary, stop and report the blocker before implementation.
 
 ## Risks
 
@@ -241,9 +309,12 @@ make test-e2e
 Focused commands likely useful during implementation:
 
 ```sh
-uv run pytest tests/unit/loom/config tests/unit/loom/pipeline -q
-uv run pytest tests/contracts -q
-uv run pytest tests/integration/pipeline tests/e2e -q
+uv run pytest tests/unit/loom/config tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/graph/test_bindings.py -q
+uv run pytest tests/unit/loom/pipeline/planning/test_resume.py tests/unit/loom/pipeline/stores/test_local_artifacts.py tests/unit/loom/pipeline/stores/test_local_runs.py -q
+uv run pytest tests/unit/loom/pipeline/execution/test_outputs.py tests/unit/loom/pipeline/executors/test_local_executor.py -q
+uv run pytest tests/package/test_import_boundaries.py tests/contracts -q
+uv run pytest tests/integration/config tests/integration/pipeline/test_local_execution_resume.py tests/integration/pipeline/test_planning_resume.py -q
+uv run pytest tests/integration/pipeline tests/e2e/test_local_pipeline_run.py -q
 ```
 
 Final PR-preparation commands:
@@ -256,19 +327,19 @@ make test-summary
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices:
-  - error-message tests and fixes by subsystem;
-  - interrupted-run/resume hardening;
-  - contract-test strengthening;
+  - config/recipe/target/spec/binding error-message tests and fixes;
+  - store/resume/runner recovery hardening for the exact prior-state cases;
+  - structural contract-test strengthening;
   - import-boundary guardrails;
-  - README/docs updates and executable example coverage.
-- Tests to run with each slice: run the narrowest corresponding unit or package tests first, then contract/integration/e2e slices before final PR-preparation validation.
-- Decisions the executor must not revisit: Phase 10 stays local-only and Python-API-first; configs are trusted; output `codec_key` remains optional; resume is same-run-directory only; remote stores, CLI commands, new executors, cross-run reuse, lock managers, and domain behavior are deferred.
-- Conditions that require stopping for the manager: a required acceptance criterion appears to need a public API expansion, broad error-framework rewrite, lock manager, predecessor-branch change, remote/GitHub operation, or implementation outside the Phase 10 scope.
+  - README/docs updates plus mirrored executable example coverage.
+- Tests to run with each slice: run the narrowest corresponding unit or package tests first, then contract/integration/e2e slices before final PR-preparation validation. Use `make validate-pr` and `make test-summary` only when the implementation is ready for PR preparation or when a broad source change needs full-gate confidence.
+- Decisions the executor must not revisit: Phase 10 stays local-only and Python-API-first; configs are trusted; output `codec_key` remains optional; stage constructor kwargs remain deferred; resume is same-run-directory only; corrupt state fails clearly rather than silently repairing; remote stores, CLI commands, new executors, cross-run reuse, retries, lock managers, and domain behavior are deferred.
+- Conditions that require stopping for the manager: a required acceptance criterion appears to need a public API expansion, broad error-framework rewrite, lock manager, repair command, predecessor-branch change, remote/GitHub operation, functional CLI behavior, or implementation outside the Phase 10 scope.
 
 ## Refinement And Review Budget Status
 
-- Phase execution plan draft: completed by `loom_phase_planner` on 2026-05-04 local time in this plan commit.
-- Phase execution plan refine: unused.
+- Phase execution plan draft: completed by `loom_phase_planner` on 2026-05-04 local time in draft commit `91904e74207f89a8507573774470f1c23a6b7df9`.
+- Phase execution plan refine: completed by `loom_phase_planner` on 2026-05-04 local time in this plan-only refinement commit.
 - Phase implementation refinement: unused.
 - PR review: unused.
 - PR body draft/refine: unused.
@@ -276,7 +347,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: created by `loom_phase_planner` in `docs/phases/harden-v0-docs.md` on 2026-05-04 local time.
-- Final phase execution plan: pending refine pass.
+- Final phase execution plan: refined by `loom_phase_planner` in `docs/phases/harden-v0-docs.md` on 2026-05-04 local time. The artifact is ready for `loom_phase_executor` unless stack state changes before implementation begins.
 - Implementation summary: pending implementation stage.
 - Implementation validation: pending implementation and PR-preparation stages.
 - Refinement summary: pending one bounded implementation refinement pass.
