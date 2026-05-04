@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Iterator, cast
 
 from loom.ids import RecordID
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
@@ -35,7 +35,7 @@ class ManifestView:
         return ManifestView(
             source=self.source,
             filters=self.filters + (predicate,),
-            metadata=thaw_plain_data(self.metadata, path="metadata"),
+            metadata=cast(dict[str, PlainData], thaw_plain_data(self.metadata, path="metadata")),
         )
 
     def get(self, record_id: RecordID) -> Record | None:
@@ -51,7 +51,10 @@ class ManifestView:
         return result
 
     def materialize(self) -> InMemoryManifest:
-        return InMemoryManifest(records=tuple(self), metadata=thaw_plain_data(self.metadata, path="metadata"))
+        return InMemoryManifest(
+            records=tuple(self),
+            metadata=cast(dict[str, PlainData], thaw_plain_data(self.metadata, path="metadata")),
+        )
 
     def to_dict(self) -> dict[str, object]:
         return self.materialize().to_dict()

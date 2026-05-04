@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Any, cast
 
 import pytest
 
@@ -82,7 +83,7 @@ def test_thaw_plain_data_converts_frozen_tree() -> None:
 
 def test_thaw_plain_data_copies_for_mutability() -> None:
     original = MappingProxyType({"a": ({"b": 1},)})
-    thawed = thaw_plain_data(original)
+    thawed = cast(dict[str, Any], thaw_plain_data(original))
     thawed["a"][0]["b"] = 2
     assert thawed["a"][0]["b"] == 2
     assert original["a"][0]["b"] == 1

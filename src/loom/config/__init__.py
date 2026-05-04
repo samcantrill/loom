@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from types import ModuleType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import sys
 
 from loom.errors import ConfigError
 
 from ._optional import require_config_dependencies
+
+if TYPE_CHECKING:
+    from .api import ComposedConfig, compose_config, instantiate, register_recipe
+    from .recipes import Recipe, RecipeCatalog
 
 
 _RESOLVED_SYMBOLS: dict[str, object] = {

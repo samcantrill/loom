@@ -16,6 +16,7 @@ from loom.serialization.plain import (
     to_plain_data,
 )
 from loom.serialization.schema import (
+    DocumentMigration,
     check_supported_schema,
     get_schema_version,
     load_versioned_document,
@@ -42,6 +43,7 @@ __all__ = [
     "json_dumps_pretty",
     "json_loads",
     "get_schema_version",
+    "DocumentMigration",
     "require_schema_version",
     "check_supported_schema",
     "require_mapping",

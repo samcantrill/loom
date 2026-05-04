@@ -203,9 +203,9 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
 def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> None:
     output = OutputSpec(artifact_type="text", metadata={"labels": ["raw", "final"]})
     outputs_input: dict[str, OutputSpec] = {"result": output}
-    stage_config = {"retry": {"max": 3}}
+    stage_config: dict[str, Any] = {"retry": {"max": 3}}
     inputs = {"artifact": "build.result"}
-    resources = {"slots": ["cpu"]}
+    resources: dict[str, Any] = {"slots": ["cpu"]}
 
     stage = StageSpec(
         name="report",
@@ -230,16 +230,17 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
     assert stage.stage_config == {"retry": {"max": 3}}
     assert stage.inputs == {"artifact": "build.result"}
     assert stage.resources == {"slots": ("cpu",)}
-    assert pipeline.metadata["owner"]["team"] == "analysis"
-    assert pipeline.metadata["owner"]["labels"] == ("primary",)
+    pipeline_owner = cast(dict[str, Any], pipeline.metadata["owner"])
+    assert pipeline_owner["team"] == "analysis"
+    assert pipeline_owner["labels"] == ("primary",)
 
     with pytest.raises(TypeError):
-        stage.outputs["result"] = OutputSpec(artifact_type="json")
+        cast(Any, stage.outputs)["result"] = OutputSpec(artifact_type="json")
     with pytest.raises(TypeError):
-        stage.stage_config["retry"]["active"] = False
+        cast(Any, stage.stage_config)["retry"]["active"] = False
     with pytest.raises(TypeError):
-        stage.inputs["artifact"] = "new.result"
+        cast(Any, stage.inputs)["artifact"] = "new.result"
     with pytest.raises(TypeError):
-        stage.resources["slots"] = ("gpu",)
+        cast(Any, stage.resources)["slots"] = ("gpu",)
     with pytest.raises(TypeError):
-        pipeline.metadata["owner"]["labels"][0] = "mutated"
+        cast(Any, pipeline.metadata)["owner"]["labels"][0] = "mutated"

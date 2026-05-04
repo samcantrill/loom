@@ -1,8 +1,11 @@
 """Unit tests for schema-version helpers."""
 
+from collections.abc import Mapping
+
 import pytest
 
 from loom.serialization import (
+    DocumentMigration,
     SchemaVersionError,
     check_supported_schema,
     get_schema_version,
@@ -79,7 +82,7 @@ def test_load_versioned_document_rejects_missing_migration() -> None:
 
 
 def test_load_versioned_document_rejects_invalid_migration_output() -> None:
-    def migration(payload: dict[str, object]) -> dict[str, object]:
+    def migration(payload: Mapping[str, object]) -> Mapping[str, object]:
         value = dict(payload)
         value["schema_version"] = "bad"
         return value
@@ -99,16 +102,18 @@ def test_load_versioned_document_rejects_non_mapping_input() -> None:
 
 
 def test_load_versioned_document_migrates_to_current_version() -> None:
-    def migration(payload: dict[str, object]) -> dict[str, object]:
+    def migration(payload: Mapping[str, object]) -> Mapping[str, object]:
         value = dict(payload)
         value["schema_version"] = 2
         value["new_field"] = True
         return value
+
+    migrations: dict[int, DocumentMigration] = {1: migration}
 
     assert load_versioned_document(
         {"schema_version": 1, "value": 1},
         current_version=2,
         required={"value"},
         optional={"new_field"},
-        migrations={1: migration},
+        migrations=migrations,
     ) == {"schema_version": 2, "value": 1, "new_field": True}
