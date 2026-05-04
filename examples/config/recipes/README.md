@@ -11,6 +11,5 @@ This example demonstrates v0 config composition without running a pipeline:
 Run from the repository root:
 
 ```sh
-uv run python examples/config_recipes/compose_config.py
+uv run python examples/config/recipes/compose_config.py
 ```
-

@@ -15,7 +15,8 @@ HERE = Path(__file__).resolve().parent
 
 
 def main() -> None:
-    run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", HERE / "runs"))
+    output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
+    run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_id = f"local-example-{safe_timestamp_for_path(timespec='seconds')}"
 
     composed = compose_config(HERE / "pipeline.yaml")
@@ -44,4 +45,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

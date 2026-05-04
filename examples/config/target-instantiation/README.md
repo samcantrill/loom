@@ -11,6 +11,5 @@ blocks after config composition:
 Run from the repository root:
 
 ```sh
-uv run python examples/target_instantiation/instantiate_targets.py
+uv run python examples/config/target-instantiation/instantiate_targets.py
 ```
-

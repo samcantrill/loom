@@ -11,9 +11,9 @@ This example demonstrates the main v0 runtime loop:
 Run from the repository root:
 
 ```sh
-uv run python examples/local_pipeline/run_pipeline.py
+uv run python examples/pipelines/local-run/run_pipeline.py
 ```
 
-The script writes run state under `examples/local_pipeline/runs/` by default.
-Set `LOOM_EXAMPLE_RUN_ROOT=/tmp/loom-example-runs` to write somewhere else.
-
+The script writes run state under `examples/pipelines/local-run/runs/` by
+default. Set `LOOM_EXAMPLE_OUTPUT_ROOT=/tmp/loom-examples` or
+`LOOM_EXAMPLE_RUN_ROOT=/tmp/loom-example-runs` to write somewhere else.
