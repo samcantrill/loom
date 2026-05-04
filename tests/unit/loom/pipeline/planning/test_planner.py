@@ -173,3 +173,21 @@ def test_from_stage_forces_selected_reusable_stage_and_invalidates_downstream(
     assert PlanReasonCode.FROM_STAGE_SELECTED in {reason.code for reason in build.reasons}
     assert report.action == PlanAction.RUN
     assert report.pending_inputs[0].reason.code == PlanReasonCode.UPSTREAM_WILL_RUN
+
+
+def test_only_stage_runs_with_reusable_provider(tmp_path) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    _seed_reusable_build(run_store, artifact_store)
+
+    plan = plan_pipeline(
+        _spec(),
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        selectors=PlanSelectors(only_stages=("report",)),
+    )
+
+    build, report = plan.stage_plans
+    assert build.action == PlanAction.REUSE
+    assert report.action == PlanAction.RUN
+    assert report.pending_inputs == ()

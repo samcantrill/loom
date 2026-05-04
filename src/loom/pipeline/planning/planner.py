@@ -6,13 +6,14 @@ from collections.abc import Mapping
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.graph import build_stage_graph, downstream_of, upstream_of
-from loom.pipeline.graph.bindings import resolve_input_bindings
+from loom.pipeline.graph.bindings import ResolvedInputBinding, resolve_input_bindings
 from loom.pipeline.specs import OutputSpec, PipelineSpec, StageSpec
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import StoreError
 from loom.pipeline.stores.run_store import RunStore
 from loom.serialization import PlainData
 
+from .actions import decide_stage_action
 from .errors import PlanPersistenceError
 from .fingerprints import build_stage_fingerprint
 from .models import (
@@ -26,11 +27,13 @@ from .models import (
     PlanReason,
     PlanReasonCode,
     PlanSelectors,
+    ResumeCheck,
     ResumeOptions,
     StageFingerprintRecord,
     StagePlan,
     summary_for,
 )
+from .invalidation import evaluate_input_invalidation
 from .resume import check_stage_resume
 from .selectors import Selection, normalize_selectors, selector_reason
 
@@ -106,7 +109,7 @@ def _plan_stage(
     fingerprint_context: FingerprintContext,
     graph_upstream: tuple[str, ...],
     graph_downstream: tuple[str, ...],
-    bindings: Mapping[str, object],
+    bindings: Mapping[str, ResolvedInputBinding],
     prior_plans: Mapping[str, StagePlan],
 ) -> StagePlan:
     selected_by = selection.reason_for_selection(stage.name)
@@ -133,262 +136,89 @@ def _plan_stage(
             invalidated_by=(),
         )
 
-    bound_inputs, pending_inputs, invalidated_by = _bind_inputs_and_invalidation(
+    invalidation = evaluate_input_invalidation(
         stage=stage,
         bindings=bindings,
         prior_plans=prior_plans,
     )
-    blocking_reasons = [
-        pending.reason
-        for pending in pending_inputs
-        if pending.reason.code
-        in {
-            PlanReasonCode.UPSTREAM_SKIPPED,
-            PlanReasonCode.UPSTREAM_BLOCKED,
-            PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT,
-        }
-    ]
-    blocking_reasons.extend(
-        reason
-        for reason in invalidated_by
-        if reason.code
-        in {
-            PlanReasonCode.UPSTREAM_SKIPPED,
-            PlanReasonCode.UPSTREAM_BLOCKED,
-            PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT,
-        }
-    )
-    invalidating_reasons = [
-        reason
-        for reason in invalidated_by
-        if reason.code
-        in {
-            PlanReasonCode.UPSTREAM_WILL_RUN,
-            PlanReasonCode.UPSTREAM_STALE,
-            PlanReasonCode.PENDING_UPSTREAM_INPUT,
-        }
-    ]
-
-    eligible = selection.is_eligible(stage.name)
-    force = (
-        stage.name in selection.forced_stages
-        or selection.selectors.from_stage == stage.name
-    )
-
-    if blocking_reasons or (pending_inputs and not eligible):
-        reasons = _unique_reasons(
-            (
-                *selector_reasons,
-                *tuple(pending.reason for pending in pending_inputs),
-                *tuple(invalidated_by),
-            )
+    bound_inputs = invalidation.bound_inputs
+    pending_inputs = invalidation.pending_inputs
+    invalidated_by = invalidation.invalidated_by
+    eligible_to_run = selection.is_eligible(stage.name)
+    if (
+        invalidation.blocking_reasons
+        or invalidation.invalidating_reasons
+        or pending_inputs
+    ):
+        decision = decide_stage_action(
+            selector_reasons=selector_reasons,
+            eligible_to_run=eligible_to_run,
+            force=(
+                stage.name in selection.forced_stages
+                or selection.selectors.from_stage == stage.name
+            ),
+            invalidation=invalidation,
         )
+    else:
+        current_fingerprint = build_stage_fingerprint(
+            stage,
+            bound_inputs={name: bound.artifact_ref for name, bound in bound_inputs.items()},
+            fingerprint_context=fingerprint_context,
+        )
+        direct = check_stage_resume(
+            stage,
+            run_id=run_id,
+            run_store=run_store,
+            artifact_store=artifact_store,
+            current_fingerprint=current_fingerprint,
+            resume=resume,
+            eligible_to_run=eligible_to_run,
+        )
+        decision = decide_stage_action(
+            selector_reasons=selector_reasons,
+            eligible_to_run=eligible_to_run,
+            force=(
+                stage.name in selection.forced_stages
+                or selection.selectors.from_stage == stage.name
+            ),
+            invalidation=invalidation,
+            direct_result=direct,
+            fingerprint=current_fingerprint,
+        )
+
+    if decision.fingerprint_status == FingerprintStatus.PENDING_INPUTS:
         return _stage_plan(
             stage=stage,
-            action=PlanAction.BLOCKED,
-            base_action=PlanAction.BLOCKED,
-            fingerprint_status=FingerprintStatus.PENDING_INPUTS,
-            fingerprint=None,
-            resume_check=None,
-            reasons=reasons,
+            action=decision.action,
+            base_action=decision.base_action,
+            fingerprint_status=decision.fingerprint_status,
+            fingerprint=decision.fingerprint,
+            resume_check=decision.resume_check,
+            reasons=decision.reasons,
             bound_inputs=bound_inputs,
             pending_inputs=tuple(pending_inputs),
-            reusable_outputs={},
+            reusable_outputs=decision.reusable_outputs,
             upstream=graph_upstream,
             downstream=graph_downstream,
             selected_by=selected_by,
             invalidated_by=tuple(invalidated_by),
         )
-
-    if pending_inputs or invalidating_reasons:
-        action = PlanAction.RUN if eligible else PlanAction.BLOCKED
-        reasons = _unique_reasons(
-            (
-                *selector_reasons,
-                *tuple(pending.reason for pending in pending_inputs),
-                *tuple(invalidated_by),
-            )
-        )
-        return _stage_plan(
-            stage=stage,
-            action=action,
-            base_action=PlanAction.RUN if eligible else PlanAction.BLOCKED,
-            fingerprint_status=FingerprintStatus.PENDING_INPUTS,
-            fingerprint=None,
-            resume_check=None,
-            reasons=reasons,
-            bound_inputs=bound_inputs,
-            pending_inputs=tuple(pending_inputs),
-            reusable_outputs={},
-            upstream=graph_upstream,
-            downstream=graph_downstream,
-            selected_by=selected_by,
-            invalidated_by=tuple(invalidated_by),
-        )
-
-    current_fingerprint = build_stage_fingerprint(
-        stage,
-        bound_inputs={name: bound.artifact_ref for name, bound in bound_inputs.items()},
-        fingerprint_context=fingerprint_context,
-    )
-    direct = check_stage_resume(
-        stage,
-        run_id=run_id,
-        run_store=run_store,
-        artifact_store=artifact_store,
-        current_fingerprint=current_fingerprint,
-        resume=resume,
-        eligible_to_run=eligible,
-    )
-    action = direct.final_action
-    reasons = [*selector_reasons, *direct.check.reasons]
-    reusable_outputs = direct.check.outputs if action == PlanAction.REUSE else {}
-    if force:
-        action = PlanAction.RUN
-        reusable_outputs = {}
     return _stage_plan(
         stage=stage,
-        action=action,
-        base_action=direct.base_action,
-        fingerprint_status=FingerprintStatus.COMPUTED,
-        fingerprint=current_fingerprint,
-        resume_check=direct.check,
-        reasons=tuple(reasons),
+        action=decision.action,
+        base_action=decision.base_action,
+        fingerprint_status=decision.fingerprint_status,
+        fingerprint=decision.fingerprint,
+        resume_check=decision.resume_check,
+        reasons=decision.reasons,
         bound_inputs=bound_inputs,
         pending_inputs=(),
-        reusable_outputs=reusable_outputs,
+        reusable_outputs=decision.reusable_outputs,
         upstream=graph_upstream,
         downstream=graph_downstream,
         selected_by=selected_by,
         invalidated_by=(),
     )
-
-
-def _bind_inputs_and_invalidation(
-    *,
-    stage: StageSpec,
-    bindings: Mapping[str, object],
-    prior_plans: Mapping[str, StagePlan],
-) -> tuple[dict[str, BoundInput], list[PendingInput], list[PlanReason]]:
-    bound: dict[str, BoundInput] = {}
-    pending: list[PendingInput] = []
-    invalidated: list[PlanReason] = []
-    for input_name, binding in bindings.items():
-        source_stage = binding.source_stage_id  # type: ignore[attr-defined]
-        source_output = binding.source_output_name  # type: ignore[attr-defined]
-        source_plan = prior_plans[source_stage]
-        if (
-            source_plan.action == PlanAction.REUSE
-            and source_output in source_plan.reusable_outputs
-        ):
-            bound[input_name] = BoundInput(
-                input_name=input_name,
-                source_stage=source_stage,
-                source_output=source_output,
-                artifact_ref=source_plan.reusable_outputs[source_output],
-            )
-            continue
-        reason = _upstream_input_reason(
-            stage.name,
-            input_name,
-            source_stage,
-            source_output,
-            source_plan,
-        )
-        pending.append(
-            PendingInput(
-                input_name=input_name,
-                source_stage=source_stage,
-                source_output=source_output,
-                reason=reason,
-            ),
-        )
-        invalidated.append(reason)
-
-    for dependency in stage.dependencies:
-        if dependency not in prior_plans:
-            continue
-        source_plan = prior_plans[dependency]
-        if source_plan.action == PlanAction.REUSE:
-            continue
-        invalidated.append(
-            _upstream_reason(stage.name, None, dependency, None, source_plan.action)
-        )
-    return bound, pending, invalidated
-
-
-def _upstream_reason(
-    stage_name: str,
-    input_name: str | None,
-    upstream_stage: str,
-    source_output: str | None,
-    upstream_action: PlanAction,
-) -> PlanReason:
-    code = {
-        PlanAction.RUN: PlanReasonCode.UPSTREAM_WILL_RUN,
-        PlanAction.STALE: PlanReasonCode.UPSTREAM_STALE,
-        PlanAction.SKIP: PlanReasonCode.UPSTREAM_SKIPPED,
-        PlanAction.BLOCKED: PlanReasonCode.UPSTREAM_BLOCKED,
-        PlanAction.REUSE: PlanReasonCode.PENDING_UPSTREAM_INPUT,
-    }[upstream_action]
-    return PlanReason(
-        code=code,
-        message=f"upstream stage {upstream_stage!r} action is {upstream_action.value}",
-        stage_name=stage_name,
-        upstream_stage=upstream_stage,
-        input_name=input_name,
-        output_name=source_output,
-    )
-
-
-def _upstream_input_reason(
-    stage_name: str,
-    input_name: str,
-    upstream_stage: str,
-    source_output: str,
-    source_plan: StagePlan,
-) -> PlanReason:
-    if _is_unavailable_reuse_provider(source_plan):
-        return PlanReason(
-            code=PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT,
-            message=(
-                f"upstream input {upstream_stage}.{source_output} is not reusable"
-            ),
-            stage_name=stage_name,
-            upstream_stage=upstream_stage,
-            input_name=input_name,
-            output_name=source_output,
-        )
-    return _upstream_reason(
-        stage_name, input_name, upstream_stage, source_output, source_plan.action
-    )
-
-
-def _is_unavailable_reuse_provider(source_plan: StagePlan) -> bool:
-    return (
-        source_plan.action == PlanAction.BLOCKED
-        and source_plan.resume_check is not None
-        and source_plan.base_action in {PlanAction.RUN, PlanAction.STALE}
-    )
-
-
-def _unique_reasons(reasons: tuple[PlanReason, ...]) -> tuple[PlanReason, ...]:
-    seen: set[tuple[object, ...]] = set()
-    unique: list[PlanReason] = []
-    for reason in reasons:
-        key = (
-            reason.code,
-            reason.message,
-            reason.stage_name,
-            reason.upstream_stage,
-            reason.input_name,
-            reason.output_name,
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(reason)
-    return tuple(unique)
 
 
 def _stage_plan(
@@ -398,7 +228,7 @@ def _stage_plan(
     base_action: PlanAction,
     fingerprint_status: FingerprintStatus,
     fingerprint: StageFingerprintRecord | None,
-    resume_check: object,
+    resume_check: ResumeCheck | None,
     reasons: tuple[PlanReason, ...],
     bound_inputs: Mapping[str, BoundInput],
     pending_inputs: tuple[PendingInput, ...],
@@ -414,7 +244,7 @@ def _stage_plan(
         base_action=base_action,
         fingerprint_status=fingerprint_status,
         fingerprint=fingerprint,
-        resume_check=resume_check,  # type: ignore[arg-type]
+        resume_check=resume_check,
         reasons=reasons,
         bound_inputs=bound_inputs,
         pending_inputs=pending_inputs,

@@ -290,10 +290,15 @@ src/loom/
 
     planning/
       __init__.py
-      plan.py
+      models.py
       planner.py
-      resume.py
+      selectors.py
       invalidation.py
+      actions.py
+      fingerprints.py
+      resume.py
+      explanations.py
+      errors.py
 
     execution/
       __init__.py
@@ -593,20 +598,33 @@ code.
 Expected modules:
 
 ```text
-specs.py          PipelineSpec and StageSpec
-stage.py          Stage protocol
-stage_factory.py  pipeline-owned import and stage construction helpers
-context.py        StageContext passed to stage implementations
-status.py         run and stage status values
-events.py         strict pipeline event records
-locks.py          run lock record model
-validation.py     spec and contract validation
-selectors.py      stage selection helpers
-resources.py      generic runtime/resource hints
-runtime.py        local runtime request foundation
-graph/            DAG construction, topology, and binding validation
-planning/         execution plans, resume decisions, invalidation policy
-errors.py         pipeline-specific errors
+specs.py           PipelineSpec and StageSpec
+stage.py           Stage protocol
+stage_factory.py   pipeline-owned import and stage construction helpers
+context.py         StageContext passed to stage implementations
+status.py          run and stage status values
+events.py          strict pipeline event records
+locks.py           run lock record model
+validation.py      spec and contract validation
+resources.py       generic runtime/resource hints
+runtime.py         local runtime request foundation
+graph/             DAG construction, topology, and binding validation
+planning/          planning policy extraction, explainable diagnostics, and resume orchestration
+errors.py          pipeline-specific errors
+```
+
+`planning/` currently includes:
+
+```text
+models.py         persisted execution plan, stage plan, fingerprint, resume, and reason models
+invalidation.py   upstream binding validation and invalidation helper policy
+selectors.py      selector and eligibility normalization
+actions.py        stage action decision policy extraction
+fingerprints.py   stable stage-fingerprint construction
+resume.py         same-run resume checks and reuse policy
+explanations.py   derived typed explanation model for CLI/preflight consumers
+planner.py        topological plan assembly and execution plan construction
+errors.py         planning, serialization, persistence, selector, and resume errors
 ```
 
 Pipeline specs describe work. Project stage objects do the work. `loom.pipeline`

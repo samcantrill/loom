@@ -116,7 +116,8 @@ propagate blocked states
 explain invalidation chains
 ```
 
-This can begin inside `resume.py` and split out once the logic grows.
+Implemented as a dedicated module by Phase 5, this module keeps traversal
+reason extraction typed and separate from resume I/O.
 
 ### 3.4 `loom.pipeline.stores.run_store`
 
@@ -196,6 +197,11 @@ train           RUN      forced by selector
 evaluate        RUN      upstream changed: train.best_checkpoint
 report          BLOCKED  missing input: evaluate.metrics
 ```
+
+`ExecutionPlan` remains the persisted contract used by execution. Explanatory view
+models are derived in `loom.pipeline.planning.explanations` so CLI and
+preflight consumers can report action and invalidation reasons without parsing
+private planner internals or replaying store reads.
 
 ### 4.2 Should Not Support in v0
 

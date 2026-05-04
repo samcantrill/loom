@@ -230,6 +230,11 @@ The v0 contract is that authored inputs are `Mapping[str, str]` where each value
 is a strict `stage.output` reference. Stage inputs are resolved before execution
 planning needs them.
 
+Resolved bindings are consumed directly by
+`loom.pipeline.planning.invalidation` as typed `ResolvedInputBinding` values so
+resume and invalidation policy can reuse upstream artifact references without
+re-parsing strings.
+
 ## Binding Sources
 
 V0 inputs may be:
