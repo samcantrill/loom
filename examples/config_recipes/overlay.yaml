@@ -1,0 +1,8 @@
+paths:
+  work_dir: ./example-work
+settings:
+  sample_count: 8
+  api_password: overlay-password
+pipeline:
+  label: overlay
+

@@ -1,5 +1,8 @@
-"""Executable docs examples from README and phase-10 examples."""
+"""Executable docs examples from README and examples/."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -54,3 +57,28 @@ def test_readme_python_api_example_runs_and_reuses_same_run(tmp_path: Path) -> N
     assert first.status.name == "SUCCEEDED"
     assert second.stage_results["build"].action == PlanAction.REUSE
     assert second.stage_results["report"].action == PlanAction.REUSE
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        Path("examples/local_pipeline/run_pipeline.py"),
+        Path("examples/config_recipes/compose_config.py"),
+        Path("examples/target_instantiation/instantiate_targets.py"),
+    ],
+)
+def test_v0_example_scripts_execute(script: Path, tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    env = os.environ.copy()
+    env["LOOM_EXAMPLE_RUN_ROOT"] = str(tmp_path / "runs")
+
+    result = subprocess.run(
+        [sys.executable, str(repo_root / script)],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip()

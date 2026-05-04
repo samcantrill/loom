@@ -1,0 +1,29 @@
+name: local-pipeline-example
+schema_version: 1
+pipeline:
+  name: local-pipeline-example
+  description: Two local stages with JSON and text artifacts.
+  stages:
+    - name: seed
+      _target_: stages:SeedNumbersStage
+      config:
+        values: [2, 4, 6, 8]
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: summarize
+      _target_: stages:SummarizeNumbersStage
+      inputs:
+        numbers: seed.numbers
+      resources:
+        cpu: 1
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1
+        note:
+          artifact_type: text
+          codec_key: text.v1
+
