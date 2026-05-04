@@ -1,0 +1,252 @@
+"""Plan explanation models derived from execution plans."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from loom.artifacts import ArtifactRef
+
+from .models import (
+    BoundInput,
+    ExecutionPlan,
+    FingerprintStatus,
+    PlanAction,
+    PlanReason,
+    PlanReasonCode,
+    PlanSelectors,
+    PendingInput,
+    ResumeCheck,
+    ResumeOptions,
+    StagePlan,
+    bound_input_mapping,
+    reject_unknown,
+    reason_code_tuple,
+    reason_tuple,
+    require_fields,
+    require_mapping,
+)
+
+PLAN_EXPLANATION_SCHEMA_VERSION = 1
+PLAN_EXPLANATION_KIND = "loom.plan_explanation"
+
+
+@dataclass(frozen=True, slots=True)
+class StageExplanation:
+    stage_name: str
+    action: PlanAction
+    base_action: PlanAction
+    fingerprint_status: FingerprintStatus
+    reason_codes: tuple[PlanReasonCode, ...]
+    reasons: tuple[PlanReason, ...]
+    selector_reasons: tuple[PlanReasonCode, ...]
+    invalidation_reasons: tuple[PlanReason, ...]
+    resume_reasons: tuple[PlanReason, ...]
+    pending_inputs: tuple[PendingInput, ...]
+    bound_inputs: dict[str, BoundInput]
+    reusable_outputs: dict[str, ArtifactRef]
+    upstream_stages: tuple[str, ...]
+    downstream_stages: tuple[str, ...]
+    prior_fingerprint: str | None
+    current_fingerprint: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "stage_name": self.stage_name,
+            "action": self.action.value,
+            "base_action": self.base_action.value,
+            "fingerprint_status": self.fingerprint_status.value,
+            "reason_codes": [code.value for code in self.reason_codes],
+            "reasons": [reason.to_dict() for reason in self.reasons],
+            "selector_reasons": [code.value for code in self.selector_reasons],
+            "invalidation_reasons": [
+                reason.to_dict() for reason in self.invalidation_reasons
+            ],
+            "resume_reasons": [reason.to_dict() for reason in self.resume_reasons],
+            "pending_inputs": [item.to_dict() for item in self.pending_inputs],
+            "bound_inputs": {
+                name: item.to_dict() for name, item in self.bound_inputs.items()
+            },
+            "reusable_outputs": {
+                name: ref.to_dict() for name, ref in self.reusable_outputs.items()
+            },
+            "upstream_stages": list(self.upstream_stages),
+            "downstream_stages": list(self.downstream_stages),
+            "prior_fingerprint": self.prior_fingerprint,
+            "current_fingerprint": self.current_fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "StageExplanation":
+        mapping = require_mapping(data, "StageExplanation")
+        allowed = {
+            "stage_name",
+            "action",
+            "base_action",
+            "fingerprint_status",
+            "reason_codes",
+            "reasons",
+            "selector_reasons",
+            "invalidation_reasons",
+            "resume_reasons",
+            "pending_inputs",
+            "bound_inputs",
+            "reusable_outputs",
+            "upstream_stages",
+            "downstream_stages",
+            "prior_fingerprint",
+            "current_fingerprint",
+        }
+        reject_unknown(mapping, allowed, "StageExplanation")
+        require_fields(mapping, allowed, "StageExplanation")
+        return cls(
+            stage_name=str(mapping["stage_name"]),
+            action=PlanAction(mapping["action"]),
+            base_action=PlanAction(mapping["base_action"]),
+            fingerprint_status=FingerprintStatus(mapping["fingerprint_status"]),
+            reason_codes=reason_code_tuple(mapping["reason_codes"], "reason_codes"),
+            reasons=reason_tuple(mapping["reasons"], "reasons"),
+            selector_reasons=reason_code_tuple(
+                mapping["selector_reasons"], "selector_reasons"
+            ),
+            invalidation_reasons=reason_tuple(
+                mapping["invalidation_reasons"], "invalidation_reasons"
+            ),
+            resume_reasons=reason_tuple(mapping["resume_reasons"], "resume_reasons"),
+            pending_inputs=tuple(
+                PendingInput.from_dict(item) for item in mapping["pending_inputs"]
+            ),
+            bound_inputs=bound_input_mapping(mapping["bound_inputs"], "bound_inputs"),
+            reusable_outputs={
+                str(name): ArtifactRef.from_dict(value)
+                for name, value in require_mapping(
+                    mapping["reusable_outputs"], "reusable_outputs"
+                ).items()
+            },
+            upstream_stages=tuple(mapping["upstream_stages"]),
+            downstream_stages=tuple(mapping["downstream_stages"]),
+            prior_fingerprint=(
+                None
+                if mapping["prior_fingerprint"] is None
+                else str(mapping["prior_fingerprint"])
+            ),
+            current_fingerprint=(
+                None
+                if mapping["current_fingerprint"] is None
+                else str(mapping["current_fingerprint"])
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PlanExplanation:
+    schema_version: int
+    kind: str
+    run_id: str
+    pipeline_name: str | None
+    selectors: PlanSelectors
+    resume: ResumeOptions
+    stage_order: tuple[str, ...]
+    stage_explanations: tuple[StageExplanation, ...]
+    summary: Mapping[str, int]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "kind": self.kind,
+            "run_id": self.run_id,
+            "pipeline_name": self.pipeline_name,
+            "selectors": self.selectors.to_dict(),
+            "resume": self.resume.to_dict(),
+            "stage_order": list(self.stage_order),
+            "stages": [explanation.to_dict() for explanation in self.stage_explanations],
+            "summary": dict(self.summary),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "PlanExplanation":
+        mapping = require_mapping(data, "PlanExplanation")
+        allowed = {
+            "schema_version",
+            "kind",
+            "run_id",
+            "pipeline_name",
+            "selectors",
+            "resume",
+            "stage_order",
+            "stages",
+            "summary",
+        }
+        reject_unknown(mapping, allowed, "PlanExplanation")
+        require_fields(mapping, allowed, "PlanExplanation")
+        return cls(
+            schema_version=int(mapping["schema_version"]),
+            kind=str(mapping["kind"]),
+            run_id=str(mapping["run_id"]),
+            pipeline_name=(
+                None if mapping["pipeline_name"] is None else str(mapping["pipeline_name"])
+            ),
+            selectors=PlanSelectors.from_dict(mapping["selectors"]),
+            resume=ResumeOptions.from_dict(mapping["resume"]),
+            stage_order=tuple(str(value) for value in mapping["stage_order"]),
+            stage_explanations=tuple(
+                StageExplanation.from_dict(item) for item in mapping["stages"]
+            ),
+            summary={str(key): int(value) for key, value in mapping["summary"].items()},
+        )
+
+
+def explain_plan(plan: ExecutionPlan) -> PlanExplanation:
+    explanations = tuple(
+        _explain_stage(stage=stage) for stage in plan.ordered_stage_plans
+    )
+    return PlanExplanation(
+        schema_version=PLAN_EXPLANATION_SCHEMA_VERSION,
+        kind=PLAN_EXPLANATION_KIND,
+        run_id=plan.run_id,
+        pipeline_name=plan.pipeline_name,
+        selectors=plan.selectors,
+        resume=plan.resume,
+        stage_order=plan.stage_order,
+        stage_explanations=explanations,
+        summary=dict(plan.summary),
+    )
+
+
+def _explain_stage(*, stage: StagePlan) -> StageExplanation:
+    resume_check: ResumeCheck | None = stage.resume_check
+    return StageExplanation(
+        stage_name=stage.stage_name,
+        action=stage.action,
+        base_action=stage.base_action,
+        fingerprint_status=stage.fingerprint_status,
+        reason_codes=tuple(reason.code for reason in stage.reasons),
+        reasons=stage.reasons,
+        selector_reasons=stage.selected_by,
+        invalidation_reasons=stage.invalidated_by,
+        resume_reasons=tuple(resume_check.reasons) if resume_check else (),
+        pending_inputs=stage.pending_inputs,
+        bound_inputs=dict(stage.bound_inputs),
+        reusable_outputs=dict(stage.reusable_outputs),
+        upstream_stages=stage.upstream_stages,
+        downstream_stages=stage.downstream_stages,
+        prior_fingerprint=(
+            resume_check.prior_fingerprint.fingerprint
+            if resume_check and resume_check.prior_fingerprint
+            else None
+        ),
+        current_fingerprint=(
+            resume_check.current_fingerprint.fingerprint
+            if resume_check and resume_check.current_fingerprint
+            else None
+        ),
+    )
+
+
+__all__ = [
+    "PLAN_EXPLANATION_SCHEMA_VERSION",
+    "PLAN_EXPLANATION_KIND",
+    "StageExplanation",
+    "PlanExplanation",
+    "explain_plan",
+]

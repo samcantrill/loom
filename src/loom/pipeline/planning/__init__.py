@@ -32,6 +32,13 @@ from loom.pipeline.planning.models import (
     StagePlan,
 )
 from loom.pipeline.planning.planner import plan_pipeline
+from loom.pipeline.planning.explanations import (
+    PLAN_EXPLANATION_KIND,
+    PLAN_EXPLANATION_SCHEMA_VERSION,
+    PlanExplanation,
+    StageExplanation,
+    explain_plan,
+)
 
 __all__ = [
     "DEFAULT_FINGERPRINT_ALGORITHM",
@@ -61,5 +68,10 @@ __all__ = [
     "StageFingerprintRecord",
     "StagePlan",
     "build_stage_fingerprint",
+    "explain_plan",
+    "PLAN_EXPLANATION_KIND",
+    "PLAN_EXPLANATION_SCHEMA_VERSION",
+    "PlanExplanation",
+    "StageExplanation",
     "plan_pipeline",
 ]

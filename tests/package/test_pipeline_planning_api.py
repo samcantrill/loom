@@ -42,6 +42,11 @@ def test_pipeline_planning_public_exports_are_phase_scoped() -> None:
         "StageFingerprintRecord",
         "StagePlan",
         "build_stage_fingerprint",
+        "explain_plan",
+        "PLAN_EXPLANATION_KIND",
+        "PLAN_EXPLANATION_SCHEMA_VERSION",
+        "PlanExplanation",
+        "StageExplanation",
         "plan_pipeline",
     ]
     assert "plan_pipeline" not in loom.__all__
