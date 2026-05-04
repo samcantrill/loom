@@ -187,12 +187,12 @@ Scope check:
 gh pr create --base develop --head codex/v0-post-recipe-catalogs --title "Phase 6: Explicit Recipe Catalogs and Fresh Composition" --body-file docs/phases/v0-post-recipe-catalogs-pr-body.md
 ```
 
-- Verification:
-
-```json
-{"baseRefName":"develop","headRefName":"codex/v0-post-recipe-catalogs","mergedAt":null,"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","completedAt":"0001-01-01T00:00:00Z","conclusion":"","detailsUrl":"https://github.com/samcantrill/loom/actions/runs/25319766762/job/74225610616","name":"checks","startedAt":"2026-05-04T12:46:00Z","status":"IN_PROGRESS","workflowName":"CI"}],"url":"https://github.com/samcantrill/loom/pull/20"}
-```
-
+- Verification command: `gh pr view 20 --json
+  baseRefName,headRefName,state,url,mergedAt,statusCheckRollup`.
+- Verification result: base `develop`, head
+  `codex/v0-post-recipe-catalogs`, state `OPEN`, URL
+  https://github.com/samcantrill/loom/pull/20, `mergedAt` null, and
+  `statusCheckRollup` showed the GitHub `checks` workflow in progress.
 - Target verification result: base is `develop`, matching the recorded target
   branch.
 - CI status at PR verification: GitHub `checks` workflow was in progress.
