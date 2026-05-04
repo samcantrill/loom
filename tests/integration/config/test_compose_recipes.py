@@ -5,9 +5,10 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config
+from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
+import loom.config.api as config_api
 from loom.config.errors import UnknownRecipeError
-from tests.support.config_samples import DownstreamRecipe, nested_argument_recipe, composed_output_recipe
+from tests.support.config_samples import DownstreamRecipe, nested_argument_recipe, composed_output_recipe, argument_recipe
 
 
 def test_nested_recipe_expansion_path_and_manifest(tmp_path: Path) -> None:
@@ -50,3 +51,22 @@ def test_unknown_recipe_rejected_in_integration_shape(tmp_path: Path) -> None:
     base.write_text("name: base\npipeline:\n  _recipe_: missing\n  value: one\n", encoding="utf-8")
     with pytest.raises(UnknownRecipeError):
         compose_config(base, recipe_catalog=RecipeCatalog())
+
+
+def test_compose_config_with_catalog_isolated_from_global_recipe_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.yaml"
+
+    base.write_text("name: base\npipeline:\n  _recipe_: arg\n  value: one\n", encoding="utf-8")
+    monkeypatch.setattr(config_api, "__default_recipe_catalog", RecipeCatalog())
+
+    register_recipe("arg", argument_recipe)
+
+    with pytest.raises(UnknownRecipeError):
+        compose_config_with_catalog(base, recipe_catalog=RecipeCatalog())
+
+    explicit_catalog = RecipeCatalog()
+    explicit_catalog.register("arg", argument_recipe)
+    composed = compose_config_with_catalog(base, recipe_catalog=explicit_catalog)
+    assert composed.resolved["pipeline"] == {"value": "one:0"}

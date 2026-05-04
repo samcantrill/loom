@@ -5,8 +5,9 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config
-from loom.config.errors import ConfigValidationError
+from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
+from loom.config.errors import ConfigValidationError, UnknownRecipeError
+import loom.config.api as config_api
 from tests.support.config_samples import argument_recipe
 
 
@@ -73,3 +74,32 @@ def test_compose_rejects_none_overrides(tmp_path: Path) -> None:
     base.write_text("name: base\npipeline: {}\n", encoding="utf-8")
     with pytest.raises(ConfigValidationError):
         compose_config(base, overrides=cast(Any, None))
+
+
+def test_compose_config_uses_global_catalog_when_recipe_catalog_not_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "base.yaml"
+    path.write_text("name: demo\npipeline:\n  _recipe_: arg\n  value: one\n", encoding="utf-8")
+    monkeypatch.setattr(config_api, "__default_recipe_catalog", RecipeCatalog())
+
+    register_recipe("arg", argument_recipe)
+    composed = compose_config(path)
+
+    assert composed.resolved["pipeline"] == {"value": "one:0"}
+    assert composed.recipe_manifest[0]["name"] == "arg"
+
+
+def test_compose_config_with_catalog_uses_explicit_catalog_and_ignores_global(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / "base.yaml"
+    path.write_text("name: demo\npipeline:\n  _recipe_: arg\n  value: one\n", encoding="utf-8")
+    monkeypatch.setattr(config_api, "__default_recipe_catalog", RecipeCatalog())
+
+    register_recipe("arg", argument_recipe)
+
+    with pytest.raises(UnknownRecipeError):
+        compose_config_with_catalog(path, recipe_catalog=RecipeCatalog())
+
+    catalog = RecipeCatalog()
+    catalog.register("arg", argument_recipe)
+    composed = compose_config_with_catalog(path, recipe_catalog=catalog)
+    assert composed.resolved["pipeline"] == {"value": "one:0"}
+    assert composed.recipe_manifest[0]["name"] == "arg"
