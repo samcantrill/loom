@@ -1230,7 +1230,7 @@ Future compatibility:
 
 ### Phase 5 - Planner Policy Decomposition And Explanations
 
-Status: pending
+Status: in_progress
 Branch: `codex/v0-post-planner-policy`
 PR: pending
 
