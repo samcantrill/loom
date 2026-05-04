@@ -793,9 +793,9 @@ choices selected above.
 
 ### Phase 1 - Core Contracts, Schemas, And Packaging
 
-Status: pending
+Status: pr_open
 Branch: `codex/v0-post-core-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/15
 
 Goal:
 
