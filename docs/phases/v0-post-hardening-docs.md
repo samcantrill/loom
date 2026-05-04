@@ -37,16 +37,38 @@
   refinement goals. This pass only tightened phase boundaries, serial-gate
   details, suite obligations, and blocker conditions; it does not reopen
   architecture or public-protocol decisions.
-- Phase implementation refinement budget: unused. Use at most one
-  `loom_phase_refiner` pass later only if targeted validation fails, required
-  suite coverage is missing, or the manager explicitly activates expanded-path
-  refinement.
+- Phase implementation refinement budget: used on 2026-05-05 by the single
+  allowed `loom_phase_refiner` pass. Refinement tightened migration-note
+  completeness for renamed run metadata APIs and run-scoped artifact-store
+  operations, corrected docs language that could imply implemented future
+  CLI/sweep behavior, fixed focused e2e optional-config import ordering, and
+  added targeted type hardening for the lock-store helper.
 - PR review budget: unused.
 - PR body draft/refine budget: unused.
 - Setup limitations: no remote synchronization or validation commands were run
   during planning. The branch and worktree were created from the local
   `develop` checkout supplied by the manager.
-- Blockers: none.
+- Blockers: none after refinement.
+
+## Implementation Refinement Evidence
+
+- Refinement pass status: used once; do not run another automated
+  implementation refinement pass without explicit manager instruction.
+- Checks run during refinement:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/e2e/test_local_pipeline_run.py`
+    initially failed during collection because config-extra imports occurred
+    before optional dependency skips. After the fix, the same command passed
+    with 5 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/e2e/test_local_pipeline_run.py`
+    passed with 5 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/e2e/test_local_pipeline_run.py`
+    passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright tests/e2e/test_local_pipeline_run.py`
+    passed with 0 errors.
+  - `git diff --check` passed.
+- Remaining blockers: none known. PR preparation still owns final
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` evidence.
 
 ## Objective
 

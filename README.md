@@ -5,7 +5,7 @@ resuming small Python pipelines.
 
 The v0 implementation is deliberately local-only:
 
-- trusted config composition and `_target_` / `_recipe_` construction
+- trusted config composition, recipe expansion, and `_target_` construction
 - local artifact + run stores on disk
 - deterministic planning with conservative same-run resume
 - local in-process execution
@@ -109,8 +109,10 @@ runs/RUN_ID/
 ## Extension Contracts
 
 - Stage implementations follow `run(context, inputs) -> Mapping[str, ArtifactRef]`.
-- Artifact stores implement `save`, `register`, `load`, `exists`, and `validate`.
-- Run stores implement stage status/input/output/fingerprint documents and run metadata.
+- Artifact stores implement `save`, `register`, `load`, `exists`,
+  `verify_checksum`, and `validate` for one bound run.
+- Run stores implement run documents, user metadata, stage state documents,
+  events, and run locks.
 
 These are structural protocol checks (`isinstance(..., Protocol)`), not inheritance
 requirements.

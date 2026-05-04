@@ -6,8 +6,8 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config_with_catalog, register_recipe
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.planning import PlanAction
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
@@ -18,6 +18,8 @@ from tests.support.pipeline_execution_configs import local_execution_config
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
+
+from loom.config import RecipeCatalog, compose_config_with_catalog, register_recipe
 
 pytestmark = pytest.mark.e2e
 
@@ -109,7 +111,12 @@ class _TrackingLocalRunStore(LocalRunStore):
         super().__init__(run_root)
         self.lock_events: list[str] = []
 
-    def acquire_run_lock(self, run_id: str, *, owner: Mapping[str, Any] | None = None):
+    def acquire_run_lock(
+        self,
+        run_id: str,
+        *,
+        owner: Mapping[str, Any] | None = None,
+    ) -> RunLockRecord:
         self.lock_events.append("acquire")
         return super().acquire_run_lock(run_id, owner=owner)
 

@@ -21,8 +21,9 @@ project code:
 V0 scope is intentionally narrower than the long-term specification below. V0
 supports local in-process execution through the Python API, inspectable local
 run directories, and import-safe unsupported CLI stubs only. Functional CLI
-commands, subprocess workers, SLURM execution, containers, sweeps, and runtime
-profiles are roadmap work after v0.
+commands, subprocess workers, SLURM execution, containers, sweeps, remote
+stores, plugin discovery, retries, timeouts, cleanup, retention, and v1 config
+composition are roadmap work after v0.
 
 ---
 
@@ -443,10 +444,16 @@ Minimum viable API:
 ```python
 from loom.refs import ResourceRef
 from loom.records import Record, InMemoryManifest, ManifestView
-from loom.artifacts import ArtifactRef
+from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import hash_mapping
 
-from loom.config import compose_config, instantiate, register_recipe
+from loom.config import (
+    RecipeCatalog,
+    compose_config,
+    compose_config_with_catalog,
+    instantiate,
+    register_recipe,
+)
 from loom.pipeline import (
     PipelineSpec,
     StageFactorySpec,
@@ -522,9 +529,10 @@ Build `loom` in small, testable layers:
 5. Resume behavior.
 6. Hardening, docs, and import-safe unsupported CLI stubs for v0.
 
-Roadmap versions after v0 add functional CLI wrappers, subprocess execution,
-SLURM execution, containers, sweeps, remote stores, plugin-discovered event
-sinks, and reliability policies.
+Roadmap versions after v0 add functional CLI wrappers, v1 config composition,
+subprocess execution, SLURM execution, containers, sweeps, remote stores,
+plugin discovery, retries, timeouts, cleanup, retention, and broader
+reliability policies.
 
 Each layer should include focused tests before the next layer depends on it.
 

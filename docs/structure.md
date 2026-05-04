@@ -446,7 +446,13 @@ from loom.refs import ResourceRef
 from loom.records import Record, InMemoryManifest, ManifestView
 from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import hash_mapping
-from loom.config import compose_config, compose_config_with_catalog, instantiate, register_recipe
+from loom.config import (
+    RecipeCatalog,
+    compose_config,
+    compose_config_with_catalog,
+    instantiate,
+    register_recipe,
+)
 from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext, PipelineRunner
 ```
 
@@ -730,12 +736,12 @@ same run directory.
 
 Detailed specification: [sweeps.md](features/sweeps.md)
 
-`loom.pipeline.sweep` expands parameter sets into multiple run configurations
-and coordinates trial execution through the same config, planning, execution, and
-store APIs as normal runs.
+`loom.pipeline.sweep` is reserved for a future module that expands parameter
+sets into multiple run configurations and coordinates trial execution through
+the same config, planning, execution, and store APIs as normal runs.
 
-Sweeps should remain generic. They should not become a hyperparameter optimizer,
-experiment database, or scheduler replacement in v0.
+Sweeps should remain generic when implemented. They should not become a
+hyperparameter optimizer, experiment database, or scheduler replacement.
 
 ### 6.10 Plugins
 
@@ -756,9 +762,10 @@ registers event sink implementations.
 Detailed specifications: [cli.md](features/cli.md),
 [preflight.md](features/preflight.md), [run-catalog.md](features/run-catalog.md)
 
-`loom.cli` owns command-line presentation. It parses arguments, calls public
-Python APIs, formats results, maps errors to exit codes, and exposes thin
-commands such as validate, plan, run, stage, sweep, status, logs, and artifacts.
+`loom.cli` owns command-line presentation. In v0 it remains an import-safe
+unsupported surface. Later CLI phases should parse arguments, call public Python
+APIs, format results, map errors to exit codes, and expose thin commands such
+as validate, plan, run, stage, sweep, status, logs, and artifacts.
 
 The CLI must not duplicate config, pipeline, store, or resume logic.
 
