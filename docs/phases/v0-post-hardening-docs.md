@@ -9,26 +9,34 @@
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 8 - Hardening, Docs, And Migration Notes`
 - PR: pending
-- Stack predecessor: none; serial human merge gate is active.
+- Stack predecessor: none. Serial human merge gate is active and this phase is
+  not stacked on any predecessor branch.
 - Base branch: `develop` at `ef5e4522e2d04b549b44ee0f0b7748ff765ed664`
 - Target branch: `develop`
 - Merge eligibility: serial human merge gate. The Phase 8 PR must target
-  `develop`, request review from `samcantrill` when GitHub allows it, and
-  mention `@samcantrill` in the PR body or an immediate fallback PR comment if
-  GitHub rejects the reviewer request. Codex must not approve or merge.
+  `develop`, be verified with `gh pr view <PR> --json
+  baseRefName,headRefName,state,url`, request review from `samcantrill` when
+  GitHub allows it, and mention `@samcantrill` in the PR body or an immediate
+  fallback PR comment if GitHub rejects the reviewer request. Codex must not
+  approve or merge.
 - Successor dependency notes: no successor v0-post phase is recorded. V1
   planning or implementation must not proceed until Phase 8 is human-reviewed,
-  human-merged into `develop`, and the implementation plan records this phase
-  as `merged`.
+  human-merged into `develop`, `gh pr view <PR> --json
+  state,baseRefName,headRefName,url,mergedAt` reports `state` as `MERGED` with
+  `baseRefName` as `develop`, and the implementation plan records this phase as
+  `merged`.
 - Plan quality gate: passed in
   `docs/implementation-plans/implementation-plan-v0-post.md`; no blocking
   plan-review findings remain.
 - Plan quality gate loop budget: initial plan review used, automated plan
   refinement pass used, confirmation review used. Do not consume another
   plan-quality review loop without explicit manager instruction.
-- Draft pass: completed by `loom_phase_planner` in this planning pass.
-- Refine pass: not needed on the fast path; this plan is scope-complete and
-  does not reopen architecture or public-protocol decisions.
+- Draft pass: completed by `loom_phase_planner` in commit `ac716be`
+  (`plan: add phase 8 execution plan`).
+- Refine pass: completed by `loom_phase_planner` in response to manager
+  refinement goals. This pass only tightened phase boundaries, serial-gate
+  details, suite obligations, and blocker conditions; it does not reopen
+  architecture or public-protocol decisions.
 - Phase implementation refinement budget: unused. Use at most one
   `loom_phase_refiner` pass later only if targeted validation fails, required
   suite coverage is missing, or the manager explicitly activates expanded-path
@@ -46,9 +54,12 @@ Close the v0-post hardening sequence with user-facing migration notes, final
 documentation consistency checks, downstream roadmap alignment, and focused e2e
 coverage for the corrected local Python runtime behavior.
 
-This phase is a closeout and evidence phase. It must not add new runtime
-features, reopen the architecture decisions completed in Phases 1 through 7, or
-move deferred work from future roadmap versions into pre-v1 hardening.
+This phase is a closeout and evidence phase. It is limited to migration notes,
+documentation consistency, downstream plan alignment, and focused e2e or
+high-level integration hardening for completed Phases 1 through 7 behavior. It
+must not add new runtime features, reopen architecture decisions completed in
+Phases 1 through 7, or move deferred work from future roadmap versions into
+pre-v1 hardening.
 
 ## Full-Plan Context
 
@@ -77,6 +88,15 @@ cleanup, and retention remain deferred.
   continue from updated `develop`.
 - Retarget/rebase plan after predecessor merge: not applicable because there
   is no unmerged predecessor and the PR target is already `develop`.
+- Review notification plan: after opening or discovering the PR, request
+  `samcantrill` as reviewer with `gh pr edit <PR> --add-reviewer samcantrill`
+  when GitHub permits it. If GitHub rejects that request because the
+  authenticated account or PR author is `samcantrill`, add an immediate PR
+  comment mentioning `@samcantrill` and record the fallback in the PR body or
+  phase notes.
+- Successor start rule: no successor phase or v1 implementation starts while
+  this PR is `pr_open` or `approved`; continue only after GitHub reports the PR
+  as `MERGED` into `develop`.
 - Branch cleanup constraints: keep the phase branch and worktree until the
   human-owned PR has merged into `develop` and no successor branch depends on
   it.
@@ -157,6 +177,9 @@ cleanup, and retention remain deferred.
   - local lifecycle events and run lock behavior visible through supported
     store APIs.
 - Preserve permanent import-boundary and no-extra/config-extra guardrails.
+- Keep runtime edits limited to small hardening fixes required by focused tests
+  or documentation corrections. Do not introduce future runtime features under
+  the closeout label.
 - During PR preparation, run `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary`; record suite-level evidence
   in the PR body and phase completion notes.
@@ -205,8 +228,8 @@ cleanup, and retention remain deferred.
 | Contract | Preserve structural stage, codec, recipe, store, and executor contract tests. Add contract coverage only if final migration notes expose a replacement contract not already tested. |
 | Integration | Use focused integration coverage where cross-module behavior is clearer than e2e: explicit catalog composition unaffected by global recipes, stage factory plus `stage_config`, same-run resume/reuse, and runner-visible event/lock behavior. |
 | E2E | Add or refresh a small number of public-API e2e tests that exercise local success, failure with durable blocked outcomes, resume/reuse, explicit catalog composition, stage factory construction, and local events/locks without relying on private internals. |
-| Opt-in/config-extra | Preserve the config-extra suite and evidence row. Any tests requiring config composition extras must run under the existing opt-in/config-extra target rather than weakening no-extra behavior. |
-| Validation gates | PR preparation must run `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and `UV_CACHE_DIR=/tmp/uv-cache make test-summary`; failures must be fixed or recorded as blockers before PR open/preparation completes. |
+| Opt-in/config-extra | Preserve the opt-in config-extra suite and its `make test-summary` evidence row. Any tests requiring config composition extras must run under the existing opt-in/config-extra target rather than weakening no-extra package/import behavior. |
+| Validation gates | PR preparation must run `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and `UV_CACHE_DIR=/tmp/uv-cache make test-summary`; failures must be fixed or recorded as blockers before PR open/preparation completes. CI failures after PR creation are blockers unless clearly unrelated and recorded with evidence. |
 
 ## Design Impact
 
@@ -278,5 +301,13 @@ cleanup, and retention remain deferred.
   architecture decision.
 - Stop if validation cannot run in the PR preparation environment, or if
   failing validation cannot be resolved within Phase 8 scope.
-- Stop if GitHub PR creation or reviewer notification cannot satisfy the
-  serial human merge gate requirements.
+- Stop if CI is clearly failing and the failure cannot be resolved within Phase
+  8 scope or justified as unrelated with evidence.
+- Stop if GitHub PR creation, PR inspection, or target verification cannot
+  satisfy the serial human merge gate requirements. A PR targeting anything
+  other than `develop` is a blocker.
+- Stop if GitHub reviewer notification cannot request `samcantrill` and the
+  required `@samcantrill` fallback comment cannot be posted and recorded.
+- Stop if the PR is closed without merge, GitHub access needed to poll the
+  serial gate is unavailable, or GitHub does not report the human-owned PR as
+  `MERGED` into `develop` before successor work would start.
