@@ -23,7 +23,6 @@ def test_validate_stage_outputs_accepts_declared_artifact(tmp_path: Path) -> Non
     store = LocalArtifactStore(tmp_path)
     ref = store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",
@@ -39,7 +38,6 @@ def test_validate_stage_outputs_rejects_contract_errors(tmp_path: Path) -> None:
     store = LocalArtifactStore(tmp_path)
     ref = store.save(
         "bad",
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="text",
@@ -64,7 +62,6 @@ def test_validate_stage_outputs_rejects_non_string_output_names(
     store = LocalArtifactStore(tmp_path)
     ref = store.save(
         {"x": 1},
-        run_id="run1",
         stage_name="build",
         name="data",
         artifact_type="json",

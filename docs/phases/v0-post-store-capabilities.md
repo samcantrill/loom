@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: implementation refinement complete; ready for PR preparation
 - Branch: `codex/v0-post-store-capabilities`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-store-capabilities`
 - Phase execution plan path: `docs/phases/v0-post-store-capabilities.md`
@@ -490,7 +490,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used in this pass
 - PR review: unused
 
 ## Completion Notes
@@ -505,8 +505,23 @@ make test-summary
   - Slice 5: `StageContext` facade and local runtime path wiring.
 - Implementation validation:
   - Slice 1-5 were validated during executor work using the slice matrix in this plan.
-  - Slice 6 (this docs-only slice) reruns package, contract, store, context, planning, and local-store checks as recorded in this pass.
-- Refinement summary: pending.
+  - Refinement targeted checks:
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_public_api.py tests/package/test_import.py tests/package/test_pipeline_api.py tests/package/test_pipeline_store_api.py tests/contracts/test_store_contract.py tests/unit/loom/test_artifacts.py tests/unit/loom/pipeline/test_context.py tests/unit/loom/pipeline/stores/test_local_artifacts.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/planning/test_resume.py tests/unit/loom/pipeline/planning/test_planner.py tests/unit/loom/pipeline/executors/test_local_executor.py` passed: 69 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_local_stores.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_resume.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py` passed: 6 passed, 2 skipped under the default environment.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/execution/test_outputs.py tests/unit/loom/pipeline/executors/test_local_executor.py tests/contracts/test_store_contract.py tests/unit/loom/pipeline/stores/test_local_runs.py` passed: 23 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_store_errors.py tests/package/test_pipeline_store_api.py` passed: 5 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed: 0 errors.
+    - `make test-no-extra` passed: 308 passed, 9 skipped.
+    - `make test-config-extra` passed: 102 passed, 309 deselected.
+    - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed, including Ruff, Pyright, default harness, config-extra harness, and package build. A first sandboxed `make validate-pr` attempt without the cache override failed before validation because uv could not create a temporary file under read-only `~/.cache/uv`.
+- Refinement summary:
+  - Fixed typed local-helper usage in `PipelineRunner` so stdout, stderr, and traceback paths flow through `LocalRunStorePaths` after the generic `RunStore` split.
+  - Narrowed `LocalRunStore.read_run_user_metadata()` typing to the nested user metadata mapping.
+  - Updated stale tests that still passed removed `run_id` arguments to run-scoped `LocalArtifactStore.save()`.
+  - Updated store export expectations for the new capability protocols.
+  - Replaced a stale `context.output_path()` docs example with `context.local_output_path()`.
 - PR preparation: pending.
 - Stack maintenance: serial human merge gate active; no successor phase may start until this phase is approved and human-merged into `develop`.
+- Residual risks: none identified in this refinement pass. Phase 4 still owns concrete lock behavior; Phase 3+ work remains unstarted.
 - Remaining blockers: none.

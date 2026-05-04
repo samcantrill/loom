@@ -208,7 +208,7 @@ class IncompleteArtifactStore:
 
 class IncompleteRunStore:
     def create_run(self, run_id: str) -> None:
-        return run_id
+        return None
 
 
 class DummyRunStorePaths:

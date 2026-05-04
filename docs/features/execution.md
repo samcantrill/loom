@@ -1309,7 +1309,7 @@ allocate or register artifacts.
 Recommended helper:
 
 ```python
-path = context.output_path("metrics", suffix=".json")
+path = context.local_output_path("metrics", suffix=".json")
 ```
 
 The helper should:
@@ -1322,8 +1322,8 @@ avoid overwriting committed outputs unless explicitly allowed
 return pathlib.Path for local stores
 ```
 
-For remote artifact stores, a future context may return a URI or provide a
-different writer API.
+Remote artifact stores should not implement this local helper. A future context
+may instead provide a URI or writer API.
 
 ### 12.3 Artifact Registration
 

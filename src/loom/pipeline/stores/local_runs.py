@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.io.uris import path_to_file_uri
@@ -111,7 +112,10 @@ class LocalRunStore:
         return self._read_run_wrapper(validate_run_id(run_id, field="run_id"))
 
     def read_run_user_metadata(self, run_id: str) -> dict[str, PlainData]:
-        return self._read_run_wrapper(validate_run_id(run_id, field="run_id"))["metadata"]
+        return cast(
+            dict[str, PlainData],
+            self._read_run_wrapper(validate_run_id(run_id, field="run_id"))["metadata"],
+        )
 
     def write_run_user_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")

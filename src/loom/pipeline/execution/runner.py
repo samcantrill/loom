@@ -268,6 +268,7 @@ class PipelineRunner:
     ) -> StageRunResult:
         attempt = next_stage_attempt(self.run_store, run_id, stage.name)
         stage_started_at: str | None = None
+        local_run_store = self._require_local_run_store()
         try:
             inputs = self._bind_inputs(stage, stage_plan, produced_outputs)
             fingerprint = build_stage_fingerprint(
@@ -314,14 +315,14 @@ class PipelineRunner:
                 inputs=inputs,
                 fingerprint=fingerprint,
                 attempt=attempt,
-                stdout_path=self.run_store.local_stage_log_path(
+                stdout_path=local_run_store.local_stage_log_path(
                     run_id, stage.name, "stdout"
                 ),
-                stderr_path=self.run_store.local_stage_log_path(
+                stderr_path=local_run_store.local_stage_log_path(
                     run_id, stage.name, "stderr"
                 ),
                 traceback_path=traceback_log_path(
-                    run_store=self.run_store, run_id=run_id, stage_name=stage.name
+                    run_store=local_run_store, run_id=run_id, stage_name=stage.name
                 ),
             )
             execution_result = self.executor.execute(exec_request)
