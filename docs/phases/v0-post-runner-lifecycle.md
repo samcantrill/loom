@@ -898,7 +898,13 @@ make test-summary
   tests/integration/pipeline/test_local_execution_resume.py` passed; and
   `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` reported 0
   errors, 0 warnings, and 0 informations.
-- PR preparation:
+- PR preparation: drafted `docs/phases/v0-post-runner-lifecycle-pr-body.md`;
+  documented manager-provided `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  evidence from refiner commit `8c91e73` (Ruff clean, Pyright 0 errors,
+  default harness 406 passed / 9 skipped, config-extra 108 passed / 407
+  deselected, build passed); and ran `UV_CACHE_DIR=/tmp/uv-cache make
+  test-summary`, which passed and wrote `build/test-summary.md` with package,
+  unit, contract, integration, e2e, and config-extra suites passing.
 - Stack maintenance: root serial phase; PR must target `develop`; Phase 8 must
   not start until Phase 7 is human-merged into `develop`.
 - Remaining blockers: none.
