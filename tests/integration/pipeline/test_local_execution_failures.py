@@ -82,12 +82,30 @@ def test_stage_exception_persists_failure_before_failed_status(tmp_path: Path) -
     assert result.status == RunStatus.FAILED
     assert result.stage_results["build"].status == StageStatus.FAILED
     assert result.stage_results["report"].action == PlanAction.BLOCKED
+    assert result.stage_results["report"].status == StageStatus.BLOCKED
     failure = run_store.read_stage_failure("run1", "build")
     status = run_store.read_stage_status("run1", "build")
+    blocked_status = run_store.read_stage_status("run1", "report")
     assert failure is not None
     assert status is not None
+    assert blocked_status is not None
     assert failure["failure_type"] == "stage_exception"
     assert status.status == StageStatus.FAILED
+    assert blocked_status.status == StageStatus.BLOCKED
+    assert blocked_status.metadata["blocked_by"] == ["build"]
+    assert blocked_status.metadata["reason_code"] == "upstream_failed"
+    blocked_dir = tmp_path / "runs" / "run1" / "stages" / "report"
+    assert sorted(path.name for path in blocked_dir.iterdir()) == ["status.json"]
+    assert run_store.read_run_lock("run1") is None
+    assert any(
+        event.event_type == "stage.failed" and event.scope.stage_name == "build"
+        for event in run_store.read_events("run1")
+    )
+    assert any(
+        event.event_type == "stage.blocked" and event.scope.stage_name == "report"
+        for event in run_store.read_events("run1")
+    )
+    assert run_store.read_events("run1")[-1].event_type == "run.failed"
 
 
 def test_invalid_outputs_fail_with_inspectable_state(tmp_path: Path) -> None:

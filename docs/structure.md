@@ -638,7 +638,22 @@ Detailed specifications: [execution.md](features/execution.md),
 
 `loom.pipeline.execution` coordinates the runner lifecycle. It prepares stages,
 uses planning decisions, constructs stage contexts, invokes executors, commits
-validated outputs, records logs and failures, and finalizes runs.
+validated outputs, records logs and failures, emits local lifecycle events,
+holds the run lock around mutating execution, persists blocked descendants after
+failures, and finalizes runs.
+
+Current execution modules:
+
+```text
+runner.py      PipelineRunner facade and local serial orchestration
+eventing.py    typed local lifecycle event append helpers
+run_locks.py   runner-held run lock owner/acquire/release helpers
+lifecycle.py   run and stage status writers
+models.py      execution request/result/failure models
+outputs.py     stage output validation
+logs.py        stage log path helpers
+errors.py      execution-specific errors
+```
 
 `loom.pipeline.executors` owns stage invocation mechanisms:
 

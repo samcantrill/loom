@@ -648,27 +648,31 @@ Recommended flow:
 1. Receive a run request.
 2. Validate or load the pipeline spec.
 3. Create or open the run directory.
-4. Prepare atomic write state; do not acquire a run lock in v0.
-5. Persist run metadata and resolved config references.
-6. Build or receive the execution plan.
-7. Persist plan.json.
-8. Initialize root run status.
-9. Iterate stage plans in dependency order.
-10. Apply non-RUN actions without executor invocation.
-11. Prepare each RUN stage attempt.
-12. Persist bound inputs.
-13. Persist fingerprint candidate.
-14. Mark the stage RUNNING.
-15. Invoke the executor.
-16. Validate returned outputs.
-17. Persist outputs.
-18. Update artifact index.
-19. Mark the stage SUCCEEDED.
-20. On failure, persist failure metadata and mark FAILED.
-21. Stop or continue according to failure policy.
-22. Finalize root run status.
-23. Release any post-v0 run lock if one is later added.
-24. Return a structured run result.
+4. Acquire the run-store lock before mutating run execution state.
+5. Emit `run.created` or `run.opened` after the lock is held.
+6. Persist run metadata and resolved config references.
+7. Build or receive the execution plan.
+8. Persist `plan.json`.
+9. Mark the run `PLANNED`, then emit `run.planned` and one `stage.planned`
+   event per planned stage.
+10. Mark the run `RUNNING`, then emit `run.started`.
+11. Iterate stage plans in dependency order.
+12. Apply non-RUN actions without executor invocation.
+13. Prepare each `RUN` stage attempt.
+14. Persist bound inputs.
+15. Persist fingerprint candidate.
+16. Mark the stage `RUNNING`, then emit `stage.started`.
+17. Invoke the executor.
+18. Validate returned outputs.
+19. Persist outputs.
+20. Update artifact index.
+21. Mark the stage `SUCCEEDED`, then emit `stage.completed`.
+22. On failure, persist failure metadata, mark `FAILED`, emit
+   `stage.failed`, persist downstream `BLOCKED` descendants, and emit
+   `stage.blocked`.
+23. Finalize root run status and emit `run.completed` or `run.failed`.
+24. Release the run lock.
+25. Return a structured run result.
 ```
 
 The exact order should avoid reporting success before all durable state is
@@ -693,16 +697,17 @@ RUN:
   invoke executor and commit outputs
 
 REUSE:
-  preserve or record reused artifact refs without executor invocation
+  preserve or record reused artifact refs without executor invocation;
+  emit stage.reused after the artifact index is updated
 
 SKIP:
-  mark stage skipped if the plan requires a persisted status
+  mark stage skipped and emit stage.skipped
 
 BLOCKED:
-  do not run; record blocked reason in run result
+  do not run; persist status-only BLOCKED state and emit stage.blocked
 
 STALE:
-  do not run directly; stale should normally resolve to RUN or BLOCKED
+  do not run directly; persist a plan-execution failure
 ```
 
 If `STALE` appears in a final executable plan, the runner should treat that as a
@@ -1251,35 +1256,40 @@ artifact index updated before SUCCEEDED
 failure persisted before FAILED
 ```
 
-### 11.7 Lifecycle Event Sinks
+### 11.7 Lifecycle Events And Future Sinks
 
-Future runner implementations may emit generic lifecycle events while preserving
-the same status semantics.
+The local runner emits generic lifecycle events while preserving the same status
+semantics.
 
 Events may include:
 
 ```text
-run_started
-stage_started
-stage_succeeded
-stage_failed
-run_finished
-submission_created
+run.created
+run.opened
+run.planned
+run.started
+run.completed
+run.failed
+stage.planned
+stage.started
+stage.completed
+stage.failed
+stage.skipped
+stage.reused
+stage.blocked
 ```
 
-The execution layer should only produce structured event records or call a small
-callback interface. Service-specific notification delivery should live outside
-core `loom`.
+The execution layer produces structured event records in local `events.jsonl`.
+Service-specific notification delivery should live outside core `loom`.
 
 Lifecycle events should be emitted after the corresponding durable state change
-when one exists. For example, `stage_started` follows persisted `RUNNING`,
-`stage_succeeded` follows output commit and persisted `SUCCEEDED`, and
-`stage_failed` follows failure metadata and persisted `FAILED`.
+when one exists. For example, `stage.started` follows persisted `RUNNING`,
+`stage.completed` follows output commit and persisted `SUCCEEDED`, and
+`stage.failed` follows failure metadata and persisted `FAILED`.
 
-Callbacks are observe-only event sinks. They must not mutate plans, artifacts,
-stage results, status transitions, or run-store state. Plugin-discovered event
-sinks are loaded by `loom.plugins`; execution only emits structured runtime
-events and invokes already-registered sinks.
+Callbacks and plugin-discovered event sinks remain deferred. Future sinks are
+observe-only and must not mutate plans, artifacts, stage results, status
+transitions, or run-store state.
 
 ---
 
@@ -1941,10 +1951,14 @@ write_stage_outputs
 write_stage_failure
 write_stage_provenance
 stage_log_paths
+append_event
+acquire_run_lock
+release_run_lock
 ```
 
-Run-store lock methods are post-v0 unless atomic/interruption tests prove a lock
-manager is required.
+The local runner acquires the run-store lock after creating or opening the run
+and releases it after final status and event commits. Lock conflicts propagate
+instead of writing failed status into a run that another owner may be mutating.
 
 The exact method names can differ, but runner code should not duplicate path
 and schema rules from the run-store spec.
@@ -1980,11 +1994,8 @@ These checks can be partly delegated to stores.
 
 ### 19.4 Locking
 
-V0 does not acquire a run-level lock by default. It relies on atomic writes and
-conservative resume validation. Revisit locking only if atomic-write,
-interrupted-run, or concurrent-run tests expose a concrete race.
-
-Post-v0, a run-level lock may protect:
+V0 local execution acquires a run-level lock around mutating execution state.
+The lock protects:
 
 
 ```text

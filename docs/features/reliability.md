@@ -329,21 +329,27 @@ These are policy hints. They do not replace artifact store ownership checks.
 
 Event records expose structured lifecycle facts for inspection and future
 external tools. Phase 4 defines the strict event model and local
-`events.jsonl` persistence. Callback hooks and plugin-discovered event sinks
-remain deferred.
+`events.jsonl` persistence. The local v0-post runner emits lifecycle events for
+run planning/start/completion/failure and stage planned/started/completed,
+failed, skipped, reused, and blocked outcomes. Callback hooks and
+plugin-discovered event sinks remain deferred.
 
 Events:
 
 ```text
 run.created
+run.opened
+run.planned
+run.started
+run.completed
+run.failed
+stage.planned
 stage.started
-stage.succeeded
+stage.completed
 stage.failed
+stage.skipped
+stage.reused
 stage.blocked
-run.finished
-submission.created
-retry.scheduled
-cleanup.performed
 ```
 
 Core `loom` should emit generic event records before adding registered
@@ -416,6 +422,13 @@ unless the caller explicitly disables it.
 
 State transitions must remain atomic enough that a controller crash leaves a
 recoverable record.
+
+Failed local runs also persist status-only blocked records for downstream
+planned descendants. These records live at `stages/<stage>/status.json` with
+`StageStatus.BLOCKED`; they do not create inputs, outputs, fingerprints,
+failure metadata, provenance, or logs for stages that never executed. Automatic
+retry, timeout enforcement, cleanup, retention, and external event sink delivery
+remain deferred.
 
 ## Executor Integration
 
