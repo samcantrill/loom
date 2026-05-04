@@ -142,3 +142,24 @@ def test_manifest_metadata_is_immutable_and_to_dict_returns_mutable_plain_data()
     filtered_dict["metadata"]["team"] = "changed"
 
     assert manifest_view.metadata == {}
+
+
+def test_in_memory_manifest_from_dict_rejects_unknown_fields() -> None:
+    with pytest.raises(Exception):
+        InMemoryManifest.from_dict(
+            {
+                "schema_version": 1,
+                "records": [],
+                "unexpected": True,
+            },
+        )
+
+
+def test_in_memory_manifest_from_dict_rejects_unsupported_schema_version() -> None:
+    with pytest.raises(Exception):
+        InMemoryManifest.from_dict(
+            {
+                "schema_version": 2,
+                "records": [],
+            },
+        )

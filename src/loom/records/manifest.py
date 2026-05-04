@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 from loom.ids import RecordID
-from loom.serialization import PlainData, check_supported_schema, freeze_plain_data, thaw_plain_data
+from loom.serialization import (
+    PlainData,
+    SchemaVersionError,
+    freeze_plain_data,
+    load_versioned_document,
+    thaw_plain_data,
+)
 
 from .base import Record
 from .errors import DuplicateRecordError, ManifestError, RecordNotFoundError
@@ -30,6 +36,9 @@ class Manifest(Protocol):
 
     def to_dict(self) -> dict[str, object]:
         ...
+
+
+_MANIFEST_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,15 +87,17 @@ class InMemoryManifest:
 
     @classmethod
     def from_dict(cls, data: object) -> "InMemoryManifest":
-        if not isinstance(data, dict):
-            raise ManifestError("InMemoryManifest.from_dict expects mapping")
+        try:
+            payload = load_versioned_document(
+                data,
+                current_version=_MANIFEST_SCHEMA_VERSION,
+                required={"records"},
+                optional={"metadata"},
+            )
+        except SchemaVersionError as exc:
+            raise ManifestError(f"InMemoryManifest.from_dict: {exc}") from exc
 
-        unknown = set(data) - {"schema_version", "records", "metadata"}
-        if unknown:
-            raise ManifestError(f"InMemoryManifest.from_dict unknown fields: {', '.join(sorted(unknown))}")
-
-        check_supported_schema(data, supported=(1,))
-        records = data.get("records")
+        records = payload.get("records")
         if not isinstance(records, list):
             raise ManifestError("InMemoryManifest.from_dict records must be a list")
 
@@ -95,7 +106,7 @@ class InMemoryManifest:
             records=tuple(deserialized),
             metadata=cast(
                 dict[str, PlainData],
-                freeze_plain_data(data.get("metadata", {}), path="metadata"),
+                freeze_plain_data(payload.get("metadata", {}), path="metadata"),
             ),
         )
 

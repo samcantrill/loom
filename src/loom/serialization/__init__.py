@@ -15,7 +15,14 @@ from loom.serialization.plain import (
     thaw_plain_data,
     to_plain_data,
 )
-from loom.serialization.schema import check_supported_schema, get_schema_version, require_schema_version
+from loom.serialization.schema import (
+    check_supported_schema,
+    get_schema_version,
+    load_versioned_document,
+    require_mapping,
+    require_schema_version,
+    validate_document_fields,
+)
 
 __all__ = [
     "PlainData",
@@ -37,4 +44,7 @@ __all__ = [
     "get_schema_version",
     "require_schema_version",
     "check_supported_schema",
+    "require_mapping",
+    "validate_document_fields",
+    "load_versioned_document",
 ]

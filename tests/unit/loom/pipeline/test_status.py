@@ -67,8 +67,38 @@ def test_status_record_rejects_invalid_schema_version() -> None:
         "updated_at": updated,
         "schema_version": 999,
     }
-    with pytest.raises(StatusSerializationError, match="unsupported schema_version"):
+    with pytest.raises(StatusSerializationError, match="unsupported schema version"):
         RunStatusRecord.from_dict(payload)
+
+
+def test_stage_status_record_rejects_invalid_schema_version() -> None:
+    _, updated = _common_ts()
+    with pytest.raises(StatusSerializationError, match="unsupported schema version"):
+        StageStatusRecord.from_dict(
+            {
+                "run_id": "run-1",
+                "stage_name": "build",
+                "status": "SUCCEEDED",
+                "attempt": 1,
+                "updated_at": updated,
+                "schema_version": 999,
+            },
+        )
+
+
+def test_status_record_rejects_unknown_fields() -> None:
+    created, updated = _common_ts()
+    with pytest.raises(StatusSerializationError, match="unknown field"):
+        RunStatusRecord.from_dict(
+            {
+                "run_id": "run-1",
+                "status": "RUNNING",
+                "created_at": created,
+                "updated_at": updated,
+                "schema_version": 1,
+                "unexpected": "field",
+            },
+        )
 
 
 def test_status_record_rejects_non_timestamp() -> None:

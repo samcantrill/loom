@@ -22,8 +22,9 @@ from loom.pipeline.planning import (
 from loom.pipeline.specs import PipelineSpec, StageSpec
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, ensure_plain_data, load_versioned_document
 from loom.serialization.errors import PlainDataError
+from loom.serialization.errors import SchemaVersionError
 from loom.timestamps import safe_timestamp_for_path
 
 from .errors import RunRequestError
@@ -232,24 +233,32 @@ class ExecutionFailure:
 
     @classmethod
     def from_dict(cls, data: object) -> "ExecutionFailure":
-        if not isinstance(data, Mapping):
-            raise RunRequestError("ExecutionFailure.from_dict expects a mapping")
-        mapping = cast(Mapping[str, object], data)
-        required = {
-            "schema_version",
-            "run_id",
-            "stage_name",
-            "attempt",
-            "failed_at",
-            "executor",
-            "failure_type",
-            "message",
-        }
-        missing = required - set(mapping)
-        if missing:
-            raise RunRequestError(
-                f"ExecutionFailure.from_dict missing required field(s): {', '.join(sorted(missing))}"
+        try:
+            mapping = load_versioned_document(
+                data,
+                current_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+                required={
+                    "run_id",
+                    "stage_name",
+                    "attempt",
+                    "failed_at",
+                    "executor",
+                    "failure_type",
+                    "message",
+                },
+                optional={
+                    "exception_type",
+                    "traceback_path",
+                    "stdout_path",
+                    "stderr_path",
+                    "exit_code",
+                    "executor_metadata",
+                    "details",
+                },
             )
+        except SchemaVersionError as exc:
+            raise RunRequestError(f"ExecutionFailure.from_dict: {exc}") from exc
+
         return cls(
             schema_version=_int(mapping["schema_version"], "schema_version"),
             run_id=_str(mapping["run_id"], "run_id"),
