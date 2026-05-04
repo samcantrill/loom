@@ -1612,9 +1612,9 @@ Completion summary:
 
 ### Phase 10 — Hardening And Documentation
 
-Status: pending
+Status: pr_open
 Branch: `codex/harden-v0-docs`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/14
 
 Goal:
 
@@ -1698,7 +1698,47 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Phase 10 hardening and documentation implemented on
+  `codex/harden-v0-docs` in worktree
+  `/home/samcantrill/work/loom-worktrees/harden-v0-docs`.
+- GitHub PR #14 opened on 2026-05-04 and verified with
+  `gh pr view 14 --json baseRefName,headRefName,state,url`;
+  `baseRefName` is `codex/add-local-execution`, `headRefName` is
+  `codex/harden-v0-docs`, and state is `OPEN`.
+- Implemented v0 hardening/docs/contracts scope: conservative resume coverage
+  for stale `RUNNING` state, failed prior stages, missing `outputs.json`,
+  corrupt persisted state, malformed fingerprints, checksum mismatch, and
+  artifact-index conflicts; final import-boundary guardrails for config,
+  pipeline, stores, execution, executors, and CLI stub imports; executor
+  import-time coupling reduction while preserving typed `Executor.execute`
+  contracts; structural store protocol guard coverage; README and `docs/loom.md`
+  updates for Python API quickstart, run layout, same-run resume, and error
+  context; and an executable docs example for same-run-directory reuse. Future
+  CLI behavior, remote stores, new backends, cross-run cache reuse, plugins,
+  dashboards, and domain-specific runtime behavior remain out of scope.
+- Validation before PR open:
+  - Focused Phase 10 pytest slices passed during implementation and the bounded
+    refinement pass, including package import boundaries, local executor,
+    planning resume, store contracts, docs example, package API, and selected
+    local execution/planning integration coverage.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; Ruff passed, Pyright
+    reported 0 errors, default pytest passed with 368 tests, and build
+    succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed; package passed with
+    34 tests, unit passed with 292 tests, contract passed with 17 tests,
+    integration passed with 24 tests, and e2e passed with 1 test.
+- Phase implementation refinement budget: used by `loom_phase_refiner` in
+  commit `d80f208`. PR review budget: unused.
+- PR body prepared at `docs/phases/harden-v0-docs-pr-body.md` in the phase
+  branch. `gh pr edit --body-file` hit the known Projects Classic deprecation
+  GraphQL error, so the PR body was updated with a GitHub REST API patch and
+  recorded in the phase artifacts.
+- Stack maintenance: Phase 10 is stacked on `codex/add-local-execution` and
+  targets `codex/add-local-execution`; it is not merge-eligible until Phase 7
+  PR #11, Phase 8 PR #12, and Phase 9 PR #13 land or the branch is replayed
+  onto the latest valid base, retargeted to `develop`, and revalidated. No
+  successor phase branch is recorded.
+- Remaining blockers: none known after PR preparation.
 
 ## Deferred Features
 
