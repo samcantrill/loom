@@ -743,11 +743,10 @@ config path.
 
 ## 10. Interpolation
 
-Use OmegaConf-style interpolation. Earlier design notes described a `config`
-extra, but the v0 implementation plan intentionally makes OmegaConf, Pydantic
-v2, and YAML support hard runtime dependencies when config composition ships so
-there is one tested installation shape for v0. Revisit optional config extras
-after v0 if downstream users need a primitives-only install.
+Use OmegaConf-style interpolation. OmegaConf, Pydantic v2, and YAML support are
+available through the `loom[config]` optional extra so core primitives, stores,
+serialization, and inspection paths remain importable without config-only
+dependencies.
 
 Examples:
 
@@ -1086,8 +1085,9 @@ source_snapshots after v1
 fingerprint
 ```
 
-Before Phase 5, `recipe_manifest` is empty and `_recipe_` blocks fail clearly as
-unsupported.
+`recipe_manifest` is empty when no recipes are expanded. When `_recipe_` blocks
+are present, composition expands them through the selected `RecipeCatalog` and
+records recipe provenance in the manifest.
 
 `instantiate`:
 

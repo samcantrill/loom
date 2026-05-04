@@ -33,7 +33,8 @@
 - Draft pass: completed by `loom_phase_planner` in commit `b824f6e`.
 - Refine pass: completed by `loom_phase_planner` in this planning pass. This
   document is decision-complete for executor handoff.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by the Phase 6 implementation
+  refinement pass.
 - PR review budget: unused.
 - Setup limitations: local `develop` matched the manager-provided Phase 6 base
   commit `b93d82e`. No remote synchronization was attempted during planning
@@ -461,3 +462,35 @@ The implementation should be small: public API routing, composition catalog
 ownership, focused unit/integration tests, and docs. Diffs that implement
 plugin discovery, CLI commands, runner lifecycle work, or recipe expansion
 semantic changes should be treated as out of scope.
+
+## Refinement And Review Budget Status
+
+- Phase implementation refinement: used in this pass.
+- PR review: unused.
+
+## Completion Notes
+
+- Draft plan: completed by `loom_phase_planner` in commit `b824f6e`.
+- Final phase execution plan: refined by `loom_phase_planner` in commit
+  `be8b06d`; this document was decision-complete for executor handoff.
+- Implementation summary: executor commits `c535c01`, `ac255fd`, and `c661181`
+  added explicit/global recipe catalog isolation coverage,
+  `compose_config_with_catalog()`, explicit catalog routing in public config
+  APIs, lazy package exports, import-boundary checks, and catalog ownership
+  docs.
+- Pre-refinement validation reviewed: manager ran
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`; it passed with Ruff clean,
+  Pyright 0 errors, default harness 401 passed/9 skipped, config-extra 107
+  passed/402 deselected, and build passed.
+- Refinement summary: completed one bounded implementation/test refinement
+  pass. No source boundary defect was found. The pass added focused unit
+  coverage proving `compose_config(..., recipe_catalog=RecipeCatalog())`
+  ignores recipes registered in the global convenience catalog, added
+  validation coverage for invalid `compose_config_with_catalog()` catalogs, and
+  removed stale config documentation claims about hard config dependencies and
+  unsupported recipe manifests.
+- Refinement validation:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_compose.py`
+  passed with 9 tests; `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/unit/loom/config/test_compose.py`
+  passed.
+- Blockers: none.

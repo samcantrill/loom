@@ -64,6 +64,11 @@ def test_compose_rejects_recipe_catalog() -> None:
         compose_config("does-not-exist.yaml", recipe_catalog=cast(Any, object()))
 
 
+def test_compose_config_with_catalog_rejects_recipe_catalog() -> None:
+    with pytest.raises(ConfigValidationError):
+        compose_config_with_catalog("does-not-exist.yaml", recipe_catalog=cast(Any, object()))
+
+
 def test_compose_rejects_none_overlays() -> None:
     with pytest.raises(ConfigValidationError):
         compose_config(Path("/tmp/base.yaml"), overlays=cast(Any, None))
@@ -94,6 +99,9 @@ def test_compose_config_with_catalog_uses_explicit_catalog_and_ignores_global(mo
     monkeypatch.setattr(config_api, "__default_recipe_catalog", RecipeCatalog())
 
     register_recipe("arg", argument_recipe)
+
+    with pytest.raises(UnknownRecipeError):
+        compose_config(path, recipe_catalog=RecipeCatalog())
 
     with pytest.raises(UnknownRecipeError):
         compose_config_with_catalog(path, recipe_catalog=RecipeCatalog())
