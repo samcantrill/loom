@@ -821,8 +821,13 @@ make test-summary
   execution plan before this refine pass.
 - Final phase execution plan: completed by `loom_phase_planner` in this refine
   pass.
-- Implementation summary: pending implementation.
-- Implementation validation: pending implementation.
+- Implementation summary: completed runtime/resource foundations, strict event
+  and lock records, `RunEventStore`/`RunLockStore` capabilities, local
+  `events.jsonl` and `lock.json` persistence, durable blocked stage status,
+  status-only blocked lifecycle writing, aligned examples/tests, and feature
+  docs.
+- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed after validation-test and example updates.
 - Refinement summary: pending implementation refinement pass.
 - PR preparation: pending PR-preparation pass.
 - Stack maintenance: serial human merge gate active; no successor phase may
@@ -933,3 +938,27 @@ make test-summary
   - `git diff --check` passed.
   - `rg -n "typed ResourceRequest validation begins|lock files, post-v0|Lock state is post-v0|Post-v0 Lock|RunLockedError|BLOCKED.*not a persisted|runtime profile types|locking.py" docs/structure.md docs/features/runtime-resources.md docs/features/state.md docs/features/run-store.md docs/features/reliability.md`
     found no matches.
+
+## Slice 7 Evidence
+
+- Slice 7 completed: validation fixes after full PR-gate execution, including
+  supported-resource fingerprint coverage, updated error/store export unit
+  tests, typed negative plain-data tests, and the local pipeline example using
+  the supported `cpus` resource key.
+- Files changed: `examples/pipelines/local-run/pipeline.yaml`,
+  `tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`,
+  `tests/unit/loom/pipeline/stores/test_store_errors.py`,
+  `tests/unit/loom/pipeline/test_events.py`,
+  `tests/unit/loom/pipeline/test_locks.py`, and
+  `tests/unit/loom/pipeline/test_pipeline_errors.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/unit/loom/pipeline/test_pipeline_errors.py`
+    (8 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py::test_v0_smoke_example_scripts_execute`
+    (3 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/unit/loom/pipeline/test_pipeline_errors.py tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/test_locks.py`
+    passed.
+  - `git diff --check` passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff, Pyright,
+    default test harness (389 passed, 9 skipped), config-extra test harness
+    (103 passed, 390 deselected), and `uv build`.

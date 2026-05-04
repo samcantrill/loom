@@ -1,6 +1,7 @@
 """Unit tests for run lock record models."""
 
 from types import MappingProxyType
+from typing import Any, cast
 
 import pytest
 
@@ -89,5 +90,5 @@ def test_run_lock_record_rejects_non_plain_owner() -> None:
             run_id="run1",
             token="abc123",
             acquired_at="2020-01-01T00:00:00Z",
-            owner={"bad": object()},
+            owner=cast(Any, {"bad": object()}),
         )

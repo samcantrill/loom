@@ -143,7 +143,11 @@ def test_pipeline_event_record_rejects_invalid_payloads(
 
 def test_pipeline_event_rejects_non_plain_payload() -> None:
     with pytest.raises(PipelineEventError):
-        PipelineEvent(scope=EventScope.run(), event_type="run.created", payload={"bad": object()})
+        PipelineEvent(
+            scope=EventScope.run(),
+            event_type="run.created",
+            payload=cast(Any, {"bad": object()}),
+        )
 
 
 def test_scope_kind_is_public_enum() -> None:
