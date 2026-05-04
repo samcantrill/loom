@@ -68,3 +68,7 @@ class BadOutputStage:
     ) -> Mapping[str, ArtifactRef]:
         _ = context, inputs
         return {}
+
+
+class NotAStage:
+    pass

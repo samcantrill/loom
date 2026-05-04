@@ -547,8 +547,11 @@ def _coerce_failure_policy(value: object) -> FailurePolicy:
     if isinstance(value, FailurePolicy):
         return value
     if isinstance(value, Mapping):
+        raw_stop_on_first_failure = value.get("stop_on_first_failure", True)
         return FailurePolicy(
-            stop_on_first_failure=bool(value.get("stop_on_first_failure", True))
+            stop_on_first_failure=_bool(
+                raw_stop_on_first_failure, "failure_policy.stop_on_first_failure"
+            )
         )
     raise RunRequestError("failure_policy must be FailurePolicy or mapping")
 
@@ -639,6 +642,12 @@ def _optional_int(value: object, field_name: str) -> int | None:
     if value is None:
         return None
     return _int(value, field_name)
+
+
+def _bool(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise RunRequestError(f"{field_name} must be a bool")
+    return value
 
 
 __all__ = [

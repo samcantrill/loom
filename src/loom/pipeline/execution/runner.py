@@ -55,6 +55,10 @@ from .outputs import validate_stage_outputs
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
 
 
+class _TargetConstructionError(StageContractError):
+    """Private marker for import or no-argument construction failures."""
+
+
 class PipelineRunner:
     def __init__(
         self,
@@ -145,16 +149,24 @@ class PipelineRunner:
                 result = self._reuse_stage(
                     run_id, stage_plan, created_at=created_at, started_at=started_at
                 )
-                outputs_by_stage[stage.name] = dict(result.outputs)
                 stage_results[stage.name] = result
+                if result.failure is not None:
+                    failed_stage = stage.name
+                    failure = result.failure
+                else:
+                    outputs_by_stage[stage.name] = dict(result.outputs)
                 continue
             if stage_plan.action == PlanAction.SKIP:
-                stage_results[stage.name] = self._skip_stage(
+                result = self._skip_stage(
                     run_id,
                     stage_plan,
                     created_at=created_at,
                     started_at=started_at,
                 )
+                stage_results[stage.name] = result
+                if result.failure is not None:
+                    failed_stage = stage.name
+                    failure = result.failure
                 continue
             if stage_plan.action in {PlanAction.BLOCKED, PlanAction.STALE}:
                 failed_stage = stage.name
@@ -245,6 +257,7 @@ class PipelineRunner:
         run_started_at: str,
     ) -> StageRunResult:
         attempt = next_stage_attempt(self.run_store, run_id, stage.name)
+        stage_started_at: str | None = None
         try:
             inputs = self._bind_inputs(stage, stage_plan, produced_outputs)
             fingerprint = build_stage_fingerprint(
@@ -266,6 +279,7 @@ class PipelineRunner:
                 attempt=attempt,
                 started_at=running_at,
             )
+            stage_started_at = running_at
             stage_object = self._construct_stage(spec, stage)
             context = StageContext(
                 run_id=run_id,
@@ -300,6 +314,7 @@ class PipelineRunner:
                 ),
             )
             execution_result = self.executor.execute(exec_request)
+            stage_started_at = execution_result.started_at
             if execution_result.status == StageStatus.FAILED:
                 failure = execution_result.failure or self._failure(
                     run_id=run_id,
@@ -378,7 +393,9 @@ class PipelineRunner:
                     exc=exc,
                 )
             )
-            self._persist_stage_failure(run_id, stage.name, attempt, None, failure)
+            self._persist_stage_failure(
+                run_id, stage.name, attempt, stage_started_at, failure
+            )
             self._write_failed_run(run_id, created_at, run_started_at, failure)
             return StageRunResult(
                 stage_name=stage.name,
@@ -388,6 +405,7 @@ class PipelineRunner:
                 outputs={},
                 failure=failure,
                 reasons=stage_plan.reasons,
+                started_at=stage_started_at,
                 finished_at=failure.failed_at,
             )
 
@@ -565,6 +583,12 @@ class PipelineRunner:
             target = import_target(
                 stage.target_path, path=f"pipeline.stages[{index}]._target_"
             )
+        except Exception as exc:
+            raise _TargetConstructionError(
+                f"could not import stage {stage.name!r} from {stage.target_path!r}: {exc}"
+            ) from exc
+
+        try:
             if isinstance(target, type):
                 candidate = target()
             elif isinstance(target, Stage):
@@ -575,17 +599,21 @@ class PipelineRunner:
                 raise StageContractError(
                     f"target {stage.target_path!r} is not callable and does not satisfy Stage"
                 )
+        except StageContractError:
+            raise
+        except Exception as exc:
+            raise _TargetConstructionError(
+                f"could not construct stage {stage.name!r} from {stage.target_path!r}: {exc}"
+            ) from exc
+
+        try:
             if not isinstance(candidate, Stage):
                 raise StageContractError(
                     f"target {stage.target_path!r} does not satisfy Stage"
                 )
             return candidate
-        except Exception as exc:
-            if isinstance(exc, StageContractError):
-                raise
-            raise StageContractError(
-                f"could not construct stage {stage.name!r} from {stage.target_path!r}: {exc}"
-            ) from exc
+        except StageContractError:
+            raise
 
     def _reuse_stage(
         self,
@@ -923,8 +951,10 @@ def _blocked_after_failure(
 def _failure_type_for_exception(exc: Exception) -> str:
     if isinstance(exc, OutputValidationError):
         return "output_validation"
-    if isinstance(exc, StageContractError):
+    if isinstance(exc, _TargetConstructionError):
         return "target_construction"
+    if isinstance(exc, StageContractError):
+        return "stage_contract"
     if isinstance(exc, PlanExecutionError):
         return "plan_execution"
     if isinstance(exc, (StoreError, ArtifactStoreError)):

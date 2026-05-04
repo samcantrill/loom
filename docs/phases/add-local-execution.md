@@ -17,7 +17,7 @@
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time in commit `d117dfb993c66029bb985e1b4424d5333ee8a6c8`.
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time in this artifact update.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used on 2026-05-04 local time.
 - PR review budget: unused.
 - PR body draft pass: unused.
 - PR body refine/open pass: unused.
@@ -897,7 +897,7 @@ This refine pass intentionally did not run those implementation checks because i
 
 - Draft phase execution plan: complete.
 - Plan refine pass: complete.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used on 2026-05-04 local time.
 - PR review: unused.
 - PR body draft/refine: unused.
 
@@ -924,7 +924,35 @@ This refine pass intentionally did not run those implementation checks because i
   `UV_CACHE_DIR=/tmp/uv-cache make test-e2e` passed with 1 test;
   `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed; and
   `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors.
-- Refinement summary: pending implementation refinement pass.
+- Refinement summary: completed the single bounded implementation/test
+  refinement pass on 2026-05-04 local time. The pass aligned
+  `loom.pipeline.execution.__all__` with the locked Phase 9 public API,
+  rejected non-bool `failure_policy` mapping values instead of silently
+  coercing them, preserved the stage `started_at` timestamp for failures after
+  `RUNNING`, distinguished stage contract failures from target construction
+  failures, and prevented `REUSE` or `SKIP` handling failures from being
+  overwritten by a final `SUCCEEDED` run status. Added focused package, unit,
+  and integration coverage for those refinements.
+- Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+  tests/unit/loom/pipeline/execution/test_execution_models.py
+  tests/integration/pipeline/test_local_execution_failures.py
+  tests/package/test_pipeline_execution_api.py -q` passed with 12 tests;
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/execution
+  tests/integration/pipeline/test_local_execution_failures.py
+  tests/unit/loom/pipeline/execution/test_execution_models.py
+  tests/package/test_pipeline_execution_api.py
+  tests/support/pipeline_execution_stages.py` passed; focused Phase 9 slice
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+  tests/package/test_pipeline_execution_api.py
+  tests/package/test_pipeline_executor_api.py tests/package/test_pipeline_api.py
+  tests/unit/loom/pipeline/execution
+  tests/unit/loom/pipeline/executors/test_local_executor.py
+  tests/unit/loom/pipeline/test_context.py tests/contracts/test_executor_contract.py
+  tests/integration/pipeline/test_local_execution.py
+  tests/integration/pipeline/test_local_execution_resume.py
+  tests/integration/pipeline/test_local_execution_failures.py
+  tests/e2e/test_local_pipeline_run.py -q` passed with 31 tests; and
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` passed with 0 errors.
 - PR preparation: pending.
 - Stack maintenance: pending Phase 7 and Phase 8 merge/rebase/retarget state.
 - Remaining blockers: none.

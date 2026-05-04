@@ -30,14 +30,8 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
         "StageExecutionResult",
         "StageExecutionRuntimeError",
         "StageRunResult",
-        "next_stage_attempt",
         "run_pipeline",
         "validate_stage_outputs",
-        "write_run_status",
-        "write_stage_failed",
-        "write_stage_running",
-        "write_stage_skipped",
-        "write_stage_succeeded",
     ]
     assert "PipelineRunner" not in loom.__all__
     assert {"PipelineRunner", "RunRequest", "RunResult"} <= set(loom.pipeline.__all__)

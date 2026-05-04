@@ -35,6 +35,24 @@ def test_run_request_rejects_continue_on_failure() -> None:
         )
 
 
+def test_run_request_rejects_non_bool_failure_policy_mapping() -> None:
+    with pytest.raises(RunRequestError, match="stop_on_first_failure"):
+        RunRequest(
+            pipeline=PipelineSpec.from_config(
+                {
+                    "stages": [
+                        {
+                            "name": "build",
+                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage",
+                            "outputs": {"data": {"artifact_type": "json"}},
+                        }
+                    ]
+                }
+            ),
+            failure_policy={"stop_on_first_failure": "false"},  # type: ignore[arg-type]
+        )
+
+
 def test_execution_failure_round_trips_plain_data() -> None:
     failure = ExecutionFailure(
         schema_version=1,
