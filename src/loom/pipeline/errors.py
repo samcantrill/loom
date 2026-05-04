@@ -16,6 +16,10 @@ class PipelineSpecError(PipelineValidationError):
     """Raised when the resolved pipeline configuration is malformed."""
 
 
+class RuntimeResourceError(PipelineSpecError):
+    """Raised when runtime or resource foundation models are malformed."""
+
+
 class InputBindingError(PipelineValidationError):
     """Raised when stage input references are malformed or unresolved."""
 
@@ -53,6 +57,7 @@ class StatusSerializationError(PipelineValidationError):
 __all__ = [
     "PipelineValidationError",
     "PipelineSpecError",
+    "RuntimeResourceError",
     "InputBindingError",
     "PipelineGraphError",
     "PipelineCycleError",

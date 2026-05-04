@@ -12,6 +12,22 @@ from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data
 from loom.serialization.errors import PlainDataError
 
 from .errors import PipelineSpecError
+from .resources import ResourceRequest, parse_resource_request
+
+
+_STAGE_DEFERRED_FIELDS = {
+    "runtime",
+    "retry",
+    "when",
+    "metadata",
+    "timeout",
+    "executor",
+    "slurm",
+    "container",
+    "docker",
+    "apptainer",
+    "remote_store",
+}
 
 
 def _require_mapping(value: object, *, path: str) -> Mapping[str, object]:
@@ -315,10 +331,12 @@ class StageSpec:
             "inputs",
             freeze_plain_data(_parse_inputs(self.inputs, stage_name=name, path="StageSpec.inputs"), path="StageSpec.inputs"),
         )
+        resources = _plain_mapping(self.resources, path="StageSpec.resources")
+        parse_resource_request(resources)
         object.__setattr__(
             self,
             "resources",
-            freeze_plain_data(_plain_mapping(self.resources, path="StageSpec.resources"), path="StageSpec.resources"),
+            freeze_plain_data(resources, path="StageSpec.resources"),
         )
         object.__setattr__(
             self,
@@ -333,6 +351,10 @@ class StageSpec:
     def target_path(self) -> str:
         return self.factory.target_path
 
+    @property
+    def resource_request(self) -> ResourceRequest:
+        return parse_resource_request(self.resources)
+
     @classmethod
     def from_config(cls, config: object, *, path: str = "$.stage") -> "StageSpec":
         mapping = _require_mapping(config, path=path)
@@ -343,7 +365,7 @@ class StageSpec:
         _reject_unknown_fields(
             mapping,
             allowed={"name", "factory", "config", "depends_on", "inputs", "outputs", "resources", "fingerprint"},
-            deferred={"runtime", "retry", "when", "metadata"},
+            deferred=_STAGE_DEFERRED_FIELDS,
             path=path,
         )
         if "factory" not in mapping:
@@ -364,6 +386,7 @@ class StageSpec:
         inputs = _parse_inputs(mapping.get("inputs"), stage_name=name, path=f"{path}.inputs")
         outputs = _parse_outputs(mapping.get("outputs"), stage_name=name, path=f"{path}.outputs")
         resources = _plain_mapping(mapping.get("resources", {}), path=f"{path}.resources")
+        parse_resource_request(resources)
         fingerprint_fields = _plain_mapping(mapping.get("fingerprint", {}), path=f"{path}.fingerprint")
         return cls(
             name=name,

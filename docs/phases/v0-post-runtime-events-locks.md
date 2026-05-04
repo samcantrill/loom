@@ -828,3 +828,21 @@ make test-summary
 - Stack maintenance: serial human merge gate active; no successor phase may
   start until the Phase 4 PR is human-merged into `develop`.
 - Remaining blockers: none.
+
+## Slice 1 Evidence
+
+- Slice 1 completed: runtime/resource foundation models, strict local-v0
+  unsupported-field rejection, `StageSpec.resource_request`, and package/import
+  surface updates.
+- Files changed: `src/loom/pipeline/resources.py`,
+  `src/loom/pipeline/runtime.py`, `src/loom/pipeline/specs.py`,
+  `src/loom/pipeline/errors.py`, `src/loom/pipeline/__init__.py`,
+  `tests/unit/loom/pipeline/test_runtime_resources.py`,
+  `tests/unit/loom/pipeline/test_specs.py`,
+  `tests/package/test_pipeline_api.py`, and
+  `tests/package/test_import_boundaries.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/test_specs.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py`
+    (59 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/test_specs.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py`
+    passed.
