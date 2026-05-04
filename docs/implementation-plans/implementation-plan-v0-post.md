@@ -891,9 +891,27 @@ Future compatibility:
 
 ### Phase 2 - Store, Artifact, And Stage Context Capabilities
 
-Status: pending
+Status: pr_open
 Branch: `codex/v0-post-store-capabilities`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/16
+
+PR gate notes:
+
+- Opened against `develop` on 2026-05-04 and verified as `OPEN` with base
+  `develop` and head `codex/v0-post-store-capabilities`.
+- Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-store-capabilities`.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package,
+  unit, contract, integration, e2e, and config-extra rows; GitHub checks passed
+  on final head `6a3896d`.
+- Reviewer notification: `gh pr edit 16 --add-reviewer samcantrill` was
+  rejected by GitHub's Projects Classic GraphQL deprecation path and
+  `reviewRequests` remained empty, so the required fallback comment mentioned
+  `@samcantrill` at
+  https://github.com/samcantrill/loom/pull/16#issuecomment-4369304096.
+- Serial human merge gate: do not start Phase 3 until PR #16 is approved,
+  merged into `develop`, updated `develop` has been fetched, and this plan
+  records Phase 2 as `merged`.
 
 Goal:
 
