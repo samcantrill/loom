@@ -182,6 +182,24 @@ def test_import_execution_does_not_import_config_stores_cli() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_stage_factory_does_not_import_forbidden_modules() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.stage_factory
+
+        for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "project"):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.pipeline.stage_factory")
+        print("ok")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_executors_does_not_import_project_layers() -> None:
     script = dedent(
         """

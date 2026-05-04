@@ -171,6 +171,45 @@ def _parse_outputs(
 
 
 @dataclass(frozen=True, slots=True)
+class StageFactorySpec:
+    target_path: str
+    init: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "target_path",
+            _require_non_empty_string(self.target_path, path="StageFactorySpec.target_path"),
+        )
+        object.__setattr__(
+            self,
+            "init",
+            _plain_mapping(self.init, path="StageFactorySpec.init"),
+        )
+
+    @classmethod
+    def from_config(
+        cls,
+        config: object,
+        *,
+        path: str,
+    ) -> "StageFactorySpec":
+        mapping = _require_mapping(config, path=path)
+        _reject_unknown_fields(
+            mapping,
+            allowed={"_target_", "init"},
+            deferred={"_args_", "_partial_", "_inject_"},
+            path=path,
+        )
+        target_path = _require_non_empty_string(
+            mapping.get("_target_"),
+            path=f"{path}._target_",
+        )
+        init = _plain_mapping(mapping.get("init", {}), path=f"{path}.init")
+        return cls(target_path=target_path, init=init)
+
+
+@dataclass(frozen=True, slots=True)
 class OutputSpec:
     artifact_type: ArtifactType
     codec_key: CodecKey | None = None
@@ -224,12 +263,13 @@ class OutputSpec:
 @dataclass(frozen=True, slots=True)
 class StageSpec:
     name: StageID
-    target_path: str
+    factory: StageFactorySpec
     outputs: Mapping[str, OutputSpec]
     stage_config: Mapping[str, PlainData] = field(default_factory=dict)
     dependencies: tuple[StageID, ...] = field(default_factory=tuple)
     inputs: Mapping[str, str] = field(default_factory=dict)
     resources: Mapping[str, PlainData] = field(default_factory=dict)
+    fingerprint_fields: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         name = _validate_identifier(
@@ -238,11 +278,6 @@ class StageSpec:
             path="StageSpec.name",
         )
         object.__setattr__(self, "name", name)
-        object.__setattr__(
-            self,
-            "target_path",
-            _require_non_empty_string(self.target_path, path="StageSpec.target_path"),
-        )
 
         outputs: dict[str, OutputSpec] = {}
         if not isinstance(self.outputs, Mapping):
@@ -280,23 +315,41 @@ class StageSpec:
             "resources",
             freeze_plain_data(_plain_mapping(self.resources, path="StageSpec.resources"), path="StageSpec.resources"),
         )
+        object.__setattr__(
+            self,
+            "fingerprint_fields",
+            freeze_plain_data(
+                _plain_mapping(self.fingerprint_fields, path="StageSpec.fingerprint_fields"),
+                path="StageSpec.fingerprint_fields",
+            ),
+        )
+
+    @property
+    def target_path(self) -> str:
+        return self.factory.target_path
 
     @classmethod
     def from_config(cls, config: object, *, path: str = "$.stage") -> "StageSpec":
         mapping = _require_mapping(config, path=path)
+        if "_target_" in mapping:
+            raise PipelineSpecError(
+                f"{path} uses legacy top-level _target_; use factory._target_ and factory.init"
+            )
         _reject_unknown_fields(
             mapping,
-            allowed={"name", "_target_", "config", "depends_on", "inputs", "outputs", "resources"},
+            allowed={"name", "factory", "config", "depends_on", "inputs", "outputs", "resources", "fingerprint"},
             deferred={"runtime", "retry", "when", "metadata"},
             path=path,
         )
+        if "factory" not in mapping:
+            raise PipelineSpecError(f"{path}.factory is required")
 
         name = _validate_identifier(
             _require_non_empty_string(mapping.get("name"), path=f"{path}.name"),
             kind="stage name",
             path=f"{path}.name",
         )
-        target_path = _require_non_empty_string(mapping.get("_target_"), path=f"{path}._target_")
+        factory = StageFactorySpec.from_config(mapping["factory"], path=f"{path}.factory")
         stage_config = _plain_mapping(mapping.get("config", {}), path=f"{path}.config")
         dependencies = _parse_dependencies(
             mapping.get("depends_on"),
@@ -306,14 +359,16 @@ class StageSpec:
         inputs = _parse_inputs(mapping.get("inputs"), stage_name=name, path=f"{path}.inputs")
         outputs = _parse_outputs(mapping.get("outputs"), stage_name=name, path=f"{path}.outputs")
         resources = _plain_mapping(mapping.get("resources", {}), path=f"{path}.resources")
+        fingerprint_fields = _plain_mapping(mapping.get("fingerprint", {}), path=f"{path}.fingerprint")
         return cls(
             name=name,
-            target_path=target_path,
+            factory=factory,
             outputs=outputs,
             stage_config=stage_config,
             dependencies=dependencies,
             inputs=inputs,
             resources=resources,
+            fingerprint_fields=fingerprint_fields,
         )
 
 
@@ -414,6 +469,7 @@ def parse_pipeline_config(config: object) -> PipelineSpec:
 
 __all__ = [
     "OutputSpec",
+    "StageFactorySpec",
     "StageSpec",
     "PipelineSpec",
     "parse_pipeline_config",

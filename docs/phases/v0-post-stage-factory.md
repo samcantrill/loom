@@ -773,3 +773,16 @@ make test-summary
 - Stack maintenance: serial human merge gate active; no successor may start
   until the Phase 3 PR is human-merged into `develop`.
 - Remaining blockers: none.
+
+## Slice 1 Evidence
+
+- Slice 1 completed: factory model parsing plus import-safe stage factory target
+  resolution helper.
+- Files changed: `src/loom/pipeline/specs.py`, `src/loom/pipeline/stage_factory.py`,
+  `src/loom/pipeline/__init__.py`, `tests/unit/loom/pipeline/test_specs.py`,
+  `tests/unit/loom/pipeline/test_stage_factory.py`,
+  `tests/package/test_import_boundaries.py`,
+  `tests/package/test_pipeline_api.py`.
+- Evidence command:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/test_stage_factory.py tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py`
+  (40 passed).

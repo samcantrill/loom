@@ -14,6 +14,7 @@ def test_pipeline_public_exports() -> None:
     assert graph
     assert set(pipeline.__all__) == {
         "OutputSpec",
+        "StageFactorySpec",
         "StageSpec",
         "PipelineSpec",
         "parse_pipeline_config",

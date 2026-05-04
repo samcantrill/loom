@@ -4,7 +4,13 @@ from typing import Any, cast
 
 import pytest
 
-from loom.pipeline import OutputSpec, PipelineSpec, parse_pipeline_config, StageSpec
+from loom.pipeline import (
+    OutputSpec,
+    PipelineSpec,
+    StageFactorySpec,
+    StageSpec,
+    parse_pipeline_config,
+)
 from loom.pipeline.errors import PipelineSpecError
 from loom.serialization import PlainData
 
@@ -12,7 +18,9 @@ from loom.serialization import PlainData
 def _base_stage(stage_name: str, *, outputs: dict[str, Any] | None = None, depends_on: list[str] | tuple[str, ...] = (), inputs: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "name": stage_name,
-        "_target_": "tests.support.config_samples:concat",
+        "factory": {
+            "_target_": "tests.support.config_samples:concat",
+        },
         "outputs": outputs
         or {
             "result": {"artifact_type": "text", "codec_key": "text.v1"},
@@ -66,9 +74,34 @@ def test_stage_required_keys() -> None:
         PipelineSpec.from_config({"stages": [stage]})
 
 
+def test_stage_rejects_top_level_target_legacy_shape() -> None:
+    stage = {
+        "name": "build",
+        "_target_": "tests.support.config_samples:concat",
+        "outputs": {"result": {"artifact_type": "text", "codec_key": "text.v1"}},
+        "config": {"alpha": 1},
+    }
+    with pytest.raises(PipelineSpecError, match="legacy top-level _target_"):
+        PipelineSpec.from_config({"stages": [stage]})
+
+
+def test_stage_factory_is_required() -> None:
+    stage = _base_stage("build")
+    del stage["factory"]
+    with pytest.raises(PipelineSpecError, match="factory is required"):
+        PipelineSpec.from_config({"stages": [stage]})
+
+
 def test_stage_rejects_deferred_fields() -> None:
     stage = _base_stage("build")
     stage["runtime"] = "local"
+    with pytest.raises(PipelineSpecError, match="deferred"):
+        PipelineSpec.from_config({"stages": [stage]})
+
+
+def test_stage_factory_rejects_unknown_factory_fields() -> None:
+    stage = _base_stage("build")
+    stage["factory"]["_args_"] = {"skip": True}
     with pytest.raises(PipelineSpecError, match="deferred"):
         PipelineSpec.from_config({"stages": [stage]})
 
@@ -135,11 +168,12 @@ def test_stage_spec_parsing_preserves_declared_dependencies_and_bindings() -> No
     stage = StageSpec.from_config(
         {
             "name": "report",
-            "_target_": "tests.support.config_samples:concat",
+            "factory": {"_target_": "tests.support.config_samples:concat", "init": {"prefix": "p"}},
             "depends_on": ["build"],
             "inputs": {"x": "build.result"},
             "outputs": {"report": {"artifact_type": "text", "codec_key": "text.v1", "schema_version": 2}},
             "config": {"nested": {"enabled": True}},
+            "fingerprint": {"label": "v1"},
             "resources": {"slot": "cpu"},
         },
         path="$.stages[0]",
@@ -147,10 +181,12 @@ def test_stage_spec_parsing_preserves_declared_dependencies_and_bindings() -> No
 
     assert stage.stage_config["nested"] == {"enabled": True}
     assert stage.name == "report"
+    assert stage.factory.init == {"prefix": "p"}
     assert stage.dependencies == ("build",)
     assert stage.inputs["x"] == "build.result"
     assert stage.outputs["report"].artifact_type == "text"
     assert stage.outputs["report"].schema_version == 2
+    assert stage.fingerprint_fields == {"label": "v1"}
     assert cast(dict[str, Any], stage.stage_config)["nested"]["enabled"] is True
 
 
@@ -165,7 +201,7 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
     outputs = {"result": output}
     stage = StageSpec(
         name="report",
-        target_path="tests.support.config_samples:concat",
+        factory=StageFactorySpec("tests.support.config_samples:concat"),
         outputs=outputs,
         stage_config=stage_config,
         dependencies=cast(tuple[str, ...], ["build"]),
@@ -190,7 +226,7 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
     stages.append(
         StageSpec(
             name="extra",
-            target_path="tests.support.config_samples:concat",
+            factory=StageFactorySpec("tests.support.config_samples:concat"),
             outputs={"extra": OutputSpec(artifact_type="json")},
         ),
     )
@@ -209,7 +245,8 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
 
     stage = StageSpec(
         name="report",
-        target_path="tests.support.config_samples:concat",
+        factory=StageFactorySpec("tests.support.config_samples:concat", {"alpha": 1}),
+        fingerprint_fields={"mode": "test"},
         outputs=outputs_input,
         stage_config=stage_config,
         dependencies=("build",),
@@ -244,3 +281,15 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
         cast(Any, stage.resources)["slots"] = ("gpu",)
     with pytest.raises(TypeError):
         cast(Any, pipeline.metadata)["owner"]["labels"][0] = "mutated"
+
+
+def test_stage_factory_defaults_and_parses_when_init_is_omitted() -> None:
+    stage = StageSpec.from_config(
+        {
+            "name": "report",
+            "factory": {"_target_": "tests.support.config_samples:concat"},
+            "outputs": {"result": {"artifact_type": "text", "codec_key": "text.v1"}},
+        },
+        path="$.stages[0]",
+    )
+    assert stage.factory.init == {}
