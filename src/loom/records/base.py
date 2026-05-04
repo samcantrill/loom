@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Mapping, cast
+from types import MappingProxyType
 
 from loom.ids import RecordID, ResourceKey
 from loom.refs import ResourceRef
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .errors import RecordError
 
@@ -36,18 +37,18 @@ class Record:
                 raise RecordError("resources values must be ResourceRef")
             normalized_resources[key] = value
 
-        object.__setattr__(self, "resources", normalized_resources)
-        object.__setattr__(self, "metadata", ensure_plain_data(dict(self.metadata), path="metadata"))
-        object.__setattr__(self, "annotations", ensure_plain_data(dict(self.annotations), path="annotations"))
-        object.__setattr__(self, "provenance", ensure_plain_data(dict(self.provenance), path="provenance"))
+        object.__setattr__(self, "resources", MappingProxyType(normalized_resources))
+        object.__setattr__(self, "metadata", freeze_plain_data(self.metadata, path="metadata"))
+        object.__setattr__(self, "annotations", freeze_plain_data(self.annotations, path="annotations"))
+        object.__setattr__(self, "provenance", freeze_plain_data(self.provenance, path="provenance"))
 
     def to_dict(self) -> dict[str, object]:
         return {
             "record_id": self.record_id,
             "resources": {name: value.to_dict() for name, value in self.resources.items()},
-            "metadata": dict(self.metadata),
-            "annotations": dict(self.annotations),
-            "provenance": dict(self.provenance),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
+            "annotations": thaw_plain_data(self.annotations, path="annotations"),
+            "provenance": thaw_plain_data(self.provenance, path="provenance"),
         }
 
     def has_resource(self, key: str) -> bool:
@@ -87,7 +88,7 @@ class Record:
         return cls(
             record_id=record_id,
             resources=resources,
-            metadata=cast(Mapping[str, PlainData], ensure_plain_data(data.get("metadata", {}), path="metadata")),
-            annotations=cast(Mapping[str, PlainData], ensure_plain_data(data.get("annotations", {}), path="annotations")),
-            provenance=cast(Mapping[str, PlainData], ensure_plain_data(data.get("provenance", {}), path="provenance")),
+            metadata=cast(Mapping[str, PlainData], freeze_plain_data(data.get("metadata", {}), path="metadata")),
+            annotations=cast(Mapping[str, PlainData], freeze_plain_data(data.get("annotations", {}), path="annotations")),
+            provenance=cast(Mapping[str, PlainData], freeze_plain_data(data.get("provenance", {}), path="provenance")),
         )

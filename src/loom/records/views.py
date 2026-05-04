@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Iterator
 
 from loom.ids import RecordID
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .base import Record
 from .errors import RecordNotFoundError
@@ -24,7 +24,7 @@ class ManifestView:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "filters", tuple(self.filters))
-        object.__setattr__(self, "metadata", ensure_plain_data(dict(self.metadata), path="metadata"))
+        object.__setattr__(self, "metadata", freeze_plain_data(self.metadata, path="metadata"))
 
     def __iter__(self) -> Iterator[Record]:
         for record in self.source:
@@ -32,7 +32,11 @@ class ManifestView:
                 yield record
 
     def filter(self, predicate: RecordFilter) -> "ManifestView":
-        return ManifestView(source=self.source, filters=self.filters + (predicate,), metadata=dict(self.metadata))
+        return ManifestView(
+            source=self.source,
+            filters=self.filters + (predicate,),
+            metadata=thaw_plain_data(self.metadata, path="metadata"),
+        )
 
     def get(self, record_id: RecordID) -> Record | None:
         for record in self:
@@ -47,7 +51,7 @@ class ManifestView:
         return result
 
     def materialize(self) -> InMemoryManifest:
-        return InMemoryManifest(records=tuple(self), metadata=dict(self.metadata))
+        return InMemoryManifest(records=tuple(self), metadata=thaw_plain_data(self.metadata, path="metadata"))
 
     def to_dict(self) -> dict[str, object]:
         return self.materialize().to_dict()

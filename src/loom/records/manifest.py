@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 from loom.ids import RecordID
-from loom.serialization import PlainData, check_supported_schema, ensure_plain_data
+from loom.serialization import PlainData, check_supported_schema, freeze_plain_data, thaw_plain_data
 
 from .base import Record
 from .errors import DuplicateRecordError, ManifestError, RecordNotFoundError
@@ -49,7 +49,7 @@ class InMemoryManifest:
                 raise DuplicateRecordError(f"Duplicate record_id: {record.record_id!r}")
             seen.add(record.record_id)
         object.__setattr__(self, "records", normalized)
-        object.__setattr__(self, "metadata", ensure_plain_data(dict(self.metadata), path="metadata"))
+        object.__setattr__(self, "metadata", freeze_plain_data(self.metadata, path="metadata"))
 
     def __iter__(self) -> Iterator[Record]:
         return iter(self._records())
@@ -73,7 +73,7 @@ class InMemoryManifest:
         return {
             "schema_version": 1,
             "records": [record.to_dict() for record in self._records()],
-            "metadata": dict(self.metadata),
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
         }
 
     @classmethod
@@ -93,7 +93,10 @@ class InMemoryManifest:
         deserialized = [Record.from_dict(item) for item in records]
         return cls(
             records=tuple(deserialized),
-            metadata=cast(dict[str, PlainData], ensure_plain_data(data.get("metadata", {}), path="metadata")),
+            metadata=cast(
+                dict[str, PlainData],
+                freeze_plain_data(data.get("metadata", {}), path="metadata"),
+            ),
         )
 
     def _records(self) -> tuple[Record, ...]:

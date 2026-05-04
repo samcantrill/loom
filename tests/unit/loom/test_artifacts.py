@@ -65,3 +65,27 @@ def test_artifact_ref_has_no_loading_behavior() -> None:
     ref = ArtifactRef(artifact_id="a", uri="file:///a", artifact_type="text")
     assert not hasattr(ref, "load")
     assert not hasattr(ref, "save")
+
+
+def test_artifact_ref_metadata_is_immutable_and_to_dict_mutations_are_local() -> None:
+    source_metadata = {"labels": ["raw", "processed"]}
+    ref = ArtifactRef(
+        artifact_id="artifact:1",
+        uri="file:///artifact",
+        artifact_type="checkpoint",
+        metadata=source_metadata,
+    )
+
+    source_metadata["labels"].append("archived")
+    assert ref.metadata["labels"] == ("raw", "processed")
+    with pytest.raises(TypeError):
+        ref.metadata["labels"][0] = "manual"
+    with pytest.raises(TypeError):
+        ref.metadata["new"] = "value"
+
+    snapshot = ref.to_dict()
+    snapshot["metadata"]["labels"].append("archived")
+    snapshot["metadata"]["extra"] = "value"
+
+    assert ref.metadata["labels"] == ("raw", "processed")
+    assert "extra" not in ref.metadata

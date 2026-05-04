@@ -61,3 +61,30 @@ def test_resource_ref_no_loading_methods() -> None:
     assert not hasattr(ref, "load")
     assert not hasattr(ref, "open")
     assert not hasattr(ref, "exists")
+
+
+def test_resource_ref_metadata_is_immutable_and_to_dict_mutations_are_local() -> None:
+    source_metadata = {"split": {"name": "train", "partitions": ["a", "b"]}}
+    ref = ResourceRef(
+        uri="file:///x",
+        resource_type="dataset",
+        metadata=source_metadata,
+    )
+
+    source_metadata["split"]["partitions"].append("c")
+    source_metadata["split"]["new"] = "value"
+
+    assert ref.metadata["split"]["name"] == "train"
+    assert ref.metadata["split"]["partitions"] == ("a", "b")
+    assert ref.metadata["split"] == {"name": "train", "partitions": ("a", "b")}
+    with pytest.raises(TypeError):
+        ref.metadata["new"] = "value"
+    with pytest.raises(TypeError):
+        ref.metadata["split"]["partitions"][0] = "z"
+
+    snapshot = ref.to_dict()
+    snapshot["metadata"]["split"]["partitions"].append("d")
+    snapshot["metadata"]["split"]["new"] = "value"
+
+    assert ref.metadata["split"]["partitions"] == ("a", "b")
+    assert "new" not in ref.metadata["split"]

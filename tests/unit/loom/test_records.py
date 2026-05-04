@@ -74,3 +74,71 @@ def test_record_from_dict_rejects_invalid_payloads() -> None:
         Record.from_dict({"record_id": "a", "resources": {"x": 1}})
     with pytest.raises(Exception):
         Record.from_dict({"record_id": "a", "resources": {1: {"uri": "x", "resource_type": "dataset"}}})
+
+
+def test_record_and_manifest_metadata_are_immutable_and_constructor_inputs_are_copied() -> None:
+    resource_metadata = {"owner": "team", "tags": ["train", "valid"]}
+    resource = ResourceRef(uri="file:///x", resource_type="dataset", metadata=resource_metadata)
+    metadata = {"split": {"name": "train", "ratios": [0.8, 0.2]}}
+    annotations = {"audit": {"notes": ["first"]}}
+    provenance = {"lineage": {"steps": ["raw"]}}
+    record = Record(
+        record_id="sample",
+        resources={"primary": resource},
+        metadata=metadata,
+        annotations=annotations,
+        provenance=provenance,
+    )
+
+    metadata["split"]["ratios"][0] = 0.5
+    annotations["audit"]["notes"].append("second")
+    provenance["lineage"]["steps"].append("transformed")
+    resource_metadata["tags"].append("release")
+
+    assert record.resources["primary"].metadata["owner"] == "team"
+    assert record.resources["primary"].metadata["tags"] == ("train", "valid")
+    assert record.metadata["split"]["ratios"] == (0.8, 0.2)
+    assert record.annotations["audit"] == {"notes": ("first",)}
+    assert record.provenance["lineage"] == {"steps": ("raw",)}
+    with pytest.raises(TypeError):
+        record.resources["primary"] = resource
+    with pytest.raises(TypeError):
+        record.metadata["split"]["ratios"][0] = 0.1
+
+    snapshot = record.to_dict()
+    snapshot["metadata"]["split"]["ratios"][0] = 0.9
+    snapshot["annotations"]["audit"]["notes"].append("extra")
+    snapshot["provenance"]["lineage"]["steps"].append("post")
+    snapshot["resources"]["primary"]["metadata"]["owner"] = "hacked"
+
+    assert record.metadata["split"]["ratios"] == (0.8, 0.2)
+    assert record.annotations["audit"] == {"notes": ("first",)}
+    assert record.provenance["lineage"] == {"steps": ("raw",)}
+
+
+def test_manifest_metadata_is_immutable_and_to_dict_returns_mutable_plain_data() -> None:
+    manifest_metadata = {"owner": {"team": "analysis", "labels": ["x", "y"]}}
+    manifest = InMemoryManifest(records=(_make_record("a"),), metadata=manifest_metadata)
+    manifest_view = ManifestView(source=manifest)
+
+    manifest_metadata["labels"] = ["z"]
+    manifest_metadata["owner"]["team"] = "ops"
+
+    assert manifest.metadata["owner"] == {"team": "analysis", "labels": ("x", "y")}
+    with pytest.raises(TypeError):
+        manifest.metadata["owner"]["team"] = "ops"
+    with pytest.raises(TypeError):
+        manifest.metadata["new"] = 1
+
+    manifest_dict = manifest.to_dict()
+    manifest_dict["metadata"]["owner"]["labels"].append("z")
+    manifest_dict["records"][0]["metadata"]["tag"] = "override"
+
+    assert manifest.metadata == {"owner": {"team": "analysis", "labels": ("x", "y")}}
+
+    filtered_view = manifest_view.filter(MetadataEquals("tag", "a"))
+    assert filtered_view.to_dict()["metadata"] == {}
+    filtered_dict = filtered_view.to_dict()
+    filtered_dict["metadata"]["team"] = "changed"
+
+    assert manifest_view.metadata == {}

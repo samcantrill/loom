@@ -145,6 +145,7 @@ def test_stage_spec_parsing_preserves_declared_dependencies_and_bindings() -> No
         path="$.stages[0]",
     )
 
+    assert stage.stage_config["nested"] == {"enabled": True}
     assert stage.name == "report"
     assert stage.dependencies == ("build",)
     assert stage.inputs["x"] == "build.result"
@@ -158,7 +159,7 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
     output = OutputSpec(artifact_type="text", metadata=output_metadata)
     output_metadata["changed"] = True
 
-    assert output.metadata == {"labels": ["raw"]}
+    assert output.metadata == {"labels": ("raw",)}
 
     stage_config: dict[str, PlainData] = {"threshold": 1}
     outputs = {"result": output}
@@ -196,4 +197,49 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
     pipeline_metadata["changed"] = True
 
     assert pipeline.stages == (stage,)
-    assert pipeline.metadata == {"tags": ["static"]}
+    assert pipeline.metadata == {"tags": ("static",)}
+
+
+def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> None:
+    output = OutputSpec(artifact_type="text", metadata={"labels": ["raw", "final"]})
+    outputs_input: dict[str, OutputSpec] = {"result": output}
+    stage_config = {"retry": {"max": 3}}
+    inputs = {"artifact": "build.result"}
+    resources = {"slots": ["cpu"]}
+
+    stage = StageSpec(
+        name="report",
+        target_path="tests.support.config_samples:concat",
+        outputs=outputs_input,
+        stage_config=stage_config,
+        dependencies=("build",),
+        inputs=inputs,
+        resources=resources,
+    )
+    pipeline_metadata = {"owner": {"team": "analysis", "labels": ["primary"]}}
+    pipeline = PipelineSpec(stages=(stage,), metadata=pipeline_metadata)
+
+    outputs_input["extra"] = OutputSpec(artifact_type="json")
+    stage_config["retry"]["max"] = 4
+    stage_config["retry"]["active"] = True
+    inputs["artifact"] = "other.result"
+    resources["slots"].append("gpu")
+    pipeline_metadata["owner"]["labels"].append("secondary")
+
+    assert stage.outputs == {"result": output}
+    assert stage.stage_config == {"retry": {"max": 3}}
+    assert stage.inputs == {"artifact": "build.result"}
+    assert stage.resources == {"slots": ("cpu",)}
+    assert pipeline.metadata["owner"]["team"] == "analysis"
+    assert pipeline.metadata["owner"]["labels"] == ("primary",)
+
+    with pytest.raises(TypeError):
+        stage.outputs["result"] = OutputSpec(artifact_type="json")
+    with pytest.raises(TypeError):
+        stage.stage_config["retry"]["active"] = False
+    with pytest.raises(TypeError):
+        stage.inputs["artifact"] = "new.result"
+    with pytest.raises(TypeError):
+        stage.resources["slots"] = ("gpu",)
+    with pytest.raises(TypeError):
+        pipeline.metadata["owner"]["labels"][0] = "mutated"
