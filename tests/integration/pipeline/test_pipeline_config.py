@@ -24,14 +24,14 @@ def pipeline_recipe(*, title: str | None = None, **_kwargs: Any) -> dict[str, An
         "stages": [
             {
                 "name": "build",
-                "_target_": "tests.support.config_samples:concat",
+                "factory": {"_target_": "tests.support.config_samples:concat"},
                 "outputs": {
                     "text": {"artifact_type": "text"},
                 },
             },
             {
                 "name": "report",
-                "_target_": "tests.support.config_samples:concat",
+                "factory": {"_target_": "tests.support.config_samples:concat"},
                 "depends_on": ["build"],
                 "inputs": {"text": "build.text"},
                 "outputs": {"report": {"artifact_type": "text"}},

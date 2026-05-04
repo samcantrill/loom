@@ -14,6 +14,7 @@ from loom.pipeline.errors import (
 )
 from loom.pipeline.specs import (
     PipelineSpec,
+    StageFactorySpec,
     StageSpec,
     OutputSpec,
     parse_pipeline_config,
@@ -41,6 +42,7 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "OutputSpec",
+    "StageFactorySpec",
     "StageSpec",
     "PipelineSpec",
     "parse_pipeline_config",

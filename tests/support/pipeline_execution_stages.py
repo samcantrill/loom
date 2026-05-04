@@ -32,6 +32,31 @@ class JsonProducerStage:
         }
 
 
+class ConfiguredProducerStage:
+    def __init__(self, *, constructor_value: int) -> None:
+        self.constructor_value = constructor_value
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        return {
+            "data": context.save_artifact(
+                "data",
+                {
+                    "constructor": self.constructor_value,
+                    "runtime": context.stage_config.get("runtime_value"),
+                    "constructor_in_stage_config": "constructor_value"
+                    in context.stage_config,
+                },
+                artifact_type="json",
+                codec_key="json.v1",
+            )
+        }
+
+
 class TextConsumerStage:
     def run(
         self,

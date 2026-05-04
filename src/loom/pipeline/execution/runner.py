@@ -18,6 +18,7 @@ from loom.pipeline.planning import (
     plan_pipeline,
 )
 from loom.pipeline.specs import PipelineSpec, StageSpec, parse_pipeline_config
+from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
@@ -302,7 +303,7 @@ class PipelineRunner:
                 local_output_dir=local_output_dir,
                 local_workspace_dir=local_workspace_dir,
                 provenance={},
-                metadata={"target_path": stage.target_path},
+                metadata={"factory_target": stage.factory.target_path},
                 artifact_store=artifact_store,
                 output_specs=stage.outputs,
             )
@@ -607,43 +608,14 @@ class PipelineRunner:
 
     def _construct_stage(self, spec: PipelineSpec, stage: StageSpec) -> Stage:
         try:
-            index = spec.stage_names.index(stage.name)
-            from loom.config.instantiate.targets import import_target
-
-            target = import_target(
-                stage.target_path, path=f"pipeline.stages[{index}]._target_"
-            )
-        except Exception as exc:
-            raise _TargetConstructionError(
-                f"could not import stage {stage.name!r} from {stage.target_path!r}: {exc}"
-            ) from exc
-
-        try:
-            if isinstance(target, type):
-                candidate = target()
-            elif isinstance(target, Stage):
-                candidate = target
-            elif callable(target):
-                candidate = target()
-            else:
-                raise StageContractError(
-                    f"target {stage.target_path!r} is not callable and does not satisfy Stage"
-                )
+            stage_path = f"pipeline.stages[{spec.stage_names.index(stage.name)}]"
+            return construct_stage(factory=stage.factory, stage_path=stage_path)
         except StageContractError:
             raise
         except Exception as exc:
             raise _TargetConstructionError(
-                f"could not construct stage {stage.name!r} from {stage.target_path!r}: {exc}"
+                f"could not construct stage {stage.name!r} at {stage.factory.target_path!r}: {exc}"
             ) from exc
-
-        try:
-            if not isinstance(candidate, Stage):
-                raise StageContractError(
-                    f"target {stage.target_path!r} does not satisfy Stage"
-                )
-            return candidate
-        except StageContractError:
-            raise
 
     def _reuse_stage(
         self,

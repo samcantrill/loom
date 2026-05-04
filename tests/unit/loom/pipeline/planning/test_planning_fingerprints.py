@@ -1,7 +1,7 @@
 """Unit tests for stage fingerprint construction."""
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline import OutputSpec, StageSpec
+from loom.pipeline import OutputSpec, StageFactorySpec, StageSpec
 from loom.pipeline.planning import (
     FingerprintContext,
     StageFingerprintError,
@@ -17,8 +17,9 @@ def _stage(
 ) -> StageSpec:
     return StageSpec(
         name="report",
-        target_path="project.Report",
+        factory=StageFactorySpec(target_path="project.Report", init={}),
         stage_config=config or {"thresholds": [1, 2]},
+        fingerprint_fields={},
         inputs={"data": "build.data"},
         outputs={"summary": OutputSpec(artifact_type="json", codec_key="json.v1")},
         resources=resources or {},
@@ -70,6 +71,54 @@ def test_fingerprint_changes_for_semantic_inputs_and_excludes_noisy_values() -> 
     assert config_changed.fingerprint != base.fingerprint
     assert base.payload.bound_inputs["data"]["source_stage"] == "build"
     assert base.payload.bound_inputs["data"]["source_output"] == "data"
+    assert base.payload.factory_init == {}
+    assert base.payload.fingerprint_fields == {}
+    assert base.payload.factory_target == "project.Report"
+
+
+def test_fingerprint_tracks_factory_init_and_declared_fingerprint_fields() -> None:
+    context = FingerprintContext(python_version="3.12.0", loom_version="0.1.0")
+    base = build_stage_fingerprint(
+        _stage(
+            config={"thresholds": [1, 2]},
+        ),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=context,
+    )
+    with_init = build_stage_fingerprint(
+        StageSpec(
+            name="report",
+            factory=StageFactorySpec(
+                target_path="project.Report", init={"worker_count": 4}
+            ),
+            stage_config={"thresholds": [1, 2]},
+            fingerprint_fields={},
+            inputs={"data": "build.data"},
+            outputs={"summary": OutputSpec(artifact_type="json", codec_key="json.v1")},
+        ),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=context,
+    )
+    with_fingerprint_fields = build_stage_fingerprint(
+        StageSpec(
+            name="report",
+            factory=StageFactorySpec(target_path="project.Report", init={}),
+            stage_config={"thresholds": [1, 2]},
+            fingerprint_fields={"input_subset": ["foo", "bar"]},
+            inputs={"data": "build.data"},
+            outputs={"summary": OutputSpec(artifact_type="json", codec_key="json.v1")},
+        ),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=context,
+    )
+
+    assert base.payload.factory_init == {}
+    assert base.fingerprint != with_init.fingerprint
+    assert with_init.payload.factory_init == {"worker_count": 4}
+    assert base.fingerprint != with_fingerprint_fields.fingerprint
+    assert with_fingerprint_fields.payload.fingerprint_fields == {
+        "input_subset": ["foo", "bar"]
+    }
 
 
 def test_fingerprint_requires_all_declared_inputs() -> None:

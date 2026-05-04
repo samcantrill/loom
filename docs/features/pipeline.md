@@ -310,8 +310,14 @@ through inheritance-heavy base classes. Plain callable stages are post-v0.
 
 The import path that identifies the stage implementation.
 
-When authored in YAML, the stage target usually appears as `_target_` and is
-parsed into internal `StageSpec.target_path`.
+In authored YAML, the stage target must be declared as:
+
+```yaml
+factory:
+  _target_: project.stages.BuildManifestStage
+```
+
+`factory.init` is optional constructor kwargs and is distinct from `config`.
 
 ### 5.5 StageContext
 
@@ -521,14 +527,16 @@ Example:
 pipeline:
   stages:
     - name: build_manifest
-      _target_: project.stages.BuildManifestStage
+      factory:
+        _target_: project.stages.BuildManifestStage
       outputs:
         manifest:
           artifact_type: manifest
           codec_key: json.v1
 
     - name: summarize
-      _target_: project.stages.SummarizeStage
+      factory:
+        _target_: project.stages.SummarizeStage
       inputs:
         manifest: build_manifest.manifest
       outputs:
@@ -548,7 +556,8 @@ Example:
 pipeline:
   stages:
     - name: train
-      _target_: project.stages.TrainStage
+      factory:
+        _target_: project.stages.TrainStage
       inputs:
         manifest: build_manifest.manifest
       outputs:
@@ -556,7 +565,8 @@ pipeline:
           artifact_type: checkpoint
 
     - name: evaluate_main
-      _target_: project.stages.EvaluateStage
+      factory:
+        _target_: project.stages.EvaluateStage
       inputs:
         checkpoint: train.best_checkpoint
       outputs:
@@ -565,7 +575,8 @@ pipeline:
           codec_key: json.v1
 
     - name: evaluate_external
-      _target_: project.stages.EvaluateStage
+      factory:
+        _target_: project.stages.EvaluateStage
       inputs:
         checkpoint: train.best_checkpoint
       outputs:
@@ -613,7 +624,8 @@ Stage-specific configuration should live under `config`:
 
 ```yaml
 - name: train
-  _target_: project.stages.TrainStage
+  factory:
+    _target_: project.stages.TrainStage
   inputs:
     manifest: build_manifest.manifest
   outputs:
@@ -624,13 +636,13 @@ Stage-specific configuration should live under `config`:
     batch_size: 32
 ```
 
-The stage constructor arguments and the stage runtime config are separate
-concepts.
+`factory.init` carries constructor kwargs and is separate from stage runtime
+`config`.
 
 Recommended rule:
 
 ```text
-constructor arguments define the stage object
+factory.init defines stage-object constructor arguments
 stage config defines the particular invocation
 ```
 
@@ -728,7 +740,8 @@ pipeline:
       max_attempts: 1
   stages:
     - name: prepare
-      _target_: project.stages.PrepareStage
+      factory:
+        _target_: project.stages.PrepareStage
 ```
 
 Default application should be deterministic and shallow enough to explain:
@@ -754,20 +767,22 @@ from typing import Any, Mapping, Sequence
 @dataclass(frozen=True, slots=True)
 class StageSpec:
     name: str
-    target_path: str
+    factory: StageFactorySpec
     inputs: Mapping[str, str] = field(default_factory=dict)
     outputs: Mapping[str, "OutputSpec"] = field(default_factory=dict)
     dependencies: Sequence[str] = field(default_factory=tuple)
     stage_config: Mapping[str, Any] = field(default_factory=dict)
+    fingerprint_fields: Mapping[str, Any] = field(default_factory=dict)
     resources: Mapping[str, Any] = field(default_factory=dict)
 ```
 
 Authored YAML keys are parsed into these internal fields:
 
 ```text
-_target_ -> target_path
+factory -> StageFactorySpec
 config -> stage_config
 depends_on -> dependencies
+fingerprint -> fingerprint_fields
 ```
 
 Suggested meanings:
@@ -776,8 +791,9 @@ Suggested meanings:
 name:
   stable stage identifier within the pipeline
 
-target_path:
-  import target path copied from `_target_`
+factory:
+  includes constructor target path and optional `init` kwargs in
+  `factory.init`
 
 inputs:
   map of stage input name to upstream logical artifact name
@@ -790,6 +806,9 @@ dependencies:
 
 stage_config:
   invocation-specific config visible to the stage
+
+fingerprint:
+  explicit stage-level semantic fingerprint fields
 
 resources:
   opaque plain-data metadata preserved for inspection; v0 does not interpret
@@ -1007,16 +1026,18 @@ adapted after the object protocol is stable.
 Pipeline stage mappings are orchestration specs, not generic `_target_` object
 graphs.
 
-For v0, Phase 9 imports the internal `target_path`, calls the target with no
-constructor kwargs, and then invokes:
+For v0, pipeline imports the stage factory target from
+`StageSpec.factory.target_path`, constructs with `StageSpec.factory.init`, and
+then invokes:
 
 ```text
 stage.run(context, inputs)
 ```
 
 Authored `config` is parsed into `StageSpec.stage_config` and exposed through
-`StageContext`; it is not passed to the stage target constructor. Accepting
-already-instantiated stage objects or target constructor config is post-v0.
+`StageContext`; it is not copied into constructor kwargs. Accepting already
+instantiated stage objects is supported only when `factory.init` is empty in this
+phase, and callable/class constructor behavior is explicit.
 
 ### 10.4 Stage Idempotence
 

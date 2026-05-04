@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from loom.pipeline import OutputSpec, StageSpec
+from loom.pipeline import OutputSpec, StageFactorySpec, StageSpec
 from loom.pipeline.execution import OutputValidationError, validate_stage_outputs
 from loom.pipeline.stores import LocalArtifactStore
 
@@ -14,7 +14,9 @@ from loom.pipeline.stores import LocalArtifactStore
 def _stage() -> StageSpec:
     return StageSpec(
         name="build",
-        target_path="tests.support.pipeline_execution_stages.JsonProducerStage",
+        factory=StageFactorySpec(
+            "tests.support.pipeline_execution_stages.JsonProducerStage"
+        ),
         outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
     )
 

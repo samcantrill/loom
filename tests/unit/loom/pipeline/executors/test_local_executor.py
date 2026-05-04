@@ -2,7 +2,13 @@
 
 from pathlib import Path
 
-from loom.pipeline import OutputSpec, PipelineSpec, StageContext, StageSpec
+from loom.pipeline import (
+    OutputSpec,
+    PipelineSpec,
+    StageContext,
+    StageFactorySpec,
+    StageSpec,
+)
 from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.planning import (
@@ -22,7 +28,9 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
     artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
     stage = StageSpec(
         name="build",
-        target_path="tests.support.pipeline_execution_stages.JsonProducerStage",
+        factory=StageFactorySpec(
+            "tests.support.pipeline_execution_stages.JsonProducerStage"
+        ),
         outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
     )
     plan = plan_pipeline(

@@ -12,9 +12,9 @@ def _linear_spec() -> PipelineSpec:
     return PipelineSpec.from_config(
         {
             "stages": [
-                {"name": "a", "_target_": "tests.support.config_samples:concat", "outputs": {"value": {"artifact_type": "text"}}},
-                {"name": "b", "_target_": "tests.support.config_samples:concat", "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
-                {"name": "c", "_target_": "tests.support.config_samples:concat", "inputs": {"in": "b.value"}, "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "a", "factory": {"_target_": "tests.support.config_samples:concat"}, "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "b", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "c", "factory": {"_target_": "tests.support.config_samples:concat"}, "inputs": {"in": "b.value"}, "outputs": {"value": {"artifact_type": "text"}}},
             ]
         }
     )
@@ -35,7 +35,7 @@ def test_build_stage_graph_unknown_dependency_rejected() -> None:
     spec = PipelineSpec.from_config(
         {
             "stages": [
-                {"name": "a", "_target_": "tests.support.config_samples:concat", "depends_on": ["missing"], "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "a", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["missing"], "outputs": {"value": {"artifact_type": "text"}}},
             ]
         }
     )
@@ -48,7 +48,7 @@ def test_build_stage_graph_self_dependency_rejected() -> None:
         PipelineSpec.from_config(
             {
                 "stages": [
-                    {"name": "a", "_target_": "tests.support.config_samples:concat", "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
+                    {"name": "a", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
                 ]
             }
         )
@@ -56,10 +56,10 @@ def test_build_stage_graph_self_dependency_rejected() -> None:
 
 def test_build_stage_graph_detects_cycles() -> None:
     spec = PipelineSpec.from_config(
-        {
-            "stages": [
-                {"name": "a", "_target_": "tests.support.config_samples:concat", "depends_on": ["b"], "outputs": {"value": {"artifact_type": "text"}}},
-                {"name": "b", "_target_": "tests.support.config_samples:concat", "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
+            {
+                "stages": [
+                {"name": "a", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["b"], "outputs": {"value": {"artifact_type": "text"}}},
+                {"name": "b", "factory": {"_target_": "tests.support.config_samples:concat"}, "depends_on": ["a"], "outputs": {"value": {"artifact_type": "text"}}},
             ]
         }
     )

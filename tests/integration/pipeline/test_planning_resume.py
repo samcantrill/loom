@@ -23,14 +23,14 @@ def _spec() -> PipelineSpec:
             "stages": [
                 {
                     "name": "build",
-                    "_target_": "project.Build",
+                    "factory": {"_target_": "project.Build"},
                     "outputs": {
                         "data": {"artifact_type": "json", "codec_key": "json.v1"}
                     },
                 },
                 {
                     "name": "report",
-                    "_target_": "project.Report",
+                    "factory": {"_target_": "project.Report"},
                     "inputs": {"data": "build.data"},
                     "outputs": {
                         "text": {"artifact_type": "text", "codec_key": "text.v1"}

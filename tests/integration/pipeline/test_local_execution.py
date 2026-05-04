@@ -7,7 +7,7 @@ import pytest
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.planning import PlanAction, PlanSelectors
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 from tests.support.pipeline_execution_configs import local_execution_config
 
 pytest.importorskip("pydantic")
@@ -51,3 +51,40 @@ def test_local_runner_applies_selector_skip(tmp_path: Path) -> None:
     status = run_store.read_stage_status("run1", "report")
     assert status is not None
     assert status.status == StageStatus.SKIPPED
+
+
+def test_local_runner_keeps_factory_init_separate_from_stage_config(
+    tmp_path: Path,
+) -> None:
+    run_store = LocalRunStore(tmp_path / "runs")
+    config = {
+        "pipeline": {
+            "name": "factory-init-demo",
+            "stages": [
+                {
+                    "name": "build",
+                    "factory": {
+                        "_target_": "tests.support.pipeline_execution_stages.ConfiguredProducerStage",
+                        "init": {"constructor_value": 7},
+                    },
+                    "config": {"runtime_value": 11},
+                    "outputs": {
+                        "data": {"artifact_type": "json", "codec_key": "json.v1"}
+                    },
+                }
+            ],
+        }
+    }
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=config, run_id="run1")
+    )
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
+    payload = artifact_store.load(result.stage_results["build"].outputs["data"])
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert payload == {
+        "constructor": 7,
+        "runtime": 11,
+        "constructor_in_stage_config": False,
+    }

@@ -25,7 +25,9 @@ def test_run_request_rejects_continue_on_failure() -> None:
                     "stages": [
                         {
                             "name": "build",
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage",
+                            "factory": {
+                                "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                            },
                             "outputs": {"data": {"artifact_type": "json"}},
                         }
                     ]
@@ -43,7 +45,9 @@ def test_run_request_rejects_non_bool_failure_policy_mapping() -> None:
                     "stages": [
                         {
                             "name": "build",
-                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage",
+                            "factory": {
+                                "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                            },
                             "outputs": {"data": {"artifact_type": "json"}},
                         }
                     ]

@@ -16,9 +16,9 @@ from loom.serialization.errors import PlainDataError
 from .errors import PlanSerializationError, PlanningValidationError
 
 PLAN_SCHEMA_VERSION = 1
-STAGE_FINGERPRINT_SCHEMA_VERSION = 1
-STAGE_FINGERPRINT_POLICY_NAME = "loom.stage.v1"
-STAGE_FINGERPRINT_POLICY_VERSION = 1
+STAGE_FINGERPRINT_SCHEMA_VERSION = 2
+STAGE_FINGERPRINT_POLICY_NAME = "loom.stage.semantic"
+STAGE_FINGERPRINT_POLICY_VERSION = 2
 DEFAULT_FINGERPRINT_ALGORITHM = "sha256"
 
 
@@ -392,8 +392,10 @@ class StageFingerprintPayload:
     policy_name: str
     policy_version: int
     stage_name: str
-    target_path: str
+    factory_target: str
+    factory_init: Mapping[str, PlainData]
     stage_config: Mapping[str, PlainData]
+    fingerprint_fields: Mapping[str, PlainData]
     declared_inputs: Mapping[str, str]
     bound_inputs: Mapping[str, Mapping[str, PlainData]]
     declared_outputs: Mapping[str, Mapping[str, PlainData]]
@@ -417,10 +419,20 @@ class StageFingerprintPayload:
             self, "stage_name", require_str(self.stage_name, "stage_name")
         )
         object.__setattr__(
-            self, "target_path", require_str(self.target_path, "target_path")
+            self,
+            "factory_target",
+            require_str(self.factory_target, "factory_target"),
+        )
+        object.__setattr__(
+            self, "factory_init", plain_mapping(self.factory_init, "factory_init")
         )
         object.__setattr__(
             self, "stage_config", plain_mapping(self.stage_config, "stage_config")
+        )
+        object.__setattr__(
+            self,
+            "fingerprint_fields",
+            plain_mapping(self.fingerprint_fields, "fingerprint_fields"),
         )
         object.__setattr__(
             self,
@@ -458,8 +470,10 @@ class StageFingerprintPayload:
             "policy_name": self.policy_name,
             "policy_version": self.policy_version,
             "stage_name": self.stage_name,
-            "target_path": self.target_path,
+            "factory_target": self.factory_target,
+            "factory_init": dict(self.factory_init),
             "stage_config": dict(self.stage_config),
+            "fingerprint_fields": dict(self.fingerprint_fields),
             "declared_inputs": dict(self.declared_inputs),
             "bound_inputs": {
                 key: dict(value) for key, value in self.bound_inputs.items()
@@ -482,7 +496,26 @@ class StageFingerprintPayload:
             "policy_name",
             "policy_version",
             "stage_name",
+            "factory_target",
+            "factory_init",
+            "stage_config",
+            "fingerprint_fields",
+            "declared_inputs",
+            "bound_inputs",
+            "declared_outputs",
+            "python_version",
+            "loom_version",
+            "git",
+            "dependencies",
+            "extra",
             "target_path",
+        }
+        reject_unknown(mapping, allowed, "StageFingerprintPayload")
+        required = {
+            "schema_version",
+            "policy_name",
+            "policy_version",
+            "stage_name",
             "stage_config",
             "declared_inputs",
             "bound_inputs",
@@ -493,15 +526,25 @@ class StageFingerprintPayload:
             "dependencies",
             "extra",
         }
-        reject_unknown(mapping, allowed, "StageFingerprintPayload")
-        require_fields(mapping, allowed, "StageFingerprintPayload")
+        require_fields(mapping, required, "StageFingerprintPayload")
+        factory_target = mapping.get("factory_target")
+        if factory_target is None:
+            factory_target = mapping.get("target_path")
+        if factory_target is None:
+            raise PlanSerializationError(
+                "StageFingerprintPayload must include factory_target or target_path"
+            )
         return cls(
             schema_version=positive_int(mapping["schema_version"], "schema_version"),
             policy_name=require_str(mapping["policy_name"], "policy_name"),
             policy_version=positive_int(mapping["policy_version"], "policy_version"),
             stage_name=require_str(mapping["stage_name"], "stage_name"),
-            target_path=require_str(mapping["target_path"], "target_path"),
+            factory_target=require_str(factory_target, "factory_target"),
+            factory_init=plain_mapping(mapping.get("factory_init", {}), "factory_init"),
             stage_config=plain_mapping(mapping["stage_config"], "stage_config"),
+            fingerprint_fields=plain_mapping(
+                mapping.get("fingerprint_fields", {}), "fingerprint_fields"
+            ),
             declared_inputs=str_mapping(mapping["declared_inputs"], "declared_inputs"),
             bound_inputs=nested_plain_mapping(mapping["bound_inputs"], "bound_inputs"),
             declared_outputs=nested_plain_mapping(
