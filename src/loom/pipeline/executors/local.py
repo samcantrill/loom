@@ -6,21 +6,17 @@ import contextlib
 import io
 import traceback
 from collections.abc import Mapping
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.execution.logs import write_text_file
-from loom.pipeline.execution.models import (
-    EXECUTION_FAILURE_SCHEMA_VERSION,
-    ExecutionFailure,
-    StageExecutionRequest,
-    StageExecutionResult,
-)
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import StageStatus
 from loom.timestamps import utc_timestamp
 
 from .errors import LocalExecutorError
+
+if TYPE_CHECKING:
+    from loom.pipeline.execution.models import StageExecutionRequest, StageExecutionResult
 
 
 class LocalExecutor:
@@ -32,6 +28,14 @@ class LocalExecutor:
         self.capture_stdout_stderr = capture_stdout_stderr
 
     def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
+        from loom.pipeline.execution.logs import write_text_file
+        from loom.pipeline.execution.models import (
+            EXECUTION_FAILURE_SCHEMA_VERSION,
+            ExecutionFailure,
+            StageExecutionRequest,
+            StageExecutionResult,
+        )
+
         if not isinstance(request, StageExecutionRequest):
             raise LocalExecutorError(
                 "LocalExecutor.execute requires StageExecutionRequest"

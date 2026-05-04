@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from loom.pipeline import OutputSpec, PipelineSpec, StageContext, StageSpec
-from loom.pipeline.execution import StageExecutionRequest
+from loom.pipeline.execution.models import StageExecutionRequest
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.planning import (
     FingerprintContext,

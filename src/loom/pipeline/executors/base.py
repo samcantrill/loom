@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from loom.pipeline.execution.models import StageExecutionRequest, StageExecutionResult
+if TYPE_CHECKING:
+    from loom.pipeline.execution.models import (
+        StageExecutionRequest,
+        StageExecutionResult,
+    )
 
 
 @runtime_checkable

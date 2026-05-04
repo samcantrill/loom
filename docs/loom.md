@@ -394,6 +394,14 @@ rerun if fingerprint changed
 fail if required artifacts are missing or invalid
 ```
 
+V0 defaults to conservative same-run reuse:
+
+```text
+reuse if status is SUCCEEDED and policy/docs checks remain valid
+rerun for RUNNING, FAILED, stale state, malformed state, or checksum mismatch
+do not reuse stages across different run directories
+```
+
 Stages can opt into stricter or looser checks through declared policies, but default behavior should be conservative.
 
 ---
@@ -485,6 +493,7 @@ the relevant config path or stage name
 the target path when import or instantiation failed
 the expected contract
 the received value or state
+the logical artifact key and the source document/path when relevant
 ```
 
 ---

@@ -175,6 +175,16 @@ class DummyRunStore:
         return None
 
 
+class IncompleteArtifactStore:
+    def save(self, *_: object, **__: object) -> object:
+        raise NotImplementedError
+
+
+class IncompleteRunStore:
+    def create_run(self, run_id: str) -> object:
+        return run_id
+
+
 def test_local_artifact_store_satisfies_protocol() -> None:
     import tempfile
     from pathlib import Path
@@ -193,3 +203,8 @@ def test_fake_artifact_store_matches_protocol() -> None:
 
 def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunStore)
+
+
+def test_structural_protocol_rejects_incomplete_implementations() -> None:
+    assert not isinstance(IncompleteArtifactStore(), ArtifactStore)
+    assert not isinstance(IncompleteRunStore(), RunStore)
