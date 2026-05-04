@@ -3,7 +3,7 @@
 - Phase: Phase 3 - Stage Factory And Semantic Fingerprint Policy
 - Branch: `codex/v0-post-stage-factory`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/17
 - Stack predecessor: none
 - Merge eligibility: serial human merge gate. This PR must target `develop`,
   request review from `samcantrill` or mention `@samcantrill` if GitHub rejects
@@ -181,26 +181,37 @@ Scope check:
 
 ## PR Creation Status
 
-- PR opened: pending.
-- PR URL: pending.
-- Command to run:
+- PR opened: yes.
+- PR URL: https://github.com/samcantrill/loom/pull/17
+- Command run:
 
 ```sh
 gh pr create --base develop --head codex/v0-post-stage-factory --title "Phase 3: Stage Factory and Semantic Fingerprint Policy" --body-file docs/phases/v0-post-stage-factory-pr-body.md
 ```
 
-- Verification: pending `gh pr view <PR> --json baseRefName,headRefName,state,url`.
-- Target verification result: pending; the PR must target `develop`.
+- Verification:
+
+```json
+{"baseRefName":"develop","headRefName":"codex/v0-post-stage-factory","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/17"}
+```
+
+- Target verification result: base is `develop`, matching the recorded target
+  branch.
 - Merge eligibility: root serial-gate PR targeting `develop`; human review and
   human merge are required. Codex must not approve or merge.
 - Current blocker: none.
 
 ## Review Notification
 
-- Reviewer request: pending PR creation.
-- Fallback if GitHub rejects the request: add a PR comment mentioning
-  `@samcantrill` and record the comment URL here.
-- Notification result: pending.
+- Reviewer requested: `samcantrill`.
+- Command attempted: `gh pr edit 17 --add-reviewer samcantrill`.
+- Command result: failed with GitHub GraphQL project-card deprecation output and
+  no review request was recorded; `gh pr view 17 --json
+  reviewRequests,author,url` showed PR author `samcantrill` and an empty
+  `reviewRequests` list.
+- Fallback used: added a PR comment mentioning `@samcantrill`.
+- Fallback comment: https://github.com/samcantrill/loom/pull/17#issuecomment-4370177330
+- Notification result: fallback comment posted; PR body records the fallback.
 
 ## Stack Maintenance
 

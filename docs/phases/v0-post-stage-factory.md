@@ -2,12 +2,13 @@
 
 ## Metadata
 
-- Status: PR preparation in progress
+- Status: pr_open
 - Branch: `codex/v0-post-stage-factory`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-stage-factory`
 - Phase execution plan path: `docs/phases/v0-post-stage-factory.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 3 - Stage Factory And Semantic Fingerprint Policy`
+- PR: https://github.com/samcantrill/loom/pull/17
 - Stack predecessor: none
 - Base branch: `develop` at `4611a877e38bc3997565352d81c40bc79801cd7c`
 - Target branch: `develop`
@@ -776,9 +777,10 @@ make test-summary
   pass. Fixed phase-scoped documentation contract drift in `docs/structure.md`
   and `docs/features/fingerprints.md`, and cleaned formatting regressions in
   touched integration tests. No source behavior changes were required.
-- PR preparation: in progress. The PR body artifact was drafted and refined in
-  `docs/phases/v0-post-stage-factory-pr-body.md`; PR creation and reviewer
-  notification are pending.
+- PR preparation: complete. The PR body artifact was drafted and refined in
+  `docs/phases/v0-post-stage-factory-pr-body.md`; PR #17 was opened against
+  `develop` and verified. GitHub rejected the direct reviewer request, so the
+  required `@samcantrill` fallback comment was posted.
 - Stack maintenance: serial human merge gate active; no successor may start
   until the Phase 3 PR is human-merged into `develop`.
 - Remaining blockers: none.
@@ -891,7 +893,7 @@ make test-summary
 
 ## PR Preparation Evidence
 
-- PR preparer pass: in progress.
+- PR preparer pass: complete.
 - Final diff and scope inspection: completed against `develop`; the diff is
   limited to Phase 3 factory parsing/construction, runner construction wiring,
   semantic fingerprint policy v2, in-scope fixtures/tests/examples, and the
@@ -914,8 +916,17 @@ make test-summary
   passed (8 passed, 5 skipped), e2e passed (1 passed), config-extra passed
   (103 passed, 326 deselected).
 - PR body artifact: `docs/phases/v0-post-stage-factory-pr-body.md`.
-- PR creation status: pending push and GitHub PR creation.
-- Review notification status: pending PR creation.
+- PR creation status: opened at https://github.com/samcantrill/loom/pull/17.
+- PR creation command:
+  `gh pr create --base develop --head codex/v0-post-stage-factory --title "Phase 3: Stage Factory and Semantic Fingerprint Policy" --body-file docs/phases/v0-post-stage-factory-pr-body.md`
+- PR target verification:
+  `{"baseRefName":"develop","headRefName":"codex/v0-post-stage-factory","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/17"}`.
+- Review notification status: `gh pr edit 17 --add-reviewer samcantrill`
+  failed with GitHub GraphQL project-card deprecation output and no review
+  request was recorded. Because the PR author is `samcantrill` and
+  `reviewRequests` is empty, the required fallback comment was posted.
+- Review fallback comment:
+  https://github.com/samcantrill/loom/pull/17#issuecomment-4370177330.
 - Stack state: root serial phase; stack predecessor none; base and PR target
   are `develop`; no successor phase may start until the PR is human-approved
   and human-merged into `develop`.
