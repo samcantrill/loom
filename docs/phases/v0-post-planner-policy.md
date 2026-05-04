@@ -594,6 +594,9 @@ Implementation refinement evidence:
   (0 errors, 0 warnings, 0 informations)
 - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py`
   (43 passed)
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  (Ruff pass; Pyright 0 errors; default harness 401 passed, 9 skipped;
+  config-extra harness 103 passed, 402 deselected; build pass)
 - `git diff --check`
   (pass)
 
