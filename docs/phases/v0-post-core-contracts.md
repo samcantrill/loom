@@ -345,7 +345,17 @@ make test-summary
 
 ### PR preparation state
 
-- PR body and final validation evidence remain pending for `loom_pr_preparer`.
+- PR body draft pass: completed on 2026-05-04 in
+  `docs/phases/v0-post-core-contracts-pr-body.md`.
+- PR body refine pass: pending.
+- PR creation: not attempted in the draft pass by instruction.
+- Final validation evidence:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` failed at Pyright after Ruff
+    passed. Pyright reported 103 errors and 6 warnings; the blocker is recorded
+    in the PR body for the manager's terminal decision.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote suite
+    evidence to ignored file `build/test-summary.md`; the suite table is copied
+    into the PR body.
 
 ## Handoff Notes For `loom_phase_executor`
 
@@ -391,9 +401,10 @@ make test-summary
 - Implementation validation: targeted refinement checks passed as recorded below;
   final `make validate-pr` remains for PR preparation.
 - Refinement summary: completed in `fix: refine after validation`.
-- PR preparation: pending.
+- PR preparation: PR body draft completed; refine pass pending; PR not opened.
 - Stack maintenance: pending.
-- Remaining blockers: none.
+- Remaining blockers: final `make validate-pr` fails at Pyright during PR
+  preparation draft pass.
 
 ### Phase Refinement Report
 
