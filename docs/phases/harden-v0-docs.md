@@ -20,7 +20,8 @@
 - Phase implementation refinement budget: used by `loom_phase_refiner` on 2026-05-04 local time.
 - PR review budget: unused.
 - PR body draft/refine budget: draft completed on 2026-05-04 local time in
-  `docs/phases/harden-v0-docs-pr-body.md`; refine pending.
+  `docs/phases/harden-v0-docs-pr-body.md`; refine completed on 2026-05-04
+  local time by `loom_pr_preparer`.
 - Setup limitations: no remote operations or validation commands were run during the draft or refine planning passes. The worktree was created from the local recorded predecessor branch because the manager supplied the exact Phase 9 base head.
 - Blockers: none.
 
@@ -344,7 +345,8 @@ make test-summary
 - Phase implementation refinement: used by `loom_phase_refiner` on 2026-05-04 local time; no automated implementation refinement budget remains for this phase.
 - PR review: unused.
 - PR body draft/refine: draft completed on 2026-05-04 local time in
-  `docs/phases/harden-v0-docs-pr-body.md`; refine pending.
+  `docs/phases/harden-v0-docs-pr-body.md`; refine completed on 2026-05-04
+  local time by `loom_pr_preparer`.
 
 ## Completion Notes
 
@@ -381,6 +383,17 @@ make test-summary
   implementation refinement budget used, PR review budget unused, refreshed
   `make test-summary` suite evidence, and that no PR was opened in the draft
   pass.
+- PR body refine: completed by `loom_pr_preparer` on 2026-05-04 local time.
+  Refine pass verified the PR body against the actual stacked diff from
+  `codex/add-local-execution`, confirmed Phase 10 hardening/docs/contracts
+  scope with no deferred feature work, reran final PR validation, and prepared
+  explicit push/PR creation against `codex/add-local-execution`.
+- PR preparation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed during PR body
+    refinement: Ruff passed, Pyright reported 0 errors, default pytest passed
+    with 368 tests, and build succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed during PR body
+    refinement: package, unit, contract, integration, and e2e suites passed.
 - Stack maintenance: Phase 10 is stacked on `codex/add-local-execution` and targets `codex/add-local-execution`; retarget to `develop` only after predecessor phases land and validation is rerun.
 - Remaining blockers: none observed.
 

@@ -9,7 +9,7 @@
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Phase execution plan: `docs/phases/harden-v0-docs.md`
 - Draft pass: completed on 2026-05-04 local time.
-- Refine pass: pending.
+- Refine pass: completed on 2026-05-04 local time by `loom_pr_preparer`.
 
 ## Summary
 
@@ -70,21 +70,21 @@ Final gate evidence:
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
-result: passed during refinement after commit d80f208; Ruff passed, Pyright reported 0 errors, default pytest passed with 368 tests, and build succeeded.
+result: passed during PR body refinement; Ruff passed, Pyright reported 0 errors, default pytest passed with 368 tests, and build succeeded.
 
 command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
-result: passed during PR body draft; package, unit, contract, integration, and e2e suites passed.
+result: passed during PR body refinement; package, unit, contract, integration, and e2e suites passed.
 ```
 
 ### Test Suite Summary
 
 | Suite | Status | Duration | Command |
 | --- | --- | ---: | --- |
-| package | passed | 2.64s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
-| unit | passed | 1.69s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
-| contract | passed | 0.46s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
-| integration | passed | 2.47s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
-| e2e | passed | 0.93s | `uv run pytest tests/e2e -m "not slow and not slurm and not network and not optional_dependency"` |
+| package | passed | 2.24s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
+| unit | passed | 1.60s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
+| contract | passed | 0.44s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
+| integration | passed | 2.43s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
+| e2e | passed | 0.81s | `uv run pytest tests/e2e -m "not slow and not slurm and not network and not optional_dependency"` |
 
 Suite counts from `build/test-summary.md`: package 34 passed, unit 292 passed, contract 17 passed, integration 24 passed, e2e 1 passed.
 
@@ -108,15 +108,13 @@ Suite counts from `build/test-summary.md`: package 34 passed, unit 292 passed, c
 
 ## PR Creation Status
 
-PR not opened in this pass by assignment. No `gh pr create` command was attempted.
-
-Prepared command for the later refine/open pass:
+PR opening is pending until this refinement commit is recorded and pushed. Prepared command:
 
 ```sh
 gh pr create --base codex/add-local-execution --head codex/harden-v0-docs --title "Phase 10: Hardening And Documentation" --body-file docs/phases/harden-v0-docs-pr-body.md
 ```
 
-Remote preflight from the manager already confirmed GitHub authentication outside the sandbox and verified `origin/develop` at `fcd5240df4ca760fc13276f530d47f4a6781bf1c`.
+Remote preflight from the manager already confirmed GitHub authentication outside the sandbox and verified `origin/develop` at `fcd5240df4ca760fc13276f530d47f4a6781bf1c`. This refine pass must verify or refresh GitHub authentication before push/PR creation.
 
 ## Stack Maintenance
 
