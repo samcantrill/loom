@@ -81,7 +81,7 @@ result: passed; wrote build/test-summary.md.
 This is a root serial-gate PR targeting `develop` with no stack predecessor.
 No successor work should start while this PR is `pr_open` or `approved`.
 
-Reviewer notification: request review from `samcantrill` after PR creation. If
-GitHub rejects the reviewer request because the authenticated account or PR
-author is `samcantrill`, add an immediate PR comment mentioning `@samcantrill`
-and record the fallback in the phase notes.
+Reviewer notification: GitHub reviewer assignment could not be completed because
+the PR author and authenticated account are `samcantrill`. The serial-gate
+fallback comment mentioning `@samcantrill` was posted:
+https://github.com/samcantrill/loom/pull/22#issuecomment-4375429754

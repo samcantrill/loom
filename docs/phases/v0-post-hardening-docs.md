@@ -2,15 +2,14 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/v0-post-hardening-docs`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-hardening-docs`
 - Phase execution plan path: `docs/phases/v0-post-hardening-docs.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 8 - Hardening, Docs, And Migration Notes`
-- PR: pending. PR body prepared at
-  `docs/phases/v0-post-hardening-docs-pr-body.md`; PR creation and target
-  verification are owned by PR preparation.
+- PR: [#22](https://github.com/samcantrill/loom/pull/22). PR body prepared at
+  `docs/phases/v0-post-hardening-docs-pr-body.md`.
 - Stack predecessor: none. Serial human merge gate is active and this phase is
   not stacked on any predecessor branch.
 - Base branch: `develop` at `ef5e4522e2d04b549b44ee0f0b7748ff765ed664`
@@ -69,13 +68,13 @@
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright tests/e2e/test_local_pipeline_run.py`
     passed with 0 errors.
   - `git diff --check` passed.
-- Remaining blockers: none known. PR preparation still owns final
+- Remaining blockers: none known. PR preparation evidence below records final
   `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and
-  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` evidence.
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` results.
 
 ## PR Preparation Evidence
 
-- PR preparation pass: in progress on 2026-05-05.
+- PR preparation pass: completed on 2026-05-05.
 - Branch confirmed: `codex/v0-post-hardening-docs`.
 - Target branch confirmed: `develop`.
 - Stack predecessor confirmed: none.
@@ -101,11 +100,23 @@
 | e2e | passed | 2.58s |
 | config-extra | passed | 5.54s |
 
-- Reviewer notification plan: after opening or discovering the PR, request
-  `samcantrill` as reviewer. If GitHub rejects because the authenticated
-  account or PR author is `samcantrill`, add an immediate PR comment mentioning
-  `@samcantrill` and record the fallback here.
-- Remaining blockers: none before GitHub push/PR creation.
+- Push: `codex/v0-post-hardening-docs` pushed to origin with head commit
+  `9ff2e01` before PR creation.
+- PR creation: opened
+  [#22](https://github.com/samcantrill/loom/pull/22) against `develop`.
+- PR target verification:
+  `gh pr view 22 --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`
+  reported `baseRefName` as `develop`, `headRefName` as
+  `codex/v0-post-hardening-docs`, `state` as `OPEN`, `url` as
+  `https://github.com/samcantrill/loom/pull/22`, `mergeCommit` as `null`, and
+  CI `checks` as `IN_PROGRESS`.
+- Reviewer notification: `gh pr edit 22 --add-reviewer samcantrill` could not
+  complete. The verified PR author and authenticated GitHub account were both
+  `samcantrill`, so the serial-gate fallback was used.
+- Reviewer fallback comment:
+  https://github.com/samcantrill/loom/pull/22#issuecomment-4375429754
+- Remaining blockers: none known. CI was still in progress at target
+  verification time.
 
 ## Objective
 
