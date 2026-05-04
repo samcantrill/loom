@@ -20,6 +20,7 @@ def _common_ts() -> tuple[str, str]:
 def test_run_status_parse() -> None:
     assert parse_run_status("SUCCEEDED") is RunStatus.SUCCEEDED
     assert parse_stage_status("FAILED") is StageStatus.FAILED
+    assert parse_stage_status("BLOCKED") is StageStatus.BLOCKED
 
 
 def test_run_status_round_trip() -> None:
@@ -56,6 +57,31 @@ def test_stage_status_round_trip_and_owner_metadata() -> None:
     assert "stage_id" not in payload
     assert "attempts" not in payload
     assert StageStatusRecord.from_dict(payload) == record
+
+
+def test_blocked_stage_status_round_trip_is_distinct() -> None:
+    _, updated = _common_ts()
+    record = StageStatusRecord(
+        run_id="run-1",
+        stage_name="downstream",
+        status=StageStatus.BLOCKED,
+        updated_at=updated,
+        attempt=1,
+        message="upstream failed",
+        metadata={"blocked_by": ["upstream"], "reason_code": "upstream_failed"},
+    )
+
+    assert record.status is StageStatus.BLOCKED
+    assert record.status not in {
+        StageStatus.FAILED,
+        StageStatus.SKIPPED,
+        StageStatus.STALE,
+        StageStatus.PENDING,
+    }
+    assert record.started_at is None
+    assert record.finished_at is None
+    assert record.owner == {}
+    assert StageStatusRecord.from_dict(record.to_dict()) == record
 
 
 def test_status_record_rejects_invalid_schema_version() -> None:

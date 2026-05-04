@@ -200,6 +200,27 @@ def test_import_stage_factory_does_not_import_forbidden_modules() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_runtime_resource_modules_do_not_import_forbidden_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.resources
+        import loom.pipeline.runtime
+        import loom.pipeline.events
+        import loom.pipeline.locks
+
+        for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "project"):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through runtime/resource/event/lock modules")
+        print("ok")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_executors_does_not_import_project_layers() -> None:
     script = dedent(
         """

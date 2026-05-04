@@ -177,6 +177,42 @@ def write_stage_skipped(
     return record
 
 
+def write_stage_blocked(
+    run_store: RunStore,
+    *,
+    run_id: str,
+    stage_name: str,
+    attempt: int,
+    blocked_at: str,
+    message: str,
+    blocked_by: PlainData | None = None,
+    reason_code: str | None = None,
+    metadata: Mapping[str, PlainData] | None = None,
+) -> StageStatusRecord:
+    if not message:
+        raise ValueError("message is required for blocked stage status")
+    normalized_metadata = ensure_plain_data(dict(metadata or {}), path="metadata")
+    if not isinstance(normalized_metadata, dict):
+        raise ValueError("metadata must be a mapping")
+    if blocked_by is not None:
+        normalized_metadata["blocked_by"] = ensure_plain_data(blocked_by, path="blocked_by")
+    if reason_code is not None:
+        if not isinstance(reason_code, str) or not reason_code:
+            raise ValueError("reason_code must be a non-empty string")
+        normalized_metadata["reason_code"] = reason_code
+    record = StageStatusRecord(
+        run_id=run_id,
+        stage_name=stage_name,
+        status=StageStatus.BLOCKED,
+        attempt=attempt,
+        updated_at=blocked_at,
+        message=message,
+        metadata=normalized_metadata,
+    )
+    run_store.write_stage_status(run_id, stage_name, record)
+    return record
+
+
 __all__ = [
     "next_stage_attempt",
     "write_run_status",
@@ -184,4 +220,5 @@ __all__ = [
     "write_stage_succeeded",
     "write_stage_failed",
     "write_stage_skipped",
+    "write_stage_blocked",
 ]

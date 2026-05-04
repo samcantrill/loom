@@ -9,9 +9,12 @@ from loom.pipeline.errors import (
     PipelineGraphError,
     PipelineSpecError,
     PipelineValidationError,
+    RuntimeResourceError,
     StageContractError,
     StatusSerializationError,
 )
+from loom.pipeline.resources import ResourceRequest, parse_resource_request
+from loom.pipeline.runtime import RuntimeKind, RuntimeRequest, parse_runtime_request
 from loom.pipeline.specs import (
     PipelineSpec,
     StageFactorySpec,
@@ -56,6 +59,7 @@ __all__ = [
     "parse_stage_status",
     "PipelineValidationError",
     "PipelineSpecError",
+    "RuntimeResourceError",
     "InputBindingError",
     "PipelineGraphError",
     "PipelineCycleError",
@@ -64,4 +68,9 @@ __all__ = [
     "PipelineRunner",
     "RunRequest",
     "RunResult",
+    "ResourceRequest",
+    "parse_resource_request",
+    "RuntimeKind",
+    "RuntimeRequest",
+    "parse_runtime_request",
 ]

@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import socket
+import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.io.uris import path_to_file_uri
+from loom.pipeline.events import PipelineEvent, PipelineEventError, PipelineEventRecord
+from loom.pipeline.locks import RunLockRecord, RunLockValidationError
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
-from loom.serialization import PlainData, ensure_plain_data, json_loads
+from loom.serialization import PlainData, ensure_plain_data, json_loads, stable_json_dumps
 from loom.serialization.errors import DeserializationError, PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
@@ -29,6 +34,8 @@ from .errors import (
     CorruptStoreDocumentError,
     MissingStoreDocumentError,
     RunAlreadyExistsError,
+    RunLockConflictError,
+    RunLockReleaseError,
     RunNotFoundError,
     UnsafeStorePathError,
 )
@@ -279,6 +286,116 @@ class LocalRunStore:
         }
         atomic_write_json(self.local_provenance_path(run_id_text, validated_name), payload)
 
+    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord:
+        if not isinstance(event, PipelineEvent):
+            raise CorruptStoreDocumentError("append_event requires a PipelineEvent")
+        run_id_text = validate_run_id(run_id, field="run_id")
+        run_dir = self.local_run_dir(run_id_text)
+        if not run_dir.is_dir():
+            raise RunNotFoundError(f"run not found: {run_id_text}")
+        existing = self.read_events(run_id_text)
+        sequence = existing[-1].sequence + 1 if existing else 1
+        record = PipelineEventRecord(
+            run_id=run_id_text,
+            sequence=sequence,
+            timestamp=event.timestamp or utc_timestamp(),
+            scope=event.scope,
+            event_type=event.event_type,
+            payload=event.payload,
+        )
+        path = run_dir / "events.jsonl"
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(stable_json_dumps(record.to_dict()))
+                handle.write("\n")
+        except OSError as exc:
+            raise CorruptStoreDocumentError(f"Could not append event at {path}: {exc}") from exc
+        return record
+
+    def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]:
+        run_id_text = validate_run_id(run_id, field="run_id")
+        path = self.local_run_dir(run_id_text) / "events.jsonl"
+        if not path.exists():
+            return ()
+        if not path.is_file():
+            raise CorruptStoreDocumentError(f"Expected event log file at {path}")
+        records: list[tuple[int, PipelineEventRecord]] = []
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                parsed = json_loads(line, path=f"{path}:{line_number}")
+                record = PipelineEventRecord.from_dict(parsed)
+            except (DeserializationError, PipelineEventError) as exc:
+                raise CorruptStoreDocumentError(
+                    f"Malformed event record at {path}:{line_number}: {exc}"
+                ) from exc
+            if record.run_id != run_id_text:
+                raise CorruptStoreDocumentError(
+                    f"event record at {path}:{line_number} has run_id {record.run_id!r}, expected {run_id_text!r}"
+                )
+            records.append((line_number, record))
+        for expected, (line_number, record) in enumerate(records, start=1):
+            if record.sequence != expected:
+                raise CorruptStoreDocumentError(
+                    f"event sequence gap at {path}:{line_number}: expected {expected}, got {record.sequence}"
+                )
+        return tuple(record for _, record in records)
+
+    def acquire_run_lock(
+        self,
+        run_id: str,
+        *,
+        owner: Mapping[str, PlainData] | None = None,
+    ) -> RunLockRecord:
+        run_id_text = validate_run_id(run_id, field="run_id")
+        run_dir = self.local_run_dir(run_id_text)
+        if not run_dir.is_dir():
+            raise RunNotFoundError(f"run not found: {run_id_text}")
+        lock_path = run_dir / "lock.json"
+        record = RunLockRecord(
+            run_id=run_id_text,
+            token=uuid.uuid4().hex,
+            acquired_at=utc_timestamp(),
+            owner=_normalize_lock_owner(owner),
+        )
+        try:
+            with lock_path.open("x", encoding="utf-8") as handle:
+                handle.write(stable_json_dumps(record.to_dict()))
+                handle.write("\n")
+        except FileExistsError as exc:
+            raise RunLockConflictError(f"run lock already exists at {lock_path}") from exc
+        except OSError as exc:
+            raise CorruptStoreDocumentError(f"Could not acquire run lock at {lock_path}: {exc}") from exc
+        return record
+
+    def read_run_lock(self, run_id: str) -> RunLockRecord | None:
+        run_id_text = validate_run_id(run_id, field="run_id")
+        lock_path = self.local_run_dir(run_id_text) / "lock.json"
+        if not lock_path.exists():
+            return None
+        return self._read_lock_record(run_id_text, lock_path)
+
+    def release_run_lock(self, run_id: str, token: str) -> None:
+        run_id_text = validate_run_id(run_id, field="run_id")
+        if not isinstance(token, str) or not token:
+            raise RunLockReleaseError("run lock token must be a non-empty string")
+        lock_path = self.local_run_dir(run_id_text) / "lock.json"
+        if not lock_path.exists():
+            raise RunLockReleaseError(f"run lock does not exist at {lock_path}")
+        try:
+            record = self._read_lock_record(run_id_text, lock_path)
+        except CorruptStoreDocumentError as exc:
+            raise RunLockReleaseError(f"Cannot release corrupt run lock at {lock_path}: {exc}") from exc
+        if record.token != token:
+            raise RunLockReleaseError(f"run lock token mismatch for {lock_path}")
+        try:
+            lock_path.unlink()
+        except FileNotFoundError as exc:
+            raise RunLockReleaseError(f"run lock disappeared before release at {lock_path}") from exc
+        except OSError as exc:
+            raise RunLockReleaseError(f"Could not release run lock at {lock_path}: {exc}") from exc
+
     def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
         path = self._stage_file_path(run_id, stage_name, "status.json")
         data = self._read_optional_json(path)
@@ -442,6 +559,20 @@ class LocalRunStore:
         if not isinstance(content, str):
             raise UnsafeStorePathError(f"stage log content must be text, got {type(content)!r}")
         atomic_write_text(self.local_stage_log_path(run_id, stage_name, validated_stream), content)
+
+    def _read_lock_record(self, run_id: str, lock_path: Path) -> RunLockRecord:
+        if not lock_path.is_file():
+            raise CorruptStoreDocumentError(f"Expected run lock file at {lock_path}")
+        try:
+            data = json_loads(lock_path.read_text(encoding="utf-8"), path=str(lock_path))
+            record = RunLockRecord.from_dict(data)
+        except (DeserializationError, RunLockValidationError) as exc:
+            raise CorruptStoreDocumentError(f"Malformed run lock at {lock_path}: {exc}") from exc
+        if record.run_id != run_id:
+            raise CorruptStoreDocumentError(
+                f"run lock at {lock_path} has run_id {record.run_id!r}, expected {run_id!r}",
+            )
+        return record
 
     def _stage_file_path(self, run_id: str, stage_name: str, filename: str) -> Path:
         stage_dir = self.local_stage_dir(run_id, stage_name)
@@ -648,6 +779,20 @@ def _serialize_stage_artifact_index(index: Mapping[str, ArtifactRef]) -> dict[st
             raise CorruptStoreDocumentError(f"stage artifact payload entry {validated_key!r} must be an ArtifactRef")
         payload[validated_key] = ensure_plain_data(ref.to_dict(), path=f"stage_artifact[{validated_key!r}]")
     return payload
+
+
+def _normalize_lock_owner(owner: Mapping[str, PlainData] | None) -> dict[str, PlainData]:
+    try:
+        metadata = ensure_plain_data(owner or {}, path="owner")
+    except PlainDataError as exc:
+        raise UnsafeStorePathError(f"run lock owner metadata must be plain data: {exc}") from exc
+    if not isinstance(metadata, dict):
+        raise UnsafeStorePathError("run lock owner metadata must be a mapping")
+    return {
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "metadata": metadata,
+    }
 
 
 def _deserialize_stage_artifact_index(mapping: object, *, path: Path) -> dict[str, ArtifactRef]:

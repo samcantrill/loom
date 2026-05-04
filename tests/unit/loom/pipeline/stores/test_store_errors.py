@@ -16,6 +16,9 @@ def test_store_error_inheritance() -> None:
     assert issubclass(stores.ArtifactChecksumUnsupportedError, stores.ArtifactStoreError)
     assert issubclass(stores.AtomicWriteError, stores.StoreError)
     assert issubclass(stores.RunAlreadyExistsError, stores.RunStoreError)
+    assert issubclass(stores.RunLockError, stores.RunStoreError)
+    assert issubclass(stores.RunLockConflictError, stores.RunLockError)
+    assert issubclass(stores.RunLockReleaseError, stores.RunLockError)
     assert issubclass(stores.RunNotFoundError, stores.RunStoreError)
     assert issubclass(stores.MissingStoreDocumentError, stores.RunStoreError)
     assert issubclass(stores.CorruptStoreDocumentError, stores.RunStoreError)
@@ -29,6 +32,8 @@ def test_store_error_exports() -> None:
         "RunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
+        "RunEventStore",
+        "RunLockStore",
         "RunStatusStore",
         "RunPlanStore",
         "RunArtifactIndexStore",
@@ -42,6 +47,9 @@ def test_store_error_exports() -> None:
         "StoreError",
         "ArtifactStoreError",
         "RunStoreError",
+        "RunLockError",
+        "RunLockConflictError",
+        "RunLockReleaseError",
         "UnsafeStorePathError",
         "UnsupportedArtifactURIError",
         "ArtifactNotFoundError",

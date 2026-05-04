@@ -3,8 +3,8 @@
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.status import RunStatusRecord
-from loom.pipeline.status import RunStatus
+from loom.pipeline.events import EventScope, PipelineEvent
+from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 
 
@@ -68,6 +68,26 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     run_store.write_plan(run_id, {"stage": ["a", "b"]})
     assert run_store.read_plan(run_id) == {"stage": ["a", "b"]}
 
+    first_event = run_store.append_event(
+        run_id,
+        PipelineEvent(scope=EventScope.run(), event_type="run.created"),
+    )
+    second_event = run_store.append_event(
+        run_id,
+        PipelineEvent(scope=EventScope.stage("stage"), event_type="stage.started"),
+    )
+    assert (first_event.sequence, second_event.sequence) == (1, 2)
+    assert [record.event_type for record in run_store.read_events(run_id)] == [
+        "run.created",
+        "stage.started",
+    ]
+
+    lock_record = run_store.acquire_run_lock(run_id, owner={"workflow": "integration"})
+    assert run_store.read_run_lock(run_id) == lock_record
+    assert (run_store.local_run_dir(run_id) / "lock.json").exists()
+    run_store.release_run_lock(run_id, lock_record.token)
+    assert run_store.read_run_lock(run_id) is None
+
     run_store.write_config_snapshot(run_id, "resolved", "alpha: 1\n")
     assert run_store.read_config_snapshot(run_id, "resolved") == "alpha: 1\n"
     run_store.write_config_snapshot(run_id, "raw", "a: b\n")
@@ -90,6 +110,19 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     run_store.write_stage_failure(run_id, "stage", {"message": "none"}, attempt=1)
     run_store.write_stage_provenance(run_id, "stage", {"tool": "loom"}, attempt=1)
     run_store.write_stage_log(run_id, "stage", "stderr", "oops\n")
+    blocked_status = StageStatusRecord(
+        run_id=run_id,
+        stage_name="blocked",
+        status=StageStatus.BLOCKED,
+        attempt=1,
+        updated_at="2020-01-01T00:00:00Z",
+        message="upstream failed",
+        metadata={"blocked_by": ["stage"], "reason_code": "upstream_failed"},
+    )
+    run_store.write_stage_status(run_id, "blocked", blocked_status)
+    assert run_store.read_stage_status(run_id, "blocked") == blocked_status
+    blocked_dir = run_store.local_stage_dir(run_id, "blocked")
+    assert sorted(path.name for path in blocked_dir.iterdir()) == ["status.json"]
 
     required_files = [
         run_store.local_run_dir(run_id) / "run.json",
@@ -102,7 +135,9 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
         run_store.local_run_dir(run_id) / "stages" / "stage" / "failure.json",
         run_store.local_run_dir(run_id) / "stages" / "stage" / "provenance.json",
         run_store.local_run_dir(run_id) / "stages" / "stage" / "logs" / "stderr.log",
+        run_store.local_run_dir(run_id) / "stages" / "blocked" / "status.json",
         run_store.local_run_dir(run_id) / "plan.json",
+        run_store.local_run_dir(run_id) / "events.jsonl",
         run_store.local_run_dir(run_id) / "artifacts.json",
         artifact_root / "stage",
         run_store.local_config_path(run_id, "raw"),

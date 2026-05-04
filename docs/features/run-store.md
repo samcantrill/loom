@@ -7,8 +7,8 @@ The run store is the persistent state layer for `loom` pipeline runs.
 It exists to make runs inspectable, resumable, debuggable, and safe under
 interruption. It should define the run directory layout, stage state files,
 status transitions, input and output records, fingerprints, logs, execution
-plans, artifact indexes, and atomic write behavior. Locking is post-v0 unless
-atomic/interruption tests expose a concrete need.
+plans, artifact indexes, append-only event records, conservative local run
+locks, and atomic write behavior.
 
 The run store should not know how to execute stages. It should not know how to
 load domain data. It should not own artifact serialization or artifact object
@@ -116,6 +116,8 @@ read and write run user metadata
 read and write run status
 read and write execution plans
 read and write stage status
+append and read run event records
+acquire, read, and release run locks
 read and write stage inputs
 read and write stage outputs
 read and write stage fingerprints
@@ -137,7 +139,8 @@ path normalization
 JSON/YAML file persistence
 atomic file replacement
 local log paths
-local lock files, post-v0
+local event logs
+local lock files
 interrupted-run inspection
 ```
 
@@ -223,6 +226,8 @@ safe directory creation
 basic stale RUNNING detection
 path-aware store errors
 schema version fields in persisted documents
+append-only events.jsonl
+conservative local lock.json
 ```
 
 V0 should support this lifecycle:
@@ -550,12 +555,18 @@ input_inventory.json:
   checksums, and project-supplied source metadata
 
 events.jsonl:
-  append-friendly lifecycle events for inspection or external notification tools
+  append-friendly lifecycle events for inspection and later external
+  notification tools
+
+lock.json:
+  conservative local run lock with token and owner metadata
 ```
 
-These files should remain optional and rebuildable or explainable from durable
-run state where possible. V0 should not require a global run catalog, but the
-local layout should make one easy to rebuild by scanning run directories.
+These files are created only when the corresponding capability is used. Event
+records are audit facts rather than the source of current state, and lock state
+is local coordination state rather than distributed truth. V0 should not require
+a global run catalog, but the local layout should make one easy to rebuild by
+scanning run directories.
 
 ### 7.2 Required v0 Files
 
@@ -878,54 +889,67 @@ defines where this file belongs and how it is written.
 ```python
 from pathlib import Path
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol
+from typing import Protocol
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.locks import RunLockRecord
+from loom.pipeline.status import RunStatusRecord, StageStatusRecord
+from loom.serialization import PlainData
 
 class RunLifecycleStore(Protocol):
-    def create_run(self, run_id: str, *, metadata: Mapping[str, Any] | None = None) -> None: ...
+    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None) -> None: ...
     def open_run(self, run_id: str) -> None: ...
 
 class RunDocumentStore(Protocol):
-    def read_run_document(self, run_id: str) -> Mapping[str, Any] | None: ...
-    def read_run_user_metadata(self, run_id: str) -> Mapping[str, Any]: ...
-    def write_run_user_metadata(self, run_id: str, metadata: Mapping[str, Any]) -> None: ...
+    def read_run_document(self, run_id: str) -> dict[str, PlainData]: ...
+    def read_run_user_metadata(self, run_id: str) -> dict[str, PlainData]: ...
+    def write_run_user_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None: ...
 
 class RunStatusStore(Protocol):
-    def read_run_status(self, run_id: str) -> Mapping[str, Any] | None: ...
-    def write_run_status(self, run_id: str, status: Mapping[str, Any]) -> None: ...
+    def read_run_status(self, run_id: str) -> RunStatusRecord | None: ...
+    def write_run_status(self, run_id: str, status: RunStatusRecord) -> None: ...
 
 class RunPlanStore(Protocol):
-    def read_plan(self, run_id: str) -> Mapping[str, Any] | None: ...
-    def write_plan(self, run_id: str, plan: Mapping[str, Any]) -> None: ...
+    def read_plan(self, run_id: str) -> dict[str, PlainData] | None: ...
+    def write_plan(self, run_id: str, plan: Mapping[str, PlainData]) -> None: ...
 
 class RunArtifactIndexStore(Protocol):
-    def read_artifact_index(self, run_id: str) -> Mapping[str, ArtifactRef]: ...
+    def read_artifact_index(self, run_id: str) -> dict[str, ArtifactRef]: ...
     def write_artifact_index(self, run_id: str, index: Mapping[str, ArtifactRef]) -> None: ...
 
 class RunConfigStore(Protocol):
     def read_config_snapshot(self, run_id: str, name: str) -> str | None: ...
     def write_config_snapshot(self, run_id: str, name: str, content: str) -> None: ...
-    def read_recipe_manifest(self, run_id: str) -> tuple[dict[str, Any], ...] | None: ...
-    def write_recipe_manifest(self, run_id: str, records: Sequence[Mapping[str, Any]]) -> None: ...
+    def read_recipe_manifest(self, run_id: str) -> tuple[dict[str, PlainData], ...] | None: ...
+    def write_recipe_manifest(self, run_id: str, records: Sequence[Mapping[str, PlainData]]) -> None: ...
 
 class RunProvenanceStore(Protocol):
-    def read_provenance_document(self, run_id: str, name: str) -> Mapping[str, Any] | None: ...
-    def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, Any]) -> None: ...
+    def read_provenance_document(self, run_id: str, name: str) -> dict[str, PlainData] | None: ...
+    def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None: ...
+
+class RunEventStore(Protocol):
+    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord: ...
+    def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]: ...
+
+class RunLockStore(Protocol):
+    def acquire_run_lock(self, run_id: str, *, owner: Mapping[str, PlainData] | None = None) -> RunLockRecord: ...
+    def read_run_lock(self, run_id: str) -> RunLockRecord | None: ...
+    def release_run_lock(self, run_id: str, token: str) -> None: ...
 
 class StageStateStore(Protocol):
-    def read_stage_status(self, run_id: str, stage_name: str) -> Mapping[str, Any] | None: ...
-    def write_stage_status(self, run_id: str, stage_name: str, status: Mapping[str, Any]) -> None: ...
-    def read_stage_inputs(self, run_id: str, stage_name: str) -> Mapping[str, ArtifactRef] | None: ...
+    def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None: ...
+    def write_stage_status(self, run_id: str, stage_name: str, status: StageStatusRecord) -> None: ...
+    def read_stage_inputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None: ...
     def write_stage_inputs(self, run_id: str, stage_name: str, inputs: Mapping[str, ArtifactRef], *, attempt: int) -> None: ...
-    def read_stage_outputs(self, run_id: str, stage_name: str) -> Mapping[str, ArtifactRef] | None: ...
+    def read_stage_outputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None: ...
     def write_stage_outputs(self, run_id: str, stage_name: str, outputs: Mapping[str, ArtifactRef], *, attempt: int) -> None: ...
-    def read_stage_fingerprint(self, run_id: str, stage_name: str) -> Mapping[str, Any] | None: ...
-    def write_stage_fingerprint(self, run_id: str, stage_name: str, fingerprint: Mapping[str, Any], *, attempt: int) -> None: ...
-    def read_stage_failure(self, run_id: str, stage_name: str) -> Mapping[str, Any] | None: ...
-    def write_stage_failure(self, run_id: str, stage_name: str, failure: Mapping[str, Any], *, attempt: int) -> None: ...
-    def read_stage_provenance(self, run_id: str, stage_name: str) -> Mapping[str, Any] | None: ...
-    def write_stage_provenance(self, run_id: str, stage_name: str, provenance: Mapping[str, Any], *, attempt: int) -> None: ...
+    def read_stage_fingerprint(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def write_stage_fingerprint(self, run_id: str, stage_name: str, fingerprint: Mapping[str, PlainData], *, attempt: int) -> None: ...
+    def read_stage_failure(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def write_stage_failure(self, run_id: str, stage_name: str, failure: Mapping[str, PlainData], *, attempt: int) -> None: ...
+    def read_stage_provenance(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def write_stage_provenance(self, run_id: str, stage_name: str, provenance: Mapping[str, PlainData], *, attempt: int) -> None: ...
 
 class StageLogStore(Protocol):
     def read_stage_log(self, run_id: str, stage_name: str, stream: str) -> str | None: ...
@@ -942,6 +966,8 @@ class RunStore(
     RunArtifactIndexStore,
     RunConfigStore,
     RunProvenanceStore,
+    RunEventStore,
+    RunLockStore,
     StageStateStore,
     StageLogStore,
     StageWorkspaceStore,
@@ -1178,11 +1204,9 @@ asks to repair or ignore it.
 
 ### 13.1 V0 Locking Policy
 
-V0 does not include a lock manager by default. It relies on atomic writes and
-conservative resume validation. Revisit run-level locking if atomic-write,
-interrupted-run, or concurrent-run tests expose a concrete race.
-
-Post-v0, a simple run-level lock may be added.
+V0 includes a conservative local run-level lock capability. It is intended to
+prevent obvious same-run concurrent local writers, not to provide distributed
+coordination.
 
 Purpose:
 
@@ -1192,38 +1216,44 @@ prevent duplicate stage execution during resume
 make interrupted runs easier to detect
 ```
 
+`RunLockStore` is backend-neutral and does not expose local paths. The local
+implementation stores the lock at `<run_dir>/lock.json`.
+
 ### 13.2 Lock File
 
-Post-v0 recommended `lock` content:
+Current `lock.json` content:
 
-
-```text
-schema_version
-run_id
-created_at
-owner_pid
-owner_host
-command
+```json
+{
+  "schema_version": 1,
+  "run_id": "run-1",
+  "token": "<uuid4 hex>",
+  "acquired_at": "2026-01-01T00:00:00Z",
+  "owner": {
+    "pid": 12345,
+    "hostname": "host",
+    "metadata": {}
+  }
+}
 ```
 
 ### 13.3 Stale Locks
 
-Post-v0 stale lock handling should be conservative.
-
-
 Recommended behavior:
 
 ```text
-if lock owner is clearly gone on same host, allow recovery with warning
-if owner cannot be verified, fail with clear message
-provide force-unlock later
+missing lock: release fails clearly
+token mismatch: release fails clearly and keeps the lock
+corrupt lock: read/release fails clearly and does not remove the file
+stale-owner detection: deferred
+force-unlock command: deferred
 ```
 
 Do not implement distributed locking in v0.
 
 ### 13.4 Stage-Level Locks
 
-Stage-level locks can be deferred until concurrent execution or controller modes
+Stage-level locks are deferred until concurrent execution or controller modes
 need them.
 
 The local layout should not make stage-level locks impossible later.
@@ -1244,9 +1274,11 @@ stage statuses
 missing state files
 corrupt state files
 artifact index entries
+lock state when lock.json exists
 ```
 
-Lock state is post-v0 unless a lock manager is added later.
+Lock state should be reported as conservative local coordination state. It must
+not be treated as proof that a remote or distributed owner is alive.
 
 ### 14.2 Interrupted RUNNING State
 
@@ -1377,7 +1409,9 @@ class RunNotFoundError(RunStoreError): ...
 class StageStateNotFoundError(RunStoreError): ...
 class CorruptRunStateError(RunStoreError): ...
 class UnsafeRunPathError(RunStoreError): ...
-class RunLockedError(RunStoreError): ...
+class RunLockError(RunStoreError): ...
+class RunLockConflictError(RunLockError): ...
+class RunLockReleaseError(RunLockError): ...
 class AtomicWriteError(RunStoreError): ...
 ```
 
@@ -1399,7 +1433,7 @@ Reason:
   invalid JSON at line 1 column 12
 ```
 
-### 17.2 Post-v0 Lock Error Example
+### 17.2 Lock Error Example
 
 ```text
 Run directory is locked.
@@ -1408,7 +1442,7 @@ Run:
   example
 
 Lock:
-  runs/example/lock
+  runs/example/lock.json
 
 Owner:
   host=login01 pid=12345
@@ -1521,7 +1555,7 @@ Build in this order:
 11. Add scan/recovery helpers for existing runs.
 12. Connect `PipelineRunner` to `RunStore`.
 13. Add CLI-backed status/log/artifact inspection later.
-14. Add run-level lock support post-v0 only if needed.
+14. Add append-only run events and conservative local run-level locks.
 
 Each step should include tests before higher-level pipeline code depends on it.
 

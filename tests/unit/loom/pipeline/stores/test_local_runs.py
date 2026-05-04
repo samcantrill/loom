@@ -6,9 +6,17 @@ from pathlib import Path
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline import RunStatus, StageStatus
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
-from loom.pipeline.stores import CorruptStoreDocumentError, LocalRunStore, atomic_write_json
+from loom.pipeline.stores import (
+    CorruptStoreDocumentError,
+    LocalRunStore,
+    RunLockConflictError,
+    RunLockReleaseError,
+    RunNotFoundError,
+    atomic_write_json,
+)
 from loom.serialization import PlainData
 
 
@@ -48,6 +56,102 @@ def test_local_run_metadata_optional_reads(tmp_path: Path) -> None:
     assert metadata["metadata"] == {"a": 1}
     assert store.read_plan("run1") is None
     assert store.read_artifact_index("run1") == {}
+    assert store.read_events("run1") == ()
+
+
+def test_local_run_appends_and_reads_events(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+
+    first = store.append_event(
+        "run1",
+        PipelineEvent(
+            scope=EventScope.run(),
+            event_type="run.created",
+            payload={"source": "test"},
+            timestamp="2020-01-01T00:00:00Z",
+        ),
+    )
+    second = store.append_event(
+        "run1",
+        PipelineEvent(scope=EventScope.stage("build"), event_type="stage.started"),
+    )
+
+    assert first.sequence == 1
+    assert second.sequence == 2
+    assert [record.sequence for record in store.read_events("run1")] == [1, 2]
+    assert store.read_events("run1")[0].payload == {"source": "test"}
+    assert (store.local_run_dir("run1") / "events.jsonl").read_text(
+        encoding="utf-8"
+    ).count("\n") == 2
+
+
+def test_local_run_rejects_corrupt_event_log(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    path = store.local_run_dir("run1") / "events.jsonl"
+    path.write_text(
+        '{"schema_version":1,"run_id":"run1","sequence":2,"timestamp":"2020-01-01T00:00:00Z","scope":{"kind":"RUN","stage_name":null},"event_type":"run.created","payload":{}}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CorruptStoreDocumentError) as exc_info:
+        store.read_events("run1")
+    assert "sequence gap" in str(exc_info.value)
+    assert f"{path}:1" in str(exc_info.value)
+
+
+def test_local_run_acquires_reads_and_releases_lock(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+
+    record = store.acquire_run_lock("run1", owner={"worker": "unit"})
+
+    assert record.run_id == "run1"
+    assert record.token
+    assert record.owner["metadata"] == {"worker": "unit"}
+    assert isinstance(record.owner["pid"], int)
+    assert isinstance(record.owner["hostname"], str)
+    assert store.read_run_lock("run1") == record
+    assert (store.local_run_dir("run1") / "lock.json").exists()
+
+    store.release_run_lock("run1", record.token)
+
+    assert store.read_run_lock("run1") is None
+    assert not (store.local_run_dir("run1") / "lock.json").exists()
+
+
+def test_local_run_lock_conflict_and_release_errors_preserve_lock(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    record = store.acquire_run_lock("run1")
+
+    with pytest.raises(RunLockConflictError):
+        store.acquire_run_lock("run1")
+
+    with pytest.raises(RunLockReleaseError, match="mismatch"):
+        store.release_run_lock("run1", "wrong-token")
+
+    assert store.read_run_lock("run1") == record
+
+
+def test_local_run_lock_requires_existing_run(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+
+    with pytest.raises(RunNotFoundError):
+        store.acquire_run_lock("missing")
+
+
+def test_local_run_rejects_corrupt_lock_document(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    lock_path = store.local_run_dir("run1") / "lock.json"
+    lock_path.write_text('{"schema_version":1,"run_id":"other"}\n', encoding="utf-8")
+
+    with pytest.raises(CorruptStoreDocumentError):
+        store.read_run_lock("run1")
+    with pytest.raises(RunLockReleaseError):
+        store.release_run_lock("run1", "token")
 
 
 def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
@@ -145,6 +249,26 @@ def test_local_run_stage_docs_and_logs(tmp_path: Path) -> None:
 
     store.write_stage_log("run1", "stage", "stdout", "line1\n")
     assert store.read_stage_log("run1", "stage", "stdout") == "line1\n"
+
+
+def test_local_run_reads_and_writes_blocked_stage_status_only(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    status = StageStatusRecord(
+        run_id="run1",
+        stage_name="blocked",
+        status=StageStatus.BLOCKED,
+        attempt=1,
+        updated_at="2020-01-01T00:00:00Z",
+        message="upstream failed",
+        metadata={"blocked_by": ["stage"], "reason_code": "upstream_failed"},
+    )
+
+    store.write_stage_status("run1", "blocked", status)
+
+    assert store.read_stage_status("run1", "blocked") == status
+    stage_dir = store.local_stage_dir("run1", "blocked")
+    assert sorted(path.name for path in stage_dir.iterdir()) == ["status.json"]
 
 
 def test_local_run_rejects_corrupt_stage_plain_mapping(tmp_path: Path) -> None:

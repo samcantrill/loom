@@ -4,14 +4,19 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.locks import RunLockRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores import (
     ArtifactStore,
     LocalArtifactStore,
+    LocalRunStore,
     LocalRunStorePaths,
     RunArtifactIndexStore,
     RunConfigStore,
     RunDocumentStore,
+    RunEventStore,
+    RunLockStore,
     RunLifecycleStore,
     RunProvenanceStore,
     RunPlanStore,
@@ -118,6 +123,38 @@ class DummyRunStore:
         return {}
 
     def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None:
+        return None
+
+    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord:
+        return PipelineEventRecord(
+            run_id=run_id,
+            sequence=1,
+            timestamp="2020-01-01T00:00:00Z",
+            scope=EventScope.run(),
+            event_type=event.event_type,
+            payload=event.payload,
+        )
+
+    def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]:
+        return ()
+
+    def acquire_run_lock(
+        self,
+        run_id: str,
+        *,
+        owner: Mapping[str, PlainData] | None = None,
+    ) -> RunLockRecord:
+        return RunLockRecord(
+            run_id=run_id,
+            token="token",
+            acquired_at="2020-01-01T00:00:00Z",
+            owner=owner or {},
+        )
+
+    def read_run_lock(self, run_id: str) -> RunLockRecord | None:
+        return None
+
+    def release_run_lock(self, run_id: str, token: str) -> None:
         return None
 
     def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
@@ -257,10 +294,20 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunArtifactIndexStore)
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)
+    assert isinstance(DummyRunStore(), RunEventStore)
+    assert isinstance(DummyRunStore(), RunLockStore)
     assert isinstance(DummyRunStore(), StageStateStore)
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)
     assert isinstance(DummyRunStore(), RunStore)
+
+
+def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+
+    assert isinstance(store, RunEventStore)
+    assert isinstance(store, RunLockStore)
+    assert isinstance(store, RunStore)
 
 
 def test_fake_run_store_does_not_satisfy_local_paths() -> None:
