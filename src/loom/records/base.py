@@ -88,7 +88,7 @@ class Record:
         return cls(
             record_id=record_id,
             resources=resources,
-            metadata=cast(Mapping[str, PlainData], freeze_plain_data(data.get("metadata", {}), path="metadata")),
-            annotations=cast(Mapping[str, PlainData], freeze_plain_data(data.get("annotations", {}), path="annotations")),
-            provenance=cast(Mapping[str, PlainData], freeze_plain_data(data.get("provenance", {}), path="provenance")),
+            metadata=cast(Mapping[str, PlainData], data.get("metadata", {})),
+            annotations=cast(Mapping[str, PlainData], data.get("annotations", {})),
+            provenance=cast(Mapping[str, PlainData], data.get("provenance", {})),
         )

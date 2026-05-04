@@ -1,9 +1,12 @@
 """Unit tests for records and manifests."""
 
+from typing import Any, cast
+
 import pytest
 
 from loom.records import DuplicateRecordError, InMemoryManifest, ManifestView, Record, HasResource, MetadataEquals, MetadataIn, RecordNotFoundError
 from loom.refs import ResourceRef
+from loom.serialization import PlainData
 
 
 def _make_record(value: str) -> Record:
@@ -15,8 +18,12 @@ def test_record_round_trip_and_resource_lookup() -> None:
     record = Record(
         record_id="sample",
         resources={"input": resource},
-        metadata={"split": "train"},
-        annotations={"stage": "prep"},
+        metadata=cast(dict[str, PlainData], {"split": {"name": "train", "folds": [1, 2]}}),
+        annotations=cast(
+            dict[str, PlainData],
+            {"stage": {"name": "prep", "flags": ["reviewed"]}},
+        ),
+        provenance=cast(dict[str, PlainData], {"sources": [{"uri": "file:///x"}]}),
     )
     assert record.has_resource("input")
     assert record.get_resource("input") == resource
@@ -77,17 +84,21 @@ def test_record_from_dict_rejects_invalid_payloads() -> None:
 
 
 def test_record_and_manifest_metadata_are_immutable_and_constructor_inputs_are_copied() -> None:
-    resource_metadata = {"owner": "team", "tags": ["train", "valid"]}
-    resource = ResourceRef(uri="file:///x", resource_type="dataset", metadata=resource_metadata)
-    metadata = {"split": {"name": "train", "ratios": [0.8, 0.2]}}
-    annotations = {"audit": {"notes": ["first"]}}
-    provenance = {"lineage": {"steps": ["raw"]}}
+    resource_metadata: dict[str, Any] = {"owner": "team", "tags": ["train", "valid"]}
+    resource = ResourceRef(
+        uri="file:///x",
+        resource_type="dataset",
+        metadata=cast(dict[str, PlainData], resource_metadata),
+    )
+    metadata: dict[str, Any] = {"split": {"name": "train", "ratios": [0.8, 0.2]}}
+    annotations: dict[str, Any] = {"audit": {"notes": ["first"]}}
+    provenance: dict[str, Any] = {"lineage": {"steps": ["raw"]}}
     record = Record(
         record_id="sample",
         resources={"primary": resource},
-        metadata=metadata,
-        annotations=annotations,
-        provenance=provenance,
+        metadata=cast(dict[str, PlainData], metadata),
+        annotations=cast(dict[str, PlainData], annotations),
+        provenance=cast(dict[str, PlainData], provenance),
     )
 
     metadata["split"]["ratios"][0] = 0.5
@@ -97,28 +108,33 @@ def test_record_and_manifest_metadata_are_immutable_and_constructor_inputs_are_c
 
     assert record.resources["primary"].metadata["owner"] == "team"
     assert record.resources["primary"].metadata["tags"] == ("train", "valid")
-    assert record.metadata["split"]["ratios"] == (0.8, 0.2)
+    split = cast(dict[str, Any], record.metadata["split"])
+    assert split["ratios"] == (0.8, 0.2)
     assert record.annotations["audit"] == {"notes": ("first",)}
     assert record.provenance["lineage"] == {"steps": ("raw",)}
     with pytest.raises(TypeError):
-        record.resources["primary"] = resource
+        cast(Any, record.resources)["primary"] = resource
     with pytest.raises(TypeError):
-        record.metadata["split"]["ratios"][0] = 0.1
+        cast(Any, split["ratios"])[0] = 0.1
 
-    snapshot = record.to_dict()
+    snapshot = cast(dict[str, Any], record.to_dict())
     snapshot["metadata"]["split"]["ratios"][0] = 0.9
     snapshot["annotations"]["audit"]["notes"].append("extra")
     snapshot["provenance"]["lineage"]["steps"].append("post")
     snapshot["resources"]["primary"]["metadata"]["owner"] = "hacked"
 
-    assert record.metadata["split"]["ratios"] == (0.8, 0.2)
+    split_after = cast(dict[str, Any], record.metadata["split"])
+    assert split_after["ratios"] == (0.8, 0.2)
     assert record.annotations["audit"] == {"notes": ("first",)}
     assert record.provenance["lineage"] == {"steps": ("raw",)}
 
 
 def test_manifest_metadata_is_immutable_and_to_dict_returns_mutable_plain_data() -> None:
-    manifest_metadata = {"owner": {"team": "analysis", "labels": ["x", "y"]}}
-    manifest = InMemoryManifest(records=(_make_record("a"),), metadata=manifest_metadata)
+    manifest_metadata: dict[str, Any] = {"owner": {"team": "analysis", "labels": ["x", "y"]}}
+    manifest = InMemoryManifest(
+        records=(_make_record("a"),),
+        metadata=cast(dict[str, PlainData], manifest_metadata),
+    )
     manifest_view = ManifestView(source=manifest)
 
     manifest_metadata["labels"] = ["z"]
@@ -126,11 +142,11 @@ def test_manifest_metadata_is_immutable_and_to_dict_returns_mutable_plain_data()
 
     assert manifest.metadata["owner"] == {"team": "analysis", "labels": ("x", "y")}
     with pytest.raises(TypeError):
-        manifest.metadata["owner"]["team"] = "ops"
+        cast(Any, manifest.metadata["owner"])["team"] = "ops"
     with pytest.raises(TypeError):
-        manifest.metadata["new"] = 1
+        cast(Any, manifest.metadata)["new"] = 1
 
-    manifest_dict = manifest.to_dict()
+    manifest_dict = cast(dict[str, Any], manifest.to_dict())
     manifest_dict["metadata"]["owner"]["labels"].append("z")
     manifest_dict["records"][0]["metadata"]["tag"] = "override"
 
@@ -138,7 +154,7 @@ def test_manifest_metadata_is_immutable_and_to_dict_returns_mutable_plain_data()
 
     filtered_view = manifest_view.filter(MetadataEquals("tag", "a"))
     assert filtered_view.to_dict()["metadata"] == {}
-    filtered_dict = filtered_view.to_dict()
+    filtered_dict = cast(dict[str, Any], filtered_view.to_dict())
     filtered_dict["metadata"]["team"] = "changed"
 
     assert manifest_view.metadata == {}
@@ -153,6 +169,22 @@ def test_in_memory_manifest_from_dict_rejects_unknown_fields() -> None:
                 "unexpected": True,
             },
         )
+
+
+def test_in_memory_manifest_from_dict_round_trips_nested_metadata() -> None:
+    manifest = InMemoryManifest(
+        records=(_make_record("a"),),
+        metadata=cast(
+            dict[str, PlainData],
+            {"owner": {"team": "analysis", "labels": ["x", "y"]}},
+        ),
+    )
+
+    restored = InMemoryManifest.from_dict(manifest.to_dict())
+
+    assert restored == manifest
+    owner = cast(dict[str, Any], restored.metadata["owner"])
+    assert owner["labels"] == ("x", "y")
 
 
 def test_in_memory_manifest_from_dict_rejects_unsupported_schema_version() -> None:

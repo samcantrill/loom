@@ -97,7 +97,7 @@ class ArtifactRef:
             fingerprint=_ensure_digest(data.get("fingerprint"), "fingerprint"),
             producer_stage=_ensure_stage_id(data.get("producer_stage")),
             created_at=_ensure_str_or_none(data.get("created_at"), "created_at", parse=True),
-            metadata=cast(Mapping[str, PlainData], freeze_plain_data(data.get("metadata", {}), path="metadata")),
+            metadata=cast(Mapping[str, PlainData], data.get("metadata", {})),
         )
 
 

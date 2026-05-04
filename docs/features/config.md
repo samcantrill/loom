@@ -317,34 +317,7 @@ experiments or sweeps.
 
 `_replace_` is allowed only in mappings. It is a composition marker and should
 not appear in the resolved config. When a mapping with `_replace_: true` has no
-destination value to replace, the marker is stripped and the mapping is used as is.
-
-## 6. Dependency and Validation Boundary
-
-In this phase, configuration composition remains feature-complete in `loom.config` but
-its external dependencies are optional:
-
-- `omegaconf`
-- `pydantic`
-- `pyyaml`
-
-These remain published under `[project.optional-dependencies].config` so core runtime
-imports and import-boundary tests can run without optional installation. Runtime
-entry paths that require configuration loading, interpolation, or recipe
-resolution require `loom[config]`.
-
-The import boundary contract is:
-
-- `import loom` and core primitive/records/artifacts/pipeline imports succeed without
-  config extras.
-- `import loom.config` stays import-safe.
-- Config-only APIs that need optional dependencies fail with a clear
-  `loom[config]` guidance error when the extra is missing.
-
-Suite evidence is split between:
-
-- no-extra validation targets for default behavior
-- `test-config-extra` targets for config composition/interpolation/recipe behavior
+destination value to replace, the marker is stripped and the mapping is used as
 written.
 
 When `_include_` appears while replacing an existing mapping, `_replace_: true`
@@ -398,6 +371,33 @@ When stable `loom` schemas validate part of the config, the manifest or
 provenance should identify the schema boundary, schema version, and config path.
 If schema defaults or type coercions affect the resolved config, those effects
 should be visible in the resolved config and traceable in provenance.
+
+### 5.12 Dependency and Validation Boundary
+
+Configuration composition remains feature-complete in `loom.config`, but its
+external dependencies are optional:
+
+- `omegaconf`
+- `pydantic`
+- `pyyaml`
+
+These remain published under `[project.optional-dependencies].config` so core
+runtime imports and import-boundary tests can run without optional installation.
+Runtime entry paths that require configuration loading, interpolation, or recipe
+resolution require `loom[config]`.
+
+The import boundary contract is:
+
+- `import loom` and core primitive/records/artifacts/pipeline imports succeed
+  without config extras.
+- `import loom.config` stays import-safe.
+- Config-only APIs that need optional dependencies fail with a clear
+  `loom[config]` guidance error when the extra is missing.
+
+Suite evidence is split between:
+
+- no-extra validation targets for default behavior
+- `test-config-extra` targets for config composition/interpolation/recipe behavior.
 
 ---
 

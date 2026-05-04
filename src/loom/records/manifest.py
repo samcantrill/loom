@@ -104,10 +104,7 @@ class InMemoryManifest:
         deserialized = [Record.from_dict(item) for item in records]
         return cls(
             records=tuple(deserialized),
-            metadata=cast(
-                dict[str, PlainData],
-                freeze_plain_data(payload.get("metadata", {}), path="metadata"),
-            ),
+            metadata=cast(dict[str, PlainData], payload.get("metadata", {})),
         )
 
     def _records(self) -> tuple[Record, ...]:

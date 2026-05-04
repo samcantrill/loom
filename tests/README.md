@@ -47,4 +47,5 @@ Phase 1 splits validation into two install surfaces:
   `--extra config` in a separate isolated environment.
 
 `make test-summary` documents both rows so reviewers can see executed config
-evidence versus default no-extra evidence.
+evidence versus default no-extra evidence. The summary e2e row runs with
+`loom[config]` when the public workflow under test is config-backed.

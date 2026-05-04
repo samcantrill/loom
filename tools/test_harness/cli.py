@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ DEFAULT_MARKER_EXPR = "not slow and not slurm and not network and not optional_d
 CONFIG_EXTRA_MARKER_EXPR = "optional_dependency"
 LOCAL_ALL_MARKER_EXPR = "not slurm and not network and not optional_dependency"
 SUMMARY_OUTPUT = Path("build/test-summary.md")
+UV_CACHE_DIR = "/tmp/uv-cache"
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return result.returncode
 
     if args.command == "summary":
-        results = [run_suite(name) for name in SUITES]
+        results = [run_summary_suite(name) for name in SUITES]
         write_summary(args.output, results)
         print(f"Wrote test summary to {args.output}")
         for result in results:
@@ -79,6 +81,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1 if any(result.returncode != 0 for result in results) else 0
 
     raise AssertionError(f"unhandled command: {args.command}")
+
+
+def run_summary_suite(name: str) -> Result:
+    command = [
+        "uv",
+        "run",
+        "--isolated",
+        "--locked",
+        "--group",
+        "dev",
+    ]
+    if name in {"config-extra", "e2e"}:
+        command.extend(["--extra", "config"])
+    command.extend(["python", "-m", "tools.test_harness", "run", name])
+
+    env = os.environ.copy()
+    env.setdefault("UV_CACHE_DIR", UV_CACHE_DIR)
+    display_command = f"UV_CACHE_DIR={env['UV_CACHE_DIR']} " + " ".join(command)
+
+    start = time.monotonic()
+    completed = subprocess.run(
+        command,
+        check=False,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    duration = time.monotonic() - start
+    status = "passed" if completed.returncode == 0 else "failed"
+    return Result(
+        suite=name,
+        command=display_command,
+        status=status,
+        duration=duration,
+        returncode=completed.returncode,
+        output=completed.stdout,
+    )
 
 
 def run_suite(name: str) -> Result:

@@ -278,43 +278,6 @@ ArtifactRef
 RunProvenance
 StageProvenance
 dataclass instances with plain-data fields
-
-## 6. Immutability and Serialization Helpers
-
-`loom.serialization` owns both recursive immutability helpers and versioned
-document helpers used by persisted models:
-
-```python
-freeze_plain_data(value, *, path="$") -> FrozenPlainData
-thaw_plain_data(value, *, path="$") -> object
-require_mapping(data, *, path="$") -> dict[str, object]
-validate_document_fields(data, *, required: set[str], optional: set[str] = ..., path="$")
-load_versioned_document(..., migrations=None, ...)
-```
-
-`freeze_plain_data()` normalizes plain-data structures for storage by recursively
-converting:
-
-- mappings to `MappingProxyType`
-- sequences to tuples
-
-This keeps nested plain data immutable after construction.
-
-`thaw_plain_data()` must recurse nested immutable structures back to mutable
-collections for public output paths so callers continue to receive mutable
-`dict`/`list` values from `to_dict`, manifest materialization, or similar.
-
-## 7. Document Schema Helpers and Migration Ownership
-
-`loom.serialization.schema` is the shared home for persisted-document shape checks.
-It provides schema version extraction and support checks plus:
-
-- required/optional field validation
-- unknown-field rejection defaults
-- versioned document loading with per-document migration tables
-
-Migrations are owned by each persisted-document module and passed into the helper
-API. This keeps schema evolution reviewable and avoids process-wide registries.
 ```
 
 ### 5.3 Serialization
@@ -904,6 +867,10 @@ sequence indexes use brackets
 Normalization should return new containers.
 
 It should not mutate input mappings, lists, dataclasses, or metadata fields.
+Frozen core value objects use `freeze_plain_data()` to recursively convert
+mappings to `MappingProxyType` and sequences to tuples at construction time.
+Public output paths use `thaw_plain_data()` so callers receive independent
+mutable `dict` and `list` trees from `to_dict()` and related helpers.
 
 Reason:
 
@@ -1282,14 +1249,14 @@ Recommended functions:
 get_schema_version
 require_schema_version
 check_supported_schema
-ensure_mapping
-require_field
-optional_field
-require_str
-optional_str
+require_mapping
+validate_document_fields
+load_versioned_document
 ```
 
 The goal is clear failure, not a full schema-validation framework.
+Migrations are owned by each persisted-document module and passed into
+`load_versioned_document()` rather than registered in global process state.
 
 ### 13.2 Version Field Names
 

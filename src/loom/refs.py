@@ -68,7 +68,7 @@ class ResourceRef:
             codec_key=_ensure_codec_key(data.get("codec_key", None)),
             schema_version=_require_schema_version(data.get("schema_version", 1)),
             checksum=_ensure_digest(data.get("checksum")),
-            metadata=cast(Mapping[str, PlainData], freeze_plain_data(data.get("metadata", {}), path="metadata")),
+            metadata=cast(Mapping[str, PlainData], data.get("metadata", {})),
         )
 
 

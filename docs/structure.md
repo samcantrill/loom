@@ -258,40 +258,6 @@ src/loom/
       __init__.py
       base.py
       catalog.py
-
----
-
-## 4. Cross-cutting Contracts
-
-### 4.1 Recursive immutability
-
-Core value objects under `refs`, `artifacts`, `records`, and `pipeline` store
-nested plain mappings and sequences in immutable structures at construction time.
-Public serialization helpers (for example `to_dict`) must expose thawed
-`dict`/`list` trees so consumers can mutate copies without mutating object
-internals.
-
-### 4.2 Schema helper ownership
-
-`loom.serialization.schema` owns shared persisted-document validation:
-
-```text
-- recursive plain mapping/sequence validation helpers
-- required/optional field validation
-- schema-version extraction and support checks
-- versioned-document loader and migration dispatch
-```
-
-Migrations remain document-family-owned through explicit migration tables passed to
-the schema helper entrypoints. There is no global migration registry.
-
-### 4.3 Optional config dependencies and validation split
-
-Config-only dependencies are published under `loom[config]`; core imports should
-work without them. Validation is split into:
-
-- `test-no-extra` (default suites without config extras)
-- `test-config-extra` (optional dependency-marked tests with `--extra config`)
       expansion.py
       errors.py
 
@@ -381,6 +347,31 @@ work without them. Validation is split into:
 This tree is intentionally more specific than [loom.md](loom.md). This document
 owns package-versus-file choices and should be updated whenever the target source
 layout changes.
+
+### 3.1 Cross-cutting contracts
+
+Core value objects under `refs`, `artifacts`, `records`, and `pipeline` store
+nested plain mappings and sequences in immutable structures at construction time.
+Public serialization helpers such as `to_dict()` must expose thawed `dict` and
+`list` trees so consumers can mutate copies without mutating object internals.
+
+`loom.serialization.schema` owns shared persisted-document validation:
+
+```text
+- recursive plain mapping/sequence validation helpers
+- required/optional field validation
+- schema-version extraction and support checks
+- versioned-document loader and migration dispatch
+```
+
+Migrations remain document-family-owned through explicit migration tables passed
+to the schema helper entrypoints. There is no global migration registry.
+
+Config-only dependencies are published under `loom[config]`; core imports should
+work without them. Validation is split into:
+
+- `test-no-extra` (default suites without config extras)
+- `test-config-extra` (optional dependency-marked tests with `--extra config`)
 
 ---
 

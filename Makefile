@@ -31,7 +31,7 @@ test-all:
 	uv run python -m tools.test_harness run all
 
 test-summary:
-	uv run python -m tools.test_harness summary
+	UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev python -m tools.test_harness summary
 
 lint:
 	uv run ruff check .

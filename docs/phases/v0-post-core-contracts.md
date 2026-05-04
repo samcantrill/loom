@@ -379,16 +379,97 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
 
 - Draft plan: completed in draft commit `f0a9fdf258645960b78128e14accb40c3a86dcde`.
 - Final phase execution plan: completed in this artifact.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary: completed in implementation commits `b511bb3`, `8327928`,
+  `38cd4aa`, `9d104ba`, `df9d28e`, `efe74e6`, and `45ee6a6`.
+- Implementation validation: targeted refinement checks passed as recorded below;
+  final `make validate-pr` remains for PR preparation.
+- Refinement summary: completed in `fix: refine after validation`.
 - PR preparation: pending.
 - Stack maintenance: pending.
 - Remaining blockers: none.
+
+### Phase Refinement Report
+
+#### Metadata
+
+- Phase: Phase 1 - Core Contracts, Schemas, And Packaging
+- Branch: `codex/v0-post-core-contracts`
+- Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-core-contracts`
+- Phase execution plan: `docs/phases/v0-post-core-contracts.md`
+- Refiner: `loom_phase_refiner`
+- Refinement date: 2026-05-04
+- Phase implementation refinement budget status after this pass: used
+
+#### Refinement Scope
+
+- Validation output reviewed: existing `build/test-summary.md`, prior slice
+  notes in this phase plan, focused local unit tests, isolated `test-no-extra`,
+  isolated `test-config-extra`, local `test-summary`, targeted Ruff, and
+  targeted Pyright.
+- Blocking issues caused by this phase:
+  - Nested metadata round trips through selected `from_dict()` readers could
+    double-freeze already frozen plain data and reject nested mapping values.
+  - `make test-summary` recorded the config-extra row from the ambient
+    environment instead of forcing isolated no-extra/config-extra install
+    surfaces; the isolated no-extra e2e summary row also failed because the
+    current e2e workflow is config-backed.
+  - The docs slice inserted Phase 1 notes inside existing Markdown code blocks
+    and paragraphs in `docs/structure.md`, `docs/features/serialization.md`,
+    and `docs/features/config.md`.
+- Issues confirmed out of scope: final `make validate-pr` and final PR body
+  suite evidence are reserved for `loom_pr_preparer`; no store/context,
+  `ArtifactAddress`, runtime/event/lock, factory/fingerprint, planner, catalog,
+  or runner lifecycle work was attempted.
+
+#### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Nested `from_dict()` metadata double-freeze | Let constructors own final freeze normalization in `ResourceRef`, `ArtifactRef`, `Record`, and `InMemoryManifest`; added nested round-trip coverage. | Focused refs/artifacts/records unit tests passed with 23 tests. |
+| Summary harness install-surface contamination | Made `summary` spawn isolated suite runs, made the config-extra row use `--extra config`, and made the config-backed e2e summary row run with `--extra config`. | `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra rows. |
+| Markdown insertion breakage | Moved Phase 1 doc additions into coherent sections and restored code-block/paragraph structure in structure, serialization, and config docs. | Markdown fence counts are balanced; targeted validation and summary checks passed. |
+| Pyright noise in dynamic PlainData regression tests | Added local casts around intentional nested PlainData mutation probes. | Targeted Pyright passed with 0 errors. |
+
+#### Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/test_refs.py tests/unit/loom/test_artifacts.py tests/unit/loom/test_records.py -q
+result: passed, 23 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-no-extra
+result: passed, 304 passed, 9 skipped
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-config-extra
+result: passed, 102 passed, 305 deselected
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: failed before harness refinement because the isolated no-extra e2e row collected only a config-backed skip; passed after refinement with package, unit, contract, integration, e2e, and config-extra rows passing
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/refs.py src/loom/artifacts.py src/loom/records/base.py src/loom/records/manifest.py tools/test_harness/cli.py tests/unit/loom/test_refs.py tests/unit/loom/test_artifacts.py tests/unit/loom/test_records.py
+result: passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/refs.py src/loom/artifacts.py src/loom/records/base.py src/loom/records/manifest.py tools/test_harness/cli.py tests/unit/loom/test_refs.py tests/unit/loom/test_artifacts.py tests/unit/loom/test_records.py
+result: passed, 0 errors
+```
+
+#### Remaining Blockers
+
+- None identified in this refinement pass.
+
+#### PR Preparation Handoff
+
+- Completion notes updated in phase execution plan: yes.
+- Budget status updated: yes, phase implementation refinement marked `used`; PR
+  review remains `unused`.
+- Final validation recommended: run `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  and rerun `UV_CACHE_DIR=/tmp/uv-cache make test-summary` during PR
+  preparation.
+- Suite evidence still needed: final PR body evidence for `make validate-pr` and
+  the final `make test-summary` artifact.
