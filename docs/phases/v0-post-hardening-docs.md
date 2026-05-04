@@ -8,7 +8,9 @@
 - Phase execution plan path: `docs/phases/v0-post-hardening-docs.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 8 - Hardening, Docs, And Migration Notes`
-- PR: pending
+- PR: pending. PR body prepared at
+  `docs/phases/v0-post-hardening-docs-pr-body.md`; PR creation and target
+  verification are owned by PR preparation.
 - Stack predecessor: none. Serial human merge gate is active and this phase is
   not stacked on any predecessor branch.
 - Base branch: `develop` at `ef5e4522e2d04b549b44ee0f0b7748ff765ed664`
@@ -44,7 +46,8 @@
   CLI/sweep behavior, fixed focused e2e optional-config import ordering, and
   added targeted type hardening for the lock-store helper.
 - PR review budget: unused.
-- PR body draft/refine budget: unused.
+- PR body draft/refine budget: fast-path draft used during PR preparation;
+  refine not needed.
 - Setup limitations: no remote synchronization or validation commands were run
   during planning. The branch and worktree were created from the local
   `develop` checkout supplied by the manager.
@@ -69,6 +72,40 @@
 - Remaining blockers: none known. PR preparation still owns final
   `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` evidence.
+
+## PR Preparation Evidence
+
+- PR preparation pass: in progress on 2026-05-05.
+- Branch confirmed: `codex/v0-post-hardening-docs`.
+- Target branch confirmed: `develop`.
+- Stack predecessor confirmed: none.
+- Final scope inspection: docs, migration notes, downstream roadmap alignment,
+  phase artifact, and focused e2e coverage only; no runtime feature files are
+  changed in the final Phase 8 diff.
+- Cleanliness check: `git diff --check develop...HEAD` passed.
+- Validation gate:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed. Ruff passed, Pyright
+  reported 0 errors, the default harness passed with 406 passed and 9 skipped,
+  the config-extra harness passed with 108 passed and 411 deselected, and
+  `uv build` produced the sdist and wheel.
+- Suite evidence:
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+  `build/test-summary.md`.
+
+| Suite | Status | Duration |
+| --- | --- | ---: |
+| package | passed | 2.99s |
+| unit | passed | 2.66s |
+| contract | passed | 1.03s |
+| integration | passed | 1.44s |
+| e2e | passed | 2.58s |
+| config-extra | passed | 5.54s |
+
+- Reviewer notification plan: after opening or discovering the PR, request
+  `samcantrill` as reviewer. If GitHub rejects because the authenticated
+  account or PR author is `samcantrill`, add an immediate PR comment mentioning
+  `@samcantrill` and record the fallback here.
+- Remaining blockers: none before GitHub push/PR creation.
 
 ## Objective
 
