@@ -1415,24 +1415,31 @@ Future compatibility:
 
 ### Phase 7 - Runner Lifecycle Decomposition
 
-Status: pr_open
+Status: merged
 Branch: `codex/v0-post-runner-lifecycle`
 PR: https://github.com/samcantrill/loom/pull/21
 
-PR notes:
+Merge notes:
 
-- Opened against `develop` as PR #21 with head
-  `codex/v0-post-runner-lifecycle` at `157f91d`.
+- Merged into `develop` on 2026-05-04T22:21:45Z as merge commit
+  `0b5089307996e8c08632d4b93139b0792f2eaa57`.
+- Summary: decomposed `PipelineRunner` around smaller internal lifecycle
+  collaborators while preserving the public facade, integrated run locking and
+  local lifecycle event emission, persisted downstream blocked outcomes after
+  failure, and kept subprocess, SLURM, container, retry, timeout, and cleanup
+  behavior deferred.
 - Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after
   the refinement pass; PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
   passed with package, unit, contract, integration, e2e, and config-extra rows;
-  GitHub checks passed.
+  GitHub CI `checks` passed.
 - Human merge gate: Codex did not approve or merge the PR. `gh pr edit 21
   --add-reviewer samcantrill` was rejected by GitHub's Projects Classic GraphQL
   deprecation path, so the required fallback comment mentioned `@samcantrill`
   at https://github.com/samcantrill/loom/pull/21#issuecomment-4371996188.
-- Serial gate: Phase 8 must not start until PR #21 reaches `MERGED` on
-  `develop` and Phase 7 is recorded as `merged`.
+- Stack maintenance: root serial phase, no successor branch was started before
+  merge, and no retargeting was required.
+- Follow-up notes: Phase 8 must continue from updated `develop`; hardening,
+  docs, migration notes, and final suite evidence remain Phase 8 work.
 
 Goal:
 
