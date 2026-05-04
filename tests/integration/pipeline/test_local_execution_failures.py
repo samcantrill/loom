@@ -13,8 +13,11 @@ from loom.pipeline.stores.errors import CorruptStoreDocumentError
 from tests.support.pipeline_execution_configs import local_execution_config
 from loom.serialization import PlainData
 
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
 class SkipStatusFailingRunStore(LocalRunStore):

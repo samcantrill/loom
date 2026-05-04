@@ -5,6 +5,10 @@ from typing import Any, cast
 
 import pytest
 
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
+
 from loom.config import RecipeCatalog, compose_config
 from loom.pipeline import PipelineSpec, parse_pipeline_config
 from loom.pipeline.graph import build_stage_graph, topological_sort

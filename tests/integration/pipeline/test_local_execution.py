@@ -10,8 +10,11 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalRunStore
 from tests.support.pipeline_execution_configs import local_execution_config
 
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
 def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None:

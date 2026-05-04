@@ -7,6 +7,10 @@ from typing import cast
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
 import yaml
 
 from loom.config import compose_config

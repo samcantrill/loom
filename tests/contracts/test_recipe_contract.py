@@ -1,10 +1,19 @@
 """Contract tests for extension-style recipe implementations."""
 
+import pytest
+
 from typing import Any, cast
+
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
 
 from loom.config.recipes import Recipe, RecipeCatalog
 from loom.config.recipes.expansion import expand_recipes
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, NestedOutputRecipe, function_recipe, nested_output_recipe
+
+
+pytestmark = [pytest.mark.contract, pytest.mark.optional_dependency]
 
 
 def test_downstream_dataclass_recipe_without_base_class_registers() -> None:

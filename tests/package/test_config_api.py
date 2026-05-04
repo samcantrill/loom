@@ -10,6 +10,10 @@ from textwrap import dedent
 
 import pytest
 
+pytest.importorskip("pydantic")
+pytest.importorskip("omegaconf")
+pytest.importorskip("yaml")
+
 from loom.config import ComposedConfig
 
 

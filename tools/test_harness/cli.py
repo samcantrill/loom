@@ -10,6 +10,7 @@ from typing import Sequence
 
 
 DEFAULT_MARKER_EXPR = "not slow and not slurm and not network and not optional_dependency"
+CONFIG_EXTRA_MARKER_EXPR = "optional_dependency"
 LOCAL_ALL_MARKER_EXPR = "not slurm and not network and not optional_dependency"
 SUMMARY_OUTPUT = Path("build/test-summary.md")
 
@@ -32,11 +33,12 @@ class Result:
 
 
 SUITES: dict[str, Suite] = {
-    "package": Suite("package", Path("tests/package")),
-    "unit": Suite("unit", Path("tests/unit")),
-    "contract": Suite("contract", Path("tests/contracts")),
-    "integration": Suite("integration", Path("tests/integration")),
-    "e2e": Suite("e2e", Path("tests/e2e")),
+    "package": Suite("package", Path("tests/package"), DEFAULT_MARKER_EXPR),
+    "unit": Suite("unit", Path("tests/unit"), DEFAULT_MARKER_EXPR),
+    "contract": Suite("contract", Path("tests/contracts"), DEFAULT_MARKER_EXPR),
+    "integration": Suite("integration", Path("tests/integration"), DEFAULT_MARKER_EXPR),
+    "e2e": Suite("e2e", Path("tests/e2e"), DEFAULT_MARKER_EXPR),
+    "config-extra": Suite("config-extra", Path("tests"), CONFIG_EXTRA_MARKER_EXPR),
 }
 
 
@@ -91,6 +93,13 @@ def run_suite(name: str) -> Result:
             "all",
             ["tests", "-m", LOCAL_ALL_MARKER_EXPR],
             f'uv run pytest tests -m "{LOCAL_ALL_MARKER_EXPR}"',
+        )
+    if name == "config-extra":
+        suite = SUITES[name]
+        return run_pytest(
+            suite.name,
+            [str(suite.path), "-m", suite.marker_expr],
+            f'uv run pytest {suite.path} -m "{suite.marker_expr}"',
         )
 
     suite = SUITES[name]
