@@ -23,6 +23,7 @@ from loom.pipeline.stores import LocalRunStore
 
 run_root = Path("tmp/runs")
 config_path = Path("tmp/demo_pipeline.yaml")
+config_path.parent.mkdir(parents=True, exist_ok=True)
 config_path.write_text(
     """
 pipeline:

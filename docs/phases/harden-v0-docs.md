@@ -17,7 +17,7 @@
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time in draft commit `91904e74207f89a8507573774470f1c23a6b7df9`.
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time in this plan-only refinement commit.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by `loom_phase_refiner` on 2026-05-04 local time.
 - PR review budget: unused.
 - PR body draft/refine budget: unused until PR-preparation workflow stages.
 - Setup limitations: no remote operations or validation commands were run during the draft or refine planning passes. The worktree was created from the local recorded predecessor branch because the manager supplied the exact Phase 9 base head.
@@ -340,7 +340,7 @@ make test-summary
 
 - Phase execution plan draft: completed by `loom_phase_planner` on 2026-05-04 local time in draft commit `91904e74207f89a8507573774470f1c23a6b7df9`.
 - Phase execution plan refine: completed by `loom_phase_planner` on 2026-05-04 local time in this plan-only refinement commit.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used by `loom_phase_refiner` on 2026-05-04 local time; no automated implementation refinement budget remains for this phase.
 - PR review: unused.
 - PR body draft/refine: unused.
 
@@ -370,7 +370,81 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning -q`
     - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q`
   - Results: all passed in the commands above.
-- Refinement summary: implementation refinement pass remained unused per explicit instruction.
+- Refinement summary: implementation refinement pass used by `loom_phase_refiner` on 2026-05-04 local time. The pass fixed executor import-boundary hardening regressions, tightened README quickstart setup, reran focused Phase 10 checks, and ran the full validation gate.
 - PR preparation: deferred to manager/next stage.
 - Stack maintenance: Phase 10 is stacked on `codex/add-local-execution` and targets `codex/add-local-execution`; retarget to `develop` only after predecessor phases land and validation is rerun.
 - Remaining blockers: none observed.
+
+## Phase Refinement Report
+
+## Metadata
+
+- Phase: Phase 10 - Hardening And Documentation.
+- Branch: `codex/harden-v0-docs`.
+- Worktree: `/home/samcantrill/work/loom-worktrees/harden-v0-docs`.
+- Phase execution plan: `docs/phases/harden-v0-docs.md`.
+- Refiner: `loom_phase_refiner`.
+- Refinement date: 2026-05-04 local time.
+- Phase implementation refinement budget status after this pass: used.
+
+## Refinement Scope
+
+- Validation output reviewed: executor-provided passing focused Phase 10 commands from the manager assignment, local focused reruns, `make validate-pr`, and `make test-summary`.
+- Blocking issues caused by this phase:
+  - `Executor.execute` had been widened from `StageExecutionRequest -> StageExecutionResult` to `object -> object` while removing import-time execution coupling.
+  - `LocalExecutor.execute` could rely on an unrelated `loom.pipeline.execution.logs` package side effect instead of importing the log helper directly at execution time.
+  - The README quickstart wrote `tmp/demo_pipeline.yaml` before creating the `tmp/` directory.
+- Issues confirmed out of scope: no functional CLI, remote stores, cross-run cache reuse, new backends, lock managers, repair commands, broad error framework changes, or domain-specific behavior were needed.
+
+## Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Executor protocol type regression | Restored type-only `StageExecutionRequest` / `StageExecutionResult` annotations in `loom.pipeline.executors.base` without runtime execution imports. | `make validate-pr` passed with Pyright `0 errors`; package import-boundary tests passed. |
+| Local executor log helper side effect | Imported `write_text_file` from `loom.pipeline.execution.logs` inside `LocalExecutor.execute` and adjusted the local executor unit test to import `StageExecutionRequest` from `loom.pipeline.execution.models`. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/test_local_executor.py -q` passed with `3 passed`. |
+| README quickstart parent directory | Added `config_path.parent.mkdir(parents=True, exist_ok=True)` before writing the example config. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/docs/test_v0_python_examples.py -q` passed with `1 passed`. |
+
+## Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/test_local_executor.py -q
+result: passed, 3 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py -q
+result: passed, 9 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/executors/base.py src/loom/pipeline/executors/local.py tests/unit/loom/pipeline/executors/test_local_executor.py README.md
+result: passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/docs/test_v0_python_examples.py -q
+result: passed, 1 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/test_local_executor.py tests/unit/loom/pipeline/planning/test_resume.py tests/contracts/test_store_contract.py tests/package/test_import_boundaries.py tests/integration/docs/test_v0_python_examples.py -q
+result: passed, 29 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_executor_api.py tests/package/test_pipeline_planning_api.py tests/package/test_pipeline_store_api.py -q
+result: passed, 27 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning -q
+result: passed, 23 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py -q
+result: passed, 10 passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; Ruff passed, Pyright reported 0 errors, default pytest passed with 368 tests, and build succeeded
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: passed; package, unit, contract, integration, and e2e suites passed
+```
+
+## Remaining Blockers
+
+- None observed in this bounded refinement pass.
+
+## PR Preparation Handoff
+
+- Completion notes updated in phase execution plan: yes.
+- Budget status updated: yes, implementation refinement budget is used.
+- Final validation recommended: rerun `make validate-pr` and `make test-summary` after any stack rebase or retarget to `develop`.
+- Suite evidence still needed: none for the current local branch state; PR preparation should reuse or refresh the evidence depending on stack maintenance timing.
