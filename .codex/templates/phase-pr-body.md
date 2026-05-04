@@ -6,6 +6,7 @@
 - Stack predecessor:
 - Merge eligibility:
 - Worktree:
+- Workflow path: fast path / expanded path
 - Plan: `docs/implementation-plans/implementation-plan-v<N>.md`
 - Phase execution plan:
 - Draft pass:

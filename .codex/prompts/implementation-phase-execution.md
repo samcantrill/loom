@@ -23,10 +23,12 @@ Task:
    extension behavior is introduced, and add integration or e2e tests only when
    the phase execution plan requires them.
 5. Keep changes limited to the phase scope.
-6. Make frequent commits after coherent units of work.
-7. Run relevant targeted suite commands when practical, then broader validation
+6. Prefer the smallest maintainable change that satisfies the phase scope and
+   tests; avoid broad refactors or new abstractions unless explicitly required.
+7. Make frequent commits after coherent units of work.
+8. Run relevant targeted suite commands when practical, then broader validation
    commands as the phase stabilizes.
-8. Record results in the phase execution plan completion notes using the sections from
+9. Record results in the phase execution plan completion notes using the sections from
    `.codex/templates/phase-implementation-handoff.md`. If the manager asks for
    a separate artifact, write it to
    `docs/phases/<summary-of-feature>-implementation-handoff.md`.
@@ -45,6 +47,8 @@ Rules:
 - Do not ask the user for feedback.
 - Do not implement future phases.
 - Do not rewrite unrelated code.
+- Do not treat phase-plan notes as permission for larger cleanup than the phase
+  needs.
 - Do not hide failing tests.
 - Do not remove tests just to make the suite pass.
 - Do not defer phase-scoped tests to PR preparation.

@@ -52,14 +52,42 @@ one phase to happen while successor phase work starts. Serial human-merge-gate
 mode instead waits for each phase PR to be merged into `develop` before the
 next phase starts.
 
+Favor short scope-first phase plans. Planning should define boundaries,
+acceptance criteria, suite obligations, risky decisions, and stop conditions,
+then move implementation to code. Do not spend extra passes or tokens producing
+line-by-line implementation recipes unless a public contract or migration risk
+requires it.
+
 Use `.codex/templates/` for durable handoff artifacts. Custom agents define
 role authority, sandbox, and model; prompts define behavior; templates define
 the artifact shape to complete and pass to the next stage.
 
 Workflow stages are artifact-centered. Each first-class artifact has a
-high-level draft pass and a lower-level refine pass before the next stage
-depends on it. Multiple prompts or agents may work on the same artifact; do not
-create a separate durable artifact merely because a separate agent ran.
+high-level draft pass and a lower-level refine pass only when the artifact is a
+feature brief, specification, implementation plan, or an expanded-path phase
+artifact. Routine phase execution plans and PR bodies use a single concise
+fast-path pass by default. Multiple prompts or agents may work on the same
+artifact; do not create a separate durable artifact merely because a separate
+agent ran.
+
+Fast path is the default for routine phases:
+
+```text
+scope-complete phase plan
+implementation and phase-scoped tests
+skip implementation refiner when targeted validation passes and coverage obligations are met
+single-pass PR preparation that writes evidence and opens/prepares the PR
+phase review or manager review
+```
+
+Use the expanded path only when the phase is likely to have durable design
+impact or high coordination cost. Expanded-path triggers include public API or
+protocol design; changes spanning multiple core areas such as config, planning,
+execution, stores, serialization, provenance, or pipeline graph behavior;
+schema, migration, compatibility, or persistence contract changes; dependency,
+packaging, import-boundary, or source-tree boundary changes; concurrency,
+locking, retry, resume, or data-loss risk; and ambiguous acceptance criteria or
+unresolved implementation-plan tradeoffs.
 
 Core rule:
 
@@ -87,7 +115,7 @@ Loop budget:
 | Gate | Allowed automated passes | Terminal action if blockers remain |
 | --- | --- | --- |
 | Plan quality gate | One `loom_plan_reviewer` review, one plan refinement, one confirmation review | Mark the plan or next phase `blocked`, report the blocker, and stop |
-| Phase implementation | One `loom_phase_refiner` pass after implementation | Report the blocker and stop before PR approval or merge |
+| Phase implementation | Fast path: zero refiner passes when targeted validation passes and coverage obligations are met. Expanded path or blocker case: one `loom_phase_refiner` pass after implementation | Report the blocker and stop before PR approval or merge |
 | Phase PR review | One `loom_phase_reviewer` pass or one equivalent local review | Leave the PR unapproved, report the blocker, and stop |
 | Serial post-PR blocker resolution | Scoped blocker-resolution passes as needed after a PR exists | Mark the phase `blocked` and report the exact blocker only when the blocker cannot be resolved in scope, required GitHub access is unavailable, the PR is closed without merge, or validation/CI remains unavailable or failing after the relevant fixes |
 
@@ -104,11 +132,11 @@ that blocker is resolved or proven out of scope.
 
 Model policy:
 
-- Use `gpt-5.5` with `xhigh` reasoning for whole-phase ownership, ambiguous
+- Use `gpt-5.5` with `high` reasoning for whole-phase ownership, ambiguous
   design translation, artifact refinement, review, PR preparation, and
   correctness decisions.
 - Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
-  a decision-complete phase execution plan. Spark agents must stop and report
+  a scope-complete phase execution plan. Spark agents must stop and report
   blockers instead of making public API or phase-scope decisions.
 
 Serial human-merge-gate mode:
@@ -201,18 +229,27 @@ For each phase:
 6. Assign phase execution plan drafting to `loom_phase_planner` using
    `.codex/prompts/phase-execution-plan-draft.md`; include or complete the
    assignment fields from `.codex/templates/phase-assignment.md`.
-7. After the draft artifact exists and context has been compacted or reset when
-   practical, assign phase execution plan refinement to `loom_phase_planner`
-   using `.codex/prompts/phase-execution-plan-refine.md`.
+7. Decide whether expanded-path triggers apply. On the fast path, treat the
+   committed phase execution plan as scope-complete and mark the refine pass
+   `not needed`. On the expanded path, after the draft artifact exists and
+   context has been compacted or reset when practical, assign phase execution
+   plan refinement to `loom_phase_planner` using
+   `.codex/prompts/phase-execution-plan-refine.md`.
 8. Assign implementation and phase-scoped tests to `loom_phase_executor` using
    `.codex/prompts/implementation-phase-execution.md`.
-9. Assign exactly one bounded refinement pass to `loom_phase_refiner` using
-   `.codex/prompts/implementation-test-refinement.md`.
-10. Assign PR body drafting and suite-summary generation to `loom_pr_preparer`
-   using `.codex/prompts/pr-body-draft.md`.
-11. After the PR body draft exists and context has been compacted or reset when
-   practical, assign PR body refinement and PR creation/preparation to
-   `loom_pr_preparer` using `.codex/prompts/pr-body-refine.md`.
+9. Assign `loom_phase_refiner` using
+   `.codex/prompts/implementation-test-refinement.md` only when targeted
+   validation fails, suite coverage is missing, the executor reports a blocker,
+   or the expanded path is active. Otherwise mark implementation refinement
+   `not needed` in the phase artifact.
+10. Assign PR body and suite-summary generation to `loom_pr_preparer` using
+   `.codex/prompts/pr-body-draft.md`. On the fast path this is the single PR
+   preparation pass and should open or prepare the PR. On the expanded path,
+   the preparer may leave the PR body refine pass pending.
+11. On the expanded path only, after the PR body draft exists and context has
+   been compacted or reset when practical, assign PR body refinement and PR
+   creation/preparation to `loom_pr_preparer` using
+   `.codex/prompts/pr-body-refine.md`.
 12. After the PR is opened or prepared, record `pr_open` metadata in the
     control checkout. In stacked mode, you may move to the next pending phase
     immediately using the current phase branch as stack base if validation
@@ -241,11 +278,11 @@ For each phase:
    - The scope is limited to the assigned phase.
    - No future phase was implemented early.
    - No obvious maintainability or regression issue remains.
-17. In stacked mode, if the PR is not acceptable after the single
-   `loom_phase_refiner` pass, report the exact blocker to the user and stop. In
-   serial human-merge-gate mode, concrete post-PR review, CI, mergeability, and
-   validation blockers may receive scoped blocker-resolution passes until they
-   are resolved or proven out of scope.
+17. In stacked mode, if the PR is not acceptable after either the fast-path
+   checks or the single allowed `loom_phase_refiner` pass, report the exact
+   blocker to the user and stop. In serial human-merge-gate mode, concrete
+   post-PR review, CI, mergeability, and validation blockers may receive scoped
+   blocker-resolution passes until they are resolved or proven out of scope.
 18. In stacked mode, if the PR is acceptable, approve it. Stacked approval is
     allowed while the PR targets its predecessor branch, but approval does not
     make it merge-eligible until the PR targets `develop`. In serial
@@ -313,6 +350,8 @@ Rules:
 - Do not approve a PR just because tests pass; the explanation must match the diff and phase execution plan.
 - Do not require exhaustive test coverage unless the phase warrants it.
 - Prefer forward progress with small PRs over large perfect changes.
+- Prefer scoped implementation over broader cleanup; capture nonessential work
+  as follow-up instead of folding it into the current phase.
 - Keep workflow prompt, template, and `AGENTS.md` refinements in the control
   checkout or a dedicated workflow PR unless explicitly assigned as phase work.
 - Do not loop on review/refinement. Escalate remaining blockers after the

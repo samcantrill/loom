@@ -35,20 +35,20 @@ When assigned a phase, implement only that phase.
 
 Project-scoped custom agents live in `.codex/agents/`:
 
-- `loom_phase_planner`: uses `gpt-5.5` with `xhigh` reasoning to create the
+- `loom_phase_planner`: uses `gpt-5.5` with `high` reasoning to create the
   phase worktree/branch, draft the phase execution plan, refine the same
   artifact after context compaction or reset, and commit those planning passes.
 - `loom_phase_executor`: uses `gpt-5.3-codex-spark` with `high` reasoning to
   execute well-specified implementation slices from the finalized phase
   execution plan with multiple coherent commits.
-- `loom_phase_refiner`: uses `gpt-5.5` with `xhigh` reasoning to perform one
+- `loom_phase_refiner`: uses `gpt-5.5` with `high` reasoning to perform one
   bounded implementation/test refinement pass and commit fixes.
-- `loom_pr_preparer`: uses `gpt-5.5` with `xhigh` reasoning to inspect the final
+- `loom_pr_preparer`: uses `gpt-5.5` with `high` reasoning to inspect the final
   diff, run checks, record PR facts and stack state, prepare the PR body, and
   open or prepare the PR.
-- `loom_phase_reviewer`: uses `gpt-5.5` with `xhigh` reasoning for read-only
+- `loom_phase_reviewer`: uses `gpt-5.5` with `high` reasoning for read-only
   phase PR review.
-- `loom_plan_reviewer`: uses `gpt-5.5` with `xhigh` reasoning for read-only
+- `loom_plan_reviewer`: uses `gpt-5.5` with `high` reasoning for read-only
   implementation plan review before phase work begins.
 - `loom_architecture_explorer`: uses `gpt-5.4-mini` with `medium` reasoning for
   read-only architecture and boundary exploration.
@@ -68,8 +68,11 @@ artifacts passed between stages.
 
 The workflow is organized around durable stage artifacts, not one file per
 agent invocation. Multiple prompts or agents may work on the same artifact.
-Each first-class artifact must have a high-level draft pass and a lower-level
-refine pass before the next stage depends on it.
+Feature briefs, specifications, and implementation plans should have a
+high-level draft pass and a lower-level refine pass before the next stage
+depends on them. Phase execution plans and PR bodies use the fast path by
+default: one concise, scope-complete pass is enough unless the expanded-path
+triggers below apply.
 
 First-class artifacts:
 
@@ -94,7 +97,9 @@ roadmap-version planning notes before drafting or changing downstream artifacts.
 For new work, draft and refine the feature brief before drafting or changing a
 specification. Draft and refine the specification before drafting an
 implementation plan. Draft and refine the implementation plan, including its
-plan quality gate, before creating phase execution plans.
+plan quality gate, before creating phase execution plans. For phase execution
+and PR preparation, prefer the fast path unless the phase has broad design or
+long-term compatibility risk.
 
 ### Branches And Worktrees
 
@@ -225,16 +230,22 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
 - Read the full implementation plan before writing code.
 - Confirm the implementation plan has passed the plan quality gate before
   starting phase work.
-- Create and refine a phase execution plan before implementation.
+- Create a scope-complete phase execution plan before implementation. Keep
+  phase plans scope-first: define boundaries, acceptance criteria, suite
+  obligations, risky decisions, and stop conditions without turning the plan
+  into an exhaustive implementation recipe. Refine the phase plan only when the
+  expanded-path triggers below apply.
 - Follow the stacked phase handoff, or the serial human merge gate when that
-  mode is selected. Do not collapse planning, implementation, refinement, and
-  PR preparation into one agent unless explicitly instructed.
+  mode is selected. Do not collapse role ownership into one agent unless
+  explicitly instructed, but skip optional second passes on the fast path.
 - Make frequent commits at coherent checkpoints.
 - Do not ask the user for feedback during the phase.
 - If something is ambiguous, make the smallest reasonable assumption, document
   it in the phase execution plan and PR body, and continue.
 - Do not implement future phases early.
 - Do not do broad refactors unless required by the assigned phase.
+- Prefer the smallest maintainable diff that satisfies the assigned phase and
+  tests.
 - Prefer direct, maintainable code over clever abstractions.
 - Make maintainability, extensibility, conflicting design choices, accepted
   technical debt, and future compatibility explicit in plans.
@@ -247,18 +258,14 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
 
 ### Stacked Phase Handoff
 
-Each phase uses this strict sequence:
+Default fast path for a routine phase:
 
 ```text
 manager selects next pending phase and stack base
-loom_phase_planner drafts and commits the phase execution plan with suite-level test obligations
-context is compacted or reset for the refine pass when practical
-loom_phase_planner refines and commits the same phase execution plan with decision-complete implementation details
+loom_phase_planner creates one concise scope-complete phase execution plan with suite-level test obligations
 loom_phase_executor implements and commits phase work and phase-scoped tests
-loom_phase_refiner performs one bounded refinement pass and commits fixes
-loom_pr_preparer runs checks, drafts the PR body, and records suite evidence
-context is compacted or reset for the PR body refine pass when practical
-loom_pr_preparer refines the PR body, records PR metadata, and opens/prepares PR
+manager skips loom_phase_refiner when targeted validation passes and coverage obligations are met
+loom_pr_preparer runs checks, writes the PR body, records suite evidence, and opens/prepares PR in one pass
 manager mirrors pr_open metadata in the control checkout
 manager applies any workflow refinements in the control checkout, outside product phase branches
 manager may move to the next pending phase using the current phase branch as stack base in stacked mode
@@ -269,15 +276,37 @@ human reviewer approves and merges the PR in serial human merge gate mode
 manager records merged metadata and cleans worktree/branch only after successor branches no longer depend on it
 ```
 
+Use the expanded path when the phase is likely to have durable design impact or
+high coordination cost. Expanded-path triggers include:
+
+- public API or public protocol design;
+- changes spanning multiple core areas such as config, planning, execution,
+  stores, serialization, provenance, or pipeline graph behavior;
+- schema, migration, compatibility, or persistence contract changes;
+- dependency, packaging, import-boundary, or source-tree boundary changes;
+- concurrency, locking, retry, resume, or data-loss risk;
+- ambiguous acceptance criteria or unresolved implementation-plan tradeoffs.
+
+Expanded path adds the optional second passes:
+
+```text
+loom_phase_planner drafts the phase execution plan
+context is compacted or reset for the refine pass when practical
+loom_phase_planner refines the same phase execution plan
+loom_phase_refiner performs one bounded refinement pass after implementation
+loom_pr_preparer may draft then refine the PR body before opening/preparing the PR
+```
+
 Do not loop indefinitely. Each gate allows at most one automated refinement
 attempt:
 
 - Plan quality gate: one `loom_plan_reviewer` review, one refinement pass, and
   one confirmation review. If blocking findings remain, mark the plan `blocked`
   or leave the phase unstarted and report the blocker to the user.
-- Phase implementation: one `loom_phase_refiner` pass after implementation. If
-  the PR is still unacceptable, the managing agent must report the blocker to
-  the user instead of spawning another fixer.
+- Phase implementation: zero `loom_phase_refiner` passes on the fast path, or
+  one pass when targeted validation fails, suite coverage is missing, or the
+  expanded path is active. If the PR is still unacceptable, the managing agent
+  must report the blocker to the user instead of spawning another fixer.
 - Phase PR review: one reviewer pass. The managing agent may merge only if no
   blocking findings remain and checks pass or unavailable checks are justified.
 
@@ -295,11 +324,11 @@ or explicitly not needed.
 
 Model policy:
 
-- Use `gpt-5.5` with `xhigh` reasoning for whole-phase ownership, ambiguous
+- Use `gpt-5.5` with `high` reasoning for whole-phase ownership, ambiguous
   design translation, artifact refinement, review, PR preparation, and
   correctness decisions.
 - Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
-  a decision-complete phase execution plan. Spark agents must stop and report
+  a scope-complete phase execution plan. Spark agents must stop and report
   blockers instead of making public API or phase-scope decisions.
 
 ### Automatic Merge Policy

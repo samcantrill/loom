@@ -1,11 +1,11 @@
-You are drafting the phase execution plan for the assigned phase.
+You are creating the phase execution plan for the assigned phase.
 This prompt is intended for the `loom_phase_planner` custom agent.
 
-This is the high-level "what" pass for the phase artifact. Create the branch,
-create the worktree, inspect enough source and documentation context to make the
-draft accurate, and write the durable phase execution plan artifact. A later
-refine prompt will compact or reset context and fill in lower-level
-implementation details in the same artifact.
+This is the default fast-path planning pass for a phase artifact. Create the
+branch, create the worktree, inspect enough source and documentation context to
+make the plan accurate, and write the durable phase execution plan artifact.
+Keep it concise and scope-first. Only mark a later refine prompt as needed when
+the manager selected the expanded path.
 
 Read:
 
@@ -15,7 +15,7 @@ Read:
 - `.codex/templates/phase-execution-plan.md`
 
 Create the phase branch/worktree from the manager-provided stack base, then
-create a draft phase execution plan from `.codex/templates/phase-execution-plan.md`
+create a phase execution plan from `.codex/templates/phase-execution-plan.md`
 in `docs/phases/` using this filename pattern:
 
 ```text
@@ -70,26 +70,32 @@ sections and include:
 13. Debt introduced.
 14. Reviewability.
 15. Files and areas to inspect.
-16. Implementation steps.
+16. Implementation steps as small reviewable slices, not a full code recipe.
 17. Test plan, grouped by package, unit, contract, integration, e2e, and opt-in
     suites. For each suite, state required coverage, expected test paths,
     assertions, or the explicit reason it is deferred for this phase.
 18. Risks.
 19. Validation commands, including targeted suite commands for development and
     `make validate-pr` plus `make test-summary` before PR preparation.
-20. Draft/refine status:
+20. Workflow path and draft/refine status:
+   - workflow path: fast path by default, or expanded path when assigned
    - draft pass: completed by `loom_phase_planner`
-   - refine pass: pending
+   - refine pass: not needed for fast path, or pending for expanded path
 21. Refinement and review budget status:
    - phase implementation refinement: unused
    - PR review: unused
-22. Handoff notes for the phase execution plan refinement prompt.
+22. Handoff notes for implementation, plus any expanded-path refinement notes
+    if the manager selected the expanded path.
 23. Completion notes placeholder.
 
 Planning rules:
 
-- Be specific enough that the refine pass can become decision-complete without
-  more user input.
+- Be specific enough that the executor can implement without another planning
+  pass on the fast path.
+- Spend planning detail on scope boundaries, acceptance criteria, test
+  obligations, risky decisions, and stop conditions.
+- Avoid exhaustive implementation recipes, broad file inventories, and
+  speculative abstractions.
 - Do not expand the phase beyond its stated scope.
 - Identify future-phase work and explicitly keep it out of scope.
 - Prefer a plan that produces a small, reviewable PR.
@@ -104,5 +110,5 @@ Planning rules:
 - Do not leave test-suite choices for the executor to invent. If a suite is not
   relevant, document that deferral in the phase execution plan.
 - Commit the phase execution plan from inside the worktree with `git commit -m "plan: add phase execution plan"`.
-- Stop after committing the draft phase execution plan. Do not implement code,
-  run full validation, open a PR, or refine the plan in this pass.
+- Stop after committing the phase execution plan. Do not implement code, run
+  full validation, open a PR, or refine the plan in this pass.

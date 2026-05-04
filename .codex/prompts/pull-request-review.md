@@ -44,6 +44,10 @@ mismatches as review risks. Also treat undocumented debt, unreviewable phase
 scope, unjustified abstractions, and conflicts with documented design choices as
 review risks.
 
+Prefer narrow required changes. Do not request broad cleanup, larger
+abstractions, or more planning detail when a small phase-scoped fix or explicit
+follow-up is enough.
+
 If there are no blocking findings, say that clearly and list any residual risk
 or test gaps. If blocking findings remain after the phase's single refinement
 pass, make the terminal blocker explicit for the managing agent. Do not make

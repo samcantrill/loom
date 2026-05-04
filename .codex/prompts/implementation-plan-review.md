@@ -43,6 +43,8 @@ Review the plan for:
    - acceptance criteria that cannot be objectively reviewed
    - missing test expectations by suite
    - unclear validation or PR test-summary evidence
+   - phase plans that demand exhaustive code recipes instead of clear scope,
+     acceptance criteria, risks, and suite obligations
 
 Output using `.codex/templates/plan-review-report.md`:
 

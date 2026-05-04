@@ -12,6 +12,7 @@
 - Base branch:
 - Target branch:
 - Merge eligibility:
+- Workflow path: fast path / expanded path
 - Successor dependency notes:
 - Plan quality gate:
 - Plan quality gate loop budget:
@@ -22,7 +23,7 @@
 
 ## Objective
 
-State the phase objective in one or two paragraphs.
+State the phase objective in one concise paragraph.
 
 ## Full-Plan Context
 
@@ -62,11 +63,12 @@ work that must remain out of scope.
 
 - TBD
 
-## Decision-Complete Contract
+## Scope Contract
 
 Define the public behavior, module boundaries, data shapes, error behavior, and
-edge cases the executor must not redesign. If no public contract changes are in
-scope, state that explicitly.
+edge cases the executor must not redesign. Keep this to decisions that affect
+scope or public behavior; do not describe routine code edits. If no public
+contract changes are in scope, state that explicitly.
 
 ## Design Impact
 
@@ -98,6 +100,9 @@ scope, state that explicitly.
 - Scope-control checks:
 
 ## Implementation Steps
+
+List three to six small, reviewable implementation slices. Avoid line-by-line
+instructions unless needed to prevent a public-contract or scope error.
 
 1. TBD
 
