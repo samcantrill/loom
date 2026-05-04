@@ -170,7 +170,10 @@ def _plan_stage(
     ]
 
     eligible = selection.is_eligible(stage.name)
-    force = stage.name in selection.forced_stages
+    force = (
+        stage.name in selection.forced_stages
+        or selection.selectors.from_stage == stage.name
+    )
 
     if blocking_reasons or (pending_inputs and not eligible):
         reasons = _unique_reasons(

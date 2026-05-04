@@ -5,7 +5,7 @@
 - PR: https://github.com/samcantrill/loom/pull/12
 - Target branch: `develop`
 - Stack predecessor: none; Phase 7 has landed in `develop`
-- Merge eligibility: root phase PR after stack maintenance; reviewable against `develop`, but not approval-ready until the recorded Phase 8 review blocker is addressed and validation is rerun.
+- Merge eligibility: root phase PR after stack maintenance; PR #12 targets `develop` and the recorded Phase 8 `from_stage` blocker has been fixed with validation rerun. Merge only after human approval and current checks; do not delete the branch while Phase 9 PR #13 depends on it.
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-planning-resume-selectors`
 - Plan: `docs/implementation-plans/implementation-plan-v0.md`
 - Phase execution plan: `docs/phases/add-planning-resume-selectors.md`
@@ -59,25 +59,43 @@ Plan persistence writes only the current plan through `RunStore.write_plan()`.
 It does not write stage status, stage inputs, outputs, fingerprints, failures,
 logs, lifecycle state, or runner-owned files.
 
+Post-review blocker fix: `from_stage` now forces the selected stage to `RUN`
+even when direct resume found valid reusable state. The selected stage preserves
+its `REUSE` base action and fingerprint-match explanation, clears reusable
+outputs for the forced rerun, records `FROM_STAGE_SELECTED`, and invalidates
+downstream consumers with pending upstream-output reasons.
+
 ## Tests And Validation
 
-Final validation evidence after refinement:
+Final validation evidence after the user-authorized post-review blocker fix:
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
-result: passed; Ruff passed, Pyright passed with 0 errors, default pytest passed with 327 passed, and uv build produced source and wheel distributions.
+result: passed; Ruff passed, Pyright passed with 0 errors, default pytest passed with 333 passed, and uv build produced source and wheel distributions.
 ```
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
-result: passed; wrote build/test-summary.md.
+result: passed; package 24 passed, unit 278 passed, contract 15 passed, integration 16 passed, and e2e was not present.
 ```
 
-GitHub check evidence after opening:
+Focused blocker-fix evidence:
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planner.py tests/integration/pipeline/test_planning_resume.py -q
+result: passed with 8 passed
+```
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline/test_planning_resume.py tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py -q
+result: passed with 27 passed
+```
+
+Current GitHub check evidence after the blocker fix:
 
 ```text
 command: gh pr view 12 --json statusCheckRollup,mergeStateStatus,isDraft
-result: passed; PR is not draft, mergeStateStatus is CLEAN, and CI check "checks" completed with conclusion SUCCESS.
+result: passed; PR is not draft, mergeStateStatus is CLEAN, and CI check "checks" completed with conclusion SUCCESS after the blocker-fix push.
 ```
 
 Earlier targeted evidence recorded in the phase execution plan:
@@ -121,18 +139,18 @@ result: passed with 15 passed
 
 | Suite | Status | Duration | Command |
 | --- | --- | ---: | --- |
-| package | passed | 1.83s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
-| unit | passed | 1.49s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
-| contract | passed | 0.52s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
-| integration | passed | 0.94s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
+| package | passed | 1.49s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
+| unit | passed | 1.39s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
+| contract | passed | 0.40s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
+| integration | passed | 0.81s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
 | e2e | not present | 0.00s | `uv run pytest tests/e2e -m "not slow and not slurm and not network and not optional_dependency"` |
 
 Suite output totals from `build/test-summary.md`:
 
 - package: 24 passed
-- unit: 273 passed
+- unit: 278 passed
 - contract: 15 passed
-- integration: 15 passed
+- integration: 16 passed
 - e2e: no test files are present for this suite yet
 
 ## Scope Control
@@ -146,7 +164,7 @@ Suite output totals from `build/test-summary.md`:
 ## Budget Status
 
 - Phase implementation refinement: used on 2026-05-04 local time.
-- PR review before this PR: unused.
+- PR review: used. The reviewer found the blocking `from_stage` selector issue; this user-authorized post-review fix addresses it. Do not consume a second automated PR review without explicit user instruction.
 - PR body draft pass: complete in commit `0f9c581`.
 - PR body refine pass: complete for stacked PR creation.
 - PR open metadata: complete in this artifact.
@@ -162,9 +180,10 @@ Suite output totals from `build/test-summary.md`:
 
 ## Risks / Follow-Ups
 
-- This PR is now retargeted to `develop` after Phase 7 landed, but remains
-  blocked by the recorded `from_stage` selector review finding until that issue
-  is fixed and validation is rerun.
+- The recorded blocking `from_stage` selector review finding is fixed and
+  validation has been rerun. A separate unsupported schema-version strictness
+  review note remains non-blocking future hardening unless explicitly pulled
+  into this phase.
 - Detailed fingerprint diff rendering and CLI display remain deferred until a later CLI/status phase needs them.
 - Plan persistence stores only the current plan, not plan attempt history.
 - Downstream fingerprints with pending upstream outputs remain deferred until Phase 9 can bind actual produced artifacts during execution.
@@ -201,8 +220,8 @@ maintenance below.
 - Current target branch: `develop`
 - Predecessor PR: Phase 7 PR #11 has landed in `develop`
 - Retarget/rebase needed after predecessor merge: completed on 2026-05-04 local time
-- Successor branches depending on this phase: none recorded in the Phase 8 execution plan
-- Branch cleanup constraints: do not delete the Phase 8 branch until successor stack state is recorded or confirmed clear
+- Successor branches depending on this phase: Phase 9 PR #13, branch `codex/add-local-execution`
+- Branch cleanup constraints: do not delete the Phase 8 branch until Phase 9 is retargeted or rebased away from it
 
 Stack-maintenance evidence after Phase 7 landed:
 
@@ -228,7 +247,10 @@ result: passed; package 24 passed, unit 277 passed, contract 15 passed, integrat
 
 Known review status:
 
-- Phase 8 PR review found a blocking `from_stage` selector bug that this
-  stack-maintenance pass did not address.
-- Do not approve or merge PR #12 until that blocker is fixed and validation is
-  rerun.
+- Phase 8 PR review found a blocking `from_stage` selector bug. This
+  user-authorized post-review fix addresses it by forcing a reusable
+  `from_stage` selection to rerun while preserving the direct resume evidence
+  and invalidating downstream stages.
+- Validation after the blocker fix passed: focused planner/resume tests,
+  focused Phase 8 planning tests, `make validate-pr`, and `make test-summary`.
+- PR review budget has been consumed; no second automated review pass was run.

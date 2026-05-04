@@ -96,6 +96,33 @@ def test_planner_reuses_valid_upstream_and_binds_downstream_input(
     assert report.fingerprint is not None
 
 
+def test_from_stage_forces_reusable_selected_stage_and_reruns_downstream(
+    tmp_path: Path,
+) -> None:
+    run_store, artifact_store = _stores(tmp_path)
+    _seed_reusable_build(run_store, artifact_store)
+
+    plan = plan_pipeline(
+        _spec(),
+        run_id="run1",
+        run_store=run_store,
+        artifact_store=artifact_store,
+        selectors=PlanSelectors(from_stage="build"),
+    )
+
+    build, report = plan.stage_plans
+    assert build.action == PlanAction.RUN
+    assert build.base_action == PlanAction.REUSE
+    assert build.reusable_outputs == {}
+    assert build.selected_by == (PlanReasonCode.FROM_STAGE_SELECTED,)
+    assert {reason.code for reason in build.reasons} >= {
+        PlanReasonCode.FROM_STAGE_SELECTED,
+        PlanReasonCode.FINGERPRINT_MATCH,
+    }
+    assert report.action == PlanAction.RUN
+    assert report.pending_inputs[0].reason.code == PlanReasonCode.UPSTREAM_WILL_RUN
+
+
 def test_only_stage_blocks_when_upstream_provider_is_unavailable(
     tmp_path: Path,
 ) -> None:
