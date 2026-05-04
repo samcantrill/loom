@@ -846,3 +846,17 @@ make test-summary
     (59 passed).
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/test_specs.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py`
     passed.
+
+## Slice 2 Evidence
+
+- Slice 2 completed: strict `loom.pipeline.events` model foundations for event
+  scopes, draft events, and persisted event records.
+- Files changed: `src/loom/pipeline/events.py`,
+  `tests/unit/loom/pipeline/test_events.py`, and
+  `tests/package/test_import_boundaries.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_events.py tests/package/test_import_boundaries.py`
+    (31 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/events.py tests/unit/loom/pipeline/test_events.py tests/package/test_import_boundaries.py`
+    passed.
+  - `git diff --check` passed.
