@@ -56,12 +56,12 @@ def test_context_requires_identity_strings() -> None:
 def test_context_helpers_save_and_register_declared_outputs(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.get_artifact_root("run1"))
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
     context = StageContext(
         run_id="run1",
         stage_name="build",
-        run_dir=run_store.get_run_dir("run1"),
-        stage_dir=run_store.get_stage_dir("run1", "build"),
+        run_dir=run_store.local_run_dir("run1"),
+        stage_dir=run_store.local_stage_dir("run1", "build"),
         resolved_config={},
         stage_config={},
         run_store=run_store,

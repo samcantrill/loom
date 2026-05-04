@@ -96,7 +96,7 @@ class StageContext:
         if self.run_store is None:
             raise PipelineValidationError("StageContext.output_path requires run_store")
         path = (
-            self.run_store.get_stage_artifact_dir(self.run_id, self.stage_name)
+            self.run_store.local_stage_artifact_dir(self.run_id, self.stage_name)
             / f"{output_name}{suffix}"
         )
         path.parent.mkdir(parents=True, exist_ok=True)

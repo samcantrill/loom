@@ -64,7 +64,7 @@ def _control_spec() -> PipelineSpec:
 def _stores(tmp_path):
     run_store = LocalRunStore(tmp_path / "runs")
     run_store.create_run("run1")
-    return run_store, LocalArtifactStore(run_store.get_artifact_root("run1"))
+    return run_store, LocalArtifactStore(run_store.local_artifact_root("run1"))
 
 
 def _succeeded(run_id: str, stage_name: str) -> StageStatusRecord:

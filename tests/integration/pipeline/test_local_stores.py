@@ -14,7 +14,7 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     run_store.create_run("run-1", metadata={"owner": "integration"})
 
     run_id = "run-1"
-    artifact_root = run_store.get_artifact_root(run_id)
+    artifact_root = run_store.local_artifact_root(run_id)
     artifact_store = LocalArtifactStore(root=artifact_root)
 
     json_ref = artifact_store.save(
@@ -88,20 +88,20 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     run_store.write_stage_log(run_id, "stage", "stderr", "oops\n")
 
     required_files = [
-        run_store.get_run_dir(run_id) / "run.json",
-        run_store.get_run_dir(run_id) / "config" / "raw.yaml",
-        run_store.get_run_dir(run_id) / "config" / "recipe_manifest.json",
-        run_store.get_run_dir(run_id) / "provenance" / "git.json",
-        run_store.get_run_dir(run_id) / "stages" / "stage" / "inputs.json",
-        run_store.get_run_dir(run_id) / "stages" / "stage" / "outputs.json",
-        run_store.get_run_dir(run_id) / "stages" / "stage" / "fingerprint.json",
-        run_store.get_run_dir(run_id) / "stages" / "stage" / "failure.json",
-        run_store.get_run_dir(run_id) / "stages" / "stage" / "provenance.json",
-        run_store.get_run_dir(run_id) / "stages" / "stage" / "logs" / "stderr.log",
-        run_store.get_run_dir(run_id) / "plan.json",
-        run_store.get_run_dir(run_id) / "artifacts.json",
+        run_store.local_run_dir(run_id) / "run.json",
+        run_store.local_run_dir(run_id) / "config" / "raw.yaml",
+        run_store.local_run_dir(run_id) / "config" / "recipe_manifest.json",
+        run_store.local_run_dir(run_id) / "provenance" / "git.json",
+        run_store.local_run_dir(run_id) / "stages" / "stage" / "inputs.json",
+        run_store.local_run_dir(run_id) / "stages" / "stage" / "outputs.json",
+        run_store.local_run_dir(run_id) / "stages" / "stage" / "fingerprint.json",
+        run_store.local_run_dir(run_id) / "stages" / "stage" / "failure.json",
+        run_store.local_run_dir(run_id) / "stages" / "stage" / "provenance.json",
+        run_store.local_run_dir(run_id) / "stages" / "stage" / "logs" / "stderr.log",
+        run_store.local_run_dir(run_id) / "plan.json",
+        run_store.local_run_dir(run_id) / "artifacts.json",
         artifact_root / "stage",
-        run_store.get_config_path(run_id, "raw"),
+        run_store.local_config_path(run_id, "raw"),
     ]
 
     for path in required_files:

@@ -20,7 +20,7 @@ from loom.pipeline.planning import (
 from loom.pipeline.specs import PipelineSpec, StageSpec, parse_pipeline_config
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, RunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
 from loom.pipeline.stores.indexes import format_artifact_key, merge_artifact_index
@@ -89,7 +89,9 @@ class PipelineRunner:
 
         started_at = self.clock()
         run_id = cast(str, request.run_id)
-        run_dir = self._create_or_open_run(request)
+        local_run_store = self._require_local_run_store()
+        self._create_or_open_run(request)
+        run_dir = local_run_store.local_run_dir(run_id)
         created_at = self._created_at(run_id, started_at)
         write_run_status(
             self.run_store,
@@ -103,7 +105,7 @@ class PipelineRunner:
         config_mapping, spec = self._resolve_config_and_spec(request)
         self._write_config_and_provenance(run_id, request, config_mapping)
         artifact_store = self.artifact_store_factory(
-            self.run_store.get_artifact_root(run_id)
+            local_run_store.local_artifact_root(run_id)
         )
 
         plan = plan_pipeline(
@@ -271,6 +273,7 @@ class PipelineRunner:
             self.run_store.write_stage_fingerprint(
                 run_id, stage.name, fingerprint.to_dict(), attempt=attempt
             )
+            self.run_store.prepare_stage_workspace(run_id, stage.name)
             running_at = self.clock()
             write_stage_running(
                 self.run_store,
@@ -285,7 +288,7 @@ class PipelineRunner:
                 run_id=run_id,
                 stage_name=stage.name,
                 run_dir=run_dir,
-                stage_dir=self.run_store.get_stage_dir(run_id, stage.name),
+                stage_dir=self.run_store.local_stage_dir(run_id, stage.name),
                 resolved_config=config_mapping,
                 stage_config=stage.stage_config,
                 provenance={},
@@ -303,10 +306,10 @@ class PipelineRunner:
                 inputs=inputs,
                 fingerprint=fingerprint,
                 attempt=attempt,
-                stdout_path=self.run_store.get_stage_log_path(
+                stdout_path=self.run_store.local_stage_log_path(
                     run_id, stage.name, "stdout"
                 ),
-                stderr_path=self.run_store.get_stage_log_path(
+                stderr_path=self.run_store.local_stage_log_path(
                     run_id, stage.name, "stderr"
                 ),
                 traceback_path=traceback_log_path(
@@ -419,11 +422,19 @@ class PipelineRunner:
                 finished_at=failure.failed_at,
             )
 
-    def _create_or_open_run(self, request: RunRequest) -> Path:
+    def _require_local_run_store(self) -> LocalRunStorePaths:
+        if not isinstance(self.run_store, LocalRunStorePaths):
+            raise PipelineExecutionError(
+                "PipelineRunner requires a run_store that exposes local_* path helpers"
+            )
+        return self.run_store
+
+    def _create_or_open_run(self, request: RunRequest) -> None:
         run_id = cast(str, request.run_id)
         if request.open_existing:
-            return self.run_store.open_run(run_id)
-        return self.run_store.create_run(run_id, metadata=request.metadata)
+            self.run_store.open_run(run_id)
+        else:
+            self.run_store.create_run(run_id, metadata=request.metadata)
 
     def _resolve_config_and_spec(
         self, request: RunRequest
@@ -470,7 +481,7 @@ class PipelineRunner:
                     getattr(request.config, "recipe_manifest"),
                 ),
             )
-            self.run_store.write_run_metadata(
+            self.run_store.write_run_user_metadata(
                 run_id,
                 {
                     **request.metadata,
@@ -888,7 +899,7 @@ class PipelineRunner:
         status = self.run_store.read_run_status(run_id)
         if status is not None:
             return status.created_at
-        metadata = self.run_store.read_run_metadata(run_id)
+        metadata = self.run_store.read_run_document(run_id)
         created = metadata.get("created_at")
         return created if isinstance(created, str) else fallback
 

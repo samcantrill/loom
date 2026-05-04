@@ -19,7 +19,7 @@ from tests.support.pipeline_execution_stages import FailingStage, JsonProducerSt
 def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
     run_store = LocalRunStore(tmp_path / "runs")
     run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.get_artifact_root("run1"))
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
     stage = StageSpec(
         name="build",
         target_path="tests.support.pipeline_execution_stages.JsonProducerStage",
@@ -43,8 +43,8 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
         context=StageContext(
             run_id="run1",
             stage_name="build",
-            run_dir=run_store.get_run_dir("run1"),
-            stage_dir=run_store.get_stage_dir("run1", "build"),
+            run_dir=run_store.local_run_dir("run1"),
+            stage_dir=run_store.local_stage_dir("run1", "build"),
             resolved_config={},
             stage_config={},
             run_store=run_store,
@@ -54,9 +54,9 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
         inputs={},
         fingerprint=fingerprint,
         attempt=1,
-        stdout_path=run_store.get_stage_log_path("run1", "build", "stdout"),
-        stderr_path=run_store.get_stage_log_path("run1", "build", "stderr"),
-        traceback_path=run_store.get_stage_dir("run1", "build")
+        stdout_path=run_store.local_stage_log_path("run1", "build", "stdout"),
+        stderr_path=run_store.local_stage_log_path("run1", "build", "stderr"),
+        traceback_path=run_store.local_stage_dir("run1", "build")
         / "logs"
         / "traceback.txt",
     )

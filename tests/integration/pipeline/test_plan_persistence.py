@@ -21,7 +21,7 @@ def test_plan_pipeline_persists_only_plan_document(tmp_path: Path) -> None:
     )
     run_store = LocalRunStore(tmp_path / "runs")
     run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.get_artifact_root("run1"))
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
 
     plan = plan_pipeline(
         spec,
@@ -34,5 +34,5 @@ def test_plan_pipeline_persists_only_plan_document(tmp_path: Path) -> None:
 
     assert persisted == plan.to_dict()
     assert ExecutionPlan.from_dict(persisted).to_dict() == plan.to_dict()
-    assert (run_store.get_run_dir("run1") / "plan.json").exists()
+    assert (run_store.local_run_dir("run1") / "plan.json").exists()
     assert run_store.read_stage_status("run1", "build") is None
