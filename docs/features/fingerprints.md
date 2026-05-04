@@ -516,8 +516,8 @@ plan --resume --explain` to show why a stage reran.
 Do not store only an opaque hash when a small summary can be retained.
 
 Plan explanations are a separate typed projection in `loom.pipeline.planning`
-(`PLAN_EXPLANATION` models) and do not require changing persisted fingerprint
-record shapes in v0.
+(`PlanExplanation` and `StageExplanation`) and do not require changing
+persisted fingerprint record shapes in v0.
 
 ---
 

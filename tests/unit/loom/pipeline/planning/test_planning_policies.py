@@ -1,6 +1,9 @@
 """Unit tests for planning policy helper extraction."""
 
 from collections.abc import Mapping
+from typing import cast
+
+import pytest
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline import PipelineSpec
@@ -13,7 +16,9 @@ from loom.pipeline.planning import (
     PlanAction,
     PlanReason,
     PlanReasonCode,
+    PlanSerializationError,
     PlanSelectors,
+    PlanningValidationError,
     PendingInput,
     ResumeCheck,
     ResumeOptions,
@@ -405,6 +410,61 @@ def test_explain_plan_derives_plain_data_and_round_trips() -> None:
     assert PlanExplanation.from_dict(serialized) == explanation
     assert explanation.to_dict() == serialized
     assert _is_plain_data(serialized)
+
+
+def test_plan_explanation_parser_rejects_wrong_kind_and_non_string_names() -> None:
+    plan = ExecutionPlan(
+        schema_version=1,
+        run_id="run1",
+        pipeline_name="policy-demo",
+        selectors=PlanSelectors(),
+        resume=ResumeOptions(),
+        fingerprint_context=FingerprintContext(),
+        stage_order=("build",),
+        stage_plans=(
+            StagePlan(
+                stage_name="build",
+                action=PlanAction.RUN,
+                base_action=PlanAction.RUN,
+                fingerprint_status=FingerprintStatus.COMPUTED,
+                fingerprint=build_stage_fingerprint(
+                    _spec_with_input().get_stage("build"),
+                    bound_inputs={},
+                ),
+                resume_check=None,
+                reasons=(_reason(PlanReasonCode.NO_PRIOR_STATUS),),
+                bound_inputs={},
+                pending_inputs=(),
+                reusable_outputs={},
+                declared_outputs={},
+                upstream_stages=(),
+                downstream_stages=(),
+                selected_by=(),
+                invalidated_by=(),
+            ),
+        ),
+        reasons=(),
+        summary={"RUN": 1},
+    )
+    serialized = explain_plan(plan).to_dict()
+
+    wrong_kind = dict(serialized)
+    wrong_kind["kind"] = "loom.execution_plan"
+    with pytest.raises(PlanSerializationError, match="kind"):
+        PlanExplanation.from_dict(wrong_kind)
+
+    non_string_stage_order = dict(serialized)
+    non_string_stage_order["stage_order"] = [1]
+    with pytest.raises(PlanningValidationError, match="stage_order"):
+        PlanExplanation.from_dict(non_string_stage_order)
+
+    non_string_stage_name = dict(serialized)
+    stages = cast(list[dict[str, object]], non_string_stage_name["stages"])
+    stage = dict(stages[0])
+    stage["stage_name"] = 1
+    non_string_stage_name["stages"] = [stage]
+    with pytest.raises(PlanningValidationError, match="stage_name"):
+        PlanExplanation.from_dict(non_string_stage_name)
 
 
 def _is_plain_data(value: object) -> bool:

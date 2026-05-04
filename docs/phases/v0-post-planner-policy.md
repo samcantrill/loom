@@ -33,7 +33,8 @@
 - Draft pass: completed by `loom_phase_planner` in commit `d5db52e`.
 - Refine pass: completed by `loom_phase_planner` in this planning pass. This
   document is decision-complete for executor handoff.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by the Phase 5 implementation
+  refinement pass.
 - PR review budget: unused.
 - Setup limitations: local `develop` matched the manager-provided Phase 5 start
   commit `235e068`. No remote synchronization was attempted during planning
@@ -576,6 +577,26 @@ Manager validation evidence:
 - `git diff --check`
   (pass)
 
+Implementation refinement evidence:
+
+- Consumed the one allowed Phase 5 implementation refinement pass.
+- Fixed explanation parser strictness so `PlanExplanation.from_dict()` rejects
+  the wrong document `kind` and does not coerce non-string stage names, stage
+  order values, reusable output keys, fingerprint digests, or summary keys.
+- Aligned `docs/structure.md` planning package lists with the implemented
+  Phase 5 modules and corrected the fingerprint docs to name
+  `PlanExplanation` and `StageExplanation`.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_policies.py`
+  (9 passed)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/planning/explanations.py tests/unit/loom/pipeline/planning/test_planning_policies.py`
+  (pass)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright src/loom/pipeline/planning/explanations.py tests/unit/loom/pipeline/planning/test_planning_policies.py`
+  (0 errors, 0 warnings, 0 informations)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/planning tests/integration/pipeline/test_plan_persistence.py tests/package/test_pipeline_planning_api.py`
+  (43 passed)
+- `git diff --check`
+  (pass)
+
 ## Design Impact
 
 This phase makes planning easier to extend without turning the public
@@ -647,6 +668,6 @@ execution contract without learning diagnostic presentation concerns.
   workflow/control files.
 - The later Phase 5 PR must target `develop`, notify `samcantrill`, and stop at
   the serial human merge gate.
-- Implementation refinement and PR review budgets are currently unused. Later
-  workflow stages get at most one automated implementation refinement pass and
-  one PR review pass unless the user explicitly resets the budget.
+- Implementation refinement budget is used. PR review budget is unused. Later
+  workflow stages get at most one automated PR review pass unless the user
+  explicitly resets the budget.

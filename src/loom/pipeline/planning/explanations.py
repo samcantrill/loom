@@ -27,6 +27,7 @@ from .models import (
     reason_tuple,
     require_fields,
     require_mapping,
+    require_str,
 )
 
 PLAN_EXPLANATION_SCHEMA_VERSION = 1
@@ -102,7 +103,7 @@ class StageExplanation:
         reject_unknown(mapping, allowed, "StageExplanation")
         require_fields(mapping, allowed, "StageExplanation")
         return cls(
-            stage_name=str(mapping["stage_name"]),
+            stage_name=require_str(mapping["stage_name"], "stage_name"),
             action=PlanAction(mapping["action"]),
             base_action=PlanAction(mapping["base_action"]),
             fingerprint_status=FingerprintStatus(mapping["fingerprint_status"]),
@@ -121,7 +122,7 @@ class StageExplanation:
             ),
             bound_inputs=bound_input_mapping(mapping["bound_inputs"], "bound_inputs"),
             reusable_outputs={
-                str(name): ArtifactRef.from_dict(value)
+                require_str(name, "reusable_outputs key"): ArtifactRef.from_dict(value)
                 for name, value in require_mapping(
                     mapping["reusable_outputs"], "reusable_outputs"
                 ).items()
@@ -131,15 +132,11 @@ class StageExplanation:
                 mapping["downstream_stages"],
                 "downstream_stages",
             ),
-            prior_fingerprint=(
-                None
-                if mapping["prior_fingerprint"] is None
-                else str(mapping["prior_fingerprint"])
+            prior_fingerprint=_optional_string(
+                mapping["prior_fingerprint"], "prior_fingerprint"
             ),
-            current_fingerprint=(
-                None
-                if mapping["current_fingerprint"] is None
-                else str(mapping["current_fingerprint"])
+            current_fingerprint=_optional_string(
+                mapping["current_fingerprint"], "current_fingerprint"
             ),
         )
 
@@ -187,11 +184,9 @@ class PlanExplanation:
         require_fields(mapping, allowed, "PlanExplanation")
         return cls(
             schema_version=_schema_version(mapping["schema_version"]),
-            kind=str(mapping["kind"]),
-            run_id=str(mapping["run_id"]),
-            pipeline_name=(
-                None if mapping["pipeline_name"] is None else str(mapping["pipeline_name"])
-            ),
+            kind=_kind(mapping["kind"]),
+            run_id=require_str(mapping["run_id"], "run_id"),
+            pipeline_name=_optional_string(mapping["pipeline_name"], "pipeline_name"),
             selectors=PlanSelectors.from_dict(mapping["selectors"]),
             resume=ResumeOptions.from_dict(mapping["resume"]),
             stage_order=_string_tuple(mapping["stage_order"], "stage_order"),
@@ -261,6 +256,15 @@ def _schema_version(value: object) -> int:
     return value
 
 
+def _kind(value: object) -> str:
+    kind = require_str(value, "kind")
+    if kind != PLAN_EXPLANATION_KIND:
+        raise PlanSerializationError(
+            f"PlanExplanation.kind must be {PLAN_EXPLANATION_KIND!r}"
+        )
+    return kind
+
+
 def _sequence(value: object, field: str) -> Sequence[object]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise PlanSerializationError(f"{field} must be a sequence")
@@ -268,16 +272,23 @@ def _sequence(value: object, field: str) -> Sequence[object]:
 
 
 def _string_tuple(value: object, field: str) -> tuple[str, ...]:
-    return tuple(str(item) for item in _sequence(value, field))
+    return tuple(require_str(item, f"{field} item") for item in _sequence(value, field))
+
+
+def _optional_string(value: object | None, field: str) -> str | None:
+    if value is None:
+        return None
+    return require_str(value, field)
 
 
 def _int_mapping(value: object, field: str) -> dict[str, int]:
     mapping = require_mapping(value, field)
     result: dict[str, int] = {}
     for key, item in mapping.items():
+        key_text = require_str(key, f"{field} key")
         if isinstance(item, bool) or not isinstance(item, int):
-            raise PlanSerializationError(f"{field}[{key!r}] must be an integer")
-        result[str(key)] = item
+            raise PlanSerializationError(f"{field}[{key_text!r}] must be an integer")
+        result[key_text] = item
     return result
 
 

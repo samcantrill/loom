@@ -290,10 +290,15 @@ src/loom/
 
     planning/
       __init__.py
-      plan.py
+      models.py
       planner.py
-      resume.py
+      selectors.py
       invalidation.py
+      actions.py
+      fingerprints.py
+      resume.py
+      explanations.py
+      errors.py
 
     execution/
       __init__.py
@@ -611,6 +616,7 @@ errors.py          pipeline-specific errors
 `planning/` currently includes:
 
 ```text
+models.py         persisted execution plan, stage plan, fingerprint, resume, and reason models
 invalidation.py   upstream binding validation and invalidation helper policy
 selectors.py      selector and eligibility normalization
 actions.py        stage action decision policy extraction
@@ -618,6 +624,7 @@ fingerprints.py   stable stage-fingerprint construction
 resume.py         same-run resume checks and reuse policy
 explanations.py   derived typed explanation model for CLI/preflight consumers
 planner.py        topological plan assembly and execution plan construction
+errors.py         planning, serialization, persistence, selector, and resume errors
 ```
 
 Pipeline specs describe work. Project stage objects do the work. `loom.pipeline`
