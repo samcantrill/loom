@@ -538,7 +538,6 @@ make test-summary
   - `git diff --check develop...HEAD` passed.
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed, Pyright reported 0 errors, default harness passed with 308 passed and 9 skipped, config-extra harness passed with 102 passed and 309 deselected, and `uv build` produced source and wheel distributions.
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`.
-  - `gh pr checks 16` reported `checks pass` in 36s.
 - Suite evidence from `make test-summary`:
   - package: passed, 32 passed and 1 skipped.
   - unit: passed, 255 passed and 1 skipped.
@@ -550,6 +549,5 @@ make test-summary
 - PR URL: https://github.com/samcantrill/loom/pull/16
 - PR creation command: `gh pr create --base develop --head codex/v0-post-store-capabilities --title "Phase 2: Store, Artifact, and Stage Context Capabilities" --body-file docs/phases/v0-post-store-capabilities-pr-body.md`
 - PR target verification: `gh pr view 16 --json baseRefName,headRefName,state,url` returned `{"baseRefName":"develop","headRefName":"codex/v0-post-store-capabilities","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/16"}`.
-- GitHub checks: `gh pr checks 16` reported `checks pass` in 36s.
 - Review notification: `gh pr edit 16 --add-reviewer samcantrill` failed with GitHub GraphQL project-card deprecation output; `gh pr view 16 --json reviewRequests,author,url` showed PR author `samcantrill` and no recorded review requests, so fallback comment `https://github.com/samcantrill/loom/pull/16#issuecomment-4369304096` was posted mentioning `@samcantrill`.
 - Serial merge gate state: active. Codex must not approve or merge this PR, and Phase 3 must not start until this PR is human-approved and human-merged into `develop`.
