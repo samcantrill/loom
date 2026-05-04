@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Branch: `codex/v0-post-runtime-events-locks`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-runtime-events-locks`
 - Phase execution plan path: `docs/phases/v0-post-runtime-events-locks.md`
@@ -12,6 +12,11 @@
 - Stack predecessor: none
 - Base branch: `develop` at `6c21f72fd777f48977f4d9e9822b7b7acd82d5b6`
 - Target branch: `develop`
+- Serial human merge gate: active. Do not open, approve, or merge a PR during
+  this planning pass. The implementation PR must target `develop` and must
+  notify `samcantrill` by reviewer request when GitHub allows it, with an
+  `@samcantrill` PR-body mention or immediate fallback PR comment recorded by
+  PR preparation.
 - Merge eligibility: serial human merge gate. The Phase 4 PR must target
   `develop`, request review from `samcantrill` when GitHub allows it, and
   mention `@samcantrill` in the PR body or an immediate fallback PR comment.
@@ -29,7 +34,7 @@
   refinement pass used, confirmation review used. Do not consume another
   plan-quality review loop without explicit manager instruction.
 - Draft pass: completed by `loom_phase_planner` in this planning pass.
-- Refine pass: pending.
+- Refine pass: completed by `loom_phase_planner` in this planning pass.
 - Phase implementation refinement budget: unused.
 - PR review budget: unused.
 - Setup limitations: local `develop` matched the manager-provided Phase 4 base
@@ -162,41 +167,56 @@ final migration notes remain future-phase work.
 
 ## In-Scope Work
 
-- Add pipeline-owned runtime/resource foundation models for the supported local
-  v0 surface. The refine pass must settle exact module and class names, but the
-  implementation must keep these models import-safe without `loom[config]`.
-- Validate generic resource request fields that are foundation-safe now, such
-  as positive CPU or memory-style values if selected by the refine pass, while
-  rejecting executor-specific scheduler/container fields and deferred runtime
-  policy fields.
-- Preserve the existing authored stage `resources` mapping as operational,
-  non-semantic plain data by default. Any typed conversion added in this phase
-  is for validation and inspection, not fingerprint impact or executor
-  enforcement.
-- Keep authored `runtime`, `retry`, `when`, executor, timeout, SLURM,
-  container, and remote-store fields rejected with clear errors until their
-  roadmap phases define semantics.
-- Add `loom.pipeline.events` with strict, versioned event record value objects
-  that carry per-run sequence, timestamp, scope, event type, and plain-data
-  payload.
-- Add local event persistence owned by the run store. The local implementation
-  must append event JSONL records in order and read them back through strict
-  model parsing.
-- Add store capability protocols for event persistence and run-level locking.
-  Keep locks capability-based and backend-neutral; do not require generic
-  store implementations to expose local paths.
-- Add a conservative `LocalRunStore` lock implementation that prevents obvious
-  same-run concurrent writers in local filesystems. Record owner metadata
-  sufficient for inspection, but do not claim distributed or stale-lock
-  recovery semantics.
-- Add durable blocked stage status or outcome support, including serialization
-  and local store read/write behavior. Blocked must remain distinct from
-  skipped, failed, stale, and planned-but-not-run states.
-- Add lifecycle/status helper support for writing blocked outcomes if that is
-  the chosen shape, without performing broad runner lifecycle integration.
-- Update package exports only where needed for stable public contracts; keep
-  private implementation helpers unexported.
-- Update docs that own the changed package boundaries and public contracts:
+- Add `src/loom/pipeline/resources.py` with `ResourceRequest` and
+  `parse_resource_request` as the typed scheduler-neutral foundation for
+  authored `StageSpec.resources`.
+- Add `src/loom/pipeline/runtime.py` with `RuntimeKind.LOCAL`,
+  `RuntimeRequest`, and `parse_runtime_request` as the local-only runtime
+  foundation. The authored stage-level `runtime` key remains rejected; this
+  model is for programmatic/future API vocabulary and strict unsupported-field
+  tests.
+- Validate the supported v0 resource keys exactly: `cpus`, `memory_mb`,
+  `gpus`, and `custom`. `cpus` and `memory_mb` are positive integers when
+  present, `gpus` is a non-negative integer, and `custom` is a plain-data
+  mapping. Booleans are invalid for all integer fields.
+- Reject deferred runtime/resource semantics clearly, including top-level stage
+  fields `runtime`, `retry`, `when`, `timeout`, `executor`, `slurm`,
+  `container`, `docker`, `apptainer`, and `remote_store`; resource keys
+  `wall_time_seconds`, `timeout_seconds`, `executor`, `runtime`, `retry`,
+  `slurm`, `partition`, `account`, `qos`, `gres`, `sbatch_args`,
+  `container`, `docker`, `apptainer`, `image`, `remote_store`, `store`,
+  `profile`, `env`, and `environment`; and the same reserved semantics under
+  `resources.custom`.
+- Preserve `StageSpec.resources` as recursively immutable plain data. Add
+  validation and an inspection path only; do not make resources semantic
+  fingerprint inputs and do not enforce them in the local executor.
+- Add `src/loom/pipeline/events.py` with strict, versioned
+  `PipelineEvent`, `PipelineEventRecord`, `EventScope`, and `EventScopeKind`
+  value objects.
+- Add local event persistence owned by `LocalRunStore` at
+  `<run_dir>/events.jsonl`. The store allocates monotonic per-run sequence
+  numbers, appends one strict JSON object per line, and reads records back
+  through `PipelineEventRecord.from_dict`.
+- Add `RunEventStore` and `RunLockStore` protocols to
+  `src/loom/pipeline/stores/run_store.py` and include them in `RunStore`.
+  These protocols must be backend-neutral and must not return local paths.
+- Add `src/loom/pipeline/locks.py` with `RunLockRecord` and implement a
+  conservative `LocalRunStore` lock at `<run_dir>/lock.json`. Acquisition uses
+  exclusive file creation, records a token and owner metadata, conflicts fail
+  clearly, release requires the matching token, and no stale-lock cleanup or
+  distributed guarantee is claimed.
+- Add durable blocked support by extending `StageStatus` with `BLOCKED` and
+  using the existing `StageStatusRecord`/`status.json` document as the
+  persisted outcome. Add `write_stage_blocked` to
+  `src/loom/pipeline/execution/lifecycle.py`; do not add a separate
+  `blocked.json` file in this phase.
+- Update local store and status tests so blocked outcomes can be written and
+  read without constructing or executing downstream stages.
+- Update package exports for the new stable surfaces only:
+  `loom.pipeline.resources`, `loom.pipeline.runtime`,
+  `loom.pipeline.events`, `loom.pipeline.locks`,
+  `loom.pipeline.stores.RunEventStore`, `RunLockStore`, and new lock errors.
+- Update docs that own changed package boundaries and public contracts:
   `docs/structure.md`, `docs/features/runtime-resources.md`,
   `docs/features/state.md`, `docs/features/run-store.md`, and
   `docs/features/reliability.md`.
@@ -231,9 +251,9 @@ final migration notes remain future-phase work.
   long-term runtime/state vocabulary before CLI, runner decomposition, and
   plugins build on it.
 - `StageSpec.resources` remains the authored resource input for now. Typed
-  resource models may normalize or validate a selected generic subset, but the
-  full `RunOptions` or runtime profile API can remain deferred if the refine
-  pass finds that smaller surface more reviewable.
+  resource models validate the selected generic subset, but full `RunOptions`,
+  runtime profiles, executor selection, retry, and timeout policy remain
+  deferred.
 - `BLOCKED` is a durable outcome, not a successful execution result. Persisting
   it must not require constructing or running the blocked stage.
 - Local locks protect against obvious same-run concurrent local writers only.
@@ -251,29 +271,199 @@ final migration notes remain future-phase work.
 
 ## Decision-Complete Contract
 
-This is the draft contract boundary for the refine pass. The refine pass must
-settle exact names, module exports, file layout, and edge-case behavior before
-executor handoff.
+### Runtime And Resource Models
 
-- Runtime/resource foundations belong under `loom.pipeline` and must not import
-  `loom.config` or executor-specific modules. They define supported local v0
-  validation and explicit rejection for deferred operational semantics.
-- Event models live in `loom.pipeline.events`. Event records are strict
-  versioned plain-data records with run identity or run-local sequence context,
-  timestamp, scope, event type, and payload. Event type names must stay
-  domain-neutral.
-- Local event persistence is append-only JSONL. Store APIs may expose append and
-  read operations, but must not turn the event log into the source of truth for
-  status documents in this phase.
-- Locking is a store capability. The generic protocol must be implementable by
-  non-local stores later without path-shaped requirements. The local
-  implementation may use a lock file under the run directory and must fail
-  clearly on conflicting acquisition.
-- Blocked outcomes are durable and distinct from skipped and failed. The chosen
-  record shape must be readable by store/status consumers without executing the
-  blocked stage or re-inferring every blocked descendant from the plan.
-- Public APIs must remain cheap to import and must preserve the no-extra import
-  boundary established in Phase 1.
+- Add `RESOURCE_SCHEMA_VERSION = 1` in `loom.pipeline.resources`.
+- `ResourceRequest` is a frozen, slots dataclass with:
+  - `cpus: int | None = None`
+  - `memory_mb: int | None = None`
+  - `gpus: int | None = None`
+  - `custom: Mapping[str, PlainData] = field(default_factory=dict)`
+  - `schema_version: int = RESOURCE_SCHEMA_VERSION`
+- `ResourceRequest.__post_init__` validates and freezes `custom` as plain data.
+  `to_dict()` includes `schema_version` and omits no fields; absent values
+  serialize as `None` so the document is inspectable and deterministic.
+- `ResourceRequest.from_dict()` parses strict serialized documents and requires
+  `schema_version`. `parse_resource_request()` parses authored
+  `StageSpec.resources` mappings without requiring `schema_version`. Both
+  reject unknown fields, reject reserved deferred fields, reject booleans for
+  integer fields, require `cpus` and `memory_mb` to be positive when set,
+  require `gpus` to be zero or positive when set, and require `custom` to be a
+  mapping.
+- `StageSpec.from_config()` must call `parse_resource_request()` after
+  `_plain_mapping()` for `resources`. It continues to store
+  `StageSpec.resources` as frozen plain data. Add a `StageSpec.resource_request`
+  property returning `parse_resource_request(self.resources)` for typed
+  inspection.
+- Add `RUNTIME_SCHEMA_VERSION = 1` in `loom.pipeline.runtime`.
+- `RuntimeKind` is a `StrEnum` with only `LOCAL = "LOCAL"`.
+- `RuntimeRequest` is a frozen, slots dataclass with:
+  - `kind: RuntimeKind = RuntimeKind.LOCAL`
+  - `resources: ResourceRequest = field(default_factory=ResourceRequest)`
+  - `metadata: Mapping[str, PlainData] = field(default_factory=dict)`
+  - `schema_version: int = RUNTIME_SCHEMA_VERSION`
+- `RuntimeRequest.from_dict()` accepts only `kind`, `resources`, `metadata`,
+  and `schema_version`; `kind` must be `LOCAL`. It rejects
+  unsupported executor, scheduler, retry, timeout, container, remote-store,
+  profile, and environment fields. It must not be wired into authored stage
+  `runtime` parsing in this phase because the authored `runtime` key remains
+  deferred.
+- Add `RuntimeResourceError` under `loom.pipeline.errors` as a subclass of
+  `PipelineSpecError`. Use it for direct runtime/resource model parsing so
+  direct API callers get a precise error type while authored config parsing
+  remains catchable as `PipelineSpecError`.
+
+### Unsupported Field Policy
+
+- Update `StageSpec.from_config()` deferred fields to include
+  `{"runtime", "retry", "when", "metadata", "timeout", "executor", "slurm",
+  "container", "docker", "apptainer", "remote_store"}`.
+- Resource top-level deferred fields are exactly
+  `{"wall_time_seconds", "timeout_seconds", "timeout", "executor", "runtime",
+  "retry", "slurm", "partition", "account", "qos", "gres", "sbatch_args",
+  "container", "docker", "apptainer", "image", "remote_store", "store",
+  "profile", "env", "environment"}`.
+- `resources.custom` may carry domain-neutral plain metadata, but must reject
+  the same reserved semantics at its first level. Do not recursively police
+  arbitrary user metadata beyond that first custom level in Phase 4.
+- Error messages must name the unsupported field and say it is deferred or not
+  supported in local v0. They must not silently preserve unsupported fields as
+  honored metadata.
+
+### Event Models
+
+- Add `EVENT_SCHEMA_VERSION = 1` in `loom.pipeline.events`.
+- `EventScopeKind` is a `StrEnum` with `RUN = "RUN"` and `STAGE = "STAGE"`.
+- `EventScope` is a frozen, slots dataclass with:
+  - `kind: EventScopeKind`
+  - `stage_name: str | None = None`
+- `EventScope.to_dict()` returns `{"kind": "RUN", "stage_name": None}` or
+  `{"kind": "STAGE", "stage_name": "<stage>"}`. `STAGE` requires a non-empty
+  stage name; `RUN` requires `stage_name is None`. Unknown fields are rejected.
+- `PipelineEvent` is an unsequenced event draft with:
+  - `scope: EventScope`
+  - `event_type: str`
+  - `payload: Mapping[str, PlainData] = field(default_factory=dict)`
+  - `timestamp: str | None = None`
+- `PipelineEventRecord` is the persisted record with:
+  - `run_id: str`
+  - `sequence: int`
+  - `timestamp: str`
+  - `scope: EventScope`
+  - `event_type: str`
+  - `payload: Mapping[str, PlainData] = field(default_factory=dict)`
+  - `schema_version: int = EVENT_SCHEMA_VERSION`
+- `event_type` is a lower-case dot-separated identifier such as
+  `run.created`, `stage.started`, or `stage.blocked`. It must contain only
+  lowercase ASCII letters, digits, underscores, and dots; it cannot be empty,
+  start/end with a dot, or contain `..`.
+- `payload` must be a plain-data mapping. The model does not define
+  event-specific payload schemas in Phase 4.
+- `PipelineEventRecord.from_dict()` must use `load_versioned_document`, reject
+  unknown fields, reject unsupported schema versions, validate `run_id`,
+  positive `sequence`, timestamp, scope, event type, and plain-data payload.
+
+### Append-Only Local Events
+
+- Add `RunEventStore` protocol:
+  - `append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord`
+  - `read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]`
+- `LocalRunStore.append_event()` writes to `<run_dir>/events.jsonl`. If
+  `event.timestamp` is `None`, assign `utc_timestamp()` immediately before
+  writing. If it is set, validate it and preserve it.
+- Sequence allocation is local-store-owned: read the last valid record's
+  sequence, use `1` when the log is absent/empty, otherwise use `last + 1`.
+  The caller cannot provide a sequence through `PipelineEvent`.
+- Append writes exactly one compact JSON object plus a trailing newline using
+  UTF-8 append mode. It must not rewrite or truncate existing lines.
+- `read_events()` returns an empty tuple when the file is absent. When present,
+  it parses each non-empty line with strict JSON and
+  `PipelineEventRecord.from_dict()`, verifies all records match `run_id`, and
+  verifies sequences are contiguous from `1`. Corrupt JSON, unknown fields,
+  wrong run IDs, or sequence gaps raise `CorruptStoreDocumentError` with the
+  line number when available.
+- Events are inspectable audit facts in this phase. They do not replace
+  `status.json`, `plan.json`, failure documents, artifact indexes, or resume
+  state as sources of truth.
+
+### Lock Capability And Local Lock
+
+- Add `LOCK_SCHEMA_VERSION = 1` in `loom.pipeline.locks`.
+- `RunLockRecord` is a frozen, slots dataclass with:
+  - `run_id: str`
+  - `token: str`
+  - `acquired_at: str`
+  - `owner: Mapping[str, PlainData] = field(default_factory=dict)`
+  - `schema_version: int = LOCK_SCHEMA_VERSION`
+- `RunLockRecord.from_dict()` rejects unknown fields, unsupported schema
+  versions, empty run IDs/tokens, invalid timestamps, and non-mapping owners.
+- Add store errors in `loom.pipeline.stores.errors`:
+  - `RunLockError`
+  - `RunLockConflictError`
+  - `RunLockReleaseError`
+- Add `RunLockStore` protocol:
+  - `acquire_run_lock(self, run_id: str, *, owner: Mapping[str, PlainData] | None = None) -> RunLockRecord`
+  - `read_run_lock(self, run_id: str) -> RunLockRecord | None`
+  - `release_run_lock(self, run_id: str, token: str) -> None`
+- `LocalRunStore` writes the lock at `<run_dir>/lock.json`. Acquisition creates
+  the file with exclusive create semantics. The generated token is
+  `uuid.uuid4().hex`. The stored owner mapping includes `pid`,
+  `hostname`, and nested user-supplied `metadata` after plain-data validation.
+- If `<run_dir>/lock.json` already exists, acquisition raises
+  `RunLockConflictError`. It may include parsed owner information in the
+  message when the existing lock is valid, but a corrupt lock file is still a
+  conflict and must not be removed automatically.
+- `read_run_lock()` returns `None` when no lock file exists and strictly parses
+  an existing lock file.
+- `release_run_lock()` reads the existing lock, requires the stored token to
+  equal the provided token, removes only that lock file, and raises
+  `RunLockReleaseError` for missing locks, corrupt lock files, or token
+  mismatches. No stale-lock cleanup, force unlock, process liveness probing, or
+  distributed locking semantics are in scope.
+
+### Blocked Outcome Persistence
+
+- Add `StageStatus.BLOCKED = "BLOCKED"`. This is the durable blocked outcome
+  representation for Phase 4.
+- Do not add `BlockedOutcomeRecord` or `blocked.json` in this phase. The
+  persisted document is the existing per-stage `status.json` containing a
+  `StageStatusRecord` with `status=BLOCKED`.
+- A blocked stage status means the stage was planned but not executed because a
+  dependency or prerequisite made execution impossible. It is distinct from:
+  `SKIPPED` (selector/user policy), `FAILED` (attempt executed and failed),
+  `STALE` (planning invalidation), `PENDING` (not decided), and `RUNNING`.
+- For blocked records, `started_at` and `finished_at` should be `None`,
+  `updated_at` is the blocked timestamp, `attempt` is the positive attempt
+  context chosen by the caller, `owner` is empty, `message` should explain why
+  the stage is blocked, and `metadata` may include `blocked_by`,
+  `reason_code`, and `reason_details` plain-data fields.
+- Add `write_stage_blocked()` in `loom.pipeline.execution.lifecycle` with
+  arguments for `run_store`, `run_id`, `stage_name`, `attempt`, `blocked_at`,
+  `message`, optional `blocked_by`, optional `reason_code`, and optional
+  metadata. It writes only status state. It must not create inputs, outputs,
+  artifacts, fingerprints, provenance, failures, or logs for the blocked stage.
+- Phase 7 will decide when runner failure paths call `write_stage_blocked()`
+  for descendants. Phase 4 only provides the durable status shape and local
+  read/write support.
+
+### Package Exports
+
+- Add module-level `__all__` for `loom.pipeline.resources`,
+  `loom.pipeline.runtime`, `loom.pipeline.events`, and `loom.pipeline.locks`.
+- Update `loom.pipeline.__all__` to include only stable foundational names
+  expected at the pipeline package level:
+  `ResourceRequest`, `parse_resource_request`, `RuntimeKind`,
+  `RuntimeRequest`, `parse_runtime_request`, `RuntimeResourceError`, and the
+  existing status exports including `StageStatus.BLOCKED` through the enum.
+- Keep event and lock models importable from their explicit modules rather
+  than adding every event/lock class to `loom.pipeline.__all__`.
+- Update `loom.pipeline.stores.__all__` to include `RunEventStore`,
+  `RunLockStore`, `RunLockError`, `RunLockConflictError`, and
+  `RunLockReleaseError`.
+- Preserve import boundaries: `import loom` must not import `loom.pipeline`;
+  `import loom.pipeline` must not import `loom.config`,
+  `loom.pipeline.execution`, or executor modules; `import loom.pipeline.events`,
+  `resources`, `runtime`, and `locks` must not require `loom[config]`.
 
 ## Design Impact
 
@@ -334,9 +524,15 @@ executor handoff.
 - Files and areas to inspect:
   - `src/loom/pipeline/status.py`
   - `src/loom/pipeline/events.py`
-  - runtime/resource modules selected by the refine pass
+  - `src/loom/pipeline/resources.py`
+  - `src/loom/pipeline/runtime.py`
+  - `src/loom/pipeline/locks.py`
+  - `src/loom/pipeline/specs.py`
   - `src/loom/pipeline/stores/run_store.py`
   - `src/loom/pipeline/stores/local_runs.py`
+  - `src/loom/pipeline/stores/errors.py`
+  - `src/loom/pipeline/__init__.py`
+  - `src/loom/pipeline/stores/__init__.py`
   - `src/loom/pipeline/execution/lifecycle.py`
   - `docs/structure.md`
   - `docs/features/runtime-resources.md`
@@ -354,29 +550,30 @@ executor handoff.
 
 ## Implementation Steps
 
-1. Refine the exact runtime/resource foundation surface, including module names,
-   class names, supported generic fields, and explicit unsupported-field error
-   behavior.
-2. Add runtime/resource model tests first, then implement the smallest
-   import-safe models needed for Phase 4 acceptance criteria.
-3. Add event record tests for strict serialization, unknown-field rejection,
+1. Add runtime/resource tests, then implement `loom.pipeline.resources`,
+   `loom.pipeline.runtime`, `StageSpec.resource_request`, and the exact
+   unsupported-field rejection policy.
+2. Update package import/API tests for resource/runtime module exports and
+   no-extra import boundaries.
+3. Add event model tests for strict serialization, unknown-field rejection,
    timestamp validation, sequence validation, scope validation, event type
    validation, and payload plain-data validation.
-4. Implement `loom.pipeline.events` and expose only stable public names.
+4. Implement `loom.pipeline.events` and its explicit module-level public names.
 5. Add run-store capability protocol tests for event append/read and lock
    acquire/release/conflict behavior.
-6. Implement local event JSONL persistence in `LocalRunStore`, preserving
+6. Implement `RunEventStore`, `RunLockStore`, and store exports without
+   path-shaped generic protocol methods.
+7. Implement local event JSONL persistence in `LocalRunStore`, preserving
    append-only behavior and strict readback.
-7. Implement conservative local run locking through the store capability, with
+8. Add lock model/error tests, then implement `loom.pipeline.locks`, new lock
+   errors, and conservative local run locking through the store capability with
    owner metadata and clear conflict errors.
-8. Add status/outcome tests for durable `BLOCKED` support or the refined
-   equivalent shape, ensuring blocked is distinct from skipped, failed, and
-   stale.
-9. Add local-store read/write tests for blocked outcomes without executing
+9. Add status/lifecycle tests for durable `StageStatus.BLOCKED`, ensuring
+   blocked is distinct from skipped, failed, stale, and pending states.
+10. Add local-store read/write tests for blocked outcomes without executing
    downstream stages.
-10. Update lifecycle helper support only as needed for blocked records; defer
+11. Update lifecycle helper support only as needed for blocked records; defer
     broad runner integration.
-11. Update package exports and import-boundary tests.
 12. Update structure and feature docs for runtime/resources, state, run-store,
     and reliability ownership.
 13. Run targeted suites while implementing. PR preparation later must run
@@ -395,10 +592,16 @@ executor handoff.
   - `tests/package/test_public_api.py`
 - Required assertions:
   - `import loom` remains cheap and no-extra safe.
-  - New runtime/resource/event/lock public exports, if any, are available from
-    the intended package boundary only.
-  - Importing `loom.pipeline`, `loom.pipeline.events`, runtime/resource modules,
-    and store protocols does not import `loom.config` or config extras.
+  - `loom.pipeline.__all__` includes `ResourceRequest`,
+    `parse_resource_request`, `RuntimeKind`, `RuntimeRequest`, and
+    `parse_runtime_request`, plus `RuntimeResourceError`, but does not
+    bulk-export event or lock helpers.
+  - `loom.pipeline.stores.__all__` includes `RunEventStore`, `RunLockStore`,
+    `RunLockError`, `RunLockConflictError`, and `RunLockReleaseError`.
+  - Importing `loom.pipeline`, `loom.pipeline.events`,
+    `loom.pipeline.resources`, `loom.pipeline.runtime`,
+    `loom.pipeline.locks`, and store protocols does not import `loom.config`,
+    `loom.pipeline.execution`, executor modules, or config extras.
   - Store capability public exports do not expose local-only path requirements
     through generic protocols.
 
@@ -406,14 +609,18 @@ executor handoff.
 
 - Status: required.
 - Expected paths:
-  - `tests/unit/loom/pipeline/test_runtime_resources.py` or refined equivalent
+  - `tests/unit/loom/pipeline/test_runtime_resources.py`
   - `tests/unit/loom/pipeline/test_events.py`
+  - `tests/unit/loom/pipeline/test_locks.py`
   - `tests/unit/loom/pipeline/test_status.py`
   - `tests/unit/loom/pipeline/stores/test_local_runs.py`
   - `tests/unit/loom/pipeline/test_specs.py`
-  - `tests/unit/loom/pipeline/execution/test_execution_models.py`
+  - `tests/unit/loom/pipeline/execution/test_lifecycle.py`
 - Required assertions:
-  - Supported runtime/resource fields validate and normalize deterministically.
+  - `ResourceRequest` accepts only `cpus`, `memory_mb`, `gpus`, and `custom`
+    with the exact integer/plain-data rules above.
+  - `RuntimeRequest` accepts only local runtime requests and rejects deferred
+    executor/policy fields.
   - Unsupported runtime, retry, timeout, executor, SLURM, container, and
     remote-store semantics fail clearly.
   - Event records reject unknown fields, unsupported versions, invalid
@@ -422,24 +629,26 @@ executor handoff.
   - Local event JSONL append/read preserves order and strict parsing.
   - Local lock acquire/release/conflict behavior is inspectable and fails
     clearly.
-  - `StageStatus` or refined outcome shape supports durable blocked outcomes
+  - `StageStatus.BLOCKED` supports durable blocked outcomes
     distinctly from skipped, failed, and stale.
-  - Blocked outcome read/write does not require stage execution outputs.
+  - `write_stage_blocked()` writes only `status.json`; blocked outcome
+    read/write does not require stage execution outputs, inputs, artifacts,
+    failures, provenance, logs, or fingerprints.
 
 ### Contract Suite
 
 - Status: required.
 - Expected paths:
   - `tests/contracts/test_store_contract.py`
-  - new contract tests for event and lock store capabilities if split out
 - Required assertions:
+  - `DummyRunStore` and `LocalRunStore` satisfy `RunEventStore`,
+    `RunLockStore`, and the expanded `RunStore` protocol.
   - New event and lock capabilities can be described without local path return
     values.
-  - Local store satisfies the new event and lock capability contracts.
   - Lock conflict behavior is part of the contract surface for local stores,
     while distributed or stale-lock recovery is explicitly not required.
-  - Blocked outcome/status persistence is covered by store contracts if it is
-    added to the generic stage-state protocol.
+  - `StageStateStore` continues to cover blocked persistence through
+    `StageStatusRecord`; no extra blocked-store protocol is added.
 
 ### Integration Suite
 
@@ -452,6 +661,10 @@ executor handoff.
 - Required assertions:
   - A real `LocalRunStore` run directory can persist event JSONL, lock state,
     and blocked outcomes and read them back after reopening.
+  - Event append preserves existing JSONL lines and allocates sequences
+    contiguously from `1`.
+  - Lock conflict/release behavior is inspectable through `lock.json` without
+    requiring distributed or stale-lock support.
   - Existing local execution failure behavior remains unchanged until Phase 7
     wires durable blocked descendants through the runner.
   - Authored unsupported runtime/retry/timeout fields still fail through config
@@ -472,22 +685,26 @@ executor handoff.
     because this phase intentionally stops at foundations and local-store
     persistence.
 
-### Config-Extra Suite
+### Opt-In Suites
 
-- Status: required.
-- Expected paths:
-  - `make test-config-extra`
-  - config-marked package/unit/integration/docs tests selected by the harness
-- Required assertions:
+- Status: config-extra required; all other opt-in suites deferred.
+- Markers affected:
+  - `config-extra` is required through `make test-config-extra`.
+  - No SLURM, container, remote-store, network, plugin, or distributed-lock
+    opt-in suite is required.
+- Required assertions or deferral reason:
   - Optional config dependency validation still executes as a visible suite row.
-  - Config-backed pipeline parsing keeps rejecting unsupported runtime/retry/when
-    fields clearly.
+  - Config-backed pipeline parsing keeps rejecting unsupported
+    runtime/retry/when/timeout/executor fields clearly.
   - New runtime/event/lock modules do not require config extras to import, even
     when config-backed tests exercise authored pipeline specs.
+  - SLURM, container, remote-store, network, plugin, and distributed-lock tests
+    are intentionally deferred because this phase does not implement external
+    executors, remote stores, plugin event sinks, or distributed locking.
 
-### Pyright/Ruff/Build Suite
+### Static Analysis And Build
 
-- Status: required.
+- Status: required before PR preparation.
 - Expected commands:
   - `uv run ruff check .`
   - `uv run --extra config pyright`
@@ -496,18 +713,7 @@ executor handoff.
 - Required assertions:
   - New modules and tests are typed without ignoring public-contract errors.
   - Public package exports remain consistent with `py.typed`.
-  - Build metadata remains valid after any package/export changes.
-
-### Opt-In Suites
-
-- Status: deferred except `config-extra`, which is required above.
-- Markers affected:
-  - No SLURM, container, remote-store, network, plugin, or distributed-lock
-    opt-in suite is required for this phase.
-- Required assertions or deferral reason:
-  - This phase explicitly does not implement external executors, remote stores,
-    plugin event sinks, or distributed locking. Adding opt-in coverage for those
-    behaviors would create false support signals.
+  - Build metadata remains valid after package/export changes.
 
 ## Risks
 
@@ -548,40 +754,50 @@ make validate-pr
 make test-summary
 ```
 
-## Handoff Notes For `phase-execution-plan-refine`
-
-- Make the runtime/resource model names and supported field set
-  decision-complete before executor handoff.
-- Decide whether durable blocked support is a new `StageStatus.BLOCKED`, a
-  separate outcome record, or both. Record the public behavior and migration
-  impact explicitly.
-- Decide exact local lock file name, owner metadata shape, conflict error type,
-  and release behavior. Keep stale-lock recovery deferred unless there is a
-  small, clearly bounded same-process cleanup need.
-- Decide exact event JSONL file path, record schema, sequence allocation policy,
-  and readback API.
-- Confirm public exports and import-boundary tests before implementation starts.
-- Keep the plan aligned with serial human merge gate: PR target `develop`, no
-  approval/merge by Codex, `samcantrill` review notification required, and no
-  Phase 5 work until Phase 4 is human-merged into `develop`.
-
 ## Handoff Notes For `loom_phase_executor`
 
-- Not ready for executor handoff until the refine pass is completed and this
-  document is decision-complete.
-- Safe likely implementation slices after refine:
-  - runtime/resource models and tests;
-  - event models and tests;
-  - store event persistence and tests;
-  - store lock capability/local implementation and tests;
-  - blocked outcome/status persistence and tests;
-  - docs and package/export updates.
-- Tests to run with each slice should include the relevant targeted package,
-  unit, contract, or integration suite from the test plan.
+- Ready for executor handoff after this commit; the refine pass is complete and
+  this document is decision-complete for Phase 4.
+- Safe implementation slices:
+  - Runtime/resource models, `StageSpec.resource_request`, unsupported-field
+    rejection, and package/import tests.
+  - Event models plus unit tests.
+  - `RunEventStore` protocol and `LocalRunStore` append-only JSONL behavior
+    plus unit/contract/integration tests.
+  - Lock model, lock store protocol, local `lock.json` implementation, lock
+    errors, and unit/contract/integration tests.
+  - `StageStatus.BLOCKED`, `write_stage_blocked`, local blocked persistence,
+    and status/lifecycle/local-store tests.
+  - Docs and final package/export updates.
+- Tests to run with each slice:
+  - Runtime/resource slice: `make test-package`, `make test-unit`, and focused
+    `uv run pytest tests/unit/loom/pipeline/test_runtime_resources.py`.
+    Also run `uv run pytest tests/unit/loom/pipeline/test_specs.py`.
+  - Event slice: `uv run pytest tests/unit/loom/pipeline/test_events.py`.
+  - Store-event slice: run `uv run pytest tests/unit/loom/pipeline/test_events.py`;
+    `uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py`;
+    `uv run pytest tests/contracts/test_store_contract.py`; and
+    `uv run pytest tests/integration/pipeline/test_local_stores.py`.
+  - Lock slice: run `uv run pytest tests/unit/loom/pipeline/test_locks.py`,
+    `uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py`,
+    `uv run pytest tests/contracts/test_store_contract.py`, and
+    `uv run pytest tests/integration/pipeline/test_local_stores.py`.
+  - Blocked-status slice: run
+    `uv run pytest tests/unit/loom/pipeline/test_status.py`,
+    `uv run pytest tests/unit/loom/pipeline/execution/test_lifecycle.py`, and
+    `uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py`.
+  - Final implementation/PR-prep evidence remains `make validate-pr` and
+    `make test-summary`.
 - Decisions the executor must not revisit:
   - serial human merge gate;
+  - Phase 4 PR target is `develop`, and PR preparation must notify/mention
+    `samcantrill`;
   - events live in `loom.pipeline.events`;
   - locks are store capabilities;
+  - local events are `<run_dir>/events.jsonl` and local locks are
+    `<run_dir>/lock.json`;
+  - blocked persistence is `StageStatus.BLOCKED` in `status.json`, not a
+    separate blocked document;
   - unsupported executor/retry/timeout/container/SLURM/remote-store semantics
     remain rejected;
   - resources remain non-semantic for fingerprints by default.
@@ -589,6 +805,8 @@ make test-summary
   - the implementation requires broad runner lifecycle decomposition;
   - the local lock protocol requires generic local path access;
   - the event record shape needs plugin or remote-store semantics;
+  - `StageStatus.BLOCKED` cannot be added without breaking existing status
+    record parsing beyond normal pre-v1 contract churn;
   - the existing plan quality gate constraints appear insufficient or
     contradicted by source behavior.
 
@@ -600,8 +818,9 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed as the draft phase
-  execution plan in this pass.
-- Final phase execution plan: pending refine pass.
+  execution plan before this refine pass.
+- Final phase execution plan: completed by `loom_phase_planner` in this refine
+  pass.
 - Implementation summary: pending implementation.
 - Implementation validation: pending implementation.
 - Refinement summary: pending implementation refinement pass.
