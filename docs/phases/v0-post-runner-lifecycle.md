@@ -33,7 +33,7 @@
 - Draft pass: completed by `loom_phase_planner` in commit `0096ffe`.
 - Refine pass: completed by `loom_phase_planner` in this planning pass. This
   document is decision-complete for executor handoff.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by this bounded refinement pass.
 - PR review budget: unused.
 - Setup limitations: local `develop` matched the manager-provided Phase 7 base
   commit `8741c73`. No remote synchronization was attempted during planning
@@ -850,7 +850,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -877,7 +877,27 @@ make test-summary
   tests/package/test_import_boundaries.py` passed with 50 tests; and
   `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` reported 0
   errors, 0 warnings, and 0 informations.
-- Refinement summary:
+- Refinement summary: one bounded implementation refinement pass completed.
+  The pass kept scope to runner lifecycle correctness: event records for
+  run-created/opened, stage-completed, stage-failed, and run-failed now use the
+  runner clock rather than executor wall-clock failure/completion timestamps;
+  the obsolete `_blocked_after_failure()` helper that returned non-durable
+  `status=None` blocked results was removed; integration coverage now asserts
+  runner-clock event timestamps and the `run.opened` payload; and
+  `docs/features/execution.md` now uses the implemented dot-name event
+  vocabulary consistently.
+- Refinement validation: `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config
+  pytest tests/integration/pipeline/test_local_execution.py
+  tests/integration/pipeline/test_local_execution_resume.py
+  tests/integration/pipeline/test_local_execution_failures.py
+  tests/unit/loom/pipeline/execution/test_eventing.py
+  tests/unit/loom/pipeline/execution/test_run_locks.py` passed with 15 tests;
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check
+  src/loom/pipeline/execution/runner.py
+  tests/integration/pipeline/test_local_execution.py
+  tests/integration/pipeline/test_local_execution_resume.py` passed; and
+  `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` reported 0
+  errors, 0 warnings, and 0 informations.
 - PR preparation:
 - Stack maintenance: root serial phase; PR must target `develop`; Phase 8 must
   not start until Phase 7 is human-merged into `develop`.

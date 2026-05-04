@@ -1,5 +1,7 @@
 """Integration tests for the local pipeline runner."""
 
+from collections.abc import Callable
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -17,9 +19,18 @@ pytest.importorskip("yaml")
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
+def _sequence_clock() -> Callable[[], str]:
+    ticks = count(1)
+
+    def clock() -> str:
+        return f"2020-01-01T00:00:{next(ticks):02d}Z"
+
+    return clock
+
+
 def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
-    result = PipelineRunner(run_store=run_store).run(
+    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
         RunRequest(config=local_execution_config(), run_id="run1")
     )
 
@@ -35,7 +46,8 @@ def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None
     ).is_file()
     assert set(run_store.read_artifact_index("run1")) == {"build.data", "report.text"}
     assert run_store.read_run_lock("run1") is None
-    assert [event.event_type for event in run_store.read_events("run1")] == [
+    events = run_store.read_events("run1")
+    assert [event.event_type for event in events] == [
         "run.created",
         "run.planned",
         "stage.planned",
@@ -47,7 +59,8 @@ def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None
         "stage.completed",
         "run.completed",
     ]
-    stage_events = [event for event in run_store.read_events("run1") if event.scope.stage_name == "build"]
+    assert all(event.timestamp.startswith("2020-01-01T00:00:") for event in events)
+    stage_events = [event for event in events if event.scope.stage_name == "build"]
     assert [event.event_type for event in stage_events] == [
         "stage.planned",
         "stage.started",

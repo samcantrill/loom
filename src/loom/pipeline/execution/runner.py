@@ -109,7 +109,7 @@ class PipelineRunner:
             self._emit_run_event(
                 run_id,
                 "run.opened" if request.open_existing else "run.created",
-                timestamp=started_at,
+                timestamp=self.clock(),
                 payload={"open_existing": request.open_existing},
             )
             return self._run_locked(
@@ -322,7 +322,7 @@ class PipelineRunner:
             self._emit_run_event(
                 run_id,
                 "run.failed",
-                timestamp=failure.failed_at,
+                timestamp=self.clock(),
                 payload={
                     "status": RunStatus.FAILED.value,
                     "failed_stage": failed_stage,
@@ -502,7 +502,7 @@ class PipelineRunner:
                 run_id,
                 stage.name,
                 "stage.completed",
-                timestamp=execution_result.finished_at,
+                timestamp=self.clock(),
                 payload={
                     "attempt": attempt,
                     "action": PlanAction.RUN.value,
@@ -1092,7 +1092,7 @@ class PipelineRunner:
             run_id,
             stage_name,
             "stage.failed",
-            timestamp=failure.failed_at,
+            timestamp=self.clock(),
             payload={"attempt": attempt, "failure_type": failure.failure_type},
         )
 
@@ -1226,22 +1226,6 @@ def run_pipeline(
         executor=executor,
         artifact_store_factory=artifact_store_factory,
     ).run(request)
-
-
-def _blocked_after_failure(
-    stage_or_plan: StageSpec | object, reasons: tuple[PlanReason, ...]
-) -> StageRunResult:
-    stage_name = getattr(
-        stage_or_plan, "name", getattr(stage_or_plan, "stage_name", "unknown")
-    )
-    return StageRunResult(
-        stage_name=str(stage_name),
-        action=PlanAction.BLOCKED,
-        status=None,
-        attempt=None,
-        outputs={},
-        reasons=reasons,
-    )
 
 
 def _reason_codes(reasons: tuple[PlanReason, ...]) -> list[PlainData]:
