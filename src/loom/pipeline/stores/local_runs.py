@@ -8,8 +8,9 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.io.uris import path_to_file_uri
+from loom.pipeline.events import PipelineEvent, PipelineEventError, PipelineEventRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
-from loom.serialization import PlainData, ensure_plain_data, json_loads
+from loom.serialization import PlainData, ensure_plain_data, json_loads, stable_json_dumps
 from loom.serialization.errors import DeserializationError, PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
@@ -278,6 +279,62 @@ class LocalRunStore:
             "provenance": ensure_plain_data(document, path=f"provenance[{validated_name}]"),
         }
         atomic_write_json(self.local_provenance_path(run_id_text, validated_name), payload)
+
+    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord:
+        if not isinstance(event, PipelineEvent):
+            raise CorruptStoreDocumentError("append_event requires a PipelineEvent")
+        run_id_text = validate_run_id(run_id, field="run_id")
+        run_dir = self.local_run_dir(run_id_text)
+        if not run_dir.is_dir():
+            raise RunNotFoundError(f"run not found: {run_id_text}")
+        existing = self.read_events(run_id_text)
+        sequence = existing[-1].sequence + 1 if existing else 1
+        record = PipelineEventRecord(
+            run_id=run_id_text,
+            sequence=sequence,
+            timestamp=event.timestamp or utc_timestamp(),
+            scope=event.scope,
+            event_type=event.event_type,
+            payload=event.payload,
+        )
+        path = run_dir / "events.jsonl"
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(stable_json_dumps(record.to_dict()))
+                handle.write("\n")
+        except OSError as exc:
+            raise CorruptStoreDocumentError(f"Could not append event at {path}: {exc}") from exc
+        return record
+
+    def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]:
+        run_id_text = validate_run_id(run_id, field="run_id")
+        path = self.local_run_dir(run_id_text) / "events.jsonl"
+        if not path.exists():
+            return ()
+        if not path.is_file():
+            raise CorruptStoreDocumentError(f"Expected event log file at {path}")
+        records: list[PipelineEventRecord] = []
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                parsed = json_loads(line, path=f"{path}:{line_number}")
+                record = PipelineEventRecord.from_dict(parsed)
+            except (DeserializationError, PipelineEventError) as exc:
+                raise CorruptStoreDocumentError(
+                    f"Malformed event record at {path}:{line_number}: {exc}"
+                ) from exc
+            if record.run_id != run_id_text:
+                raise CorruptStoreDocumentError(
+                    f"event record at {path}:{line_number} has run_id {record.run_id!r}, expected {run_id_text!r}"
+                )
+            records.append(record)
+        for expected, record in enumerate(records, start=1):
+            if record.sequence != expected:
+                raise CorruptStoreDocumentError(
+                    f"event sequence gap at {path}: expected {expected}, got {record.sequence}"
+                )
+        return tuple(records)
 
     def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
         path = self._stage_file_path(run_id, stage_name, "status.json")

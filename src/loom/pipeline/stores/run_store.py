@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.serialization import PlainData
 
@@ -64,6 +65,13 @@ class RunProvenanceStore(Protocol):
     def read_provenance_document(self, run_id: str, name: str) -> dict[str, PlainData] | None: ...
 
     def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None: ...
+
+
+@runtime_checkable
+class RunEventStore(Protocol):
+    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord: ...
+
+    def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]: ...
 
 
 @runtime_checkable
@@ -168,6 +176,7 @@ class RunStore(
     RunArtifactIndexStore,
     RunConfigStore,
     RunProvenanceStore,
+    RunEventStore,
     StageStateStore,
     StageLogStore,
     StageWorkspaceStore,

@@ -860,3 +860,22 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/events.py tests/unit/loom/pipeline/test_events.py tests/package/test_import_boundaries.py`
     passed.
   - `git diff --check` passed.
+
+## Slice 3 Evidence
+
+- Slice 3 completed: backend-neutral run event store protocol plus append-only
+  local `events.jsonl` persistence with strict readback and contiguous
+  per-run sequence validation.
+- Files changed: `src/loom/pipeline/stores/run_store.py`,
+  `src/loom/pipeline/stores/local_runs.py`,
+  `src/loom/pipeline/stores/__init__.py`,
+  `tests/unit/loom/pipeline/stores/test_local_runs.py`,
+  `tests/contracts/test_store_contract.py`,
+  `tests/package/test_pipeline_store_api.py`, and
+  `tests/integration/pipeline/test_local_stores.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/package/test_pipeline_store_api.py tests/integration/pipeline/test_local_stores.py`
+    (42 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores src/loom/pipeline/events.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py tests/package/test_pipeline_store_api.py`
+    passed.
+  - `git diff --check` passed.

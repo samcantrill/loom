@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores import (
     ArtifactStore,
@@ -12,6 +13,7 @@ from loom.pipeline.stores import (
     RunArtifactIndexStore,
     RunConfigStore,
     RunDocumentStore,
+    RunEventStore,
     RunLifecycleStore,
     RunProvenanceStore,
     RunPlanStore,
@@ -119,6 +121,19 @@ class DummyRunStore:
 
     def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None:
         return None
+
+    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord:
+        return PipelineEventRecord(
+            run_id=run_id,
+            sequence=1,
+            timestamp="2020-01-01T00:00:00Z",
+            scope=EventScope.run(),
+            event_type=event.event_type,
+            payload=event.payload,
+        )
+
+    def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]:
+        return ()
 
     def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
         return None
@@ -257,6 +272,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunArtifactIndexStore)
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)
+    assert isinstance(DummyRunStore(), RunEventStore)
     assert isinstance(DummyRunStore(), StageStateStore)
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)

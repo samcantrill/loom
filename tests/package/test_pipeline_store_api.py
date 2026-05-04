@@ -19,6 +19,7 @@ def test_pipeline_store_public_exports() -> None:
         "RunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
+        "RunEventStore",
         "RunStatusStore",
         "RunPlanStore",
         "RunArtifactIndexStore",

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline.status import RunStatusRecord
 from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
@@ -68,6 +69,20 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     run_store.write_plan(run_id, {"stage": ["a", "b"]})
     assert run_store.read_plan(run_id) == {"stage": ["a", "b"]}
 
+    first_event = run_store.append_event(
+        run_id,
+        PipelineEvent(scope=EventScope.run(), event_type="run.created"),
+    )
+    second_event = run_store.append_event(
+        run_id,
+        PipelineEvent(scope=EventScope.stage("stage"), event_type="stage.started"),
+    )
+    assert (first_event.sequence, second_event.sequence) == (1, 2)
+    assert [record.event_type for record in run_store.read_events(run_id)] == [
+        "run.created",
+        "stage.started",
+    ]
+
     run_store.write_config_snapshot(run_id, "resolved", "alpha: 1\n")
     assert run_store.read_config_snapshot(run_id, "resolved") == "alpha: 1\n"
     run_store.write_config_snapshot(run_id, "raw", "a: b\n")
@@ -103,6 +118,7 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
         run_store.local_run_dir(run_id) / "stages" / "stage" / "provenance.json",
         run_store.local_run_dir(run_id) / "stages" / "stage" / "logs" / "stderr.log",
         run_store.local_run_dir(run_id) / "plan.json",
+        run_store.local_run_dir(run_id) / "events.jsonl",
         run_store.local_run_dir(run_id) / "artifacts.json",
         artifact_root / "stage",
         run_store.local_config_path(run_id, "raw"),

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline import RunStatus, StageStatus
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores import CorruptStoreDocumentError, LocalRunStore, atomic_write_json
@@ -48,6 +49,47 @@ def test_local_run_metadata_optional_reads(tmp_path: Path) -> None:
     assert metadata["metadata"] == {"a": 1}
     assert store.read_plan("run1") is None
     assert store.read_artifact_index("run1") == {}
+    assert store.read_events("run1") == ()
+
+
+def test_local_run_appends_and_reads_events(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+
+    first = store.append_event(
+        "run1",
+        PipelineEvent(
+            scope=EventScope.run(),
+            event_type="run.created",
+            payload={"source": "test"},
+            timestamp="2020-01-01T00:00:00Z",
+        ),
+    )
+    second = store.append_event(
+        "run1",
+        PipelineEvent(scope=EventScope.stage("build"), event_type="stage.started"),
+    )
+
+    assert first.sequence == 1
+    assert second.sequence == 2
+    assert [record.sequence for record in store.read_events("run1")] == [1, 2]
+    assert store.read_events("run1")[0].payload == {"source": "test"}
+    assert (store.local_run_dir("run1") / "events.jsonl").read_text(
+        encoding="utf-8"
+    ).count("\n") == 2
+
+
+def test_local_run_rejects_corrupt_event_log(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    path = store.local_run_dir("run1") / "events.jsonl"
+    path.write_text(
+        '{"schema_version":1,"run_id":"run1","sequence":2,"timestamp":"2020-01-01T00:00:00Z","scope":{"kind":"RUN","stage_name":null},"event_type":"run.created","payload":{}}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CorruptStoreDocumentError, match="sequence"):
+        store.read_events("run1")
 
 
 def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
