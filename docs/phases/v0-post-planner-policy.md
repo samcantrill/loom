@@ -600,6 +600,43 @@ Implementation refinement evidence:
 - `git diff --check`
   (pass)
 
+## PR Preparation Evidence
+
+- PR preparer pass: in progress.
+- Final diff and scope inspection: completed against `develop`; the diff is
+  limited to Phase 5 planner invalidation/action helper extraction,
+  `PlanExplanation`/`StageExplanation` diagnostics, planner typing cleanup,
+  focused package/unit/integration coverage, and required structure/feature
+  docs.
+- Scope guard: no Phase 6 recipe catalog work, Phase 7 runner lifecycle
+  decomposition, CLI/preflight command implementation, semantic fingerprint
+  policy change, non-local executor behavior, remote store behavior, catalog,
+  bundle, sweep, retry, timeout, cleanup, retention, or migration closeout work
+  was added.
+- Validation command:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed before PR preparation per the manager-provided latest validation:
+  Ruff passed, Pyright reported 0 errors, the default harness passed with 401
+  passed and 9 skipped, the config-extra harness passed with 103 passed and 402
+  deselected, and build passed.
+- Suite summary command:
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed during PR preparation and wrote `build/test-summary.md`.
+- Suite summary rows: package passed (34 passed, 1 skipped), unit passed (344
+  passed, 1 skipped), contract passed (14 passed, 1 skipped), integration
+  passed (9 passed, 5 skipped), e2e passed (1 passed), config-extra passed
+  (103 passed, 402 deselected).
+- PR body artifact: `docs/phases/v0-post-planner-policy-pr-body.md`.
+- PR body draft pass: complete in this PR-preparation pass.
+- PR body refine pass: complete in this PR-preparation pass.
+- PR creation status: pending.
+- PR target: `develop`.
+- Review notification status: pending.
+- Stack state: root serial phase; stack predecessor none; base and PR target
+  are `develop`; no successor phase may start until the PR is human-approved
+  and human-merged into `develop`.
+- Remaining blockers: none.
+
 ## Design Impact
 
 This phase makes planning easier to extend without turning the public
