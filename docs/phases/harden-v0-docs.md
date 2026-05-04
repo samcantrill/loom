@@ -19,7 +19,8 @@
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time in this plan-only refinement commit.
 - Phase implementation refinement budget: used by `loom_phase_refiner` on 2026-05-04 local time.
 - PR review budget: unused.
-- PR body draft/refine budget: unused until PR-preparation workflow stages.
+- PR body draft/refine budget: draft completed on 2026-05-04 local time in
+  `docs/phases/harden-v0-docs-pr-body.md`; refine pending.
 - Setup limitations: no remote operations or validation commands were run during the draft or refine planning passes. The worktree was created from the local recorded predecessor branch because the manager supplied the exact Phase 9 base head.
 - Blockers: none.
 
@@ -342,7 +343,8 @@ make test-summary
 - Phase execution plan refine: completed by `loom_phase_planner` on 2026-05-04 local time in this plan-only refinement commit.
 - Phase implementation refinement: used by `loom_phase_refiner` on 2026-05-04 local time; no automated implementation refinement budget remains for this phase.
 - PR review: unused.
-- PR body draft/refine: unused.
+- PR body draft/refine: draft completed on 2026-05-04 local time in
+  `docs/phases/harden-v0-docs-pr-body.md`; refine pending.
 
 ## Completion Notes
 
@@ -372,6 +374,13 @@ make test-summary
   - Results: all passed in the commands above.
 - Refinement summary: implementation refinement pass used by `loom_phase_refiner` on 2026-05-04 local time. The pass fixed executor import-boundary hardening regressions, tightened README quickstart setup, reran focused Phase 10 checks, and ran the full validation gate.
 - PR preparation: deferred to manager/next stage.
+- PR body draft: created at `docs/phases/harden-v0-docs-pr-body.md` on
+  2026-05-04 local time. Draft confirms branch `codex/harden-v0-docs`, target
+  branch `codex/add-local-execution`, stack predecessor
+  `codex/add-local-execution`, stacked merge eligibility, Phase 10 scope,
+  implementation refinement budget used, PR review budget unused, refreshed
+  `make test-summary` suite evidence, and that no PR was opened in the draft
+  pass.
 - Stack maintenance: Phase 10 is stacked on `codex/add-local-execution` and targets `codex/add-local-execution`; retarget to `develop` only after predecessor phases land and validation is rerun.
 - Remaining blockers: none observed.
 
