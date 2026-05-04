@@ -828,7 +828,8 @@ make test-summary
   status-only blocked lifecycle writing, aligned examples/tests, and feature
   docs.
 - Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
-  passed after validation-test and example updates.
+  passed after validation-test/example updates and again after the bounded
+  refinement pass.
 - Refinement summary: completed one bounded implementation/test refinement
   pass. Fixed local event JSONL sequence-gap errors so they include the
   available line number, added contract coverage proving `LocalRunStore`
@@ -841,6 +842,10 @@ make test-summary
   `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/local_runs.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py`
   passed; `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed
   with 0 errors; `git diff --check` passed.
+- Post-refinement full validation:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff, Pyright, default
+  test harness (390 passed, 9 skipped), config-extra test harness (103 passed,
+  391 deselected), and `uv build`.
 - PR preparation: pending PR-preparation pass.
 - Stack maintenance: serial human merge gate active; no successor phase may
   start until the Phase 4 PR is human-merged into `develop`.
