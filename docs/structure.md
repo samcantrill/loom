@@ -437,7 +437,7 @@ Preferred public imports:
 ```python
 from loom.refs import ResourceRef
 from loom.records import Record, InMemoryManifest, ManifestView
-from loom.artifacts import ArtifactRef
+from loom.artifacts import ArtifactAddress, ArtifactRef
 from loom.fingerprints import hash_mapping
 from loom.config import compose_config, instantiate, register_recipe
 from loom.pipeline import PipelineSpec, StageSpec, StageContext, PipelineRunner
@@ -483,6 +483,7 @@ records/
 artifacts.py
   ArtifactRef, a serializable pointer to a produced pipeline output. Artifact
   loading and path allocation belong to stores and codecs, not the value object.
+  ArtifactAddress, cross-run artifact identity for catalogs and resume metadata.
 
 fingerprints.py
   Deterministic hashing helpers for semantic production inputs. Fingerprints
@@ -666,6 +667,10 @@ plan.json
 ```
 
 The runner owns lifecycle transitions. Stores persist those transitions.
+
+`RunStore` is an aggregate protocol over capability surfaces for durable run
+state. `LocalRunStorePaths` provides explicit local path helpers separately for
+explicit local path consumers.
 
 ### 6.8 Provenance and Resume
 

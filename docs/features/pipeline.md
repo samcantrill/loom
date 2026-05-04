@@ -1057,12 +1057,14 @@ but it should not implement domain-specific checkpoint recovery.
 
 ## 11. StageContext
 
-### 11.1 Phase 6 Minimal Fields
+### 11.1 StageContext Stage-author Facade
 
-Recommended fields:
+`StageContext` should remain a narrow stage-author API and not leak direct mutable
+store handles.
 
 ```python
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -1070,88 +1072,40 @@ from typing import Any, Mapping
 class StageContext:
     run_id: str
     stage_name: str
-    run_dir: Path
-    stage_dir: Path
     resolved_config: Mapping[str, Any]
     stage_config: Mapping[str, Any]
     provenance: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 ```
 
-The Phase 6 context is a minimal static value shape so stage protocol tests do
-not depend on stores or execution. The concrete type can evolve when store and
-runner phases add runtime services.
+Public context attributes should not include `run_dir`, `stage_dir`, `run_store`,
+or `artifact_store`.
 
-### 11.2 Phase 9 Runtime Extensions
-
-After run/artifact store protocols and runner wiring exist, the runtime context
-may expose store-backed fields and helpers:
-
-```text
-artifact_dir
-artifact_store
-run_store
-logger
-provenance writer
-temporary directory helper
-output path helper
-save_artifact/register_artifact helpers
-```
-
-Phase 6 acceptance tests should assert that the minimal context does not require
-artifact stores, run stores, loggers, or helper implementations.
-
-### 11.3 Output Path Allocation
-
-Runtime context extensions can provide a helper to allocate output paths under
-the stage artifact directory.
-
-Example:
+The facade helper set is:
 
 ```python
-path = context.output_path("metrics")
+def input_artifact(name: str) -> ArtifactRef: ...
+def load_input(name: str, *, expected_type: str | None = None, codec_key: str | None = None) -> object: ...
+def load_artifact(ref: ArtifactRef, *, expected_type: str | None = None, codec_key: str | None = None) -> object: ...
+def save_artifact(name: str, obj: object, *, artifact_type: str, codec_key: str, schema_version: int = 1, metadata: Mapping[str, Any] | None = None, fingerprint: str | None = None) -> ArtifactRef: ...
+def register_artifact(name: str, uri: str, *, artifact_type: str, codec_key: str | None = None, schema_version: int = 1, metadata: Mapping[str, Any] | None = None, fingerprint: str | None = None, checksum: str | None = None, allow_external: bool = False) -> ArtifactRef: ...
+def register_local_artifact(name: str, path: str | os.PathLike[str], *, artifact_type: str, codec_key: str | None = None, schema_version: int = 1, metadata: Mapping[str, Any] | None = None, fingerprint: str | None = None, checksum: str | None = None, allow_external: bool = False) -> ArtifactRef: ...
+def local_output_path(name: str, *, suffix: str = "") -> Path: ...
+def local_workspace_path(*parts: str) -> Path: ...
 ```
 
-or:
+`save_artifact()` and `register_artifact()` validate declared output type,
+codec key, and schema version before writing or registering.
 
-```python
-path = context.artifact_path("metrics.json")
-```
+`local_output_path()` validates the output name and suffix, creates parents, and
+raises `PipelineValidationError` when local output helpers are unavailable.
 
-The helper should prevent stages from accidentally writing outside the stage
-artifact directory unless the user explicitly provides an external artifact URI.
+`local_workspace_path()` should validate all path parts and create the workspace
+directory on demand; it should raise `PipelineValidationError` when local access
+is not available.
 
-### 11.4 Runtime Services
-
-Runtime context extensions may expose generic services:
-
-```text
-artifact_store
-run_store
-logger
-provenance writer
-temporary directory helper
-output path helper
-```
-
-Avoid adding domain services to `StageContext`. Domain packages can pass their own
-dependencies through stage runtime config or their own imported code. V0 does
-not pass authored stage `config` as target constructor kwargs.
-
-### 11.5 Config Visibility
-
-Stages may need both:
-
-```text
-stage_config:
-  the config specific to this stage invocation
-
-resolved_config:
-  the full resolved run config for reproducibility and advanced use
-```
-
-Stage fingerprints should not automatically include the entire resolved config
-unless that is the documented policy. Including too much can cause noisy reruns.
+`load_input()` fails early for unknown input names and `load_artifact()` or
+`load_input()` fail clearly when no artifact store is available.
 
 ---
 
@@ -2130,7 +2084,7 @@ Examples:
 
 ```text
 assert stage returns declared ArtifactRefs
-assert stage writes outputs under context artifact_dir
+assert stage writes outputs via context.local_output_path
 assert stage can run with synthetic ArtifactRefs
 ```
 

@@ -263,6 +263,15 @@ A serializable reference to an artifact.
 It should be lightweight enough to store in JSON, pass between stages, include in
 fingerprints, and record in provenance.
 
+`ArtifactRef` is run-local in its identity. A cross-run artifact reference is
+`ArtifactAddress`.
+
+```python
+from loom.artifacts import ArtifactAddress
+
+_ = ArtifactAddress(run_id="run-2026-05-04", artifact_id="train/metrics")
+```
+
 ### 5.3 Artifact URI
 
 The location of an artifact.
@@ -286,10 +295,28 @@ or, when needed:
 STAGE_NAME/OUTPUT_NAME/ATTEMPT
 ```
 
-The artifact ID is not necessarily globally unique outside the run unless the
-store defines it that way.
+`artifact_id` is intentionally run-local.
+Cross-run ownership is explicit via `ArtifactAddress`:
 
-### 5.5 Logical Artifact Name
+```text
+ArtifactAddress(run_id, artifact_id)
+```
+
+### 5.6 ArtifactAddress
+
+`ArtifactAddress` is a minimal cross-run artifact handle used when artifact
+lineage, deduplication, or cataloging spans multiple runs.
+
+```python
+@dataclass(frozen=True, slots=True)
+class ArtifactAddress:
+    run_id: str
+    artifact_id: str
+```
+
+Both fields are required and plain-data compatible.
+
+### 5.7 Logical Artifact Name
 
 The graph-level name used by pipeline specs and run indexes.
 
@@ -302,7 +329,7 @@ train.best_checkpoint
 Logical artifact names are owned by the pipeline and run store. Artifact IDs are
 owned by the artifact store.
 
-### 5.6 Artifact Type
+### 5.8 Artifact Type
 
 An open string label describing the broad kind of artifact.
 
@@ -319,7 +346,7 @@ directory
 
 `loom` should not make this a closed enum.
 
-### 5.7 Codec Key
+### 5.9 Codec Key
 
 The key used to resolve a codec for managed save/load.
 
@@ -334,7 +361,7 @@ project.checkpoint.v1
 
 Artifacts may omit a codec key when loading is handled entirely by project code.
 
-### 5.8 Checksum
+### 5.10 Checksum
 
 The identity of stored bytes.
 
@@ -346,7 +373,7 @@ sha256:4f9d...
 
 Checksums help detect corruption and support stricter resume validation.
 
-### 5.9 Fingerprint
+### 5.11 Fingerprint
 
 The identity of the production recipe for an artifact or stage.
 
@@ -360,7 +387,7 @@ fingerprint:
   how the artifact was produced
 ```
 
-### 5.10 Producer Stage
+### 5.12 Producer Stage
 
 The stage that produced the artifact.
 
@@ -380,7 +407,7 @@ Good:
 ```python
 def run(context, inputs):
     checkpoint_ref = inputs["checkpoint"]
-    model = context.artifact_store.load(checkpoint_ref)
+    model = context.load_input("checkpoint")
 ```
 
 Avoid:
@@ -615,6 +642,9 @@ STAGE_NAME/OUTPUT_NAME/attempt-0002
 V0 may overwrite latest attempt outputs or write to stable paths. Attempt history
 can be added later if needed.
 
+`artifact_id` stays run-local. Use `ArtifactAddress` for cross-run artifact
+identity in external catalogs and result tables.
+
 ### 8.3 Output Names
 
 Output names should be:
@@ -686,10 +716,10 @@ When an `OutputSpec` declares an expected artifact type:
 returned ArtifactRef.artifact_type must match
 ```
 
-When loading:
+When loading through StageContext:
 
 ```python
-artifact_store.load(ref, expected_type="metrics.json")
+context.load_artifact(ref, expected_type="metrics.json")
 ```
 
 should fail clearly if `ref.artifact_type` differs.
@@ -773,7 +803,6 @@ codec fails to parse content
 ### 11.1 Recommended Interface
 
 ```python
-from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 class ArtifactStore(Protocol):
@@ -781,28 +810,28 @@ class ArtifactStore(Protocol):
         self,
         obj: Any,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
         codec_key: str,
-        path: str | None = None,
+        schema_version: int = 1,
         metadata: Mapping[str, Any] | None = None,
         fingerprint: str | None = None,
     ) -> ArtifactRef: ...
 
     def register(
         self,
-        uri: str | Path,
+        uri: str,
         *,
-        run_id: str,
         stage_name: str,
         name: str,
         artifact_type: str,
         codec_key: str | None = None,
+        schema_version: int = 1,
         metadata: Mapping[str, Any] | None = None,
         fingerprint: str | None = None,
         checksum: str | None = None,
+        allow_external: bool = False,
     ) -> ArtifactRef: ...
 
     def load(
@@ -815,8 +844,13 @@ class ArtifactStore(Protocol):
 
     def exists(self, ref: ArtifactRef) -> bool: ...
     def verify_checksum(self, ref: ArtifactRef) -> bool: ...
-    def local_path(self, ref: ArtifactRef) -> Path | None: ...
 ```
+
+`register()` accepts URI strings at the generic protocol level. `LocalArtifactStore`
+may accept local paths as a convenience, but the protocol remains URI-based.
+
+`ArtifactStore` is deliberately run-scoped: all `save()` and `register()`
+operations are invoked by an already-run-bound store instance.
 
 This can be narrowed during implementation. The important distinction is between
 `save()` for managed serialization and `register()` for files produced directly
@@ -998,9 +1032,8 @@ This keeps the ref shape compatible with future remote stores.
 class EvaluateStage:
     def run(self, context, inputs):
         metrics = {"accuracy": 0.91}
-        ref = context.artifact_store.save(
+        ref = context.save_artifact(
             metrics,
-            run_id=context.run_id,
             stage_name=context.stage_name,
             name="metrics",
             artifact_type="metrics.json",
@@ -1014,13 +1047,12 @@ class EvaluateStage:
 ```python
 class TrainStage:
     def run(self, context, inputs):
-        checkpoint_path = context.artifact_path("best.ckpt")
+        checkpoint_path = context.local_output_path("best.ckpt")
         train_model(output_path=checkpoint_path)
-        ref = context.artifact_store.register(
+        ref = context.register_local_artifact(
+            "best_checkpoint",
             checkpoint_path,
-            run_id=context.run_id,
             stage_name=context.stage_name,
-            name="best_checkpoint",
             artifact_type="checkpoint",
         )
         return {"best_checkpoint": ref}
@@ -1249,7 +1281,6 @@ store = LocalArtifactStore(root=run_dir / "artifacts")
 
 ref = store.save(
     {"loss": 0.1},
-    run_id="example",
     stage_name="evaluate",
     name="metrics",
     artifact_type="metrics.json",
@@ -1262,8 +1293,8 @@ metrics = store.load(ref, expected_type="metrics.json")
 The high-level user path should normally be through `StageContext`:
 
 ```python
-context.artifact_store.save(...)
-context.artifact_store.register(...)
+context.save_artifact(...)
+context.register_local_artifact(...)
 ```
 
 ---

@@ -497,8 +497,15 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` in commit `25d9d2b7eb4c090c263bb04491afab957825e015`.
 - Final phase execution plan: refined in this pass; ready for `loom_phase_executor`.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary:
+  - Slice 1: `ArtifactAddress` and public exports.
+  - Slice 2: run-store protocol capability split and exports.
+  - Slice 3: local run API migration and run-document/user-metadata naming support.
+  - Slice 4: run-scoped `ArtifactStore`/`LocalArtifactStore` updates.
+  - Slice 5: `StageContext` facade and local runtime path wiring.
+- Implementation validation:
+  - Slice 1-5 were validated during executor work using the slice matrix in this plan.
+  - Slice 6 (this docs-only slice) reruns package, contract, store, context, planning, and local-store checks as recorded in this pass.
 - Refinement summary: pending.
 - PR preparation: pending.
 - Stack maintenance: serial human merge gate active; no successor phase may start until this phase is approved and human-merged into `develop`.
