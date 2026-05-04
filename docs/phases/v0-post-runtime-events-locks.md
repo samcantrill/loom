@@ -35,7 +35,8 @@
   plan-quality review loop without explicit manager instruction.
 - Draft pass: completed by `loom_phase_planner` in this planning pass.
 - Refine pass: completed by `loom_phase_planner` in this planning pass.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by `loom_phase_refiner` during
+  the one allowed implementation/test refinement pass.
 - PR review budget: unused.
 - Setup limitations: local `develop` matched the manager-provided Phase 4 base
   commit. No remote synchronization was attempted during planning because the
@@ -812,7 +813,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -828,7 +829,18 @@ make test-summary
   docs.
 - Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
   passed after validation-test and example updates.
-- Refinement summary: pending implementation refinement pass.
+- Refinement summary: completed one bounded implementation/test refinement
+  pass. Fixed local event JSONL sequence-gap errors so they include the
+  available line number, added contract coverage proving `LocalRunStore`
+  satisfies the expanded `RunEventStore`, `RunLockStore`, and `RunStore`
+  protocols, and aligned reliability/run-store docs with the Phase 4 v0
+  runtime/resource and store API contracts.
+- Refinement validation:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py`
+  passed (25 passed);
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/local_runs.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py`
+  passed; `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed
+  with 0 errors; `git diff --check` passed.
 - PR preparation: pending PR-preparation pass.
 - Stack maintenance: serial human merge gate active; no successor phase may
   start until the Phase 4 PR is human-merged into `develop`.

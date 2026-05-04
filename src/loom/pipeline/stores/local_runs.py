@@ -319,7 +319,7 @@ class LocalRunStore:
             return ()
         if not path.is_file():
             raise CorruptStoreDocumentError(f"Expected event log file at {path}")
-        records: list[PipelineEventRecord] = []
+        records: list[tuple[int, PipelineEventRecord]] = []
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
@@ -334,13 +334,13 @@ class LocalRunStore:
                 raise CorruptStoreDocumentError(
                     f"event record at {path}:{line_number} has run_id {record.run_id!r}, expected {run_id_text!r}"
                 )
-            records.append(record)
-        for expected, record in enumerate(records, start=1):
+            records.append((line_number, record))
+        for expected, (line_number, record) in enumerate(records, start=1):
             if record.sequence != expected:
                 raise CorruptStoreDocumentError(
-                    f"event sequence gap at {path}: expected {expected}, got {record.sequence}"
+                    f"event sequence gap at {path}:{line_number}: expected {expected}, got {record.sequence}"
                 )
-        return tuple(records)
+        return tuple(record for _, record in records)
 
     def acquire_run_lock(
         self,

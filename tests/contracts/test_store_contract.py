@@ -10,6 +10,7 @@ from loom.pipeline import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores import (
     ArtifactStore,
     LocalArtifactStore,
+    LocalRunStore,
     LocalRunStorePaths,
     RunArtifactIndexStore,
     RunConfigStore,
@@ -299,6 +300,14 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)
     assert isinstance(DummyRunStore(), RunStore)
+
+
+def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+
+    assert isinstance(store, RunEventStore)
+    assert isinstance(store, RunLockStore)
+    assert isinstance(store, RunStore)
 
 
 def test_fake_run_store_does_not_satisfy_local_paths() -> None:

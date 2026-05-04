@@ -95,8 +95,10 @@ def test_local_run_rejects_corrupt_event_log(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(CorruptStoreDocumentError, match="sequence"):
+    with pytest.raises(CorruptStoreDocumentError) as exc_info:
         store.read_events("run1")
+    assert "sequence gap" in str(exc_info.value)
+    assert f"{path}:1" in str(exc_info.value)
 
 
 def test_local_run_acquires_reads_and_releases_lock(tmp_path: Path) -> None:

@@ -166,9 +166,11 @@ class TimeoutPolicy:
     grace_seconds: int | None = None
 ```
 
-`wall_time_seconds` may be sourced from `ResourceRequest.wall_time_seconds` or
-from an explicit reliability policy. The design should avoid two conflicting
-ways to express the same timeout.
+`wall_time_seconds` is not a v0 `ResourceRequest` field; v0 rejects authored
+timeout fields so callers do not assume timeout behavior is honored. A later
+phase may add timeout policy as an explicit reliability policy or as a future
+resource extension, but the design should avoid two conflicting ways to express
+the same timeout.
 
 ## Timeout Enforcement
 
