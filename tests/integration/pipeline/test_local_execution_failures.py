@@ -42,7 +42,7 @@ def _failure_config(target: str) -> dict[str, PlainData]:
     return cast(
         dict[str, PlainData],
         {
-        "pipeline": {
+            "pipeline": {
                 "name": "failure-demo",
                 "stages": [
                     {

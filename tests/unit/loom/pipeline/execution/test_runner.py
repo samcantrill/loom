@@ -1,21 +1,27 @@
 """Unit tests for runner stage construction delegation."""
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline import OutputSpec, Stage, StageFactorySpec, StageSpec
+from loom.pipeline import OutputSpec, PipelineSpec, Stage, StageFactorySpec, StageSpec
 from loom.pipeline.context import StageContext
 from loom.pipeline.errors import StageContractError
 from loom.pipeline.execution import PipelineRunner
 from loom.pipeline.stores import LocalRunStore
-from loom.pipeline import PipelineSpec
+from loom.serialization import PlainData
 
 
 class ConfigurableStage(Stage):
     def __init__(self, *, value: int = 0) -> None:
         self.value = value
 
-    def run(self, context: StageContext, inputs: dict[str, ArtifactRef]) -> dict[str, ArtifactRef]:
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = context, inputs
         return {}
 
 
@@ -26,7 +32,7 @@ def _runner(tmp_path: Path) -> PipelineRunner:
 def _stage(
     *,
     target_path: str,
-    init: dict[str, object] | None = None,
+    init: Mapping[str, PlainData] | None = None,
 ) -> StageSpec:
     return StageSpec(
         name="build",
@@ -35,7 +41,11 @@ def _stage(
     )
 
 
-def _spec(*, target_path: str, init: dict[str, object] | None = None) -> PipelineSpec:
+def _spec(
+    *,
+    target_path: str,
+    init: Mapping[str, PlainData] | None = None,
+) -> PipelineSpec:
     return PipelineSpec(stages=(_stage(target_path=target_path, init=init),))
 
 

@@ -764,8 +764,13 @@ make test-summary
 - Draft plan: completed by `loom_phase_planner` in commit `ed907e7`.
 - Final phase execution plan: completed by this refine pass; ready for
   `loom_phase_executor`.
-- Implementation summary: pending implementation pass.
-- Implementation validation: pending implementation and PR-preparation passes.
+- Implementation summary: completed in four implementation slices covering
+  factory specs/target resolution, runner construction wiring, semantic
+  fingerprint policy v2, fixture/docs migration, and config-extra local
+  execution validation for constructor/runtime separation.
+- Implementation validation: targeted package, unit, integration, e2e,
+  config-extra, Ruff, Pyright, and diff-check evidence recorded below. Final
+  `make validate-pr` and `make test-summary` remain for PR preparation.
 - Refinement summary: pending implementation refinement pass if used.
 - PR preparation: pending PR-preparer pass. The PR must target `develop` and
   request review from `samcantrill` or mention `@samcantrill` via the documented
@@ -813,5 +818,28 @@ make test-summary
     (49 passed).
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_stage_factory.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/execution/test_execution_models.py tests/unit/loom/pipeline/graph/test_bindings.py tests/unit/loom/pipeline/graph/test_dag.py tests/unit/loom/pipeline/graph/test_topology.py tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/planning/test_planner.py tests/unit/loom/pipeline/planning/test_planning_errors.py tests/unit/loom/pipeline/planning/test_selectors.py tests/integration/pipeline/test_pipeline_config.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/pipeline/test_plan_persistence.py tests/integration/pipeline/test_planning_resume.py tests/integration/docs/test_v0_python_examples.py`
     (43 passed, 3 skipped in the no-extra environment).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed.
+  - `git diff --check` passed.
+
+## Slice 4 Evidence
+
+- Slice 4 completed: config-extra/local execution cleanup, docs example YAML
+  correction, integration proof that `factory.init` reaches the constructor
+  while authored runtime `config` remains `StageContext.stage_config`, and
+  Pyright migration of remaining test helpers away from `target_path=`.
+- Files changed: `tests/support/pipeline_execution_stages.py`,
+  `tests/integration/pipeline/test_local_execution.py`,
+  `tests/integration/docs/test_v0_python_examples.py`,
+  `tests/integration/pipeline/test_local_execution_failures.py`,
+  `tests/unit/loom/pipeline/execution/test_outputs.py`,
+  `tests/unit/loom/pipeline/executors/test_local_executor.py`, and
+  `tests/unit/loom/pipeline/execution/test_runner.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/pipeline/test_pipeline_config.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_resume.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/docs/test_v0_python_examples.py tests/integration/config/test_compose_config.py tests/e2e/test_local_pipeline_run.py`
+    (21 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/execution/test_outputs.py tests/unit/loom/pipeline/executors/test_local_executor.py tests/unit/loom/pipeline/execution/test_runner.py`
+    (9 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed with 0
+    errors.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed.
   - `git diff --check` passed.

@@ -47,7 +47,7 @@ name: demo
 pipeline:
   name: demo
   stages:
-      - name: build
+    - name: build
       factory:
         _target_: tests.support.pipeline_execution_stages.JsonProducerStage
       config:
