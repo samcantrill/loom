@@ -2,7 +2,11 @@
 
 ## Metadata
 
+<<<<<<< HEAD
 - Status: PR open
+=======
+- Status: refined phase execution plan
+>>>>>>> ea41d19 (plan: refine local stores run layout phase)
 - Branch: `codex/add-local-stores-run-layout`
 - Worktree: `/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout`
 - Phase execution plan path: `docs/phases/add-local-stores-run-layout.md`
@@ -18,9 +22,12 @@
 - Plan quality gate loop budget: initial review used, automated plan refinement pass used, confirmation review used. Do not rerun or consume the plan-quality gate for this phase.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-04 local time.
 - Refine pass: completed by `loom_phase_planner` on 2026-05-04 local time.
+<<<<<<< HEAD
 - PR body path: `docs/phases/add-local-stores-run-layout-pr-body.md`
 - PR body draft pass: completed by `loom_pr_preparer` on 2026-05-04 local time.
 - PR body refine pass: completed by `loom_pr_preparer` on 2026-05-04 local time.
+=======
+>>>>>>> ea41d19 (plan: refine local stores run layout phase)
 - Setup limitations: manager verified the control checkout was clean and synced to `origin/develop` at `e9407f427314f88aec0324946f125529d4cd93ce` before assignment. The draft pass created the worktree from local `develop`; an initial sandboxed `git worktree add` could not create the branch ref and was rerun with approved filesystem access. No remote synchronization or validation commands were run in this draft pass.
 - Blockers: none
 
@@ -719,6 +726,7 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; recorded in the `plan: add phase execution plan` commit for this artifact.
 - Final phase execution plan: completed by `loom_phase_planner` in the refine pass; exact exports, method signatures, path/checksum behavior, document wrappers, and suite-level tests are recorded above.
+<<<<<<< HEAD
 - Implementation summary:
   - Added local store errors, atomic helpers, artifact index helpers, protocol definitions, local artifact store, and local run store under `src/loom/pipeline/stores/`.
   - Exported Phase 7 store API in `src/loom/pipeline/stores/__init__.py` only, including exact `__all__` list and error, helper, protocol, and index exports.
@@ -799,4 +807,11 @@ make test-summary
       `build/test-summary.md`: package passed, unit passed, contract passed,
       integration passed, e2e not present.
   - Remaining blockers: none known after the user-authorized post-review fix.
+=======
+- Implementation summary: pending.
+- Implementation validation: pending.
+- Refinement summary: pending.
+- PR preparation: pending.
+- Stack maintenance: none required at draft time; root phase targets `develop`.
+>>>>>>> ea41d19 (plan: refine local stores run layout phase)
 - Remaining blockers: none.
