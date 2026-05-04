@@ -137,6 +137,36 @@ unmerged work.
   a dedicated workflow PR. Do not include workflow prompt, template, or
   `AGENTS.md` refinements in product phase PR diffs unless explicitly assigned.
 
+### Serial Human Merge Gate
+
+When the user selects a clean merge gate or human-owned merge workflow, use a
+serial phase flow instead of stacked phase PRs.
+
+- Start each phase only after every earlier phase has been merged into
+  `develop`.
+- Branch each phase from updated `develop`, and open each phase PR against
+  `develop`.
+- Do not start successor phase implementation while the current phase is only
+  `pr_open` or `approved`.
+- Do not approve or merge phase PRs. Human review and merge are the external
+  gate.
+- After opening or discovering a phase PR, request review from `samcantrill`
+  with `gh pr edit <PR> --add-reviewer samcantrill` when GitHub allows it. If
+  GitHub rejects the request because the authenticated account or PR author is
+  `samcantrill`, add a PR comment mentioning `@samcantrill` and record that
+  fallback in the PR body or phase notes.
+- Poll GitHub for the merge gate instead of asking the user to return to Codex
+  manually. Continue only after `gh pr view <PR> --json
+  state,baseRefName,headRefName,url,mergedAt` reports `state` as `MERGED` and
+  `baseRefName` as `develop`.
+- Stop if the PR is closed without merging, targets a branch other than
+  `develop`, required GitHub access is unavailable, validation or CI is clearly
+  failing, the user interrupts, or the session can no longer keep polling.
+- After the PR merges, fetch updated `develop`, record the phase as `merged`,
+  commit and push metadata when permissions allow, clean up the completed phase
+  worktree and branch when safe, then begin the next pending phase from updated
+  `develop`.
+
 ### GitHub CLI And Remote Operations
 
 - Prefer GitHub CLI-backed authentication for GitHub operations when available.
@@ -196,8 +226,9 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
 - Confirm the implementation plan has passed the plan quality gate before
   starting phase work.
 - Create and refine a phase execution plan before implementation.
-- Follow the stacked phase handoff. Do not collapse planning, implementation,
-  refinement, and PR preparation into one agent unless explicitly instructed.
+- Follow the stacked phase handoff, or the serial human merge gate when that
+  mode is selected. Do not collapse planning, implementation, refinement, and
+  PR preparation into one agent unless explicitly instructed.
 - Make frequent commits at coherent checkpoints.
 - Do not ask the user for feedback during the phase.
 - If something is ambiguous, make the smallest reasonable assumption, document
@@ -230,9 +261,11 @@ context is compacted or reset for the PR body refine pass when practical
 loom_pr_preparer refines the PR body, records PR metadata, and opens/prepares PR
 manager mirrors pr_open metadata in the control checkout
 manager applies any workflow refinements in the control checkout, outside product phase branches
-manager may move to the next pending phase using the current phase branch as stack base
+manager may move to the next pending phase using the current phase branch as stack base in stacked mode
+manager requests samcantrill review and waits for human merge in serial human merge gate mode
 loom_phase_reviewer or manager reviews PR
-manager approves, retargets/rebases stack children when predecessors land, merges merge-eligible PRs, or escalates to the user
+manager approves, retargets/rebases stack children when predecessors land, merges merge-eligible PRs, or escalates to the user in stacked mode
+human reviewer approves and merges the PR in serial human merge gate mode
 manager records merged metadata and cleans worktree/branch only after successor branches no longer depend on it
 ```
 
@@ -273,6 +306,10 @@ Model policy:
 
 Automatic merging is allowed only for the managing agent after phase review
 approval.
+
+If serial human merge gate mode is active, this section is disabled: the
+managing agent must not approve or merge, and must wait for the human-merged PR
+to reach `MERGED` on `develop`.
 
 Before merging, the managing agent must confirm:
 

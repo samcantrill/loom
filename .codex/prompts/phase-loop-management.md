@@ -1,4 +1,4 @@
-You are the managing agent for a stacked multi-phase implementation plan.
+You are the managing agent for a phase-based implementation plan.
 
 Read:
 
@@ -47,9 +47,10 @@ Prefer GitHub CLI-backed remote operations when available:
   present and no successor branch depends on the deleted branch.
 
 Your job is to advance the implementation plan one phase at a time without
-indefinite review/refine loops. Human review and merge of one phase must not
-block planning or implementing the next phase when the current phase PR is
-opened or prepared, validated, and recorded as `pr_open`.
+indefinite review/refine loops. Stacked mode allows human review and merge of
+one phase to happen while successor phase work starts. Serial human-merge-gate
+mode instead waits for each phase PR to be merged into `develop` before the
+next phase starts.
 
 Use `.codex/templates/` for durable handoff artifacts. Custom agents define
 role authority, sandbox, and model; prompts define behavior; templates define
@@ -93,6 +94,32 @@ Model policy:
   a decision-complete phase execution plan. Spark agents must stop and report
   blockers instead of making public API or phase-scope decisions.
 
+Serial human-merge-gate mode:
+
+- Use this mode whenever the user asks for a clean merge gate, no stacked PRs,
+  human-owned approval/merge, or continuation only after the PR is merged.
+- Treat `develop` as the only PR target branch in this mode. Do not create
+  stacked successor branches unless the user explicitly re-enables stacking.
+- Do not approve or merge phase PRs in this mode. The human reviewer owns
+  GitHub approval and merge.
+- After opening or discovering a phase PR, request review from `samcantrill`
+  with `gh pr edit <PR> --add-reviewer samcantrill` when GitHub allows it. If
+  GitHub rejects the request because the authenticated account or PR author is
+  `samcantrill`, add a PR comment mentioning `@samcantrill` and record that
+  fallback in the PR body or phase notes.
+- After the PR is ready, poll GitHub for the merge gate instead of asking the
+  user to return to Codex manually. Use `gh pr view <PR> --json
+  state,baseRefName,headRefName,url,mergedAt,reviewDecision,statusCheckRollup`
+  and continue only when `state` is `MERGED` and `baseRefName` is `develop`.
+- While waiting, do not start the next phase. Stop only if the PR is closed
+  without merging, the target branch is not `develop`, required GitHub access is
+  unavailable, validation or CI is clearly failing, the user interrupts, or the
+  session can no longer keep polling.
+- After the PR is merged, fetch updated `develop`, verify the merged PR facts,
+  update the implementation-plan metadata to `merged`, commit/push that
+  metadata when permissions allow, clean up the completed phase worktree and
+  branch when safe, then start the next pending phase from updated `develop`.
+
 For new or ambiguous work before an implementation plan exists:
 
 1. If the user assigns a roadmap version and wants interactive design
@@ -127,14 +154,17 @@ Before implementation begins:
 
 For each phase:
 
-1. Find the next phase with `Status: pending` whose earlier phases are
-   `pr_open`, `approved`, or `merged`. Do not skip over a `blocked` phase.
+1. Find the next phase with `Status: pending`. In stacked mode, earlier phases
+   may be `pr_open`, `approved`, or `merged`. In serial human-merge-gate mode,
+   all earlier phases must be `merged`. Do not skip over a `blocked` phase.
 2. Choose the stack base:
-   - use `develop` when all earlier phases are `merged`;
+   - in serial human-merge-gate mode, always use updated `develop`;
+   - in stacked mode, use `develop` when all earlier phases are `merged`;
    - otherwise use the nearest earlier unmerged phase branch, usually the most
      recent phase with status `pr_open` or `approved`.
 3. Choose the PR target branch:
-   - use `develop` when the stack base is `develop`;
+   - in serial human-merge-gate mode, always use `develop`;
+   - in stacked mode, use `develop` when the stack base is `develop`;
    - otherwise use the stack base branch.
 4. Record the branch, stack predecessor, base branch, target branch, and merge
    eligibility in the manager assignment. A stacked PR is reviewable when it
@@ -158,11 +188,11 @@ For each phase:
    practical, assign PR body refinement and PR creation/preparation to
    `loom_pr_preparer` using `.codex/prompts/pr-body-refine.md`.
 12. After the PR is opened or prepared, record `pr_open` metadata in the
-    control checkout. You may move to the next pending phase immediately using
-    the current phase branch as stack base if validation passed or unavailable
-    validation is justified. The review and merge steps below may run
-    asynchronously with successor phase work and do not block stack
-    continuation.
+    control checkout. In stacked mode, you may move to the next pending phase
+    immediately using the current phase branch as stack base if validation
+    passed or unavailable validation is justified. In serial human-merge-gate
+    mode, request/record the `samcantrill` review notification and do not
+    assign the next phase; continue through the review and merge gate below.
 13. Apply any managing-agent workflow refinements in the control checkout or a
     dedicated workflow PR before assigning the next phase. Keep those changes
     out of product phase branches unless explicitly assigned as phase work.
@@ -187,20 +217,23 @@ For each phase:
 17. If the PR is not acceptable after the single `loom_phase_refiner` pass,
    report the exact blocker to the user and stop. Do not spawn another fixer
    unless the user explicitly asks.
-18. If the PR is acceptable, approve it. Stacked approval is allowed while the
-    PR targets its predecessor branch, but approval does not make it
-    merge-eligible until the PR targets `develop`.
-19. Before merging, verify the PR target with `gh pr view <PR> --json
-   baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`. Merge only
-   when `baseRefName` is exactly `develop`. Merge the approved PR into
-   `develop` using a squash merge when GitHub tooling and permissions are
+18. In stacked mode, if the PR is acceptable, approve it. Stacked approval is
+    allowed while the PR targets its predecessor branch, but approval does not
+    make it merge-eligible until the PR targets `develop`. In serial
+    human-merge-gate mode, do not approve; wait for the human reviewer to
+    approve and merge.
+19. In stacked mode, before merging, verify the PR target with `gh pr view <PR>
+   --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
+   Merge only when `baseRefName` is exactly `develop`. Merge the approved PR
+   into `develop` using a squash merge when GitHub tooling and permissions are
    available. Use `gh pr merge <PR> --squash --delete-branch` only when no
-   successor branch depends on the phase branch; otherwise use
-   `gh pr merge <PR> --squash` and keep the branch until successors are
-   retargeted. Use the corresponding `--auto` form when branch protection
-   requires checks to finish first. If the PR still targets a predecessor
-   branch, leave it `approved`, document the stack state, and keep advancing
-   successor phase work.
+   successor branch depends on the phase branch; otherwise use `gh pr merge
+   <PR> --squash` and keep the branch until successors are retargeted. Use the
+   corresponding `--auto` form when branch protection requires checks to finish
+   first. If the PR still targets a predecessor branch, leave it `approved`,
+   document the stack state, and keep advancing successor phase work. In serial
+   human-merge-gate mode, treat a verified `MERGED` PR targeting `develop` as
+   the merge event and continue with post-merge metadata and cleanup.
 20. After a successful predecessor merge, rebase or replay each immediate
     successor branch onto its new base. Use updated `develop` when that
     successor no longer has an unmerged predecessor; otherwise use the updated
@@ -225,14 +258,18 @@ For each phase:
    branches no longer depend on it. Prefer `gh api --method DELETE
    repos/<owner>/<repo>/git/refs/heads/<branch>` for GitHub branch cleanup when
    git SSH auth is unavailable.
-24. Move to the next pending phase whenever the immediate predecessor is
-   `pr_open`, `approved`, or `merged`.
+24. In stacked mode, move to the next pending phase whenever the immediate
+   predecessor is `pr_open`, `approved`, or `merged`. In serial
+   human-merge-gate mode, move to the next pending phase only after every
+   earlier phase is `merged` and `develop` has been updated locally.
 25. Stop when all phases are complete, approved, merged, or blocked.
 
 Rules:
 
-- Only the managing agent may merge phase PRs.
-- Merge only after phase review approval and passing validation or CI.
+- Only the managing agent may merge phase PRs in stacked mode. In serial
+  human-merge-gate mode, do not approve or merge; wait for human merge.
+- Merge only after phase review approval and passing validation or CI when
+  merging is enabled.
 - Merge phase PRs into `develop`, not directly into `main` or a predecessor
   branch. Stacked PRs may target predecessor branches for review only.
 - Stop immediately if a phase PR targets `main`; close or recreate it against

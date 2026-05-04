@@ -36,10 +36,17 @@ Task:
    the recorded target branch. Document whether the PR is already
    merge-eligible (`develop` target) or stacked for review only (predecessor
    branch target).
+8. Request review from `samcantrill` with `gh pr edit <PR> --add-reviewer
+   samcantrill` when GitHub allows it. If GitHub rejects the review request
+   because the authenticated account or PR author is `samcantrill`, add a PR
+   comment mentioning `@samcantrill` and record the fallback in the PR body.
+9. Record the review-notification status in
+   `docs/phases/<summary-of-feature>-pr-body.md`.
 
 Rules:
 
 - Do not merge.
+- Do not approve the PR.
 - Do not perform implementation refinements.
 - Do not create new test coverage.
 - Do not retarget or rebase stack branches; the managing agent owns stack

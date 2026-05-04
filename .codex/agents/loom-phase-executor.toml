@@ -1,6 +1,6 @@
 name = "loom_phase_executor"
 description = "Implements one finalized Loom phase execution plan in its dedicated worktree."
-model = "gpt-5.5"
+model = "gpt-5.3-codex-spark"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Phase Executor", "Implementation Worker", "Phase Builder"]

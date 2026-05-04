@@ -61,6 +61,12 @@ If the PR was not opened, record the exact command attempted and blocker. If
 the PR is stacked, record that it is reviewable against the predecessor branch
 but not merge-eligible until retargeted to `develop`.
 
+## Review Notification
+
+- Reviewer requested: `samcantrill`
+- Command or fallback used:
+- Notification result:
+
 ## Stack Maintenance
 
 - Current base branch:
