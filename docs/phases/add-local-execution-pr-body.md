@@ -2,7 +2,7 @@
 
 - Phase: Phase 9 - Local Execution
 - Branch: `codex/add-local-execution`
-- PR: not opened in this draft pass
+- PR: pending creation in this refine/open pass
 - Target branch: `codex/add-planning-resume-selectors`
 - Stack predecessor: `codex/add-planning-resume-selectors`
 - Merge eligibility: stacked phase PR; reviewable against `codex/add-planning-resume-selectors`; not merge-eligible until Phase 7 and Phase 8 land and this branch is rebased or replayed onto `develop`
@@ -12,8 +12,8 @@
 - Phase execution plan draft pass: complete
 - Phase execution plan refine pass: complete
 - PR body draft pass: complete
-- PR body refine/open pass: pending
-- PR open metadata: not applicable; PR was not opened in this draft pass
+- PR body refine pass: complete
+- PR open metadata: pending until PR creation and verification
 
 ## Summary
 
@@ -84,7 +84,7 @@ Targeted implementation and refinement evidence is recorded in
 `docs/phases/add-local-execution.md`, including focused Phase 9 slices,
 package, unit, contract, integration, e2e, Ruff, and Pyright checks.
 
-Live stack-target verification used during this draft pass:
+Pre-open stack-target verification from the draft pass:
 
 ```text
 command: gh pr view 12 --json number,state,baseRefName,headRefName,url
@@ -125,7 +125,8 @@ Suite output totals from `build/test-summary.md`:
 - Phase implementation refinement: used on 2026-05-04 local time.
 - PR review before this PR: unused.
 - PR body draft pass: complete in this artifact.
-- PR body refine/open pass: unused.
+- PR body refine pass: complete in this artifact.
+- PR open metadata: pending until PR creation and verification.
 
 ## Assumptions
 
@@ -147,9 +148,8 @@ Suite output totals from `build/test-summary.md`:
 
 ## PR Creation Status
 
-Not opened in this draft pass by request.
-
-Intended final PR command when the refine/open pass is authorized:
+This refine/open pass will create the stacked PR with the explicit recorded
+base and head:
 
 ```sh
 gh pr create --base codex/add-planning-resume-selectors --head codex/add-local-execution --body-file docs/phases/add-local-execution-pr-body.md --title "Phase 9: Local Execution"
@@ -161,8 +161,7 @@ After creation, verify the PR target immediately with:
 gh pr view <PR> --json baseRefName,headRefName,state,url
 ```
 
-Stop if `baseRefName` is not `codex/add-planning-resume-selectors` or
-`develop` after an approved stack replay.
+Stop if `baseRefName` is not `codex/add-planning-resume-selectors`.
 
 ## Stack Maintenance
 
