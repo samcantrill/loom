@@ -1006,7 +1006,7 @@ Future compatibility:
 
 ### Phase 3 - Stage Factory And Semantic Fingerprint Policy
 
-Status: pending
+Status: in_progress
 Branch: `codex/v0-post-stage-factory`
 PR: pending
 
