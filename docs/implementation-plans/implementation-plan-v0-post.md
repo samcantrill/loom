@@ -1415,9 +1415,24 @@ Future compatibility:
 
 ### Phase 7 - Runner Lifecycle Decomposition
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/v0-post-runner-lifecycle`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/21
+
+PR notes:
+
+- Opened against `develop` as PR #21 with head
+  `codex/v0-post-runner-lifecycle` at `157f91d`.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after
+  the refinement pass; PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed with package, unit, contract, integration, e2e, and config-extra rows;
+  GitHub checks passed.
+- Human merge gate: Codex did not approve or merge the PR. `gh pr edit 21
+  --add-reviewer samcantrill` was rejected by GitHub's Projects Classic GraphQL
+  deprecation path, so the required fallback comment mentioned `@samcantrill`
+  at https://github.com/samcantrill/loom/pull/21#issuecomment-4371996188.
+- Serial gate: Phase 8 must not start until PR #21 reaches `MERGED` on
+  `develop` and Phase 7 is recorded as `merged`.
 
 Goal:
 
