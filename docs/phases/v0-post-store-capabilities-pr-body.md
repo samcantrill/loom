@@ -3,7 +3,7 @@
 - Phase: Phase 2 - Store, Artifact, And Stage Context Capabilities
 - Branch: `codex/v0-post-store-capabilities`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/16
 - Stack predecessor: none
 - Merge eligibility: serial human merge gate. This PR must target `develop`, request review from `samcantrill` or mention `@samcantrill` if GitHub rejects the reviewer request, and must be approved and merged by a human. Codex must not approve or merge.
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-store-capabilities`
@@ -122,25 +122,32 @@ Scope check:
 
 ## PR Creation Status
 
-- PR opened: pending.
-- PR URL: pending.
-- Planned command:
+- PR opened: yes.
+- PR URL: https://github.com/samcantrill/loom/pull/16
+- Command run:
 
 ```sh
 gh pr create --base develop --head codex/v0-post-store-capabilities --title "Phase 2: Store, Artifact, and Stage Context Capabilities" --body-file docs/phases/v0-post-store-capabilities-pr-body.md
 ```
 
-- Verification: pending `gh pr view <PR> --json baseRefName,headRefName,state,url`.
-- Target verification requirement: base must be `develop`; stop if not.
+- Verification:
+
+```json
+{"baseRefName":"develop","headRefName":"codex/v0-post-store-capabilities","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/16"}
+```
+
+- Target verification result: base is `develop`, matching the recorded target branch.
 - Merge eligibility: root serial-gate PR targeting `develop`; human review and human merge are required. Codex must not approve or merge.
 - Current blocker: none.
 
 ## Review Notification
 
-- Reviewer requested: pending.
-- Required reviewer: `samcantrill`.
-- Fallback required if reviewer request fails: add a PR comment mentioning `@samcantrill` and record the comment URL or exact blocker here.
-- Notification result: pending.
+- Reviewer requested: `samcantrill`.
+- Command attempted: `gh pr edit 16 --add-reviewer samcantrill`.
+- Command result: failed with GitHub GraphQL project-card deprecation output and no review request was recorded; `gh pr view 16 --json reviewRequests,author,url` showed PR author `samcantrill` and an empty `reviewRequests` list.
+- Fallback used: added a PR comment mentioning `@samcantrill`.
+- Fallback comment: https://github.com/samcantrill/loom/pull/16#issuecomment-4369304096
+- Notification result: fallback comment posted; PR body records the fallback.
 
 ## Stack Maintenance
 

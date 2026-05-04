@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: PR preparation in progress; local validation passed, GitHub PR pending
+- Status: pr_open
 - Branch: `codex/v0-post-store-capabilities`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-store-capabilities`
 - Phase execution plan path: `docs/phases/v0-post-store-capabilities.md`
@@ -521,7 +521,7 @@ make test-summary
   - Updated stale tests that still passed removed `run_id` arguments to run-scoped `LocalArtifactStore.save()`.
   - Updated store export expectations for the new capability protocols.
   - Replaced a stale `context.output_path()` docs example with `context.local_output_path()`.
-- PR preparation: pending.
+- PR preparation: complete.
 - Stack maintenance: serial human merge gate active; no successor phase may start until this phase is approved and human-merged into `develop`.
 - Residual risks: none identified in this refinement pass. Phase 4 still owns concrete lock behavior; Phase 3+ work remains unstarted.
 - Remaining blockers: none.
@@ -545,8 +545,9 @@ make test-summary
   - integration: passed, 8 passed and 5 skipped.
   - e2e: passed, 1 passed.
   - config-extra: passed, 102 passed and 309 deselected.
-- PR creation: pending.
-- PR URL: pending.
-- PR target verification: pending.
-- Review notification: pending `samcantrill` reviewer request or `@samcantrill` fallback comment.
+- PR creation: complete.
+- PR URL: https://github.com/samcantrill/loom/pull/16
+- PR creation command: `gh pr create --base develop --head codex/v0-post-store-capabilities --title "Phase 2: Store, Artifact, and Stage Context Capabilities" --body-file docs/phases/v0-post-store-capabilities-pr-body.md`
+- PR target verification: `gh pr view 16 --json baseRefName,headRefName,state,url` returned `{"baseRefName":"develop","headRefName":"codex/v0-post-store-capabilities","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/16"}`.
+- Review notification: `gh pr edit 16 --add-reviewer samcantrill` failed with GitHub GraphQL project-card deprecation output; `gh pr view 16 --json reviewRequests,author,url` showed PR author `samcantrill` and no recorded review requests, so fallback comment `https://github.com/samcantrill/loom/pull/16#issuecomment-4369304096` was posted mentioning `@samcantrill`.
 - Serial merge gate state: active. Codex must not approve or merge this PR, and Phase 3 must not start until this PR is human-approved and human-merged into `develop`.
