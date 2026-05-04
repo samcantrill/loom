@@ -1328,7 +1328,7 @@ Future compatibility:
 
 ### Phase 6 - Explicit Recipe Catalogs And Fresh Composition
 
-Status: pending
+Status: in_progress
 Branch: `codex/v0-post-recipe-catalogs`
 PR: pending
 
