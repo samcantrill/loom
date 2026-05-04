@@ -386,8 +386,16 @@ make test-summary
 - PR body refine: completed by `loom_pr_preparer` on 2026-05-04 local time.
   Refine pass verified the PR body against the actual stacked diff from
   `codex/add-local-execution`, confirmed Phase 10 hardening/docs/contracts
-  scope with no deferred feature work, reran final PR validation, and prepared
-  explicit push/PR creation against `codex/add-local-execution`.
+  scope with no deferred feature work, reran final PR validation, pushed
+  `codex/harden-v0-docs`, and opened PR #14 against
+  `codex/add-local-execution`.
+- PR creation:
+  - URL: https://github.com/samcantrill/loom/pull/14
+  - Creation command: `gh pr create --base codex/add-local-execution --head codex/harden-v0-docs --title "Phase 10: Hardening And Documentation" --body-file docs/phases/harden-v0-docs-pr-body.md`
+  - Verification command: `gh pr view 14 --json baseRefName,headRefName,state,url`
+  - Verification result: `{"baseRefName":"codex/add-local-execution","headRefName":"codex/harden-v0-docs","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/14"}`
+  - Target check: passed; base branch matches recorded target branch
+    `codex/add-local-execution`.
 - PR preparation validation:
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed during PR body
     refinement: Ruff passed, Pyright reported 0 errors, default pytest passed

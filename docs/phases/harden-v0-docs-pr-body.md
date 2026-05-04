@@ -108,13 +108,28 @@ Suite counts from `build/test-summary.md`: package 34 passed, unit 292 passed, c
 
 ## PR Creation Status
 
-PR opening is pending until this refinement commit is recorded and pushed. Prepared command:
+PR opened during the PR body refine pass:
+
+- URL: https://github.com/samcantrill/loom/pull/14
+- State: `OPEN`
+- Base branch: `codex/add-local-execution`
+- Head branch: `codex/harden-v0-docs`
+- Merge eligibility: stacked for review only; not merge-eligible until retargeted to `develop` after predecessor phases land and validation is rerun.
+
+Creation command:
 
 ```sh
 gh pr create --base codex/add-local-execution --head codex/harden-v0-docs --title "Phase 10: Hardening And Documentation" --body-file docs/phases/harden-v0-docs-pr-body.md
 ```
 
-Remote preflight from the manager already confirmed GitHub authentication outside the sandbox and verified `origin/develop` at `fcd5240df4ca760fc13276f530d47f4a6781bf1c`. This refine pass must verify or refresh GitHub authentication before push/PR creation.
+Verification command and result:
+
+```text
+command: gh pr view 14 --json baseRefName,headRefName,state,url
+result: {"baseRefName":"codex/add-local-execution","headRefName":"codex/harden-v0-docs","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/14"}
+```
+
+Remote preflight from the manager already confirmed GitHub authentication outside the sandbox and verified `origin/develop` at `fcd5240df4ca760fc13276f530d47f4a6781bf1c`. This refine pass refreshed network-approved GitHub authentication, verified `origin/develop` at the same commit, pushed `codex/harden-v0-docs`, opened PR #14, and confirmed the PR target is the recorded stack predecessor.
 
 ## Stack Maintenance
 
