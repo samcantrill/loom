@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation refinement complete
+- Status: PR preparation in progress
 - Branch: `codex/v0-post-stage-factory`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-stage-factory`
 - Phase execution plan path: `docs/phases/v0-post-stage-factory.md`
@@ -776,9 +776,9 @@ make test-summary
   pass. Fixed phase-scoped documentation contract drift in `docs/structure.md`
   and `docs/features/fingerprints.md`, and cleaned formatting regressions in
   touched integration tests. No source behavior changes were required.
-- PR preparation: pending PR-preparer pass. The PR must target `develop` and
-  request review from `samcantrill` or mention `@samcantrill` via the documented
-  fallback.
+- PR preparation: in progress. The PR body artifact was drafted and refined in
+  `docs/phases/v0-post-stage-factory-pr-body.md`; PR creation and reviewer
+  notification are pending.
 - Stack maintenance: serial human merge gate active; no successor may start
   until the Phase 3 PR is human-merged into `develop`.
 - Remaining blockers: none.
@@ -888,3 +888,35 @@ make test-summary
     (103 passed, 326 deselected), and build.
 - Residual risks: none identified within Phase 3 scope. PR preparation should
   still run `make test-summary` for suite-level PR body evidence.
+
+## PR Preparation Evidence
+
+- PR preparer pass: in progress.
+- Final diff and scope inspection: completed against `develop`; the diff is
+  limited to Phase 3 factory parsing/construction, runner construction wiring,
+  semantic fingerprint policy v2, in-scope fixtures/tests/examples, and the
+  required docs.
+- Scope guard: no Phase 4 runtime/resource/event/lock work, planner
+  decomposition, recipe catalog changes, runner lifecycle decomposition,
+  non-local executors, remote stores, catalogs, bundles, sweeps, retry,
+  timeout, cleanup, retention, or migration closeout work was started.
+- Validation command:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed during PR preparation. Ruff passed; Pyright passed with 0 errors; the
+  isolated default no-extra harness passed with 325 passed and 9 skipped; the
+  isolated config-extra harness passed with 103 passed and 326 deselected; the
+  source distribution and wheel built successfully.
+- Suite summary command:
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed and wrote `build/test-summary.md`.
+- Suite summary rows: package passed (33 passed, 1 skipped), unit passed (271
+  passed, 1 skipped), contract passed (13 passed, 1 skipped), integration
+  passed (8 passed, 5 skipped), e2e passed (1 passed), config-extra passed
+  (103 passed, 326 deselected).
+- PR body artifact: `docs/phases/v0-post-stage-factory-pr-body.md`.
+- PR creation status: pending push and GitHub PR creation.
+- Review notification status: pending PR creation.
+- Stack state: root serial phase; stack predecessor none; base and PR target
+  are `develop`; no successor phase may start until the PR is human-approved
+  and human-merged into `develop`.
+- Remaining blockers: none.
