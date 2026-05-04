@@ -1519,7 +1519,7 @@ Future compatibility:
 
 ### Phase 8 - Hardening, Docs, And Migration Notes
 
-Status: pending
+Status: in_progress
 Branch: `codex/v0-post-hardening-docs`
 PR: pending
 
