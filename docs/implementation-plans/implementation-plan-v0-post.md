@@ -1415,7 +1415,7 @@ Future compatibility:
 
 ### Phase 7 - Runner Lifecycle Decomposition
 
-Status: pending
+Status: in_progress
 Branch: `codex/v0-post-runner-lifecycle`
 PR: pending
 
