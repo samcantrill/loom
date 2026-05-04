@@ -34,6 +34,25 @@ def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None
         tmp_path / "runs" / "run1" / "stages" / "report" / "fingerprint.json"
     ).is_file()
     assert set(run_store.read_artifact_index("run1")) == {"build.data", "report.text"}
+    assert run_store.read_run_lock("run1") is None
+    assert [event.event_type for event in run_store.read_events("run1")] == [
+        "run.created",
+        "run.planned",
+        "stage.planned",
+        "stage.planned",
+        "run.started",
+        "stage.started",
+        "stage.completed",
+        "stage.started",
+        "stage.completed",
+        "run.completed",
+    ]
+    stage_events = [event for event in run_store.read_events("run1") if event.scope.stage_name == "build"]
+    assert [event.event_type for event in stage_events] == [
+        "stage.planned",
+        "stage.started",
+        "stage.completed",
+    ]
 
 
 def test_local_runner_applies_selector_skip(tmp_path: Path) -> None:
@@ -51,6 +70,10 @@ def test_local_runner_applies_selector_skip(tmp_path: Path) -> None:
     status = run_store.read_stage_status("run1", "report")
     assert status is not None
     assert status.status == StageStatus.SKIPPED
+    assert any(
+        event.event_type == "stage.skipped" and event.scope.stage_name == "report"
+        for event in run_store.read_events("run1")
+    )
 
 
 def test_local_runner_keeps_factory_init_separate_from_stage_config(

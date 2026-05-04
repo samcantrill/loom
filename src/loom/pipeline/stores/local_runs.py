@@ -14,7 +14,13 @@ from loom.io.uris import path_to_file_uri
 from loom.pipeline.events import PipelineEvent, PipelineEventError, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord, RunLockValidationError
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
-from loom.serialization import PlainData, ensure_plain_data, json_loads, stable_json_dumps
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    json_loads,
+    stable_json_dumps,
+    thaw_plain_data,
+)
 from loom.serialization.errors import DeserializationError, PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
@@ -301,7 +307,10 @@ class LocalRunStore:
             timestamp=event.timestamp or utc_timestamp(),
             scope=event.scope,
             event_type=event.event_type,
-            payload=event.payload,
+            payload=cast(
+                Mapping[str, PlainData],
+                thaw_plain_data(event.payload, path="event.payload"),
+            ),
         )
         path = run_dir / "events.jsonl"
         try:

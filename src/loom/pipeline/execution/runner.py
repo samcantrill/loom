@@ -34,9 +34,11 @@ from .errors import (
     PlanExecutionError,
     RunRequestError,
 )
+from .eventing import emit_run_event, emit_stage_event
 from .lifecycle import (
     next_stage_attempt,
     write_run_status,
+    write_stage_blocked,
     write_stage_failed,
     write_stage_running,
     write_stage_skipped,
@@ -52,6 +54,7 @@ from .models import (
     StageRunResult,
 )
 from .outputs import validate_stage_outputs
+from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
 
@@ -93,6 +96,41 @@ class PipelineRunner:
         local_run_store = self._require_local_run_store()
         self._create_or_open_run(request)
         run_dir = local_run_store.local_run_dir(run_id)
+        lock = acquire_run_lock(
+            self.run_store,
+            run_id,
+            owner=build_lock_owner(
+                component="PipelineRunner",
+                run_id=run_id,
+                executor=str(getattr(self.executor, "name", "unknown")),
+            ),
+        )
+        try:
+            self._emit_run_event(
+                run_id,
+                "run.opened" if request.open_existing else "run.created",
+                timestamp=started_at,
+                payload={"open_existing": request.open_existing},
+            )
+            return self._run_locked(
+                request=request,
+                run_id=run_id,
+                run_dir=run_dir,
+                local_run_store=local_run_store,
+                started_at=started_at,
+            )
+        finally:
+            release_run_lock(self.run_store, lock)
+
+    def _run_locked(
+        self,
+        *,
+        request: RunRequest,
+        run_id: str,
+        run_dir: Path,
+        local_run_store: LocalRunStorePaths,
+        started_at: str,
+    ) -> RunResult:
         created_at = self._created_at(run_id, started_at)
         write_run_status(
             self.run_store,
@@ -128,6 +166,23 @@ class PipelineRunner:
             started_at=started_at,
             metadata={"plan_summary": dict(plan.summary)},
         )
+        self._emit_run_event(
+            run_id,
+            "run.planned",
+            timestamp=self.clock(),
+            payload={"summary": dict(plan.summary)},
+        )
+        for stage_plan in plan.ordered_stage_plans:
+            self._emit_stage_event(
+                run_id,
+                stage_plan.stage_name,
+                "stage.planned",
+                timestamp=self.clock(),
+                payload={
+                    "action": stage_plan.action.value,
+                    "reason_codes": _reason_codes(stage_plan.reasons),
+                },
+            )
         write_run_status(
             self.run_store,
             run_id=run_id,
@@ -135,6 +190,12 @@ class PipelineRunner:
             created_at=created_at,
             updated_at=self.clock(),
             started_at=started_at,
+        )
+        self._emit_run_event(
+            run_id,
+            "run.started",
+            timestamp=self.clock(),
+            payload={"stage_count": len(plan.ordered_stage_plans)},
         )
 
         stage_results: dict[str, StageRunResult] = {}
@@ -144,8 +205,10 @@ class PipelineRunner:
         for stage_plan in plan.ordered_stage_plans:
             stage = spec.get_stage(stage_plan.stage_name)
             if failed_stage is not None:
-                stage_results[stage.name] = _blocked_after_failure(
-                    stage, stage_plan.reasons
+                stage_results[stage.name] = self._block_stage_after_failure(
+                    run_id=run_id,
+                    stage_plan=stage_plan,
+                    blocked_by=failed_stage,
                 )
                 continue
             if stage_plan.action == PlanAction.REUSE:
@@ -171,22 +234,43 @@ class PipelineRunner:
                     failed_stage = stage.name
                     failure = result.failure
                 continue
-            if stage_plan.action in {PlanAction.BLOCKED, PlanAction.STALE}:
+            if stage_plan.action == PlanAction.BLOCKED:
                 failed_stage = stage.name
                 failure = self._plan_failure(
                     run_id, stage, stage_plan.action, stage_plan.reasons
                 )
+                stage_results[stage.name] = self._block_plan_stage(
+                    run_id=run_id,
+                    stage_plan=stage_plan,
+                    failure=failure,
+                )
+                self._write_failed_run(run_id, created_at, started_at, failure)
+                continue
+            if stage_plan.action == PlanAction.STALE:
+                failed_stage = stage.name
+                failure = self._plan_failure(
+                    run_id, stage, stage_plan.action, stage_plan.reasons
+                )
+                attempt = next_stage_attempt(self.run_store, run_id, stage.name)
+                failure = self._record_stage_failure_and_failed_run(
+                    run_id=run_id,
+                    stage_name=stage.name,
+                    attempt=attempt,
+                    started_at=None,
+                    created_at=created_at,
+                    run_started_at=started_at,
+                    failure=failure,
+                )
                 stage_results[stage.name] = StageRunResult(
                     stage_name=stage.name,
                     action=PlanAction.BLOCKED,
-                    status=None,
-                    attempt=None,
+                    status=StageStatus.FAILED,
+                    attempt=attempt,
                     outputs={},
                     failure=failure,
                     reasons=stage_plan.reasons,
                     finished_at=failure.failed_at,
                 )
-                self._write_failed_run(run_id, created_at, started_at, failure)
                 continue
             result = self._run_stage(
                 request=request,
@@ -216,7 +300,6 @@ class PipelineRunner:
                 failure = result.failure
 
         finished_at = self.clock()
-        artifact_index = self.run_store.read_artifact_index(run_id)
         if failure is None:
             write_run_status(
                 self.run_store,
@@ -227,14 +310,34 @@ class PipelineRunner:
                 started_at=started_at,
                 finished_at=finished_at,
             )
+            self._emit_run_event(
+                run_id,
+                "run.completed",
+                timestamp=finished_at,
+                payload={"status": RunStatus.SUCCEEDED.value},
+            )
             run_status = RunStatus.SUCCEEDED
         else:
+            self._write_failed_run(run_id, created_at, started_at, failure)
+            self._emit_run_event(
+                run_id,
+                "run.failed",
+                timestamp=failure.failed_at,
+                payload={
+                    "status": RunStatus.FAILED.value,
+                    "failed_stage": failed_stage,
+                    "failure_type": failure.failure_type,
+                },
+            )
             run_status = RunStatus.FAILED
             for stage_plan in plan.ordered_stage_plans:
                 if stage_plan.stage_name not in stage_results:
-                    stage_results[stage_plan.stage_name] = _blocked_after_failure(
-                        stage_plan, ()
+                    stage_results[stage_plan.stage_name] = self._block_stage_after_failure(
+                        run_id=run_id,
+                        stage_plan=stage_plan,
+                        blocked_by=failed_stage or failure.stage_name,
                     )
+        artifact_index = self.run_store.read_artifact_index(run_id)
         return RunResult(
             run_id=run_id,
             run_dir=run_dir,
@@ -291,6 +394,13 @@ class PipelineRunner:
                 stage_name=stage.name,
                 attempt=attempt,
                 started_at=running_at,
+            )
+            self._emit_stage_event(
+                run_id,
+                stage.name,
+                "stage.started",
+                timestamp=running_at,
+                payload={"attempt": attempt, "action": PlanAction.RUN.value},
             )
             stage_started_at = running_at
             stage_object = self._construct_stage(spec, stage)
@@ -387,6 +497,17 @@ class PipelineRunner:
                 started_at=execution_result.started_at,
                 finished_at=execution_result.finished_at,
                 metadata={"action": PlanAction.RUN.value},
+            )
+            self._emit_stage_event(
+                run_id,
+                stage.name,
+                "stage.completed",
+                timestamp=execution_result.finished_at,
+                payload={
+                    "attempt": attempt,
+                    "action": PlanAction.RUN.value,
+                    "status": StageStatus.SUCCEEDED.value,
+                },
             )
             return StageRunResult(
                 stage_name=stage.name,
@@ -617,6 +738,124 @@ class PipelineRunner:
                 f"could not construct stage {stage.name!r} at {stage.factory.target_path!r}: {exc}"
             ) from exc
 
+    def _emit_run_event(
+        self,
+        run_id: str,
+        event_type: str,
+        *,
+        timestamp: str,
+        payload: Mapping[str, PlainData] | None = None,
+    ) -> None:
+        emit_run_event(
+            self.run_store,
+            run_id=run_id,
+            event_type=event_type,
+            timestamp=timestamp,
+            payload=payload,
+        )
+
+    def _emit_stage_event(
+        self,
+        run_id: str,
+        stage_name: str,
+        event_type: str,
+        *,
+        timestamp: str,
+        payload: Mapping[str, PlainData] | None = None,
+    ) -> None:
+        emit_stage_event(
+            self.run_store,
+            run_id=run_id,
+            stage_name=stage_name,
+            event_type=event_type,
+            timestamp=timestamp,
+            payload=payload,
+        )
+
+    def _block_plan_stage(
+        self,
+        *,
+        run_id: str,
+        stage_plan,
+        failure: ExecutionFailure,
+    ) -> StageRunResult:
+        attempt = next_stage_attempt(self.run_store, run_id, stage_plan.stage_name)
+        blocked_at = failure.failed_at
+        write_stage_blocked(
+            self.run_store,
+            run_id=run_id,
+            stage_name=stage_plan.stage_name,
+            attempt=attempt,
+            blocked_at=blocked_at,
+            message=f"stage {stage_plan.stage_name!r} blocked by execution plan",
+            blocked_by=[],
+            reason_code="plan_blocked",
+            metadata={"reasons": [reason.to_dict() for reason in stage_plan.reasons]},
+        )
+        self._emit_stage_event(
+            run_id,
+            stage_plan.stage_name,
+            "stage.blocked",
+            timestamp=blocked_at,
+            payload={
+                "attempt": attempt,
+                "blocked_by": [],
+                "reason_codes": _reason_codes(stage_plan.reasons),
+            },
+        )
+        return StageRunResult(
+            stage_name=stage_plan.stage_name,
+            action=PlanAction.BLOCKED,
+            status=StageStatus.BLOCKED,
+            attempt=attempt,
+            outputs={},
+            failure=failure,
+            reasons=stage_plan.reasons,
+            finished_at=blocked_at,
+        )
+
+    def _block_stage_after_failure(
+        self,
+        *,
+        run_id: str,
+        stage_plan,
+        blocked_by: str,
+    ) -> StageRunResult:
+        attempt = next_stage_attempt(self.run_store, run_id, stage_plan.stage_name)
+        blocked_at = self.clock()
+        blocked_by_list: list[PlainData] = [blocked_by]
+        write_stage_blocked(
+            self.run_store,
+            run_id=run_id,
+            stage_name=stage_plan.stage_name,
+            attempt=attempt,
+            blocked_at=blocked_at,
+            message=f"stage blocked because upstream stage {blocked_by!r} failed",
+            blocked_by=blocked_by_list,
+            reason_code="upstream_failed",
+            metadata={"reasons": [reason.to_dict() for reason in stage_plan.reasons]},
+        )
+        self._emit_stage_event(
+            run_id,
+            stage_plan.stage_name,
+            "stage.blocked",
+            timestamp=blocked_at,
+            payload={
+                "attempt": attempt,
+                "blocked_by": blocked_by_list,
+                "reason_codes": _reason_codes(stage_plan.reasons),
+            },
+        )
+        return StageRunResult(
+            stage_name=stage_plan.stage_name,
+            action=PlanAction.BLOCKED,
+            status=StageStatus.BLOCKED,
+            attempt=attempt,
+            outputs={},
+            reasons=stage_plan.reasons,
+            finished_at=blocked_at,
+        )
+
     def _reuse_stage(
         self,
         run_id: str,
@@ -675,6 +914,17 @@ class PipelineRunner:
                 finished_at=failure.failed_at,
             )
         prior_status = self.run_store.read_stage_status(run_id, stage_plan.stage_name)
+        self._emit_stage_event(
+            run_id,
+            stage_plan.stage_name,
+            "stage.reused",
+            timestamp=self.clock(),
+            payload={
+                "action": PlanAction.REUSE.value,
+                "reason_codes": _reason_codes(stage_plan.reasons),
+                **({"attempt": prior_status.attempt} if prior_status else {}),
+            },
+        )
         return StageRunResult(
             stage_name=stage_plan.stage_name,
             action=PlanAction.REUSE,
@@ -704,6 +954,17 @@ class PipelineRunner:
                 message="stage skipped by selector",
                 metadata={
                     "reasons": [reason.to_dict() for reason in stage_plan.reasons]
+                },
+            )
+            self._emit_stage_event(
+                run_id,
+                stage_plan.stage_name,
+                "stage.skipped",
+                timestamp=finished_at,
+                payload={
+                    "attempt": attempt,
+                    "action": PlanAction.SKIP.value,
+                    "reason_codes": _reason_codes(stage_plan.reasons),
                 },
             )
         except Exception as exc:
@@ -826,6 +1087,13 @@ class PipelineRunner:
             finished_at=failure.failed_at,
             message=failure.message,
             metadata={"failure_type": failure.failure_type},
+        )
+        self._emit_stage_event(
+            run_id,
+            stage_name,
+            "stage.failed",
+            timestamp=failure.failed_at,
+            payload={"attempt": attempt, "failure_type": failure.failure_type},
         )
 
     def _record_stage_failure_and_failed_run(
@@ -974,6 +1242,10 @@ def _blocked_after_failure(
         outputs={},
         reasons=reasons,
     )
+
+
+def _reason_codes(reasons: tuple[PlanReason, ...]) -> list[PlainData]:
+    return [reason.code.value for reason in reasons]
 
 
 def _failure_type_for_exception(exc: Exception) -> str:
