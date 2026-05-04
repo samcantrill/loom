@@ -278,6 +278,43 @@ ArtifactRef
 RunProvenance
 StageProvenance
 dataclass instances with plain-data fields
+
+## 6. Immutability and Serialization Helpers
+
+`loom.serialization` owns both recursive immutability helpers and versioned
+document helpers used by persisted models:
+
+```python
+freeze_plain_data(value, *, path="$") -> FrozenPlainData
+thaw_plain_data(value, *, path="$") -> object
+require_mapping(data, *, path="$") -> dict[str, object]
+validate_document_fields(data, *, required: set[str], optional: set[str] = ..., path="$")
+load_versioned_document(..., migrations=None, ...)
+```
+
+`freeze_plain_data()` normalizes plain-data structures for storage by recursively
+converting:
+
+- mappings to `MappingProxyType`
+- sequences to tuples
+
+This keeps nested plain data immutable after construction.
+
+`thaw_plain_data()` must recurse nested immutable structures back to mutable
+collections for public output paths so callers continue to receive mutable
+`dict`/`list` values from `to_dict`, manifest materialization, or similar.
+
+## 7. Document Schema Helpers and Migration Ownership
+
+`loom.serialization.schema` is the shared home for persisted-document shape checks.
+It provides schema version extraction and support checks plus:
+
+- required/optional field validation
+- unknown-field rejection defaults
+- versioned document loading with per-document migration tables
+
+Migrations are owned by each persisted-document module and passed into the helper
+API. This keeps schema evolution reviewable and avoids process-wide registries.
 ```
 
 ### 5.3 Serialization

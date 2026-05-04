@@ -319,6 +319,34 @@ make test-summary
 
 `make validate-pr` must include Ruff, Pyright, the default no-extra test path, config-extra validation, and build. `make test-summary` must record package, unit, contract, integration, e2e, and config-extra suite rows.
 
+## Completion Notes
+
+### Slice 6 (docs and completion note updates)
+
+- Updated `docs/structure.md` for recursive immutability, schema-helper ownership,
+  and `config` optional-dependency validation split.
+- Updated `docs/features/serialization.md` with freeze/thaw helper ownership and
+  shared versioned-document schema-helper responsibilities.
+- Updated `docs/features/config.md` with optional `config` dependency and boundary
+  contract for no-extra/config-extra behavior.
+- Updated `tests/README.md` to document the split between default no-extra and
+  config-extra evidence.
+
+### Validation evidence observed from prior slices
+
+- Slice 1 (`b511bb3`) through Slice 5 (`efe74e6`) implemented:
+  - recursive freeze/thaw primitives
+  - recursive immutability and thawed `to_dict` output
+  - shared schema/migration helpers and selected persisted-document migrations
+  - optional `loom[config]` dependency split and lockfile updates
+  - no-extra / config-extra harness split in Makefile and test harness
+- Slice 5 added harness targets that should now appear in `make test-summary`
+  output (`test-no-extra` and `test-config-extra` coverage rows).
+
+### PR preparation state
+
+- PR body and final validation evidence remain pending for `loom_pr_preparer`.
+
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices:
