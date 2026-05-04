@@ -1230,9 +1230,36 @@ Future compatibility:
 
 ### Phase 5 - Planner Policy Decomposition And Explanations
 
-Status: in_progress
+Status: merged
 Branch: `codex/v0-post-planner-policy`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/19
+
+Merge notes:
+
+- Merged into `develop` on 2026-05-04 as squash commit `496cba8`.
+- Summary: extracted planner invalidation and action-decision policy into typed
+  helper modules, rewired `planner.py` around `ResolvedInputBinding` without
+  changing execution-plan persistence, added `PlanExplanation` and
+  `StageExplanation` diagnostics derived from `ExecutionPlan`, tightened
+  explanation parsing, preserved semantic fingerprint policy/version, updated
+  public planning exports, and aligned structure, graph, resume, preflight, and
+  fingerprint docs.
+- Checks: PR-local `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after
+  the refinement pass; PR-local `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed with package, unit, contract, integration, e2e, and config-extra rows;
+  GitHub checks passed.
+- Human merge gate: PR #19 reached `MERGED` on `develop`; Codex did not approve
+  or merge the PR. `gh pr edit 19 --add-reviewer samcantrill` was rejected by
+  GitHub's Projects Classic GraphQL deprecation path and `reviewRequests`
+  remained empty with `samcantrill` as the PR author, so the required fallback
+  comment mentioned `@samcantrill` at
+  https://github.com/samcantrill/loom/pull/19#issuecomment-4370912666.
+- Stack maintenance: root serial phase, no successor branch was started before
+  merge, and no retargeting was required.
+- Follow-up notes: Phase 6 must continue from updated `develop`; explicit
+  recipe catalogs and fresh composition remain Phase 6 work, while runner
+  lifecycle decomposition, non-local executors, remote stores, bundles, sweeps,
+  and final migration notes remain later phases.
 
 Goal:
 

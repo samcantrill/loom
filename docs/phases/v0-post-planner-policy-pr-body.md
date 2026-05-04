@@ -3,7 +3,7 @@
 - Phase: Phase 5 - Planner Policy Decomposition And Explanations
 - Branch: `codex/v0-post-planner-policy`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/19
 - Stack predecessor: none
 - Merge eligibility: serial human merge gate. This PR must target `develop`,
   request review from `samcantrill` or mention `@samcantrill` if GitHub rejects
@@ -186,30 +186,36 @@ Scope check:
 
 ## PR Creation Status
 
-- PR opened: pending.
-- PR URL: pending.
-- Command to run:
+- PR opened: yes.
+- PR URL: https://github.com/samcantrill/loom/pull/19
+- Command run:
 
 ```sh
 gh pr create --base develop --head codex/v0-post-planner-policy --title "Phase 5: Planner Policy Decomposition and Explanations" --body-file docs/phases/v0-post-planner-policy-pr-body.md
 ```
 
-- Verification: pending.
-- Target verification result: pending.
-- CI status at PR verification: pending.
+- Verification: PR #19 targeted `develop` from
+  `codex/v0-post-planner-policy` and reached `MERGED` at
+  `2026-05-04T12:12:26Z` as squash commit
+  `496cba815cd3d8c789e7ab8a05ab0c49dfb48fd4`.
+- Target verification result: base is `develop`, matching the recorded target
+  branch.
+- CI status at final PR verification: GitHub `checks` completed successfully.
 - Merge eligibility: root serial-gate PR targeting `develop`; human review and
   human merge are required. Codex must not approve or merge.
 - Current blocker: none.
 
 ## Review Notification
 
-- Reviewer requested: pending.
-- Command to run: `gh pr edit <PR> --add-reviewer samcantrill`.
-- Fallback policy: if GitHub rejects the reviewer request because the
-  authenticated account or PR author is `samcantrill`, add an immediate PR
-  comment mentioning `@samcantrill` and record the fallback here and in the
-  phase execution plan.
-- Notification result: pending.
+- Reviewer requested: `samcantrill`.
+- Command attempted: `gh pr edit 19 --add-reviewer samcantrill`.
+- Command result: failed with GitHub GraphQL project-card deprecation output and
+  no review request was recorded; `gh pr view 19 --json
+  reviewRequests,author,url` showed PR author `samcantrill` and an empty
+  `reviewRequests` list.
+- Fallback used: added a PR comment mentioning `@samcantrill`.
+- Fallback comment: https://github.com/samcantrill/loom/pull/19#issuecomment-4370912666
+- Notification result: fallback comment posted; PR body records the fallback.
 
 ## Stack Maintenance
 

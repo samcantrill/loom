@@ -2,21 +2,24 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: merged
 - Branch: `codex/v0-post-planner-policy`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-planner-policy`
 - Phase execution plan path: `docs/phases/v0-post-planner-policy.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 5 - Planner Policy Decomposition And Explanations`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/19
 - Stack predecessor: none
 - Base branch: `develop` at `235e068da580d261510f9fdda351e8d37a0da3f7`
 - Target branch: `develop`
 - Serial human merge gate: active. The Phase 5 implementation PR must target
   `develop`, request review from `samcantrill` when GitHub allows it, and
   mention `@samcantrill` in the PR body or an immediate fallback PR comment.
-  Codex must not approve or merge the PR. The manager must wait for human merge
-  into `develop` before starting Phase 6.
+  Codex must not approve or merge the PR. PR preparation attempted the GitHub
+  reviewer request; GitHub rejected it for this author/account path, so the
+  required fallback comment was posted:
+  https://github.com/samcantrill/loom/pull/19#issuecomment-4370912666. The PR
+  reached `MERGED` on `develop` at `2026-05-04T12:12:26Z`.
 - Merge eligibility: root serial phase. The Phase 5 PR is merge-eligible only
   after human review and human merge into `develop`; there is no stack
   predecessor to retarget from.
@@ -602,7 +605,7 @@ Implementation refinement evidence:
 
 ## PR Preparation Evidence
 
-- PR preparer pass: in progress.
+- PR preparer pass: complete.
 - Final diff and scope inspection: completed against `develop`; the diff is
   limited to Phase 5 planner invalidation/action helper extraction,
   `PlanExplanation`/`StageExplanation` diagnostics, planner typing cleanup,
@@ -629,12 +632,23 @@ Implementation refinement evidence:
 - PR body artifact: `docs/phases/v0-post-planner-policy-pr-body.md`.
 - PR body draft pass: complete in this PR-preparation pass.
 - PR body refine pass: complete in this PR-preparation pass.
-- PR creation status: pending.
+- PR creation status: opened at
+  https://github.com/samcantrill/loom/pull/19 and then human-merged into
+  `develop`.
+- PR creation command:
+  `gh pr create --base develop --head codex/v0-post-planner-policy --title "Phase 5: Planner Policy Decomposition and Explanations" --body-file docs/phases/v0-post-planner-policy-pr-body.md`
+- PR target verification: PR #19 targeted `develop` from
+  `codex/v0-post-planner-policy`; final GitHub state was `MERGED` with merge
+  commit `496cba815cd3d8c789e7ab8a05ab0c49dfb48fd4`.
 - PR target: `develop`.
-- Review notification status: pending.
+- Review notification status: `gh pr edit 19 --add-reviewer samcantrill`
+  failed with GitHub GraphQL project-card deprecation output and no review
+  request was recorded. `gh pr view 19 --json reviewRequests,author,url`
+  showed author `samcantrill` and no recorded review requests, so the required
+  fallback comment was posted mentioning `@samcantrill`:
+  https://github.com/samcantrill/loom/pull/19#issuecomment-4370912666.
 - Stack state: root serial phase; stack predecessor none; base and PR target
-  are `develop`; no successor phase may start until the PR is human-approved
-  and human-merged into `develop`.
+  are `develop`; PR #19 was human-merged before Phase 6 started.
 - Remaining blockers: none.
 
 ## Design Impact
