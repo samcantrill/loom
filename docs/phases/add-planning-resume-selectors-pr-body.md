@@ -162,7 +162,9 @@ Suite output totals from `build/test-summary.md`:
 
 ## Risks / Follow-Ups
 
-- This PR is stacked and must be retargeted or rebased onto `develop` after Phase 7 lands, followed by rerunning validation.
+- This PR is now retargeted to `develop` after Phase 7 landed, but remains
+  blocked by the recorded `from_stage` selector review finding until that issue
+  is fixed and validation is rerun.
 - Detailed fingerprint diff rendering and CLI display remain deferred until a later CLI/status phase needs them.
 - Plan persistence stores only the current plan, not plan attempt history.
 - Downstream fingerprints with pending upstream outputs remain deferred until Phase 9 can bind actual produced artifacts during execution.
