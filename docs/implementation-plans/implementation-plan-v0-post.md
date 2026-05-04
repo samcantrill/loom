@@ -1,4 +1,4 @@
-# V0 Post-Implementation Architecture Limitations Audit
+# V0 Post-Implementation Architecture Limitations and Remediation Decisions
 
 ## Goal
 
@@ -6,9 +6,10 @@ Evaluate the current v0 implementation against the longer-term `loom` vision in
 [`docs/loom.md`](../loom.md), [`docs/structure.md`](../structure.md), and the
 post-v0 roadmap.
 
-This is a pre-v1 architecture gate audit, not an implementation plan for fixes.
-It records decisions that were reasonable for the local v0 runtime but may
-limit future users or roadmap work if they harden into permanent contracts.
+This is a pre-v1 architecture gate audit, remediation decision record, and
+phased implementation plan. Individual phase execution plans should expand the
+implementation detail for one phase at a time, but this document is the
+controlling sequence for the v0-post hardening work.
 
 ## Context
 
@@ -40,7 +41,8 @@ Each finding records:
 - user impact;
 - affected roadmap versions;
 - severity;
-- gate decision.
+- gate decision;
+- selected remediation.
 
 Severity values:
 
@@ -58,6 +60,40 @@ must resolve before v1
 resolve before later roadmap step
 monitor
 ```
+
+## Review Outcome
+
+The selected direction is a dedicated v0-post hardening plan that must land
+before v1 config-composition work proceeds. Breaking changes to existing v0 APIs
+are allowed where they cleanly correct long-term contracts before CLI, workers,
+catalogs, plugins, and remote stores build on them.
+
+Cross-run artifact identity should be represented by a higher-level
+`ArtifactAddress` value object in `loom.artifacts`, backed by the pair
+`(run_id, artifact_id)`. Artifact IDs remain run-local, and artifact stores
+remain bound to one run.
+
+The amended phase plan uses eight phases. Documentation that defines package
+ownership or public contracts must move with the phase that creates the
+contract; the final hardening phase performs migration-note and roadmap cleanup
+rather than carrying all structure updates.
+
+## Selected Remediation Summary
+
+| # | Finding | Selected direction |
+|---|---|---|
+| 1 | Local path-shaped store contracts | Break before v1; replace generic path contracts with capability-oriented store and context APIs. |
+| 2 | Artifact store run scope and identity | Make `ArtifactStore` explicitly run-scoped; add `loom.artifacts.ArtifactAddress` for catalog/bundle identity. |
+| 3 | Runner as high-policy coordinator | Do a broad pre-v1 internal decomposition while preserving `PipelineRunner` as the facade. |
+| 4 | Planning policy concentration | Split planner policies before v1 and add a separate typed explanation surface. |
+| 5 | Shallow immutability | Make frozen core refs and specs recursively immutable. |
+| 6 | Persisted schema boilerplate | Add a central strict versioned plain-data schema layer with explicit migrations. |
+| 7 | Global recipe registry state | Make explicit catalogs the reproducible path; keep global registration only as Python convenience. |
+| 8 | Run metadata naming ambiguity | Rename before v1 to clear run-document and user-metadata APIs. |
+| 9 | Blocked descendant state | Persist blocked stage outcome records for planned descendants. |
+| 10 | Hard config dependencies | Move config dependencies behind optional extras before v1. |
+| 11 | No-argument stage construction | Add an explicit `factory: {_target_: ..., init: {...}}` block separate from runtime `stage_config`. |
+| 12 | Missing runtime/resource/event/lock abstractions | Add typed foundations, `loom.pipeline.events`, append-only local events, and store-capability locking. |
 
 ## Findings
 
@@ -104,15 +140,16 @@ Affected roadmap versions:
 
 Severity: critical.
 
-Gate decision: must resolve before v1 if v1 or v2 documents additional public
-usage of run paths; otherwise resolve before v4 at the latest.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Separate durable run-state persistence from local layout/path allocation.
-- Introduce capability-oriented store methods before non-local execution relies
-  on current `Path` returns.
-- Keep local path helpers for `LocalRunStore`, but avoid making them the only
+- Break the generic path-shaped `RunStore` and `StageContext` contracts before
+  v1.
+- Replace them with capability-oriented APIs for artifacts, outputs, logs,
+  temporary/workspace access, and durable run state.
+- Keep local path helpers only on explicit local-only types or capabilities.
+  The local run directory remains inspectable, but it is no longer the generic
   store protocol shape.
 
 ### 2. Artifact Store Run Scope and Artifact Identity
@@ -157,15 +194,16 @@ Affected roadmap versions:
 
 Severity: high.
 
-Gate decision: resolve before later roadmap step, ideally before v8.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Decide explicitly whether `ArtifactStore` is run-scoped or multi-run.
-- If multi-run, include `run_id` in managed artifact identity and path/URI
-  allocation policy.
-- If run-scoped, remove `run_id` from the artifact-store contract and let the
-  runner bind a store instance to a run.
+- Treat `ArtifactStore` as explicitly run-scoped.
+- Remove `run_id` from artifact-store operations and bind store instances to
+  one run at construction or runner setup time.
+- Keep artifact IDs run-local. Catalogs, bundles, comparisons, and sweep
+  summaries should use an explicit `(run_id, artifact_id)` pair when referring
+  across runs.
 
 ### 3. Runner as a High-Policy Coordinator
 
@@ -208,14 +246,17 @@ Affected roadmap versions:
 
 Severity: high.
 
-Gate decision: resolve before later roadmap step, before v5 at the latest.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
 - Preserve `PipelineRunner` as the public facade.
-- Split internals around lifecycle/status, provenance recording, stage
-  coordination, artifact commits, and failure recording before adding multiple
-  executor modes.
+- Perform a broad pre-v1 internal decomposition around lifecycle/status
+  handling, planning invocation, provenance recording, stage coordination,
+  artifact commits, failure and blocked-outcome persistence, event emission,
+  and lock handling.
+- Keep executor-specific behavior out of the runner decomposition; subprocess,
+  SLURM, container, retry, and timeout policies remain later roadmap work.
 
 ### 4. Planning Policy Concentration
 
@@ -254,15 +295,16 @@ Affected roadmap versions:
 
 Severity: high.
 
-Gate decision: resolve before later roadmap step, preferably before v2 exposes
-planner explanations widely.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Keep the persisted `ExecutionPlan` model stable.
+- Keep the persisted `ExecutionPlan` model stable as the execution contract.
 - Extract typed policy helpers for selector eligibility, upstream invalidation,
-  direct resume checks, and plan explanation.
-- Avoid CLI-local planning logic.
+  resume checks, action selection, fingerprinting, and diagnostics.
+- Add a separate typed `PlanExplanation` or equivalent diagnostics surface for
+  CLI and preflight. Do not embed explanation records directly into the
+  persisted execution contract, and do not add CLI-local planning logic.
 
 ### 5. Shallow Immutability of Core References and Specs
 
@@ -300,14 +342,17 @@ Affected roadmap versions:
 
 Severity: medium.
 
-Gate decision: resolve before later roadmap step.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Decide whether refs/specs are deeply immutable or explicitly mutable
-  snapshots.
-- If immutable, normalize nested mappings and lists into read-only structures
-  or copy deeply at all persistence/fingerprint boundaries.
+- Make frozen core references, records, and specs recursively immutable at
+  construction time.
+- Normalize nested mappings and sequences into read-only structures so
+  validated, fingerprinted, or persisted objects cannot be mutated through
+  nested metadata.
+- Continue returning ordinary mutable plain data from `to_dict()` and related
+  serialization helpers.
 
 ### 6. Persisted Schema Boilerplate and Evolution Cost
 
@@ -345,14 +390,15 @@ Affected roadmap versions:
 
 Severity: medium.
 
-Gate decision: resolve before later roadmap step.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Keep strict persisted schemas, but centralize document version checks,
-  migration hooks, and compatibility policy.
-- Avoid adding many more persisted shapes before defining schema evolution
-  rules.
+- Keep strict plain-data persisted schemas.
+- Add a central schema layer for document version envelopes, unknown-field
+  rejection, migration dispatch, compatibility policy, and test helpers.
+- Reject unsupported versions and unknown fields by default. Route known older
+  versions through explicit migrations rather than broad loose parsing.
 
 ### 7. Global Recipe Registry State
 
@@ -388,13 +434,16 @@ Affected roadmap versions:
 
 Severity: medium.
 
-Gate decision: monitor for v1, resolve before v11.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Prefer explicit catalog construction for reproducible runs.
-- If global registration remains, document reset/inspection behavior and
-  plugin-loading boundaries.
+- Make explicit `RecipeCatalog` construction the reproducible path.
+- Keep process-global `register_recipe()` only as a Python convenience for
+  scripts and interactive use.
+- CLI and plugin workflows must build fresh explicit catalogs from config,
+  project, and plugin inputs. They must not depend on process-global registry
+  history.
 
 ### 8. Run Metadata Naming Ambiguity
 
@@ -426,13 +475,16 @@ Affected roadmap versions:
 
 Severity: low.
 
-Gate decision: monitor; rename or add a clearer method before broad CLI/catalog
-exposure.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Add explicit names such as `read_run_document()` and `read_run_user_metadata()`
-  if both shapes are needed.
+- Rename the ambiguous API before v1.
+- Use explicit methods such as `read_run_document()` for the whole `run.json`
+  wrapper and `read_run_user_metadata()` for the nested user-authored metadata
+  value.
+- Do not build CLI, diagnostics, or catalog code on top of the ambiguous
+  `read_run_metadata()` name.
 
 ### 9. Blocked Descendant State Is Not Fully Persisted
 
@@ -469,14 +521,17 @@ Affected roadmap versions:
 
 Severity: medium.
 
-Gate decision: resolve before later roadmap step, ideally before v3.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Decide whether blocked remains plan-only or receives a persisted stage
-  outcome document.
-- If persisted, distinguish blocked from skipped and failed so resume semantics
-  stay conservative.
+- Persist blocked stage outcome records for every planned descendant of a
+  failed stage.
+- Distinguish blocked from skipped and failed in the durable status model so
+  resume semantics stay conservative.
+- Keep the execution plan as the source of planned order, but make run-status
+  and catalog-style readers able to report complete stage outcomes without
+  re-inferring blocked state.
 
 ### 10. Hard Config Dependencies vs Long-Term Dependency Policy
 
@@ -512,14 +567,16 @@ Affected roadmap versions:
 
 Severity: medium.
 
-Gate decision: monitor; revisit before packaging or plugin work makes this
-harder to reverse.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Keep import-boundary tests strict.
-- Reassess optional extras after v0 and before promoting primitives as a
-  lightweight library surface.
+- Move OmegaConf, Pydantic, and YAML support behind a `config` optional extra
+  before v1.
+- Keep primitives, stores, serialization, and inspection paths lightweight and
+  importable without config dependencies.
+- Keep import-boundary tests strict so optional dependency paths do not leak
+  into core runtime imports.
 
 ### 11. No-Argument Stage Construction
 
@@ -560,14 +617,20 @@ Affected roadmap versions:
 
 Severity: medium.
 
-Gate decision: monitor for v1/v2; resolve before stage-worker or plugin work if
-real users hit the no-arg constraint.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
+- Add an explicit stage factory/init contract before v1.
+- Standardize authored stage construction as
+  `factory: {_target_: ..., init: {...}}`.
+- Keep constructor-time kwargs separate from runtime invocation config; authored
+  stage `config` remains `StageContext.stage_config`.
 - Preserve `run(context, inputs)` as the stage execution contract.
-- Consider an explicit stage factory or stage object adapter only after a real
-  downstream need appears.
+- Fingerprint semantic production inputs only: factory target, factory init
+  config, runtime stage config, input artifact refs, selected environment
+  identity, and explicit fingerprint fields. Exclude non-semantic operational
+  hints by default.
 
 ### 12. Runtime, Resource, Event, and Lock Abstractions Are Missing
 
@@ -608,69 +671,865 @@ Affected roadmap versions:
 
 Severity: high.
 
-Gate decision: resolve before later roadmap step, before v4.
+Gate decision: must resolve before v1.
 
-Recommended direction:
+Selected remediation:
 
-- Keep v0 rejection behavior.
-- Define typed runtime/resource objects before executor-specific implementations.
-- Define runtime event records before plugin event sinks.
-- Add locks only after CLI or worker modes create a concrete concurrent-access
-  risk.
+- Define typed runtime/resource, event, and lock foundations before v1.
+- Add event models in `loom.pipeline.events`.
+- Persist local lifecycle events as append-only strict JSONL with sequence,
+  timestamp, scope, event type, and payload.
+- Define locking as a store capability; `PipelineRunner` owns acquire/release
+  lifecycle around mutating execution.
+- Keep unsupported executor, retry, timeout, SLURM, container, and remote-store
+  behavior rejected or explicitly unsupported until their roadmap phases.
+
+## Desired Outcome
+
+After all phases land, v0-post should provide:
+
+- Core refs, records, and specs whose frozen API is backed by recursive
+  immutability.
+- Strict versioned persisted-document helpers. The shared schema layer owns
+  envelopes, version checks, unknown-field rejection, and dispatch helpers; each
+  document type owns its supported versions and explicit migration table.
+- A packaging/import boundary where primitives, stores, serialization, and
+  inspection do not require config dependencies.
+- Capability-oriented store contracts split across durable state, artifact
+  payloads, logs, workspace/temp access, locking, and explicit local-path helper
+  protocols.
+- A `StageContext` author facade that exposes stage-facing helpers without
+  exposing generic run-store or artifact-store internals to project stages.
+- A run-scoped artifact-store contract with cross-run references represented by
+  `loom.artifacts.ArtifactAddress`.
+- Clear run-document and user-metadata read APIs.
+- An explicit stage factory contract using
+  `factory: {_target_: ..., init: {...}}`, with runtime stage invocation config
+  remaining under authored `config`.
+- A semantic-only stage fingerprint policy that includes factory target, factory
+  init config, runtime stage config, input artifact refs, selected environment
+  identity, and explicit fingerprint fields while excluding non-semantic
+  operational hints by default.
+- Typed runtime/resource, event, lock, and stage-outcome foundations.
+- Event models in `loom.pipeline.events`, with local lifecycle events persisted
+  as append-only strict JSONL.
+- Locking modeled as a store capability, with `PipelineRunner` owning
+  acquire/release around mutating execution.
+- Planner internals split into typed policy helpers and a separate explanation
+  surface.
+- `PipelineRunner` preserved as a public facade over smaller lifecycle,
+  planning, provenance, artifact, event, and failure/outcome coordinators.
+- Explicit recipe catalogs and fresh-catalog composition paths for reproducible
+  CLI/plugin workflows.
+
+## Non-Goals
+
+- No remote artifact-store backend, cross-run cache reuse, run catalog, bundle,
+  sweep, subprocess, SLURM, container, retry, timeout, or cleanup behavior.
+- No CLI feature expansion beyond whatever tests or docs are necessary to keep
+  future CLI work from depending on removed contracts.
+- No broad rewrite of config composition, I/O codecs, provenance capture, or
+  pipeline graph validation beyond the interfaces touched by this plan.
+- No move to Pydantic for persisted run/planning/provenance documents.
+- No compatibility promise for renamed or removed v0 APIs; breaking changes are
+  allowed before v1 when they correct long-term contracts.
+
+## Implementation Constraints
+
+- Keep `loom` domain-neutral.
+- Preserve source-tree ownership and dependency direction from
+  `docs/structure.md`.
+- Keep `PipelineRunner` as the main public execution facade.
+- Keep `ExecutionPlan` as the execution contract; expose explanations beside it,
+  not by making the execution plan a presentation model.
+- Keep local run directories inspectable through ordinary files.
+- Keep unsupported future semantics rejected clearly rather than preserving
+  fields that look meaningful but have no effect.
+- Update `docs/structure.md` and affected feature docs in the phase that creates
+  or changes a package boundary or public contract.
+- Keep `StageContext` as a stage-author facade. Do not expose generic store
+  escape hatches through it.
+- Add cross-run artifact identity as `loom.artifacts.ArtifactAddress`; do not
+  embed run identity into run-local `ArtifactRef.artifact_id`.
+- Persist local runtime events as append-only strict JSONL with sequence,
+  timestamp, scope, event type, and payload.
+- Model locking as a store capability. The runner owns lock acquire/release
+  lifecycle.
+- Use explicit per-document schema migration tables rather than a global
+  migration registry.
+- Fingerprint semantic production inputs only. Do not rerun solely because a
+  non-semantic CPU, memory, log, or scheduling hint changed unless a later
+  phase explicitly makes that hint semantic.
+- Require phase execution plans to record design impact, future compatibility,
+  alternatives rejected, debt introduced, reviewability, and suite-level test
+  obligations.
+
+## Phased Implementation
+
+Each phase includes an execution context block to speed up the later phase
+execution-plan draft/refine passes. These blocks are implementation starting
+points, sequencing guidance, closed decisions, and review traps. They do not
+replace `docs/phases/` execution plans, and they do not reopen the remediation
+choices selected above.
+
+### Phase 1 - Core Contracts, Schemas, And Packaging
+
+Status: pending
+Branch: `codex/v0-post-core-contracts`
+PR: pending
+
+Goal:
+
+- Fix the lowest-level contracts before higher layers and tests depend on
+  mutable values, one-off schema parsing, or hard config dependency imports.
+
+Scope:
+
+- Make frozen core refs, records, and specs recursively immutable at
+  construction time.
+- Preserve plain mutable `to_dict()` output for serialization and user
+  inspection.
+- Add shared persisted-document helpers for schema version envelopes,
+  unknown-field rejection, migration dispatch, and compatibility tests.
+- Keep migration registration per document type rather than centralizing all
+  migrations in global process state.
+- Move OmegaConf, Pydantic, and YAML support behind a `config` optional extra.
+- Add or update import-boundary tests proving primitives, stores,
+  serialization, and inspection paths do not import config dependency paths.
+- Update `docs/structure.md` and affected serialization/config docs for optional
+  dependency and schema-layer ownership changes.
+
+Execution context:
+
+- Start from `src/loom/refs.py`, `src/loom/artifacts.py`,
+  `src/loom/records/`, `src/loom/pipeline/specs.py`,
+  `src/loom/serialization/schema.py`, `pyproject.toml`, and
+  `tests/package/test_import_boundaries.py`.
+- First introduce shared freeze/thaw helpers for plain structured data, then
+  apply them to frozen public value objects. Keep serialization output mutable
+  by thawing at API boundaries rather than exposing internal frozen mappings.
+- Treat the current schema-version helpers as seed code. The phase should add a
+  small persisted-document API that can reject unknown fields, validate envelope
+  versions, and dispatch per-document migrations without a global registry.
+- Move config dependencies only after import-boundary tests describe the target
+  behavior. Config modules may still require config extras; core, stores,
+  serialization, and inspection imports must not.
+- Closed decisions: recursive immutability is required, `to_dict()` remains
+  mutable, unknown fields are strict errors, and migrations are owned by each
+  document family.
+- Review focus: watch for `MappingProxyType` or tuple conversions leaking into
+  `to_dict()` output, config imports through package `__init__` files, and new
+  schema helpers that duplicate existing validation instead of replacing it.
+
+Acceptance criteria:
+
+- Nested metadata/config mappings on core frozen objects cannot be mutated
+  after construction.
+- Existing serialization round trips still return ordinary plain-data dict/list
+  structures.
+- Persisted readers reject unsupported schema versions and unknown fields by
+  default, while known older versions can route through explicit migrations.
+- `import loom` and core primitive/store imports work without config extras.
+- Default and config-extra test paths are documented for later phases.
+
+Design impact:
+
+- This phase makes the public immutability promise true and prevents future
+  persisted documents from each inventing their own compatibility policy.
+
+Future compatibility:
+
+- Run bundles, catalogs, event records, and cleanup policies can reuse one
+  schema-evolution layer instead of adding ad hoc readers later.
+
+### Phase 2 - Store, Artifact, And Stage Context Capabilities
+
+Status: pending
+Branch: `codex/v0-post-store-capabilities`
+PR: pending
+
+Goal:
+
+- Replace generic local path assumptions with backend-neutral capabilities while
+  preserving the local store as the inspectable reference implementation.
+
+Scope:
+
+- Break the generic `RunStore` and `StageContext` path-shaped contracts.
+- Split store-facing behavior into focused capability protocols for durable
+  run-state documents, artifact payloads, logs, workspace/temp access, locking,
+  and explicit local-path helpers.
+- Redefine `StageContext` as a narrow stage-author facade with stage config,
+  input/output helpers, artifact save/register helpers, and explicitly named
+  local workspace helpers where local behavior is intentionally exposed.
+- Remove generic `StageContext` access to run-store and artifact-store internals.
+- Keep local path access only through explicit local-only helpers or local
+  capabilities.
+- Make `ArtifactStore` explicitly run-scoped and remove `run_id` from
+  artifact-store operations.
+- Add `loom.artifacts.ArtifactAddress` as the immutable cross-run
+  `(run_id, artifact_id)` value object without embedding run identity into
+  run-local artifact IDs.
+- Rename ambiguous run-store metadata APIs to clear run-document and
+  user-metadata methods.
+- Update `docs/structure.md`, `docs/features/artifacts.md`,
+  `docs/features/run-store.md`, and `docs/features/pipeline.md` for the new
+  ownership boundaries.
+
+Execution context:
+
+- Start from `src/loom/pipeline/stores/run_store.py`,
+  `src/loom/pipeline/stores/artifact_store.py`,
+  `src/loom/pipeline/stores/local_runs.py`,
+  `src/loom/pipeline/stores/local_artifacts.py`,
+  `src/loom/pipeline/context.py`, `tests/contracts/test_store_contract.py`,
+  and `tests/unit/loom/pipeline/test_context.py`.
+- Split capability protocols before rewriting local implementations. The local
+  store can satisfy several protocols, but generic protocols must stop requiring
+  local `Path` return values.
+- Update the local store as the reference implementation, then update callers to
+  depend on the narrowest capability they need. Keep explicit local helpers
+  available for local-only operations such as inspectable directories, logs, and
+  workspace/temp paths.
+- Narrow `StageContext` after the store split is usable. The stage-author facade
+  should expose stage config, declared output helpers, artifact save/register
+  helpers, input helpers, and explicitly named local workspace helpers; it
+  should not expose generic run-store or artifact-store objects.
+- Add `ArtifactAddress` in `loom.artifacts` as a frozen `(run_id, artifact_id)`
+  value for cross-run references. Do not change the meaning of run-local
+  `ArtifactRef.artifact_id`.
+- Closed decisions: store capabilities are segregated, artifact stores are
+  run-scoped, local path access is explicit/local-only, and metadata API names
+  must distinguish run documents from user metadata.
+- Review focus: watch for convenience methods that reintroduce generic path
+  requirements, project stages retaining store escape hatches, and artifact
+  identity changes that make local artifact IDs globally scoped.
+
+Acceptance criteria:
+
+- Store protocol tests no longer require generic implementations to return
+  local `Path` values.
+- Local stores still create an ordinary inspectable run directory.
+- Local artifact IDs remain human-readable and run-local.
+- Catalog/bundle-facing references can carry `ArtifactAddress`.
+- No code outside explicit local-store helpers depends on the old
+  `read_run_metadata()` semantics.
+- Project stages cannot mutate durable run state except through stage-author
+  helpers explicitly exposed on `StageContext`.
+
+Design impact:
+
+- This phase is the main public contract break. It prevents v1/v2 users from
+  writing against local path assumptions that would block workers, containers,
+  clusters, or remote stores.
+
+Future compatibility:
+
+- Remote stores and subprocess workers can implement focused capabilities
+  honestly rather than faking local paths.
+
+### Phase 3 - Stage Factory And Semantic Fingerprint Policy
+
+Status: pending
+Branch: `codex/v0-post-stage-factory`
+PR: pending
+
+Goal:
+
+- Add stage construction semantics before planner policy is extracted, so
+  fingerprints and runner lifecycle work do not build on a soon-to-change
+  no-argument construction contract.
+
+Scope:
+
+- Add an explicit authored factory block:
+
+  ```yaml
+  factory:
+    _target_: project.stages.ExampleStage
+    init:
+      key: value
+  config:
+    runtime_key: value
+  ```
+
+- Preserve `config` as runtime invocation config exposed through
+  `StageContext.stage_config`.
+- Preserve `run(context, inputs)` as the stage execution contract.
+- Add a stage factory protocol or construction helper that execution can use
+  without importing optional config dependency paths.
+- Define and implement the semantic-only stage fingerprint policy:
+  factory target, factory init config, runtime stage config, input artifact
+  refs, selected environment identity, and explicit fingerprint fields are
+  semantic; CPU, memory, logging, scheduling, and other operational hints are
+  non-semantic by default.
+- Update parsing, validation, fingerprint construction, and tests for the split
+  between construction config and runtime stage config.
+- Update `docs/structure.md`, `docs/features/pipeline.md`,
+  `docs/features/execution.md`, and `docs/features/fingerprints.md`.
+
+Execution context:
+
+- Start from `src/loom/pipeline/specs.py`,
+  `src/loom/pipeline/execution/runner.py`,
+  `src/loom/pipeline/planning/fingerprints.py`,
+  `src/loom/pipeline/planning/models.py`,
+  `src/loom/config/instantiate/targets.py`, and pipeline config/planning tests.
+- Add parsing and value objects for the factory block before changing runner
+  construction. Existing `_target_` handling should either migrate to the
+  factory shape or remain behind an explicit compatibility path selected in the
+  phase execution plan.
+- Keep stage construction import-safe for installs without config extras. Target
+  import resolution can use a lightweight helper; full config composition and
+  recursive object graph instantiation remain optional config behavior.
+- Update fingerprints in the same phase as factory parsing so construction
+  semantics and reuse semantics cannot drift. The semantic hash input must
+  include factory target, factory init, runtime stage config, input artifact
+  refs, selected environment identity, and explicit fingerprint fields.
+- Closed decisions: `config` is runtime `StageContext.stage_config`,
+  `factory.init` is constructor input, `run(context, inputs)` remains the stage
+  contract, and operational hints are non-semantic by default.
+- Review focus: watch for constructor values being smuggled through
+  `stage_config`, runner imports of optional config modules, and fingerprint
+  tests that compare only hashes without asserting which fields caused changes.
+
+Acceptance criteria:
+
+- Authored configs can construct stages with `factory._target_` and
+  `factory.init` without routing constructor values through
+  `StageContext.stage_config`.
+- Stage construction remains import-safe for installs without the `config`
+  optional extra unless the caller explicitly uses config composition.
+- Fingerprint tests prove semantic fields affect reuse and non-semantic
+  operational hints do not.
+- Existing no-argument stage examples migrate to the factory shape or continue
+  through a documented compatibility path chosen by the phase execution plan.
+
+Design impact:
+
+- This phase removes the construction/fingerprint ambiguity before planner
+  decomposition, CLI planning, plugin discovery, or worker-side construction
+  depends on it.
+
+Future compatibility:
+
+- Plugin-discovered stages and worker-side stage construction can feed the same
+  explicit factory contract without relying on import side effects or no-arg
+  wrappers.
+
+### Phase 4 - Runtime, Resource, Event, And Lock Foundations
+
+Status: pending
+Branch: `codex/v0-post-runtime-events-locks`
+PR: pending
+
+Goal:
+
+- Add the durable state vocabulary that later runner and CLI work can depend on
+  without implementing deferred executor/retry policies early.
+
+Scope:
+
+- Add typed runtime/resource foundation models that validate supported local
+  v0 fields and reject unsupported executor, retry, timeout, SLURM, container,
+  and remote-store semantics.
+- Add event models in `loom.pipeline.events`.
+- Persist local event records as append-only strict JSONL with sequence,
+  timestamp, scope, event type, and payload.
+- Define locking as a store capability, with a conservative local
+  implementation.
+- Add durable stage-outcome/status support for blocked descendants, distinct
+  from skipped and failed.
+- Wire local store persistence for event JSONL, lock, and blocked-outcome
+  document shapes where the store layer owns those files.
+- Update `docs/structure.md`, `docs/features/runtime-resources.md`,
+  `docs/features/state.md`, `docs/features/run-store.md`, and
+  `docs/features/reliability.md`.
+
+Execution context:
+
+- Start from `src/loom/pipeline/status.py`,
+  `src/loom/pipeline/stores/local_runs.py`,
+  `src/loom/pipeline/execution/lifecycle.py`,
+  `src/loom/pipeline/execution/models.py`, runtime/resource feature docs, and
+  local execution failure tests.
+- Add foundation models before broad runner wiring. This phase should make
+  runtime/resource/event/lock/outcome records serializable and locally
+  persistable; Phase 7 owns full runner lifecycle integration.
+- Put event types in `loom.pipeline.events`, not in execution internals. Local
+  event persistence should be strict append-only JSONL with versioned records,
+  monotonic per-run sequence, timestamp, scope, event type, and plain-data
+  payload.
+- Model locks as a store capability. The local implementation should prevent
+  obvious same-run concurrent writers but should not claim distributed locking,
+  stale-lock cleanup, or remote-store semantics.
+- Add durable blocked outcome/status support in a way that preserves the
+  distinction between skipped, failed, stale, and blocked. Persisting a blocked
+  outcome should not require executing the blocked stage.
+- Closed decisions: unsupported executor/retry/timeout/container/SLURM fields
+  are rejected, events live under `loom.pipeline.events`, JSONL is append-only,
+  and locking belongs to store capabilities.
+- Review focus: watch for event emission mixed into runner control flow too
+  early, lock APIs that require local paths generically, and blocked state that
+  only appears in in-memory `RunResult`.
+
+Acceptance criteria:
+
+- Unsupported runtime/retry/timeout/executor fields fail clearly and do not
+  appear as silently honored metadata.
+- Event record serialization is strict, versioned, inspectable, and append-only
+  in the local store.
+- Local lock behavior prevents obvious same-run concurrent writers without
+  requiring distributed locking.
+- Blocked stage outcomes can be written and read without executing downstream
+  stages.
+
+Design impact:
+
+- This phase gives later runner decomposition a stable vocabulary for lifecycle
+  facts, instead of adding events and blocked status as incidental runner
+  side effects.
+
+Future compatibility:
+
+- Plugins can later observe event records, and reliability policies can later
+  extend the same event/outcome vocabulary.
+
+### Phase 5 - Planner Policy Decomposition And Explanations
+
+Status: pending
+Branch: `codex/v0-post-planner-policy`
+PR: pending
+
+Goal:
+
+- Keep planning deterministic while making selector, invalidation, resume,
+  fingerprint, action, and explanation policy testable independently.
+
+Scope:
+
+- Extract typed planner helpers for selector eligibility, upstream
+  invalidation, resume checks, action selection, fingerprinting, and diagnostic
+  construction.
+- Keep `ExecutionPlan` as the persisted execution contract.
+- Add a separate typed `PlanExplanation` or equivalent diagnostic surface for
+  CLI/preflight consumers.
+- Preserve the semantic-only fingerprint policy defined in Phase 3.
+- Remove or tighten loosened typing around input bindings where the current
+  planner path has type erosion.
+- Update `docs/structure.md`, `docs/features/pipeline-graph.md`,
+  `docs/features/resume.md`, `docs/features/preflight.md`, and
+  `docs/features/fingerprints.md`.
+
+Execution context:
+
+- Start from `src/loom/pipeline/planning/planner.py`,
+  `src/loom/pipeline/planning/models.py`,
+  `src/loom/pipeline/planning/resume.py`,
+  `src/loom/pipeline/planning/selectors.py`,
+  `src/loom/pipeline/planning/fingerprints.py`, and planner/resume tests.
+- Extract helpers around existing behavior before changing model shapes. A good
+  order is selector eligibility, input binding and upstream invalidation, resume
+  checks, action selection, fingerprint assembly calls, then diagnostics.
+- Keep `ExecutionPlan` as the persisted execution record. Add
+  `PlanExplanation` beside it for CLI/preflight diagnostics instead of turning
+  plan files into presentation envelopes.
+- Preserve Phase 3 fingerprint semantics exactly. This phase may move
+  fingerprint policy calls behind helpers, but it must not change which inputs
+  are semantic.
+- Tighten types where the planner currently passes generic objects through
+  stage plans, especially around bound inputs, pending inputs, and plan reasons.
+- Closed decisions: planning remains deterministic, explanations are separate
+  from execution records, and CLI/preflight must call planner policy helpers
+  rather than duplicate planning logic.
+- Review focus: watch for behavior changes hidden inside refactors, explanation
+  models that become required to execute a plan, and tests that assert private
+  helper structure instead of public planning outcomes.
+
+Acceptance criteria:
+
+- Existing planning and resume behavior is preserved.
+- Explanation tests can inspect action reasons and invalidation causes without
+  parsing CLI text or private planner internals.
+- CLI-facing planning helpers do not duplicate planning, resume, or selector
+  semantics.
+- `ExecutionPlan` files remain stable execution records, not presentation
+  envelopes.
+
+Design impact:
+
+- This phase turns planning from one large policy path into composable policy
+  units without changing the persisted execution contract.
+
+Future compatibility:
+
+- CLI `plan`, diagnostics/preflight, sweeps, and reliability work can reuse the
+  same explanation and policy helpers.
+
+### Phase 6 - Explicit Recipe Catalogs And Fresh Composition
+
+Status: pending
+Branch: `codex/v0-post-recipe-catalogs`
+PR: pending
+
+Goal:
+
+- Make reproducible config composition explicit and remove process-history
+  surprises before CLI, plugins, and sweeps build on composition behavior.
+
+Scope:
+
+- Make explicit `RecipeCatalog` construction the reproducible path in public
+  docs and code used by run/config composition.
+- Keep process-global `register_recipe()` only as a Python convenience for
+  scripts and interactive use.
+- Add a fresh-catalog composition path suitable for future CLI and plugin
+  workflows so process-global registry history is ignored there.
+- Keep plugin discovery itself deferred.
+- Update `docs/structure.md`, `docs/features/config.md`, and
+  `docs/features/plugins.md` for catalog ownership and global-state policy.
+
+Execution context:
+
+- Start from `src/loom/config/api.py`,
+  `src/loom/config/compose.py`,
+  `src/loom/config/recipes/catalog.py`,
+  `src/loom/config/recipes/expansion.py`, recipe contract tests, and config
+  composition tests.
+- Make explicit `RecipeCatalog` construction the documented reproducible path
+  before changing composition defaults. Composition APIs used by future CLI and
+  plugin code should be able to receive or create a fresh catalog explicitly.
+- Keep process-global `register_recipe()` as a convenience for Python scripts,
+  notebooks, and interactive use. It should not be the path future CLI/plugin
+  workflows use for reproducible composition.
+- Add tests that register recipes globally and then prove fresh-catalog
+  composition ignores that process history. Keep plugin discovery deferred to a
+  later roadmap phase.
+- Closed decisions: explicit catalogs are the reproducible path, global
+  registration remains convenience-only, and plugin discovery is out of scope.
+- Review focus: watch for tests that depend on process-global cleanup order,
+  composition helpers that silently fall back to global state, and docs that
+  imply plugin entry-point loading exists in this phase.
+
+Acceptance criteria:
+
+- Reproducible composition tests pass with explicit catalogs and do not observe
+  prior global registration.
+- Interactive/script registration remains available where explicitly documented.
+- CLI/plugin-oriented composition helpers construct fresh explicit catalogs and
+  do not depend on global registry history.
+
+Design impact:
+
+- This phase removes hidden global/process-history risks before CLI, plugins,
+  sweeps, and workers make composition more visible.
+
+Future compatibility:
+
+- Plugin-discovered recipes can feed explicit catalogs without relying on
+  import side effects.
+
+### Phase 7 - Runner Lifecycle Decomposition
+
+Status: pending
+Branch: `codex/v0-post-runner-lifecycle`
+PR: pending
+
+Goal:
+
+- Preserve `PipelineRunner` as the public facade while splitting lifecycle
+  concerns into smaller internal coordinators.
+
+Scope:
+
+- Split runner internals around run creation/opening, lock acquire/release,
+  planning invocation, provenance recording, stage coordination, artifact
+  commits, event emission, failure recording, blocked-outcome persistence, and
+  result construction.
+- Update local execution to use the stage-author context facade, run-scoped
+  artifact store, explicit stage factory, event/outcome foundations, and store
+  lock capability.
+- Persist blocked descendant outcomes after a failed stage.
+- Emit local run/stage lifecycle events for planned, started, completed,
+  failed, skipped, reused, and blocked outcomes where applicable.
+- Keep executor-specific subprocess, SLURM, container, retry, and timeout
+  behavior out of this phase.
+- Update `docs/structure.md`, `docs/features/execution.md`,
+  `docs/features/state.md`, and `docs/features/reliability.md`.
+
+Execution context:
+
+- Start from `src/loom/pipeline/execution/runner.py`,
+  `src/loom/pipeline/execution/lifecycle.py`,
+  `src/loom/pipeline/executors/base.py`,
+  `src/loom/pipeline/executors/local.py`,
+  `tests/integration/pipeline/test_local_execution.py`,
+  `tests/integration/pipeline/test_local_execution_resume.py`, and
+  `tests/integration/pipeline/test_local_execution_failures.py`.
+- Decompose around already-established contracts from Phases 2 through 5. Do
+  not start this phase by inventing replacement public APIs; `PipelineRunner`
+  remains the public facade and the new components are internal lifecycle
+  collaborators.
+- A safe extraction order is run creation/opening and status transitions,
+  planning invocation, stage context construction, stage execution coordination,
+  artifact/index commits, failure and blocked-outcome persistence, event
+  emission, and final result construction.
+- Acquire and release the store lock around mutating run execution. Ensure
+  failure paths release locks and emit/persist the same lifecycle facts as
+  success paths where applicable.
+- Persist blocked descendant outcomes after the first failed stage and emit
+  lifecycle events for planned, started, completed, failed, skipped, reused, and
+  blocked outcomes. Do not add subprocess, SLURM, container, retry, timeout, or
+  cleanup behavior.
+- Closed decisions: runner decomposition is internal, stage execution uses the
+  stage-author context facade, artifact stores are run-scoped, stage factories
+  are explicit, and event/lock/outcome foundations from Phase 4 are reused.
+- Review focus: watch for future executor policy leaking in, lifecycle helpers
+  that still require full synthetic pipelines for unit tests, missing lock
+  release on exceptions, and blocked outcomes that are returned but not
+  persisted.
+
+Acceptance criteria:
+
+- Success, failure, skip, reuse, and blocked-result integration tests still pass
+  through `PipelineRunner`.
+- Failed runs persist complete downstream blocked outcomes.
+- Local event records are written deterministically enough for tests and human
+  inspection.
+- Local run locking is acquired and released around mutating run execution.
+- Runner unit tests can target lifecycle subcomponents without constructing an
+  entire synthetic pipeline for every concern.
+
+Design impact:
+
+- This phase removes the highest-maintenance pressure point while retaining the
+  small public execution facade.
+
+Future compatibility:
+
+- Later subprocess, SLURM, container, retry, timeout, event-sink, and cleanup
+  work can attach to lifecycle boundaries instead of modifying one monolithic
+  runner.
+
+### Phase 8 - Hardening, Docs, And Migration Notes
+
+Status: pending
+Branch: `codex/v0-post-hardening-docs`
+PR: pending
+
+Goal:
+
+- Close the pre-v1 hardening work with migration notes, end-to-end coverage,
+  roadmap alignment, and a final documentation consistency pass.
+
+Scope:
+
+- Verify that `docs/loom.md`, `docs/structure.md`, and affected feature docs
+  already reflect the phase-local contract changes.
+- Add migration notes for renamed/removed v0 APIs and expected user-facing
+  changes.
+- Update downstream implementation plans so v1 starts after this hardening
+  sequence and does not repeat superseded assumptions.
+- Add focused end-to-end tests for local run success, failure with blocked
+  outcomes, resume/reuse, explicit catalog composition, stage factory
+  construction, and local event/lock behavior.
+- Run final validation gates and record suite-level evidence.
+
+Execution context:
+
+- Start from `docs/loom.md`, `docs/structure.md`, affected `docs/features/`
+  files, `tests/e2e/test_local_pipeline_run.py`, integration pipeline tests,
+  and the package/import test suite.
+- Treat this phase as a closeout pass, not a dumping ground for contract docs
+  that earlier phases should have updated. If a public contract changed in an
+  earlier phase, its docs should already be updated by that phase.
+- Add migration notes that map removed or renamed v0 APIs to replacement APIs,
+  including local path helpers, run metadata naming, artifact-store run scoping,
+  `ArtifactAddress`, stage factory blocks, stage context access, and recipe
+  catalog behavior.
+- Add or refresh focused e2e coverage only for the corrected v0-post local
+  behavior. Keep remote stores, non-local executors, retries, timeouts, plugin
+  discovery, sweeps, catalogs, bundles, and cleanup explicitly deferred.
+- Run `make validate-pr` and `make test-summary` during PR preparation and
+  record suite-level evidence in the phase PR body.
+- Closed decisions: this phase verifies and documents the completed hardening
+  sequence; it does not reopen architecture choices or introduce new runtime
+  features.
+- Review focus: watch for docs that describe deferred features as implemented,
+  migration notes that omit breaking public changes, and e2e tests that depend
+  on implementation internals instead of public APIs.
+
+Acceptance criteria:
+
+- Docs describe only supported pre-v1 behavior and explicitly defer remote
+  stores, non-local executors, retries, timeouts, plugin discovery, sweeps,
+  catalogs, bundles, and cleanup behavior.
+- Migration notes identify breaking API changes and replacement APIs.
+- `make validate-pr` passes.
+- `make test-summary` records suite-level evidence.
+- The implementation plan status can move to complete only after all earlier
+  phases are merged.
+
+Design impact:
+
+- This phase makes the hardening visible and reviewable for users before v1
+  config composition resumes without delaying structure updates until the end.
+
+Future compatibility:
+
+- Later roadmap phases start from corrected contracts and do not need to
+  explain around v0-local debt.
+
+## Overall Test Plan
+
+Package and import tests:
+
+- `import loom` remains cheap.
+- Primitive, schema, serialization, store, and inspection imports do not require
+  config extras.
+- Config APIs fail clearly when config extras are not installed, or are tested
+  only in the config-extra environment chosen by the phase execution plan.
+
+Unit tests:
+
+- Recursive immutability and mutable `to_dict()` output.
+- Schema version envelopes, unknown-field rejection, and per-document migration
+  dispatch tables.
+- Segregated store capability contracts and the stage-author `StageContext`
+  facade.
+- Run-scoped artifact store behavior and `ArtifactAddress` references.
+- Stage factory parsing, construction, import-safe target resolution, and
+  semantic-only fingerprint behavior.
+- Runtime/resource model validation, append-only event JSONL serialization,
+  lock capability behavior, and blocked outcome serialization.
+- Planner policy helpers and separate explanation records that preserve the
+  semantic fingerprint contract.
+- Explicit recipe catalogs and fresh composition paths.
+
+Integration tests:
+
+- Local pipeline success through `PipelineRunner`.
+- Failed local pipeline with durable failed and blocked outcomes.
+- Resume/reuse behavior after contract changes.
+- Local event records and lock behavior during runner execution.
+- Stage factory construction with separate runtime `stage_config`.
+- Explicit catalog composition that is unaffected by prior process-global
+  recipe registration.
+
+Validation gates:
+
+- Run narrower package tests during each phase as needed.
+- Run `make validate-pr` before each phase PR.
+- Run `make test-summary` during PR preparation so suite evidence is available.
+
+## Maintainability Assessment
+
+The selected plan is intentionally front-loaded. It fixes foundational contracts
+before v1 and v2 expand public usage through config composition and CLI
+commands. The main maintainability risk is phase size: store/context
+capabilities, stage factory/fingerprint policy, runtime events/locks, and runner
+lifecycle decomposition are each large enough to require their own phase
+execution plans and should not be collapsed into one PR.
+
+The plan reduces long-term maintenance risk by:
+
+- moving schema evolution into one shared layer;
+- making immutable public value objects actually immutable;
+- preventing local path assumptions from spreading through user stages and CLI
+  code;
+- separating stage author APIs from backend/store APIs;
+- resolving stage construction and semantic fingerprinting before planner
+  decomposition;
+- keeping event models in a pipeline-level package instead of execution
+  internals;
+- keeping planner explanations out of CLI-local logic; and
+- splitting runner lifecycle behavior before more executor modes arrive.
+
+## Extensibility Assessment
+
+The plan keeps `loom` domain-neutral while opening the expected roadmap paths:
+
+- Remote stores can implement capabilities without pretending to be local
+  filesystems.
+- Catalogs, bundles, and sweeps can use `ArtifactAddress` without changing
+  run-local artifact IDs.
+- Project stages can remain portable because `StageContext` exposes stage-author
+  helpers instead of store internals.
+- Plugins can later load recipes into explicit catalogs and observe event
+  records without relying on import side effects.
+- Subprocess, SLURM, and container executors can attach to runner lifecycle and
+  runtime/resource foundations without changing stage invocation semantics.
+
+Deferred extensibility remains intentional for remote payload operations,
+distributed locks, real plugin discovery, retry/timeout policy, sweep
+orchestration, catalog storage, and non-local executor implementations.
+
+## Technical Debt Ledger
+
+- Breaking pre-v1 APIs are accepted to correct local path, metadata naming,
+  artifact-store, and stage-construction contracts. Revisit only if downstream
+  users require a compatibility bridge before v1.
+- Local path helpers remain accepted debt on explicit local-only types. Revisit
+  if they leak into generic protocols or public examples.
+- Strict unknown-field rejection is accepted for inspectability. Revisit when
+  run bundles or catalogs need forward-tolerant partial inspection.
+- Per-document migration tables are accepted over a global migration registry.
+  Revisit if many document families need shared cross-document migration
+  orchestration.
+- Global recipe registration remains accepted as a Python convenience. Revisit
+  if tests, notebooks, or plugin work show process-history surprises despite
+  explicit-catalog paths.
+- Local lock behavior is intentionally conservative and not distributed.
+  Revisit when subprocess workers, SLURM operations, or remote stores introduce
+  real concurrent controllers.
+- Semantic-only fingerprinting intentionally excludes non-semantic operational
+  hints. Revisit if users need a declared runtime hint to affect reuse.
+- Runtime/resource models are foundation-only in this plan. Retry, timeout,
+  executor, scheduler, and container semantics remain deferred.
+
+## Plan Quality Gate
+
+Status: pending.
+
+Before any phase implementation starts, this plan must pass the project plan
+quality gate for maintainability, extensibility, future compatibility,
+conflicting design choices, technical debt, test strategy, and reviewability.
+
+Budget state:
+
+- Initial plan review: unused.
+- Automated plan refinement pass: unused.
+- Confirmation review: unused.
+
+Gate requirements:
+
+- A reviewer must confirm that the eight-phase sequence is reviewable and does
+  not hide future executor, remote-store, plugin, sweep, retry, timeout, or
+  catalog work inside pre-v1 hardening.
+- A reviewer must confirm that each phase updates `docs/structure.md` and
+  affected feature docs when it changes package ownership or public contracts.
+- A reviewer must confirm that the stage-author context facade, segregated store
+  capabilities, `ArtifactAddress`, event JSONL, store-capability locking,
+  semantic fingerprint policy, and explicit recipe catalog decisions are not
+  reopened by phase execution plans.
+- Any accepted risk must remain recorded in the technical debt ledger with a
+  concrete revisit trigger.
+- Each phase execution plan must preserve the selected remediation choices from
+  this document and must not re-open them without explicit user instruction.
 
 ## Pre-V1 Gate Assessment
 
-V1 config composition can proceed if it avoids broadening the public surface of
-local path-shaped run/store APIs. The highest-risk v0 decisions do not directly
-block `_include_`, `_replace_`, `_copy_`, source snapshots, or config
-fingerprints.
+V1 config composition should not proceed until all phases in this plan land.
+The highest-risk v0 decisions do not directly concern `_include_`, `_replace_`,
+`_copy_`, source snapshots, or config fingerprints, but v1 would make config,
+stage, runner, and store contracts more visible. Those contracts should be
+corrected first.
 
-However, v2 and later roadmap work should not build more user-facing behavior
-on top of unclear store, artifact identity, planner explanation, or runner
-lifecycle boundaries without a follow-up architecture plan.
-
-Recommended gate outcome:
+Selected gate outcome:
 
 ```text
-v1 may proceed with caution.
-Before v2 exposes CLI plan/run behavior broadly, review planner explanations,
-run metadata naming, and blocked descendant visibility.
-Before v4/v5, resolve local path-shaped store/context contracts and runner
-internal lifecycle boundaries.
-Before v8/v12, resolve artifact store run scope and artifact identity.
+Create and implement the dedicated v0-post hardening sequence before v1.
+Breaking API changes are allowed before v1 where they fix long-term contracts.
+After hardening lands, v1 config composition may proceed on top of the corrected
+store, context, planner, runner, schema, catalog, and dependency boundaries.
 ```
-
-## User Impact Summary
-
-Current v0 users get a clear and useful local runtime, but the documented
-limitations affect how safely those users can grow:
-
-- Users should treat v0 stages as local-first unless they only use
-  `StageContext.save_artifact()` / `register_artifact()` and avoid direct path
-  assumptions.
-- Users should assume artifact IDs are run-local, not global.
-- Users should prefer explicit recipe catalogs in reproducible contexts.
-- Users should not encode future runtime, resource, retry, or event semantics in
-  arbitrary metadata and expect `loom` to honor them later.
-- Users should expect v0 persisted schemas to be strict and inspectable, but not
-  yet backed by a full migration story.
-
-## Audit Conclusion
-
-No finding shows a domain-neutrality failure or a need to discard the v0
-architecture. The central package boundaries are sound: config, serialization,
-I/O, pipeline planning, stores, execution, provenance, and CLI responsibilities
-remain distinct in the design.
-
-The critical risk is that v0-local conveniences become public contracts before
-the roadmap adds non-local execution, runtime options, remote stores, catalogs,
-and events. The next architecture work should therefore focus on capability
-boundaries, not broad rewrites.
-
-Highest-priority follow-up topics:
-
-1. Store and `StageContext` capability boundary.
-2. Artifact-store run scope and artifact identity.
-3. Runner internal lifecycle decomposition.
-4. Planner explanation and policy decomposition.
-5. Persisted schema evolution policy.
