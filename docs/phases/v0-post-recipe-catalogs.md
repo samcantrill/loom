@@ -2,13 +2,13 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/v0-post-recipe-catalogs`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v0-post-recipe-catalogs`
 - Phase execution plan path: `docs/phases/v0-post-recipe-catalogs.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v0-post.md`
 - Source phase: `Phase 6 - Explicit Recipe Catalogs And Fresh Composition`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/20
 - Stack predecessor: none
 - Base branch: `develop` at `b93d82eeb506bdb6297c229c8a2a3a4d395917dd`
 - Target branch: `develop`
@@ -512,7 +512,21 @@ semantic changes should be treated as out of scope.
   `build/test-summary.md`; package 34 passed/1 skipped, unit 344 passed/1
   skipped, contract 14 passed/1 skipped, integration 9 passed/5 skipped, e2e 1
   passed, and config-extra 108 passed/402 deselected.
-- PR creation status: pending.
-- Review notification status: pending reviewer request for `samcantrill`, with
-  immediate `@samcantrill` PR comment fallback if GitHub rejects the request.
+- PR creation status: opened as https://github.com/samcantrill/loom/pull/20
+  with explicit base `develop` and head `codex/v0-post-recipe-catalogs`.
+- PR verification: `gh pr view 20 --json
+  baseRefName,headRefName,state,url,mergedAt,statusCheckRollup` reported
+  base `develop`, head `codex/v0-post-recipe-catalogs`, state `OPEN`, URL
+  https://github.com/samcantrill/loom/pull/20, `mergedAt` null, and GitHub
+  `checks` in progress.
+- Target verification result: base is `develop`, matching the recorded target
+  branch. Codex did not approve or merge.
+- Review notification status: `gh pr edit 20 --add-reviewer samcantrill`
+  failed with GitHub GraphQL project-card deprecation output and no review
+  request was recorded; fallback PR comment mentioning `@samcantrill` was
+  posted at
+  https://github.com/samcantrill/loom/pull/20#issuecomment-4371151613.
+- Stack state: root serial phase, no predecessor branch, no retarget/rebase
+  needed, and Phase 7 must not start until PR #20 is human-merged into
+  `develop`.
 - Blockers: none.

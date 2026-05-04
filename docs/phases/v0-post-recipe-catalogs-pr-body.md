@@ -3,7 +3,7 @@
 - Phase: Phase 6 - Explicit Recipe Catalogs And Fresh Composition
 - Branch: `codex/v0-post-recipe-catalogs`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/20
 - Stack predecessor: none
 - Merge eligibility: serial human merge gate. This PR must target `develop`,
   request review from `samcantrill` or mention `@samcantrill` if GitHub rejects
@@ -179,28 +179,38 @@ Scope check:
 
 ## PR Creation Status
 
-- PR opened: pending.
-- PR URL: pending.
-- Command planned:
+- PR opened: yes.
+- PR URL: https://github.com/samcantrill/loom/pull/20
+- Command run:
 
 ```sh
 gh pr create --base develop --head codex/v0-post-recipe-catalogs --title "Phase 6: Explicit Recipe Catalogs and Fresh Composition" --body-file docs/phases/v0-post-recipe-catalogs-pr-body.md
 ```
 
-- Verification: pending.
-- Target verification result: pending; expected base is `develop`.
-- CI status at PR verification: pending.
+- Verification:
+
+```json
+{"baseRefName":"develop","headRefName":"codex/v0-post-recipe-catalogs","mergedAt":null,"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","completedAt":"0001-01-01T00:00:00Z","conclusion":"","detailsUrl":"https://github.com/samcantrill/loom/actions/runs/25319766762/job/74225610616","name":"checks","startedAt":"2026-05-04T12:46:00Z","status":"IN_PROGRESS","workflowName":"CI"}],"url":"https://github.com/samcantrill/loom/pull/20"}
+```
+
+- Target verification result: base is `develop`, matching the recorded target
+  branch.
+- CI status at PR verification: GitHub `checks` workflow was in progress.
 - Merge eligibility: root serial-gate PR targeting `develop`; human review and
   human merge are required. Codex must not approve or merge.
 - Current blocker: none.
 
 ## Review Notification
 
-- Reviewer requested: pending `gh pr edit <PR> --add-reviewer samcantrill`.
-- Fallback policy: if GitHub rejects the reviewer request, add an immediate PR
-  comment mentioning `@samcantrill` and record the comment URL here.
-- Fallback comment: pending.
-- Notification result: pending.
+- Reviewer requested: `samcantrill`.
+- Command attempted: `gh pr edit 20 --add-reviewer samcantrill`.
+- Command result: failed with GitHub GraphQL project-card deprecation output
+  and no review request was recorded; `gh pr view 20 --json
+  reviewRequests,author,url` showed PR author `samcantrill` and an empty
+  `reviewRequests` list.
+- Fallback used: added a PR comment mentioning `@samcantrill`.
+- Fallback comment: https://github.com/samcantrill/loom/pull/20#issuecomment-4371151613
+- Notification result: fallback comment posted; PR body records the fallback.
 
 ## Stack Maintenance
 
