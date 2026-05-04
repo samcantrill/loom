@@ -1120,7 +1120,7 @@ Future compatibility:
 
 ### Phase 4 - Runtime, Resource, Event, And Lock Foundations
 
-Status: pending
+Status: in_progress
 Branch: `codex/v0-post-runtime-events-locks`
 PR: pending
 
