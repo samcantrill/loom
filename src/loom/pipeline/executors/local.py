@@ -6,22 +6,17 @@ import contextlib
 import io
 import traceback
 from collections.abc import Mapping
-from typing import cast
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.execution.logs import write_text_file
-from loom.pipeline.execution.models import (
-    EXECUTION_FAILURE_SCHEMA_VERSION,
-    ExecutionFailure,
-    StageExecutionRequest,
-    StageExecutionResult,
-)
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import StageStatus
 from loom.timestamps import utc_timestamp
+from typing import TYPE_CHECKING, cast
 
 from .errors import LocalExecutorError
 
+if TYPE_CHECKING:
+    from loom.pipeline.execution.models import StageExecutionRequest, StageExecutionResult
 
 class LocalExecutor:
     name = "local"
@@ -32,6 +27,14 @@ class LocalExecutor:
         self.capture_stdout_stderr = capture_stdout_stderr
 
     def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
+        from loom.pipeline import execution as _execution
+        from loom.pipeline.execution.models import (
+            EXECUTION_FAILURE_SCHEMA_VERSION,
+            ExecutionFailure,
+            StageExecutionRequest,
+            StageExecutionResult,
+        )
+
         if not isinstance(request, StageExecutionRequest):
             raise LocalExecutorError(
                 "LocalExecutor.execute requires StageExecutionRequest"
@@ -58,10 +61,14 @@ class LocalExecutor:
             traceback_text = "".join(
                 traceback.format_exception(type(exc), exc, exc.__traceback__)
             )
-            write_text_file(request.traceback_path, traceback_text)
+            _execution.logs.write_text_file(request.traceback_path, traceback_text)
             if self.capture_stdout_stderr:
-                write_text_file(request.stdout_path, stdout_buffer.getvalue())
-                write_text_file(request.stderr_path, stderr_buffer.getvalue())
+                _execution.logs.write_text_file(
+                    request.stdout_path, stdout_buffer.getvalue()
+                )
+                _execution.logs.write_text_file(
+                    request.stderr_path, stderr_buffer.getvalue()
+                )
             failure = ExecutionFailure(
                 schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
                 run_id=request.run_id,
@@ -92,8 +99,8 @@ class LocalExecutor:
 
         finished_at = utc_timestamp()
         if self.capture_stdout_stderr:
-            write_text_file(request.stdout_path, stdout_buffer.getvalue())
-            write_text_file(request.stderr_path, stderr_buffer.getvalue())
+            _execution.logs.write_text_file(request.stdout_path, stdout_buffer.getvalue())
+            _execution.logs.write_text_file(request.stderr_path, stderr_buffer.getvalue())
         if not isinstance(raw_outputs, Mapping):
             failure = ExecutionFailure(
                 schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
