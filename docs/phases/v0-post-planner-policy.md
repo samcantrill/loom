@@ -543,6 +543,23 @@ review harder.
   `docs/features/resume.md`, `docs/features/preflight.md`, and
   `docs/features/fingerprints.md`.
 
+Validation evidence:
+
+- `PYTHONPATH=src /home/samcantrill/work/loom/.venv/bin/pytest tests/unit/loom/pipeline/planning`
+  (35 passed)
+- `PYTHONPATH=src /home/samcantrill/work/loom/.venv/bin/pytest tests/integration/pipeline/test_planning_resume.py`
+  (4 passed)
+- `PYTHONPATH=src /home/samcantrill/work/loom/.venv/bin/pytest tests/integration/pipeline/test_plan_persistence.py`
+  (2 passed)
+- `PYTHONPATH=src /home/samcantrill/work/loom/.venv/bin/pytest tests/package/test_pipeline_planning_api.py`
+  (5 passed)
+- `PYTHONPATH=src /home/samcantrill/work/loom/.venv/bin/pytest tests/package/test_import_boundaries.py`
+  (12 passed)
+- `/home/samcantrill/work/loom/.venv/bin/ruff check` on changed files
+  (pass)
+- `git diff --check`
+  (pass)
+
 ## Design Impact
 
 This phase makes planning easier to extend without turning the public
