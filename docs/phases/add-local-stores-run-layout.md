@@ -708,7 +708,12 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used
-- PR review: unused
+- PR review: used before this post-review blocker fix; the normal review loop
+  is not being rerun by this pass.
+- User-authorized post-review blocker fix: used on 2026-05-04 local time for
+  PR #11 review blockers; this was explicitly requested by the user after the
+  normal Phase 7 refinement/review budgets were consumed and is not an
+  unrequested extra automated loop.
 
 ## Completion Notes
 
@@ -764,4 +769,34 @@ make test-summary
   - PR URL: https://github.com/samcantrill/loom/pull/11.
   - PR verification JSON from `gh pr view 11 --json baseRefName,headRefName,state,url`: `{"baseRefName":"develop","headRefName":"codex/add-local-stores-run-layout","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/11"}`.
 - Stack maintenance: none required at refine time; root phase targets `develop`.
+- User-authorized post-review blocker fix:
+  - Authorization: user explicitly requested this post-review blocker fix for
+    PR #11 after the normal Phase 7 implementation refinement and PR body
+    passes were consumed.
+  - Fixes made:
+    - Hardened `LocalRunStore` wrapper reads so present malformed `run.json`,
+      `plan.json`, `artifacts.json`, recipe manifest, provenance documents,
+      and stage attempt documents validate required fields, exact field set,
+      field types, UTC timestamp fields, and mapping/list payload shape before
+      returning caller-visible values.
+    - Wrapped unsafe root artifact-index keys, unsafe stage artifact-index
+      keys, and malformed `ArtifactRef` payloads from persisted indexes as
+      `CorruptStoreDocumentError` messages naming the source JSON document.
+    - Updated `replace_file()` to fsync the target parent directory after
+      `os.replace()` where supported, while preserving temp cleanup behavior.
+    - Added focused regressions for corrupt wrapper fields, unsafe index keys,
+      malformed stage artifact refs, corrupt-document path messages, and
+      parent-directory fsync.
+  - Tests or validation re-run:
+    - `UV_CACHE_DIR=/tmp/uv-cache PYTHONPATH=/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout/src uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/stores/test_indexes.py tests/unit/loom/pipeline/stores/test_atomic.py` — passed, 25 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache PYTHONPATH=/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout/src uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py` — passed, 42 passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/stores/test_atomic.py` — passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/stores/test_atomic.py` — passed, 0 errors.
+    - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff passed,
+      Pyright passed, default pytest passed with 306 passed, and `uv build`
+      produced source and wheel distributions.
+    - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` — passed and wrote
+      `build/test-summary.md`: package passed, unit passed, contract passed,
+      integration passed, e2e not present.
+  - Remaining blockers: none known after the user-authorized post-review fix.
 - Remaining blockers: none.

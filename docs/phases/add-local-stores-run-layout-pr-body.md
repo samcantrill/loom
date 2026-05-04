@@ -53,7 +53,7 @@ remote store support.
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache PYTHONPATH=/home/samcantrill/work/loom-worktrees/add-local-stores-run-layout/src uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py
-result: passed, 38 passed
+result: passed, 42 passed
 ```
 
 ```text
@@ -78,28 +78,28 @@ result: passed
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
-result: passed in the PR body refine pass; Ruff passed, Pyright passed, default pytest passed with 302 passed, and uv build produced source and wheel distributions.
+result: passed after the user-authorized post-review blocker fix; Ruff passed, Pyright passed, default pytest passed with 306 passed, and uv build produced source and wheel distributions.
 ```
 
 ```text
 command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
-result: passed in the PR body refine pass; wrote build/test-summary.md.
+result: passed after the user-authorized post-review blocker fix; wrote build/test-summary.md.
 ```
 
 ### Test Suite Summary
 
 | Suite | Status | Duration | Command |
 | --- | --- | ---: | --- |
-| package | passed | 0.92s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
-| unit | passed | 0.98s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
-| contract | passed | 0.36s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
-| integration | passed | 0.56s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
+| package | passed | 1.04s | `uv run pytest tests/package -m "not slow and not slurm and not network and not optional_dependency"` |
+| unit | passed | 1.14s | `uv run pytest tests/unit -m "not slow and not slurm and not network and not optional_dependency"` |
+| contract | passed | 0.41s | `uv run pytest tests/contracts -m "not slow and not slurm and not network and not optional_dependency"` |
+| integration | passed | 0.63s | `uv run pytest tests/integration -m "not slow and not slurm and not network and not optional_dependency"` |
 | e2e | not present | 0.00s | `uv run pytest tests/e2e -m "not slow and not slurm and not network and not optional_dependency"` |
 
 Suite output totals from `build/test-summary.md`:
 
 - package: 19 passed
-- unit: 257 passed
+- unit: 261 passed
 - contract: 15 passed
 - integration: 11 passed
 - e2e: no test files are present for this suite yet
@@ -113,7 +113,24 @@ Suite output totals from `build/test-summary.md`:
 ## Budget Status
 
 - Phase implementation refinement: used
-- PR review before this PR: unused
+- PR review: used before this post-review blocker fix
+- User-authorized post-review blocker fix: used on 2026-05-04 local time for PR #11 review blockers; not an unrequested extra automated loop
+
+## Post-Review Fix
+
+The user explicitly authorized a post-review blocker fix after the normal Phase
+7 review/refinement budgets were consumed. This update:
+
+- rejects corrupt persisted run-store wrappers with `CorruptStoreDocumentError`
+  messages naming the source document path;
+- wraps unsafe root/stage artifact-index keys and malformed persisted
+  `ArtifactRef` payloads as `CorruptStoreDocumentError` from run-store readers;
+- changes `replace_file()` durability to fsync the target parent directory
+  after `os.replace()` where supported;
+- adds focused regressions for corrupt wrapper fields, unsafe index keys,
+  malformed stage artifact refs, and parent-directory fsync.
+
+Remaining blockers after this user-authorized post-review fix: none known.
 
 ## Risks / Follow-Ups
 

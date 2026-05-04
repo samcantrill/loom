@@ -9,6 +9,7 @@ from loom.serialization import PlainData
 from loom.serialization import ensure_plain_data
 
 from .errors import ArtifactStoreError
+from .errors import UnsafeStorePathError
 from ._paths import validate_output_name, validate_stage_name
 
 
@@ -28,7 +29,10 @@ def parse_artifact_key(key: str) -> tuple[str, str]:
     if key.count(".") != 1:
         raise ArtifactStoreError(f"artifact key must contain exactly one '.': {key!r}")
     stage_name, output_name = key.split(".", 1)
-    return validate_stage_name(stage_name, field="stage_name"), validate_output_name(output_name, field="output_name")
+    try:
+        return validate_stage_name(stage_name, field="stage_name"), validate_output_name(output_name, field="output_name")
+    except UnsafeStorePathError as exc:
+        raise ArtifactStoreError(f"invalid artifact key {key!r}: {exc}") from exc
 
 
 def artifact_index_to_dict(index: Mapping[str, ArtifactRef]) -> dict[str, PlainData]:

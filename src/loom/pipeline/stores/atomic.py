@@ -90,7 +90,7 @@ def replace_file(source: str | Path, target: str | Path) -> None:
 
     try:
         os.replace(source_path, target_path)
-        _fsync_path(target_path)
+        _fsync_path(target_path.parent)
     except OSError as exc:
         raise AtomicWriteError(f"Failed replacing {target_path}: {exc}") from exc
 

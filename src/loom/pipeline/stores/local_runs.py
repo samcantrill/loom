@@ -9,8 +9,8 @@ from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.io.uris import path_to_file_uri
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.serialization import PlainData, ensure_plain_data, json_loads
-from loom.serialization.errors import DeserializationError
-from loom.timestamps import utc_timestamp
+from loom.serialization.errors import DeserializationError, PlainDataError
+from loom.timestamps import parse_timestamp, utc_timestamp
 
 from ._paths import (
     VALID_CONFIG_SNAPSHOTS,
@@ -34,6 +34,12 @@ from .errors import (
 from .indexes import artifact_index_from_dict, artifact_index_to_dict
 
 _SCHEMA_VERSION = 1
+
+_RUN_WRAPPER_FIELDS = frozenset({"schema_version", "run_id", "created_at", "run_dir", "metadata"})
+_PLAN_WRAPPER_FIELDS = frozenset({"schema_version", "run_id", "updated_at", "plan"})
+_ARTIFACT_INDEX_WRAPPER_FIELDS = frozenset({"schema_version", "run_id", "updated_at", "artifacts"})
+_RECIPE_MANIFEST_WRAPPER_FIELDS = frozenset({"schema_version", "run_id", "created_at", "recipe_manifest"})
+_PROVENANCE_WRAPPER_FIELDS = frozenset({"schema_version", "run_id", "kind", "created_at", "provenance"})
 
 
 class LocalRunStore:
@@ -143,19 +149,16 @@ class LocalRunStore:
 
     def read_plan(self, run_id: str) -> dict[str, PlainData] | None:
         run_dir = self.get_run_dir(run_id)
-        data = self._read_optional_json(run_dir / "plan.json")
+        path = run_dir / "plan.json"
+        data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"plan document for {run_id} must be an object")
-        if data.get("run_id") != validate_run_id(run_id, field="run_id"):
-            raise CorruptStoreDocumentError(f"plan run_id mismatch at {run_dir / 'plan.json'}")
-        if data.get("schema_version") != _SCHEMA_VERSION:
-            raise CorruptStoreDocumentError(f"Unsupported plan schema at {run_dir / 'plan.json'}")
-        plan = ensure_plain_data(data.get("plan", {}), path="plan")
-        if not isinstance(plan, dict):
-            raise CorruptStoreDocumentError(f"plan document for {run_id} is not a mapping")
-        return plan
+        payload = _require_document_object(data, path, label="plan document")
+        _validate_exact_document_fields(payload, path, label="plan document", fields=_PLAN_WRAPPER_FIELDS)
+        _require_schema_version(payload, path, label="plan document")
+        _require_run_id_field(payload, path, expected=run_id, label="plan document")
+        _require_timestamp_field(payload, path, "updated_at", label="plan document")
+        return _require_mapping_field(payload, path, "plan", label="plan document")
 
     def write_plan(self, run_id: str, plan: Mapping[str, PlainData]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
@@ -169,19 +172,20 @@ class LocalRunStore:
 
     def read_artifact_index(self, run_id: str) -> dict[str, ArtifactRef]:
         run_dir = self.get_run_dir(run_id)
-        data = self._read_optional_json(run_dir / "artifacts.json")
+        path = run_dir / "artifacts.json"
+        data = self._read_optional_json(path)
         if data is None:
             return {}
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"artifact index for {run_id} must be an object")
-        if data.get("run_id") != validate_run_id(run_id, field="run_id"):
-            raise CorruptStoreDocumentError(f"artifact index run_id mismatch at {run_dir / 'artifacts.json'}")
-        if data.get("schema_version") != _SCHEMA_VERSION:
-            raise CorruptStoreDocumentError(f"Unsupported artifact index schema at {run_dir / 'artifacts.json'}")
+        payload = _require_document_object(data, path, label="artifact index document")
+        _validate_exact_document_fields(payload, path, label="artifact index document", fields=_ARTIFACT_INDEX_WRAPPER_FIELDS)
+        _require_schema_version(payload, path, label="artifact index document")
+        _require_run_id_field(payload, path, expected=run_id, label="artifact index document")
+        _require_timestamp_field(payload, path, "updated_at", label="artifact index document")
+        artifacts = _require_mapping_field(payload, path, "artifacts", label="artifact index document")
         try:
-            return artifact_index_from_dict(data.get("artifacts", {}))
+            return artifact_index_from_dict(artifacts)
         except ArtifactStoreError as exc:
-            raise CorruptStoreDocumentError(f"Malformed artifact index at {run_dir / 'artifacts.json'}: {exc}") from exc
+            raise CorruptStoreDocumentError(f"Malformed artifact index at {path}: {exc}") from exc
 
     def write_artifact_index(self, run_id: str, index: Mapping[str, ArtifactRef]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
@@ -209,21 +213,19 @@ class LocalRunStore:
 
     def read_recipe_manifest(self, run_id: str) -> tuple[dict[str, PlainData], ...] | None:
         run_dir = self.get_run_dir(run_id)
-        data = self._read_optional_json(run_dir / "config" / "recipe_manifest.json")
+        path = run_dir / "config" / "recipe_manifest.json"
+        data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"recipe manifest for {run_id} must be an object")
-        if data.get("run_id") != validate_run_id(run_id, field="run_id"):
-            raise CorruptStoreDocumentError(f"recipe manifest run_id mismatch for {run_id}")
-        if data.get("schema_version") != _SCHEMA_VERSION:
-            raise CorruptStoreDocumentError(f"Unsupported recipe manifest schema for {run_id}")
-        manifest = ensure_plain_data(data.get("recipe_manifest", []), path="recipe_manifest")
-        if not isinstance(manifest, list):
-            raise CorruptStoreDocumentError(f"recipe_manifest must be an array for {run_id}")
+        payload = _require_document_object(data, path, label="recipe manifest document")
+        _validate_exact_document_fields(payload, path, label="recipe manifest document", fields=_RECIPE_MANIFEST_WRAPPER_FIELDS)
+        _require_schema_version(payload, path, label="recipe manifest document")
+        _require_run_id_field(payload, path, expected=run_id, label="recipe manifest document")
+        _require_timestamp_field(payload, path, "created_at", label="recipe manifest document")
+        manifest = _require_list_field(payload, path, "recipe_manifest", label="recipe manifest document")
         for item in manifest:
             if not isinstance(item, dict):
-                raise CorruptStoreDocumentError(f"recipe_manifest entries must be mappings for {run_id}")
+                raise CorruptStoreDocumentError(f"recipe_manifest entries in {path} must be mappings")
         return tuple(dict(item) for item in manifest)  # type: ignore[arg-type]
 
     def write_recipe_manifest(self, run_id: str, records: Sequence[Mapping[str, PlainData]]) -> None:
@@ -244,19 +246,15 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"provenance document {name} for {run_id} must be an object")
-        if data.get("run_id") != validate_run_id(run_id, field="run_id"):
-            raise CorruptStoreDocumentError(f"provenance run_id mismatch at {path}")
-        if data.get("schema_version") != _SCHEMA_VERSION:
-            raise CorruptStoreDocumentError(f"Unsupported provenance schema at {path}")
-        kind = data.get("kind")
+        payload = _require_document_object(data, path, label="provenance document")
+        _validate_exact_document_fields(payload, path, label="provenance document", fields=_PROVENANCE_WRAPPER_FIELDS)
+        _require_schema_version(payload, path, label="provenance document")
+        _require_run_id_field(payload, path, expected=run_id, label="provenance document")
+        _require_timestamp_field(payload, path, "created_at", label="provenance document")
+        kind = _require_string_field(payload, path, "kind", label="provenance document")
         if kind != validate_provenance_name(name):
             raise CorruptStoreDocumentError(f"provenance kind mismatch for {path}")
-        value = ensure_plain_data(data.get("provenance", {}), path=f"provenance[{name}]")
-        if not isinstance(value, dict):
-            raise CorruptStoreDocumentError(f"provenance[{name}] must be a mapping")
-        return value
+        return _require_mapping_field(payload, path, "provenance", label="provenance document")
 
     def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None:
         run_id_text = validate_run_id(run_id, field="run_id")
@@ -271,14 +269,15 @@ class LocalRunStore:
         atomic_write_json(self.get_provenance_path(run_id_text, validated_name), payload)
 
     def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
-        data = self._read_optional_json(self._stage_file_path(run_id, stage_name, "status.json"))
+        path = self._stage_file_path(run_id, stage_name, "status.json")
+        data = self._read_optional_json(path)
         if data is None:
             return None
         try:
             return StageStatusRecord.from_dict(data)
         except Exception as exc:
             raise CorruptStoreDocumentError(
-                f"Malformed stage status for {stage_name} in {run_id}: {exc}",
+                f"Malformed stage status at {path}: {exc}",
             ) from exc
 
     def write_stage_status(self, run_id: str, stage_name: str, status: StageStatusRecord) -> None:
@@ -292,10 +291,9 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"stage inputs for {run_id}/{stage_name} must be an object")
-        _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "inputs")
-        return _deserialize_stage_artifact_index(data["inputs"])
+        payload = _require_document_object(data, path, label="stage inputs document")
+        inputs = self._validate_stage_attempt_payload(payload, run_id, stage_name, "inputs", path)
+        return _deserialize_stage_artifact_index(inputs, path=path)
 
     def write_stage_inputs(
         self,
@@ -320,10 +318,9 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"stage outputs for {run_id}/{stage_name} must be an object")
-        _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "outputs")
-        return _deserialize_stage_artifact_index(data["outputs"])
+        payload = _require_document_object(data, path, label="stage outputs document")
+        outputs = self._validate_stage_attempt_payload(payload, run_id, stage_name, "outputs", path)
+        return _deserialize_stage_artifact_index(outputs, path=path)
 
     def write_stage_outputs(
         self,
@@ -348,13 +345,8 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"stage fingerprint for {run_id}/{stage_name} must be an object")
-        _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "fingerprint")
-        return self._ensure_plain_mapping(
-            data["fingerprint"],
-            path=f"{run_id}/{stage_name}/fingerprint",
-        )
+        payload = _require_document_object(data, path, label="stage fingerprint document")
+        return self._validate_stage_attempt_payload(payload, run_id, stage_name, "fingerprint", path)
 
     def write_stage_fingerprint(
         self,
@@ -379,13 +371,8 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"stage failure for {run_id}/{stage_name} must be an object")
-        _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "failure")
-        return self._ensure_plain_mapping(
-            data["failure"],
-            path=f"{run_id}/{stage_name}/failure",
-        )
+        payload = _require_document_object(data, path, label="stage failure document")
+        return self._validate_stage_attempt_payload(payload, run_id, stage_name, "failure", path)
 
     def write_stage_failure(
         self,
@@ -411,13 +398,8 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
-        if not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"stage provenance for {run_id}/{stage_name} must be an object")
-        _ = self._validate_stage_attempt_payload(data, run_id, stage_name, "provenance")
-        return self._ensure_plain_mapping(
-            data["provenance"],
-            path=f"{run_id}/{stage_name}/provenance",
-        )
+        payload = _require_document_object(data, path, label="stage provenance document")
+        return self._validate_stage_attempt_payload(payload, run_id, stage_name, "provenance", path)
 
     def write_stage_provenance(
         self,
@@ -473,22 +455,20 @@ class LocalRunStore:
         if not path.is_file():
             raise MissingStoreDocumentError(f"run metadata missing at {path}")
         data = self._read_optional_json(path)
-        if data is None or not isinstance(data, dict):
-            raise CorruptStoreDocumentError(f"run metadata for {run_id} must be an object")
-        if data.get("schema_version") != _SCHEMA_VERSION:
-            raise CorruptStoreDocumentError(f"Unsupported run metadata schema at {path}")
-        if data.get("run_id") != run_id:
-            raise CorruptStoreDocumentError(f"run_id mismatch in {path}")
-        try:
-            return {
-                "schema_version": _SCHEMA_VERSION,
-                "run_id": str(data["run_id"]),
-                "created_at": str(data["created_at"]),
-                "run_dir": str(data["run_dir"]),
-                "metadata": ensure_plain_data(data.get("metadata", {}), path="metadata"),
-            }
-        except Exception as exc:
-            raise CorruptStoreDocumentError(f"Malformed run metadata at {path}: {exc}") from exc
+        payload = _require_document_object(data, path, label="run metadata document")
+        _validate_exact_document_fields(payload, path, label="run metadata document", fields=_RUN_WRAPPER_FIELDS)
+        schema_version = _require_schema_version(payload, path, label="run metadata document")
+        run_id_text = _require_run_id_field(payload, path, expected=run_id, label="run metadata document")
+        created_at = _require_timestamp_field(payload, path, "created_at", label="run metadata document")
+        run_dir = _require_string_field(payload, path, "run_dir", label="run metadata document")
+        metadata = _require_mapping_field(payload, path, "metadata", label="run metadata document")
+        return {
+            "schema_version": schema_version,
+            "run_id": run_id_text,
+            "created_at": created_at,
+            "run_dir": run_dir,
+            "metadata": metadata,
+        }
 
     def _build_stage_payload(
         self,
@@ -519,29 +499,24 @@ class LocalRunStore:
         run_id: str,
         stage_name: str,
         field_name: str,
-    ) -> None:
+        source_path: Path,
+    ) -> dict[str, PlainData]:
         failure_key = "failed_at" if field_name == "failure" else "created_at"
-        if payload.get(failure_key) is None:
-            raise CorruptStoreDocumentError(f"stage payload missing {failure_key!r} for {run_id}/{stage_name}")
-
+        fields = frozenset({"schema_version", "run_id", "stage_name", "attempt", failure_key, field_name})
+        label = f"stage {field_name} document"
+        _validate_exact_document_fields(payload, source_path, label=label, fields=fields)
+        _require_schema_version(payload, source_path, label=label)
         run_id_text = validate_run_id(run_id, field="run_id")
-        if payload.get("run_id") != run_id_text:
-            raise CorruptStoreDocumentError(f"stage payload run_id mismatch for {run_id}")
-        if payload.get("stage_name") != stage_name:
-            raise CorruptStoreDocumentError(f"stage payload stage_name mismatch for {stage_name}")
-        if payload.get("schema_version") != _SCHEMA_VERSION:
-            raise CorruptStoreDocumentError(f"Unsupported stage payload schema for {run_id}/{stage_name}")
-        attempt = payload.get("attempt")
+        _require_run_id_field(payload, source_path, expected=run_id_text, label=label)
+        stage_name_text = validate_stage_name(stage_name, field="stage_name")
+        stored_stage = _require_string_field(payload, source_path, "stage_name", label=label)
+        if stored_stage != stage_name_text:
+            raise CorruptStoreDocumentError(f"{label} at {source_path} has stage_name {stored_stage!r}, expected {stage_name_text!r}")
+        attempt = _require_field(payload, source_path, "attempt", label=label)
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
-            raise CorruptStoreDocumentError("stage payload attempt must be a positive integer")
-        if field_name not in payload:
-            raise CorruptStoreDocumentError(f"stage payload missing {field_name!r} for {run_id}/{stage_name}")
-        if field_name in {"inputs", "outputs"}:
-            field_value = payload[field_name]
-            if not isinstance(field_value, dict):
-                raise CorruptStoreDocumentError(f"stage payload {field_name!r} for {run_id}/{stage_name} must be an object")
-            for key in field_value:
-                validate_output_name(key, field=f"{field_name}_key")
+            raise CorruptStoreDocumentError(f"{label} at {source_path} field 'attempt' must be a positive integer")
+        _require_timestamp_field(payload, source_path, failure_key, label=label)
+        return _require_mapping_field(payload, source_path, field_name, label=label)
 
     def _validate_run_identifier_for_status(self, run_id: str, status_run_id: str) -> None:
         if status_run_id != run_id:
@@ -553,11 +528,103 @@ class LocalRunStore:
         if status.stage_name != stage_name:
             raise UnsafeStorePathError(f"stage name mismatch for stage status: {status.stage_name} != {stage_name}")
 
-    def _ensure_plain_mapping(self, value: object, *, path: str) -> dict[str, PlainData]:
-        normalized = ensure_plain_data(value, path=path)
-        if not isinstance(normalized, dict):
-            raise CorruptStoreDocumentError(f"{path} must be a mapping")
-        return normalized
+
+def _require_document_object(data: object, path: Path, *, label: str) -> dict[str, object]:
+    if not isinstance(data, dict):
+        raise CorruptStoreDocumentError(f"{label} at {path} must be an object")
+    return data
+
+
+def _validate_exact_document_fields(
+    payload: Mapping[str, object],
+    path: Path,
+    *,
+    label: str,
+    fields: frozenset[str],
+) -> None:
+    actual_fields = set(payload)
+    missing = fields - actual_fields
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise CorruptStoreDocumentError(f"{label} at {path} missing required field(s): {missing_list}")
+    unknown = actual_fields - fields
+    if unknown:
+        unknown_list = ", ".join(sorted(unknown))
+        raise CorruptStoreDocumentError(f"{label} at {path} has unknown field(s): {unknown_list}")
+
+
+def _require_field(payload: Mapping[str, object], path: Path, field_name: str, *, label: str) -> object:
+    try:
+        return payload[field_name]
+    except KeyError as exc:
+        raise CorruptStoreDocumentError(f"{label} at {path} missing required field {field_name!r}") from exc
+
+
+def _require_schema_version(payload: Mapping[str, object], path: Path, *, label: str) -> int:
+    value = _require_field(payload, path, "schema_version", label=label)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise CorruptStoreDocumentError(f"{label} at {path} field 'schema_version' must be an integer")
+    if value != _SCHEMA_VERSION:
+        raise CorruptStoreDocumentError(f"Unsupported {label} schema at {path}: {value!r}")
+    return value
+
+
+def _require_run_id_field(payload: Mapping[str, object], path: Path, *, expected: str, label: str) -> str:
+    value = _require_string_field(payload, path, "run_id", label=label)
+    expected_text = validate_run_id(expected, field="run_id")
+    if value != expected_text:
+        raise CorruptStoreDocumentError(f"{label} at {path} has run_id {value!r}, expected {expected_text!r}")
+    return value
+
+
+def _require_string_field(payload: Mapping[str, object], path: Path, field_name: str, *, label: str) -> str:
+    value = _require_field(payload, path, field_name, label=label)
+    if not isinstance(value, str) or not value:
+        raise CorruptStoreDocumentError(f"{label} at {path} field {field_name!r} must be a non-empty string")
+    return value
+
+
+def _require_timestamp_field(payload: Mapping[str, object], path: Path, field_name: str, *, label: str) -> str:
+    value = _require_string_field(payload, path, field_name, label=label)
+    try:
+        parse_timestamp(value)
+    except ValueError as exc:
+        raise CorruptStoreDocumentError(f"{label} at {path} field {field_name!r} must be a valid UTC timestamp: {exc}") from exc
+    return value
+
+
+def _require_mapping_field(
+    payload: Mapping[str, object],
+    path: Path,
+    field_name: str,
+    *,
+    label: str,
+) -> dict[str, PlainData]:
+    value = _require_field(payload, path, field_name, label=label)
+    try:
+        normalized = ensure_plain_data(value, path=field_name)
+    except PlainDataError as exc:
+        raise CorruptStoreDocumentError(f"{label} at {path} field {field_name!r} must be plain data: {exc}") from exc
+    if not isinstance(normalized, dict):
+        raise CorruptStoreDocumentError(f"{label} at {path} field {field_name!r} must be an object")
+    return normalized
+
+
+def _require_list_field(
+    payload: Mapping[str, object],
+    path: Path,
+    field_name: str,
+    *,
+    label: str,
+) -> list[PlainData]:
+    value = _require_field(payload, path, field_name, label=label)
+    try:
+        normalized = ensure_plain_data(value, path=field_name)
+    except PlainDataError as exc:
+        raise CorruptStoreDocumentError(f"{label} at {path} field {field_name!r} must be plain data: {exc}") from exc
+    if not isinstance(normalized, list):
+        raise CorruptStoreDocumentError(f"{label} at {path} field {field_name!r} must be an array")
+    return normalized
 
 
 def _serialize_stage_artifact_index(index: Mapping[str, ArtifactRef]) -> dict[str, PlainData]:
@@ -572,19 +639,22 @@ def _serialize_stage_artifact_index(index: Mapping[str, ArtifactRef]) -> dict[st
     return payload
 
 
-def _deserialize_stage_artifact_index(mapping: object) -> dict[str, ArtifactRef]:
+def _deserialize_stage_artifact_index(mapping: object, *, path: Path) -> dict[str, ArtifactRef]:
     if not isinstance(mapping, dict):
-        raise CorruptStoreDocumentError("stage artifact payload must be an object")
+        raise CorruptStoreDocumentError(f"stage artifact payload at {path} must be an object")
 
     parsed: dict[str, ArtifactRef] = {}
     for key, value in mapping.items():
-        validated_key = validate_output_name(key, field="artifact_key")
+        try:
+            validated_key = validate_output_name(key, field="artifact_key")
+        except UnsafeStorePathError as exc:
+            raise CorruptStoreDocumentError(f"Malformed stage artifact index at {path}: invalid key {key!r}: {exc}") from exc
         if not isinstance(value, dict):
-            raise CorruptStoreDocumentError(f"stage artifact payload value for {validated_key!r} must be an object")
+            raise CorruptStoreDocumentError(f"stage artifact payload value for {validated_key!r} at {path} must be an object")
         try:
             parsed[validated_key] = ArtifactRef.from_dict(dict(value))
         except ArtifactValidationError as exc:
-            raise CorruptStoreDocumentError(f"invalid artifact ref for {validated_key!r}: {exc}") from exc
+            raise CorruptStoreDocumentError(f"invalid artifact ref for {validated_key!r} at {path}: {exc}") from exc
     return parsed
 
 

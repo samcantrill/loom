@@ -8,7 +8,6 @@ from loom.pipeline.stores import atomic_write_bytes, atomic_write_json, atomic_w
 from loom.pipeline.stores.atomic import AtomicWriteError, unique_temp_path as atomic_unique_temp_path
 
 
-
 def test_ensure_dir_is_idempotent(tmp_path: Path) -> None:
     dir_path = tmp_path / "a" / "b"
     ensure_dir(dir_path)
@@ -42,6 +41,20 @@ def test_replace_file_updates_target(tmp_path: Path) -> None:
     source.write_text("old")
     replace_file(source, target)
     assert target.read_text(encoding="utf-8") == "old"
+
+
+def test_replace_file_fsyncs_parent_directory(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    target = tmp_path / "target.txt"
+    source.write_text("new")
+    synced_paths: list[Path] = []
+
+    monkeypatch.setattr("loom.pipeline.stores.atomic._fsync_path", synced_paths.append)
+
+    replace_file(source, target)
+
+    assert target.read_text(encoding="utf-8") == "new"
+    assert synced_paths == [target.parent]
 
 
 def test_unique_temp_path_is_within_target_directory(tmp_path: Path) -> None:
