@@ -764,6 +764,25 @@ After all phases land, v0-post should provide:
   alternatives rejected, debt introduced, reviewability, and suite-level test
   obligations.
 
+## Execution Mode
+
+This plan uses the serial human-merge-gate workflow, not stacked phase PRs.
+
+- Each phase branch starts from updated `develop`.
+- Each phase PR targets `develop`.
+- Each phase PR requests review from `samcantrill` and mentions
+  `@samcantrill` in the PR body or an immediate PR comment.
+- Codex does not approve or merge phase PRs. Human review and merge are the
+  external gate.
+- The managing agent must not start a successor phase while the current phase
+  is only `pr_open` or `approved`.
+- The managing agent may start the next phase only after the current phase PR
+  is verified as `MERGED` into `develop`, updated `develop` has been fetched,
+  and this implementation plan records the completed phase as `merged`.
+- Each phase execution plan must record this execution mode, the `develop` base
+  and target branch, the `samcantrill` review notification, and the approval
+  and merge gate state.
+
 ## Phased Implementation
 
 Each phase includes an execution context block to speed up the later phase
@@ -796,6 +815,9 @@ Scope:
 - Move OmegaConf, Pydantic, and YAML support behind a `config` optional extra.
 - Add or update import-boundary tests proving primitives, stores,
   serialization, and inspection paths do not import config dependency paths.
+- Update `pyproject.toml`, `Makefile`, the test harness, and suite markers so
+  Phase 1 PR evidence covers both default no-extra validation and config-extra
+  validation.
 - Update `docs/structure.md` and affected serialization/config docs for optional
   dependency and schema-layer ownership changes.
 
@@ -814,6 +836,11 @@ Execution context:
 - Move config dependencies only after import-boundary tests describe the target
   behavior. Config modules may still require config extras; core, stores,
   serialization, and inspection imports must not.
+- Add a reviewable config-extra validation path such as `make
+  test-config-extra` or an equivalent `uv run --extra config ...` harness
+  target, and include that suite in `make test-summary` evidence. The default
+  harness should prove the no-extra import boundary rather than silently
+  skipping all config dependency checks.
 - Closed decisions: recursive immutability is required, `to_dict()` remains
   mutable, unknown fields are strict errors, and migrations are owned by each
   document family.
@@ -830,7 +857,9 @@ Acceptance criteria:
 - Persisted readers reject unsupported schema versions and unknown fields by
   default, while known older versions can route through explicit migrations.
 - `import loom` and core primitive/store imports work without config extras.
-- Default and config-extra test paths are documented for later phases.
+- Phase 1 validation evidence includes both the default no-extra path and a
+  config-extra path, and `make test-summary` makes skipped versus executed
+  optional-dependency suites visible.
 
 Design impact:
 
@@ -857,8 +886,11 @@ Scope:
 
 - Break the generic `RunStore` and `StageContext` path-shaped contracts.
 - Split store-facing behavior into focused capability protocols for durable
-  run-state documents, artifact payloads, logs, workspace/temp access, locking,
-  and explicit local-path helpers.
+  run-state documents, artifact payloads, logs, workspace/temp access, and
+  explicit local-path helpers.
+- Reserve the locking capability boundary only where needed for future store
+  composition; Phase 4 owns the concrete lock protocol, local implementation,
+  docs, and tests.
 - Redefine `StageContext` as a narrow stage-author facade with stage config,
   input/output helpers, artifact save/register helpers, and explicitly named
   local workspace helpers where local behavior is intentionally exposed.
@@ -900,10 +932,12 @@ Execution context:
   `ArtifactRef.artifact_id`.
 - Closed decisions: store capabilities are segregated, artifact stores are
   run-scoped, local path access is explicit/local-only, and metadata API names
-  must distinguish run documents from user metadata.
+  must distinguish run documents from user metadata. Concrete locking protocol
+  and behavior are out of scope for this phase and owned by Phase 4.
 - Review focus: watch for convenience methods that reintroduce generic path
   requirements, project stages retaining store escape hatches, and artifact
-  identity changes that make local artifact IDs globally scoped.
+  identity changes that make local artifact IDs globally scoped. Also watch for
+  premature lock API churn beyond reserving the store capability boundary.
 
 Acceptance criteria:
 
@@ -1037,7 +1071,8 @@ Scope:
 - Persist local event records as append-only strict JSONL with sequence,
   timestamp, scope, event type, and payload.
 - Define locking as a store capability, with a conservative local
-  implementation.
+  implementation. This phase owns the concrete lock protocol, local
+  implementation, serialization/status documentation, and unit/contract tests.
 - Add durable stage-outcome/status support for blocked descendants, distinct
   from skipped and failed.
 - Wire local store persistence for event JSONL, lock, and blocked-outcome
@@ -1063,6 +1098,8 @@ Execution context:
 - Model locks as a store capability. The local implementation should prevent
   obvious same-run concurrent writers but should not claim distributed locking,
   stale-lock cleanup, or remote-store semantics.
+- Do not revisit the Phase 2 store split except where needed to add the
+  concrete lock capability reserved there.
 - Add durable blocked outcome/status support in a way that preserves the
   distinction between skipped, failed, stale, and blocked. Persisting a blocked
   outcome should not require executing the blocked stage.
@@ -1387,8 +1424,10 @@ Package and import tests:
 - `import loom` remains cheap.
 - Primitive, schema, serialization, store, and inspection imports do not require
   config extras.
-- Config APIs fail clearly when config extras are not installed, or are tested
-  only in the config-extra environment chosen by the phase execution plan.
+- Config APIs fail clearly when config extras are not installed.
+- Phase 1 establishes a config-extra validation target and suite-summary entry
+  so optional-dependency behavior is tested with the extra installed rather than
+  hidden behind default-suite skips.
 
 Unit tests:
 
@@ -1419,6 +1458,9 @@ Integration tests:
 Validation gates:
 
 - Run narrower package tests during each phase as needed.
+- Phase 1 must produce reviewable evidence for both default no-extra validation
+  and config-extra validation, and later phases must preserve those suite
+  targets when touching config imports or package metadata.
 - Run `make validate-pr` before each phase PR.
 - Run `make test-summary` during PR preparation so suite evidence is available.
 
@@ -1471,6 +1513,12 @@ orchestration, catalog storage, and non-local executor implementations.
   users require a compatibility bridge before v1.
 - Local path helpers remain accepted debt on explicit local-only types. Revisit
   if they leak into generic protocols or public examples.
+- The serial human-merge-gate workflow is accepted to avoid stacked-PR
+  maintenance complexity. Revisit only if phase review latency blocks progress
+  enough to justify a shallow stack.
+- The no-extra/config-extra split introduces two validation surfaces. Revisit if
+  `make test-summary` no longer makes skipped optional-dependency suites
+  visible or config-extra validation drifts out of PR evidence.
 - Strict unknown-field rejection is accepted for inspectability. Revisit when
   run bundles or catalogs need forward-tolerant partial inspection.
 - Per-document migration tables are accepted over a global migration registry.
@@ -1482,6 +1530,9 @@ orchestration, catalog storage, and non-local executor implementations.
 - Local lock behavior is intentionally conservative and not distributed.
   Revisit when subprocess workers, SLURM operations, or remote stores introduce
   real concurrent controllers.
+- Locking is reserved as a store capability boundary before its concrete API is
+  added. Revisit if Phase 2 leaks a partial lock protocol or if Phase 4 needs to
+  undo earlier store capability decisions.
 - Semantic-only fingerprinting intentionally excludes non-semantic operational
   hints. Revisit if users need a declared runtime hint to affect reuse.
 - Runtime/resource models are foundation-only in this plan. Retry, timeout,
@@ -1489,7 +1540,7 @@ orchestration, catalog storage, and non-local executor implementations.
 
 ## Plan Quality Gate
 
-Status: pending.
+Status: passed.
 
 Before any phase implementation starts, this plan must pass the project plan
 quality gate for maintainability, extensibility, future compatibility,
@@ -1497,15 +1548,27 @@ conflicting design choices, technical debt, test strategy, and reviewability.
 
 Budget state:
 
-- Initial plan review: unused.
-- Automated plan refinement pass: unused.
-- Confirmation review: unused.
+- Initial plan review: used.
+- Automated plan refinement pass: used.
+- Confirmation review: used.
 
 Gate requirements:
 
 - A reviewer must confirm that the eight-phase sequence is reviewable and does
   not hide future executor, remote-store, plugin, sweep, retry, timeout, or
   catalog work inside pre-v1 hardening.
+- A reviewer must confirm that serial human-merge-gate mode is recorded as a
+  durable plan constraint and each phase execution plan must branch from
+  updated `develop`, target `develop`, request/record `samcantrill` review,
+  wait for human approval and merge, and avoid successor implementation until
+  the current phase is `merged`.
+- A reviewer must confirm that Phase 1 defines reviewable no-extra and
+  config-extra validation evidence through `pyproject.toml`, the Makefile/test
+  harness, suite markers, and `make test-summary`.
+- A reviewer must confirm that Phase 2 only reserves the store lock capability
+  boundary, Phase 4 owns the concrete lock protocol and local tests/docs, and
+  Phase 7 only integrates the established lock capability into runner
+  lifecycle.
 - A reviewer must confirm that each phase updates `docs/structure.md` and
   affected feature docs when it changes package ownership or public contracts.
 - A reviewer must confirm that the stage-author context facade, segregated store
