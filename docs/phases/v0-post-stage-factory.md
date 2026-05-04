@@ -786,3 +786,14 @@ make test-summary
 - Evidence command:
   `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/test_stage_factory.py tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py`
   (40 passed).
+
+## Slice 2 Evidence
+
+- Slice 2 completed: runner construction wiring to `loom.pipeline.stage_factory`.
+- Files changed: `src/loom/pipeline/execution/runner.py`,
+  `tests/unit/loom/pipeline/execution/test_runner.py`.
+- Evidence commands:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_stage_factory.py tests/unit/loom/pipeline/execution/test_runner.py`
+    (10 passed).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_api.py`
+    (16 passed).
