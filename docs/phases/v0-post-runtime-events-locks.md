@@ -920,3 +920,16 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/status.py src/loom/pipeline/execution/lifecycle.py tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/integration/pipeline/test_local_stores.py`
     passed.
   - `git diff --check` passed.
+
+## Slice 6 Evidence
+
+- Slice 6 completed: documentation updates for the Phase 4 runtime/resource,
+  event, lock, run-store, state, reliability, and structure contracts without
+  claiming deferred executor, callback, stale-lock, or distributed semantics.
+- Files changed: `docs/structure.md`,
+  `docs/features/runtime-resources.md`, `docs/features/state.md`,
+  `docs/features/run-store.md`, and `docs/features/reliability.md`.
+- Evidence commands:
+  - `git diff --check` passed.
+  - `rg -n "typed ResourceRequest validation begins|lock files, post-v0|Lock state is post-v0|Post-v0 Lock|RunLockedError|BLOCKED.*not a persisted|runtime profile types|locking.py" docs/structure.md docs/features/runtime-resources.md docs/features/state.md docs/features/run-store.md docs/features/reliability.md`
+    found no matches.

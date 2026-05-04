@@ -325,25 +325,29 @@ These are policy hints. They do not replace artifact store ownership checks.
 
 ## Event Hooks
 
-Event hooks expose structured lifecycle events for external tools.
+Event records expose structured lifecycle facts for inspection and future
+external tools. Phase 4 defines the strict event model and local
+`events.jsonl` persistence. Callback hooks and plugin-discovered event sinks
+remain deferred.
 
 Events:
 
 ```text
-run_started
-stage_started
-stage_succeeded
-stage_failed
-run_finished
-submission_created
-retry_scheduled
-cleanup_performed
+run.created
+stage.started
+stage.succeeded
+stage.failed
+stage.blocked
+run.finished
+submission.created
+retry.scheduled
+cleanup.performed
 ```
 
-Core `loom` should emit generic event records or call registered callbacks.
-Callbacks are observe-only event sinks. They receive committed runtime facts and
-must not mutate plans, configs, artifacts, stage outputs, status transitions,
-retry decisions, or store records.
+Core `loom` should emit generic event records before adding registered
+callbacks. Future callbacks are observe-only event sinks. They receive committed
+runtime facts and must not mutate plans, configs, artifacts, stage outputs,
+status transitions, retry decisions, or store records.
 
 Plugin-discovered event sinks are owned by `loom.plugins`; this document owns
 event names, event payloads, persistence policy, and callback failure behavior.
@@ -351,21 +355,23 @@ Core `loom` should not ship service-specific notification backends initially.
 
 ## Event Record Shape
 
-Recommended shape:
+Current persisted foundation shape:
 
 ```python
 @dataclass(frozen=True)
-class RuntimeEvent:
-    event_type: str
-    recorded_at: str
+class PipelineEventRecord:
+    schema_version: int
     run_id: str
-    stage_id: str | None = None
-    attempt: int | None = None
-    severity: str = "info"
-    details: Mapping[str, object] = field(default_factory=dict)
+    sequence: int
+    timestamp: str
+    scope: EventScope
+    event_type: str
+    payload: Mapping[str, PlainData] = field(default_factory=dict)
 ```
 
-Event details must be JSON-serializable.
+Event payloads must be plain-data mappings. Local stores allocate contiguous
+per-run sequence numbers and append one JSON object per line to
+`<run_dir>/events.jsonl`.
 
 ## Notification Boundary
 
@@ -376,6 +382,7 @@ Instead, it should support:
 
 ```text
 event records in run metadata
+append-only local events.jsonl
 programmatic callbacks
 optional plugin hooks
 CLI commands that stream or inspect event records
@@ -401,7 +408,8 @@ retention metadata
 event records when event persistence is enabled
 ```
 
-When event sinks are configured, event persistence should be enabled by default
+Local event persistence is available as a run-store capability. When future
+event sinks are configured, event persistence should be enabled by default
 unless the caller explicitly disables it.
 
 State transitions must remain atomic enough that a controller crash leaves a
@@ -476,7 +484,7 @@ test environment explicitly provides real commands.
 5. Add cleanup dry-run reporting for known temporary paths.
 6. Add conservative deletion behind explicit CLI flags.
 7. Add retention metadata before adding automatic deletion behavior.
-8. Add generic event records and plugin callback hooks.
+8. Add plugin callback hooks on top of generic event records.
 
 ## Deferred Work
 

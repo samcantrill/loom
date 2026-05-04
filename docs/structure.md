@@ -274,6 +274,8 @@ src/loom/
     stage.py
     context.py
     status.py
+    events.py
+    locks.py
     validation.py
     selectors.py
     resources.py
@@ -317,7 +319,6 @@ src/loom/
       local_artifacts.py
       local_runs.py
       atomic.py
-      locking.py
       errors.py
 
     sweep/
@@ -597,10 +598,12 @@ stage.py          Stage protocol
 stage_factory.py  pipeline-owned import and stage construction helpers
 context.py        StageContext passed to stage implementations
 status.py         run and stage status values
+events.py         strict pipeline event records
+locks.py          run lock record model
 validation.py     spec and contract validation
 selectors.py      stage selection helpers
 resources.py      generic runtime/resource hints
-runtime.py        runtime profile types
+runtime.py        local runtime request foundation
 graph/            DAG construction, topology, and binding validation
 planning/         execution plans, resume decisions, invalidation policy
 errors.py         pipeline-specific errors
@@ -652,7 +655,6 @@ indexes.py         run-level artifact and stage indexes
 local_artifacts.py local filesystem artifact storage
 local_runs.py      local run directory state
 atomic.py          atomic file write helpers
-locking.py         lock helpers, initially conservative/deferred
 errors.py          store-specific errors
 ```
 
@@ -667,6 +669,8 @@ run.json
 status.json
 artifacts.json
 plan.json
+events.jsonl
+lock.json
 ```
 
 The runner owns lifecycle transitions. Stores persist those transitions.

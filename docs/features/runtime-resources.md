@@ -17,12 +17,16 @@ much of that request they can enforce.
 V0 alignment:
 
 ```text
-v0 keeps authored stage resources as a generic StageSpec.resources mapping
-with no executor-specific semantics and no default fingerprint impact
+v0 keeps authored stage resources as a generic StageSpec.resources mapping,
+validated through ResourceRequest, with no executor-specific semantics and no
+default fingerprint impact
+v0 supports ResourceRequest fields cpus, memory_mb, gpus, and custom
+v0 supports a local-only RuntimeRequest foundation for programmatic/runtime
+vocabulary, not authored stage runtime selection
 v0 supports Python planning selector fields from_stage, only_stages,
 force_stages, and skip_stages
-typed ResourceRequest, RunOptions, ExecutionOptions, runtime profiles,
-preflight, and executor-specific resource mapping are post-v0
+RunOptions, ExecutionOptions, runtime profiles, preflight, and
+executor-specific resource mapping are post-v0
 ```
 
 The sections below describe the intended stable direction for the runtime and
@@ -77,11 +81,13 @@ by a stage.
 Post-v0 direction:
 
 ```text
-v0 keeps stage resources as a plain structured mapping on StageSpec
-typed ResourceRequest validation begins after the local v0 runner is stable
+StageSpec stores resources as recursively immutable plain data
+StageSpec.resource_request returns the typed ResourceRequest inspection view
+unsupported executor, retry, timeout, scheduler, container, environment, and
+remote-store fields are rejected instead of preserved as honored metadata
 ```
 
-Recommended shape:
+Current v0 shape:
 
 ```python
 @dataclass(frozen=True)
@@ -89,7 +95,6 @@ class ResourceRequest:
     cpus: int | None = None
     memory_mb: int | None = None
     gpus: int | None = None
-    wall_time_seconds: int | None = None
     custom: Mapping[str, object] = field(default_factory=dict)
 ```
 
@@ -135,7 +140,7 @@ zero or positive integer when provided
 
 ```text
 expected or requested maximum runtime for the stage
-positive integer when provided
+deferred; rejected in v0 so callers do not assume timeout behavior is honored
 ```
 
 `custom`:
@@ -173,6 +178,9 @@ by the executor and included in submission metadata when relevant.
 Post-v0 direction:
 
 ```text
+v0 has a local-only RuntimeRequest foundation with kind=LOCAL, resources, and
+plain metadata
+authored stage runtime/executor fields remain rejected
 v0 runner APIs may accept minimal run directory and selector inputs directly
 full RunOptions normalization, profiles, dry-run, and executor selection are
 post-v0
@@ -394,25 +402,32 @@ Validation that requires filesystem access belongs in preflight.
 
 Runtime and resource objects should serialize to plain dictionaries.
 
-Example:
+Current foundation examples:
 
 ```json
 {
-  "executor": "slurm",
-  "dry_run": false,
-  "execution": {
-    "max_parallel_stages": null,
-    "fail_fast": true,
-    "capture_logs": true
-  },
-  "resources": {
-    "train": {
-      "cpus": 8,
-      "memory_mb": 32768,
-      "gpus": 1,
-      "wall_time_seconds": 7200
-    }
+  "schema_version": 1,
+  "cpus": 8,
+  "memory_mb": 32768,
+  "gpus": 1,
+  "custom": {
+    "hint": "large"
   }
+}
+```
+
+```json
+{
+  "schema_version": 1,
+  "kind": "LOCAL",
+  "resources": {
+    "schema_version": 1,
+    "cpus": null,
+    "memory_mb": null,
+    "gpus": null,
+    "custom": {}
+  },
+  "metadata": {}
 }
 ```
 
@@ -445,8 +460,10 @@ Unit tests should cover:
 valid resource request construction
 invalid negative resources
 invalid zero values where not allowed
+rejection of deferred timeout, retry, executor, scheduler, container, and
+remote-store fields
 custom metadata serialization
-runtime option defaults
+local-only runtime request defaults
 resume option normalization
 selected stage validation
 force stage validation
@@ -458,12 +475,14 @@ Tests should avoid requiring SLURM, Docker, or Apptainer.
 
 ## Implementation Plan
 
-1. Define resource and runtime dataclasses.
+1. Define foundation resource and runtime dataclasses.
 2. Add validation helpers that do not touch the filesystem.
-3. Wire config and CLI option parsing into the runtime objects.
-4. Record normalized runtime options in run metadata.
-5. Teach executor adapters to consume the shared objects.
-6. Add preflight checks that use the same normalized objects.
+3. Keep authored stage runtime/executor policy rejected until a later phase
+   owns execution semantics.
+4. Wire config and CLI option parsing into broader runtime option objects later.
+5. Record normalized runtime options in run metadata later.
+6. Teach executor adapters to consume the shared objects later.
+7. Add preflight checks that use the same normalized objects later.
 
 ## Deferred Work
 

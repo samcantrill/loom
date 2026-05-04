@@ -123,6 +123,8 @@ mark run RUNNING
 mark stage RUNNING
 mark stage SUCCEEDED only after output validation
 mark stage FAILED after failure metadata is persisted
+mark stage BLOCKED when a stage is not executed because a dependency or
+prerequisite prevents it
 finalize run status
 ```
 
@@ -194,6 +196,7 @@ RunStatus enum
 StageStatus enum
 RunStatusRecord
 StageStatusRecord
+BLOCKED stage status for durable blocked outcomes
 attempt field for stages
 started_at and finished_at fields
 message/reason fields
@@ -357,6 +360,7 @@ PENDING
 RUNNING
 SUCCEEDED
 FAILED
+BLOCKED
 SKIPPED
 STALE
 CANCELLED
@@ -376,6 +380,9 @@ SUCCEEDED:
 
 FAILED:
   completed unsuccessfully with failure metadata
+
+BLOCKED:
+  not executed because a dependency or prerequisite prevents execution
 
 SKIPPED:
   excluded by selector or condition
@@ -422,7 +429,9 @@ status and appear as `REUSE` in the plan output.
 
 ### 7.7 Blocked Is Not a Success State
 
-`BLOCKED` should be a planning result, not a persisted successful stage status.
+`BLOCKED` is a durable stage status for a known stage that did not execute
+because a dependency or prerequisite made execution impossible. It is not a
+successful or reusable result.
 
 Downstream stages can remain:
 
@@ -430,7 +439,15 @@ Downstream stages can remain:
 PENDING
 ```
 
-or be represented in the plan as blocked.
+or be represented in persisted state as:
+
+```text
+BLOCKED
+```
+
+Phase 4 provides the status record and status-only lifecycle writer. Runner
+failure paths that persist blocked descendants are owned by later execution
+lifecycle work.
 
 ---
 
@@ -964,10 +981,13 @@ Use `REUSE` as a planner action and keep prior `SUCCEEDED` state.
 Recommended answer:
 
 ```text
-no
+yes, as a status-only stage outcome
 ```
 
-Blocked is a planning result caused by failed/skipped/upstream state.
+Blocked is caused by failed/skipped/upstream or prerequisite state. Persisting
+it should write `stages/STAGE/status.json` with `StageStatus.BLOCKED`, not
+inputs, outputs, artifacts, fingerprints, failure metadata, provenance, or logs
+for a stage that did not execute.
 
 ### 18.3 Should `STALE` Be Persisted?
 
