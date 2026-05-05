@@ -36,19 +36,19 @@ New tests implemented:
 | Targeted Phase 13 suite | Passed | 100 passed across package/import-boundary, unit config artifact/provenance/redaction/compose, contract artifact/inspection, and config integration provenance suites |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff passed; Pyright 0 errors; default pytest 427 passed/10 skipped; config-extra 279 passed/432 deselected; build succeeded |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md` with overall status passed |
-| GitHub checks | Not run | PR not opened in this expanded-path draft pass |
+| GitHub checks | Pending | Triggered by PR submission; local PR gate passed before opening |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.62s | 22% |
-| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 3.69s | 58% |
-| contract | passed | 28 | 0 | 0 | 2 | 0 | 30 | 1.44s | 28% |
-| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 1.87s | 42% |
-| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.40s | 64% |
-| config-extra | passed | 279 | 0 | 0 | 0 | 432 | 279 | 8.13s | 76% |
-| Overall | passed | 711 | 0 | 0 | 9 | 432 | 720 | 22.15s | - |
+| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.68s | 22% |
+| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 3.88s | 58% |
+| contract | passed | 28 | 0 | 0 | 2 | 0 | 30 | 1.46s | 28% |
+| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 1.93s | 42% |
+| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.48s | 64% |
+| config-extra | passed | 279 | 0 | 0 | 0 | 432 | 279 | 8.16s | 76% |
+| Overall | passed | 711 | 0 | 0 | 9 | 432 | 720 | 22.59s | - |
 
 ## Risks / Follow-Ups
 
