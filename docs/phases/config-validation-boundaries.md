@@ -230,8 +230,21 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; committed as `plan: refine phase execution plan`.
 - Implementation summary:
+  - Removed implicit top-level `name`/`pipeline`/schema defaulting from `validate_top_level_fields(...)`; public composition now treats top-level mappings as pass-through project payload by default.
+  - Reworked `ConfigValidationError` to reuse structured-context plumbing (`_ConfigError`) so validation failures can carry `ConfigErrorContext`.
+  - Added load-time `_schema_` rejection in `load.py` alongside existing `_copy_` checks, producing source-aware `ConfigLoadError` context for base, overlay, and included file boundaries.
+  - Updated composition-related tests to cover domain-neutral inputs (`compose_config` without `name`/`pipeline`), `_schema_` rejection in base/overlay/included YAML, and project-scoped `_target_` inertness.
+  - Updated validation-contract coverage to verify structured context for `ConfigValidationError`.
 - Implementation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_validation.py tests/unit/loom/config/test_config_errors.py tests/unit/loom/config/test_load.py tests/contracts/test_config_error_contract.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py` → `46 passed`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/package/test_import_boundaries.py tests/package/test_config_api.py` → `38 passed`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` → passed (`ruff`, `pyright`, all default tests, build).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` → full evidence written to `build/test-summary.md` with all suites passing.
 - Refinement summary: expanded-path refine pass incorporated manager and architecture findings about current compose order, obsolete top-level validation, `_schema_` coverage gaps, config/pipeline validation ownership, required generic pass-through integration coverage, and the revised pre-submit blocker gate.
+- Assumptions:
+  - The `_schema_` directive is unsupported in v1 authored YAML; compose must reject it before any schema interpretation or import.
+  - Generic compose payloads should remain unvalidated except for explicitly owned boundaries already implemented by existing include/override/recipe/validation helpers.
+- Blockers:
+  - None.
 - PR preparation:
 - Stack maintenance:
-- Remaining blockers:
