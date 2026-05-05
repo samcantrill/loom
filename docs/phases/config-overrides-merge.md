@@ -247,7 +247,7 @@ make test-summary
 
 - Phase execution plan draft: used
 - Phase execution plan refine: used
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -255,16 +255,16 @@ make test-summary
 - Draft plan: completed in this artifact by `loom_phase_planner`; implementation completed.
 - Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation completed.
 - Implementation summary: completed in `src/loom/config/overrides.py` and `src/loom/config/merge.py` with strict `+path` parent-creation behavior retained for add only, ordered strict update/add overrides, non-mutation guarantees, and `_replace_` merge semantics including recursive mapping replacement, marker validation, and marker removal.
-- Implementation validation: targeted tests run and passed for override/merge scope.
+- Implementation validation: targeted tests and PR validation passed for override/merge/compose scope.
 - Refinement summary: clarified `_replace_` as an explicit whole-section mapping replacement marker while absence of `_replace_` means recursive mapping merge; clarified scalar/list/null and mapping-over-non-mapping replacements do not require `_replace_`; clarified `+` add parent creation and update strictness; bounded current `compose_config` testing to strict helper behavior without Phase 7/9/12 ordering decisions; decided override/merge errors may remain message-only with stable subclasses/tests unless local `ConfigErrorContext` wiring is trivial; tightened suite obligations and Spark executor stop conditions.
+- Implementation refinement summary: consumed the one allowed expanded-path implementation refinement pass. Root-level `_replace_` in the higher-precedence overlay passed directly to `merge_configs()` is supported as whole-root mapping replacement because the top-level merge is still a mapping-over-existing-mapping merge; the marker is consumed, omitted from the result, and invalid root marker values or marker-only root overlays fail with `ConfigMergeError`. No Phase 4/6 source authorship or Phase 12 orchestration decision was required. No additional strict override edge was changed; message-only override/merge subclasses remain the phase-scoped diagnostic contract.
 - PR preparation: pending.
 
 ### Completion Validation
 
-- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_overrides.py` (pass)
-- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_merge.py` (pass)
-- `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` (pass)
-- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass)
-- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_overrides.py tests/unit/loom/config/test_merge.py` (pass: 28 passed)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` (pass: 10 passed)
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass: Ruff passed; Pyright 0 errors; default suite 423 passed, 9 skipped; config-extra suite 145 passed, 428 deselected; build succeeded)
+- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 24 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 145 passed/428 deselected; overall 573 passed, 8 skipped, 428 deselected)
 - Stack maintenance: none yet.
 - Remaining blockers: none.

@@ -26,6 +26,9 @@ def merge_configs(
         key: _normalize_mapping_value(value, path=f"{path}[{key!r}]") for key, value in base.items()
     }
 
+    if _REPLACE_KEY in overlay:
+        return _merge_replace_mapping(base_value=merged, overlay_value=overlay, path=path)
+
     for key, overlay_raw_value in overlay.items():
         child_path = f"{path}[{key!r}]"
         base_value = merged.get(key)

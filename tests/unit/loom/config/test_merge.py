@@ -43,6 +43,13 @@ def test_merge_replace_marker_consumed_as_whole_mapping_replacement() -> None:
     assert merge_configs(base, overlay) == {"a": {"d": 3}}
 
 
+def test_merge_root_replace_marker_consumed_as_whole_mapping_replacement() -> None:
+    base = plain_config({"a": {"b": 1}, "c": 2})
+    overlay = plain_config({"_replace_": True, "d": 3})
+
+    assert merge_configs(base, overlay) == {"d": 3}
+
+
 def test_merge_replace_marker_removes_marker_from_result() -> None:
     base = plain_config({"section": {"a": 1}})
     overlay = plain_config({"section": {"_replace_": True, "a": 2}})
@@ -78,6 +85,20 @@ def test_merge_replace_marker_fails_with_no_sibling_replacement_keys() -> None:
 def test_merge_replace_marker_rejects_non_true_value() -> None:
     base = plain_config({"section": {"a": 1}})
     overlay = plain_config({"section": {"_replace_": False, "a": 2}})
+    with pytest.raises(ConfigMergeError):
+        merge_configs(base, overlay)
+
+
+def test_merge_root_replace_marker_rejects_non_true_value() -> None:
+    base = plain_config({"a": 1})
+    overlay = plain_config({"_replace_": False, "b": 2})
+    with pytest.raises(ConfigMergeError):
+        merge_configs(base, overlay)
+
+
+def test_merge_root_replace_marker_fails_with_no_sibling_replacement_keys() -> None:
+    base = plain_config({"a": 1})
+    overlay = plain_config({"_replace_": True})
     with pytest.raises(ConfigMergeError):
         merge_configs(base, overlay)
 
