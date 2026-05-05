@@ -1567,9 +1567,9 @@ Completion notes:
 
 ### Phase 9 - Recipe Catalog And Expansion
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-recipes-catalog`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/36
 
 Goal:
 
@@ -1602,6 +1602,31 @@ Test expectations:
 - Unit/integration tests for explicit catalog use, expansion order,
   artifact-safe output hashes, override-after-expansion behavior, and
   resolver-dependent shape failure.
+
+PR-open notes:
+
+- Phase execution plan: `docs/phases/config-recipes-catalog.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is
+  merge-eligible after review.
+- Implementation summary: reorders composition so include expansion and user
+  composition overrides run before recipe expansion, ordinary overrides apply
+  to recipe-expanded concrete paths, recipe argument handling preserves authored
+  resolver-style expressions for artifact-safe records and hashes, and recipe
+  expansion rejects resolver-shaped output keys before producing successful
+  artifacts.
+- Scope notes: explicit `RecipeCatalog` composition remains the deterministic
+  v1 path while existing default-catalog and `register_recipe(...)`
+  compatibility remain intact. No CLI behavior, pipeline imports, run-store
+  writes, public inspection fields, source-artifact or fingerprint population,
+  resolver-output or raw-source persistence, `_copy_`, plugin/remote behavior,
+  or recipe sandboxing were added.
+- Validation: targeted Phase 9 suite passed with 97 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall
+  677 passed, 0 failed, 0 errors, 8 skipped, and 431 deselected.
+- PR notes: opened and verified on 2026-05-05 as PR #36 with base `develop`,
+  head `codex/config-recipes-catalog`, and state `OPEN`. GitHub CI check
+  `checks` passed on PR #36.
 
 ### Phase 10 - Loom Validation Boundaries
 
