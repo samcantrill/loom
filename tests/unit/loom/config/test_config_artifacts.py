@@ -1,6 +1,8 @@
 """Unit tests for configuration artifact contracts."""
 
 import pytest
+from typing import cast
+from loom.serialization import PlainData
 
 from loom.config.artifacts import (
     SCHEMA_VERSION,
@@ -88,7 +90,8 @@ def test_composition_manifest_rejects_unknown_fields() -> None:
 
 def test_config_artifact_metadata_must_be_plain_data() -> None:
     with pytest.raises(ConfigProvenanceError):
+        invalid_metadata = cast(dict[str, PlainData], {"value": {1: "x"}})
         CompositionManifest(
             schema_version=SCHEMA_VERSION,
-            metadata={"value": {tuple(): 1}},
+            metadata=invalid_metadata,
         )

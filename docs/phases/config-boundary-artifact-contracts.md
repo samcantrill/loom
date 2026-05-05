@@ -237,6 +237,8 @@ make test-summary
   - `uv run pytest tests/package/test_import_boundaries.py` ✅ 14 passed
   - `uv run pytest tests/package/test_config_api.py` ✅ skipped (optional dependency profile)
   - `uv run pytest tests/package/test_pipeline_api.py` ✅ 2 passed
+  - `make validate-pr` ✅ passed (ruff, pyright, targeted harness targets, build)
+  - `make test-summary` ✅ `build/test-summary.md` written with all suite tiers passing
 - Refinement summary: expanded-path refinement completed; sharpened module placement, export boundaries, artifact skeleton naming, package/unit/contract suite obligations, and implementation stop conditions.
 - PR preparation: pending.
 - Stack maintenance: none yet.

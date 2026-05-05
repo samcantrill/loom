@@ -299,10 +299,11 @@ def _to_recipe_manifest_payload(value: Sequence[object]) -> tuple[dict[str, Plai
     for index, item in enumerate(value):
         if not isinstance(item, Mapping):
             raise ConfigProvenanceError(f"recipe_manifest[{index}] must be mapping")
-        manifest_records.append(ensure_plain_data(item, path=f"CompositionManifest.recipe_manifest[{index}]"))
-        if not isinstance(manifest_records[-1], Mapping):
+        payload = ensure_plain_data(item, path=f"CompositionManifest.recipe_manifest[{index}]")
+        if not isinstance(payload, dict):
             raise ConfigProvenanceError(f"recipe_manifest[{index}] must be a mapping")
-    return tuple(cast(dict[str, PlainData], item) for item in manifest_records)
+        manifest_records.append(payload)
+    return tuple(manifest_records)
 
 
 def to_plain_mapping(value: Mapping[str, Any]) -> dict[str, PlainData]:
