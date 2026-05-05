@@ -23,7 +23,7 @@
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner` in this artifact; refine budget used.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by `loom_phase_refiner` on 2026-05-05; this was the single allowed implementation refinement pass.
 - Pre-submit/PR review budget: unused. The revised workflow requires a pre-submit blocker gate before PR submission; if that gate reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks, it consumes the Phase 10 PR-review budget unless the submitted diff changes afterward.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. `gh auth setup-git` and `git fetch origin` succeeded with approved access. Local `develop`, `origin/develop`, and `HEAD` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none.
@@ -221,7 +221,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used by `loom_phase_refiner` on 2026-05-05; no further automated implementation refinement pass remains.
 - Pre-submit blocker gate: unused.
 - PR review: unused. The revised workflow requires a pre-submit blocker gate before PR submission; when that gate reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks, it consumes the Phase 10 PR-review budget unless the submitted diff changes afterward.
 
@@ -240,6 +240,16 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/package/test_import_boundaries.py tests/package/test_config_api.py` → `38 passed`.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` → passed (`ruff`, `pyright`, all default tests, build).
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` → full evidence written to `build/test-summary.md` with all suites passing.
+- Implementation refinement pass:
+  - `loom_phase_refiner` performed the single allowed expanded-path implementation refinement pass on 2026-05-05.
+  - Diff inspection found no production blocker: public `compose_config(...)` no longer requires top-level `name`, `pipeline`, or `schema_version`; generic payloads remain pass-through; `_schema_` rejection is source-aware for base, overlay, and included file loads; `_target_` remains inert during composition; no `loom.pipeline` import or future-phase behavior is introduced; structured validation context remains plain data and does not include raw source text or resolved resolver values.
+  - Added focused integration coverage that generic, non-pipeline payloads feed redaction, provenance resolved fingerprints, and public config fingerprints without injecting `schema_version`.
+  - Refinement validation:
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_config.py` → `10 passed`.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_validation.py tests/unit/loom/config/test_config_errors.py tests/unit/loom/config/test_load.py tests/contracts/test_config_error_contract.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py` → `47 passed`.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/package/test_import_boundaries.py tests/package/test_config_api.py` → `38 passed`.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` → passed (`ruff`, `pyright`, default tests, config-extra tests, build).
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` → passed; `build/test-summary.md` records package `36 passed, 1 skipped`, unit `354 passed, 1 skipped`, contract `28 passed, 1 skipped`, integration `9 passed, 5 skipped`, e2e `5 passed`, config-extra `253 passed, 432 deselected`.
 - Refinement summary: expanded-path refine pass incorporated manager and architecture findings about current compose order, obsolete top-level validation, `_schema_` coverage gaps, config/pipeline validation ownership, required generic pass-through integration coverage, and the revised pre-submit blocker gate.
 - Assumptions:
   - The `_schema_` directive is unsupported in v1 authored YAML; compose must reject it before any schema interpretation or import.

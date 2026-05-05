@@ -7,6 +7,8 @@ import pytest
 
 from loom.config import RecipeCatalog, compose_config
 from loom.config.errors import ConfigLoadError, OverrideApplyError
+from loom.config.provenance import build_config_fingerprint
+from loom.fingerprints import hash_mapping
 from tests.support.config_samples import DownstreamRecipe, argument_recipe
 
 
@@ -144,6 +146,44 @@ def test_compose_allows_generic_configs_without_name_or_pipeline(tmp_path: Path)
     composed = compose_config(base)
     assert composed.resolved["experiment"] == {"architecture": "transformer", "params": {"width": 256}}
     assert "schema_version" not in composed.resolved
+
+
+def test_compose_uses_generic_payload_for_redaction_and_fingerprints(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "experiment:\n"
+        "  architecture: transformer\n"
+        "  secret_token: keep-private\n"
+        "metadata:\n"
+        "  owner: project\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base)
+
+    assert composed.resolved == {
+        "experiment": {
+            "architecture": "transformer",
+            "secret_token": "keep-private",
+        },
+        "metadata": {
+            "owner": "project",
+        },
+    }
+    redacted_experiment = cast(dict[str, Any], composed.redacted["experiment"])
+    assert redacted_experiment == {
+        "architecture": "transformer",
+        "secret_token": "***REDACTED***",
+    }
+    assert "schema_version" not in composed.redacted
+    assert composed.provenance.resolved_fingerprint == hash_mapping(composed.resolved)
+    assert composed.fingerprint == build_config_fingerprint(
+        resolved=composed.resolved,
+        sources=composed.provenance.sources,
+        overrides=composed.provenance.overrides,
+        recipe_manifest=composed.recipe_manifest,
+        schema_version=composed.provenance.schema_version,
+    )
 
 
 def test_compose_keeps_project_scoped_target_nodes_inert(tmp_path: Path) -> None:
