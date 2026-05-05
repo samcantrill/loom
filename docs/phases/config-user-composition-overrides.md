@@ -1,0 +1,237 @@
+# Phase 7 Execution Plan: User Composition Overrides
+
+## Metadata
+
+- Status: draft phase execution plan
+- Feature focus: Configuration
+- PR title: `Configuration - Phase 7: User Composition Overrides`
+- Branch: `codex/config-user-composition-overrides`
+- Worktree: `/home/samcantrill/work/loom-worktrees/config-user-composition-overrides`
+- Phase execution plan path: `docs/phases/config-user-composition-overrides.md`
+- Full plan: `docs/implementation-plans/implementation-plan-v1.md`
+- Planning notes: `docs/implementation-plans/roadmap-v1-planning-notes.md`
+- Source phase: Phase 7 - User Composition Overrides
+- Stack predecessor: none; Phases 1-6 are merged
+- Base branch: `develop`
+- Base commit: `c3ab85a4cd1310ff25d8cb9053a904a7dc62f6ed`
+- Target branch: `develop`
+- Merge eligibility: merge-eligible after PR review because target is `develop`
+- Workflow path: expanded path
+- Workflow path rationale: user-authored include replacement changes config composition semantics and depends on Phase 6 include-site records, override ordering, strict source context, and future public/artifact phases.
+- Successor dependency notes: Phase 8 resolver security must see user-composed include targets without executing resolvers. Phase 9 recipes can finalize recipe-before-ordinary-override ordering later because Phase 7 will have already separated user composition overrides from ordinary value overrides.
+- Plan quality gate: passed on 2026-05-05 by `loom_plan_reviewer` confirmation review; no blocking findings remain.
+- Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
+- Draft pass: completed by `loom_phase_planner` in this artifact.
+- Refine pass: pending because expanded path is active.
+- Setup limitations: sandboxed `gh auth status` reported the stored token as invalid, but approved outside-sandbox `gh auth status` succeeded; `gh auth setup-git` succeeded. `git fetch origin` required approved access because writing `.git/FETCH_HEAD` was blocked by the sandbox, then succeeded. Local `develop` resolved to the assigned base commit `c3ab85a4cd1310ff25d8cb9053a904a7dc62f6ed`. `git worktree add` required approved access because writing Git refs was blocked by the sandbox.
+- Blockers: none for the draft plan. Expanded-path refinement should confirm the internal include-site context extension described below before implementation starts.
+
+## Objective
+
+Add the internal user-composition stage that applies `path._include_=...` overrides after file-defined include expansion and before recipes or ordinary value overrides, supporting existing include-site swaps, explicit brand-new include sites, recomposed component subtrees, and later ordinary value override targeting of recomposed values.
+
+## Full-Plan Context
+
+Phases 1-6 established config/package boundaries, artifact skeletons, structured loading/errors, strict overrides and `_replace_`, source-aware overlays, deterministic include resolution, and file-authored recursive includes. Phase 7 is the bridge from file-authored composition to user-authored composition. It must reuse Phase 6 include records and strict Phase 5 resolver behavior while keeping resolver execution, recipe expansion changes, public inspection orchestration, manifests, source artifacts, fingerprints, persistence, CLI behavior, and pipeline imports out of scope.
+
+## Stack Context
+
+- Root or stacked phase: root phase.
+- Current predecessor branch or PR: none; Phases 1-6 are merged into `develop`.
+- Why this base branch is correct: the manager selected `develop`, the implementation plan records Phase 6 and its follow-up as merged, and local `develop` matches the assigned base commit.
+- Retarget/rebase plan after predecessor merge: none for this root phase. The PR should target `develop`.
+- Branch cleanup constraints: safe to delete only after the Phase 7 PR is merged and no successor phase branch depends on `codex/config-user-composition-overrides`.
+
+## Source Phase Summary
+
+- Goal: apply user-defined composition after file-defined composition.
+- Required scope: existing-site bare include replacement; explicit brand-new user include sites only; recomposed swapped component subtrees; ordinary value override pass hooks for later expanded config updates.
+- Required checkpoints: parse user overrides once and preserve order; partition `_include_` composition overrides from ordinary value overrides; recompose swapped include subtrees before recipes and ordinary overrides; reject brand-new bare include sites; keep ordinary override strict update/add behavior against the recomposed concrete config.
+- Acceptance criteria: `path._include_=...` can replace an existing file-defined include site; brand-new user include sites require explicit path, absolute path, or `file://`; ordinary overrides can target values introduced by recomposed includes.
+
+## Current Source And Harness Findings
+
+- Existing files or modules that constrain this phase: `src/loom/config/compose.py` currently orders load, source-aware file merge, file include expansion, parse/apply all user overrides, recipe expansion, interpolation, validation, redaction, provenance, and fingerprinting. `src/loom/config/includes.py` owns `resolve_include_target(...)`, recursive include expansion, include-site records, local customization records, and include expansion errors. `src/loom/config/overrides.py` parses strict update and `+` add overrides and applies ordinary values to an already concrete mapping. `src/loom/config/source_maps.py` owns exact tuple `ConfigPath` source authorship plus consumed replacement and mapping-site handoff. `src/loom/config/errors.py` already has structured include resolution/expansion errors but ordinary override errors are message-only.
+- Existing tests or harness behavior: `tests/unit/loom/config/test_includes.py` covers include target resolution, recursive expansion, include records, cycle errors, and replacement requirements. `tests/unit/loom/config/test_overrides.py` covers typed override parsing and strict update/add application. `tests/integration/config/test_compose_includes.py` proves current public compose expands file includes before ordinary user overrides and enforces Phase 6 replacement rules. `tests/integration/config/test_compose_config.py` covers current compose order with recipes and ordinary overrides. Package import-boundary tests already assert `loom.config` does not import pipeline, stores, execution, or CLI.
+- Import-boundary or dependency constraints: keep implementation under `src/loom/config/` and config tests. Do not import pipeline, stores, CLI modules, plugin discovery, project code, network clients, or heavyweight dependencies.
+- Phase 6 record gap to refine: current `IncludeSiteRecord` stores the composed include-site path and source path/kind/order, but nested bare replacements need the source-local include-site path or equivalent resolution base. Phase 7 should add a narrow internal source-context field or sidecar before user composition rather than guessing from composed paths or making a public artifact contract.
+
+## In-Scope Work
+
+- Parse user override strings once, preserving order, and separate composition overrides whose final path segment is `_include_` from ordinary strict update/add value overrides.
+- Apply user composition overrides after file-defined include expansion and before the existing ordinary value override pass, recipe argument interpolation, recipe expansion, runtime interpolation, validation, redaction, provenance, and fingerprinting.
+- Replace an existing file-defined include site with `path._include_=...`, allowing bare targets only when the target path matches a recorded file-defined include site with strict source context.
+- Recompose swapped component subtrees by loading and recursively expanding the replacement include target, then reapplying the original local sibling customizations for that include site before downstream ordinary value overrides run.
+- Add explicit brand-new user include sites only when the target is an explicit relative path, absolute path, or `file://`; reject bare brand-new include targets and unsupported/resolver-dependent targets.
+- Keep ordinary update and `+` add override semantics intact and apply ordinary value overrides against the recomposed concrete config so users can update values introduced by replacement includes.
+- Add or extend internal include-site/recomposition records only as needed to carry source-local include paths, source context, local customization values, and user composition diagnostics for later phases.
+
+## Out-of-Scope Work
+
+- Recipe expansion changes, recipe argument override syntax, resolver execution, resolver scanning, and runtime interpolation policy changes.
+- Final public `compose_config` orchestration redesign, public `inspect_config_composition(...)`, additive v1 `ComposedConfig` fields, manifest/provenance/source-artifact/fingerprint population, raw source snapshots, and run-store writes.
+- `_copy_` support, Hydra defaults lists, list-valued includes, multiple include targets in one mapping node, list patching, global search paths, plugin/remote include resolvers, CLI commands, pipeline imports, or root package exports.
+- Public persistence of resolver outputs, raw source bytes, or user override source bytes beyond existing authored override strings in provenance.
+
+## Assumptions
+
+- User composition overrides are still plain override strings in the existing Python API; v1 does not introduce a new CLI or public lower-level API in this phase.
+- A composition override is identified by the final parsed dot-path segment `_include_`. The containing config path is the include site container path.
+- Existing-site matching uses exact tuple `ConfigPath` semantics derived from parsed path segments; string path segments are not split again and keys with literal dots remain unsupported by the v1 override language.
+- Existing-site replacements reuse the original include site's source context for bare and explicit relative resolution. For nested include sites, this requires the source-local include-site path or an equivalent resolution base from Phase 6 internals.
+- Brand-new explicit relative user include sites use the base config source as the only available Python-API source context unless refinement identifies an already implemented stricter user-source context. Brand-new bare targets remain rejected.
+- Recomposing a swapped subtree must preserve the original file-authored local sibling customizations at that include site. If current Phase 6 records are insufficient to recover local authored customization values, add a narrow internal local-overlay payload or preserve the pre-expansion container mapping for recomposition.
+- User-authored `_replace_` in override strings is not a Phase 7 feature. Replacement semantics for user include swaps are expressed by targeting `_include_` at a known site or by adding an explicit brand-new include site.
+
+## Scope Contract
+
+- Phase 7 adds an internal user composition stage, not a new public artifact contract. It may add internal records and helper functions under `loom.config`, but must not add public root exports or new `ComposedConfig` fields.
+- Phase 7 stage order is fixed only around this phase boundary: file source merge, file include expansion, user composition overrides, then the existing ordinary value override pass and downstream stages. Do not implement Phase 9 recipe ordering changes in this phase.
+- Existing-site include replacement is allowed for `path._include_=bare` only when `path._include_` exactly matches a recorded file-defined include site and that record has source context sufficient for deterministic bare resolution.
+- Brand-new include sites must be authored with `+path._include_=./target.yaml`, `+path._include_=/abs/target.yaml`, or `+path._include_=file:///...`. A missing existing site without `+` remains a strict update failure. A brand-new bare include target fails with a structured source/context error.
+- User composition must never execute interpolation or resolver expressions to decide include targets. Resolver-dependent include target strings fail through existing include resolution policy.
+- Recomposition loads included files through existing strict loading and recursive include expansion. It must preserve Phase 6 cycle detection, source-aware errors, local sibling merge semantics, `_replace_` marker rejection, and no raw source byte persistence.
+- Ordinary overrides remain strict updates or explicit additions and operate only on the recomposed concrete config. They must not create or modify `_include_`, `_replace_`, `_copy_`, recipes, manifests, fingerprints, or source artifacts beyond this phase's composition stage.
+
+## Design Impact
+
+- Maintainability: isolates user composition from generic ordinary override application so later recipe, inspection, and artifact phases can reason about composition stages explicitly.
+- Extensibility: preserves future CLI and sweep behavior by making Python API overrides flow through the same internal semantics without adding CLI-only shortcuts.
+- Domain neutrality: treats user include swaps as plain mapping composition with no model, dataset, stage, or project-schema assumptions.
+- Source-tree boundaries: keeps the work inside `loom.config` and config tests with no dependency on `loom.pipeline`, stores, CLI, plugin discovery, remote IO, or project code.
+
+## Future Compatibility
+
+- Phase 8 can enforce resolver security after user-composed include targets are present without needing to reinterpret composition-control overrides.
+- Phase 9 can finalize recipe ordering after user composition while preserving the Phase 7 guarantee that ordinary overrides see recomposed include values.
+- Phase 12 can expose the user composition stage through inspection records without changing Phase 7 behavior.
+- Phase 13/14 can serialize user composition records and fingerprint inputs additively while preserving artifact-safe defaults.
+- Future CLI and sweep phases can generate the same override strings and rely on Phase 7's strict existing-site vs brand-new include-site distinction.
+
+## Alternatives Rejected
+
+| Alternative | Reason rejected |
+| --- | --- |
+| Treat `path._include_=...` as an ordinary value override after expansion | The expanded concrete config no longer contains `_include_`, and this would not recompose component subtrees. |
+| Allow brand-new bare user include sites | User-authored overrides lack the file-local mapping context needed for deterministic bare resolution. |
+| Resolve existing-site bare replacements from the composed path alone | Nested include sites need the source-local include path from the file that authored the original include. |
+| Preserve local customizations by reading values from the final expanded subtree only | Nested mapping customizations can be indistinguishable from included values after merge; recomposition needs an internal local overlay or pre-expansion context. |
+| Add public manifest/provenance fields in Phase 7 | Artifact population and public inspection are later phases; this phase should keep records internal. |
+| Add plugin, global search, remote, or resolver-backed include resolution | Explicitly out of scope for v1 and conflicts with deterministic artifact-safe composition. |
+
+## Debt Introduced
+
+| Debt | Reason accepted | Revisit trigger |
+| --- | --- | --- |
+| User composition records remain internal and may need additive reshaping | Keeps Phase 7 focused on behavior before public inspection and artifact contracts are populated. | Revisit in Phase 12/13 when inspection, manifests, source artifacts, and fingerprints serialize composition stages. |
+| Brand-new explicit relative user includes are anchored to base config source context unless refinement narrows this | The existing Python API has no separate override source file, and brand-new bare includes are rejected. | Revisit during expanded-path refinement or v2 CLI planning if a better explicit user-source model is required. |
+| Ordinary override errors may remain message-only | Phase 3 owns strict ordinary override behavior; Phase 7 only needs composition-specific source-aware errors. | Revisit if integration tests cannot assert source-context failures without structured ordinary override contexts. |
+
+## Reviewability
+
+- Expected PR size and shape: focused internal user-composition helper(s), narrow Phase 6 include-record/context extension, compose-stage partitioning/order wiring, and targeted unit/integration/contract tests. No broad public API or artifact-schema diff.
+- Files and areas to inspect: likely `src/loom/config/includes.py`, `src/loom/config/overrides.py`, `src/loom/config/compose.py`, `src/loom/config/source_maps.py` if recomposition context requires source-map handoff, `src/loom/config/errors.py`, `tests/unit/loom/config/test_includes.py`, `tests/unit/loom/config/test_overrides.py`, `tests/integration/config/test_compose_includes.py`, and new or existing `tests/integration/config/test_compose_overrides.py`.
+- Scope-control checks: no resolver execution or resolver scanning; no recipe expansion behavior change beyond preserving order; no public inspection API; no new `ComposedConfig` fields; no manifest/provenance/source-artifact/fingerprint population; no raw source persistence; no CLI, run-store, network, plugin, remote, global search, pipeline import, root export, `_copy_`, or future recipe argument override syntax.
+
+## Implementation Steps
+
+1. Extend internal include expansion output as needed to retain exact recomposition context: composed include-site path, source-local include-site path or resolution base, source context, original local sibling overlay values, and local customization metadata without making those records public artifacts.
+2. Add a user-composition override classifier that consumes parsed overrides in order, identifies `_include_` composition overrides, and leaves ordinary strict update/add overrides in their original relative order for the later ordinary override pass.
+3. Implement existing-site include replacement: locate the recorded include site, resolve the new target using its source context, recursively expand the replacement include, reapply original local customizations, and replace the container subtree.
+4. Implement brand-new explicit user include additions: require an add operation and an explicit relative, absolute, or `file://` target; reject bare, resolver-dependent, missing, unsupported, or ordinary update-to-missing cases with source-aware composition errors.
+5. Wire the stage into `compose_config` after file-defined include expansion and before the existing ordinary value override pass, ensuring ordinary overrides can update values introduced by recomposed includes without changing Phase 9 recipe behavior.
+6. Add focused unit, contract, and integration coverage for successful swaps, brand-new include restrictions, recomposition source context, and phase boundaries without implementing later public artifacts.
+
+## Test Plan
+
+### Package Suite
+
+- Status: required only if public exports or import behavior change; otherwise deferred for targeted implementation and covered by final PR validation.
+- Expected paths: `tests/package/test_config_api.py`, `tests/package/test_import_boundaries.py` if touched.
+- Required assertions or deferral reason: no public exports are expected. If implementation touches package exports or optional loading, assert no user-composition helpers are exported at the root and `loom.config` still does not import pipeline, stores, CLI, plugin discovery, network clients, or heavyweight optional dependencies eagerly.
+
+### Unit Suite
+
+- Status: required.
+- Expected paths: `tests/unit/loom/config/test_includes.py`, `tests/unit/loom/config/test_overrides.py`, and possibly `tests/unit/loom/config/test_source_maps.py` if recomposition context changes source-map handoff.
+- Required assertions or deferral reason: parsed override partitioning preserves order and distinguishes composition vs ordinary overrides; exact include-site path matching works; existing-site bare replacement uses the recorded source-local include context; nested existing-site replacements do not resolve from the composed path by mistake; recomposition reapplies local sibling customizations over the replacement include; `_include_` markers do not remain in final recomposed output; brand-new bare include sites fail; explicit relative, absolute, and `file://` brand-new sites resolve under strict rules; resolver-dependent and unsupported include targets fail through existing include resolution policy; ordinary update/add override behavior is unchanged.
+
+### Contract Suite
+
+- Status: required for structured composition errors or new record serialization; otherwise narrowly deferred.
+- Expected paths: `tests/contracts/test_config_error_contract.py` and/or a focused config user-composition record contract test if record classes expose serialization helpers.
+- Required assertions or deferral reason: any new user-composition error contexts serialize as plain data with source path/kind/order, config path, directive, authored target, operation order, resolved/candidate path where available, and failure reason; no raw YAML bytes, resolver outputs, or non-plain payloads appear. If new recomposition records remain internal without `to_dict()`, contract coverage can stay on structured error serialization.
+
+### Integration Suite
+
+- Status: required.
+- Expected paths: `tests/integration/config/test_compose_overrides.py` and/or focused additions to `tests/integration/config/test_compose_includes.py`.
+- Required assertions or deferral reason: `pipeline.model._include_=replacement` swaps an existing file-defined include site and recomposes the subtree; local sibling customizations survive the swap; a nested existing-site bare swap resolves relative to the included file that authored the nested include; `+pipeline.dataset._include_=./dataset/tabular.yaml` creates a brand-new explicit include site; `+pipeline.dataset._include_=tabular` fails as brand-new bare; ordinary overrides can update values introduced by the replacement include; source-context errors identify the user override and original include context where applicable.
+
+### E2E Suite
+
+- Status: deferred.
+- Expected paths: none for this phase.
+- Required assertions or deferral reason: Phase 7 does not complete final public v1 orchestration, public inspection APIs, artifact population, or CLI behavior. Public e2e coverage starts in later phases once full composition order and artifact-safe public surfaces are wired.
+
+### Opt-In Suites
+
+- Status: deferred.
+- Markers affected: none expected.
+- Required assertions or deferral reason: raw source snapshots, remote/plugin resolvers, network-backed includes, resolver runtime-value persistence, and CLI behavior are out of scope.
+
+## Risks
+
+- Existing Phase 6 records may be too thin for nested bare replacements or local customization replay unless Phase 7 adds a narrow internal source-local context and local overlay payload.
+- Partitioning overrides can accidentally change ordinary override ordering. Tests must prove composition overrides run first while ordinary overrides preserve their relative order afterward.
+- Brand-new explicit relative include sites need a carefully documented source base because Python API overrides have no file source of their own.
+- Recomposition can leak old included values if it derives local customizations from the final expanded subtree instead of original local overlays.
+- Error handling can become inconsistent if composition override failures use ordinary override errors without source/context details.
+- Compose wiring can drift into Phase 9/12/13 by changing recipes, public inspection fields, artifacts, fingerprints, or provenance too early.
+
+## Validation Commands
+
+Targeted development commands:
+
+```sh
+uv run pytest tests/unit/loom/config/test_includes.py
+uv run pytest tests/unit/loom/config/test_overrides.py
+uv run pytest tests/integration/config/test_compose_includes.py
+uv run pytest tests/integration/config/test_compose_overrides.py
+uv run pytest tests/integration/config/test_compose_config.py
+uv run pytest tests/contracts/test_config_error_contract.py
+uv run pytest tests/package/test_import_boundaries.py
+```
+
+Final PR-preparation commands:
+
+```sh
+make validate-pr
+make test-summary
+```
+
+## Handoff Notes For `loom_phase_executor`
+
+- Safe implementation slices: include-record/recomposition context first; override classification second; existing-site replacement third; brand-new explicit include sites fourth; compose-stage ordering fifth; tests alongside each slice.
+- Tests to run with each slice: run include unit tests after record/context changes; run override unit tests after partitioning; run include/override integration tests after replacement and brand-new include behavior; run compose integration and import-boundary tests after stage wiring.
+- Decisions the executor must not revisit: `loom.config` remains persistence-free; `loom.pipeline` must not depend on `loom.config` or manifests; `_copy_` is unsupported; default artifacts are security-first and artifact-safe; resolver outputs and raw source bytes are not persisted by default; v1 is Python-API-only with no CLI commands; no plugin/remote/global search include resolvers; Phase 7 must not implement recipe expansion changes, resolver execution, final public compose orchestration, manifests/artifacts/fingerprints/persistence, CLI, or pipeline imports.
+- Conditions that require stopping for the manager: existing-site bare replacement cannot be implemented without guessing source context; recomposed subtrees cannot preserve local customizations without a broad public record redesign; brand-new explicit relative include semantics conflict with accepted source-context policy; ordinary override ordering cannot be preserved; satisfying tests requires recipes, resolver execution, public inspection fields, manifests, fingerprints, raw source persistence, CLI, pipeline imports, network access, or new dependencies.
+- Expanded-path refinement notes: pending. Refinement should specifically confirm the source-local include-site context, local customization replay strategy, brand-new explicit relative source base, and override ordering contract before implementation.
+
+## Refinement And Review Budget Status
+
+- Phase execution plan draft: used
+- Phase execution plan refine: pending
+- Phase implementation refinement: unused
+- PR review: unused
+
+## Completion Notes
+
+- Draft plan: completed in this artifact by `loom_phase_planner`.
+- Final phase execution plan: pending expanded-path refinement.
+- Implementation summary:
+- Implementation validation:
+- Refinement summary:
+- PR preparation:
+- Stack maintenance:
+- Remaining blockers:
