@@ -170,6 +170,12 @@ Model policy:
 - Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
   a scope-complete phase execution plan. Spark agents must stop and report
   blockers instead of making public API or phase-scope decisions.
+- If `gpt-5.3-codex-spark` usage limits are exhausted or unavailable for a
+  phase implementation assignment, fall back to `gpt-5.5` with `high` reasoning
+  for that implementation pass. Preserve the same scoped executor handoff,
+  phase boundaries, blocker-reporting rules, and prohibition on future-phase or
+  public API scope decisions unless the phase execution plan already resolves
+  them.
 
 CI-gated stacked continuation mode:
 
