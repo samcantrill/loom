@@ -226,6 +226,8 @@ make test-summary
 - Phase execution plan draft: used
 - Phase execution plan refine: used
 - Phase implementation refinement: used
+- PR body draft: used
+- PR body refine: pending; expanded path is active and PR opening is reserved for the refine pass
 - PR review: unused
 
 ## Completion Notes
@@ -262,5 +264,23 @@ make test-summary
   - PR gate: `make validate-pr` passed.
   - Suite summary: `make test-summary` passed.
 - PR preparation:
+- Draft pass completed on 2026-05-05 using `.codex/prompts/pr-body-draft.md`.
+- PR body artifact: `docs/phases/config-user-composition-overrides-pr-body.md`.
+- PR facts confirmed:
+  - Branch: `codex/config-user-composition-overrides`.
+  - Worktree: `/home/samcantrill/work/loom-worktrees/config-user-composition-overrides`.
+  - Target branch: `develop`.
+  - Stack predecessor: none.
+  - Merge eligibility: merge-eligible after PR review because target is `develop`.
+  - PR title: `Configuration - Phase 7: User Composition Overrides`.
+  - Base commit / merge base with `develop`: `c3ab85a4cd1310ff25d8cb9053a904a7dc62f6ed`.
+  - Draft commit at preparation start: `0e9823e65b5d6f3f415930a210a6e723bb688554`.
+  - Upstream tracking branch: none configured locally.
+- Final diff reviewed against `develop`: phase execution plan, private config composition/include/override changes, and focused unit/integration coverage only.
+- Scope confirmed: private user-composition override stage only; no public root exports, no new `ComposedConfig` fields, no manifests/artifacts/fingerprints/provenance population, no CLI, no pipeline imports, no resolver execution, no recipe ordering changes, and no `_copy_`.
+- Validation rerun during PR preparation:
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff, Pyright, default harness, config-extra harness, and build succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` — passed; refreshed `build/test-summary.md` with overall 651 passed, 0 failed, 8 skipped, 430 deselected.
+- PR opening status: intentionally not opened in this draft pass because expanded path is active. PR body refine pass remains pending.
 - Stack maintenance:
 - Remaining blockers: none.
