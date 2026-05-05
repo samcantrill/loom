@@ -226,8 +226,17 @@ make test-summary
 
 - Draft plan: completed in this artifact by `loom_phase_planner`; committed with `plan: add phase execution plan`.
 - Final phase execution plan: refined by `loom_phase_planner`; committed with `plan: refine phase execution plan`.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary:
+  - Added `src/loom/config/artifacts.py` with `CompositionManifest`, `SourceArtifactRecord`, and `ConfigFingerprintRecord` contracts, each with strict `schema_version` validation, plain-data normalization, and round-trip serialization.
+  - Added `tests/unit/loom/config/test_config_artifacts.py` for round-trip and malformed-data coverage of source/fingerprint/manifests and tuple-shaped collection preservation.
+  - Added `tests/contracts/test_config_artifact_contract.py` to lock stable manifest/fingerprint/source/provenance contract expectations at Phase 1.
+  - Extended `tests/package/test_import_boundaries.py` with checks that `loom.config.artifacts` imports without pulling pipeline/CLI/config-only modules and that pipeline parsing can be built from plain data without importing `loom.config`.
+- Implementation validation:
+  - `uv run pytest tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_provenance.py` ✅ 11 passed
+  - `uv run pytest tests/contracts/test_config_artifact_contract.py` ✅ 5 passed
+  - `uv run pytest tests/package/test_import_boundaries.py` ✅ 14 passed
+  - `uv run pytest tests/package/test_config_api.py` ✅ skipped (optional dependency profile)
+  - `uv run pytest tests/package/test_pipeline_api.py` ✅ 2 passed
 - Refinement summary: expanded-path refinement completed; sharpened module placement, export boundaries, artifact skeleton naming, package/unit/contract suite obligations, and implementation stop conditions.
 - PR preparation: pending.
 - Stack maintenance: none yet.
