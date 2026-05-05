@@ -263,6 +263,30 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (passed).
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (passed).
   - `git diff --check` (passed).
-- PR preparation: not started.
+- PR facts confirmed for draft body: branch/head `codex/config-file-includes`;
+  target/base `develop`; stack predecessor none; root PR; merge eligibility
+  remains merge-eligible after PR review because target is `develop`; PR title
+  `Configuration - Phase 6: File-Defined Recursive Includes`; PR body artifact
+  `docs/phases/config-file-includes-pr-body.md`.
+- PR body draft: completed in
+  `docs/phases/config-file-includes-pr-body.md` using
+  `.codex/templates/phase-pr-body.md`; mentions `@samcantrill` near the top;
+  keeps workflow internals out of the public body; summarizes implemented scope,
+  implementation notes, tests, suite evidence, assumptions, and risks.
+- PR body refine pass: pending because expanded path is active.
+- PR opening: intentionally deferred to the PR-body refine pass per expanded
+  path instructions. No GitHub PR was opened in this draft pass.
+- Final validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed): Ruff passed,
+    Pyright reported 0 errors, default suite passed 425/425 with 9 skipped,
+    config-extra suite passed 209/209 selected with 430 deselected, and
+    `uv build` produced both sdist and wheel.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed): wrote
+    `build/test-summary.md`; package passed 36 with 1 skipped; unit passed 354
+    with 1 skipped; contract passed 26 with 1 skipped; integration passed 9
+    with 5 skipped; e2e passed 5; config-extra passed 209 with 430 deselected;
+    overall passed 639 with 8 skipped and 430 deselected.
+- Budget status confirmed during PR-body draft: implementation refinement used;
+  PR review unused.
 - Stack maintenance: N/A pending open PR.
-- Remaining blockers: none from the targeted Phase 6 validation set.
+- Remaining blockers: none.
