@@ -33,7 +33,7 @@ New tests implemented:
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff, Pyright, default tests, config-extra tests, and build passed after implementation refinement. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | `build/test-summary.md` generated 2026-05-05T12:19:16+00:00; overall 677 passed, 0 failed, 0 errors, 8 skipped, 431 deselected. |
 | Targeted Phase 9 suite | Passed | 97 focused package/unit/contract/integration tests passed after refinement. |
-| GitHub checks | Pending | PR will be opened against `develop`; GitHub checks are expected to run after PR creation. |
+| GitHub checks | Pending | PR opened against `develop`; GitHub checks were pending at creation. |
 
 ### Test Suite Summary
 

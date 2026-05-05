@@ -253,8 +253,13 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Merge eligibility: root phase, merge-eligible only after PR body refine/open, review, and passing checks against `develop`.
   - Validation evidence reviewed: targeted Phase 9 suite passed with 97 tests; `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`.
   - Test-summary facts recorded in PR body: generated 2026-05-05T12:19:16+00:00; overall 677 passed, 0 failed, 0 errors, 8 skipped, 431 deselected across package/unit/contract/integration/e2e/config-extra suites.
-  - Public PR body facts: mentions `@samcantrill` near the top; records concise scope, implementation notes, new/changed tests, validation tables, and risks; omits commit lists, workflow budget accounting, GitHub JSON, and stack cleanup details. Refine pass corrected the GitHub checks row so it no longer refers to the prior draft-only state.
-  - PR creation: pending branch push and `gh pr create` in this refine/open pass with explicit `--base develop`, `--head codex/config-recipes-catalog`, and the intended title.
+  - Public PR body facts: mentions `@samcantrill` near the top; records concise scope, implementation notes, new/changed tests, validation tables, and risks; omits commit lists, workflow budget accounting, GitHub JSON, and stack cleanup details. Refine pass corrected the GitHub checks row so it records the opened PR state.
+  - PR creation: opened by `loom_pr_preparer` on 2026-05-05 with explicit `--base develop`, `--head codex/config-recipes-catalog`, and title `Configuration - Phase 9: Recipe Catalog And Expansion`.
+  - PR URL: https://github.com/samcantrill/loom/pull/36
+  - PR verification: `gh pr view 36 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/config-recipes-catalog`, state `OPEN`, url `https://github.com/samcantrill/loom/pull/36`.
+  - Target branch verification: confirmed root PR target is `develop`; stack predecessor remains none.
+  - Merge eligibility: root phase PR targets `develop`; merge-eligible only after review approval and passing required GitHub checks. No merge or approval was performed.
+  - GitHub/auth notes: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded for account `samcantrill`. `gh auth setup-git`, `git ls-remote --heads origin develop`, `git push -u origin codex/config-recipes-catalog`, `gh pr create`, and `gh pr view` succeeded with approved access.
 - Stack maintenance:
   - No phase stack actions executed yet in this worktree phase pass.
 - Remaining blockers:
