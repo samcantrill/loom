@@ -1,0 +1,7 @@
+name: config-includes-demo
+pipeline:
+  processor:
+    _include_: ./components/processor/base.yaml
+    batch_size: 64
+    labels:
+      owner: config-example

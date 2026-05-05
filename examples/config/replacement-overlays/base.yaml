@@ -1,0 +1,11 @@
+workflow:
+  name: replacement-overlays-example
+  retry_policy:
+    attempts: 1
+    delay_seconds: 10
+  resources:
+    cpu: 1
+    memory: 2Gi
+  labels:
+    owner: platform
+    lifecycle: draft

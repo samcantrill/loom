@@ -1,0 +1,7 @@
+kind: replacement
+batch_size: 32
+replacement_only: true
+labels:
+  tier: replacement
+engine:
+  _include_: ./engines/parallel.yaml

@@ -1,0 +1,4 @@
+name: daily-readings
+format: parquet
+retention_days: 7
+

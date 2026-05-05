@@ -1,0 +1,8 @@
+paths:
+  workspace: ./overlay-workspace
+settings:
+  mode: overlay
+pipeline:
+  label: overlay
+  checks:
+    threshold: 0.95

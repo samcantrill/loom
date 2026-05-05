@@ -1,0 +1,20 @@
+id: config.artifact-safety
+title: Artifact-Safe Config Artifacts
+summary: Inspect provenance, source artifacts, redaction, resolver facts, and raw snapshot opt-in.
+capability: config
+level: advanced
+introduced_in: v1
+status: runnable
+validation: smoke
+entrypoints:
+  - path: artifact_safety.py
+    kind: python
+    description: Compose artifact-safe config records and compare public fingerprint artifacts.
+tags:
+  - compose-config
+  - provenance
+  - source-artifacts
+  - fingerprints
+  - redaction
+  - raw-snapshots
+

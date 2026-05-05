@@ -1,0 +1,7 @@
+pipeline:
+  dataset:
+    retention_days: 14
+  audit:
+    enabled: true
+    reviewer: config-team
+

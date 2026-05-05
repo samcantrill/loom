@@ -1,0 +1,67 @@
+# Configuration Example Coverage
+
+This document lists the configuration functionality that should be documented
+through examples and proposes example coverage. Examples should stay
+domain-neutral, use public Python APIs, and avoid promising CLI, remote,
+plugin, sweep, `_copy_`, or persistence behavior that is outside v1.
+
+## Behavior To Document
+
+| Capability | User-facing behavior to show |
+| --- | --- |
+| Basic composition | Load a base YAML file and read `resolved`, `unresolved`, and `redacted` views. |
+| Overlays | Apply one or more overlays and show later overlays overriding earlier values. |
+| `_replace_` | Replace a mapping intentionally and show that the marker is consumed. |
+| File includes | Include reusable local YAML fragments with explicit relative paths. |
+| Nested includes | Include a file that includes another file relative to the including file. |
+| User include replacement | Swap an existing include target through an override and preserve local customizations. |
+| Brand-new include addition | Add a new include site with `+..._include_=./path.yaml`. |
+| Ordinary overrides | Update existing values, add new values, and show strict failure behavior in comments or tests. |
+| Recipes | Register a trusted local recipe and expand `_recipe_` blocks into plain config. |
+| Recipe manifests | Print or inspect recipe manifest records for reviewability. |
+| Interpolation | Resolve config-node interpolation after composition and overrides. |
+| `oc.env` resolver | Use the supported environment resolver while documenting that resolver outputs are not persisted by default. |
+| Redaction | Show secret-like values in `resolved` and redacted markers in `redacted`/artifacts. |
+| Source artifacts | Inspect metadata-only source records for base, overlays, includes, and recipes. |
+| Fingerprints | Compare artifact-safe fingerprints across two compositions. |
+| Raw source snapshots | Opt in to raw source snapshots and show that the default is metadata-only. |
+| Target instantiation | Keep `_target_` config inert during composition, then explicitly instantiate trusted targets. |
+| Nested target graphs | Construct objects with nested `_target_`, `_args_`, `_partial_`, and `_inject_`. |
+| Error handling | Catch structured config errors and inspect context fields. |
+| Import boundaries | Demonstrate that target instantiation can be used separately from YAML composition. |
+
+## Proposed Examples
+
+| Example | Functionality covered | Implementation notes |
+| --- | --- | --- |
+| `config.basic-composition` | Base YAML, overlays, ordinary overrides, `resolved`/`unresolved`/`redacted`. | Existing runnable smoke example using `compose_config`; no recipes or includes. |
+| `config.includes` | Explicit relative include, nested include, user include replacement, brand-new include addition. | Existing runnable smoke example with a small `configs/` tree and printed source artifact paths. |
+| `config.replacement-overlays` | Multi-overlay order and `_replace_` marker semantics. | Runnable smoke example showing overlay 2 replacing overlay 1's mapping. |
+| `config.recipes` | Trusted recipe registration, recipe expansion, interpolation, recipe manifest, redaction. | Existing runnable example; keep as the canonical recipe example. |
+| `config.artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprints, resolver facts, raw snapshot default/opt-in. | Runnable or full example that avoids printing secrets and compares two fingerprints. |
+| `config.target-instantiation` | Nested `_target_` graph, `_args_`, `_partial_`, `_inject_`, explicit instantiation after composition or direct config. | Existing runnable example; extend only if needed for composed handoff. |
+| `config.errors` | Structured exceptions for missing include, invalid override, unsupported resolver, unsupported `_copy_`. | Existing runnable smoke example catches errors and prints context summaries. |
+
+## Example Coverage Checks
+
+Each runnable example should have:
+
+- an `example.yaml` manifest with `status: runnable`;
+- one Python entrypoint validated by `tests/integration/docs/test_v0_python_examples.py`;
+- a README that says which public API is used;
+- no CLI commands except repository-local `uv run python ...` execution;
+- no remote includes, plugin discovery, global search, sweeps, `_copy_`, or
+  implicit persistence claims.
+
+## Existing Examples
+
+| Existing example | Current coverage | Suggested follow-up |
+| --- | --- | --- |
+| `config.basic-composition` | Base YAML, overlays, ordinary update and add overrides, `resolved`/`unresolved`/`redacted`. | Keep as the canonical first composition example without recipes or includes. |
+| `config.includes` | Explicit relative include, nested include relative to the including file, user include replacement, brand-new include addition, include source artifacts. | Keep as the canonical include composition example; broaden only if source snapshot examples need a shared tree. |
+| `config.replacement-overlays` | Multi-overlay order and `_replace_` mapping replacement through public `compose_config`. | Keep as the canonical replacement overlay smoke example. |
+| `config.recipes` | Recipes, overlays, ordinary overrides, interpolation, redaction, recipe manifest, fingerprint. | Keep; optionally add one source artifact print once docs want artifact reviewability in examples. |
+| `config.artifact-safety` | Provenance metadata, source artifacts, artifact-safe fingerprint comparison, `oc.env` resolver facts, redaction, metadata-only snapshot defaults, and raw snapshot opt-in. | Keep output concise and avoid printing raw snapshot content or resolved secret values. |
+| `config.target-instantiation` | Direct nested target instantiation with `_args_`, `_partial_`, and `_inject_`. | Keep; add a composed-target handoff example only if a separate example would not be clearer. |
+| `config.errors` | Missing include, invalid include override, unsupported resolver, unsupported `_copy_`, and structured context summaries. | Keep as the canonical config error-handling smoke example. |
+| `pipelines.local-run` | Pipeline execution using composed plain config. | Keep under pipeline examples; do not use it as config artifact evidence. |

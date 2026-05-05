@@ -1,0 +1,17 @@
+id: config.includes
+title: Config Includes
+summary: Compose local YAML includes with replacement and additive include overrides.
+capability: config
+level: intermediate
+introduced_in: v1
+status: runnable
+validation: smoke
+entrypoints:
+  - path: compose_includes.py
+    kind: python
+    description: Compose the include tree and print resolved config plus include artifact paths.
+tags:
+  - compose-config
+  - includes
+  - overrides
+  - source-artifacts

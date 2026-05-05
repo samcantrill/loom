@@ -1,0 +1,10 @@
+workflow:
+  retry_policy:
+    attempts: 2
+  resources:
+    cpu: 2
+    memory: 4Gi
+    accelerator: none
+  labels:
+    lifecycle: review
+    source: overlay-one

@@ -1,0 +1,7 @@
+workflow:
+  resources:
+    _replace_: true
+    cpu: 4
+    memory: 8Gi
+  labels:
+    source: overlay-two

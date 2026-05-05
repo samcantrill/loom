@@ -60,9 +60,11 @@ _OPTIONAL_SYMBOLS: Final = frozenset(
 )
 
 def _resolve_optional_symbol(name: str) -> object:
-    require_config_dependencies()
-
     match name:
+        case "instantiate":
+            from .instantiate.recursive import instantiate as _instantiate
+
+            return _instantiate
         case (
             "ComposedConfig"
             | "ConfigCompositionInspection"
@@ -72,6 +74,7 @@ def _resolve_optional_symbol(name: str) -> object:
             | "inspect_config_composition"
             | "register_recipe"
         ):
+            require_config_dependencies()
             from . import api
 
             return getattr(api, name)
@@ -85,17 +88,15 @@ def _resolve_optional_symbol(name: str) -> object:
             | "ARTIFACT_SAFE_FINGERPRINT_POLICY"
             | "ARTIFACT_SAFE_RUNTIME_REPLAY"
         ):
+            require_config_dependencies()
             from . import api
 
             return getattr(api, name)
         case "Recipe" | "RecipeCatalog":
+            require_config_dependencies()
             from . import recipes
 
             return getattr(recipes, name)
-        case "instantiate":
-            from .api import instantiate as _instantiate
-
-            return _instantiate
     raise AssertionError(f"unexpected config symbol name: {name!r}")
 
 

@@ -1,0 +1,3 @@
+name: unsupported-resolver
+pipeline:
+  value: ${oc.create:dict}

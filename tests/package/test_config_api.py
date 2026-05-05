@@ -127,7 +127,7 @@ def test_config_instantiate_callable_survives_submodule_import_order() -> None:
     import loom.config
 
     package_instantiate = loom.config.instantiate
-    assert package_instantiate.__module__ == "loom.config.api"
+    assert package_instantiate.__module__ == "loom.config.instantiate.recursive"
 
     instantiate_submodule = importlib.import_module("loom.config.instantiate")
     assert inspect.ismodule(instantiate_submodule)

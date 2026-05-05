@@ -1,0 +1,6 @@
+kind: baseline
+batch_size: 16
+labels:
+  tier: standard
+engine:
+  _include_: ./engines/simple.yaml
