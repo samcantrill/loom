@@ -1419,7 +1419,7 @@ PR-open notes:
 
 ### Phase 7 - User Composition Overrides
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-user-composition-overrides`
 PR: https://github.com/samcantrill/loom/pull/33
 
@@ -1457,8 +1457,8 @@ Completion notes:
 
 - Phase execution plan:
   `docs/phases/config-user-composition-overrides.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is
-  merge-eligible after review.
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
+  `develop`.
 - Implementation summary: adds the private user-composition stage between
   file-defined include expansion and ordinary value overrides. The phase
   partitions include-composition overrides from ordinary overrides, replaces
@@ -1476,8 +1476,16 @@ Completion notes:
   651 passed, 0 failed, 0 errors, 8 skipped, and 430 deselected. Focused
   Phase 7 targeted checks passed with 22 override/composition tests and
   73 broader config/import-boundary tests.
-- PR notes: opened and verified on 2026-05-05 as PR #33 with base `develop`,
-  head `codex/config-user-composition-overrides`, and state `OPEN`.
+- PR review: `loom_phase_reviewer` found no blocking correctness, scope,
+  import-boundary, domain-neutrality, or validation-evidence issues. The PR
+  review budget is consumed.
+- PR notes: opened and verified on 2026-05-05 as PR #33 with base `develop`
+  and head `codex/config-user-composition-overrides`; GitHub CI `checks`
+  passed, and the PR merged into `develop` at 2026-05-05T10:50:29Z with merge
+  commit `e15279dee60920c8d943ecd9d3fbc1dbaaa3d89f`.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-user-composition-overrides` when the PR merged; branch and
+  worktree cleanup are safe after this metadata update.
 
 ### Phase 8 - Resolver Security And Runtime Interpolation
 

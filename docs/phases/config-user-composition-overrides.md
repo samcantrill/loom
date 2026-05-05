@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: merged
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 7: User Composition Overrides`
 - Branch: `codex/config-user-composition-overrides`
@@ -15,7 +15,7 @@
 - Base branch: `develop`
 - Base commit: `c3ab85a4cd1310ff25d8cb9053a904a7dc62f6ed`
 - Target branch: `develop`
-- Merge eligibility: merge-eligible after PR review because target is `develop`
+- Merge eligibility: merged into `develop`
 - Workflow path: expanded path
 - Workflow path rationale: user-authored include replacement changes config composition semantics and depends on Phase 6 include-site records, override ordering, strict source context, and future public/artifact phases.
 - Successor dependency notes: Phase 8 resolver security must see user-composed include targets without executing resolvers. Phase 9 recipes can finalize recipe-before-ordinary-override ordering later because Phase 7 will have already separated user composition overrides from ordinary value overrides.
@@ -228,12 +228,12 @@ make test-summary
 - Phase implementation refinement: used
 - PR body draft: used
 - PR body refine: used
-- PR review: unused
+- PR review: used
 
 ## Completion Notes
 
 - Draft plan: completed in this artifact by `loom_phase_planner`.
-- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation refinement budget is used and PR review budget remains unused.
+- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation refinement budget and PR review budget are used.
 - Implementation summary:
   - Added `split_include_and_ordinary_overrides` in `src/loom/config/overrides.py` and preserved existing semantics for strict update/add value overrides.
   - Extended include expansion records in `src/loom/config/includes.py` with recomposition context (`IncludeRecompositionContext`) and source-local include-site metadata needed for nested existing-site swaps.
@@ -295,5 +295,16 @@ make test-summary
   - Stack predecessor: none.
   - Merge eligibility: merge-eligible after PR review because target is `develop`.
   - GitHub/auth limitations: none; sandboxed `gh auth status` reported an invalid token, but approved network-backed `gh auth status` succeeded before push and PR creation.
+- PR review:
+  - `loom_phase_reviewer` completed the single read-only PR review pass after GitHub had already merged PR #33.
+  - Findings: none blocking. The review found no correctness, scope, import-boundary, domain-neutrality, or validation-evidence issues.
+  - Residual non-blocking risk: dedicated Phase 7 integration coverage exercises explicit-relative brand-new include additions and bare rejection; absolute and `file://` brand-new additions rely on the shared include resolver path.
+  - Review budget: consumed.
+  - Merge eligibility check: PR #33 targeted `develop`, head was `codex/config-user-composition-overrides`, and CI `checks` succeeded, so the PR was merge-eligible.
+- Merge notes:
+  - `gh pr view 33 --json baseRefName,headRefName,state,url,mergedAt,mergeCommit,statusCheckRollup` reported `state=MERGED`, `baseRefName=develop`, `headRefName=codex/config-user-composition-overrides`, `mergedAt=2026-05-05T10:50:29Z`, merge commit `e15279dee60920c8d943ecd9d3fbc1dbaaa3d89f`, and CI `checks` conclusion `SUCCESS`.
+  - The control checkout fast-forwarded `develop` to `origin/develop` after the merge.
 - Stack maintenance:
+  - No successor phase branch depended on `codex/config-user-composition-overrides` at merge time.
+  - Phase branch and worktree cleanup are safe after this metadata update.
 - Remaining blockers: none.
