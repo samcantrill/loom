@@ -88,6 +88,91 @@ def test_integration_compose_raw_snapshot_opt_in_includes_reconstructable_payloa
     assert available_payloads[0].size_bytes == len(shared)
 
 
+def test_integration_user_include_replacement_snapshots_nested_include_sources(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    include_dir = tmp_path / "includes"
+    include_dir.mkdir()
+    original = include_dir / "original.yaml"
+    replacement = include_dir / "replacement.yaml"
+    leaf = include_dir / "leaf.yaml"
+
+    base_text = (
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./includes/original.yaml\n"
+    )
+    replacement_text = "component:\n  _include_: leaf.yaml\n"
+    leaf_text = "leaf_value: replacement-leaf\n"
+    base.write_text(base_text, encoding="utf-8")
+    original.write_text("component:\n  old: true\n", encoding="utf-8")
+    replacement.write_text(replacement_text, encoding="utf-8")
+    leaf.write_text(leaf_text, encoding="utf-8")
+
+    composed = compose_config(
+        base,
+        overrides=("pipeline.model._include_=./includes/replacement.yaml",),
+        include_raw_source_snapshots=True,
+    )
+
+    assert composed.resolved["pipeline"] == {
+        "model": {"component": {"leaf_value": "replacement-leaf"}}
+    }
+    assert composed.raw_source_snapshots.enabled is True
+
+    source_paths = {record.path for record in composed.source_artifacts}
+    assert source_paths == {
+        str(base.resolve()),
+        str(replacement.resolve()),
+        str(leaf.resolve()),
+    }
+
+    payloads_by_id = {
+        payload.payload_id: payload for payload in composed.raw_source_snapshots.payloads
+    }
+    references_by_path = {
+        reference.path: reference for reference in composed.raw_source_snapshots.references
+    }
+    assert set(references_by_path) == source_paths
+    for path, expected_content in {
+        str(base.resolve()): base_text,
+        str(replacement.resolve()): replacement_text,
+        str(leaf.resolve()): leaf_text,
+    }.items():
+        reference = references_by_path[path]
+        assert reference.availability == "available"
+        assert reference.payload_id is not None
+        assert payloads_by_id[reference.payload_id].content == expected_content
+
+    include_artifacts = [
+        record for record in composed.source_artifacts if record.kind == "include"
+    ]
+    assert [record.path for record in include_artifacts] == [
+        str(replacement.resolve()),
+        str(leaf.resolve()),
+    ]
+    nested_metadata = cast(dict[str, Any], include_artifacts[1].metadata)
+    assert list(cast(tuple[str, ...], nested_metadata["include_site_path"])) == [
+        "pipeline",
+        "model",
+        "component",
+        "_include_",
+    ]
+    assert list(cast(tuple[str, ...], nested_metadata["source_include_site_path"])) == [
+        "component",
+        "_include_",
+    ]
+
+    manifest_metadata = cast(dict[str, Any], composed.manifest.to_dict()["metadata"])
+    provenance_metadata = cast(dict[str, Any], composed.provenance.to_dict()["metadata"])
+    manifest_refs = cast(list[dict[str, Any]], manifest_metadata["raw_source_snapshot_references"])
+    provenance_refs = cast(list[dict[str, Any]], provenance_metadata["raw_source_snapshot_references"])
+    assert {reference["path"] for reference in manifest_refs} == source_paths
+    assert {reference["path"] for reference in provenance_refs} == source_paths
+    assert all(reference["availability"] == "available" for reference in manifest_refs)
+    assert all("content" not in reference for reference in manifest_refs)
+
+
 def test_integration_compose_raw_snapshot_unavailable_recipe_records_are_marked(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
     catalog = RecipeCatalog()

@@ -459,14 +459,14 @@ def _apply_user_composition_overrides(
                     },
                 )
 
-            staged, include_record = _add_brand_new_include_site(
+            staged, include_records = _add_brand_new_include_site(
                 staged,
                 include_override=override,
                 include_site_path=include_site_path,
                 base_source=base_source,
                 raw_source_texts=raw_source_texts,
             )
-            user_include_records.append(include_record)
+            user_include_records.extend(include_records)
             continue
 
         if override.operation == "add":
@@ -485,13 +485,13 @@ def _apply_user_composition_overrides(
             )
 
         if context is not None:
-            staged, include_record = _replace_existing_include_site(
+            staged, include_records = _replace_existing_include_site(
                 staged,
                 include_override=override,
                 context=context,
                 raw_source_texts=raw_source_texts,
             )
-            user_include_records.append(include_record)
+            user_include_records.extend(include_records)
             continue
 
         raise _user_composition_error(
@@ -517,7 +517,7 @@ def _replace_existing_include_site(
     include_override: ParsedOverride,
     context: IncludeRecompositionContext,
     raw_source_texts: dict[str, str] | None,
-) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
+) -> tuple[dict[str, PlainData], tuple[IncludeSiteRecord, ...]]:
     authored_target = _as_include_target(
         include_override,
         source=_source_from_context(context),
@@ -530,7 +530,7 @@ def _replace_existing_include_site(
         include_site_path=context.source_include_site_path,
     )
 
-    replacement, include_record = _load_include_target(
+    replacement, include_records = _load_include_target(
         path=resolved.resolved_path,
         source=replacement_source,
         include_site_path=context.include_site_path,
@@ -547,7 +547,7 @@ def _replace_existing_include_site(
         source=replacement_source,
         override=include_override,
     )
-    return staged, include_record
+    return staged, include_records
 
 
 def _add_brand_new_include_site(
@@ -557,7 +557,7 @@ def _add_brand_new_include_site(
     include_site_path: ConfigPath,
     base_source: ConfigSource,
     raw_source_texts: dict[str, str] | None,
-) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
+) -> tuple[dict[str, PlainData], tuple[IncludeSiteRecord, ...]]:
     authored_target = _as_include_target(
         include_override,
         source=base_source,
@@ -602,7 +602,7 @@ def _add_brand_new_include_site(
             },
         )
 
-    replacement, include_record = _load_include_target(
+    replacement, include_records = _load_include_target(
         path=resolved.resolved_path,
         source=base_source,
         include_site_path=include_site_path,
@@ -612,7 +612,7 @@ def _add_brand_new_include_site(
         raw_source_texts=raw_source_texts,
     )
     parent[key] = replacement
-    return config, include_record
+    return config, include_records
 
 
 def _replay_local_customizations(
@@ -646,7 +646,7 @@ def _load_include_target(
     resolved: IncludeResolutionResult,
     override: ParsedOverride,
     raw_source_texts: dict[str, str] | None,
-) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
+) -> tuple[dict[str, PlainData], tuple[IncludeSiteRecord, ...]]:
     try:
         if raw_source_texts is None:
             included_config, included_source = load_config(path, kind="overlay", order=0)
@@ -678,9 +678,11 @@ def _load_include_target(
     expanded = expand_config_includes(
         included_config,
         source_map=build_base_source_map(included_config, included_source),
+        path_prefix=include_site_path[:-1],
         replacement_sites=(),
         mapping_sites=(),
         reject_unconsumed_replace_markers=True,
+        raw_source_texts=raw_source_texts,
     )
 
     if not isinstance(expanded.config, Mapping):
@@ -714,7 +716,10 @@ def _load_include_target(
         has_replace_marker=False,
     )
 
-    return cast(dict[str, PlainData], expanded.config), include_record
+    return cast(dict[str, PlainData], expanded.config), (
+        include_record,
+        *expanded.include_sites,
+    )
 
 
 def _set_value(

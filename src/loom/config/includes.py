@@ -168,6 +168,7 @@ def expand_config_includes(
     config: Mapping[str, PlainData],
     source_map: dict[ConfigPath, ConfigSource],
     *,
+    path_prefix: ConfigPath = (),
     replacement_sites: Sequence[ConfigPath] = (),
     mapping_sites: Sequence[ConfigPath] = (),
     reject_unconsumed_replace_markers: bool = False,
@@ -182,7 +183,7 @@ def expand_config_includes(
     expanded_mapping = _expand_value_with_includes(
         value=cast(dict[str, PlainData], config),
         source_map=source_map,
-        path=(),
+        path=path_prefix,
         source_lookup_path=(),
         replacement_sites=tuple(replacement_sites),
         mapping_sites=tuple(mapping_sites),
