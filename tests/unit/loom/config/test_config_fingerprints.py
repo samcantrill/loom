@@ -192,7 +192,7 @@ def test_compare_config_artifact_fingerprints_status_matrix() -> None:
         metadata={},
     )
     incompatible_result = compare_config_artifact_fingerprints(left=left, right=incompatible)
-    assert incompatible_result.status == "insufficient_data"
+    assert incompatible_result.status == "incompatible_policy"
 
     missing = compare_config_artifact_fingerprints(
         left=left,
@@ -207,3 +207,33 @@ def test_compare_config_artifact_fingerprints_status_matrix() -> None:
     }
     plain_result = compare_config_artifact_fingerprints(left=left, right=manifest_map)
     assert plain_result.status == "match"
+
+
+def test_compare_config_artifact_fingerprints_reports_wrong_label_mapping_as_incompatible() -> None:
+    left = _build_record(unresolved_value="${paths.root}", path="/tmp/root")
+    wrong_label_mapping = left.to_dict()
+    wrong_label_mapping["label"] = "resolved"
+
+    comparison = compare_config_artifact_fingerprints(left=left, right=wrong_label_mapping)
+
+    assert comparison.status == "incompatible_policy"
+    assert comparison.right_record_label == "resolved"
+    assert comparison.reason == "Unexpected fingerprint label"
+
+
+def test_compare_config_artifact_fingerprints_handles_malformed_mapping_as_insufficient_data() -> None:
+    left = _build_record(unresolved_value="${paths.root}", path="/tmp/root")
+    malformed = cast(
+        dict[str, Any],
+        {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "digest": "sha256:abc",
+            "label": ARTIFACT_SAFE_FINGERPRINT_LABEL,
+            "metadata": object(),
+        },
+    )
+
+    comparison = compare_config_artifact_fingerprints(left=left, right=malformed)
+
+    assert comparison.status == "insufficient_data"
+    assert comparison.right_digest is None

@@ -6,6 +6,8 @@ This PR implements Phase 14's artifact-safe default config fingerprint contract.
 
 It also adds a narrow config-layer comparison helper for persisted fingerprint records or manifest-shaped plain data. The helper reports authored-composition match, mismatch, incompatible policy/schema, or insufficient data without claiming exact runtime resolver replay.
 
+Pre-submit blocker resolution tightened comparison outcomes so valid wrong-label records or record-shaped mappings report `incompatible_policy`, while malformed plain mappings report `insufficient_data` without escaping validation errors.
+
 ## Acceptance Criteria
 
 - [x] Default config fingerprints change for meaningful authored composition changes.
@@ -33,6 +35,7 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff, Pyright, default isolated pytest, config-extra isolated pytest, and build passed after refinement. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md`; suite table summarized below. |
+| Focused comparison-helper unit check | Passed | `uv run --extra config pytest tests/unit/loom/config/test_config_fingerprints.py`: 5 passed. |
 | Targeted default contract check | Passed | `uv run --isolated --locked --group dev pytest tests/contracts/test_config_artifact_contract.py`: 7 passed. |
 | Targeted config-extra contract check | Passed | `uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py`: 8 passed. |
 | GitHub checks | Not run | PR intentionally not opened in this expanded-path draft pass. |
@@ -46,7 +49,7 @@ New tests implemented:
 | contract | passed | 29 | 0 | 0 | 2 | 0 |
 | integration | passed | 9 | 0 | 0 | 5 | 0 |
 | e2e | passed | 5 | 0 | 0 | 0 | 0 |
-| config-extra | passed | 286 | 0 | 0 | 0 | 433 |
+| config-extra | passed | 288 | 0 | 0 | 0 | 433 |
 
 ## Risks / Follow-Ups
 

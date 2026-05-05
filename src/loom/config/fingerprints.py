@@ -231,14 +231,18 @@ def _extract_default_fingerprint_record(
     value: ConfigFingerprintRecord | CompositionManifest | Mapping[str, PlainData],
 ) -> ConfigFingerprintRecord | None:
     if isinstance(value, ConfigFingerprintRecord):
-        return value if value.label == ARTIFACT_SAFE_FINGERPRINT_LABEL else None
+        return value
 
     if isinstance(value, CompositionManifest):
         return _extract_default_record_from_records(value.fingerprint_records)
 
     if not isinstance(value, Mapping):
         return None
-    plain = _ensure_plain_mapping(value)
+    try:
+        plain = _ensure_plain_mapping(value)
+    except Exception:
+        return None
+
     if _looks_like_manifest_dict(plain):
         try:
             manifest = CompositionManifest.from_dict(plain)
@@ -250,7 +254,7 @@ def _extract_default_fingerprint_record(
         record = ConfigFingerprintRecord.from_dict(plain)
     except Exception:
         return None
-    return record if record.label == ARTIFACT_SAFE_FINGERPRINT_LABEL else None
+    return record
 
 
 def _extract_default_record_from_records(

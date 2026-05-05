@@ -24,7 +24,7 @@
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner`; refine budget used.
 - Phase implementation refinement budget: used for the 2026-05-06 default validation blocker pass; no further automated implementation refinement pass remains.
-- Pre-submit blocker gate budget: used by the same 2026-05-06 default validation blocker pass; no further automated blocker pass remains.
+- Pre-submit blocker gate budget: user-authorized scoped blocker-resolution pass used on 2026-05-06 for the comparison-helper outcome blocker; no further automated blocker pass remains.
 - PR body draft pass: completed in this artifact; durable draft at `docs/phases/config-artifact-fingerprints-pr-body.md`.
 - PR body refine pass: pending; expanded-path PR opening is deferred to the later refine pass.
 - PR review budget: unused.
@@ -252,7 +252,7 @@ make test-summary
 - Phase execution plan draft: used.
 - Phase execution plan refine: used.
 - Phase implementation refinement: used for the 2026-05-06 default validation blocker pass.
-- Pre-submit blocker gate: used by the same 2026-05-06 default validation blocker pass.
+- Pre-submit blocker gate: user-authorized scoped blocker-resolution pass used on 2026-05-06 for the comparison-helper outcome blocker.
 - PR body draft: used.
 - PR body refine: pending.
 - PR review: unused.
@@ -284,6 +284,12 @@ make test-summary
 - PR preparation: expanded-path draft PR body created at `docs/phases/config-artifact-fingerprints-pr-body.md`; draft pass complete and refine pass pending. PR opening intentionally deferred to the later `pr-body-refine` pass.
 - PR facts: expected title `Configuration - Phase 14: Artifact-Safe Fingerprints And Resume Comparison`; head branch `codex/config-artifact-fingerprints`; target branch `develop`; stack predecessor none/root phase; merge eligibility root phase targeting `develop` after refine pass, PR submission, review, and CI.
 - Scope confirmation: final branch diff is limited to Phase 14 config artifact-safe fingerprint/comparison implementation, config API exports, focused tests, and phase artifacts. It does not include Phase 15 raw snapshot/source hardening, Phase 16 documentation/e2e hardening, run-store persistence, CLI behavior, pipeline resume integration, secret-aware runtime fingerprints, plugin/remote/global include resolvers, `_copy_`, or raw source-byte default artifacts.
-- Validation evidence for draft PR body: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed after refinement; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md` with package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 29 passed/2 skipped, integration 9 passed/5 skipped, e2e 5 passed, and config-extra 286 passed/433 deselected. Targeted default contract check passed with 7 passed; targeted config-extra contract check passed with 8 passed.
+- Validation evidence for draft PR body: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed after refinement; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md` with package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 29 passed/2 skipped, integration 9 passed/5 skipped, e2e 5 passed, and config-extra 288 passed/433 deselected. Targeted default contract check passed with 7 passed; targeted config-extra contract check passed with 8 passed.
+- User-authorized pre-submit blocker resolution: fixed `compare_config_artifact_fingerprints` so valid `ConfigFingerprintRecord` inputs and record-shaped mappings with non-default labels reach the policy checks and return `incompatible_policy`, while malformed plain mappings are caught and returned as `insufficient_data` without escaping plain-data validation errors. Added focused unit coverage for wrong-label record/mapping inputs and malformed mapping inputs.
+- Blocker-resolution validation:
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_fingerprints.py` passed: 5 passed.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py` passed: 8 passed.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff, Pyright, default isolated suite, config-extra isolated suite, and build.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 29 passed/2 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 288 passed/433 deselected.
 - Stack maintenance: none; root phase targeting `develop`.
 - Remaining blockers: none known.
