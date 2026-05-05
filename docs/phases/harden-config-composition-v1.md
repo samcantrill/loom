@@ -221,7 +221,8 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Phase implementation refinement: used by `loom_phase_refiner`; no additional automated implementation refinement budget remains
 - Pre-submit blocker gate: unused
 - Blocker-resolution: unused
-- PR body: unused
+- PR body draft: completed by `loom_pr_preparer`; durable draft created at `docs/phases/harden-config-composition-v1-pr-body.md`
+- PR body refine: pending for the expanded-path PR opening pass
 - PR review: unused
 
 ## Completion Notes
@@ -263,6 +264,28 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   test-summary` wrote `build/test-summary.md` with package 36 passed/1 skipped,
   unit 354 passed/1 skipped, contract 31 passed/2 skipped, integration 9
   passed/5 skipped, e2e 6 passed, and config-extra 301 passed/436 deselected.
-- PR preparation: pending PR body preparation
-- Stack maintenance: pending
+- PR preparation: expanded-path draft PR body completed at
+  `docs/phases/harden-config-composition-v1-pr-body.md`; PR opening is
+  intentionally deferred to the later PR-body refine/opening pass.
+- PR facts: title `Configuration - Phase 16: Hardening, Documentation, And
+  End-To-End Coverage`; branch `codex/harden-config-composition-v1`; target
+  branch `develop`; stack predecessor none/root phase; merge eligibility remains
+  root PR to `develop` after PR-body refine, PR opening, remote verification,
+  and review with no blocking findings.
+- Draft PR-body scope confirmation: public body summarizes docs alignment,
+  representative public-Python e2e coverage, and the focused
+  `CompositionManifest.to_dict()` artifact-contract bug fix only. No future CLI,
+  plugin, remote, sweep, `_copy_`, run-store persistence, default raw-source
+  persistence, default resolved-config persistence, or pipeline dependency scope
+  is included.
+- Draft PR-body validation evidence: reused current recorded evidence:
+  targeted config artifact contract plus public-Python e2e passed with 10 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed with Ruff, Pyright,
+  default suite 430 passed/11 skipped, config-extra suite 301 passed/436
+  deselected, and build success; `UV_CACHE_DIR=/tmp/loom_uv_cache make
+  test-summary` wrote `build/test-summary.md` with package 36 passed/1 skipped,
+  unit 354 passed/1 skipped, contract 31 passed/2 skipped, integration 9
+  passed/5 skipped, e2e 6 passed, and config-extra 301 passed/436 deselected.
+- Stack maintenance: none needed in this draft pass; root phase has no stack
+  predecessor
 - Remaining blockers: none
