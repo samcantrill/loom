@@ -257,6 +257,12 @@ make test-summary
   - Corrected integration tests for YAML boolean parsing, required top-level `name`, and explicit `+` add override syntax.
   - Added type narrowing in changed tests and tightened include record source-kind typing for Pyright.
 - Refinement summary: completed the single expanded-path implementation/test refinement pass and added focused regression coverage for the manager blockers.
+- User-authorized blocker resolution: fixed cycle errors to use the `ConfigSource` for the current attempted `_include_` directive while preserving resolved-path cycle identity and active include-stack details. Added focused include unit assertions for current source path/kind/order and composed attempted config path.
+- Blocker-resolution validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_includes.py` (passed, 41/41).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (passed).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (passed).
+  - `git diff --check` (passed).
 - PR preparation: not started.
 - Stack maintenance: N/A pending open PR.
 - Remaining blockers: none from the targeted Phase 6 validation set.

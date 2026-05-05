@@ -255,6 +255,7 @@ def _expand_including_mapping(
     _validate_include_cycle(
         resolution=resolution,
         include_site_path=include_site_path,
+        include_source=include_source,
         include_stack=include_stack,
     )
 
@@ -446,6 +447,7 @@ def _validate_include_cycle(
     *,
     resolution: IncludeResolutionResult,
     include_site_path: ConfigPath,
+    include_source: ConfigSource,
     include_stack: list[IncludeStackFrame],
 ) -> None:
     for frame in include_stack:
@@ -453,13 +455,7 @@ def _validate_include_cycle(
             raise _include_expansion_error(
                 "Include cycle detected.",
                 code="include_cycle",
-                source=ConfigSource(
-                    kind=frame.source_kind,
-                    path=frame.source_path,
-                    order=frame.source_order,
-                    content_digest="sha256:unknown",
-                    size_bytes=0,
-                ),
+                source=include_source,
                 include_site_path=include_site_path,
                 authored_target=resolution.authored_target,
                 details={

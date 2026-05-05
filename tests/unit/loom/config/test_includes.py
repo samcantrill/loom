@@ -639,16 +639,24 @@ def test_expand_config_includes_detects_cycles_by_resolved_path(
     context = exc.value.context
     assert context is not None
     assert context.code == "include_cycle"
+    assert context.source_path == str(include_b)
+    assert context.source_kind == "overlay"
+    assert context.source_order == 0
+    assert context.config_path == "$.pipeline.model.bridge.bridge._include_"
     details = context.details
     assert details is not None
     assert details["reason"] == "include_cycle"
     include_stack = details["include_stack"]
     assert isinstance(include_stack, list)
     assert len(include_stack) >= 2
-    assert any(
-        isinstance(item, dict) and item.get("resolved_path") == str(include_a)
-        for item in include_stack
-    )
+    repeated_frame = include_stack[0]
+    assert isinstance(repeated_frame, dict)
+    assert repeated_frame["resolved_path"] == str(include_a)
+    assert repeated_frame["source_path"] == str(base_path)
+    assert repeated_frame["source_kind"] == "base"
+    assert repeated_frame["source_order"] == 0
+    attempted_site = ["pipeline", "model", "bridge", "bridge", "_include_"]
+    assert details["attempted_include_site_path"] == attempted_site
     assert details["attempted_target"] == str(include_a)
 
 
