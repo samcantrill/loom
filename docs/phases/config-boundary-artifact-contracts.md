@@ -263,10 +263,13 @@ make test-summary
     `.codex/prompts/pr-body-refine.md`; public body was checked against the
     final diff, phase plan, acceptance criteria, suite evidence, scope
     boundaries, assumptions, and risks.
-  - PR open status: pending branch push and GitHub PR creation; expected PR
-    creation should use title
-    `Configuration - Phase 1: Boundary and Artifact Contracts`, target
-    `develop`, and head `codex/config-boundary-artifact-contracts`.
+  - PR open status: opened at
+    `https://github.com/samcantrill/loom/pull/23` with title
+    `Configuration - Phase 1: Boundary and Artifact Contracts`.
+  - PR verification: `gh pr view 23 --json baseRefName,headRefName,state,url`
+    reported `baseRefName=develop`,
+    `headRefName=codex/config-boundary-artifact-contracts`, `state=OPEN`,
+    and `url=https://github.com/samcantrill/loom/pull/23`.
   - PR facts confirmed: root phase, stack predecessor none, base branch
     `develop`, target branch `develop`, merge eligibility after PR review
     approval because the PR targets `develop`.
