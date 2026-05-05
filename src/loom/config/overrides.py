@@ -20,6 +20,23 @@ def parse_overrides(overrides: Sequence[str]) -> tuple[ParsedOverride, ...]:
     return tuple(_parse_override(raw=raw, order=index) for index, raw in enumerate(overrides))
 
 
+def split_include_and_ordinary_overrides(
+    overrides: Sequence[ParsedOverride],
+) -> tuple[tuple[ParsedOverride, ...], tuple[ParsedOverride, ...]]:
+    include_overrides: list[ParsedOverride] = []
+    ordinary_overrides: list[ParsedOverride] = []
+    for override in overrides:
+        if _is_include_target_override(override.path):
+            include_overrides.append(override)
+            continue
+        ordinary_overrides.append(override)
+    return tuple(include_overrides), tuple(ordinary_overrides)
+
+
+def _is_include_target_override(path: str) -> bool:
+    return path.split(".")[-1] == "_include_"
+
+
 def _parse_override(*, raw: str, order: int) -> ParsedOverride:
     if not isinstance(raw, str):
         raise OverrideParseError(f"Override at order {order} must be text: {type(raw).__name__}")
