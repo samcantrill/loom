@@ -231,9 +231,16 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; committed as `plan: refine phase execution plan`.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary:
+  - Added `ConfigUnsupportedResolverError` in `src/loom/config/errors.py` as a `ConfigError`/`NotImplementedError` pair with `ConfigErrorContext` metadata support.
+  - Added no-execution resolver scanning in `src/loom/config/interpolation.py` (`scan_resolver_expressions`) with `ResolverExpressionRecord` metadata and resolver allow-list enforcement in runtime resolution.
+  - Updated `src/loom/config/compose.py` to scan for resolver expressions prior to final runtime interpolation and only execute interpolation in the runtime stage.
+  - Added phase-scoped unit/contract/integration tests for resolver allow-listing, no-execution behavior, and resolver-dependent include target/override failures.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_interpolation.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (failed: `omegaconf` missing in test venv).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_includes.py tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_overrides.py tests/package/test_import_boundaries.py` (blocked by missing optional dependencies: `omegaconf`, `pydantic`, `yaml`; plus import guard raises `MissingConfigDependencyError` for `loom.config` package symbols).
+  - `UV_CACHE_DIR=/tmp/uv-cache uv pip install omegaconf pyyaml pydantic` failed due DNS/network restriction in the sandbox.
 - Refinement summary: clarified `oc.env`-only runtime resolver allow-list, private artifact-safe scanner/no-execution semantics, include/user-composition resolver-expression coverage, recipe no-execution boundaries, structured error tests, and unchanged artifact/pipeline/CLI scope.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none recorded.
+- Remaining blockers: unresolved environment dependency install/network restriction prevented full phase test execution in this environment.
