@@ -321,6 +321,16 @@ starting another automated review/refine cycle. No phase agent may reassign
 itself, spawn a replacement fixer, or request another automated pass for the
 same gate without an explicit user instruction.
 
+When the user explicitly authorizes blocker resolution after a gate has stopped,
+the managing agent may create one scoped blocker-resolution subagent to address
+the exact blocker. Use `loom_phase_refiner` for implementation or test fixes,
+`loom_pr_preparer` for PR body or metadata fixes, or the narrowest applicable
+project-scoped agent. The handoff must cite the concrete blocker, bound the
+write scope, prohibit future-phase work, require validation, and require phase
+artifact updates. This user-authorized pass does not reset the original review
+or refinement budgets, and any remaining blocker after the pass must be reported
+to the user instead of spawning another fixer.
+
 Phase execution plans must record the phase implementation refinement and PR
 review budget status so later handoffs can see whether a pass is unused, used,
 or explicitly not needed.

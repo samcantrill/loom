@@ -111,6 +111,23 @@ only after a phase PR exists, and only to concrete blockers that prevent human
 approval or merge. Do not use blocker-resolution passes to expand phase scope,
 implement future phases, or revisit accepted design choices.
 
+Exception for explicit user-authorized blocker resolution:
+
+```text
+create one scoped blocker-resolution subagent for the exact blocker, then
+validate, update artifacts, and resume the phase loop only if the blocker is
+resolved
+```
+
+This exception applies only after the manager has reported or recorded a
+concrete blocker and the user explicitly asks Codex to address it. Use
+`loom_phase_refiner` for implementation or test blockers, `loom_pr_preparer`
+for PR body or metadata blockers, or the narrowest applicable project-scoped
+agent. The subagent handoff must cite the blocker, bound the write scope,
+prohibit future-phase work, require relevant validation, and require phase
+artifact updates. It does not reset the original gate budgets; if the blocker
+remains after the pass, report it to the user instead of spawning another fixer.
+
 Loop budget:
 
 | Gate | Allowed automated passes | Terminal action if blockers remain |
@@ -119,6 +136,7 @@ Loop budget:
 | Phase implementation | Fast path: zero refiner passes when targeted validation passes and coverage obligations are met. Expanded path or blocker case: one `loom_phase_refiner` pass after implementation | Report the blocker and stop before PR approval or merge |
 | Phase PR review | One `loom_phase_reviewer` pass or one equivalent local review | Leave the PR unapproved, report the blocker, and stop |
 | Serial post-PR blocker resolution | Scoped blocker-resolution passes as needed after a PR exists | Mark the phase `blocked` and report the exact blocker only when the blocker cannot be resolved in scope, required GitHub access is unavailable, the PR is closed without merge, or validation/CI remains unavailable or failing after the relevant fixes |
+| User-authorized blocker resolution | One scoped subagent pass for the exact blocker named or accepted by the user | Report the remaining blocker and stop |
 
 Before assigning any reviewer or refiner, check the current thread, phase
 execution plan, PR body, and implementation-plan notes for evidence that the
