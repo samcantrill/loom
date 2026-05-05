@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: merged
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 8: Resolver Security And Runtime Interpolation`
 - Branch: `codex/config-resolver-security`
@@ -225,7 +225,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used by the single allowed Phase 8 implementation refinement pass on 2026-05-05.
-- PR review: unused
+- PR review: used by the post-merge `loom_phase_reviewer` review that found
+  the `oc.env` mutable global resolver-registry blocker.
 
 ## Completion Notes
 
@@ -257,6 +258,7 @@ make test-summary
   - PR opening: completed on 2026-05-05.
   - PR URL: https://github.com/samcantrill/loom/pull/34
   - PR verification: `gh pr view 34 --json baseRefName,headRefName,state,url` returned `baseRefName=develop`, `headRefName=codex/config-resolver-security`, `state=OPEN`, `url=https://github.com/samcantrill/loom/pull/34`.
+  - PR merge: PR #34 merged into `develop` at 2026-05-05T11:30:58Z with merge commit `f297a48279351d81da87a7408801c6a647e54cd8`; GitHub CI check `checks` passed.
   - Intended PR title: `Configuration - Phase 8: Resolver Security And Runtime Interpolation`.
   - PR facts confirmed for refine/open: branch `codex/config-resolver-security`; target branch `develop`; stack predecessor none; root phase; merge eligible after review and passing checks because the PR targets `develop`.
   - GitHub/auth notes: sandboxed `gh auth status` reported the stored token as invalid, then approved outside-sandbox `gh auth status` succeeded; `gh auth setup-git`, `git ls-remote --heads origin develop`, branch push, PR creation, and PR verification all succeeded with approved network access.
@@ -267,13 +269,19 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed; Pyright passed with 0 errors; default suite passed with 426 passed and 9 skipped; config-extra suite passed with 236 passed and 431 deselected; build succeeded.
     - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 27 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 236 passed/431 deselected.
 - Stack maintenance: no predecessor and no retarget/rebase work in this draft pass; branch cleanup remains deferred until after merge and successor dependency checks.
-- Remaining blockers: none known after the single implementation refinement pass.
+- Post-merge review:
+  - `loom_phase_reviewer` consumed the Phase 8 PR review budget after PR #34 merged.
+  - Blocking finding: the initial allow-listed `oc.env` runtime path still delegated execution to OmegaConf's mutable global resolver registry, allowing project code to replace the `oc.env` resolver function.
+  - Resolution path: user-authorized scoped blocker-resolution subagent on `codex/config-resolver-security-ocenv-blocker`.
+- Remaining blockers: none after PR #35 merged.
 
 ## Post-Merge Blocker Resolution Notes
 
 - Follow-up branch: `codex/config-resolver-security-ocenv-blocker`.
 - Follow-up worktree: `/home/samcantrill/work/loom-worktrees/config-resolver-security-ocenv-blocker`.
-- PR target: `develop`; PR opening intentionally deferred for this scoped blocker-resolution task.
+- PR target: `develop`.
+- PR URL: https://github.com/samcantrill/loom/pull/35
+- PR merge: PR #35 merged into `develop` at 2026-05-05T11:52:47Z with merge commit `afa85f8ede952b87504726de09e9f877cec376e0`; GitHub CI check `checks` passed.
 - Blocker fixed: `resolve_interpolation()` no longer executes allow-listed `oc.env` through OmegaConf's mutable global resolver registry. Runtime `oc.env` now resolves through a Loom-owned implementation before final OmegaConf node interpolation, and resolver output that looks like interpolation is preserved as literal data rather than reparsed.
 - Regression coverage added:
   - `tests/unit/loom/config/test_interpolation.py` proves replacing OmegaConf's global `oc.env` resolver does not execute the replacement and that resolver-looking environment output remains literal.

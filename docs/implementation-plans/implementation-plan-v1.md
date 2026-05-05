@@ -1489,7 +1489,7 @@ Completion notes:
 
 ### Phase 8 - Resolver Security And Runtime Interpolation
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-resolver-security`
 PR: https://github.com/samcantrill/loom/pull/34
 
@@ -1524,16 +1524,17 @@ Test expectations:
 - Unit/integration tests proving no resolver execution during artifact
   generation, built-in runtime resolution, and custom resolver failure.
 
-PR-open notes:
+Completion notes:
 
 - Phase execution plan: `docs/phases/config-resolver-security.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is
-  merge-eligible after review.
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
+  `develop`.
 - Implementation summary: adds private no-execution resolver scanning for
   authored resolver-expression metadata, enforces the Phase 8 runtime resolver
-  allow-list of `oc.env` only, raises structured
-  `ConfigUnsupportedResolverError` for custom and non-allow-listed resolver
-  expressions before execution, and preserves the existing
+  allow-list of `oc.env` only, resolves `oc.env` through Loom-owned runtime
+  code instead of OmegaConf's mutable global resolver registry, raises
+  structured `ConfigUnsupportedResolverError` for custom and non-allow-listed
+  resolver expressions before execution, and preserves the existing
   `ConfigIncludeResolutionError` / `resolver_dependent` contract for
   resolver-dependent include targets and user-composition include overrides.
 - Scope notes: no public root exports, public `ComposedConfig` fields,
@@ -1545,8 +1546,24 @@ PR-open notes:
   667 passed, 0 failed, 0 errors, 8 skipped, and 431 deselected. Focused
   Phase 8 targeted checks passed with 24 resolver/error tests and 83
   include/recipe/compose/import tests.
-- PR notes: opened and verified on 2026-05-05 as PR #34 with base `develop`,
-  head `codex/config-resolver-security`, and state `OPEN`.
+- PR review: `loom_phase_reviewer` consumed the Phase 8 review budget after PR
+  #34 merged and found one blocking issue: the initial allow-listed `oc.env`
+  path still delegated execution to OmegaConf's mutable global resolver
+  registry. The user-authorized blocker-resolution subagent fixed that issue in
+  follow-up PR #35.
+- Merge result: PR #34 merged into `develop` at 2026-05-05T11:30:58Z with
+  merge commit `f297a48279351d81da87a7408801c6a647e54cd8`; GitHub CI check
+  `checks` passed.
+- Blocker follow-up: PR https://github.com/samcantrill/loom/pull/35 merged
+  into `develop` at 2026-05-05T11:52:47Z with merge commit
+  `afa85f8ede952b87504726de09e9f877cec376e0`; GitHub CI check `checks`
+  passed. The follow-up added regression coverage proving global replacement
+  of OmegaConf's `oc.env` resolver is not executed by `resolve_interpolation()`
+  or public `compose_config()`.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-resolver-security` or
+  `codex/config-resolver-security-ocenv-blocker` when PR #35 merged; branch and
+  worktree cleanup are safe after this metadata update.
 
 ### Phase 9 - Recipe Catalog And Expansion
 
