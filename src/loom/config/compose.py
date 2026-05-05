@@ -12,7 +12,7 @@ from .api import ComposedConfig
 from .errors import ConfigValidationError
 from .interpolation import resolve_interpolation
 from .load import load_config
-from .merge import merge_configs
+from .source_maps import compose_config_with_sources
 from .overrides import apply_overrides, parse_overrides
 from .provenance import (
     SCHEMA_VERSION,
@@ -45,11 +45,17 @@ def compose_config(
     base_config, base_source = load_config(config_path, kind="base", order=0)
     sources = [base_source]
 
-    merged = base_config
+    overlay_pairs: list[tuple[dict[str, PlainData], ConfigSource]] = []
     for order, overlay_path in enumerate(overlays, start=1):
         overlay_config, overlay_source = load_config(overlay_path, kind="overlay", order=order)
         sources.append(overlay_source)
-        merged = merge_configs(merged, overlay_config, path=f"overlay[{order}]")
+        overlay_pairs.append((overlay_config, overlay_source))
+
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=overlay_pairs,
+    ).config
 
     parsed_overrides = parse_overrides(overrides)
     merged = apply_overrides(merged, parsed_overrides)
