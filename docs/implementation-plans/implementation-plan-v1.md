@@ -2054,9 +2054,9 @@ Completion notes:
 
 ### Phase 15 - Raw Snapshot Opt-In And Source Artifact Hardening
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-source-artifacts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/42
 
 Goal:
 
@@ -2090,6 +2090,44 @@ Test expectations:
 - Unit/contract tests for raw snapshot fields, manifest references, dedupe,
   opt-in raw payload behavior if implemented, and metadata-only rebuild
   limitations.
+
+Completion notes:
+
+- Phase execution plan: `docs/phases/config-source-artifacts.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is open against
+  `develop`.
+- Implementation summary: adds the keyword-only Python API opt-in
+  `include_raw_source_snapshots: bool = False`; returns caller-owned
+  `RawSourceSnapshotBundle` payload/reference records for supported local/file
+  base, overlay, and include sources; dedupes duplicate payloads by digest plus
+  size; marks recipe sources unavailable with an explicit reason; and hardens
+  source artifact, manifest, provenance, and inspection metadata so default
+  metadata/hash-only artifacts state raw snapshot availability and rebuild
+  limitations without embedding raw content in persisted artifact contracts.
+- Scope notes: no default raw source-byte persistence, run-store writes,
+  storage/security policy, CLI behavior, pipeline integration, remote/plugin
+  sources, `_copy_`, secret classification/encryption policy, resolved runtime
+  value persistence, or Phase 16 docs/e2e broadening was added.
+- Implementation path note: the initial Spark executor hit the configured usage
+  limit before completing the phase; the workflow's explicit fallback path used
+  a GPT-5.5/high implementation worker with the same scoped handoff and stop
+  conditions. The fallback worker continued from partial uncommitted phase edits
+  without reverting them.
+- Revised workflow gate: expanded-path implementation refinement found no
+  product-code or test blocker. The full pre-submit blocker gate then found one
+  blocker: nested local/file includes inside user include replacement targets
+  could be composed without being recorded in source artifacts or raw snapshot
+  references. The user-authorized scoped blocker-resolution pass fixed nested
+  replacement include source propagation and raw source capture; the bounded
+  confirmation gate passed with no remaining blocking findings.
+- Validation: focused source snapshot regression passed with 5 tests; targeted
+  Phase 15 suite passed with 78 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 735
+  passed, 0 failed, 0 errors, 9 skipped, and 434 deselected.
+- PR notes: opened and verified on PR #42 with base `develop`, head
+  `codex/config-source-artifacts`, and state `OPEN`. GitHub CI was pending at
+  this metadata update.
 
 ### Phase 16 - Hardening, Documentation, And End-To-End Coverage
 
