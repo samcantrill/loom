@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import cast
 
 from loom.fingerprints import Fingerprint
 from loom.serialization import PlainData, to_plain_data
 
-from .api import ComposedConfig
+from .api import ConfigCompositionInspection, ConfigCompositionStageRecord
 from .errors import ConfigErrorContext, ConfigIncludeExpansionError, ConfigLoadError, ConfigValidationError
 from .includes import (
     IncludeRecompositionContext,
@@ -21,6 +22,7 @@ from .includes import (
 from .interpolation import resolve_interpolation, scan_resolver_expressions
 from .load import load_config
 from .merge import merge_configs
+from .artifacts import CompositionManifest, ConfigFingerprintRecord, SourceArtifactRecord
 from .source_maps import ConfigPath, build_base_source_map, compose_config_with_sources, format_config_path
 from .overrides import (
     ParsedOverride,
@@ -43,13 +45,13 @@ from .validation import validate_top_level_fields
 _BARE_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def compose_config(
+def inspect_config_composition(
     config_path: str | Path,
     *,
     recipe_catalog: RecipeCatalog,
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
-) -> ComposedConfig:
+) -> ConfigCompositionInspection:
     if not isinstance(recipe_catalog, RecipeCatalog):
         raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
 
@@ -58,30 +60,60 @@ def compose_config(
     if overrides is None:
         raise ConfigValidationError("overrides may not be None")
 
+    stages: list[ConfigCompositionStageRecord] = []
+
     base_config, base_source = load_config(config_path, kind="base", order=0)
     sources = [base_source]
-
     overlay_pairs: list[tuple[dict[str, PlainData], ConfigSource]] = []
     for order, overlay_path in enumerate(overlays, start=1):
         overlay_config, overlay_source = load_config(overlay_path, kind="overlay", order=order)
         sources.append(overlay_source)
         overlay_pairs.append((overlay_config, overlay_source))
+    _append_stage(
+        stages,
+        "source_load",
+        {
+            "base_source": base_source.to_dict(),
+            "overlay_sources": [overlay_source.to_dict() for _, overlay_source in overlay_pairs],
+        },
+    )
 
     merged_with_sources = compose_config_with_sources(
         base_config=base_config,
         base_source=base_source,
         overlays=overlay_pairs,
     )
+    _append_stage(
+        stages,
+        "overlay_merge",
+        {
+            "source_count": len(sources),
+            "overlay_count": len(overlay_pairs),
+            "merged_keys": _config_key_count(merged_with_sources.config),
+        },
+    )
+
     expanded_with_includes = expand_config_includes(
         merged_with_sources.config,
         source_map=merged_with_sources.source_map,
         replacement_sites=merged_with_sources.replacement_sites,
         mapping_sites=merged_with_sources.mapping_sites,
     )
-    merged: dict[str, PlainData] = expanded_with_includes.config
+    _append_stage(
+        stages,
+        "file_include_expansion",
+        {
+            "include_site_count": len(expanded_with_includes.include_sites),
+            "local_customization_count": len(expanded_with_includes.local_customizations),
+            "recomposition_context_count": len(expanded_with_includes.recomposition_contexts),
+        },
+    )
+
+    merged = expanded_with_includes.config
 
     parsed_overrides = parse_overrides(overrides)
     include_overrides, ordinary_overrides = split_include_and_ordinary_overrides(parsed_overrides)
+    _append_stage(stages, "user_composition_overrides", {"requested_include_overrides": len(include_overrides)})
 
     if include_overrides:
         merged = _apply_user_composition_overrides(
@@ -92,11 +124,59 @@ def compose_config(
             base_source=base_source,
         )
 
+    _append_stage(
+        stages,
+        "recipe_argument_interpolation",
+        {"status": "completed"},
+    )
     resolved_recipe_args = resolve_recipe_argument_interpolation(merged, path="$")
+    _append_stage(stages, "recipe_expansion", {"recipe_manifest_count": 0})
     expanded, recipe_manifest = expand_recipes(resolved_recipe_args, catalog=recipe_catalog, path="$")
+    if stages[-1].name == "recipe_expansion":
+        stages[-1] = ConfigCompositionStageRecord(
+            name="recipe_expansion",
+            status="completed",
+            payload={
+                "recipe_manifest_count": len(recipe_manifest),
+            },
+        )
+
+    _append_stage(
+        stages,
+        "ordinary_overrides",
+        {"ordinary_override_count": len(ordinary_overrides)},
+    )
     merged = apply_overrides(expanded, ordinary_overrides)
 
+    _append_stage(stages, "resolver_scan", {"resolver_expression_count": 0})
     expanded_artifact_safe, _resolver_records = scan_resolver_expressions(merged, path="$")
+    if stages[-1].name == "resolver_scan":
+        stages[-1] = ConfigCompositionStageRecord(
+            name="resolver_scan",
+            status="completed",
+            payload={
+                "resolver_expression_count": len(_resolver_records),
+                "resolver_records": [
+                    {
+                        "config_path": record.config_path,
+                        "token": record.token,
+                        "resolver": record.resolver,
+                        "expression": record.expression,
+                    }
+                    for record in _resolver_records
+                ],
+            },
+        )
+
+    _append_stage(
+        stages,
+        "runtime_interpolation",
+        {
+            "status": "completed",
+            "input_key_count": _config_key_count(expanded_artifact_safe),
+        },
+    )
+    unresolved = expanded_artifact_safe
     resolved = resolve_interpolation(
         expanded_artifact_safe,
         path="$",
@@ -104,9 +184,19 @@ def compose_config(
         source_order=base_source.order,
         source_path=str(base_source.path),
     )
-
     validated = validate_top_level_fields(resolved)
+
+    _append_stage(
+        stages,
+        "validation",
+        {
+            "status": "completed",
+            "resolved_keys": _config_key_count(validated),
+            "has_schema_version": "schema_version" in validated,
+        },
+    )
     redacted = redact_secrets(validated)
+    _append_stage(stages, "redaction", {"redacted_keys": _config_key_count(redacted)})
 
     resolved_fingerprint = build_resolved_fingerprint(validated)
     provenance = _build_provenance(
@@ -116,6 +206,7 @@ def compose_config(
         resolved_fingerprint=resolved_fingerprint,
         recipe_manifest_count=len(recipe_manifest),
     )
+    _append_stage(stages, "provenance", {"source_count": len(sources), "override_count": len(parsed_overrides)})
     fingerprint = build_config_fingerprint(
         resolved=validated,
         sources=provenance.sources,
@@ -123,13 +214,74 @@ def compose_config(
         recipe_manifest=recipe_manifest,
         schema_version=provenance.schema_version,
     )
+    _append_stage(stages, "fingerprint", {"fingerprint": fingerprint})
 
-    return ComposedConfig(
+    recipe_manifest_payload = tuple(
+        cast(
+            dict[str, PlainData],
+            to_plain_data(_ensure_mappingproxy_plain(record), path=f"recipe_manifest[{index}]"),
+        )
+        for index, record in enumerate(recipe_manifest)
+    )
+    placeholder_manifest = CompositionManifest(
+        schema_version=SCHEMA_VERSION,
+        source_artifacts=(),
+        fingerprint_records=(),
+        recipe_manifest=recipe_manifest_payload,
+        metadata={"phase": "12"},
+    )
+    source_artifacts: tuple[SourceArtifactRecord, ...] = ()
+    fingerprint_records: tuple[ConfigFingerprintRecord, ...] = ()
+    _append_stage(
+        stages,
+        "artifact_placeholders",
+        {
+            "manifest": {
+                "schema_version": placeholder_manifest.schema_version,
+                "source_artifacts": 0,
+                "fingerprint_records": 0,
+                "recipe_manifest_count": len(placeholder_manifest.recipe_manifest),
+            },
+            "source_artifact_count": len(source_artifacts),
+            "fingerprint_record_count": len(fingerprint_records),
+        },
+    )
+
+    _append_stage(
+        stages,
+        "composed_config",
+        {
+            "resolved_keys": _config_key_count(validated),
+            "unresolved_keys": _config_key_count(unresolved),
+        },
+    )
+
+    return ConfigCompositionInspection(
+        stages=tuple(stages),
+        unresolved=cast(dict[str, PlainData], to_plain_data(unresolved, path="unresolved")),
         resolved=validated,
         redacted=redacted,
         provenance=provenance,
         recipe_manifest=tuple(recipe_manifest),
         fingerprint=fingerprint,
+        manifest=placeholder_manifest,
+        source_artifacts=source_artifacts,
+        fingerprint_records=fingerprint_records,
+    )
+
+
+def compose_config(
+    config_path: str | Path,
+    *,
+    recipe_catalog: RecipeCatalog,
+    overlays: Sequence[str | Path] = (),
+    overrides: Sequence[str] = (),
+) -> ConfigCompositionInspection:
+    return inspect_config_composition(
+        config_path=config_path,
+        recipe_catalog=recipe_catalog,
+        overlays=overlays,
+        overrides=overrides,
     )
 
 
@@ -604,6 +756,33 @@ def _build_provenance(
         recipe_manifest_count=recipe_manifest_count,
         metadata={},
     )
+
+
+def _append_stage(stages: list[ConfigCompositionStageRecord], name: str, payload: Mapping[str, object]) -> None:
+    payload_data = cast(dict[str, PlainData], to_plain_data(dict(payload), path=f"stage[{name}]"))
+    stages.append(
+        ConfigCompositionStageRecord(
+            name=name,
+            status="completed",
+            payload=payload_data,
+        )
+    )
+
+
+def _ensure_mappingproxy_plain(value: object) -> object:
+    if isinstance(value, MappingProxyType):
+        value = dict(value)
+    if isinstance(value, Mapping):
+        return {str(key): _ensure_mappingproxy_plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_ensure_mappingproxy_plain(item) for item in value]
+    if isinstance(value, tuple):
+        return [_ensure_mappingproxy_plain(item) for item in value]
+    return value
+
+
+def _config_key_count(config: Mapping[str, PlainData]) -> int:
+    return len(config)
 
 
 def build_resolved_fingerprint(validated: dict[str, PlainData]) -> str:

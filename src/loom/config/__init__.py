@@ -12,7 +12,16 @@ from loom.errors import ConfigError
 from ._optional import require_config_dependencies
 
 if TYPE_CHECKING:
-    from .api import ComposedConfig, compose_config, compose_config_with_catalog, instantiate, register_recipe
+    from .api import (
+        ComposedConfig,
+        ConfigCompositionInspection,
+        ConfigCompositionStageRecord,
+        compose_config,
+        compose_config_with_catalog,
+        inspect_config_composition,
+        instantiate,
+        register_recipe,
+    )
     from .recipes import Recipe, RecipeCatalog
 
 
@@ -22,6 +31,9 @@ _RESOLVED_SYMBOLS: dict[str, object] = {
 _OPTIONAL_SYMBOLS: Final = frozenset(
     {
         "ComposedConfig",
+        "ConfigCompositionInspection",
+        "ConfigCompositionStageRecord",
+        "inspect_config_composition",
         "compose_config",
         "compose_config_with_catalog",
         "register_recipe",
@@ -35,7 +47,15 @@ def _resolve_optional_symbol(name: str) -> object:
     require_config_dependencies()
 
     match name:
-        case "ComposedConfig" | "compose_config" | "compose_config_with_catalog" | "register_recipe":
+        case (
+            "ComposedConfig"
+            | "ConfigCompositionInspection"
+            | "ConfigCompositionStageRecord"
+            | "compose_config"
+            | "compose_config_with_catalog"
+            | "inspect_config_composition"
+            | "register_recipe"
+        ):
             from . import api
 
             return getattr(api, name)
@@ -78,6 +98,9 @@ if not isinstance(_module, _ConfigPackage):
 __all__ = [
     "ConfigError",
     "ComposedConfig",
+    "ConfigCompositionInspection",
+    "ConfigCompositionStageRecord",
+    "inspect_config_composition",
     "compose_config_with_catalog",
     "Recipe",
     "RecipeCatalog",

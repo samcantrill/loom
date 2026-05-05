@@ -243,8 +243,20 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; refined scope contract covers public compose orchestration, public inspection, additive `ComposedConfig` fields, placeholder artifact limits, explicit-only instantiation, suite obligations, and budget status.
 - Implementation summary:
+  - Added public `inspect_config_composition(...)`, `ConfigCompositionInspection`, and `ConfigCompositionStageRecord` in `src/loom/config/api.py`.
+  - Extended `ComposedConfig` additively with `unresolved`, `manifest`, `source_artifacts`, and `fingerprint_records` while preserving existing behavior fields.
+  - Refactored orchestration so `compose_config(...)` and inspection share the same staged full-order flow and artifact-safe stage payloads.
+  - Added/updated package, unit, contract, and integration coverage for inspection shape, import boundaries, stage ordering, and post-compose explicit instantiation semantics.
 - Implementation validation:
-- Refinement summary: expanded-path refinement complete; no implementation, PR preparation, PR opening, approval, merge, or workflow-file changes performed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (lint/typecheck + full targeted default + `config-extra` test runs) passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` completed successfully and wrote `build/test-summary.md`.
+  - Required phase target suites run:
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py`
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_compose.py`
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py`
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/pipeline/test_pipeline_config.py`
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e -k config` (existing e2e only; no new phase-12-specific e2e added due harness scope).
+- Refinement summary: expanded-path implementation refinement complete; no implementation, PR preparation, PR opening, approval, merge, or workflow-file changes performed.
 - PR preparation:
-- Stack maintenance:
+- Stack maintenance: none.
 - Remaining blockers: none known.
