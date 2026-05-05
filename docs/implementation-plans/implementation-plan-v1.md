@@ -1961,7 +1961,7 @@ Completion notes:
 
 ### Phase 14 - Artifact-Safe Fingerprints And Resume Comparison
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-artifact-fingerprints`
 PR: https://github.com/samcantrill/loom/pull/41
 
@@ -2003,7 +2003,7 @@ Test expectations:
 Completion notes:
 
 - Phase execution plan: `docs/phases/config-artifact-fingerprints.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is open against
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
   `develop`.
 - Implementation summary: replaces the public default config fingerprint with
   one `artifact_safe_config` record built from artifact-safe authored
@@ -2037,9 +2037,20 @@ Completion notes:
   passed/1 skipped, unit 354 passed/1 skipped, contract 29 passed/2 skipped,
   integration 9 passed/5 skipped, e2e 5 passed, and config-extra 288
   passed/433 deselected.
-- PR notes: opened and verified on PR #41 with base `develop`, head
-  `codex/config-artifact-fingerprints`, and state `OPEN`. GitHub CI was pending
-  at this metadata update.
+- Pre-merge target check: PR #41 was verified immediately before merge with
+  base `develop`, head `codex/config-artifact-fingerprints`, state `OPEN`,
+  clean merge state, and successful GitHub CI `checks`. A formal GitHub
+  approval review could not be posted because GitHub does not allow the PR
+  author to approve their own PR; the focused confirmation gate supplied the
+  workflow review approval.
+- Merge result: PR #41 merged into `develop` at 2026-05-05T16:47:55Z with
+  merge commit `2a9ab64fb1f28b0f343b753682525750540a7609`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-artifact-fingerprints` when PR #41 merged. The GitHub merge
+  command merged the PR but could not delete the local branch while its
+  worktree was attached; branch and worktree cleanup are safe after this
+  metadata update.
 
 ### Phase 15 - Raw Snapshot Opt-In And Source Artifact Hardening
 
