@@ -80,6 +80,96 @@ def test_compose_expands_file_includes_and_removes_include_keys(tmp_path: Path) 
     assert "_include_" not in model
 
 
+def test_compose_default_raw_snapshot_bundle_is_metadata_only(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: included.yaml\n",
+        encoding="utf-8",
+    )
+    included.write_text("value: included\n", encoding="utf-8")
+
+    composed = compose_config(base)
+
+    assert composed.raw_source_snapshots.enabled is False
+    assert composed.raw_source_snapshots.payloads == ()
+    assert len(composed.raw_source_snapshots.references) == 2
+    assert all(reference.availability == "disabled" for reference in composed.raw_source_snapshots.references)
+    assert all(reference.reason == "not_requested" for reference in composed.raw_source_snapshots.references)
+    assert all(reference.payload_id is None for reference in composed.raw_source_snapshots.references)
+
+    manifest_metadata = cast(dict[str, Any], composed.manifest.to_dict()["metadata"])
+    manifest_refs = cast(list[dict[str, Any]], manifest_metadata["raw_source_snapshot_references"])
+    assert len(manifest_refs) == len(composed.raw_source_snapshots.references)
+    assert all(reference["availability"] == "disabled" for reference in manifest_refs)
+    assert all(reference["reason"] == "not_requested" for reference in manifest_refs)
+
+
+def test_compose_with_raw_snapshots_opt_in_reuses_deduped_payloads(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    included = tmp_path / "included.yaml"
+
+    shared = "value: shared\n"
+    overlay.write_text(shared, encoding="utf-8")
+    included.write_text(shared, encoding="utf-8")
+    base.write_text(
+        "name: base\npipeline:\n  model:\n    _include_: included.yaml\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, overlays=(overlay,), include_raw_source_snapshots=True)
+
+    assert composed.raw_source_snapshots.enabled is True
+    assert len(composed.raw_source_snapshots.references) == 3
+    assert len(composed.raw_source_snapshots.payloads) == 2
+    payload = next(payload for payload in composed.raw_source_snapshots.payloads if payload.content == shared)
+    assert payload.content == shared
+    assert payload.encoding == "utf-8"
+    overlay_reference_payload_ids = [
+        reference.payload_id
+        for reference in composed.raw_source_snapshots.references
+        if reference.kind in {"overlay", "include"}
+    ]
+    assert overlay_reference_payload_ids[0] == overlay_reference_payload_ids[1]
+
+    manifest_metadata = cast(dict[str, Any], composed.manifest.to_dict()["metadata"])
+    manifest_refs = cast(list[dict[str, Any]], manifest_metadata["raw_source_snapshot_references"])
+    assert len(manifest_refs) == 3
+    assert manifest_refs[0]["availability"] == "available"
+    assert manifest_refs[1]["availability"] == "available"
+    assert manifest_refs[2]["availability"] == "available"
+    assert manifest_refs[1]["payload_id"] == manifest_refs[2]["payload_id"]
+    assert manifest_metadata["raw_source_snapshot_enabled"] is True
+
+
+def test_compose_with_raw_snapshots_marks_recipe_unavailable(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: demo\n"
+        "pipeline:\n"
+        "  _recipe_: arg\n"
+        "  value: one\n",
+        encoding="utf-8",
+    )
+    catalog = RecipeCatalog()
+    catalog.register("arg", argument_recipe)
+
+    composed = compose_config(base, recipe_catalog=catalog, include_raw_source_snapshots=True)
+
+    recipe_refs = [ref for ref in composed.raw_source_snapshots.references if ref.kind == "recipe"]
+    assert len(recipe_refs) == 1
+    assert recipe_refs[0].availability == "unavailable"
+    assert recipe_refs[0].reason == "unsupported_source_kind"
+    assert recipe_refs[0].payload_id is None
+    assert composed.raw_source_snapshots.enabled is True
+    assert len(composed.raw_source_snapshots.payloads) == 1
+
+
 def test_compose_expands_file_include_with_user_override_ordering(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
     base.write_text(

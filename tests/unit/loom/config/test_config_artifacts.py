@@ -6,6 +6,9 @@ from loom.serialization import PlainData
 
 from loom.config.artifacts import (
     SCHEMA_VERSION,
+    RawSourceSnapshotBundle,
+    RawSourceSnapshotPayload,
+    RawSourceSnapshotReference,
     CompositionManifest,
     ConfigFingerprintRecord,
     SourceArtifactRecord,
@@ -135,3 +138,79 @@ def test_config_artifact_metadata_must_be_plain_data() -> None:
             schema_version=SCHEMA_VERSION,
             metadata=invalid_metadata,
         )
+
+
+def test_raw_source_snapshot_payload_round_trip() -> None:
+    payload = RawSourceSnapshotPayload(
+        payload_id="sha256:abc:3",
+        content="a: 1\n",
+        content_digest="sha256:abc",
+        size_bytes=3,
+        metadata={"source": "base"},
+    )
+
+    serialized = payload.to_dict()
+    assert serialized["encoding"] == "utf-8"
+    assert RawSourceSnapshotPayload.from_dict(serialized) == payload
+
+
+def test_raw_source_snapshot_reference_round_trip() -> None:
+    reference = RawSourceSnapshotReference(
+        kind="base",
+        order=0,
+        path="/tmp/base.yaml",
+        content_digest="sha256:abc",
+        size_bytes=3,
+        availability="available",
+        payload_id="sha256:abc:3",
+        reason="requested",
+    )
+
+    serialized = reference.to_dict()
+    assert serialized["payload_id"] == "sha256:abc:3"
+    assert RawSourceSnapshotReference.from_dict(serialized) == reference
+
+
+def test_raw_source_snapshot_bundle_round_trip() -> None:
+    bundle = RawSourceSnapshotBundle(
+        schema_version=SCHEMA_VERSION,
+        enabled=True,
+        payloads=(
+            RawSourceSnapshotPayload(
+                payload_id="sha256:abc:3",
+                content="a: 1\n",
+                content_digest="sha256:abc",
+                size_bytes=3,
+            ),
+        ),
+        references=(
+            RawSourceSnapshotReference(
+                kind="base",
+                order=0,
+                path="/tmp/base.yaml",
+                content_digest="sha256:abc",
+                size_bytes=3,
+                availability="available",
+                payload_id="sha256:abc:3",
+                reason="requested",
+            ),
+            RawSourceSnapshotReference(
+                kind="recipe",
+                order=1,
+                path="/tmp/recipe.py",
+                content_digest="sha256:def",
+                size_bytes=4,
+                availability="unavailable",
+                payload_id=None,
+                reason="unsupported_source_kind",
+            ),
+        ),
+        metadata={"request": True},
+    )
+
+    serialized = bundle.to_dict()
+    assert set(serialized.keys()) == {"schema_version", "enabled", "payloads", "references", "metadata"}
+    references = cast(list[dict[str, object]], serialized["references"])
+    assert references[1]["payload_id"] is None
+    assert references[1]["reason"] == "unsupported_source_kind"
+    assert RawSourceSnapshotBundle.from_dict(serialized) == bundle
