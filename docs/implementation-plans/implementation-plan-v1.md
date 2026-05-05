@@ -989,9 +989,9 @@ implementation, record it in that phase execution plan and PR body.
 
 ### Phase 1 - Boundary And Artifact Contracts
 
-Status: blocked
+Status: merged
 Branch: `codex/config-boundary-artifact-contracts`
-PR: https://github.com/samcantrill/loom/pull/23 (merged before phase review approval)
+PR: https://github.com/samcantrill/loom/pull/23
 
 Goal:
 
@@ -1041,18 +1041,22 @@ Phase metadata:
 - Validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall suite
   status `passed`; GitHub CI check `checks` passed on PR #23.
-- Blocking review finding: `CompositionManifest.__post_init__` does not validate
+- Blocking review finding: `CompositionManifest.__post_init__` did not validate
   or normalize nested plain data inside `recipe_manifest` when constructed
   directly. A local probe confirmed
   `CompositionManifest(schema_version=1, recipe_manifest=({"bad": {1, 2}},))`
   creates a record containing a `set`, violating the Phase 1 plain-data artifact
-  contract. The single implementation refinement pass and single PR-review pass
-  are consumed, so the phase loop must stop instead of launching Phase 2.
+  contract.
+- Blocker resolution: user authorized one scoped blocker-resolution subagent
+  pass after the gate stopped. Follow-up PR
+  https://github.com/samcantrill/loom/pull/24 merged into `develop` at
+  `d9d45cddcb206ea480253d79fcd1dcff8c13c5fa` on 2026-05-05 after local
+  validation and GitHub CI `checks` passed. The fix normalizes and freezes
+  `recipe_manifest` during construction and rejects nested non-plain payloads
+  with `ConfigProvenanceError`.
 - Follow-up notes: later phases populate these skeletons; no compose, include,
   resolver, run-store, CLI, root-export, or `ComposedConfig` behavior was added
-  in Phase 1. Before Phase 2 begins, fix the post-merge Phase 1 artifact
-  contract blocker with a focused follow-up approved by the user or human
-  maintainer.
+  in Phase 1. No remaining Phase 1 blockers prevent Phase 2.
 
 ### Phase 2 - Strict Loading And Structured Errors
 
