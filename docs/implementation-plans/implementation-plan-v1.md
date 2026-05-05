@@ -1637,9 +1637,9 @@ Completion notes:
 
 ### Phase 10 - Loom Validation Boundaries
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-validation-boundaries`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/37
 
 Goal:
 
@@ -1681,6 +1681,34 @@ Test expectations:
 - Unit/integration tests for Loom-owned validation, project-owned pass-through
   without `name`/`pipeline`, schema-feature rejection, `_target_` inference
   non-behavior, and structured validation errors.
+
+PR-open notes:
+
+- Phase execution plan: `docs/phases/config-validation-boundaries.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is
+  merge-eligible after GitHub CI and allowed review/merge checks pass.
+- Revised workflow gate: the pre-submit blocker gate ran before PR submission
+  and found no blocking correctness, scope, import-boundary, test-evidence, or
+  PR-body accuracy issues. It consumed the Phase 10 PR-review budget for the
+  current implementation diff, PR body draft, suite evidence, scope boundary,
+  and known review risks.
+- Implementation summary: removes implicit top-level `name`/`pipeline`/schema
+  defaulting from public composition, keeps generic project payloads
+  pass-through for redaction/provenance/fingerprints, rejects authored
+  `_schema_` alongside existing `_copy_` unsupported directive checks with
+  source-aware structured context, keeps `_target_` inert during composition,
+  and lets `ConfigValidationError` carry structured context.
+- Scope notes: no `loom.pipeline` imports, project schema API, CLI behavior,
+  public inspection fields, persistence, `_copy_` support, raw source or
+  resolver-output persistence, plugin/remote behavior, run-store writes, or
+  Phase 11 instantiation behavior were added.
+- Validation: targeted Phase 10 groups passed with 47 and 38 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall
+  685 passed, 0 failed, 0 errors, 8 skipped, and 432 deselected.
+- PR notes: opened and verified on 2026-05-05 as PR #37 with base `develop`,
+  head `codex/config-validation-boundaries`, and state `OPEN`. GitHub CI check
+  `checks` was in progress when this metadata was recorded.
 
 ### Phase 11 - Strict Instantiation And Runtime Injection
 
