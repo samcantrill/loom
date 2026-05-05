@@ -8,6 +8,7 @@ from loom.errors import ConfigError
 from loom.config.errors import (
     ConfigErrorContext,
     ConfigInterpolationError,
+    ConfigIncludeResolutionError,
     ConfigLoadError,
     ConfigMergeError,
     DuplicateRecipeError,
@@ -32,6 +33,7 @@ from loom.serialization import PlainDataError
 def test_config_error_shapes() -> None:
     assert issubclass(ConfigLoadError, ConfigError)
     assert issubclass(ConfigMergeError, ConfigError)
+    assert issubclass(ConfigIncludeResolutionError, ConfigError)
     assert issubclass(OverrideParseError, ConfigError)
     assert issubclass(OverrideApplyError, ConfigError)
     assert issubclass(ConfigInterpolationError, ConfigError)

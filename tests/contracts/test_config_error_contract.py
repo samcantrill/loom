@@ -2,7 +2,11 @@
 
 import pytest
 
-from loom.config.errors import ConfigErrorContext, ConfigLoadError
+from loom.config.errors import (
+    ConfigErrorContext,
+    ConfigIncludeResolutionError,
+    ConfigLoadError,
+)
 from loom.serialization import PlainDataError
 
 
@@ -75,3 +79,37 @@ def test_config_error_context_rejects_non_mapping_details_before_serialization()
             source_path="/tmp/base.yaml",
             details=["not", "a", "mapping"],  # type: ignore[arg-type]
         )
+
+
+def test_config_include_resolution_error_serializes_structured_context() -> None:
+    error = ConfigIncludeResolutionError(
+        "cannot resolve include target",
+        context=ConfigErrorContext(
+            code="target_not_found",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/config.yaml",
+            config_path="$.model._include_",
+            expected="existing regular file",
+            actual="missing",
+            details={
+                "authored_target": "missing.yaml",
+                "include_site_path": ("model", "_include_"),
+                "candidate_path": "/tmp/model/missing.yaml",
+                "target_kind": "explicit_relative",
+                "explicit_escape": True,
+            },
+        ),
+    )
+
+    payload = error.to_dict()
+    assert payload["context"]["code"] == "target_not_found"
+    assert payload["context"]["source_path"] == "/tmp/config.yaml"
+    assert payload["context"]["config_path"] == "$.model._include_"
+    context_details = payload["context"]["details"]
+    assert isinstance(context_details, dict)
+    assert context_details["authored_target"] == "missing.yaml"
+    assert context_details["candidate_path"] == "/tmp/model/missing.yaml"
+    assert context_details["target_kind"] == "explicit_relative"
+    assert context_details["explicit_escape"] is True
+    assert ConfigErrorContext.from_dict(payload["context"]) == error.context
