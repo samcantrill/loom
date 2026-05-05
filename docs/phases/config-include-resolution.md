@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 5: Include Resolution Primitives`
 - Branch: `codex/config-include-resolution`
@@ -22,7 +22,7 @@
 - Plan quality gate: passed on 2026-05-05 by `loom_plan_reviewer` confirmation review; no blocking findings remain.
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact.
-- Refine pass: pending; expanded path selected by manager.
+- Refine pass: completed by `loom_phase_planner`; expanded-path refinement tightened bare-name grammar, include-site path assumptions, explicit path and `file://` handling, unsafe normalization behavior, structured error scope, resolver-dependent target detection, and suite obligations.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid, but approved outside-sandbox `gh auth status` succeeded; `gh auth setup-git` and `git fetch origin` succeeded. Local `develop`, `origin/develop`, and worktree base all resolved to `29163292885a0a2543c4e66614b962f1cda1893f`. `git worktree add` required approved access because writing Git refs was blocked by the sandbox.
 - Blockers: none.
 
@@ -48,7 +48,7 @@ Future behavior remains out of scope: recursive include expansion, include stack
 
 - Goal: resolve accepted include target forms strictly and deterministically.
 - Required scope: bare-name resolution from including file plus mapping key path; exact relative paths; exact absolute paths; `file://` URIs; `.yaml` bare-name behavior; no extension probing; unsupported URI scheme failures; resolver-dependent include target failures.
-- Required checkpoints: target classification is deterministic; accepted target forms produce exact filesystem paths/URI-derived local paths; explicit paths require exact filenames; bare names append exactly `.yaml`; unsafe, missing, ambiguous, unsupported, and resolver-dependent targets fail with source/path context.
+- Required checkpoints: target classification is deterministic; accepted target forms produce exact filesystem paths/URI-derived local paths; explicit paths require exact filenames; bare names are simple component names that append exactly `.yaml`; unsafe, missing, ambiguous, unsupported, and resolver-dependent targets fail with source/path context.
 - Acceptance criteria: every accepted target form resolves deterministically; explicit paths require exact filenames; bare names append exactly `.yaml`; ambiguous, missing, unsafe, unsupported, or resolver-dependent targets fail.
 
 ## Current Source And Harness Findings
@@ -59,15 +59,15 @@ Future behavior remains out of scope: recursive include expansion, include stack
 
 ## In-Scope Work
 
-- Add an internal include-target resolution helper, likely in a focused `src/loom/config/includes.py`, that accepts an authored target string, the including `ConfigSource`, and the include-site `ConfigPath`.
+- Add an internal include-target resolution helper, likely in a focused `src/loom/config/includes.py`, that accepts an authored target string, the including `ConfigSource`, and the include-site `ConfigPath` for the `_include_` key.
 - Define a small internal result shape for resolved local include targets, including enough context for later phases to know the authored target, include site, source file, resolved path, and whether the target escaped the including config tree by explicit author choice.
 - Classify accepted target forms deterministically: bare names, exact explicit relative paths, exact absolute paths, and `file://` URIs.
-- Resolve bare names from the including file directory plus the mapping key path, then append exactly `.yaml`; do not probe `.yml`, append extensions for explicit paths, or try fallback candidates.
-- Resolve explicit relative paths from the including file directory and require the normalized target to exist as the exact authored filename.
-- Resolve exact absolute paths and `file://` URIs to local filesystem paths, requiring exact existing files and rejecting unsupported or ambiguous URI forms.
+- Resolve bare names from the including file directory plus the parent mapping path of the `_include_` key, then append exactly `.yaml`; do not probe `.yml`, append extensions for explicit paths, or try fallback candidates.
+- Resolve exact explicit relative paths from the including file directory and require the normalized target to exist as the exact authored filename.
+- Resolve exact absolute paths and local-only `file://` URIs to local filesystem paths, requiring exact existing files and rejecting unsupported or ambiguous URI forms.
 - Fail on unsupported URI schemes and resolver-dependent include target strings before any runtime interpolation can execute.
 - Fail on unsafe normalization where a target attempts to escape the implicit bare-name config subtree without using an explicit relative path, absolute path, or `file://` URI.
-- Add include-specific structured errors or a structured `ConfigError` subclass that carries `ConfigErrorContext` plus include-target details where needed.
+- Prefer an internal `ConfigIncludeResolutionError` in `loom.config.errors` only if include failures need a distinct subclass. It should subclass `_ConfigError`, reuse `ConfigErrorContext`, and not be exported from `loom.config` root in this phase.
 
 ## Out-of-Scope Work
 
@@ -84,22 +84,29 @@ Future behavior remains out of scope: recursive include expansion, include stack
 
 - The resolver helper can remain internal in Phase 5; public inspection and artifact contracts remain later-phase scope.
 - `ConfigSource.path` is already an absolute local source path from `load_config` for base and overlay files. Tests may construct equivalent `ConfigSource` values directly.
-- Include-site paths are immutable `ConfigPath` tuples. Bare-name directory derivation uses the parent mapping path, not the `_include_` key segment itself.
-- A bare-name target means a simple component name with no path separator, no URI scheme, and no explicit suffix. Explicit filenames such as `resnet50.yaml`, `./resnet50.yaml`, `../shared/resnet50.yaml`, `/abs/resnet50.yaml`, and `file:///abs/resnet50.yaml` are exact-path forms and must not receive another extension.
-- Any OmegaConf-style interpolation token in the target, including resolver-style `${oc.env:...}` or plain `${path.value}`, makes the target resolver-dependent for Phase 5 and must fail before interpolation executes.
+- Include-site paths are immutable `ConfigPath` tuples pointing to the `_include_` key. The helper should require a non-empty path ending in the exact string segment `"_include_"`; bare-name directory derivation uses only `include_site_path[:-1]`.
+- Include-site path segments before `_include_` must be string mapping-key segments for Phase 5. Integer/list-index segments are rejected as invalid include-site context instead of being treated as filesystem directories. Future list/include placement validation remains Phase 6 scope.
+- Path tuple string segments are exact mapping keys and must not be split on literal dots. A segment such as `"model.v1"` is one directory name for bare resolution, while empty, `"."`, `".."`, or separator-containing string segments are unsafe for bare-name directory derivation and should fail rather than normalize silently.
+- A bare-name target is a non-empty ASCII component token matching `[A-Za-z0-9_-]+`. Literal dots are not allowed, so `resnet50.v2`, `.hidden`, and `resnet50.yaml` are not bare names. Bare names have no path separators, no URI scheme, no dot segments, and no explicit suffix/extension.
+- Explicit relative path indicators are `./`, `../`, embedded `/`, or an exact basename with an explicit suffix such as `resnet50.yaml`. `resnet50.yaml` is an exact relative path from the including file directory, not a bare name, and must not be resolved through the mapping-key directory.
+- Any `${...}` token anywhere in the authored target makes the target resolver-dependent for Phase 5 and must fail before OmegaConf or any runtime resolver execution. Do not distinguish `${path}` from `${oc.env:...}` in this phase.
+- Phase 5 uses POSIX-local filesystem semantics in this repository context. Windows drive paths, UNC paths, and Windows-style `file://` drive forms are not accepted positive target forms on POSIX; only add portable rejection tests if implementation handles them explicitly.
 - File existence checks are part of the primitive because missing exact targets are an acceptance criterion. Reading/parsing the target file is Phase 6 scope.
 
 ## Scope Contract
 
 - The resolver returns exactly one local file target or raises one structured config error. It must not return multiple candidates or silently choose between alternatives.
 - Bare target `resnet50` at include site `("model", "_include_")` in `/project/configs/experiment.yaml` resolves to `/project/configs/model/resnet50.yaml`. Bare target `small` at `("model", "encoder", "_include_")` resolves to `/project/configs/model/encoder/small.yaml`.
-- Explicit relative target `../shared/optimizer.yaml` resolves from the including file directory, may leave the implicit config subtree because the escape is explicit, and requires that exact filename to exist.
+- Bare resolution must remain under `including_file.parent / *parent_mapping_segments`. The implementation should verify the normalized candidate stays under that derived directory before the final filename check. Explicit relative, absolute, and `file://` escapes are allowed only because the author made the escape explicit and the exact target exists.
+- Explicit relative targets `./local.yaml`, `../shared/optimizer.yaml`, `components/resnet50.yaml`, and `resnet50.yaml` resolve from the including file directory, may leave the implicit config subtree when the authored target says so, and require that exact filename to exist.
 - Absolute path and `file://` targets are explicit local filesystem choices. They are accepted only for local file targets that normalize to an exact existing file.
+- `file://` support is local only. Reject non-empty netloc/host values, query strings, fragments, params, empty paths, directory targets, malformed or ambiguous percent escapes, and decoded paths that cannot be represented as one deterministic local path. Treat `file://localhost/...` as non-empty host and reject it for Phase 5.
 - Unsupported URI schemes such as `s3://`, `https://`, `pkg://`, or unknown scheme-like targets fail with an unsupported-scheme code and no resolver fallback.
-- Bare names append exactly `.yaml`; explicit paths never probe `.yml`, `.yaml`, suffix variants, directories, or extensionless fallbacks.
-- Unsafe implicit normalization fails when a bare-name-derived path would escape its derived directory/root or otherwise cannot be normalized to a single safe local file under the implicit bare-name layout.
+- Bare names append exactly `.yaml`; explicit paths never probe `.yml`, `.yaml`, suffix variants, directories, or extensionless fallbacks. An authored exact path to `resnet50.yml` may be treated only as that exact file if the implementation chooses to support exact YAML filenames generally, but it must never be discovered as fallback for `resnet50` or `resnet50.yaml`.
+- Unsafe implicit normalization fails when the include-site path or bare-name-derived path would escape its derived directory/root or otherwise cannot be normalized to a single safe local file under the implicit bare-name layout.
 - Resolver-dependent targets fail before runtime interpolation, and errors must not include resolved resolver values.
 - Missing targets fail after deterministic candidate construction, with context that includes source path, include-site config path, authored target, and deterministic candidate/resolved path.
+- Invalid include-site context, including a path not ending in `_include_` or containing list-index segments, fails in the primitive with structured context. It is not a caller precondition because Phase 6 will consume this helper for source-aware errors.
 - The helper must not call `load_config`, modify `compose_config` public behavior, expose new root package symbols, or persist resolver output/raw source bytes.
 
 ## Design Impact
@@ -125,24 +132,25 @@ Future behavior remains out of scope: recursive include expansion, include stack
 | Loading included files in Phase 5 | Would mix target policy with recursive expansion and document-shape validation owned by Phase 6. |
 | Treating interpolation in include targets as runtime-resolvable | Composition control flow must be decidable before runtime resolver execution and must not depend on resolver outputs. |
 | Exposing a public include resolver API now | Public inspection/API shape belongs to Phase 12 after include expansion and user composition records exist. |
+| Allowing literal-dot bare names | Conflicts with the simple component-token grammar and can be confused with explicit suffixes or future dotted shorthand. Authors can use explicit paths for such filenames. |
 
 ## Debt Introduced
 
 | Debt | Reason accepted | Revisit trigger |
 | --- | --- | --- |
 | Include result records remain internal and may need additive fields for include stacks or artifacts | Keeps Phase 5 focused on deterministic target policy before Phase 6 proves traversal needs. | Revisit during Phase 6 if recursive expansion needs context not captured by the primitive result. |
-| Error class/export placement may remain config-internal unless contract tests require public-ish serialization | Avoids freezing public API before full composition orchestration. | Revisit during Phase 6/12 when include errors are surfaced through public compose/inspection paths. |
+| `ConfigIncludeResolutionError`, if added, remains internal to `loom.config.errors` and unexported from `loom.config` root | Avoids freezing public API before full composition orchestration while still giving tests and callers a structured config-domain error. | Revisit during Phase 6/12 when include errors are surfaced through public compose/inspection paths. |
 
 ## Reviewability
 
-- Expected PR size and shape: focused internal helper plus include-specific error tests; no compose orchestration, public return fields, manifest/provenance population, or recursive expansion.
-- Files and areas to inspect: likely `src/loom/config/includes.py`, `src/loom/config/errors.py`, optional `src/loom/config/__init__.py` only if a public-ish error class is intentionally exported, `tests/unit/loom/config/test_includes.py`, `tests/contracts/test_config_error_contract.py` if structured include errors serialize through `ConfigErrorContext`, and package tests only if exports/imports change.
+- Expected PR size and shape: focused internal helper plus include-specific error tests; no compose orchestration, public return fields, manifest/provenance population, root public API export, or recursive expansion.
+- Files and areas to inspect: likely `src/loom/config/includes.py`, `src/loom/config/errors.py`, `tests/unit/loom/config/test_includes.py`, `tests/unit/loom/config/test_config_errors.py` if a new error subclass is added, `tests/contracts/test_config_error_contract.py` if structured include errors serialize through `ConfigErrorContext`, and package tests to confirm no root public API changes if exports are touched.
 - Scope-control checks: no YAML loading of target files; no traversal of config trees; no include cycles/stacks; no sibling merge; no `_replace_` include-swap logic; no user composition; no recipes/resolver runtime changes; no public inspection API; no artifact/fingerprint/source-record population; no persistence; no CLI; no pipeline imports.
 
 ## Implementation Steps
 
-1. Add internal include target types and resolver helper around `ConfigSource`, `ConfigPath`, and existing path formatting/context helpers.
-2. Implement deterministic target classification for bare, relative, absolute, `file://`, unsupported URI, ambiguous, unsafe, missing, and resolver-dependent cases.
+1. Add internal include target types and resolver helper around `ConfigSource`, `ConfigPath`, and existing path formatting/context helpers, validating include-site paths end in `_include_`.
+2. Implement deterministic target classification for bare, relative, absolute, local-only `file://`, unsupported URI, ambiguous, unsafe, missing, and resolver-dependent cases.
 3. Add include-specific structured error handling, reusing `ConfigErrorContext` and keeping raw source bytes/resolver outputs out of error payloads.
 4. Add focused unit tests for every accepted form and failure branch, using temporary filesystem fixtures for exact-file and missing-file behavior.
 5. Add contract/package tests only if the implementation exposes a new structured include error/result shape beyond an internal module.
@@ -153,19 +161,19 @@ Future behavior remains out of scope: recursive include expansion, include stack
 
 - Status: required if exports/imports change; otherwise deferred for targeted implementation and covered by final PR validation.
 - Expected paths: `tests/package/test_config_api.py` and `tests/package/test_import_boundaries.py` if a new include error class or helper is exported.
-- Required assertions or deferral reason: no public package exports are expected. If an error class is exported through `loom.config`, assert it remains cheap to import and does not pull in pipeline, stores, CLI, plugin discovery, network clients, or heavyweight optional dependencies.
+- Required assertions or deferral reason: no public package exports are expected. If implementation touches `loom.config.__init__` or package exports, assert `ConfigIncludeResolutionError` and resolver helpers are not added to the root public API, and assert config imports remain cheap and do not pull in pipeline, stores, CLI, plugin discovery, network clients, or heavyweight optional dependencies.
 
 ### Unit Suite
 
 - Status: required.
 - Expected paths: new `tests/unit/loom/config/test_includes.py`, plus `tests/unit/loom/config/test_config_errors.py` if a new error subclass is added.
-- Required assertions or deferral reason: bare names derive directories from including source plus include-site mapping path and append exactly `.yaml`; nested bare include paths work; explicit relative paths resolve from including file directory and require exact filenames; absolute paths require exact existing files; `file://` URI local paths require exact existing files; explicit `.yaml` paths are not suffixed again; no `.yml` or fallback probing happens; unsupported schemes fail; ambiguous URI/path forms fail; resolver-dependent targets fail before interpolation; missing targets report deterministic candidate context; unsafe implicit normalization fails; explicit relative/absolute/`file://` escapes are accepted only when the exact target exists.
+- Required assertions or deferral reason: bare names match only `[A-Za-z0-9_-]+`, reject empty targets, literal dots, suffixes/extensions, URI schemes, path separators, and dot segments, derive directories from including source plus parent mapping path, and append exactly `.yaml`; include-site paths must end in `_include_`; list-index include-site segments fail; mapping-key string segments are exact and are not split on dots; nested bare include paths work with exact string segments; unsafe mapping path segments or implicit normalization fail; explicit relative paths using `./`, `../`, embedded `/`, and exact suffixed basenames such as `resnet50.yaml` resolve from the including file directory and require exact filenames; absolute paths require exact existing files; local-only `file://` paths require exact existing files and reject hosts, query, fragment, params, empty paths, directories, and malformed/ambiguous percent escapes; explicit `.yaml` paths are not suffixed again; no `.yml` or fallback probing happens; unsupported schemes fail; ambiguous URI/path forms fail; any `${...}` target fails before interpolation; missing targets report deterministic candidate and include-site context; explicit relative/absolute/`file://` escapes are accepted only when the exact target exists.
 
 ### Contract Suite
 
 - Status: required if include-specific structured errors are added; otherwise deferred.
 - Expected paths: `tests/contracts/test_config_error_contract.py` or a new focused config include error contract test.
-- Required assertions or deferral reason: if a new `ConfigIncludeResolutionError` or equivalent structured error exists, assert `to_dict()` carries stable `ConfigErrorContext` fields plus plain-data include details such as authored target, include site, candidate/resolved path, scheme, and safety reason, with no raw source bytes or resolved resolver values. If errors reuse existing structured load/config context without a new serialized shape, note the deferral in the PR body.
+- Required assertions or deferral reason: if a new `ConfigIncludeResolutionError` or equivalent structured error exists, assert `to_dict()` carries stable `ConfigErrorContext` fields plus plain-data include details such as authored target, include site, candidate/resolved path, scheme, and safety reason, with no raw source bytes or resolved resolver values. Confirm the subclass reuses `_ConfigError` and `ConfigErrorContext`. If errors reuse existing structured load/config context without a new serialized shape, note the deferral in the PR body.
 
 ### Integration Suite
 
@@ -188,7 +196,9 @@ Future behavior remains out of scope: recursive include expansion, include stack
 ## Risks
 
 - Target classification can become too permissive if URI-like strings are treated as paths after unsupported-scheme parsing fails; fail closed on scheme-like targets.
-- Bare-name safety can be weakened by accepting separators, dot segments, suffixes, or normalization escapes as bare names; keep bare names simple and exact.
+- Bare-name safety can be weakened by accepting separators, literal dots, dot segments, suffixes, empty values, or normalization escapes as bare names; keep bare names simple and exact.
+- Include-site path ambiguity can leak into filesystem layout if literal-dot mapping keys are split or list indexes become directories; use exact string segments only and fail on list-index segments.
+- `file://` parsing can accidentally accept host, query, fragment, params, or percent-decoding variants that are not one local file; reject ambiguous forms explicitly.
 - Error payloads can leak runtime values if resolver-dependent targets are interpolated before failure; detect interpolation syntax textually and fail before resolver execution.
 - Introducing public exports too early could freeze the wrong include result/error shape before Phase 6 and Phase 12.
 - File existence tests can accidentally parse/read YAML content; Phase 5 should stop at path existence and regular-file checks.
@@ -212,26 +222,26 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: internal include result/error type first, deterministic path/URI classifier second, filesystem exact-target and safety checks third, structured error context fourth, focused unit/contract tests fifth.
+- Safe implementation slices: internal include result/error type first, include-site path validation and bare-name grammar second, deterministic explicit path/URI classifier third, filesystem exact-target and safety checks fourth, structured error context fifth, focused unit/contract/package tests sixth.
 - Tests to run with each slice: run the new include unit tests after helper work; run config error unit/contract tests after adding error classes or context payloads; run package/import tests only if exports or import surfaces change.
-- Decisions the executor must not revisit: no global search path; no plugin/remote resolvers; bare names append exactly `.yaml`; explicit paths are exact; resolver-dependent targets fail before interpolation; no recursive expansion; no user include swaps; no public inspection API; no manifest/provenance/fingerprint/source-artifact population; no persistence or CLI; no pipeline imports.
+- Decisions the executor must not revisit: no global search path; no plugin/remote resolvers; bare names are `[A-Za-z0-9_-]+` only and append exactly `.yaml`; literal-dot bare names are rejected; include-site paths end in `_include_` and list-index segments are rejected; mapping-key string segments are exact and not dot-split; `resnet50.yaml` is an exact relative path from the including file directory; explicit paths are exact; local-only `file://` rejects host/query/fragment/params/directories/ambiguous percent escapes; any `${...}` target fails before interpolation; no recursive expansion; no user include swaps; no public inspection API; no root public API export; no manifest/provenance/fingerprint/source-artifact population; no persistence or CLI; no pipeline imports.
 - Conditions that require stopping for the manager: deterministic resolution cannot be implemented without changing public `compose_config` fields before Phase 12; accepted target forms require a new public resolver API; safe path behavior conflicts with the accepted explicit escape rules; source context from Phase 4 is insufficient to derive bare-name paths; satisfying tests requires recursive loading/expansion, include stacks/cycles, user composition, resolver execution, artifact population, optional dependencies, network access, or pipeline imports.
-- Expanded-path refinement notes: pending; the refine pass should check target classification, URI/path safety, structured error context, and test obligations before implementation starts.
+- Expanded-path refinement notes: completed; bare-name grammar, include-site path assumptions, exact mapping-key handling, explicit relative filename behavior, local-only `file://` handling, unsafe normalization, structured error scope, resolver-dependent target detection, and suite obligations are now recorded for implementation.
 
 ## Refinement And Review Budget Status
 
 - Phase execution plan draft: used
-- Phase execution plan refine: unused; pending for expanded path
+- Phase execution plan refine: used
 - Phase implementation refinement: unused
 - PR review: unused
 
 ## Completion Notes
 
 - Draft plan: completed in this artifact by `loom_phase_planner`.
-- Final phase execution plan:
+- Final phase execution plan: refined by `loom_phase_planner` in this artifact; implementation refinement and PR review budgets remain unused.
 - Implementation summary:
 - Implementation validation:
-- Refinement summary:
+- Refinement summary: completed; manager review focus was incorporated without changing branch, base, target, or implementation/PR-review budgets.
 - PR preparation:
 - Stack maintenance:
-- Remaining blockers: none at draft time.
+- Remaining blockers: none after refine.
