@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 3: Overrides and Merge Primitives`
 - Branch: `codex/config-overrides-merge`
@@ -259,8 +259,9 @@ make test-summary
 - Implementation validation: targeted tests and PR validation passed for override/merge/compose scope.
 - Refinement summary: clarified `_replace_` as an explicit whole-section mapping replacement marker while absence of `_replace_` means recursive mapping merge; clarified scalar/list/null and mapping-over-non-mapping replacements do not require `_replace_`; clarified `+` add parent creation and update strictness; bounded current `compose_config` testing to strict helper behavior without Phase 7/9/12 ordering decisions; decided override/merge errors may remain message-only with stable subclasses/tests unless local `ConfigErrorContext` wiring is trivial; tightened suite obligations and Spark executor stop conditions.
 - Implementation refinement summary: consumed the one allowed expanded-path implementation refinement pass. Root-level `_replace_` in the higher-precedence overlay passed directly to `merge_configs()` is supported as whole-root mapping replacement because the top-level merge is still a mapping-over-existing-mapping merge; the marker is consumed, omitted from the result, and invalid root marker values or marker-only root overlays fail with `ConfigMergeError`. No Phase 4/6 source authorship or Phase 12 orchestration decision was required. No additional strict override edge was changed; message-only override/merge subclasses remain the phase-scoped diagnostic contract.
-- PR preparation: completed locally on 2026-05-05; branch push, PR creation,
-  and target verification pending at artifact update time.
+- PR preparation: completed on 2026-05-05; PR #27 opened at
+  `https://github.com/samcantrill/loom/pull/27` and verified with base
+  `develop`, head `codex/config-overrides-merge`, and state `OPEN`.
 
 ### Completion Validation
 
@@ -304,5 +305,6 @@ make test-summary
   message-only stable subclasses; explicit `+` overrides may create missing
   mapping parents but ordinary updates remain strict; final v1 composition
   ordering remains later-phase work.
-- PR creation status: pending branch push and `gh pr create` at artifact update
-  time.
+- PR creation status: opened as PR #27 at
+  `https://github.com/samcantrill/loom/pull/27`.
+- PR verification JSON: `{"baseRefName":"develop","headRefName":"codex/config-overrides-merge","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/27"}`.
