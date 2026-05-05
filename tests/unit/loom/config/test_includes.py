@@ -401,6 +401,29 @@ def test_resolve_target_rejects_ambiguous_single_slash_file_uri(tmp_path: Path) 
     assert details["reason"] == "ambiguous_file_uri_form"
 
 
+def test_file_uri_rejects_decoded_nul_path_with_structured_error(
+    tmp_path: Path,
+) -> None:
+    source_file = _config_source(tmp_path / "base.yaml")
+
+    with pytest.raises(ConfigIncludeResolutionError) as exc:
+        resolve_include_target(
+            "file:///tmp/a%00.yaml",
+            source=source_file,
+            include_site_path=("pipeline", "_include_"),
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_file_uri"
+    assert context.config_path == "$.pipeline._include_"
+    details = context.details
+    assert details is not None
+    assert details["reason"] == "embedded_nul_byte"
+    assert details["path"] == "/tmp/a%00.yaml"
+    assert details["authored_target"] == "file:///tmp/a%00.yaml"
+
+
 def test_resolve_target_rejects_file_uri_path_as_directory(tmp_path: Path) -> None:
     source_file = _config_source(tmp_path / "base.yaml")
     target_dir = tmp_path / "directory"

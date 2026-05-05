@@ -231,6 +231,13 @@ def _resolve_uri_target(
         include_site_path=include_site_path,
         authored_target=target,
     )
+    _validate_decoded_file_uri_path(
+        decoded_path=decoded_path,
+        raw_path=raw_path,
+        source=source,
+        include_site_path=include_site_path,
+        authored_target=target,
+    )
     candidate = Path(decoded_path)
 
     return _validate_candidate(
@@ -614,6 +621,29 @@ def _decode_file_uri_path(
                 "reason": "invalid_utf8_percent_escape",
             },
         ) from exc
+
+
+def _validate_decoded_file_uri_path(
+    *,
+    decoded_path: str,
+    raw_path: str,
+    source: ConfigSource,
+    include_site_path: ConfigPath,
+    authored_target: str,
+) -> None:
+    if "\x00" in decoded_path:
+        raise _include_error(
+            "file URI paths may not contain embedded NUL bytes.",
+            code="invalid_file_uri",
+            source=source,
+            include_site_path=include_site_path,
+            authored_target=authored_target,
+            details={
+                "scheme": "file",
+                "path": raw_path,
+                "reason": "embedded_nul_byte",
+            },
+        )
 
 
 def _is_explicit_relative_target(target: str) -> bool:

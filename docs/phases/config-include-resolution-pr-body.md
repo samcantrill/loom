@@ -37,7 +37,9 @@ segments without splitting literal dots, reject list-index and unsafe path
 segments, append exactly `.yaml`, and reject symlink escapes from the derived
 config directory. Explicit relative, absolute, and `file://` targets are allowed
 to escape only because the target form is explicit, but still require one exact
-existing regular file and do not probe suffix variants.
+existing regular file and do not probe suffix variants. Decoded `file://` paths
+that cannot be represented as local filesystem paths, including embedded NUL
+bytes, fail before candidate validation with structured include-error context.
 
 `src/loom/config/errors.py` adds internal `ConfigIncludeResolutionError`.
 Structured error context carries the source path/order/kind, formatted include
@@ -61,7 +63,7 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 424 passed/9 skipped; config-extra passed with 191 passed/429 deselected; build succeeded. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall suite evidence passed with 620 passed, 0 failed, 0 errors, 8 skipped, and 429 deselected. |
-| Targeted phase validation | Passed | Include unit tests passed with 31 tests; include error unit/contract tests passed; package API/import-boundary checks passed during final gates. |
+| Targeted phase validation | Passed | Include unit tests passed with 32 tests after PR-review blocker resolution; include error unit/contract tests passed; package API/import-boundary checks passed during final gates. |
 | GitHub checks | Pending | CI starts after PR creation; verify status on the opened PR. |
 
 ### Test Suite Summary
