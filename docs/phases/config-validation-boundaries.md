@@ -262,7 +262,10 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - PR preparation:
 - PR facts:
   - Draft pass: completed by `loom_pr_preparer` on 2026-05-05.
-  - Refine pass: pending because expanded path is active.
+  - Refine pass: completed by `loom_pr_preparer` on 2026-05-05. The PR body
+    was checked against the phase plan, implementation diff, acceptance
+    criteria, validation evidence, scope boundaries, assumptions, risks, and
+    recorded pre-submit blocker gate; no public PR-body correction was needed.
   - PR body artifact: `docs/phases/config-validation-boundaries-pr-body.md`.
   - Intended PR title: `Configuration - Phase 10: Loom Validation Boundaries`.
   - Head branch: `codex/config-validation-boundaries`.
@@ -300,3 +303,6 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     for the current diff. A post-submit PR review should run only if the
     submitted diff changes.
 - Stack maintenance:
+  - Root PR; no stack predecessor and no retarget/rebase action required before
+    submission. Branch cleanup is safe only after the Phase 10 PR is merged and
+    no successor branch depends on `codex/config-validation-boundaries`.
