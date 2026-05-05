@@ -1127,9 +1127,9 @@ Phase metadata:
 
 ### Phase 3 - Overrides And Merge Primitives
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-overrides-merge`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/27
 
 Goal:
 
@@ -1163,6 +1163,27 @@ Test expectations:
 
 - Unit tests for parser behavior, strict/add overrides, invalid paths,
   `_replace_` required/unnecessary cases, and merge semantics.
+
+Phase metadata:
+
+- Worktree: `/home/samcantrill/work/loom-worktrees/config-overrides-merge`
+- Stack predecessor: none
+- Base branch: `develop`
+- PR target branch: `develop`
+- PR status: opened as PR #27 at
+  https://github.com/samcantrill/loom/pull/27; verified base `develop`, head
+  `codex/config-overrides-merge`, state `OPEN`.
+- Implementation summary: added strict `_replace_` merge semantics, including
+  root-level replacement, recursive mapping merge when `_replace_` is absent,
+  scalar/list/null and type replacement behavior, marker validation and
+  omission, input non-mutation, and focused strict override/merge coverage.
+- Validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall suite
+  status `passed`; GitHub CI check `checks` passed on PR #27.
+- Follow-up notes: override and merge errors remain message-only stable
+  subclasses; no includes, source-authored overlays, recipe ordering changes,
+  public inspection API, persistence, CLI, provenance population, fingerprints,
+  `_copy_`, escaped-dot paths, list indexing, or list patching were added.
 
 ### Phase 4 - Source-Authored Overlays
 
