@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from omegaconf import OmegaConf
 from omegaconf.errors import OmegaConfBaseException
@@ -14,8 +13,8 @@ from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization import to_plain_data
 
 from .errors import ConfigErrorContext, ConfigInterpolationError, ConfigUnsupportedResolverError
+from .source_maps import ConfigPath, format_config_path
 
-_INTERPOLATION_PATTERN = re.compile(r"\$\{([^{}]+)\}")
 _ALLOWED_RUNTIME_RESOLVERS = frozenset({"oc.env"})
 
 
@@ -70,7 +69,7 @@ def scan_resolver_expressions(
     if not isinstance(plain_config, dict):
         raise ConfigInterpolationError(f"Interpolation scan input must be a mapping at {path}")
     records: list[ResolverExpressionRecord] = []
-    _collect_resolver_records(plain_config, path=path, records=records)
+    _collect_resolver_records(plain_config, root_path=path, config_path=(), records=records)
     return plain_config, tuple(records)
 
 
@@ -101,14 +100,14 @@ def _reject_unsupported_resolvers(
                 "Phase 8 only allows oc.env resolver execution during runtime resolution. "
                 "Register and execute custom resolvers are intentionally rejected."
             ),
-            details={
+            details=cast(dict[str, PlainData], {
                 "authored_expression": first.expression,
                 "interpolation_token": first.token,
                 "unsupported_resolver": first.resolver,
                 "supported_resolvers": sorted(_ALLOWED_RUNTIME_RESOLVERS),
                 "resolver_expression_count": len(records),
                 "unsupported_resolver_count": len(unsupported),
-            },
+            }),
         ),
     )
 
@@ -116,33 +115,79 @@ def _reject_unsupported_resolvers(
 def _collect_resolver_records(
     value: Any,
     *,
-    path: str,
+    root_path: str,
+    config_path: ConfigPath,
     records: list[ResolverExpressionRecord],
 ) -> None:
     if isinstance(value, str):
-        for match in _INTERPOLATION_PATTERN.finditer(value):
-            token = match.group(1)
-            resolver = _extract_resolver_name(token)
+        for token, expression in _iter_interpolation_tokens(value):
+            resolver = _extract_resolver_name(expression)
             if resolver is None:
                 continue
             records.append(
                 ResolverExpressionRecord(
-                    config_path=path,
-                    token=match.group(0),
+                    config_path=_format_scan_path(root_path, config_path),
+                    token=token,
                     resolver=resolver,
-                    expression=token,
+                    expression=expression,
                 )
             )
         return
 
     if isinstance(value, Mapping):
         for key, child in value.items():
-            _collect_resolver_records(child, path=f"{path}[{key!r}]", records=records)
+            _collect_resolver_records(
+                child,
+                root_path=root_path,
+                config_path=config_path + (key,),
+                records=records,
+            )
         return
 
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for index, child in enumerate(value):
-            _collect_resolver_records(child, path=f"{path}[{index}]", records=records)
+            _collect_resolver_records(
+                child,
+                root_path=root_path,
+                config_path=config_path + (index,),
+                records=records,
+            )
+
+
+def _iter_interpolation_tokens(value: str) -> tuple[tuple[str, str], ...]:
+    tokens: list[tuple[str, str]] = []
+    index = 0
+    while True:
+        start = value.find("${", index)
+        if start < 0:
+            return tuple(tokens)
+
+        depth = 1
+        cursor = start + 2
+        while cursor < len(value) and depth > 0:
+            if value.startswith("${", cursor):
+                depth += 1
+                cursor += 2
+                continue
+            if value[cursor] == "}":
+                depth -= 1
+            cursor += 1
+
+        if depth != 0:
+            index = start + 2
+            continue
+
+        token = value[start:cursor]
+        expression = token[2:-1]
+        tokens.append((token, expression))
+        tokens.extend(_iter_interpolation_tokens(expression))
+        index = cursor
+
+
+def _format_scan_path(root_path: str, config_path: ConfigPath) -> str:
+    if root_path == "$":
+        return format_config_path(config_path)
+    return f"{root_path}{format_config_path(config_path)[1:]}"
 
 
 def _extract_resolver_name(value: str) -> str | None:

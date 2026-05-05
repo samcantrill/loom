@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 from loom.config import compose_config
-from loom.config.errors import ConfigIncludeExpansionError
+from loom.config.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError
 from loom.serialization import PlainData
 
 
@@ -252,7 +252,7 @@ def test_public_compose_rejects_existing_include_override_with_resolver_expressi
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigIncludeExpansionError) as exc:
+    with pytest.raises(ConfigIncludeResolutionError) as exc:
         compose_config(base, overrides=("pipeline.model._include_=${oc.env:PHASE8_MODEL}",))
 
     context = exc.value.context
@@ -266,7 +266,7 @@ def test_public_compose_rejects_brand_new_include_override_with_resolver_express
     base = tmp_path / "base.yaml"
     base.write_text("pipeline: {}\n", encoding="utf-8")
 
-    with pytest.raises(ConfigIncludeExpansionError) as exc:
+    with pytest.raises(ConfigIncludeResolutionError) as exc:
         compose_config(base, overrides=("+pipeline.dataset._include_=${oc.env:PHASE8_DATASET}",))
 
     context = exc.value.context

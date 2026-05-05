@@ -139,7 +139,7 @@ class ConfigInterpolationError(ConfigError):
     """Error while resolving config-node interpolation."""
 
 
-class ConfigUnsupportedResolverError(ConfigError, NotImplementedError):
+class ConfigUnsupportedResolverError(_ConfigError, NotImplementedError):
     """Error for unsupported OmegaConf resolver execution."""
 
 

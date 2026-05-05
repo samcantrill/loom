@@ -45,21 +45,25 @@ def test_scan_resolver_expressions_preserves_config_data() -> None:
     assert plain["plain"] == "value"
     assert plain["resolved"] == "${root.path}"
     assert plain["resolver"] == "${oc.env:HOME}/x"
-    assert plain["list"][1]["nested"] == "${env:HOME}"
+    values = plain["list"]
+    assert isinstance(values, list)
+    nested = values[1]
+    assert isinstance(nested, dict)
+    assert nested["nested"] == "${env:HOME}"
 
     assert [record.config_path for record in records] == [
-        "$.['resolver']",
-        "$.['list'][1]['nested']",
+        "$.resolver",
+        "$.list[1].nested",
     ]
     assert records == (
         ResolverExpressionRecord(
-            config_path="$.['resolver']",
+            config_path="$.resolver",
             token="${oc.env:HOME}",
             resolver="oc.env",
             expression="oc.env:HOME",
         ),
         ResolverExpressionRecord(
-            config_path="$.['list'][1]['nested']",
+            config_path="$.list[1].nested",
             token="${env:HOME}",
             resolver="env",
             expression="env:HOME",

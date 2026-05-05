@@ -224,7 +224,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used by the single allowed Phase 8 implementation refinement pass on 2026-05-05.
 - PR review: unused
 
 ## Completion Notes
@@ -237,10 +237,19 @@ make test-summary
   - Updated `src/loom/config/compose.py` to scan for resolver expressions prior to final runtime interpolation and only execute interpolation in the runtime stage.
   - Added phase-scoped unit/contract/integration tests for resolver allow-listing, no-execution behavior, and resolver-dependent include target/override failures.
 - Implementation validation:
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_interpolation.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (failed: `omegaconf` missing in test venv).
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_includes.py tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_overrides.py tests/package/test_import_boundaries.py` (blocked by missing optional dependencies: `omegaconf`, `pydantic`, `yaml`; plus import guard raises `MissingConfigDependencyError` for `loom.config` package symbols).
-  - `UV_CACHE_DIR=/tmp/uv-cache uv pip install omegaconf pyyaml pydantic` failed due DNS/network restriction in the sandbox.
+  - Initial executor validation used the wrong dependency setup and failed because optional config dependencies were unavailable in that test environment. The blocker was cleared by rerunning with `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config ...`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_interpolation.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` initially failed with 9 phase-owned failures: `ConfigUnsupportedResolverError` did not accept structured `context=`, scanner paths did not match repository config-path formatting, and unsupported built-in resolvers with nested interpolation arguments reached OmegaConf and surfaced as `ConfigInterpolationError`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_includes.py tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_overrides.py tests/package/test_import_boundaries.py` initially failed with 4 phase-owned failures: unsupported resolver compose paths hit the same structured-error constructor issue, and user-composition include override resolver-expression tests expected `ConfigIncludeExpansionError` while the existing include target contract correctly raises `ConfigIncludeResolutionError` with code `resolver_dependent`.
+  - After refinement, `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_interpolation.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` passed: 24 passed.
+  - After refinement, `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_includes.py tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_overrides.py tests/package/test_import_boundaries.py` passed: 83 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed; Pyright passed with 0 errors; default suite passed with 426 passed and 9 skipped; config-extra suite passed with 236 passed and 431 deselected; build succeeded.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 27 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 236 passed/431 deselected.
+- Implementation refinement report:
+  - Validation output reviewed: both corrected targeted pytest commands, `make validate-pr`, and `make test-summary`.
+  - Blocking issues caused by this phase: unsupported-resolver structured error constructor, no-execution resolver scanner path formatting, nested resolver-token scanning before OmegaConf runtime resolution, and resolver-dependent include-override test expectations.
+  - Issues confirmed out of scope: wrapping user-composition include target resolver expressions as `ConfigIncludeExpansionError`; preserving the existing `ConfigIncludeResolutionError`/`resolver_dependent` include contract is the refined phase behavior.
+  - Fixes made: `ConfigUnsupportedResolverError` now inherits the structured config error base while remaining catchable as `NotImplementedError`; resolver scanning uses repository config-path formatting and scans balanced nested interpolation tokens before OmegaConf resolution; include override resolver-expression tests now expect `ConfigIncludeResolutionError` for the existing include target contract; type-check narrowing/casts were added for validation.
 - Refinement summary: clarified `oc.env`-only runtime resolver allow-list, private artifact-safe scanner/no-execution semantics, include/user-composition resolver-expression coverage, recipe no-execution boundaries, structured error tests, and unchanged artifact/pipeline/CLI scope.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: unresolved environment dependency install/network restriction prevented full phase test execution in this environment.
+- Remaining blockers: none known after the single implementation refinement pass.
