@@ -23,7 +23,7 @@
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner` in this artifact; refine budget used.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by the expanded-path implementation refinement pass on 2026-05-05.
 - Pre-submit/PR review budget: unused. The revised workflow requires a pre-submit blocker gate before PR submission; if that gate reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks, it consumes the Phase 11 PR-review budget unless the submitted diff changes afterward.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Sandboxed `gh auth setup-git` failed because `/home/samcantrill/.gitconfig` was read-only; approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop`, `origin/develop`, and `HEAD` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none.
@@ -213,7 +213,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used on 2026-05-05. This was the single expanded-path implementation refinement pass.
 - Pre-submit blocker gate: unused. Must run before PR submission against the phase plan, implementation diff, draft PR body, suite evidence, scope boundary, and known review risks; it consumes the Phase 11 PR-review budget when it reviews that full set unless the submitted diff changes afterward.
 - PR review: unused. A post-submit PR review should run only if the pre-submit gate did not review the full diff/body/evidence set or if the submitted diff changes after that gate.
 
@@ -228,12 +228,17 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Implementation validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate/test_targets.py` (6 passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate/test_recursive.py` (12 passed)
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate/test_injection.py` (7 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate/test_injection.py` (9 passed after refinement)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py` (17 passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_config.py -k target` (2 passed)
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed)
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed; summary written to `build/test-summary.md`)
-- Refinement summary: incorporated manager/architecture findings about existing module boundaries, existing parser behavior, existing test coverage, and the revised pre-submit blocker gate. The final plan now directs the executor to avoid unnecessary refactors and primarily lock contracts with focused tests for no nested lookup, no fallback import splitting, bottom-up order, partial behavior, injection validation, public API smoke, and compose-time `_target_` inertness.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate` (collected 0 tests in this environment; explicit file-level commands above were used for suite evidence)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed: Ruff, Pyright, default suite with 427 passed/9 skipped, config-extra suite with 266 passed/432 deselected, and build)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed; summary written to `build/test-summary.md`: package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 28 passed/1 skipped, integration 9 passed/5 skipped, e2e 5 passed, config-extra 266 passed/432 deselected)
+- Refinement summary:
+  - Confirmed the potential falsey-runtime blocker was real in the internal injection path: `runtime or {}` could normalize `[]` or `0` before mapping validation.
+  - Fixed `src/loom/config/instantiate/injection.py` to default only `runtime is None` and fixed `src/loom/config/instantiate/recursive.py` to pass the original runtime value into injection.
+  - Added focused regression coverage for falsey non-mapping runtime values in `tests/unit/loom/config/instantiate/test_injection.py`.
+  - Preserved the accepted Phase 11 boundaries: no compose-time instantiation, registries, allow-lists, target lookup broadening, artifact changes, CLI, pipeline imports, persistence, or future-phase behavior.
 - PR preparation:
   - Scope remains within Phase 11 and public API surfaces were not expanded.
 - Stack maintenance:

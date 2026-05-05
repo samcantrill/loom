@@ -16,7 +16,7 @@ def apply_injected_kwargs(
 ) -> dict[str, object]:
     """Merge runtime-injected values into kwargs."""
 
-    runtime = runtime or {}
+    runtime = {} if runtime is None else runtime
     if not isinstance(injected, Mapping):
         raise RuntimeInjectionError(f"_inject_ must be a mapping at {path}")
     if not isinstance(runtime, Mapping):

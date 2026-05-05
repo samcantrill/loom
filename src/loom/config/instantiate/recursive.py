@@ -80,7 +80,7 @@ def _instantiate_mapping(*, mapping: Mapping[str, Any], runtime: Mapping[str, ob
     partial_mode = bool(mapping.get("_partial_", False))
 
     if inject_value is not None:
-        kwargs = injection.apply_injected_kwargs(kwargs=kwargs, injected=inject_value, runtime=runtime or {}, path=_child_path(path, "_inject_"))
+        kwargs = injection.apply_injected_kwargs(kwargs=kwargs, injected=inject_value, runtime=runtime, path=_child_path(path, "_inject_"))
 
     target_callable = import_target(target, path=_child_path(path, "_target_"))
     if not callable(target_callable):

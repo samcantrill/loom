@@ -3,6 +3,7 @@
 import pytest
 
 from loom.config.errors import RuntimeInjectionError
+from loom.config.instantiate import injection
 from loom.config.instantiate import instantiate
 from tests.support.config_samples import EchoService
 
@@ -38,6 +39,17 @@ def test_injection_rejects_duplicate_keys() -> None:
 def test_injection_rejects_non_mapping_runtime() -> None:
     with pytest.raises(RuntimeInjectionError):
         instantiate({"_target_": "tests.support.config_samples:EchoService", "value": "static"}, runtime="not-a-mapping")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("runtime", [[], 0])
+def test_injection_helper_rejects_falsey_non_mapping_runtime(runtime: object) -> None:
+    with pytest.raises(RuntimeInjectionError):
+        injection.apply_injected_kwargs(
+            kwargs={},
+            injected={"value": "runtime"},
+            runtime=runtime,  # type: ignore[arg-type]
+            path="$._inject_",
+        )
 
 
 def test_injection_rejects_invalid_inject_shape() -> None:
