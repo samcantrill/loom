@@ -24,10 +24,14 @@ from .includes import (
 )
 from .interpolation import resolve_interpolation, scan_resolver_expressions
 from .load import load_config
+from .load import load_config_with_source_text
 from .merge import merge_configs
 from .artifacts import (
     SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
     CompositionManifest,
+    RawSourceSnapshotBundle,
+    RawSourceSnapshotPayload,
+    RawSourceSnapshotReference,
     SourceArtifactRecord,
 )
 from .fingerprints import (
@@ -73,6 +77,7 @@ def inspect_config_composition(
     recipe_catalog: RecipeCatalog,
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
+    include_raw_source_snapshots: bool = False,
 ) -> ConfigCompositionInspection:
     if not isinstance(recipe_catalog, RecipeCatalog):
         raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
@@ -81,14 +86,35 @@ def inspect_config_composition(
         raise ConfigValidationError("overlays may not be None")
     if overrides is None:
         raise ConfigValidationError("overrides may not be None")
+    if not isinstance(include_raw_source_snapshots, bool):
+        raise ConfigValidationError("include_raw_source_snapshots must be a bool")
 
     stages: list[ConfigCompositionStageRecord] = []
+    raw_source_texts: dict[str, str] | None = {} if include_raw_source_snapshots else None
 
-    base_config, base_source = load_config(config_path, kind="base", order=0)
+    if include_raw_source_snapshots:
+        base_config, base_source, base_text = load_config_with_source_text(
+            config_path,
+            kind="base",
+            order=0,
+        )
+        if raw_source_texts is not None:
+            raw_source_texts[base_source.path] = base_text
+    else:
+        base_config, base_source = load_config(config_path, kind="base", order=0)
     sources = [base_source]
     overlay_pairs: list[tuple[dict[str, PlainData], ConfigSource]] = []
     for order, overlay_path in enumerate(overlays, start=1):
-        overlay_config, overlay_source = load_config(overlay_path, kind="overlay", order=order)
+        if include_raw_source_snapshots:
+            overlay_config, overlay_source, overlay_text = load_config_with_source_text(
+                overlay_path,
+                kind="overlay",
+                order=order,
+            )
+            if raw_source_texts is not None:
+                raw_source_texts[overlay_source.path] = overlay_text
+        else:
+            overlay_config, overlay_source = load_config(overlay_path, kind="overlay", order=order)
         sources.append(overlay_source)
         overlay_pairs.append((overlay_config, overlay_source))
     _append_stage(
@@ -120,6 +146,7 @@ def inspect_config_composition(
         source_map=merged_with_sources.source_map,
         replacement_sites=merged_with_sources.replacement_sites,
         mapping_sites=merged_with_sources.mapping_sites,
+        raw_source_texts=raw_source_texts,
     )
     _append_stage(
         stages,
@@ -145,6 +172,7 @@ def inspect_config_composition(
             include_records=expanded_with_includes.include_sites,
             recomposition_contexts=expanded_with_includes.recomposition_contexts,
             base_source=base_source,
+            raw_source_texts=raw_source_texts,
         )
         merged = user_composition.config
         replaced_include_containers = {
@@ -253,6 +281,11 @@ def inspect_config_composition(
         include_sites=effective_include_sites,
         recipe_manifest=recipe_manifest_payload,
     )
+    raw_source_snapshot_bundle = _build_raw_source_snapshot_bundle(
+        sources=source_artifacts,
+        include_raw_source_snapshots=include_raw_source_snapshots,
+        raw_source_texts=raw_source_texts,
+    )
     artifact_safe_config_fingerprint_record = build_artifact_safe_config_fingerprint_record(
         unresolved=unresolved,
         redacted=redacted,
@@ -277,6 +310,9 @@ def inspect_config_composition(
         source_artifacts=source_artifacts,
         redaction_policy=redaction_policy(),
         warnings=_plaintext_secret_warnings(tuple(include_overrides) + tuple(ordinary_overrides)),
+        raw_source_snapshot_references=[
+            reference.to_dict() for reference in raw_source_snapshot_bundle.references
+        ],
     )
     manifest_metadata = dict(provenance_metadata)
     manifest_metadata["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
@@ -285,6 +321,10 @@ def inspect_config_composition(
     manifest_metadata["source_artifact_references"] = [
         _to_source_artifact_reference(record) for record in source_artifacts
     ]
+    manifest_metadata["raw_source_snapshot_references"] = [
+        reference.to_dict() for reference in raw_source_snapshot_bundle.references
+    ]
+    manifest_metadata["raw_source_snapshot_enabled"] = raw_source_snapshot_bundle.enabled
 
     provenance = _build_provenance(
         config_path=str(base_source.path),
@@ -304,6 +344,8 @@ def inspect_config_composition(
             "resolver_record_count": len(_resolver_records),
             "recipe_manifest_count": len(recipe_manifest_payload),
             "fingerprint_record_count": len(fingerprint_records),
+            "raw_source_snapshot_reference_count": len(raw_source_snapshot_bundle.references),
+            "raw_source_snapshot_enabled": raw_source_snapshot_bundle.enabled,
         },
     )
     fingerprint = artifact_safe_config_fingerprint_record.digest
@@ -336,6 +378,11 @@ def inspect_config_composition(
             "source_artifact_count": len(placeholder_manifest.source_artifacts),
             "fingerprint_record_count": len(placeholder_manifest.fingerprint_records),
             "source_reference_count": len(manifest_metadata["source_artifact_references"]),
+            "raw_source_snapshot_reference_count": len(
+                manifest_metadata["raw_source_snapshot_references"]
+            ),
+            "raw_source_snapshot_payload_count": len(raw_source_snapshot_bundle.payloads),
+            "raw_source_snapshot_enabled": raw_source_snapshot_bundle.enabled,
         },
     )
 
@@ -359,6 +406,7 @@ def inspect_config_composition(
         manifest=placeholder_manifest,
         source_artifacts=source_artifacts,
         fingerprint_records=fingerprint_records,
+        raw_source_snapshots=raw_source_snapshot_bundle,
     )
 
 
@@ -368,12 +416,14 @@ def compose_config(
     recipe_catalog: RecipeCatalog,
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
+    include_raw_source_snapshots: bool = False,
 ) -> ComposedConfig:
     return inspect_config_composition(
         config_path=config_path,
         recipe_catalog=recipe_catalog,
         overlays=overlays,
         overrides=overrides,
+        include_raw_source_snapshots=include_raw_source_snapshots,
     ).to_composed_config()
 
 
@@ -384,6 +434,7 @@ def _apply_user_composition_overrides(
     include_records: Sequence[IncludeSiteRecord],
     recomposition_contexts: Sequence[IncludeRecompositionContext],
     base_source: ConfigSource,
+    raw_source_texts: dict[str, str] | None,
 ) -> _UserCompositionResult:
     include_record_by_path = {record.include_site_path: record for record in include_records}
     context_by_path = {context.include_site_path: context for context in recomposition_contexts}
@@ -413,6 +464,7 @@ def _apply_user_composition_overrides(
                 include_override=override,
                 include_site_path=include_site_path,
                 base_source=base_source,
+                raw_source_texts=raw_source_texts,
             )
             user_include_records.append(include_record)
             continue
@@ -437,6 +489,7 @@ def _apply_user_composition_overrides(
                 staged,
                 include_override=override,
                 context=context,
+                raw_source_texts=raw_source_texts,
             )
             user_include_records.append(include_record)
             continue
@@ -463,6 +516,7 @@ def _replace_existing_include_site(
     *,
     include_override: ParsedOverride,
     context: IncludeRecompositionContext,
+    raw_source_texts: dict[str, str] | None,
 ) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     authored_target = _as_include_target(
         include_override,
@@ -483,6 +537,7 @@ def _replace_existing_include_site(
         source_include_site_path=context.source_include_site_path,
         resolved=resolved,
         override=include_override,
+        raw_source_texts=raw_source_texts,
     )
     replacement = _replay_local_customizations(replacement, context=context)
     staged = _set_value(
@@ -501,6 +556,7 @@ def _add_brand_new_include_site(
     include_override: ParsedOverride,
     include_site_path: ConfigPath,
     base_source: ConfigSource,
+    raw_source_texts: dict[str, str] | None,
 ) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     authored_target = _as_include_target(
         include_override,
@@ -553,6 +609,7 @@ def _add_brand_new_include_site(
         source_include_site_path=include_site_path,
         resolved=resolved,
         override=include_override,
+        raw_source_texts=raw_source_texts,
     )
     parent[key] = replacement
     return config, include_record
@@ -588,9 +645,18 @@ def _load_include_target(
     source_include_site_path: ConfigPath,
     resolved: IncludeResolutionResult,
     override: ParsedOverride,
+    raw_source_texts: dict[str, str] | None,
 ) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     try:
-        included_config, included_source = load_config(path, kind="overlay", order=0)
+        if raw_source_texts is None:
+            included_config, included_source = load_config(path, kind="overlay", order=0)
+        else:
+            included_config, included_source, source_text = load_config_with_source_text(
+                path,
+                kind="overlay",
+                order=0,
+            )
+            raw_source_texts[included_source.path] = source_text
     except ConfigLoadError as exc:
         if exc.context is None or exc.context.code != "non_mapping_root":
             raise
@@ -868,6 +934,120 @@ def _user_composition_error(
     )
 
 
+def _build_raw_source_snapshot_bundle(
+    *,
+    sources: Sequence[SourceArtifactRecord],
+    include_raw_source_snapshots: bool,
+    raw_source_texts: dict[str, str] | None,
+) -> RawSourceSnapshotBundle:
+    payloads: list[RawSourceSnapshotPayload] = []
+    references: list[RawSourceSnapshotReference] = []
+    payload_by_digest_and_size: dict[tuple[str, int], str] = {}
+
+    for source in sources:
+        if source.kind == "recipe":
+            references.append(
+                RawSourceSnapshotReference(
+                    kind="recipe",
+                    order=source.order,
+                    path=source.path,
+                    content_digest=source.content_digest,
+                    size_bytes=source.size_bytes,
+                    availability="unavailable",
+                    payload_id=None,
+                    reason="unsupported_source_kind",
+                )
+            )
+            continue
+
+        if not include_raw_source_snapshots:
+            references.append(
+                RawSourceSnapshotReference(
+                    kind=source.kind,
+                    order=source.order,
+                    path=source.path,
+                    content_digest=source.content_digest,
+                    size_bytes=source.size_bytes,
+                    availability="disabled",
+                    payload_id=None,
+                    reason="not_requested",
+                )
+            )
+            continue
+
+        if raw_source_texts is None:
+            references.append(
+                RawSourceSnapshotReference(
+                    kind=source.kind,
+                    order=source.order,
+                    path=source.path,
+                    content_digest=source.content_digest,
+                    size_bytes=source.size_bytes,
+                    availability="disabled",
+                    payload_id=None,
+                    reason="not_requested",
+                )
+            )
+            continue
+
+        content = raw_source_texts.get(source.path)
+        if content is None:
+            references.append(
+                RawSourceSnapshotReference(
+                    kind=source.kind,
+                    order=source.order,
+                    path=source.path,
+                    content_digest=source.content_digest,
+                    size_bytes=source.size_bytes,
+                    availability="unavailable",
+                    payload_id=None,
+                    reason="raw_capture_unavailable",
+                )
+            )
+            continue
+
+        key = (source.content_digest, source.size_bytes)
+        payload_id = payload_by_digest_and_size.get(key)
+        if payload_id is None:
+            payload_id = f"{source.content_digest}:{source.size_bytes}"
+            payload_by_digest_and_size[key] = payload_id
+            payloads.append(
+                RawSourceSnapshotPayload(
+                    payload_id=payload_id,
+                    content=content,
+                    content_digest=source.content_digest,
+                    size_bytes=source.size_bytes,
+                )
+            )
+
+        references.append(
+            RawSourceSnapshotReference(
+                kind=source.kind,
+                order=source.order,
+                path=source.path,
+                content_digest=source.content_digest,
+                size_bytes=source.size_bytes,
+                availability="available",
+                payload_id=payload_id,
+                reason="requested",
+            )
+        )
+
+    return RawSourceSnapshotBundle(
+        schema_version=ARTIFACT_SCHEMA_VERSION,
+        enabled=include_raw_source_snapshots and raw_source_texts is not None,
+        payloads=tuple(payloads),
+        references=tuple(references),
+        metadata={
+            "request": include_raw_source_snapshots,
+            "enabled": include_raw_source_snapshots and raw_source_texts is not None,
+            "source_count": len(sources),
+            "payload_count": len(payloads),
+            "reference_count": len(references),
+        },
+    )
+
+
 def _build_provenance(
     *,
     config_path: str,
@@ -904,7 +1084,10 @@ def _build_source_artifacts(
                 order=source.order,
                 content_digest=source.content_digest,
                 size_bytes=source.size_bytes,
-                metadata={"role": "base_or_overlay"},
+                metadata={
+                    "role": "base_or_overlay",
+                    "raw_snapshot": _metadata_only_raw_snapshot_limits(source_kind=source.kind),
+                },
             )
         )
     start_order = len(sources)
@@ -942,6 +1125,7 @@ def _build_include_source_artifacts(
                     "has_replace_marker": record.has_replace_marker,
                     "resolved_path": record.resolved_path,
                     "source_include_site_path": list(record.source_include_site_path),
+                    "raw_snapshot": _metadata_only_raw_snapshot_limits(source_kind="include"),
                 },
             )
         )
@@ -977,10 +1161,23 @@ def _build_recipe_source_artifacts(
                     "target": cast(str, target) if isinstance(target, str) else "",
                     "expanded_hash": expanded_hash,
                     "loom_version": manifest_record.get("loom_version"),
+                    "raw_snapshot": _metadata_only_raw_snapshot_limits(source_kind="recipe"),
                 },
             )
         )
     return tuple(artifacts)
+
+
+def _metadata_only_raw_snapshot_limits(*, source_kind: str) -> dict[str, PlainData]:
+    reason = "unsupported_source_kind" if source_kind == "recipe" else "not_requested"
+    availability = "unavailable" if source_kind == "recipe" else "disabled"
+    return {
+        "content_in_source_artifact": False,
+        "manifest_embeds_content": False,
+        "availability_without_opt_in": availability,
+        "reason_without_opt_in": reason,
+        "rebuild_limitation": "metadata_hash_only_without_raw_snapshot_bundle",
+    }
 
 
 def _to_source_artifact_reference(record: SourceArtifactRecord) -> dict[str, PlainData]:
@@ -1005,6 +1202,7 @@ def _build_provenance_metadata(
     source_artifacts: Sequence[SourceArtifactRecord],
     redaction_policy: dict[str, PlainData],
     warnings: tuple[dict[str, PlainData], ...],
+    raw_source_snapshot_references: Sequence[dict[str, PlainData]],
 ) -> dict[str, PlainData]:
     redacted_include_overrides = [
         _override_to_dict(override, record_values=True) for override in include_overrides
@@ -1038,6 +1236,7 @@ def _build_provenance_metadata(
         "source_artifact_references": [
             _to_source_artifact_reference(record) for record in source_artifacts
         ],
+        "raw_source_snapshot_references": list(raw_source_snapshot_references),
         "redaction_policy": redaction_policy,
         "security_facts": {
             "artifact_safety": {

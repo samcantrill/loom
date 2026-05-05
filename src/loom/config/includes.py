@@ -17,7 +17,7 @@ from .errors import (
     ConfigIncludeResolutionError,
     ConfigLoadError,
 )
-from .load import load_config
+from .load import load_config, load_config_with_source_text
 from .provenance import ConfigSource
 from .source_maps import ConfigPath, build_base_source_map, format_config_path
 from .merge import merge_configs
@@ -171,6 +171,7 @@ def expand_config_includes(
     replacement_sites: Sequence[ConfigPath] = (),
     mapping_sites: Sequence[ConfigPath] = (),
     reject_unconsumed_replace_markers: bool = False,
+    raw_source_texts: dict[str, str] | None = None,
 ) -> ExpandedConfigWithIncludes:
     """Expand file-authored `_include_` directives recursively."""
 
@@ -190,6 +191,7 @@ def expand_config_includes(
         recomposition_contexts=recomposition_contexts,
         include_stack=include_stack,
         reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
+        raw_source_texts=raw_source_texts,
     )
 
     return ExpandedConfigWithIncludes(
@@ -208,6 +210,7 @@ def _expand_value_with_includes(
     source_lookup_path: ConfigPath,
     replacement_sites: tuple[ConfigPath, ...],
     mapping_sites: tuple[ConfigPath, ...],
+    raw_source_texts: dict[str, str] | None,
     include_sites: list[IncludeSiteRecord],
     local_customizations: list[IncludeLocalCustomization],
     recomposition_contexts: list[IncludeRecompositionContext],
@@ -224,6 +227,7 @@ def _expand_value_with_includes(
                     source_lookup_path=source_lookup_path + (index,),
                     replacement_sites=replacement_sites,
                     mapping_sites=mapping_sites,
+                    raw_source_texts=raw_source_texts,
                     include_sites=include_sites,
                     local_customizations=local_customizations,
                     recomposition_contexts=recomposition_contexts,
@@ -245,6 +249,7 @@ def _expand_value_with_includes(
             source_lookup_path=source_lookup_path,
             replacement_sites=replacement_sites,
             mapping_sites=mapping_sites,
+            raw_source_texts=raw_source_texts,
             include_sites=include_sites,
             local_customizations=local_customizations,
             recomposition_contexts=recomposition_contexts,
@@ -277,6 +282,7 @@ def _expand_value_with_includes(
             replacement_sites=replacement_sites,
             mapping_sites=mapping_sites,
             include_sites=include_sites,
+            raw_source_texts=raw_source_texts,
             local_customizations=local_customizations,
             recomposition_contexts=recomposition_contexts,
             include_stack=include_stack,
@@ -293,6 +299,7 @@ def _expand_including_mapping(
     source_lookup_path: ConfigPath,
     replacement_sites: tuple[ConfigPath, ...],
     mapping_sites: tuple[ConfigPath, ...],
+    raw_source_texts: dict[str, str] | None,
     include_sites: list[IncludeSiteRecord],
     local_customizations: list[IncludeLocalCustomization],
     recomposition_contexts: list[IncludeRecompositionContext],
@@ -366,11 +373,19 @@ def _expand_including_mapping(
                 )
 
         try:
-            included_config, included_source = load_config(
-                resolution.resolved_path,
-                kind="overlay",
-                order=0,
-            )
+            if raw_source_texts is None:
+                included_config, included_source = load_config(
+                    resolution.resolved_path,
+                    kind="overlay",
+                    order=0,
+                )
+            else:
+                included_config, included_source, source_text = load_config_with_source_text(
+                    resolution.resolved_path,
+                    kind="overlay",
+                    order=0,
+                )
+                raw_source_texts[included_source.path] = source_text
         except ConfigLoadError as exc:
             if exc.context is None or exc.context.code != "non_mapping_root":
                 raise
@@ -416,6 +431,7 @@ def _expand_including_mapping(
             replacement_sites=(),
             mapping_sites=(),
             include_sites=include_sites,
+            raw_source_texts=raw_source_texts,
             local_customizations=local_customizations,
             recomposition_contexts=recomposition_contexts,
             include_stack=include_stack,
@@ -470,6 +486,7 @@ def _expand_including_mapping(
             replacement_sites=(),
             mapping_sites=(),
             include_sites=include_sites,
+            raw_source_texts=raw_source_texts,
             local_customizations=local_customizations,
             recomposition_contexts=recomposition_contexts,
             include_stack=include_stack,

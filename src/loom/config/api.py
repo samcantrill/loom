@@ -14,6 +14,9 @@ from .artifacts import (
     SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
     CompositionManifest,
     ConfigFingerprintRecord,
+    RawSourceSnapshotBundle,
+    RawSourceSnapshotPayload,
+    RawSourceSnapshotReference,
     SourceArtifactRecord,
 )
 from .fingerprints import (
@@ -64,6 +67,7 @@ class ConfigCompositionInspection:
     manifest: CompositionManifest
     source_artifacts: tuple[SourceArtifactRecord, ...]
     fingerprint_records: tuple[ConfigFingerprintRecord, ...]
+    raw_source_snapshots: RawSourceSnapshotBundle
 
     def __post_init__(self) -> None:
         if not isinstance(self.stages, tuple):
@@ -93,6 +97,10 @@ class ConfigCompositionInspection:
             raise ConfigValidationError("ConfigCompositionInspection.source_artifacts must be a tuple")
         if not isinstance(self.fingerprint_records, tuple):
             raise ConfigValidationError("ConfigCompositionInspection.fingerprint_records must be a tuple")
+        if not isinstance(self.raw_source_snapshots, RawSourceSnapshotBundle):
+            raise ConfigValidationError(
+                "ConfigCompositionInspection.raw_source_snapshots must be a RawSourceSnapshotBundle"
+            )
 
         for index, source_artifact in enumerate(self.source_artifacts):
             if not isinstance(source_artifact, SourceArtifactRecord):
@@ -128,6 +136,7 @@ class ConfigCompositionInspection:
             manifest=self.manifest,
             source_artifacts=self.source_artifacts,
             fingerprint_records=self.fingerprint_records,
+            raw_source_snapshots=self.raw_source_snapshots,
         )
 
 
@@ -150,6 +159,15 @@ class ComposedConfig:
     )
     source_artifacts: tuple[SourceArtifactRecord, ...] = ()
     fingerprint_records: tuple[ConfigFingerprintRecord, ...] = ()
+    raw_source_snapshots: RawSourceSnapshotBundle = field(
+        default_factory=lambda: RawSourceSnapshotBundle(
+            schema_version=ARTIFACT_SCHEMA_VERSION,
+            enabled=False,
+            payloads=(),
+            references=(),
+            metadata={"reason": "not_requested_default"},
+        )
+    )
 
 
 def compose_config(
@@ -157,6 +175,8 @@ def compose_config(
     overlays: list[str | Path] | tuple[str | Path, ...] = (),
     overrides: list[str] | tuple[str, ...] = (),
     recipe_catalog: RecipeCatalog | None = None,
+    *,
+    include_raw_source_snapshots: bool = False,
 ) -> ComposedConfig:
     from .compose import inspect_config_composition
 
@@ -166,12 +186,15 @@ def compose_config(
         raise ConfigValidationError("overrides may not be None")
     if recipe_catalog is not None and not isinstance(recipe_catalog, RecipeCatalog):
         raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
+    if not isinstance(include_raw_source_snapshots, bool):
+        raise ConfigValidationError("include_raw_source_snapshots must be a bool")
 
     return inspect_config_composition(
         config_path=config_path,
         overlays=tuple(overlays),
         overrides=tuple(overrides),
         recipe_catalog=recipe_catalog if recipe_catalog is not None else _get_default_recipe_catalog(),
+        include_raw_source_snapshots=include_raw_source_snapshots,
     ).to_composed_config()
 
 
@@ -180,6 +203,8 @@ def inspect_config_composition(
     overlays: list[str | Path] | tuple[str | Path, ...] = (),
     overrides: list[str] | tuple[str, ...] = (),
     recipe_catalog: RecipeCatalog | None = None,
+    *,
+    include_raw_source_snapshots: bool = False,
 ) -> ConfigCompositionInspection:
     from .compose import inspect_config_composition as _inspect_config_composition
 
@@ -189,12 +214,15 @@ def inspect_config_composition(
         raise ConfigValidationError("overrides may not be None")
     if recipe_catalog is not None and not isinstance(recipe_catalog, RecipeCatalog):
         raise ConfigValidationError("recipe_catalog must be a RecipeCatalog")
+    if not isinstance(include_raw_source_snapshots, bool):
+        raise ConfigValidationError("include_raw_source_snapshots must be a bool")
 
     return _inspect_config_composition(
         config_path=config_path,
         overlays=tuple(overlays),
         overrides=tuple(overrides),
         recipe_catalog=recipe_catalog if recipe_catalog is not None else _get_default_recipe_catalog(),
+        include_raw_source_snapshots=include_raw_source_snapshots,
     )
 
 
@@ -204,6 +232,7 @@ def compose_config_with_catalog(
     recipe_catalog: RecipeCatalog,
     overlays: list[str | Path] | tuple[str | Path, ...] = (),
     overrides: list[str] | tuple[str, ...] = (),
+    include_raw_source_snapshots: bool = False,
 ) -> ComposedConfig:
     from .compose import inspect_config_composition
 
@@ -213,12 +242,15 @@ def compose_config_with_catalog(
         raise ConfigValidationError("overlays may not be None")
     if overrides is None:
         raise ConfigValidationError("overrides may not be None")
+    if not isinstance(include_raw_source_snapshots, bool):
+        raise ConfigValidationError("include_raw_source_snapshots must be a bool")
 
     return inspect_config_composition(
         config_path=config_path,
         overlays=tuple(overlays),
         overrides=tuple(overrides),
         recipe_catalog=recipe_catalog,
+        include_raw_source_snapshots=include_raw_source_snapshots,
     ).to_composed_config()
 
 
@@ -248,6 +280,9 @@ __all__ = [
     "compose_config_with_catalog",
     "compare_config_artifact_fingerprints",
     "ConfigFingerprintComparison",
+    "RawSourceSnapshotBundle",
+    "RawSourceSnapshotPayload",
+    "RawSourceSnapshotReference",
     "ARTIFACT_SAFE_FINGERPRINT_LABEL",
     "ARTIFACT_SAFE_FINGERPRINT_POLICY",
     "ARTIFACT_SAFE_RUNTIME_REPLAY",

@@ -4,7 +4,14 @@ from typing import cast
 
 import pytest
 
-from loom.config.artifacts import CompositionManifest, ConfigFingerprintRecord, SourceArtifactRecord
+from loom.config.artifacts import (
+    CompositionManifest,
+    ConfigFingerprintRecord,
+    RawSourceSnapshotBundle,
+    RawSourceSnapshotPayload,
+    RawSourceSnapshotReference,
+    SourceArtifactRecord,
+)
 from loom.config.errors import ConfigProvenanceError
 from loom.config.provenance import ConfigProvenance, ConfigSource, ParsedOverride, SCHEMA_VERSION
 from loom.config.fingerprints import (
@@ -75,6 +82,66 @@ def test_source_artifact_contract_includes_future_source_roles() -> None:
 
     assert SourceArtifactRecord.from_dict(include_record.to_dict()) == include_record
     assert SourceArtifactRecord.from_dict(recipe_record.to_dict()) == recipe_record
+
+
+def test_raw_source_snapshot_contract_round_trip() -> None:
+    bundle = RawSourceSnapshotBundle(
+        schema_version=1,
+        enabled=False,
+        payloads=(
+            RawSourceSnapshotPayload(
+                payload_id="sha256:base:10",
+                content="value: base\n",
+                content_digest="sha256:base",
+                size_bytes=10,
+            ),
+        ),
+        references=(
+            RawSourceSnapshotReference(
+                kind="base",
+                order=0,
+                path="/tmp/base.yaml",
+                content_digest="sha256:base",
+                size_bytes=10,
+                availability="available",
+                payload_id="sha256:base:10",
+                reason="requested",
+            ),
+            RawSourceSnapshotReference(
+                kind="recipe",
+                order=1,
+                path="pipeline",
+                content_digest="sha256:recipe",
+                size_bytes=7,
+                availability="unavailable",
+                payload_id=None,
+                reason="unsupported_source_kind",
+            ),
+            RawSourceSnapshotReference(
+                kind="overlay",
+                order=2,
+                path="/tmp/overlay.yaml",
+                content_digest="sha256:overlay",
+                size_bytes=11,
+                availability="disabled",
+                payload_id=None,
+                reason="not_requested",
+            ),
+        ),
+        metadata={"request": False},
+    )
+
+    payload = bundle.to_dict()
+    assert payload["schema_version"] == 1
+    assert payload["enabled"] is False
+    payloads = cast(list[dict[str, object]], payload["payloads"])
+    references = cast(list[dict[str, object]], payload["references"])
+    assert len(payloads) == 1
+    assert len(references) == 3
+    assert references[2]["payload_id"] is None
+
+    round_trip = RawSourceSnapshotBundle.from_dict(payload)
+    assert round_trip == bundle
 
 
 def test_config_fingerprint_record_contract_round_trip() -> None:

@@ -19,7 +19,21 @@ ConfigKind = Literal["base", "overlay"]
 
 def load_config(path: str | Path, *, kind: ConfigKind, order: int) -> tuple[dict[str, PlainData], ConfigSource]:
     """Load one YAML config source and return the validated plain mapping."""
+    plain_mapping, source, _text = _load_config(path=path, kind=kind, order=order)
+    return plain_mapping, source
 
+
+def load_config_with_source_text(path: str | Path, *, kind: ConfigKind, order: int) -> tuple[dict[str, PlainData], ConfigSource, str]:
+    """Load one YAML config source and return text for optional snapshot capture."""
+    return _load_config(path=path, kind=kind, order=order)
+
+
+def _load_config(
+    path: str | Path,
+    *,
+    kind: ConfigKind,
+    order: int,
+) -> tuple[dict[str, PlainData], ConfigSource, str]:
     resolved_path = _resolve_config_path(path, kind=kind, order=order)
     raw = _read_raw_bytes(resolved_path, kind=kind, order=order)
     content_digest = hash_bytes(raw)
@@ -37,7 +51,8 @@ def load_config(path: str | Path, *, kind: ConfigKind, order: int) -> tuple[dict
         content_digest=content_digest,
         size_bytes=len(raw),
     )
-    return plain_mapping, source
+
+    return plain_mapping, source, text
 
 
 def _resolve_config_path(path: str | Path, *, kind: ConfigKind, order: int) -> Path:

@@ -20,6 +20,9 @@ if TYPE_CHECKING:
         ARTIFACT_SAFE_FINGERPRINT_POLICY,
         ARTIFACT_SAFE_RUNTIME_REPLAY,
         ConfigFingerprintComparison,
+        RawSourceSnapshotBundle,
+        RawSourceSnapshotPayload,
+        RawSourceSnapshotReference,
         compare_config_artifact_fingerprints,
         compose_config,
         compose_config_with_catalog,
@@ -43,6 +46,9 @@ _OPTIONAL_SYMBOLS: Final = frozenset(
         "compose_config_with_catalog",
         "compare_config_artifact_fingerprints",
         "ConfigFingerprintComparison",
+        "RawSourceSnapshotBundle",
+        "RawSourceSnapshotPayload",
+        "RawSourceSnapshotReference",
         "ARTIFACT_SAFE_FINGERPRINT_LABEL",
         "ARTIFACT_SAFE_FINGERPRINT_POLICY",
         "ARTIFACT_SAFE_RUNTIME_REPLAY",
@@ -72,6 +78,9 @@ def _resolve_optional_symbol(name: str) -> object:
         case (
             "compare_config_artifact_fingerprints"
             | "ConfigFingerprintComparison"
+            | "RawSourceSnapshotBundle"
+            | "RawSourceSnapshotPayload"
+            | "RawSourceSnapshotReference"
             | "ARTIFACT_SAFE_FINGERPRINT_LABEL"
             | "ARTIFACT_SAFE_FINGERPRINT_POLICY"
             | "ARTIFACT_SAFE_RUNTIME_REPLAY"
@@ -124,6 +133,9 @@ __all__ = [
     "compose_config_with_catalog",
     "compare_config_artifact_fingerprints",
     "ConfigFingerprintComparison",
+    "RawSourceSnapshotBundle",
+    "RawSourceSnapshotPayload",
+    "RawSourceSnapshotReference",
     "ARTIFACT_SAFE_FINGERPRINT_LABEL",
     "ARTIFACT_SAFE_FINGERPRINT_POLICY",
     "ARTIFACT_SAFE_RUNTIME_REPLAY",
