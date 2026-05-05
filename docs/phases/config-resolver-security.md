@@ -253,12 +253,15 @@ make test-summary
 - PR preparation:
   - Draft body pass completed on 2026-05-05 using `.codex/prompts/pr-body-draft.md`.
   - PR body artifact: `docs/phases/config-resolver-security-pr-body.md`.
-  - PR body refine pass: pending because expanded path is active.
-  - PR opening: intentionally deferred to the expanded-path refine pass; no PR created in this draft pass.
+  - PR body refine pass: completed on 2026-05-05 using `.codex/prompts/pr-body-refine.md`.
+  - PR opening: completed on 2026-05-05.
+  - PR URL: https://github.com/samcantrill/loom/pull/34
+  - PR verification: `gh pr view 34 --json baseRefName,headRefName,state,url` returned `baseRefName=develop`, `headRefName=codex/config-resolver-security`, `state=OPEN`, `url=https://github.com/samcantrill/loom/pull/34`.
   - Intended PR title: `Configuration - Phase 8: Resolver Security And Runtime Interpolation`.
-  - PR facts confirmed for draft: branch `codex/config-resolver-security`; target branch `develop`; stack predecessor none; root phase; merge eligible into `develop` only after PR refine/open, review, and passing checks.
-  - Scope confirmed for draft: private `loom.config` resolver/interpolation hardening only; no public root exports, public `ComposedConfig` fields, manifest/source-artifact/fingerprint/provenance population, CLI behavior, pipeline imports, run-store writes, resolver plugins, remote resolvers, recipe behavior changes, or `_copy_`.
-  - Validation evidence used for draft:
+  - PR facts confirmed for refine/open: branch `codex/config-resolver-security`; target branch `develop`; stack predecessor none; root phase; merge eligible after review and passing checks because the PR targets `develop`.
+  - GitHub/auth notes: sandboxed `gh auth status` reported the stored token as invalid, then approved outside-sandbox `gh auth status` succeeded; `gh auth setup-git`, `git ls-remote --heads origin develop`, branch push, PR creation, and PR verification all succeeded with approved network access.
+  - Scope confirmed for refine/open: private `loom.config` resolver/interpolation hardening only; no public root exports, public `ComposedConfig` fields, manifest/source-artifact/fingerprint/provenance population, CLI behavior, pipeline imports, run-store writes, resolver plugins, remote resolvers, recipe behavior changes, or `_copy_`.
+  - Validation evidence used for draft/refine:
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_interpolation.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` passed: 24 passed.
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_includes.py tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_overrides.py tests/package/test_import_boundaries.py` passed: 83 passed.
     - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed; Pyright passed with 0 errors; default suite passed with 426 passed and 9 skipped; config-extra suite passed with 236 passed and 431 deselected; build succeeded.

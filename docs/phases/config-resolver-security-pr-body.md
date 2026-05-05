@@ -34,7 +34,7 @@ New tests implemented:
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall 667 passed, 0 failed, 8 skipped, 431 deselected. |
 | Targeted resolver/error suite | Passed | `tests/unit/loom/config/test_interpolation.py`, `tests/unit/loom/config/test_config_errors.py`, and `tests/contracts/test_config_error_contract.py`: 24 passed. |
 | Targeted include/recipe/compose/import suite | Passed | Include, recipe expansion, resolver compose, override compose, and import-boundary targets: 83 passed. |
-| GitHub checks | Pending | PR creation is intentionally deferred to the expanded-path PR-body refine pass. |
+| GitHub checks | Pending | Available after PR creation; review the opened PR checks for remote CI status. |
 
 ### Test Suite Summary
 
