@@ -1267,9 +1267,10 @@ Phase metadata:
 
 ### Phase 5 - Include Resolution Primitives
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-include-resolution`
 PR: https://github.com/samcantrill/loom/pull/29
+Follow-up PR: https://github.com/samcantrill/loom/pull/30
 
 Goal:
 
@@ -1319,7 +1320,24 @@ PR-open notes:
   containment validation for normalized symlink escapes.
 - Validation: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed
   with overall 620 passed, 0 failed, 0 errors, 8 skipped, and 429 deselected.
-- PR review: pending.
+- PR review: `loom_phase_reviewer` found one blocking `file://` decoded-path
+  representability issue. The user-authorized blocker-resolution subagent fixed
+  it, but PR #29 had already merged before that commit reached `develop`.
+- Merge result: PR #29 merged into `develop` at 2026-05-05T08:49:43Z with
+  merge commit `efa914c65e2f76967e3d945b934d56a3864fed7c`.
+- Blocker follow-up: PR #30 cherry-picked the exact scoped fix onto updated
+  `develop`; it merged at 2026-05-05T08:59:44Z with merge commit
+  `5612c3b30dd6ef87a5be05e3223019389bf452d3`.
+- Follow-up validation: PR #30 GitHub CI `checks` passed; local
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; local
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall
+  621 passed, 0 failed, 0 errors, 8 skipped, and 429 deselected.
+- Follow-up notes: Phase 5 now rejects decoded `file://` paths with embedded
+  NUL bytes before candidate validation using structured
+  `ConfigIncludeResolutionError` context. No recursive include expansion, user
+  include replacement, public inspection/source-map API, manifest/provenance
+  population, fingerprint changes, raw source persistence, CLI behavior,
+  pipeline imports, or root package exports were added.
 
 ### Phase 6 - File-Defined Recursive Includes
 
