@@ -231,7 +231,7 @@ make test-summary
 
 - Phase execution plan draft: used
 - Phase execution plan refine: used
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -248,7 +248,17 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_merge.py tests/unit/loom/config/test_compose.py` ✅ (28 passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/config/test_compose_config.py tests/integration/config/test_source_maps.py` ✅ (5 passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest ...` initially blocked on first run by read-only uv cache and DNS/network constraints; resolved by using writable cache directory and installing optional config extras once.
-- Refinement summary: implementation refinement budget remains unused.
+- Implementation refinement:
+  - Budget status: used by the single expanded-path Phase 4 implementation/test refinement pass.
+  - Validation output reviewed: prior executor validation in these completion notes plus the manager finding that source-aware `_replace_: true` semantics diverged from Phase 3 `merge_configs`.
+  - Blocking issue caused by this phase: `src/loom/config/source_maps.py` reused normal recursive merge semantics while normalizing replacement children, which incorrectly reintroduced lower-precedence descendants under whole-section replacements.
+  - Fix summary: replacement children now use replacement-mode normalization that mirrors `merge_configs`, so root and nested `_replace_: true` consume markers, validate nested marker lower mappings, discard lower source-map descendants under replaced subtrees, and author retained replacement descendants to the overlay source.
+  - Regression coverage: source-map unit tests now compare replacement outputs with `merge_configs` for root replacement, nested replacement under a replaced section/root, lower-mapping failure cases, and source-map marker/descendant discard expectations.
+  - Validation rerun:
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_source_maps.py` ✅ (11 passed)
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_merge.py tests/unit/loom/config/test_compose.py` ✅ (28 passed)
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/config/test_compose_config.py tests/integration/config/test_source_maps.py` ✅ (5 passed)
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/source_maps.py tests/unit/loom/config/test_source_maps.py tests/integration/config/test_source_maps.py` ✅
 - PR preparation: not started (per user scope).
 - Stack maintenance: no stack changes required in this scope.
 - Remaining blockers: none.

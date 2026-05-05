@@ -236,13 +236,48 @@ def _merge_replace_mapping_with_sources(
     merged: dict[str, PlainData] = {}
     for key, overlay_raw_value in replacement_value.items():
         child_path = path + (key,)
-        overlay_child = _normalize_mapping_value(
+        merged[key] = _normalize_replacement_value_with_sources(
             overlay_raw_value,
-            path=f"{_format_config_path(child_path)}",
-        )
-        merged[key] = _merge_value_with_sources(
             base_value=base_mapping.get(key),
-            overlay_value=overlay_child,
+            path=child_path,
+            source=source,
+            source_map=source_map,
+        )
+
+    return merged
+
+
+def _normalize_replacement_value_with_sources(
+    value: object,
+    *,
+    base_value: PlainData | None,
+    path: ConfigPath,
+    source: ConfigSource,
+    source_map: dict[ConfigPath, ConfigSource],
+) -> PlainData:
+    replacement_value = _normalize_mapping_value(value, path=_format_config_path(path))
+    if not isinstance(replacement_value, dict):
+        _set_value_source(source_map, path=path, value=replacement_value, source=source)
+        return replacement_value
+
+    replacement_mapping = cast(dict[str, PlainData], replacement_value)
+    if _REPLACE_KEY in replacement_mapping:
+        return _merge_replace_mapping_with_sources(
+            base_value=base_value,
+            overlay_value=replacement_mapping,
+            path=path,
+            source=source,
+            source_map=source_map,
+        )
+
+    source_map[path] = source
+    base_mapping = base_value if isinstance(base_value, Mapping) else {}
+    merged: dict[str, PlainData] = {}
+    for key, child_value in replacement_mapping.items():
+        child_path = path + (key,)
+        merged[key] = _normalize_replacement_value_with_sources(
+            child_value,
+            base_value=base_mapping.get(key),
             path=child_path,
             source=source,
             source_map=source_map,

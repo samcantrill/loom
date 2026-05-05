@@ -3,6 +3,7 @@ from typing import Mapping, cast
 import pytest
 
 from loom.config.errors import ConfigMergeError
+from loom.config.merge import merge_configs
 from loom.config.provenance import ConfigSource
 from loom.config.source_maps import (
     ConfigPath,
@@ -152,7 +153,8 @@ def test_replace_marker_discarded_and_removes_replaced_descendants() -> None:
         overlays=[(overlay, overlay_source)],
     )
 
-    assert merged.config == {"section": {"kept": {"old": 1, "new": 2}, "stale": "still-there"}}
+    assert merged.config == merge_configs(base, overlay)
+    assert merged.config == {"section": {"kept": {"new": 2}, "stale": "still-there"}}
     assert ("section", "_replace_") not in merged.source_map
     assert ("section", "removed") not in merged.source_map
     assert ("section", "kept", "old") not in merged.source_map
@@ -162,13 +164,80 @@ def test_replace_marker_discarded_and_removes_replaced_descendants() -> None:
     assert_source(("section", "stale"), merged.source_map, overlay_source)
 
 
-def test_invalid_replace_marker_still_raises_config_merge_error() -> None:
+def test_nested_replace_marker_under_replaced_section_matches_merge_configs() -> None:
+    base = plain_config({"section": {"nested": {"old": 1}, "stale": True}})
+    overlay = plain_config({"section": {"_replace_": True, "nested": {"_replace_": True, "new": 2}}})
+
+    base_source = source(kind="base", path="/base.yaml", order=0)
+    overlay_source = source(kind="overlay", path="/overlay.yaml", order=1)
+
+    merged = compose_config_with_sources(
+        base_config=base,
+        base_source=base_source,
+        overlays=[(overlay, overlay_source)],
+    )
+
+    assert merged.config == merge_configs(base, overlay)
+    assert merged.config == {"section": {"nested": {"new": 2}}}
+    assert ("section", "_replace_") not in merged.source_map
+    assert ("section", "nested", "_replace_") not in merged.source_map
+    assert ("section", "nested", "old") not in merged.source_map
+    assert ("section", "stale") not in merged.source_map
+    assert_source(("section",), merged.source_map, overlay_source)
+    assert_source(("section", "nested"), merged.source_map, overlay_source)
+    assert_source(("section", "nested", "new"), merged.source_map, overlay_source)
+
+
+def test_nested_replace_marker_under_root_replacement_matches_merge_configs() -> None:
+    base = plain_config({"nested": {"old": 1}, "stale": True})
+    overlay = plain_config({"_replace_": True, "nested": {"_replace_": True, "new": 2}})
+
+    base_source = source(kind="base", path="/base.yaml", order=0)
+    overlay_source = source(kind="overlay", path="/overlay.yaml", order=1)
+
+    merged = compose_config_with_sources(
+        base_config=base,
+        base_source=base_source,
+        overlays=[(overlay, overlay_source)],
+    )
+
+    assert merged.config == merge_configs(base, overlay)
+    assert merged.config == {"nested": {"new": 2}}
+    assert ("_replace_",) not in merged.source_map
+    assert ("nested", "_replace_") not in merged.source_map
+    assert ("nested", "old") not in merged.source_map
+    assert ("stale",) not in merged.source_map
+    assert_source((), merged.source_map, overlay_source)
+    assert_source(("nested",), merged.source_map, overlay_source)
+    assert_source(("nested", "new"), merged.source_map, overlay_source)
+
+
+def test_nested_replace_marker_missing_lower_mapping_matches_merge_configs_failure() -> None:
     base = plain_config({"section": {"a": 1}})
     overlay = plain_config({"section": {"_replace_": True, "nested": {"_replace_": True, "x": 1}}})
 
     base_source = source(kind="base", path="/base.yaml", order=0)
     overlay_source = source(kind="overlay", path="/overlay.yaml", order=1)
 
+    with pytest.raises(ConfigMergeError):
+        merge_configs(base, overlay)
+    with pytest.raises(ConfigMergeError):
+        compose_config_with_sources(
+            base_config=base,
+            base_source=base_source,
+            overlays=[(overlay, overlay_source)],
+        )
+
+
+def test_nested_replace_marker_under_root_missing_lower_mapping_matches_merge_configs_failure() -> None:
+    base = plain_config({"section": {"a": 1}})
+    overlay = plain_config({"_replace_": True, "nested": {"_replace_": True, "x": 1}})
+
+    base_source = source(kind="base", path="/base.yaml", order=0)
+    overlay_source = source(kind="overlay", path="/overlay.yaml", order=1)
+
+    with pytest.raises(ConfigMergeError):
+        merge_configs(base, overlay)
     with pytest.raises(ConfigMergeError):
         compose_config_with_sources(
             base_config=base,
