@@ -252,11 +252,19 @@ make test-summary
 
 ## Completion Notes
 
-- Draft plan: completed in this artifact by `loom_phase_planner`; implementation not started.
-- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation not started.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Draft plan: completed in this artifact by `loom_phase_planner`; implementation completed.
+- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation completed.
+- Implementation summary: completed in `src/loom/config/overrides.py` and `src/loom/config/merge.py` with strict `+path` parent-creation behavior retained for add only, ordered strict update/add overrides, non-mutation guarantees, and `_replace_` merge semantics including recursive mapping replacement, marker validation, and marker removal.
+- Implementation validation: targeted tests run and passed for override/merge scope.
 - Refinement summary: clarified `_replace_` as an explicit whole-section mapping replacement marker while absence of `_replace_` means recursive mapping merge; clarified scalar/list/null and mapping-over-non-mapping replacements do not require `_replace_`; clarified `+` add parent creation and update strictness; bounded current `compose_config` testing to strict helper behavior without Phase 7/9/12 ordering decisions; decided override/merge errors may remain message-only with stable subclasses/tests unless local `ConfigErrorContext` wiring is trivial; tightened suite obligations and Spark executor stop conditions.
 - PR preparation: pending.
+
+### Completion Validation
+
+- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_overrides.py` (pass)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_merge.py` (pass)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` (pass)
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass)
+- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass)
 - Stack maintenance: none yet.
 - Remaining blockers: none.
