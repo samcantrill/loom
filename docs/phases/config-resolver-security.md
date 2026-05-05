@@ -250,6 +250,18 @@ make test-summary
   - Issues confirmed out of scope: wrapping user-composition include target resolver expressions as `ConfigIncludeExpansionError`; preserving the existing `ConfigIncludeResolutionError`/`resolver_dependent` include contract is the refined phase behavior.
   - Fixes made: `ConfigUnsupportedResolverError` now inherits the structured config error base while remaining catchable as `NotImplementedError`; resolver scanning uses repository config-path formatting and scans balanced nested interpolation tokens before OmegaConf resolution; include override resolver-expression tests now expect `ConfigIncludeResolutionError` for the existing include target contract; type-check narrowing/casts were added for validation.
 - Refinement summary: clarified `oc.env`-only runtime resolver allow-list, private artifact-safe scanner/no-execution semantics, include/user-composition resolver-expression coverage, recipe no-execution boundaries, structured error tests, and unchanged artifact/pipeline/CLI scope.
-- PR preparation: pending.
-- Stack maintenance: pending.
+- PR preparation:
+  - Draft body pass completed on 2026-05-05 using `.codex/prompts/pr-body-draft.md`.
+  - PR body artifact: `docs/phases/config-resolver-security-pr-body.md`.
+  - PR body refine pass: pending because expanded path is active.
+  - PR opening: intentionally deferred to the expanded-path refine pass; no PR created in this draft pass.
+  - Intended PR title: `Configuration - Phase 8: Resolver Security And Runtime Interpolation`.
+  - PR facts confirmed for draft: branch `codex/config-resolver-security`; target branch `develop`; stack predecessor none; root phase; merge eligible into `develop` only after PR refine/open, review, and passing checks.
+  - Scope confirmed for draft: private `loom.config` resolver/interpolation hardening only; no public root exports, public `ComposedConfig` fields, manifest/source-artifact/fingerprint/provenance population, CLI behavior, pipeline imports, run-store writes, resolver plugins, remote resolvers, recipe behavior changes, or `_copy_`.
+  - Validation evidence used for draft:
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_interpolation.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` passed: 24 passed.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_includes.py tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_overrides.py tests/package/test_import_boundaries.py` passed: 83 passed.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed; Pyright passed with 0 errors; default suite passed with 426 passed and 9 skipped; config-extra suite passed with 236 passed and 431 deselected; build succeeded.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 27 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 236 passed/431 deselected.
+- Stack maintenance: no predecessor and no retarget/rebase work in this draft pass; branch cleanup remains deferred until after merge and successor dependency checks.
 - Remaining blockers: none known after the single implementation refinement pass.
