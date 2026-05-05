@@ -2141,7 +2141,7 @@ Completion notes:
 
 ### Phase 16 - Hardening, Documentation, And End-To-End Coverage
 
-Status: pr_open
+Status: merged
 Branch: `codex/harden-config-composition-v1`
 PR: https://github.com/samcantrill/loom/pull/43
 
@@ -2188,7 +2188,7 @@ Test expectations:
 Completion notes:
 
 - Phase execution plan: `docs/phases/harden-config-composition-v1.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is open against
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
   `develop`.
 - Implementation path note: the initial Spark executor hit the configured usage
   limit before editing; the workflow's explicit fallback path used a
@@ -2216,9 +2216,20 @@ Completion notes:
   31 passed/2 skipped, integration 9 passed/5 skipped, e2e 6 passed, and
   config-extra 301 passed/436 deselected. The final docs-only wording fix was
   confirmed with `git diff --check` and focused stale-phrase scans.
-- PR notes: opened and verified on PR #43 with base `develop`, head
-  `codex/harden-config-composition-v1`, and state `OPEN`. GitHub CI was pending
-  at this metadata update.
+- Pre-merge target check: PR #43 was verified immediately before merge with
+  base `develop`, head `codex/harden-config-composition-v1`, state `OPEN`,
+  clean merge state, and successful GitHub CI `checks`. A formal GitHub
+  approval review could not be posted because GitHub does not allow the PR
+  author to approve their own PR; the focused confirmation gate supplied the
+  workflow review approval.
+- Merge result: PR #43 merged into `develop` at 2026-05-05T18:35:20Z with
+  merge commit `f9458a813c3e444ca5aa8252c5cde86d5d2f3e24`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/harden-config-composition-v1` when PR #43 merged. The GitHub merge
+  command merged the PR but could not delete the local branch while its
+  worktree was attached; branch and worktree cleanup are safe after this
+  metadata update.
 
 ## Test Structure And Fixtures
 
