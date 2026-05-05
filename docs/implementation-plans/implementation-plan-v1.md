@@ -1127,7 +1127,7 @@ Phase metadata:
 
 ### Phase 3 - Overrides And Merge Primitives
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-overrides-merge`
 PR: https://github.com/samcantrill/loom/pull/27
 
@@ -1170,16 +1170,25 @@ Phase metadata:
 - Stack predecessor: none
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR status: opened as PR #27 at
-  https://github.com/samcantrill/loom/pull/27; verified base `develop`, head
-  `codex/config-overrides-merge`, state `OPEN`.
+- Merge result: PR #27 merged into `develop` at
+  `362adf642170db274652b194b20b6592d2d8be71` on 2026-05-05 after PR review,
+  blocker resolution, local validation, and GitHub CI `checks` passed.
 - Implementation summary: added strict `_replace_` merge semantics, including
   root-level replacement, recursive mapping merge when `_replace_` is absent,
   scalar/list/null and type replacement behavior, marker validation and
-  omission, input non-mutation, and focused strict override/merge coverage.
+  omission, nested marker handling inside replacement subtrees, input
+  non-mutation, and focused strict override/merge coverage.
 - Validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall suite
   status `passed`; GitHub CI check `checks` passed on PR #27.
+- Blocking review finding: nested `_replace_` markers could leak into returned
+  config when they appeared inside a whole-section replacement subtree.
+- Blocker resolution: user authorized one scoped blocker-resolution pass on the
+  open PR branch. Commit `ea42824d65f65f730b1bf1bb163c1caa35f7ffa5` prevents
+  nested markers from leaking by consuming them when a corresponding
+  lower-precedence mapping exists and rejecting them with `ConfigMergeError`
+  otherwise; targeted tests, `make validate-pr`, `make test-summary`, and
+  GitHub CI all passed afterward.
 - Follow-up notes: override and merge errors remain message-only stable
   subclasses; no includes, source-authored overlays, recipe ordering changes,
   public inspection API, persistence, CLI, provenance population, fingerprints,

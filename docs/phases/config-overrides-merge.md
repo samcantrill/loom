@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 3: Overrides and Merge Primitives`
 - Branch: `codex/config-overrides-merge`
@@ -26,6 +26,9 @@
 - Refine pass: completed by `loom_phase_planner`; expanded-path refinement tightened `_replace_` semantics, override parent-creation behavior, compose/recipe compatibility boundaries, error-structure decisions, suite obligations, and executor stop conditions.
 - Setup limitations: branch and worktree were created from local `develop`; initial sandboxed worktree creation could not create the nested `codex/...` branch ref, then succeeded with approved escalated Git worktree access.
 - Blockers: none.
+- Merge result: PR #27 merged into `develop` at
+  `362adf642170db274652b194b20b6592d2d8be71` on 2026-05-05 after PR review,
+  blocker resolution, local validation, and GitHub CI `checks` passed.
 
 ## Objective
 
