@@ -232,23 +232,25 @@ make test-summary
 
 - Phase execution plan draft: used
 - Phase execution plan refine: used
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
 
 - Draft plan: completed in this artifact by `loom_phase_planner`.
-- Final phase execution plan: refined by `loom_phase_planner` in this artifact; implementation refinement and PR review budgets remain unused.
+- Final phase execution plan: refined by `loom_phase_planner` in this artifact; implementation refinement budget is now used and PR review budget remains unused.
 - Implementation summary:
   - Added internal include target resolver in `src/loom/config/includes.py` with deterministic classification for bare-name, explicit relative, absolute, and local `file://` forms.
   - Added `ConfigIncludeResolutionError` to `loom.config.errors` (unexported from package root) and structured source/site/error-context payloads for resolver failures.
   - Added `tests/unit/loom/config/test_includes.py` covering accepted forms and documented failure branches for this phase.
   - Added include-error shape and contract coverage in `tests/unit/loom/config/test_config_errors.py` and `tests/contracts/test_config_error_contract.py`.
 - Implementation validation:
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_includes.py` (23 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_includes.py` (30 passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (10 passed)
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py` (14 passed, 1 skipped)
-- Refinement summary: completed; manager review focus was incorporated without changing branch, base, target, or implementation/PR-review budgets.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py` (17 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (0 errors, 0 warnings)
+- Refinement summary: completed on 2026-05-05; tightened explicit-relative classification so standalone dot-prefixed names are rejected unless authored with a documented relative indicator, required `file://` instead of ambiguous `file:/` forms, normalized returned and error candidate paths, rejected invalid UTF-8 percent escapes, and narrowed include-test `ConfigSource.kind` typing for Pyright.
 - PR preparation: not performed (user requested stop after implementation and initial validation).
 - Stack maintenance: none changed; no successor dependency in-flight.
 - Remaining blockers: none.

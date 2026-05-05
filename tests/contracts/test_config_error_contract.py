@@ -70,7 +70,9 @@ def test_config_error_context_rejects_non_plain_details_before_serialization() -
         )
 
 
-def test_config_error_context_rejects_non_mapping_details_before_serialization() -> None:
+def test_config_error_context_rejects_non_mapping_details_before_serialization() -> (
+    None
+):
     with pytest.raises(TypeError, match="details must be a mapping"):
         ConfigErrorContext(
             code="non_plain_context",
@@ -94,7 +96,7 @@ def test_config_include_resolution_error_serializes_structured_context() -> None
             actual="missing",
             details={
                 "authored_target": "missing.yaml",
-                "include_site_path": ("model", "_include_"),
+                "include_site_path": ["model", "_include_"],
                 "candidate_path": "/tmp/model/missing.yaml",
                 "target_kind": "explicit_relative",
                 "explicit_escape": True,

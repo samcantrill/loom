@@ -5,8 +5,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal
-from urllib.parse import SplitResult, unquote, urlparse
+from typing import Final, Literal, cast
+from urllib.parse import ParseResult, unquote_to_bytes, urlparse
+
+from loom.serialization import PlainData, to_plain_data
 
 from .errors import ConfigErrorContext, ConfigIncludeResolutionError
 from .provenance import ConfigSource
@@ -90,25 +92,18 @@ def resolve_include_target(
             details={"reason": "unsupported_path_separator"},
         )
 
-    if target.startswith((".", "./", "../")) or target.startswith("/"):
-        absolute_or_relative = Path(target)
-        kind: IncludeTargetKind
-        if absolute_or_relative.is_absolute():
-            kind = "absolute"
-        else:
-            kind = "explicit_relative"
+    target_path = Path(target)
+    if target_path.is_absolute():
         return _validate_candidate(
             target=target,
-            candidate=absolute_or_relative
-            if absolute_or_relative.is_absolute()
-            else source_path.parent.joinpath(target),
+            candidate=target_path,
             source=source,
             include_site_path=include_site_path,
-            kind=kind,
+            kind="absolute",
             explicit_escape=True,
         )
 
-    if "/" in target or Path(target).suffix:
+    if _is_explicit_relative_target(target):
         explicit = source_path.parent.joinpath(target)
         return _validate_candidate(
             target=target,
@@ -133,7 +128,7 @@ def resolve_include_target(
 def _resolve_uri_target(
     *,
     target: str,
-    parsed: SplitResult,
+    parsed: ParseResult,
     source: ConfigSource,
     include_site_path: ConfigPath,
 ) -> IncludeResolutionResult:
@@ -151,6 +146,19 @@ def _resolve_uri_target(
             details={
                 "scheme": scheme,
                 "reason": "unsupported_scheme",
+            },
+        )
+
+    if not target.lower().startswith("file://"):
+        raise _include_error(
+            "file URI targets must use file:// form.",
+            code="invalid_file_uri",
+            source=source,
+            include_site_path=include_site_path,
+            authored_target=target,
+            details={
+                "scheme": scheme,
+                "reason": "ambiguous_file_uri_form",
             },
         )
 
@@ -217,7 +225,12 @@ def _resolve_uri_target(
         include_site_path=include_site_path,
         authored_target=target,
     )
-    decoded_path = unquote(raw_path)
+    decoded_path = _decode_file_uri_path(
+        raw_path=raw_path,
+        source=source,
+        include_site_path=include_site_path,
+        authored_target=target,
+    )
     candidate = Path(decoded_path)
 
     return _validate_candidate(
@@ -251,7 +264,10 @@ def _resolve_bare_name_target(
                 source=source,
                 include_site_path=include_site_path,
                 authored_target=target,
-                details={"reason": "include_site_segment_type", "segment": repr(segment)},
+                details={
+                    "reason": "include_site_segment_type",
+                    "segment": repr(segment),
+                },
             )
         _validate_bare_parent_segment(
             segment=segment,
@@ -283,9 +299,11 @@ def _validate_candidate(
     explicit_escape: bool,
     details: dict[str, object] | None = None,
 ) -> IncludeResolutionResult:
-    if not candidate.exists():
+    normalized_candidate = candidate.resolve(strict=False)
+
+    if not normalized_candidate.exists():
         raise _include_error(
-            f"Include target does not resolve to an existing file: {candidate}",
+            f"Include target does not resolve to an existing file: {normalized_candidate}",
             code="target_not_found",
             source=source,
             include_site_path=include_site_path,
@@ -293,16 +311,16 @@ def _validate_candidate(
             expected="existing regular file",
             actual="missing target",
             details={
-                "candidate_path": str(candidate),
+                "candidate_path": str(normalized_candidate),
                 "target_kind": kind,
                 "explicit_escape": explicit_escape,
                 **(details or {}),
             },
         )
 
-    if not candidate.is_file():
+    if not normalized_candidate.is_file():
         raise _include_error(
-            f"Include target must resolve to a regular file: {candidate}",
+            f"Include target must resolve to a regular file: {normalized_candidate}",
             code="target_not_file",
             source=source,
             include_site_path=include_site_path,
@@ -310,7 +328,7 @@ def _validate_candidate(
             expected="regular file",
             actual="directory",
             details={
-                "candidate_path": str(candidate),
+                "candidate_path": str(normalized_candidate),
                 "target_kind": kind,
                 "explicit_escape": explicit_escape,
                 **(details or {}),
@@ -321,13 +339,15 @@ def _validate_candidate(
         authored_target=target,
         include_site_path=include_site_path,
         source_path=str(source.path),
-        resolved_path=candidate,
+        resolved_path=normalized_candidate,
         target_kind=kind,
         explicit_escape=explicit_escape,
     )
 
 
-def _validate_include_site_path(source: ConfigSource, include_site_path: ConfigPath) -> None:
+def _validate_include_site_path(
+    source: ConfigSource, include_site_path: ConfigPath
+) -> None:
     if not include_site_path:
         raise _include_error(
             "Include-site path must be non-empty and end in _include_.",
@@ -359,7 +379,10 @@ def _validate_include_site_path(source: ConfigSource, include_site_path: ConfigP
                 source=source,
                 include_site_path=include_site_path,
                 authored_target="",
-                details={"reason": "include_site_segment_type", "segment": repr(segment)},
+                details={
+                    "reason": "include_site_segment_type",
+                    "segment": repr(segment),
+                },
             )
 
         if segment in _DOT_SEGMENTS or not segment:
@@ -455,7 +478,11 @@ def _validate_file_uri_path(
             source=source,
             include_site_path=include_site_path,
             authored_target=authored_target,
-            details={"scheme": "file", "path": raw_path, "reason": "empty_file_uri_path"},
+            details={
+                "scheme": "file",
+                "path": raw_path,
+                "reason": "empty_file_uri_path",
+            },
         )
 
     if "%" in raw_path and not _is_valid_percent_encoding(raw_path):
@@ -465,7 +492,11 @@ def _validate_file_uri_path(
             source=source,
             include_site_path=include_site_path,
             authored_target=authored_target,
-            details={"scheme": "file", "path": raw_path, "reason": "malformed_percent_escape"},
+            details={
+                "scheme": "file",
+                "path": raw_path,
+                "reason": "malformed_percent_escape",
+            },
         )
 
     lowered = raw_path.lower()
@@ -476,7 +507,11 @@ def _validate_file_uri_path(
             source=source,
             include_site_path=include_site_path,
             authored_target=authored_target,
-            details={"scheme": "file", "path": raw_path, "reason": "escaped_path_separator"},
+            details={
+                "scheme": "file",
+                "path": raw_path,
+                "reason": "escaped_path_separator",
+            },
         )
 
     if "%5c" in lowered:
@@ -486,7 +521,11 @@ def _validate_file_uri_path(
             source=source,
             include_site_path=include_site_path,
             authored_target=authored_target,
-            details={"scheme": "file", "path": raw_path, "reason": "escaped_path_separator"},
+            details={
+                "scheme": "file",
+                "path": raw_path,
+                "reason": "escaped_path_separator",
+            },
         )
 
     if "%2e" in lowered:
@@ -496,7 +535,11 @@ def _validate_file_uri_path(
             source=source,
             include_site_path=include_site_path,
             authored_target=authored_target,
-            details={"scheme": "file", "path": raw_path, "reason": "encoded_dot_segment"},
+            details={
+                "scheme": "file",
+                "path": raw_path,
+                "reason": "encoded_dot_segment",
+            },
         )
 
     if not raw_path.startswith("/"):
@@ -508,6 +551,40 @@ def _validate_file_uri_path(
             authored_target=authored_target,
             details={"scheme": "file", "path": raw_path, "reason": "non_absolute_path"},
         )
+
+
+def _decode_file_uri_path(
+    *,
+    raw_path: str,
+    source: ConfigSource,
+    include_site_path: ConfigPath,
+    authored_target: str,
+) -> str:
+    try:
+        return unquote_to_bytes(raw_path).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise _include_error(
+            "file URI percent escapes must decode as valid UTF-8.",
+            code="invalid_file_uri",
+            source=source,
+            include_site_path=include_site_path,
+            authored_target=authored_target,
+            details={
+                "scheme": "file",
+                "path": raw_path,
+                "reason": "invalid_utf8_percent_escape",
+            },
+        ) from exc
+
+
+def _is_explicit_relative_target(target: str) -> bool:
+    if target.startswith(("./", "../")):
+        return True
+    if "/" in target:
+        return True
+    if target.startswith("."):
+        return False
+    return bool(Path(target).suffix)
 
 
 def _is_valid_percent_encoding(value: str) -> bool:
@@ -538,6 +615,10 @@ def _include_error(
 ) -> ConfigIncludeResolutionError:
     payload = dict(details or {})
     payload["authored_target"] = authored_target
+    plain_details = to_plain_data(payload)
+    if not isinstance(plain_details, dict):
+        raise TypeError("Config include resolution error details must be a mapping")
+
     return ConfigIncludeResolutionError(
         message,
         context=ConfigErrorContext(
@@ -546,8 +627,14 @@ def _include_error(
             source_order=source.order,
             source_path=str(source.path),
             config_path=format_config_path(include_site_path),
-            expected=expected,
-            actual=actual,
-            details=payload,
+            expected=_optional_plain_data(expected),
+            actual=_optional_plain_data(actual),
+            details=cast(dict[str, PlainData], plain_details),
         ),
     )
+
+
+def _optional_plain_data(value: object | None) -> PlainData | None:
+    if value is None:
+        return None
+    return to_plain_data(value)
