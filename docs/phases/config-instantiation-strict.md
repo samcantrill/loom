@@ -222,8 +222,20 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; committed as `plan: refine phase execution plan`.
 - Implementation summary:
+  - Added strict contract tests for target parsing, no nested lookup/fallback splitting behavior, recursive construction order, and `_partial_` with runtime injection.
+  - Tightened `_inject_` validation to validate mapping shape, key/value shape, and duplicate/missing runtime references in `src/loom/config/instantiate/injection.py` so errors remain in instantiation path as `RuntimeInjectionError`.
+  - Added probe helpers in `tests/support/config_samples.py` to make recursion/partial ordering assertions deterministic without broad production changes.
 - Implementation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate/test_targets.py` (6 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate/test_recursive.py` (12 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/instantiate/test_injection.py` (7 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py` (17 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_config.py -k target` (2 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed; summary written to `build/test-summary.md`)
 - Refinement summary: incorporated manager/architecture findings about existing module boundaries, existing parser behavior, existing test coverage, and the revised pre-submit blocker gate. The final plan now directs the executor to avoid unnecessary refactors and primarily lock contracts with focused tests for no nested lookup, no fallback import splitting, bottom-up order, partial behavior, injection validation, public API smoke, and compose-time `_target_` inertness.
 - PR preparation:
+  - Scope remains within Phase 11 and public API surfaces were not expanded.
 - Stack maintenance:
+  - No stack predecessor changes; this is a root phase branch (`codex/config-instantiation-strict`) targeting `develop`.
 - Remaining blockers: none.

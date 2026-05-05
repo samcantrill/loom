@@ -33,3 +33,29 @@ def test_injection_rejects_duplicate_keys() -> None:
             },
             runtime={"runtime": "svc"},
         )
+
+
+def test_injection_rejects_non_mapping_runtime() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate({"_target_": "tests.support.config_samples:EchoService", "value": "static"}, runtime="not-a-mapping")  # type: ignore[arg-type]
+
+
+def test_injection_rejects_invalid_inject_shape() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate({"_target_": "tests.support.config_samples:EchoService", "_inject_": ["value"]}, runtime={})  # type: ignore[arg-type]
+
+
+def test_injection_rejects_invalid_inject_key_shape() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate(
+            {"_target_": "tests.support.config_samples:RuntimePlaceholder", "_inject_": {1: "runtime"}},
+            runtime={"runtime": "svc"},  # type: ignore[arg-type]
+        )
+
+
+def test_injection_rejects_invalid_injected_key_shape() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate(
+            {"_target_": "tests.support.config_samples:RuntimePlaceholder", "_inject_": {"value": ""}},
+            runtime={"runtime": "svc"},
+        )
