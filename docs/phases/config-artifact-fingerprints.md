@@ -2,9 +2,10 @@
 
 ## Metadata
 
-- Status: implemented; implementation refinement completed; pre-submit blocker gate completed; user-authorized blocker-resolution pass completed; PR body draft completed; focused confirmation gate completed; expanded-path PR body refine completed; PR submission pending
+- Status: pr_open
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 14: Artifact-Safe Fingerprints And Resume Comparison`
+- PR: https://github.com/samcantrill/loom/pull/41
 - Branch: `codex/config-artifact-fingerprints`
 - Worktree: `/home/samcantrill/work/loom-worktrees/config-artifact-fingerprints`
 - Phase execution plan path: `docs/phases/config-artifact-fingerprints.md`
@@ -15,7 +16,7 @@
 - Base branch: `develop`
 - Base commit: `50e89647fc37b6dd223e95e3a50aa831c5f83296`
 - Target branch: `develop`
-- Merge eligibility: root phase; eligible to merge into `develop` only after implementation, phase-scoped validation, pre-submit blocker gate, PR preparation/submission, and passing review/CI against `develop`.
+- Merge eligibility: root phase; PR targets `develop` and is merge-eligible only after passing review/CI against `develop`.
 - Workflow path: expanded path
 - Workflow path rationale: this phase defines durable artifact-safe fingerprint and authored-composition resume comparison semantics from Phase 13 records, affects public-ish artifact contracts, and must preserve resolver-output exclusion and path portability.
 - Successor dependency notes: Phase 15 may add raw source snapshot opt-in and source hardening without changing Phase 14 default artifact-safe fingerprint semantics. Phase 16 may document limitations and broaden e2e coverage.
@@ -27,7 +28,7 @@
 - Pre-submit blocker gate budget: used on 2026-05-06 by a full diff/body/evidence review before PR submission. The gate found the comparison-helper outcome blocker.
 - User-authorized blocker-resolution budget: used on 2026-05-06 for the exact comparison-helper outcome blocker; no further automated blocker pass remains.
 - PR body draft pass: completed in this artifact; durable draft at `docs/phases/config-artifact-fingerprints-pr-body.md`.
-- PR body refine pass: completed in this artifact; expanded-path PR opening is proceeding from this refine pass.
+- PR body refine pass: completed in this artifact; PR opened and verified.
 - PR review budget: consumed by the full pre-submit blocker gate. Because the submitted diff changed after blocker resolution, only a bounded confirmation gate focused on that blocker and evidence drift remains before PR submission.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` and `git fetch origin` succeeded. Local `develop` and `origin/develop` matched the assigned base commit. Initial sandboxed `git worktree add` could not create the nested `codex/...` branch ref because `.git/refs/heads/codex` directory creation was blocked by sandbox filesystem policy; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none known.
@@ -285,7 +286,7 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff, Pyright, default isolated suite, config-extra isolated suite, and build.
     - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 29 passed/2 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 286 passed/433 deselected.
 - PR preparation: expanded-path draft PR body created at `docs/phases/config-artifact-fingerprints-pr-body.md`; draft pass complete and refine pass pending. PR opening intentionally deferred to the later `pr-body-refine` pass.
-- PR facts: expected title `Configuration - Phase 14: Artifact-Safe Fingerprints And Resume Comparison`; head branch `codex/config-artifact-fingerprints`; target branch `develop`; stack predecessor none/root phase; merge eligibility root phase targeting `develop` after refine pass, PR submission, review, and CI.
+- PR facts: PR #41 opened with title `Configuration - Phase 14: Artifact-Safe Fingerprints And Resume Comparison`; head branch `codex/config-artifact-fingerprints`; target branch `develop`; stack predecessor none/root phase; merge eligibility root phase targeting `develop` after review and CI.
 - Scope confirmation: final branch diff is limited to Phase 14 config artifact-safe fingerprint/comparison implementation, config API exports, focused tests, and phase artifacts. It does not include Phase 15 raw snapshot/source hardening, Phase 16 documentation/e2e hardening, run-store persistence, CLI behavior, pipeline resume integration, secret-aware runtime fingerprints, plugin/remote/global include resolvers, `_copy_`, or raw source-byte default artifacts.
 - Validation evidence for draft PR body: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed after refinement; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md` with package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 29 passed/2 skipped, integration 9 passed/5 skipped, e2e 5 passed, and config-extra 288 passed/433 deselected. Targeted default contract check passed with 7 passed; targeted config-extra contract check passed with 8 passed.
 - User-authorized pre-submit blocker resolution: fixed `compare_config_artifact_fingerprints` so valid `ConfigFingerprintRecord` inputs and record-shaped mappings with non-default labels reach the policy checks and return `incompatible_policy`, while malformed plain mappings are caught and returned as `insufficient_data` without escaping plain-data validation errors. Added focused unit coverage for wrong-label record/mapping inputs and malformed mapping inputs.
@@ -296,5 +297,6 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 29 passed/2 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 288 passed/433 deselected.
 - Focused confirmation gate: passed on current branch after the user-authorized blocker-resolution commit `b5f9070`; no remaining blockers. The focused comparison-helper unit check passed with 5 tests, the config-extra artifact/inspection contract check passed with 8 tests, `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed, and `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with config-extra 288 passed/433 deselected.
 - Expanded-path PR body refine: completed. The public PR body at `docs/phases/config-artifact-fingerprints-pr-body.md` matches the phase plan, final diff, focused confirmation gate, validation evidence, scope boundaries, assumptions, and risks; it keeps workflow internals and budget details in this phase artifact. `@samcantrill` remains near the top of the body.
+- PR submission: opened https://github.com/samcantrill/loom/pull/41 with explicit base `develop`, head `codex/config-artifact-fingerprints`, and title `Configuration - Phase 14: Artifact-Safe Fingerprints And Resume Comparison`. Immediate verification via `gh pr view 41 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/config-artifact-fingerprints`, state `OPEN`, url `https://github.com/samcantrill/loom/pull/41`. This is a root phase PR with no stack predecessor and no retarget/rebase work required.
 - Stack maintenance: none; root phase targeting `develop`.
 - Remaining blockers: none known.
