@@ -128,15 +128,21 @@ Responsibilities:
 ```text
 raw config paths
 overlay paths
-CLI overrides
+Python API override strings
 interpolation provenance
 recipe expansion records
 target import paths discovered during instantiate
-redacted versus full resolved config locations
+artifact-safe manifest/source/fingerprint records
+redacted config view metadata
 ```
 
 Top-level `loom.provenance` may aggregate config provenance summaries, but it
 should not implement config composition or recipe expansion.
+
+V1 `loom.config` returns config provenance, manifest, source artifact, raw
+snapshot availability, and fingerprint records to the caller. It does not write
+run provenance, choose run-store paths, persist full resolved configs, or own
+CLI display.
 
 ### 3.3 `loom.pipeline`
 
@@ -1493,19 +1499,23 @@ Example:
 
 ### 20.3 Config Provenance Summary
 
-Run provenance may include a summary:
+Future run provenance may include a summary owned by the runner/run store:
 
 ```json
 {
   "config": {
     "raw_config": "config/raw.yaml",
-    "resolved_config": "config/resolved.yaml",
+    "manifest": "config/composition_manifest.json",
+    "redacted_config": "config/resolved.redacted.yaml",
     "overlays": ["config/overlays.yaml"],
-    "cli_overrides": "config/cli_overrides.yaml",
+    "overrides": "config/overrides.yaml",
     "recipe_manifest": "config/recipe_manifest.json"
   }
 }
 ```
+
+V1 `loom.config` returns these artifact records to the caller and does not write
+the files above.
 
 `loom.config` owns detailed contents.
 
@@ -1553,6 +1563,10 @@ redacted provenance:
 ```
 
 If only one view is persisted in v0, persist redacted-safe fields by default.
+
+For v1 config composition, the default config artifact view is artifact-safe:
+it records authored resolver expressions and source metadata/hashes, but not
+resolved resolver outputs, raw source bytes, or full resolved config contents.
 
 ### 21.4 Fingerprint Payloads
 
@@ -1615,14 +1629,18 @@ Config provenance should include:
 ```text
 raw config path
 overlay paths
-CLI overrides
+Python API override strings
 recipe expansion records
-resolved config hash/path
-redacted config path
+artifact-safe config fingerprint records
+manifest and source artifact references
+raw source snapshot availability
+resolver-expression metadata
 target import paths
 ```
 
-`loom.config` owns detailed capture because it knows composition order.
+`loom.config` owns detailed capture because it knows composition order. In v1,
+that capture is returned as plain artifact data; persistence and run-level
+aggregation belong to callers such as future run stores.
 
 ### 23.2 Aggregation
 
@@ -1634,6 +1652,9 @@ Recommended:
 store detailed config provenance under runs/RUN_ID/config/
 store summary links in run provenance
 ```
+
+This is future run-store guidance. V1 config composition itself is
+persistence-free.
 
 ### 23.3 Authored Config Trust
 
@@ -2051,9 +2072,9 @@ record fingerprint records
 record failure summaries
 ```
 
-### 29.7 Phase 7: CLI Integration
+### 29.7 Phase 7: Future CLI Integration
 
-Expose provenance in:
+When functional CLI behavior exists, expose persisted provenance in:
 
 ```text
 loom status

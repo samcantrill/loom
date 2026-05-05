@@ -228,9 +228,24 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 - Draft plan: completed by `loom_phase_planner` in commit `e2632a2`
 - Final phase execution plan: completed by `loom_phase_planner`; scope-complete for implementation
-- Implementation summary: pending
-- Implementation validation: pending
+- Implementation summary: aligned stale v1 claims in the named feature docs,
+  added one public-Python config-composition e2e covering base/overlay/nested
+  includes, user include replacement, strict/add overrides, recipe catalog,
+  built-in resolver expressions, redaction, manifest/provenance/source metadata,
+  artifact-safe fingerprint comparison, and raw snapshot default/opt-in
+  behavior; fixed a narrow `CompositionManifest.to_dict()` bug where nested
+  frozen recipe-manifest mappings were not thawed before serialization.
+- Implementation validation: targeted package/import-boundary checks passed
+  with 18 tests; targeted config unit/integration optional-dependency checks
+  passed with 271 tests; targeted e2e plus config artifact contract checks
+  passed with 10 tests; touched-file Ruff and Pyright checks passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed with Ruff, Pyright,
+  default suite 430 passed/11 skipped, config-extra suite 301 passed/436
+  deselected, and package build success; `UV_CACHE_DIR=/tmp/loom_uv_cache make
+  test-summary` wrote `build/test-summary.md` with package 36 passed/1 skipped,
+  unit 354 passed/1 skipped, contract 31 passed/2 skipped, integration 9
+  passed/5 skipped, e2e 6 passed, and config-extra 301 passed/436 deselected.
 - Refinement summary: expanded-path refine pass confirmed exact documentation audit targets, representative public-Python e2e shape, focused error-audit limits, final validation obligations, and explicit executor stop conditions
-- PR preparation: pending
+- PR preparation: pending PR body preparation
 - Stack maintenance: pending
 - Remaining blockers: none

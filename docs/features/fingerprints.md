@@ -66,7 +66,7 @@ ids / errors / serialization
 fingerprints
         |
         v
-artifacts / run stores / pipeline planning / provenance / cli
+artifacts / run stores / pipeline planning / provenance / future cli
 ```
 
 It may depend on:
@@ -1081,6 +1081,12 @@ loom version or pipeline contract version
 project-provided extra fingerprint fields
 ```
 
+V1 config artifacts add a separate `artifact_safe_config` fingerprint record.
+That record hashes authored composition facts, source metadata/hashes,
+unresolved expanded config content, recipe facts, override facts, and resolver
+expressions as authored text. It does not persist or hash resolved resolver
+outputs, raw source bytes, or full resolved config artifacts by default.
+
 ### 13.3 Values to Avoid
 
 Avoid noisy values unless explicitly output-affecting:
@@ -1706,9 +1712,14 @@ config.
 Reason:
 
 ```text
-overlays, CLI overrides, interpolation, and recipes all affect the actual stage
+overlays, override strings, interpolation, and recipes all affect the actual stage
 invocation
 ```
+
+This is pipeline planning guidance, not a v1 `loom.config` persistence rule.
+V1 config fingerprints are artifact-safe authored-composition fingerprints:
+they preserve resolver expressions and source hashes and intentionally do not
+persist resolved resolver outputs by default.
 
 ### 21.2 Selected Config Subtrees
 
@@ -1724,6 +1735,10 @@ hash selected global config values declared as dependencies
 ```
 
 Hashing the whole config can cause noisy reruns when unrelated settings change.
+
+Future pipeline policies may choose selected resolved subtrees for stage reuse.
+They should not reinterpret v1 config artifact fingerprints as exact
+runtime-value replay.
 
 ### 21.3 Redacted Config
 
@@ -2116,7 +2131,7 @@ compare current and prior records
 explain mismatch reasons
 ```
 
-### 26.7 Phase 7: CLI Explanation
+### 26.7 Phase 7: Future CLI Explanation
 
 Expose summary data to:
 

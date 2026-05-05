@@ -151,19 +151,22 @@ report unsupported URI schemes
 
 ### 3.6 `loom.config`
 
-Owns resolved config generation.
+Owns config composition and artifact-safe comparison records.
 
 Responsibilities:
 
 ```text
-produce the resolved config used for fingerprinting
-persist config snapshots
-record overlays and CLI overrides
+return in-memory resolved config to Python callers
+return artifact-safe manifest/provenance/source/fingerprint records
+record overlays and Python API override strings
 redact secrets from public views
 ```
 
-Resume should use resolved config data and config hashes. It should not recompose
-or reinterpret config semantics.
+V1 config composition does not persist snapshots or write run-store state.
+Resume policy should use pipeline-owned fingerprints and, where useful, the
+artifact-safe config comparison records returned by `loom.config`. Those records
+compare authored composition equivalence; they do not prove exact runtime
+resolver-value replay.
 
 ---
 
@@ -824,6 +827,10 @@ selectors
 fingerprint policy
 ```
 
+The config input may be a pipeline-owned selected resolved view or a v1
+artifact-safe config fingerprint/manifest comparison. Resume remains
+pipeline-owned and must not require `loom.config` artifacts to exist.
+
 ### 12.2 High-Level Flow
 
 Recommended flow:
@@ -1093,14 +1100,18 @@ The exact fields can evolve, but tests should assert explicit reasons.
 
 ---
 
-## 17. CLI Integration
+## 17. Future CLI Integration
+
+Functional resume CLI behavior is not part of v1 config composition. The
+examples in this section describe future CLI UX for pipeline-owned resume
+planning.
 
 ### 17.1 `loom plan --resume`
 
 Should:
 
 ```text
-compose config
+load or receive current pipeline config
 load prior run state
 compute fingerprints
 evaluate reuse
@@ -1300,7 +1311,7 @@ unknown selector stage errors
 
 ### 19.5 CLI-Plan Tests
 
-Test the API that backs CLI output:
+When functional CLI behavior exists, test the API that backs CLI output:
 
 ```text
 plan reasons are stable enough for assertions
@@ -1326,7 +1337,7 @@ Build in this order:
 10. Implement `from-stage`.
 11. Implement `only-stage`.
 12. Implement `skip-stage`.
-13. Add plan reason formatting for CLI.
+13. Add future plan reason formatting for CLI.
 14. Add tests for interrupted and corrupt state.
 15. Add optional verbose explanation helpers later.
 
