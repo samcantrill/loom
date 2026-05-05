@@ -1,6 +1,7 @@
 """Unit tests for config source loading."""
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -121,3 +122,29 @@ def test_load_rejects_copy_directive_at_root_and_nested_paths(tmp_path: Path) ->
         assert exc.value.context is not None
         assert exc.value.context.code == "unsupported_directive"
         assert exc.value.context.directive == "_copy_"
+
+
+@pytest.mark.parametrize(
+    ("kind",),
+    [
+        ("base",),
+        ("overlay",),
+    ],
+)
+def test_load_rejects_schema_authoring_directive(
+    tmp_path: Path,
+    kind: Literal["base", "overlay"],
+) -> None:
+    source_path = tmp_path / f"{kind}.yaml"
+    source_path.write_text("name: base\n_schema_: {}\n", encoding="utf-8")
+
+    with pytest.raises(ConfigLoadError) as exc:
+        load_config(source_path, kind=kind, order=0)
+
+    assert exc.value.context is not None
+    assert exc.value.context.code == "unsupported_directive"
+    assert exc.value.context.directive == "_schema_"
+    assert exc.value.context.config_path == "$._schema_"
+    assert exc.value.context.source_kind == kind
+    assert exc.value.context.actual == "_schema_"
+    assert "raw source" not in str(exc.value.context.expected)
