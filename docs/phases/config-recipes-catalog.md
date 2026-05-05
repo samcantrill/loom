@@ -229,8 +229,21 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; committed as `plan: refine phase execution plan`.
 - Implementation summary:
+  - Reordered compose flow so include expansion and composition overrides are applied first, then recipe arguments are resolved and recipe expansion runs, and only then ordinary overrides are applied to the expanded concrete config.
+  - Restored resolver-safe argument resolution behavior for recipe args in `resolve_recipe_argument_interpolation` so `${...}` interpolation still resolves non-resolver tokens while preserving resolver-style `${...:...}` tokens in stored recipe arguments.
+  - Added output-shape validation in recipe expansion to reject resolver-shaped mapping keys in expanded recipe output via `InvalidRecipeOutputError` before manifest generation.
+  - Added/updated phase-scoped unit, contract, and integration tests for compose ordering, ordinary-overrides targeting expanded paths, resolver expression preservation in manifest arguments, and resolver-shaped recipe output key failure behavior.
 - Implementation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_recipes.py tests/contracts/test_recipe_contract.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_resolvers.py tests/unit/loom/config/test_compose.py tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_error_contract.py tests/package/test_config_api.py tests/package/test_import_boundaries.py tests/unit/loom/config/recipes/test_manifest.py tests/unit/loom/config/recipes/test_catalog.py`
+    - Result: 95 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr`
+    - Result: passed (ruff/pyright + default + config-extra harness + build).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary`
+    - Result: wrote `build/test-summary.md`; summary passed across package/unit/contract/integration/e2e/config-extra.
 - Refinement summary: recorded current compose order and intentional test updates for the Phase 9 ordering change; tightened explicit catalog/default catalog compatibility guidance; clarified resolver-bearing recipe argument and resolver-dependent shape behavior; updated targeted and final validation commands to use `UV_CACHE_DIR=/tmp/loom_uv_cache` and `uv run --extra config` where applicable.
 - PR preparation:
+  - Not started. No PR was opened or prepared in this phase by request.
 - Stack maintenance:
+  - No phase stack actions executed yet in this worktree phase pass.
 - Remaining blockers:
+  - None blocking; no further implementation changes required to satisfy the finalized phase scope.
