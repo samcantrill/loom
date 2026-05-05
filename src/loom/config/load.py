@@ -26,6 +26,7 @@ def load_config(path: str | Path, *, kind: ConfigKind, order: int) -> tuple[dict
     text = _decode_utf8(raw, resolved_path, kind=kind, order=order)
     parsed = _parse_yaml(text, resolved_path, kind=kind, order=order)
     mapping = _validate_root_mapping(parsed, resolved_path, kind=kind, order=order)
+    _ensure_no_recursive_aliases(mapping, path="$", active={}, kind=kind, order=order, source_path=resolved_path)
     _ensure_no_unsupported_directives(mapping, path="$", kind=kind, order=order, source_path=resolved_path)
     plain_mapping = _ensure_plain_data(mapping, resolved_path, kind=kind, order=order)
 
@@ -186,6 +187,61 @@ def _ensure_plain_data(value: object, path: Path, *, kind: ConfigKind, order: in
             remediation="Author a plain mapping for the config root.",
         )
     return plain
+
+
+def _ensure_no_recursive_aliases(
+    value: object,
+    *,
+    path: str,
+    active: dict[int, str],
+    kind: ConfigKind,
+    order: int,
+    source_path: Path,
+) -> None:
+    if not isinstance(value, (dict, list)):
+        return
+
+    value_id = id(value)
+    if value_id in active:
+        raise _config_load_error(
+            f"Recursive YAML alias in {kind} config (order={order}) at {source_path}",
+            code="non_plain_data",
+            resolved_path=source_path,
+            kind=kind,
+            order=order,
+            config_path=path,
+            expected="acyclic plain YAML value",
+            actual="recursive alias",
+            remediation="Remove recursive YAML aliases so the config can be represented as plain data.",
+            details={"referenced_path": active[value_id]},
+        )
+
+    active[value_id] = path
+    try:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path != "$" else f"$.{key}"
+                _ensure_no_recursive_aliases(
+                    child,
+                    path=child_path,
+                    active=active,
+                    kind=kind,
+                    order=order,
+                    source_path=source_path,
+                )
+        else:
+            for index, child in enumerate(value):
+                child_path = f"{path}[{index}]"
+                _ensure_no_recursive_aliases(
+                    child,
+                    path=child_path,
+                    active=active,
+                    kind=kind,
+                    order=order,
+                    source_path=source_path,
+                )
+    finally:
+        del active[value_id]
 
 
 def _ensure_no_unsupported_directives(
