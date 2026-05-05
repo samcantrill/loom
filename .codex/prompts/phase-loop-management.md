@@ -49,9 +49,13 @@ Prefer GitHub CLI-backed remote operations when available:
 
 Your job is to advance the implementation plan one phase at a time without
 indefinite review/refine loops. Stacked mode allows human review and merge of
-one phase to happen while successor phase work starts. Serial human-merge-gate
-mode instead waits for each phase PR to be merged into `develop` before the
-next phase starts.
+one phase to happen while successor phase work starts. CI-gated stacked
+continuation attempts to merge each phase PR into `develop` once CI checks pass;
+when the manager cannot approve or complete that merge, it continues by stacking
+phase N+1 on the old phase N branch and opening phase N+1 against phase N.
+Serial human-merge-gate mode instead waits for each phase PR to be merged into
+`develop` before the next phase starts, and should be used only when the user
+explicitly asks to disable stacked continuation.
 
 Favor short scope-first phase plans. Planning should define boundaries,
 acceptance criteria, suite obligations, risky decisions, and stop conditions,
@@ -99,17 +103,24 @@ one confirmation/review decision
 then proceed or escalate to the user
 ```
 
-Exception for serial human-merge-gate mode:
+Pre-submit blocker handling:
 
 ```text
-post-PR review, CI, mergeability, and validation blockers are worked until
-resolved before merge, using scoped blocker-resolution passes
+resolve known implementation, validation, scope, review, and PR-body blockers
+before PR submission
 ```
 
-This exception is user-authorized for serial human-merge-gate mode. It applies
-only after a phase PR exists, and only to concrete blockers that prevent human
-approval or merge. Do not use blocker-resolution passes to expand phase scope,
-implement future phases, or revisit accepted design choices.
+This handling is user-authorized for the phase loop. It applies after
+implementation and before PR creation or submission. The manager must run or
+assign a pre-submit blocker gate against the phase plan, diff, PR body draft,
+validation evidence, scope boundary, and known review risks before opening or
+preparing the PR. Concrete blockers found before submission must be resolved in
+the phase branch before the PR is submitted, using the relevant remaining budget
+or a scoped blocker-resolution pass for the exact blocker. Do not submit a PR
+with known unresolved blockers merely to let GitHub review or CI rediscover
+them. If a blocker cannot be resolved within the assigned phase scope, mark the
+phase `blocked`, record the reason in the phase artifact, report the blocker,
+and stop before PR submission.
 
 Exception for explicit user-authorized blocker resolution:
 
@@ -133,9 +144,9 @@ Loop budget:
 | Gate | Allowed automated passes | Terminal action if blockers remain |
 | --- | --- | --- |
 | Plan quality gate | One `loom_plan_reviewer` review, one plan refinement, one confirmation review | Mark the plan or next phase `blocked`, report the blocker, and stop |
-| Phase implementation | Fast path: zero refiner passes when targeted validation passes and coverage obligations are met. Expanded path or blocker case: one `loom_phase_refiner` pass after implementation | Report the blocker and stop before PR approval or merge |
-| Phase PR review | One `loom_phase_reviewer` pass or one equivalent local review | Leave the PR unapproved, report the blocker, and stop |
-| Serial post-PR blocker resolution | Scoped blocker-resolution passes as needed after a PR exists | Mark the phase `blocked` and report the exact blocker only when the blocker cannot be resolved in scope, required GitHub access is unavailable, the PR is closed without merge, or validation/CI remains unavailable or failing after the relevant fixes |
+| Phase implementation | Fast path: zero refiner passes when targeted validation passes and coverage obligations are met. Expanded path or blocker case: one `loom_phase_refiner` pass after implementation | Report the blocker and stop before PR submission, approval, or merge |
+| Pre-submit blocker gate | One manager review or `loom_phase_reviewer` pass before PR submission; this consumes the phase PR-review budget when it reviews the diff, PR body, and suite evidence. Scoped blocker-resolution passes may address concrete blockers found before PR submission | Mark the phase `blocked`, report the exact blocker, and stop before PR submission when a blocker cannot be resolved in scope |
+| Phase PR review | One `loom_phase_reviewer` pass or one equivalent local review only when no full pre-submit review occurred or the submitted diff changed afterward | Leave the PR unapproved, report the blocker, and stop |
 | User-authorized blocker resolution | One scoped subagent pass for the exact blocker named or accepted by the user | Report the remaining blocker and stop |
 
 Before assigning any reviewer or refiner, check the current thread, phase
@@ -144,10 +155,12 @@ gate's budget has already been consumed. If the history is ambiguous, treat the
 budget as consumed and escalate to the user instead of starting another
 automated pass.
 Do not use a different agent name or local review to bypass a consumed budget.
-Serial post-PR blocker-resolution passes are not a way to bypass consumed plan,
+Pre-submit blocker-resolution passes are not a way to bypass consumed plan,
 implementation, or PR-review budgets. Each pass must cite a current concrete
-review, CI, mergeability, or validation blocker on the open PR and stop once
-that blocker is resolved or proven out of scope.
+pre-submit blocker and stop once that blocker is resolved or proven out of
+scope. After submission, only GitHub-only blockers that could not have been
+known earlier, such as branch protection, remote CI, or mergeability state, may
+receive scoped handling before merge or stacked continuation.
 
 Model policy:
 
@@ -158,10 +171,38 @@ Model policy:
   a scope-complete phase execution plan. Spark agents must stop and report
   blockers instead of making public API or phase-scope decisions.
 
+CI-gated stacked continuation mode:
+
+- Use this mode whenever the user asks Codex to attempt merge after CI while
+  continuing successor phases as stacked PRs if the merge cannot be approved or
+  completed.
+- After a phase PR is submitted, poll GitHub for CI with `gh pr view <PR>
+  --json state,baseRefName,headRefName,url,mergedAt,reviewDecision,statusCheckRollup`
+  or an equivalent `gh` check command. Treat required checks as passed only when
+  GitHub reports success, or record a narrow justification when GitHub checks
+  are unavailable and local `make validate-pr` and `make test-summary` passed.
+- Once CI checks pass, attempt to approve and merge the phase PR into `develop`
+  when the PR targets `develop`, the manager has authority to approve and merge,
+  and phase review approval is satisfied. Use a squash merge and delete the
+  branch only when no successor branch depends on it; otherwise keep the branch
+  after merge for later stack maintenance.
+- If the manager cannot approve or complete the merge because approval authority,
+  branch protection, GitHub permissions, target branch, or review state blocks
+  the merge, record the exact reason and continue with normal stacked PR flow.
+  Keep the phase N branch as the stack predecessor, create phase N+1 from the
+  old phase N branch, and open the phase N+1 PR against phase N after the
+  phase N+1 pre-submit blocker gate passes.
+- During this mode, defer child-branch rebase or retarget maintenance until the
+  full phased implementation plan has been completed and the user is ready to
+  update the stack, unless immediate maintenance is required to unblock a
+  specific CI or mergeability failure.
+
 Serial human-merge-gate mode:
 
-- Use this mode whenever the user asks for a clean merge gate, no stacked PRs,
-  human-owned approval/merge, or continuation only after the PR is merged.
+- Use this mode only when the user asks for a clean merge gate, no stacked PRs,
+  human-owned approval/merge, or continuation only after the PR is merged. Do
+  not use it when the user asks for CI-gated merge attempts with stacked
+  fallback.
 - Treat `develop` as the only PR target branch in this mode. Do not create
   stacked successor branches unless the user explicitly re-enables stacking.
 - Do not approve or merge phase PRs in this mode. The human reviewer owns
@@ -177,11 +218,13 @@ Serial human-merge-gate mode:
   and do not start the next phase until the PR is approved. In clean merge-gate
   operation, continue to wait after approval and start the next phase only when
   `state` is `MERGED` and `baseRefName` is `develop`.
-- While waiting, do not start the next phase. If review comments, a
-  `CHANGES_REQUESTED` decision, failing required checks, merge conflicts, or
-  local validation failures appear, assign an appropriate implementation or
-  refinement agent to resolve the concrete blocker, commit the fix, update the
-  PR body or phase notes, rerun relevant validation, and resume polling.
+- While waiting, do not start the next phase. Known local blockers must already
+  have been handled before PR submission. If a GitHub-only or late blocker such
+  as review comments, a `CHANGES_REQUESTED` decision, failing required checks,
+  merge conflicts, or validation drift appears, assign an appropriate
+  implementation or refinement agent to resolve the concrete blocker, commit
+  the fix, update the PR body or phase notes, rerun relevant validation, and
+  resume polling.
 - Stop only if the PR is closed without merging, the target branch is not
   `develop`, required GitHub access is unavailable, a blocker cannot be
   resolved within the assigned phase scope, the user interrupts, or the session
@@ -225,17 +268,20 @@ Before implementation begins:
 
 For each phase:
 
-1. Find the next phase with `Status: pending`. In stacked mode, earlier phases
-   may be `pr_open`, `approved`, or `merged`. In serial human-merge-gate mode,
-   all earlier phases must be `merged`. Do not skip over a `blocked` phase.
+1. Find the next phase with `Status: pending`. In CI-gated stacked continuation
+   or stacked mode, earlier phases may be `pr_open`, `approved`, or `merged`.
+   In serial human-merge-gate mode, all earlier phases must be `merged`. Do not
+   skip over a `blocked` phase.
 2. Choose the stack base:
    - in serial human-merge-gate mode, always use updated `develop`;
-   - in stacked mode, use `develop` when all earlier phases are `merged`;
+   - in CI-gated stacked continuation or stacked mode, use `develop` when all
+     earlier phases are `merged`;
    - otherwise use the nearest earlier unmerged phase branch, usually the most
      recent phase with status `pr_open` or `approved`.
 3. Choose the PR target branch:
    - in serial human-merge-gate mode, always use `develop`;
-   - in stacked mode, use `develop` when the stack base is `develop`;
+   - in CI-gated stacked continuation or stacked mode, use `develop` when the
+     stack base is `develop`;
    - otherwise use the stack base branch.
 4. Record the branch, stack predecessor, base branch, target branch, and merge
    eligibility in the manager assignment. A stacked PR is reviewable when it
@@ -261,74 +307,94 @@ For each phase:
    `not needed` in the phase artifact.
 10. Assign PR body and suite-summary generation to `loom_pr_preparer` using
    `.codex/prompts/pr-body-draft.md`. On the fast path this is the single PR
-   preparation pass and should open or prepare the PR. On the expanded path,
-   the preparer may leave the PR body refine pass pending.
+   preparation pass; it must include the pre-submit blocker gate below before
+   opening or preparing the PR. On the expanded path, the preparer may leave
+   the PR body refine pass pending, but must not submit the PR while known
+   blockers remain.
 11. On the expanded path only, after the PR body draft exists and context has
    been compacted or reset when practical, assign PR body refinement and PR
    creation/preparation to `loom_pr_preparer` using
-   `.codex/prompts/pr-body-refine.md`.
-12. After the PR is opened or prepared, record `pr_open` metadata in the
-    control checkout. In stacked mode, you may move to the next pending phase
-    immediately using the current phase branch as stack base if validation
-    passed or unavailable validation is justified. In serial human-merge-gate
+   `.codex/prompts/pr-body-refine.md`. The refine pass must also complete the
+   pre-submit blocker gate before PR submission.
+12. Before the PR is opened or prepared, run the pre-submit blocker gate. Review
+   the implementation against:
+   - The original implementation plan.
+   - The phase execution plan.
+   - The PR explanation or body draft.
+   - The diff.
+   - Suite-level test and validation results.
+   - Scope boundaries, future-phase exclusions, assumptions, and risks.
+   When this review covers the diff, PR body, and suite evidence, treat it as
+   the phase review gate for approval and merge decisions.
+13. If the pre-submit blocker gate finds a blocker, resolve it before PR
+   submission. Use `loom_phase_refiner` for implementation or test blockers,
+   `loom_pr_preparer` for PR body or metadata blockers, or the narrowest
+   applicable local fix when no subagent is available. Commit the fix, update
+   phase artifacts, rerun relevant validation, and rerun the pre-submit gate.
+   If the blocker remains or cannot be fixed within the assigned phase scope,
+   mark the phase `blocked`, report the exact blocker, and stop without
+   submitting the PR.
+14. After the pre-submit blocker gate passes, open or prepare the PR and record
+    `pr_open` metadata in the control checkout. In serial human-merge-gate
     mode, confirm the PR body mentions `@samcantrill` or record an immediate
     PR comment link in phase notes, and do not assign the next phase; continue
     through the approval and merge gates below.
-13. Apply any managing-agent workflow refinements in the control checkout or a
+15. Apply any managing-agent workflow refinements in the control checkout or a
     dedicated workflow PR before assigning the next phase. Keep those changes
     out of product phase branches unless explicitly assigned as phase work.
-14. Review the PR with the `loom_phase_reviewer` custom agent using
-   `.codex/prompts/pull-request-review.md` when subagents are explicitly
-   requested or available and the PR-review budget has not been consumed.
-   Otherwise perform the same review locally only if that also does not exceed
-   the PR-review budget.
-15. Review the PR against:
-   - The original implementation plan.
-   - The phase execution plan.
-   - The PR explanation.
-   - The diff.
-   - Suite-level test and validation results.
-16. Approve the PR only if:
+16. After submission, verify the opened or discovered PR with `gh pr view <PR>
+   --json baseRefName,headRefName,state,url,mergedAt,reviewDecision,statusCheckRollup`.
+   Stop if the target branch is neither `develop` nor the recorded stack
+   predecessor branch. Treat post-submit review as a final drift and
+   GitHub-state check, not as the first place to discover known local blockers.
+   Do not run a second full phase review unless no full pre-submit review
+   occurred or the submitted diff changed afterward.
+17. Approve the PR only if:
    - The explanation matches the implementation.
    - The assigned phase acceptance criteria are satisfied.
    - Relevant tests pass or any unavailable checks are clearly justified.
    - The scope is limited to the assigned phase.
    - No future phase was implemented early.
    - No obvious maintainability or regression issue remains.
-17. In stacked mode, if the PR is not acceptable after either the fast-path
-   checks or the single allowed `loom_phase_refiner` pass, report the exact
-   blocker to the user and stop. In serial human-merge-gate mode, concrete
-   post-PR review, CI, mergeability, and validation blockers may receive scoped
-   blocker-resolution passes until they are resolved or proven out of scope.
-18. In stacked mode, if the PR is acceptable, approve it. Stacked approval is
-    allowed while the PR targets its predecessor branch, but approval does not
-    make it merge-eligible until the PR targets `develop`. In serial
-    human-merge-gate mode, do not approve; wait for the human reviewer to
-    approve. If `reviewDecision` becomes `CHANGES_REQUESTED`, collect the review
-    findings, assign a scoped blocker-resolution pass, update the PR, and
-    resume polling for approval.
-19. In stacked mode, before merging, verify the PR target with `gh pr view <PR>
-   --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
-   Merge only when `baseRefName` is exactly `develop`. Merge the approved PR
-   into `develop` using a squash merge when GitHub tooling and permissions are
-   available. Use `gh pr merge <PR> --squash --delete-branch` only when no
-   successor branch depends on the phase branch; otherwise use `gh pr merge
-   <PR> --squash` and keep the branch until successors are retargeted. Use the
-   corresponding `--auto` form when branch protection requires checks to finish
-   first. If the PR still targets a predecessor branch, leave it `approved`,
-   document the stack state, and keep advancing successor phase work. In serial
-   human-merge-gate mode, do not merge. Treat a verified `APPROVED` PR as the
-   approval gate and a verified `MERGED` PR targeting `develop` as the merge
-   event. Do not start the next phase until the approval gate has passed; in
-   clean merge-gate operation, also wait for the merge event before starting
-   the next phase.
-20. After a successful predecessor merge, rebase or replay each immediate
-    successor branch onto its new base. Use updated `develop` when that
-    successor no longer has an unmerged predecessor; otherwise use the updated
-    predecessor branch. Retarget successor PRs to their new base, rerun relevant
-    validation, and record the stack maintenance in the successor phase plan
-    and PR body.
-21. After a successful merge, complete the fields from
+18. If a post-submit issue appears, handle only blockers that were not knowable
+   before submission, such as remote CI failures, branch protection,
+   mergeability state, or late review decisions. Resolve in-scope blockers with
+   a scoped fix, update the PR and phase notes, rerun relevant validation, and
+   resume the gate. If the blocker is out of scope or cannot be resolved, leave
+   the PR unapproved, mark the phase `blocked` where appropriate, report the
+   blocker, and stop.
+19. In CI-gated stacked continuation or stacked mode, poll GitHub checks after
+   PR submission. Once CI checks pass, verify the PR target with `gh pr view
+   <PR> --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
+   If the PR targets `develop`, the manager can approve and merge, and review
+   approval is satisfied, merge the PR into `develop` using a squash merge. Use
+   `gh pr merge <PR> --squash --delete-branch` only when no successor branch
+   depends on the phase branch; otherwise use `gh pr merge <PR> --squash` and
+   keep the branch. Use the corresponding `--auto` form when branch protection
+   requires checks to finish first.
+20. If the phase PR cannot be approved or merged after CI passes, record the
+    exact reason in the phase plan and implementation-plan metadata. Leave the
+    phase `pr_open` when approval is unavailable, or `approved` when review
+    approval is complete but the PR is not merge-eligible. In CI-gated stacked
+    continuation or stacked mode, keep the old phase N branch as the stack
+    predecessor, create the phase N+1 branch from phase N, and open or prepare
+    the phase N+1 PR against phase N after phase N+1 passes its own
+    pre-submit blocker gate.
+21. In serial human-merge-gate mode, do not approve or merge. Treat a verified
+    `APPROVED` PR as the approval gate and a verified `MERGED` PR targeting
+    `develop` as the merge event. Do not start the next phase until the
+    approval gate has passed; in clean merge-gate operation, also wait for the
+    merge event before starting the next phase.
+22. When a predecessor merges while successor phase branches already exist,
+    record the stack maintenance that will be required. In CI-gated stacked
+    continuation mode, defer child branch rebase or retarget maintenance until
+    the full phased implementation plan has been completed and the user is
+    ready to update the stack, unless immediate maintenance is required to
+    unblock a specific CI or mergeability failure. Outside that mode, rebase or
+    replay each immediate successor branch onto its new base, retarget successor
+    PRs to their new base, rerun relevant validation, and record the stack
+    maintenance in the successor phase plan and PR body.
+23. After a successful merge, complete the fields from
    `.codex/templates/phase-merge-record.md` and update the selected
    implementation plan on `develop` without overwriting unrelated plan content.
    Record:
@@ -337,27 +403,36 @@ For each phase:
    - Short implementation summary.
    - Test results summary.
    - Follow-up notes for later phases.
-   - Stack rebase or retargeting results for successor phases.
-22. Commit the metadata update with a `docs:` commit message and push it when
+   - Stack rebase or retargeting results for successor phases, including
+     deferred maintenance when applicable.
+24. Commit the metadata update with a `docs:` commit message and push it when
    permissions allow. If direct pushes to `develop` are disallowed, prepare a
    small metadata PR without blocking already-open successor phase work.
-23. Remove the phase worktree from `/home/samcantrill/work/loom-worktrees`,
+25. Remove the phase worktree from `/home/samcantrill/work/loom-worktrees`,
    run `git worktree prune`, and delete the phase branch only after successor
    branches no longer depend on it. Prefer `gh api --method DELETE
    repos/<owner>/<repo>/git/refs/heads/<branch>` for GitHub branch cleanup when
    git SSH auth is unavailable.
-24. In stacked mode, move to the next pending phase whenever the immediate
-   predecessor is `pr_open`, `approved`, or `merged`. In serial
-   human-merge-gate mode, move to the next pending phase only after every
-   earlier phase is `merged` and `develop` has been updated locally.
-25. Stop when all phases are complete, approved, merged, or blocked.
+26. In CI-gated stacked continuation or stacked mode, move to the next pending
+   phase whenever the immediate predecessor is `pr_open`, `approved`, or
+   `merged`. In serial human-merge-gate mode, move to the next pending phase
+   only after every earlier phase is `merged` and `develop` has been updated
+   locally.
+27. Stop when all phases are complete, approved, merged, or blocked.
 
 Rules:
 
-- Only the managing agent may merge phase PRs in stacked mode. In serial
-  human-merge-gate mode, do not approve or merge; wait for human merge.
+- Known implementation, validation, scope, review, and PR-body blockers must be
+  addressed before PR submission. Do not open a PR with known unresolved
+  blockers.
+- Only the managing agent may merge phase PRs in CI-gated stacked continuation
+  or stacked mode. In serial human-merge-gate mode, do not approve or merge;
+  wait for human merge.
 - Merge only after phase review approval and passing validation or CI when
   merging is enabled.
+- In CI-gated stacked continuation mode, attempt the merge into `develop` after
+  CI passes. If approval or merge is unavailable, continue by stacking phase
+  N+1 from the old phase N branch and opening phase N+1 against phase N.
 - Merge phase PRs into `develop`, not directly into `main` or a predecessor
   branch. Stacked PRs may target predecessor branches for review only.
 - Stop immediately if a phase PR targets `main`; close or recreate it against
@@ -372,8 +447,9 @@ Rules:
 - Keep workflow prompt, template, and `AGENTS.md` refinements in the control
   checkout or a dedicated workflow PR unless explicitly assigned as phase work.
 - Do not loop on review/refinement. Escalate remaining blockers after the
-  bounded pass; do not re-label the same work as a new pass. The only exception
-  is serial post-PR blocker resolution for concrete review, CI, mergeability,
-  or validation blockers on an open PR.
+  bounded pass; do not re-label the same work as a new pass. Pre-submit blocker
+  resolution may address concrete blockers before PR submission, and
+  post-submit handling is limited to GitHub-only or late blockers that could
+  not have been known before submission.
 - Use only these phase statuses: `pending`, `in_progress`, `pr_open`, `approved`, `merged`, `blocked`.
 - Project custom agents are configured in `.codex/agents/`.
