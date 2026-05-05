@@ -251,6 +251,11 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (0 errors, 0 warnings)
 - Refinement summary: completed on 2026-05-05; tightened explicit-relative classification so standalone dot-prefixed names are rejected unless authored with a documented relative indicator, required `file://` instead of ambiguous `file:/` forms, normalized returned and error candidate paths, rejected invalid UTF-8 percent escapes, and narrowed include-test `ConfigSource.kind` typing for Pyright.
+- User-authorized blocker resolution: completed on 2026-05-05; added bare-name-only containment validation so a normalized candidate must remain under the derived config directory path before final file validation, while preserving explicit relative, absolute, and `file://` escape behavior.
+- Blocker-resolution validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_includes.py` (31 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (0 errors, 0 warnings)
 - PR preparation: not performed (user requested stop after implementation and initial validation).
 - Stack maintenance: none changed; no successor dependency in-flight.
 - Remaining blockers: none.

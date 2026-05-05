@@ -67,6 +67,38 @@ def test_resolve_nested_bare_name_target_with_dot_segment(tmp_path: Path) -> Non
     assert result.include_site_path == ("encoder.v1", "_include_")
 
 
+def test_bare_name_rejects_symlink_escape_from_derived_directory(
+    tmp_path: Path,
+) -> None:
+    source_file = _config_source(tmp_path / "configs" / "experiment.yaml")
+    external_dir = tmp_path / "external-models"
+    external_target = external_dir / "resnet50.yaml"
+    external_dir.mkdir()
+    external_target.write_text("name: escaped\n", encoding="utf-8")
+    symlinked_mapping_dir = tmp_path / "configs" / "model"
+    symlinked_mapping_dir.symlink_to(external_dir, target_is_directory=True)
+
+    with pytest.raises(ConfigIncludeResolutionError) as exc:
+        resolve_include_target(
+            "resnet50",
+            source=source_file,
+            include_site_path=("model", "_include_"),
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "unsafe_include_target"
+    assert context.config_path == "$.model._include_"
+    details = context.details
+    assert details is not None
+    assert details["candidate_path"] == str(external_target)
+    assert details["resolved_path"] == str(external_target)
+    assert details["derived_dir"] == str(symlinked_mapping_dir)
+    assert details["target_kind"] == "bare_name"
+    assert details["explicit_escape"] is False
+    assert details["reason"] == "bare_name_symlink_escape"
+
+
 @pytest.mark.parametrize(
     "target, relative_path",
     [

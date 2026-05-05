@@ -278,9 +278,17 @@ def _resolve_bare_name_target(
         derived_dir = derived_dir / segment
 
     candidate = derived_dir / f"{target}.yaml"
+    normalized_candidate = candidate.resolve(strict=False)
+    _validate_bare_candidate_contained(
+        target=target,
+        derived_dir=derived_dir,
+        candidate=normalized_candidate,
+        source=source,
+        include_site_path=include_site_path,
+    )
     return _validate_candidate(
         target=target,
-        candidate=candidate,
+        candidate=normalized_candidate,
         source=source,
         include_site_path=include_site_path,
         kind="bare_name",
@@ -462,6 +470,37 @@ def _validate_bare_parent_segment(
                 "segment": segment,
             },
         )
+
+
+def _validate_bare_candidate_contained(
+    *,
+    target: str,
+    derived_dir: Path,
+    candidate: Path,
+    source: ConfigSource,
+    include_site_path: ConfigPath,
+) -> None:
+    derived_root = derived_dir.absolute()
+    try:
+        candidate.relative_to(derived_root)
+    except ValueError as exc:
+        raise _include_error(
+            "Bare-name include target resolved outside its derived config directory.",
+            code="unsafe_include_target",
+            source=source,
+            include_site_path=include_site_path,
+            authored_target=target,
+            expected="normalized bare-name target under derived config directory",
+            actual=str(candidate),
+            details={
+                "candidate_path": str(candidate),
+                "resolved_path": str(candidate),
+                "derived_dir": str(derived_dir),
+                "target_kind": "bare_name",
+                "explicit_escape": False,
+                "reason": "bare_name_symlink_escape",
+            },
+        ) from exc
 
 
 def _validate_file_uri_path(
