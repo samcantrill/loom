@@ -1,6 +1,9 @@
 """Contract tests for config structured error context payloads."""
 
+import pytest
+
 from loom.config.errors import ConfigErrorContext, ConfigLoadError
+from loom.serialization import PlainDataError
 
 
 def test_config_error_context_round_trip() -> None:
@@ -50,3 +53,25 @@ def test_config_load_error_serializes_context_for_machine_inspection() -> None:
     assert payload["context"]["code"] == "unsupported_directive"
     assert payload["context"]["source_order"] == 2
     assert payload["context"]["config_path"] == "$.model[0]._copy_"
+
+
+def test_config_error_context_rejects_non_plain_details_before_serialization() -> None:
+    with pytest.raises(PlainDataError, match="set-like values"):
+        ConfigErrorContext(
+            code="non_plain_context",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/base.yaml",
+            details={"bad": {1, 2}},  # type: ignore[dict-item]
+        )
+
+
+def test_config_error_context_rejects_non_mapping_details_before_serialization() -> None:
+    with pytest.raises(TypeError, match="details must be a mapping"):
+        ConfigErrorContext(
+            code="non_plain_context",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/base.yaml",
+            details=["not", "a", "mapping"],  # type: ignore[arg-type]
+        )

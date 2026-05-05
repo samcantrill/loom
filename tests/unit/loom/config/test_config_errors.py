@@ -1,5 +1,9 @@
 """Unit tests for phase-4 config errors."""
 
+from typing import Any
+
+import pytest
+
 from loom.errors import ConfigError
 from loom.config.errors import (
     ConfigErrorContext,
@@ -22,6 +26,7 @@ from loom.config.errors import (
     UnsupportedRecipeError,
     UnknownRecipeError,
 )
+from loom.serialization import PlainDataError
 
 
 def test_config_error_shapes() -> None:
@@ -71,3 +76,63 @@ def test_config_error_context_serializes_and_round_trips() -> None:
     error = ConfigLoadError("unsupported directive", context=context)
     serialized = error.to_dict()
     assert serialized["context"]["code"] == "unsupported_directive"
+
+
+def test_config_error_context_normalizes_plain_data_at_construction() -> None:
+    expected: Any = ("mapping", "plain")
+    actual: Any = {"items": ("tuple",)}
+    details: Any = {"paths": ("$.model", "$.dataset")}
+
+    context = ConfigErrorContext(
+        code="shape_error",
+        source_kind="base",
+        source_order=0,
+        source_path="/tmp/base.yaml",
+        expected=expected,
+        actual=actual,
+        details=details,
+    )
+
+    assert context.expected == ["mapping", "plain"]
+    assert context.actual == {"items": ["tuple"]}
+    assert context.details == {"paths": ["$.model", "$.dataset"]}
+
+
+def test_config_error_context_rejects_invalid_details_at_construction() -> None:
+    with pytest.raises(TypeError, match="details must be a mapping"):
+        ConfigErrorContext(
+            code="shape_error",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/base.yaml",
+            details=["not", "a", "mapping"],  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(PlainDataError, match="set-like values"):
+        ConfigErrorContext(
+            code="shape_error",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/base.yaml",
+            details={"bad": {1, 2}},  # type: ignore[dict-item]
+        )
+
+
+def test_config_error_context_rejects_invalid_expected_actual_at_construction() -> None:
+    with pytest.raises(PlainDataError, match="set-like values"):
+        ConfigErrorContext(
+            code="shape_error",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/base.yaml",
+            expected={"bad": {1, 2}},  # type: ignore[dict-item]
+        )
+
+    with pytest.raises(PlainDataError, match="set-like values"):
+        ConfigErrorContext(
+            code="shape_error",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/base.yaml",
+            actual={"bad": {1, 2}},  # type: ignore[dict-item]
+        )

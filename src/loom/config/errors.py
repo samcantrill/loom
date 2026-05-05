@@ -24,6 +24,21 @@ class ConfigErrorContext:
     remediation: str | None = None
     details: dict[str, PlainData] | None = None
 
+    def __post_init__(self) -> None:
+        """Normalize plain-data fields when callers construct contexts directly."""
+
+        if self.expected is not None:
+            object.__setattr__(self, "expected", ensure_plain_data(self.expected))
+        if self.actual is not None:
+            object.__setattr__(self, "actual", ensure_plain_data(self.actual))
+        if self.details is None:
+            return
+
+        details = ensure_plain_data(self.details)
+        if not isinstance(details, dict):
+            raise TypeError("Config error context details must be a mapping")
+        object.__setattr__(self, "details", details)
+
     def to_dict(self) -> dict[str, PlainData]:
         """Serialize the context as plain data."""
 
