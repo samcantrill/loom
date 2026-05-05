@@ -16,6 +16,11 @@ if TYPE_CHECKING:
         ComposedConfig,
         ConfigCompositionInspection,
         ConfigCompositionStageRecord,
+        ARTIFACT_SAFE_FINGERPRINT_LABEL,
+        ARTIFACT_SAFE_FINGERPRINT_POLICY,
+        ARTIFACT_SAFE_RUNTIME_REPLAY,
+        ConfigFingerprintComparison,
+        compare_config_artifact_fingerprints,
         compose_config,
         compose_config_with_catalog,
         inspect_config_composition,
@@ -36,6 +41,11 @@ _OPTIONAL_SYMBOLS: Final = frozenset(
         "inspect_config_composition",
         "compose_config",
         "compose_config_with_catalog",
+        "compare_config_artifact_fingerprints",
+        "ConfigFingerprintComparison",
+        "ARTIFACT_SAFE_FINGERPRINT_LABEL",
+        "ARTIFACT_SAFE_FINGERPRINT_POLICY",
+        "ARTIFACT_SAFE_RUNTIME_REPLAY",
         "register_recipe",
         "Recipe",
         "RecipeCatalog",
@@ -55,6 +65,16 @@ def _resolve_optional_symbol(name: str) -> object:
             | "compose_config_with_catalog"
             | "inspect_config_composition"
             | "register_recipe"
+        ):
+            from . import api
+
+            return getattr(api, name)
+        case (
+            "compare_config_artifact_fingerprints"
+            | "ConfigFingerprintComparison"
+            | "ARTIFACT_SAFE_FINGERPRINT_LABEL"
+            | "ARTIFACT_SAFE_FINGERPRINT_POLICY"
+            | "ARTIFACT_SAFE_RUNTIME_REPLAY"
         ):
             from . import api
 
@@ -102,6 +122,11 @@ __all__ = [
     "ConfigCompositionStageRecord",
     "inspect_config_composition",
     "compose_config_with_catalog",
+    "compare_config_artifact_fingerprints",
+    "ConfigFingerprintComparison",
+    "ARTIFACT_SAFE_FINGERPRINT_LABEL",
+    "ARTIFACT_SAFE_FINGERPRINT_POLICY",
+    "ARTIFACT_SAFE_RUNTIME_REPLAY",
     "Recipe",
     "RecipeCatalog",
     "compose_config",

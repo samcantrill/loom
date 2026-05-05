@@ -7,8 +7,7 @@ import pytest
 
 from loom.config import RecipeCatalog, compose_config, inspect_config_composition, instantiate
 from loom.config.errors import ConfigLoadError, OverrideApplyError
-from loom.config.provenance import build_config_fingerprint
-from loom.fingerprints import hash_mapping
+from loom.config.fingerprints import compare_config_artifact_fingerprints
 from tests.support.config_samples import DownstreamRecipe, argument_recipe
 
 
@@ -176,13 +175,13 @@ def test_compose_uses_generic_payload_for_redaction_and_fingerprints(tmp_path: P
         "secret_token": "***REDACTED***",
     }
     assert "schema_version" not in composed.redacted
-    assert composed.provenance.resolved_fingerprint == hash_mapping(composed.resolved)
-    assert composed.fingerprint == build_config_fingerprint(
-        resolved=composed.resolved,
-        sources=composed.provenance.sources,
-        overrides=composed.provenance.overrides,
-        recipe_manifest=composed.recipe_manifest,
-        schema_version=composed.provenance.schema_version,
+    assert composed.fingerprint == composed.fingerprint_records[0].digest
+    assert (
+        compare_config_artifact_fingerprints(
+            left=composed.fingerprint_records[0],
+            right=composed.manifest,
+        ).status
+        == "match"
     )
 
 

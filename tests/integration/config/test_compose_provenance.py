@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from loom.config import RecipeCatalog, compose_config, inspect_config_composition
 from loom.config.redaction import REDACTION_MARKER
+from loom.config.fingerprints import ARTIFACT_SAFE_FINGERPRINT_LABEL, ARTIFACT_SAFE_FINGERPRINT_POLICY
 from tests.support.config_samples import argument_recipe
 
 
@@ -137,7 +138,8 @@ def test_public_compose_redaction_preserves_resolver_expressions_in_artifacts(tm
     artifact_safety = cast(dict[str, Any], security["artifact_safety"])
     assert artifact_safety["raw_source_bytes_included"] is False
     assert artifact_safety["resolved_runtime_values_included"] is False
-    assert [record.label for record in composed.fingerprint_records] == ["unresolved"]
+    assert [record.label for record in composed.fingerprint_records] == [ARTIFACT_SAFE_FINGERPRINT_LABEL]
+    assert composed.fingerprint_records[0].metadata["fingerprint_policy"] == ARTIFACT_SAFE_FINGERPRINT_POLICY
 
     artifact_payload = {
         "manifest": composed.manifest.to_dict(),

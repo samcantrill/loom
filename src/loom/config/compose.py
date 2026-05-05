@@ -28,8 +28,10 @@ from .merge import merge_configs
 from .artifacts import (
     SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
     CompositionManifest,
-    ConfigFingerprintRecord,
     SourceArtifactRecord,
+)
+from .fingerprints import (
+    build_artifact_safe_config_fingerprint_record,
 )
 from .source_maps import ConfigPath, build_base_source_map, compose_config_with_sources, format_config_path
 from .overrides import (
@@ -42,7 +44,6 @@ from .provenance import (
     SCHEMA_VERSION as PROVENANCE_SCHEMA_VERSION,
     ConfigProvenance,
     ConfigSource,
-    build_config_fingerprint,
 )
 from .redaction import (
     REDACTION_MARKER,
@@ -247,22 +248,24 @@ def inspect_config_composition(
     )
     _append_stage(stages, "redaction", {"redacted_keys": _config_key_count(redacted), "marker": REDACTION_MARKER})
 
-    resolved_fingerprint = build_resolved_fingerprint(validated)
-    unresolved_fingerprint = build_resolved_fingerprint(unresolved)
-
     source_artifacts = _build_source_artifacts(
         sources=sources,
         include_sites=effective_include_sites,
         recipe_manifest=recipe_manifest_payload,
     )
-    fingerprint_records = (
-        ConfigFingerprintRecord(
-            schema_version=ARTIFACT_SCHEMA_VERSION,
-            digest=unresolved_fingerprint,
-            label="unresolved",
-            metadata={"resolution_stage": "artifact_safe"},
-        ),
+    artifact_safe_config_fingerprint_record = build_artifact_safe_config_fingerprint_record(
+        unresolved=unresolved,
+        redacted=redacted,
+        source_artifacts=source_artifacts,
+        include_sites=effective_include_sites,
+        include_overrides=include_overrides,
+        ordinary_overrides=ordinary_overrides,
+        recipe_manifest=recipe_manifest_payload,
+        resolver_records=_resolver_records,
+        redaction_policy=redaction_policy(),
     )
+    fingerprint_records = (artifact_safe_config_fingerprint_record,)
+    resolved_fingerprint = build_resolved_fingerprint(validated)
     provenance_metadata = _build_provenance_metadata(
         include_records=effective_include_sites,
         recomposition_contexts=expanded_with_includes.recomposition_contexts,
@@ -303,13 +306,7 @@ def inspect_config_composition(
             "fingerprint_record_count": len(fingerprint_records),
         },
     )
-    fingerprint = build_config_fingerprint(
-        resolved=validated,
-        sources=provenance.sources,
-        overrides=provenance.overrides,
-        recipe_manifest=recipe_manifest_payload,
-        schema_version=provenance.schema_version,
-    )
+    fingerprint = artifact_safe_config_fingerprint_record.digest
     _append_stage(
         stages,
         "fingerprint",
