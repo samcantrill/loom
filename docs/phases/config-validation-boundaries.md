@@ -222,8 +222,11 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used by `loom_phase_refiner` on 2026-05-05; no further automated implementation refinement pass remains.
-- Pre-submit blocker gate: unused.
-- PR review: unused. The revised workflow requires a pre-submit blocker gate before PR submission; when that gate reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks, it consumes the Phase 10 PR-review budget unless the submitted diff changes afterward.
+- Pre-submit blocker gate: used by `loom_phase_reviewer` on 2026-05-05; no
+  blockers found for the unchanged diff.
+- PR review: consumed by the pre-submit blocker gate for the current diff,
+  draft PR body, suite evidence, scope boundary, and known review risks. Run a
+  post-submit PR review only if the submitted diff changes.
 
 ## Completion Notes
 
@@ -279,10 +282,21 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     `9 passed, 5 skipped`, e2e `5 passed`, config-extra
     `253 passed, 432 deselected`.
 - Pre-submit blocker gate:
-  - Status: pending before PR submission.
+  - Status: passed before PR submission.
   - Required review scope: final diff, PR body draft, suite evidence, phase
     scope boundary, and known review risks.
-  - Budget note: this gate remains unused in this draft pass; if it performs
-    the required full review before submission, it consumes the Phase 10
-    PR-review budget unless the submitted diff changes afterward.
+  - Reviewer: `loom_phase_reviewer`.
+  - Findings: none. The reviewer found no blocking correctness, scope,
+    import-boundary, test-evidence, or PR-body accuracy issues.
+  - Evidence checked: branch `codex/config-validation-boundaries` uses merge
+    base `80c1efb` against `develop`; `validation.py` removes required
+    top-level `name`/`pipeline`/`schema_version` validation; `load.py` rejects
+    authored `_schema_` and `_copy_` with structured source context;
+    `ConfigValidationError` carries structured context; no `loom.pipeline`
+    imports, CLI/public inspection APIs, persistence, `_copy_` support, schema
+    registries, raw source persistence, resolver-output persistence,
+    plugin/remote behavior, or Phase 11 instantiation behavior leaked in.
+  - Budget note: this pre-submit gate consumes the Phase 10 PR-review budget
+    for the current diff. A post-submit PR review should run only if the
+    submitted diff changes.
 - Stack maintenance:
