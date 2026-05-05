@@ -259,6 +259,24 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_merge.py tests/unit/loom/config/test_compose.py` ✅ (28 passed)
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/config/test_compose_config.py tests/integration/config/test_source_maps.py` ✅ (5 passed)
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/source_maps.py tests/unit/loom/config/test_source_maps.py tests/integration/config/test_source_maps.py` ✅
-- PR preparation: not started (per user scope).
+- PR preparation draft:
+  - Draft pass status: completed by `loom_pr_preparer`; public draft written to `docs/phases/config-source-overlays-pr-body.md`.
+  - Refine pass status: pending; expanded path is active and PR creation is intentionally left for `.codex/prompts/pr-body-refine.md`.
+  - PR title: `Configuration - Phase 4: Source-Authored Overlays`
+  - Branch: `codex/config-source-overlays`
+  - Target branch: `develop`
+  - Stack predecessor: none
+  - Merge eligibility: merge-eligible after PR review because the target is `develop`.
+  - PR review budget: unused.
+  - GitHub PR creation: not attempted in this draft pass per expanded-path instructions.
+- PR preparation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` failed: Ruff passed, then Pyright reported one error in `tests/unit/loom/config/test_source_maps.py` because helper parameter `kind: str` is passed to `ConfigSource(kind=...)`, whose type expects `Literal["base", "overlay"]`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` failed after writing `build/test-summary.md`: package, unit, contract, integration, and e2e suites passed; `config-extra` errored during collection because `tests/integration/config/test_source_maps.py` and `tests/unit/loom/config/test_source_maps.py` share the same basename under pytest import collection.
+  - `build/test-summary.md` suite evidence: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 24 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 1 collection error; overall 428 passed, 1 error, 8 skipped, 428 deselected.
+  - Prior targeted validation after implementation refinement remains recorded above and passed with the writable cache pattern.
+- Scope confirmation:
+  - Final diff reviewed against `develop`; changed files are limited to this phase plan, `src/loom/config/compose.py`, `src/loom/config/source_maps.py`, `tests/unit/loom/config/test_source_maps.py`, and `tests/integration/config/test_source_maps.py`.
+  - No future-phase implementation observed: no include resolution, recursive includes, user include replacement, public inspection/API fields, manifests/provenance population, fingerprints, raw source persistence, CLI, pipeline imports, run-store writes, or root package exports.
 - Stack maintenance: no stack changes required in this scope.
-- Remaining blockers: none.
+- Remaining blockers:
+  - Final validation is blocked by the Pyright test-helper type error and the `config-extra` duplicate test-module collection error above. No implementation or test refinement was performed during PR preparation.
