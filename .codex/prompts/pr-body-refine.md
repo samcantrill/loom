@@ -29,20 +29,21 @@ Task:
    are described as phase work.
 5. Mark the PR body refine pass complete.
 6. Open the PR if GitHub tooling and authentication are available. Use explicit
-   `--base <target-branch>` and `--head codex/<summary-of-feature>` flags,
-   where `<target-branch>` is the branch recorded in the phase execution plan.
-   Otherwise, leave the PR body ready to use and document the exact blocker.
+   `--base <target-branch>`, `--head codex/<summary-of-feature>`, and
+   `--title "<plan-focus> - Phase <N>: <what-changed> E.g. Configuration - Phase 1: Boundary and Artifact Contracts "` flags from the
+   phase execution plan. Otherwise, leave the PR body ready to use and document
+   the exact blocker in phase notes.
 7. Verify an opened PR with `gh pr view <PR>
    --json baseRefName,headRefName,state,url` and confirm `baseRefName` matches
    the recorded target branch. Document whether the PR is already
    merge-eligible (`develop` target) or stacked for review only (predecessor
-   branch target).
-8. Request review from `samcantrill` with `gh pr edit <PR> --add-reviewer
-   samcantrill` when GitHub allows it. If GitHub rejects the review request
-   because the authenticated account or PR author is `samcantrill`, add a PR
-   comment mentioning `@samcantrill` and record the fallback in the PR body.
-9. Record the review-notification status in
-   `docs/phases/<summary-of-feature>-pr-body.md`.
+   branch target) in phase notes.
+8. Ensure the PR body mentions `@samcantrill` near the top. Do not request
+   `samcantrill` as a GitHub reviewer. If the body cannot be edited after PR
+   creation, add an immediate PR comment mentioning `@samcantrill` and record
+   the comment link in phase notes.
+9. Keep workflow internals such as PR verification JSON, notification fallback,
+   commit lists, and budget accounting out of the public PR body.
 
 Rules:
 
@@ -53,6 +54,8 @@ Rules:
 - Do not create new test coverage.
 - Do not add broad implementation narrative beyond what reviewers need to
   verify scope, behavior, tests, and risks.
+- Ensure Implementation Notes describe the technical behavior changed and the
+  new or changed tests that validate it.
 - Do not retarget or rebase stack branches; the managing agent owns stack
   maintenance after predecessor PRs land.
 - If the PR body cannot be made accurate from the artifact, diff, and validation

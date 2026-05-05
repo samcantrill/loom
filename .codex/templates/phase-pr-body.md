@@ -1,20 +1,15 @@
-## Phase
-
-- Phase:
-- Branch:
-- Target branch:
-- Stack predecessor:
-- Merge eligibility:
-- Worktree:
-- Workflow path: fast path / expanded path
-- Plan: `docs/implementation-plans/implementation-plan-v<N>.md`
-- Phase execution plan:
-- Draft pass:
-- Refine pass:
-
 ## Summary
 
-Describe what this PR implements.
+@samcantrill
+
+Describe what this PR implements in one or two human-readable paragraphs. Keep
+workflow metadata, commit lists, budget accounting, and long command output in
+the phase execution plan or completion notes instead of the public PR body.
+
+## Media
+
+Include screenshots, recordings, or generated artifacts only when they help
+review the changed behavior. Delete this section when not applicable.
 
 ## Acceptance Criteria
 
@@ -23,54 +18,31 @@ Describe what this PR implements.
 
 ## Implementation Notes
 
-Describe important implementation choices, assumptions, or tradeoffs.
+Describe important technical choices, changed modules or data flow, preserved
+contracts, assumptions, and tradeoffs.
+
+New tests implemented:
+
+- Describe the behavior validated by new or changed tests.
+- Name test areas only when useful for review.
 
 ## Tests And Validation
 
-List final validation commands and results.
+Use compact Markdown tables for final validation and suite evidence.
 
-```text
-command:
-result:
-```
+| Check | Result | Evidence |
+| --- | --- | --- |
+| `make validate-pr` |  |  |
+| `make test-summary` |  |  |
+| GitHub checks |  |  |
 
-If a command could not be run, explain why.
+If a command could not be run, explain why in the table.
 
 ### Test Suite Summary
 
-Paste the `make test-summary` Markdown table or summarize equivalent suite
-evidence.
-
-## Scope Control
-
-- [ ] Implements only the assigned phase.
-- [ ] Does not implement future phases early.
-- [ ] Does not include unrelated refactors.
-
-## Budget Status
-
-- Phase implementation refinement:
-- PR review before this PR:
+Paste or summarize the compact suite table from `build/test-summary.md`. Do not
+include box-drawing tables, full output tails, or long command listings.
 
 ## Risks / Follow-Ups
 
 List known risks, limitations, or follow-up work for later phases.
-
-## PR Creation Status
-
-If the PR was not opened, record the exact command attempted and blocker. If
-the PR is stacked, record that it is reviewable against the predecessor branch
-but not merge-eligible until retargeted to `develop`.
-
-## Review Notification
-
-- Reviewer requested: `samcantrill`
-- Command or fallback used:
-- Notification result:
-
-## Stack Maintenance
-
-- Current base branch:
-- Retarget/rebase needed after predecessor merge:
-- Successor branches depending on this phase:
-- Branch cleanup constraints:

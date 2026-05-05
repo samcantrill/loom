@@ -3,6 +3,8 @@
 ## Metadata
 
 - Phase:
+- Feature focus:
+- PR title: `<feature-focus> - Phase <N>: <Words to scope>`
 - Source plan: `docs/implementation-plans/implementation-plan-v<N>.md`
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`

@@ -26,7 +26,7 @@ Task:
 3. Refine the phase execution plan until it is implementable: scope boundaries,
    acceptance criteria, public contracts or risky choices, edge cases, tests by
    suite, validation, assumptions, stack base/target branch, merge eligibility,
-   and explicit out-of-scope work.
+   feature focus, intended PR title, and explicit out-of-scope work.
 4. Keep the plan limited to the assigned phase and preserve the durable
    handoff sections from `.codex/templates/phase-execution-plan.md`.
 5. Add concise handoff notes for `loom_phase_executor`, including small safe

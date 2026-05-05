@@ -3,6 +3,8 @@
 ## Metadata
 
 - Status: draft phase execution plan
+- Feature focus:
+- PR title: `<feature-focus> - Phase <N>: <Words to scope>`
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
 - Phase execution plan path: `docs/phases/<summary-of-feature>.md`

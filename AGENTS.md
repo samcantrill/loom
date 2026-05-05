@@ -155,11 +155,10 @@ serial phase flow instead of stacked phase PRs.
   `pr_open` or `approved`.
 - Do not approve or merge phase PRs. Human review and merge are the external
   gate.
-- After opening or discovering a phase PR, request review from `samcantrill`
-  with `gh pr edit <PR> --add-reviewer samcantrill` when GitHub allows it. If
-  GitHub rejects the request because the authenticated account or PR author is
-  `samcantrill`, add a PR comment mentioning `@samcantrill` and record that
-  fallback in the PR body or phase notes.
+- The PR body must mention `@samcantrill` near the top. Do not request
+  `samcantrill` as a GitHub reviewer; if the PR body cannot be edited after
+  creation, add an immediate PR comment mentioning `@samcantrill` and record
+  the comment link in phase notes.
 - Poll GitHub for the merge gate instead of asking the user to return to Codex
   manually. Continue only after `gh pr view <PR> --json
   state,baseRefName,headRefName,url,mergedAt` reports `state` as `MERGED` and
@@ -193,12 +192,14 @@ serial phase flow instead of stacked phase PRs.
   `https://github.com/<owner>/<repo>.git` for `origin`.
 - Use `git` for local worktree and commit operations. Use `gh` wherever it
   provides safer GitHub state checks or avoids SSH-only behavior.
-- Create phase PRs with explicit base and head branches. Use `develop` only for
-  root PRs or PRs already rebased onto `develop`; use the stack predecessor
-  branch for stacked PRs:
+- Create phase PRs with explicit base, head, and title. PR titles must use
+  `<feature-focus> - Phase <X>: <Words to scope>`, for example
+  `Configuration - Phase 1: Boundary and Artifact Contracts`. Use `develop`
+  only for root PRs or PRs already rebased onto `develop`; use the stack
+  predecessor branch for stacked PRs:
 
 ```sh
-gh pr create --base <target-branch> --head codex/<summary-of-feature> --body-file <body>
+gh pr create --base <target-branch> --head codex/<summary-of-feature> --title "<feature-focus> - Phase <X>: <Words to scope>" --body-file <body>
 ```
 
 - Immediately verify the created or existing PR with:
@@ -235,6 +236,8 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
   obligations, risky decisions, and stop conditions without turning the plan
   into an exhaustive implementation recipe. Refine the phase plan only when the
   expanded-path triggers below apply.
+- Record the PR feature focus and intended PR title in the phase execution plan
+  before implementation begins so PR preparation does not invent title scope.
 - Follow the stacked phase handoff, or the serial human merge gate when that
   mode is selected. Do not collapse role ownership into one agent unless
   explicitly instructed, but skip optional second passes on the fast path.
@@ -265,11 +268,11 @@ manager selects next pending phase and stack base
 loom_phase_planner creates one concise scope-complete phase execution plan with suite-level test obligations
 loom_phase_executor implements and commits phase work and phase-scoped tests
 manager skips loom_phase_refiner when targeted validation passes and coverage obligations are met
-loom_pr_preparer runs checks, writes the PR body, records suite evidence, and opens/prepares PR in one pass
+loom_pr_preparer runs checks, writes a concise human-readable PR body with suite evidence, and opens/prepares PR in one pass
 manager mirrors pr_open metadata in the control checkout
 manager applies any workflow refinements in the control checkout, outside product phase branches
 manager may move to the next pending phase using the current phase branch as stack base in stacked mode
-manager requests samcantrill review and waits for human merge in serial human merge gate mode
+manager ensures the PR body mentions @samcantrill and waits for human merge in serial human merge gate mode
 loom_phase_reviewer or manager reviews PR
 manager approves, retargets/rebases stack children when predecessors land, merges merge-eligible PRs, or escalates to the user in stacked mode
 human reviewer approves and merges the PR in serial human merge gate mode
@@ -352,8 +355,9 @@ Before merging, the managing agent must confirm:
   clearly justified.
 - The PR implements only the assigned phase and does not include future phase
   work.
-- The PR body and phase execution plan accurately summarize the implementation,
-  suite-level test evidence, assumptions, risks, branch, and worktree path.
+- The PR body accurately summarizes the implementation, suite-level test
+  evidence, assumptions, and risks. The phase execution plan records workflow
+  metadata such as branch and worktree path.
 
 After merging, the managing agent must:
 
@@ -454,12 +458,17 @@ make test-summary
 ```
 
 `make validate-pr` wraps the required Ruff, Pyright, default Pytest, and build
-commands. `make test-summary` writes the suite evidence used in PR bodies.
+commands. `make test-summary` writes the suite evidence used in PR bodies; PR
+bodies should summarize this evidence with compact Markdown tables rather than
+box-drawing output or long command tails.
 Agents may run narrower suite targets such as `make test-unit`,
 `make test-integration`, or direct `uv run pytest ...` commands during
 implementation, but PR preparation must report the final validation gate.
 
 If a command cannot be run, record why in the phase execution plan and PR body.
+Keep detailed workflow internals such as commit lists, budget accounting,
+GitHub JSON, and notification mechanics in phase execution notes, not in the
+public PR body.
 
 ### Commit Style
 
@@ -486,5 +495,5 @@ A phase is done when:
 - Relevant tests are added or updated.
 - Relevant checks have been run.
 - Failing checks are fixed or clearly explained.
-- The PR body summarizes implementation, suite-level test evidence, validation,
-  assumptions, and risks.
+- The PR body summarizes implementation, new tests added for changed behavior,
+  suite-level test evidence, validation, assumptions, and risks.

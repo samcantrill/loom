@@ -36,8 +36,9 @@ Prefer GitHub CLI-backed remote operations when available:
   `gh auth setup-git` and use the HTTPS remote form
   `https://github.com/<owner>/<repo>.git` for `origin`.
 - Use `gh pr create --base <target-branch> --head <branch> --body-file <body>`
-  for phase PRs. Never rely on GitHub's default base branch for phase PR
-  creation. Use `develop` for root PRs and the recorded stack predecessor
+  plus an explicit `--title "<plan-focus> - Phase <N>: <what-changed> E.g. Configuration - Phase 1: Boundary and Artifact Contracts "`
+  for phase PRs. Never rely on GitHub's default base branch or title for phase
+  PR creation. Use `develop` for root PRs and the recorded stack predecessor
   branch for stacked PRs.
 - Immediately verify each opened or discovered phase PR with `gh pr view <PR>
   --json baseRefName,headRefName,state,url`; stop if `baseRefName` is neither
@@ -147,13 +148,11 @@ Serial human-merge-gate mode:
   stacked successor branches unless the user explicitly re-enables stacking.
 - Do not approve or merge phase PRs in this mode. The human reviewer owns
   GitHub approval and merge.
-- The PR body or an immediate PR comment must mention `@samcantrill` so the
-  reviewer receives an explicit notification in the PR conversation.
-- After opening or discovering a phase PR, request review from `samcantrill`
-  with `gh pr edit <PR> --add-reviewer samcantrill` when GitHub allows it. If
-  GitHub rejects the request because the authenticated account or PR author is
-  `samcantrill`, add a PR comment mentioning `@samcantrill` and record that
-  fallback in the PR body or phase notes.
+- The PR body must mention `@samcantrill` near the top so the reviewer receives
+  an explicit notification in the PR conversation. Do not request
+  `samcantrill` as a GitHub reviewer; if the PR body cannot be edited after
+  creation, add an immediate PR comment mentioning `@samcantrill` and record
+  the comment link in phase notes.
 - After the PR is ready, poll GitHub for the merge gate instead of asking the
   user to return to Codex manually. Use `gh pr view <PR> --json
   state,baseRefName,headRefName,url,mergedAt,reviewDecision,statusCheckRollup`
@@ -254,9 +253,9 @@ For each phase:
     control checkout. In stacked mode, you may move to the next pending phase
     immediately using the current phase branch as stack base if validation
     passed or unavailable validation is justified. In serial human-merge-gate
-    mode, mention `@samcantrill` in the PR body or an immediate PR comment,
-    request/record the `samcantrill` review notification, and do not assign the
-    next phase; continue through the approval and merge gates below.
+    mode, confirm the PR body mentions `@samcantrill` or record an immediate
+    PR comment link in phase notes, and do not assign the next phase; continue
+    through the approval and merge gates below.
 13. Apply any managing-agent workflow refinements in the control checkout or a
     dedicated workflow PR before assigning the next phase. Keep those changes
     out of product phase branches unless explicitly assigned as phase work.

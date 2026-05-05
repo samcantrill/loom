@@ -56,37 +56,39 @@ The draft phase execution plan must preserve the template's durable handoff
 sections and include:
 
 1. Branch name using `codex/<summary-of-feature>`.
-2. Worktree path.
-3. Source phase from the selected implementation plan.
-4. Stack predecessor, base branch, target branch, and merge eligibility.
-5. Objective.
-6. Full-plan context.
-7. In-scope work.
-8. Out-of-scope work.
-9. Assumptions.
-10. Design impact.
-11. Future compatibility.
-12. Alternatives rejected.
-13. Debt introduced.
-14. Reviewability.
-15. Files and areas to inspect.
-16. Implementation steps as small reviewable slices, not a full code recipe.
-17. Test plan, grouped by package, unit, contract, integration, e2e, and opt-in
+2. Feature focus and intended PR title using
+   `<plan-focus> - Phase <N>: <what-changed> E.g. Configuration - Phase 1: Boundary and Artifact Contracts `.
+3. Worktree path.
+4. Source phase from the selected implementation plan.
+5. Stack predecessor, base branch, target branch, and merge eligibility.
+6. Objective.
+7. Full-plan context.
+8. In-scope work.
+9. Out-of-scope work.
+10. Assumptions.
+11. Design impact.
+12. Future compatibility.
+13. Alternatives rejected.
+14. Debt introduced.
+15. Reviewability.
+16. Files and areas to inspect.
+17. Implementation steps as small reviewable slices, not a full code recipe.
+18. Test plan, grouped by package, unit, contract, integration, e2e, and opt-in
     suites. For each suite, state required coverage, expected test paths,
     assertions, or the explicit reason it is deferred for this phase.
-18. Risks.
-19. Validation commands, including targeted suite commands for development and
+19. Risks.
+20. Validation commands, including targeted suite commands for development and
     `make validate-pr` plus `make test-summary` before PR preparation.
-20. Workflow path and draft/refine status:
+21. Workflow path and draft/refine status:
    - workflow path: fast path by default, or expanded path when assigned
    - draft pass: completed by `loom_phase_planner`
    - refine pass: not needed for fast path, or pending for expanded path
-21. Refinement and review budget status:
+22. Refinement and review budget status:
    - phase implementation refinement: unused
    - PR review: unused
-22. Handoff notes for implementation, plus any expanded-path refinement notes
+23. Handoff notes for implementation, plus any expanded-path refinement notes
     if the manager selected the expanded path.
-23. Completion notes placeholder.
+24. Completion notes placeholder.
 
 Planning rules:
 
