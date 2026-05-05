@@ -9,7 +9,16 @@ from loom.config import RecipeCatalog, compose_config, compose_config_with_catal
 from loom.config.errors import ConfigLoadError
 from loom.config.errors import ConfigValidationError, UnknownRecipeError
 import loom.config.api as config_api
+from loom.serialization import PlainData
 from tests.support.config_samples import argument_recipe
+
+
+def _model_mapping(config: dict[str, PlainData]) -> dict[str, PlainData]:
+    pipeline = config["pipeline"]
+    assert isinstance(pipeline, dict)
+    model = pipeline["model"]
+    assert isinstance(model, dict)
+    return cast(dict[str, PlainData], model)
 
 
 def test_compose_base_overlay_override_flow(tmp_path: Path) -> None:
@@ -38,12 +47,42 @@ def test_compose_base_overlay_override_flow(tmp_path: Path) -> None:
     assert [source.kind for source in result.provenance.sources] == ["base", "overlay", "overlay"]
 
 
-def test_compose_preserves_include_replace_keys(tmp_path: Path) -> None:
+def test_compose_expands_file_includes_and_removes_include_keys(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
-    base.write_text("name: demo\npipeline: {}\n_include_: true\n_replace_: true\n", encoding="utf-8")
+    base.write_text(
+        "name: demo\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: included.yaml\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "included.yaml").write_text(
+        "stage: included\n", encoding="utf-8"
+    )
     result = compose_config(base)
-    assert result.resolved["_include_"] is True
-    assert result.resolved["_replace_"] is True
+    model = _model_mapping(result.resolved)
+    assert model == {"stage": "included"}
+    assert "_include_" not in model
+
+
+def test_compose_expands_file_include_with_user_override_ordering(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: demo\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: included.yaml\n"
+        "    local: base\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "included.yaml").write_text(
+        "source: included\n", encoding="utf-8"
+    )
+
+    result = compose_config(base, overrides=("pipeline.model.local=override",))
+    model = _model_mapping(result.resolved)
+    assert model["source"] == "included"
+    assert model["local"] == "override"
 
 
 def test_compose_rejects_copy_directive_in_config(tmp_path: Path) -> None:

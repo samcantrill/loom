@@ -4,6 +4,7 @@ import pytest
 
 from loom.config.errors import (
     ConfigErrorContext,
+    ConfigIncludeExpansionError,
     ConfigIncludeResolutionError,
     ConfigLoadError,
 )
@@ -114,4 +115,38 @@ def test_config_include_resolution_error_serializes_structured_context() -> None
     assert context_details["candidate_path"] == "/tmp/model/missing.yaml"
     assert context_details["target_kind"] == "explicit_relative"
     assert context_details["explicit_escape"] is True
+    assert ConfigErrorContext.from_dict(payload["context"]) == error.context
+
+
+def test_config_include_expansion_error_serializes_structured_context() -> None:
+    error = ConfigIncludeExpansionError(
+        "cannot expand include",
+        context=ConfigErrorContext(
+            code="included_root_not_mapping",
+            source_kind="overlay",
+            source_order=1,
+            source_path="/tmp/overlay.yaml",
+            config_path="$.pipeline.model._include_",
+            directive="_include_",
+            details={
+                "include_site_path": ["pipeline", "model", "_include_"],
+                "authored_target": "./model.yaml",
+                "resolved_path": "/tmp/model.yaml",
+                "source_order": 1,
+                "target_kind": "explicit_relative",
+                "explicit_escape": True,
+                "resolved_path_type": "dict",
+            },
+        ),
+    )
+
+    payload = error.to_dict()
+    assert payload["context"]["code"] == "included_root_not_mapping"
+    assert payload["context"]["source_order"] == 1
+    assert payload["context"]["source_path"] == "/tmp/overlay.yaml"
+    assert payload["context"]["directive"] == "_include_"
+    context_details = payload["context"]["details"]
+    assert isinstance(context_details, dict)
+    assert context_details["include_site_path"] == ["pipeline", "model", "_include_"]
+    assert context_details["resolved_path"] == "/tmp/model.yaml"
     assert ConfigErrorContext.from_dict(payload["context"]) == error.context

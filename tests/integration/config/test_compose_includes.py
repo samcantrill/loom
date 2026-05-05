@@ -1,0 +1,165 @@
+"""Integration checks for file-authored config include composition."""
+
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from loom.config import compose_config
+from loom.config.errors import ConfigIncludeExpansionError
+from loom.serialization import PlainData
+
+
+def _model_mapping(config: dict[str, PlainData]) -> dict[str, PlainData]:
+    pipeline = config["pipeline"]
+    assert isinstance(pipeline, dict)
+    model = pipeline["model"]
+    assert isinstance(model, dict)
+    return cast(dict[str, PlainData], model)
+
+
+def test_public_compose_includes_base_and_overlay_after_source_aware_merge(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+    (include_dir / "model-base.yaml").write_text("source: base\n", encoding="utf-8")
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./include/model-base.yaml\n"
+        "    local: from-base\n",
+        encoding="utf-8",
+    )
+    overlay.write_text(
+        "pipeline:\n"
+        "  model:\n"
+        "    local: from-overlay\n"
+        "    overlay_only: 'yes'\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, overlays=(overlay,))
+    model = _model_mapping(composed.resolved)
+    assert model == {
+        "source": "base",
+        "local": "from-overlay",
+        "overlay_only": "yes",
+    }
+
+
+def test_public_compose_includes_nested_include_relative_to_including_file(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+    (include_dir / "root.yaml").write_text(
+        "outer:\n"
+        "  _include_: nested\n"
+        "base_key: root\n",
+        encoding="utf-8",
+    )
+    nested_dir = include_dir / "outer"
+    nested_dir.mkdir()
+    (nested_dir / "nested.yaml").write_text("inner: 'yes'\n", encoding="utf-8")
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./include/root.yaml\n"
+        "    local: local\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base)
+    model = _model_mapping(composed.resolved)
+    assert model == {
+        "outer": {"inner": "yes"},
+        "base_key": "root",
+        "local": "local",
+    }
+
+
+def test_public_compose_includes_requires_same_site_replace_for_mapping_swap(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    included = tmp_path / "model.yaml"
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    existing: base\n",
+        encoding="utf-8",
+    )
+    overlay.write_text(
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./model.yaml\n",
+        encoding="utf-8",
+    )
+    included.write_text("from_include: value\n", encoding="utf-8")
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        compose_config(base, overlays=(overlay,))
+    assert exc.value.context is not None
+    assert exc.value.context.code == "missing_required_replace_for_include"
+
+
+def test_public_compose_includes_with_same_site_replace_stays_enabled(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    included = tmp_path / "model.yaml"
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    existing: base\n",
+        encoding="utf-8",
+    )
+    overlay.write_text(
+        "pipeline:\n"
+        "  model:\n"
+        "    _replace_: true\n"
+        "    _include_: ./model.yaml\n"
+        "    override: overlay\n",
+        encoding="utf-8",
+    )
+    included.write_text(
+        "override: include\n"
+        "base_only: keep\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, overlays=(overlay,))
+    model = _model_mapping(composed.resolved)
+    assert model == {
+        "override": "overlay",
+        "base_only": "keep",
+    }
+
+
+def test_public_compose_user_overrides_apply_after_file_include_expansion(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: included.yaml\n"
+        "    local: base\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "included.yaml").write_text("source: included\n", encoding="utf-8")
+
+    composed = compose_config(
+        base,
+        overrides=("pipeline.model.local=override", "+pipeline.model.extra=added"),
+    )
+
+    model = _model_mapping(composed.resolved)
+    assert model["local"] == "override"
+    assert model["extra"] == "added"
+    assert model["source"] == "included"

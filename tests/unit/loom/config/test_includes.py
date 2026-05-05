@@ -8,12 +8,19 @@ from typing import Literal, cast
 import pytest
 
 from loom.config.includes import (
+    ConfigIncludeExpansionError,
     ConfigIncludeResolutionError,
     IncludeResolutionResult,
+    expand_config_includes,
     resolve_include_target,
 )
+from loom.config.source_maps import (
+    ConfigPath,
+    compose_config_with_sources,
+)
 from loom.config.provenance import ConfigSource
-from loom.config.source_maps import ConfigPath
+from loom.config.load import load_config
+from loom.serialization import PlainData
 
 
 def _config_source(
@@ -460,3 +467,400 @@ def test_resolution_error_context_carries_candidate_and_target_kind(
     )
     assert context.details["target_kind"] == "bare_name"
     assert context.details["explicit_escape"] is False
+
+
+def _write_yaml(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+
+
+def _nested_mapping(config: dict[str, PlainData], *path: str) -> dict[str, PlainData]:
+    value: PlainData = config
+    for segment in path:
+        assert isinstance(value, dict)
+        value = value[segment]
+    assert isinstance(value, dict)
+    return cast(dict[str, PlainData], value)
+
+
+def test_expand_config_includes_recursively_expands_nested_includes(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    include_dir = tmp_path / "includes"
+    include_dir.mkdir()
+    root_include = include_dir / "model.yaml"
+    nested_include = include_dir / "nested.yaml"
+
+    _write_yaml(
+        base_path,
+        (
+            "pipeline:\n"
+            "  model:\n"
+            "    _include_: ./includes/model.yaml\n"
+            "    from_included: from-base\n"
+            "    unique: add-only\n"
+        ),
+    )
+    _write_yaml(
+        root_include,
+        (
+            "from_included: from-file\n"
+            "nested:\n"
+            "  _include_: ./nested.yaml\n"
+        ),
+    )
+    _write_yaml(nested_include, "value: 7\n")
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=(),
+    )
+    expanded = expand_config_includes(
+        merged.config,
+        source_map=merged.source_map,
+        replacement_sites=merged.replacement_sites,
+        mapping_sites=merged.mapping_sites,
+    )
+
+    model = _nested_mapping(expanded.config, "pipeline", "model")
+    assert model == {
+        "from_included": "from-base",
+        "unique": "add-only",
+        "nested": {"value": 7},
+    }
+    assert "_include_" not in model
+
+    include_sites = [record.to_dict() for record in expanded.include_sites]
+    assert len(include_sites) == 2
+    assert include_sites[0]["include_site_path"] == [
+        "pipeline",
+        "model",
+        "_include_",
+    ]
+    assert include_sites[0]["authored_target"] == "./includes/model.yaml"
+    assert include_sites[1]["include_site_path"] == [
+        "pipeline",
+        "model",
+        "nested",
+        "_include_",
+    ]
+    assert include_sites[1]["explicit_escape"] is True
+
+    local_customizations = [record.to_dict() for record in expanded.local_customizations]
+    assert len(local_customizations) == 2
+    assert local_customizations[0]["sibling_path"] == ["pipeline", "model", "from_included"]
+    assert local_customizations[0]["kind"] == "override"
+    assert local_customizations[1]["sibling_path"] == ["pipeline", "model", "unique"]
+    assert local_customizations[1]["kind"] == "add"
+    assert local_customizations[1]["source_path"] == str(base_path)
+
+
+def test_expand_config_includes_resolves_nested_bare_include_from_included_file_path(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    include_dir = tmp_path / "includes"
+    leaf_dir = include_dir / "component"
+    leaf_dir.mkdir(parents=True)
+    root_include = include_dir / "root.yaml"
+    leaf_include = leaf_dir / "leaf.yaml"
+
+    _write_yaml(
+        base_path,
+        "pipeline:\n  model:\n    _include_: ./includes/root.yaml\n",
+    )
+    _write_yaml(
+        root_include,
+        "component:\n  _include_: leaf\n",
+    )
+    _write_yaml(leaf_include, "value: from-leaf\n")
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=(),
+    )
+
+    expanded = expand_config_includes(
+        merged.config,
+        source_map=merged.source_map,
+        replacement_sites=merged.replacement_sites,
+        mapping_sites=merged.mapping_sites,
+    )
+
+    assert _nested_mapping(expanded.config, "pipeline", "model") == {
+        "component": {"value": "from-leaf"},
+    }
+    include_sites = [record.to_dict() for record in expanded.include_sites]
+    assert include_sites[1]["include_site_path"] == [
+        "pipeline",
+        "model",
+        "component",
+        "_include_",
+    ]
+    assert include_sites[1]["target_kind"] == "bare_name"
+    assert include_sites[1]["resolved_path"] == str(leaf_include)
+
+
+def test_expand_config_includes_detects_cycles_by_resolved_path(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+    include_a = include_dir / "a.yaml"
+    include_b = include_dir / "b.yaml"
+
+    _write_yaml(
+        base_path,
+        "pipeline:\n  model:\n    _include_: ./include/a.yaml\n",
+    )
+    _write_yaml(include_a, "bridge:\n  _include_: ./b.yaml\n")
+    _write_yaml(include_b, "bridge:\n  _include_: ./a.yaml\n")
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=(),
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            merged.config,
+            source_map=merged.source_map,
+            replacement_sites=merged.replacement_sites,
+            mapping_sites=merged.mapping_sites,
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "include_cycle"
+    details = context.details
+    assert details is not None
+    assert details["reason"] == "include_cycle"
+    include_stack = details["include_stack"]
+    assert isinstance(include_stack, list)
+    assert len(include_stack) >= 2
+    assert any(
+        isinstance(item, dict) and item.get("resolved_path") == str(include_a)
+        for item in include_stack
+    )
+    assert details["attempted_target"] == str(include_a)
+
+
+def test_expand_config_includes_rejects_non_string_value(tmp_path: Path) -> None:
+    base_path = tmp_path / "base.yaml"
+    _write_yaml(base_path, "pipeline:\n  model:\n    _include_: 1\n")
+
+    base_source = ConfigSource(
+        kind="base",
+        path=str(base_path),
+        order=0,
+        content_digest="sha256:dummy",
+        size_bytes=8,
+    )
+    merged = compose_config_with_sources(
+        base_config={"pipeline": {"model": {"_include_": 1}}},
+        base_source=base_source,
+        overlays=(),
+    )
+
+    source_map = {
+        (): base_source,
+        ("pipeline",): base_source,
+        ("pipeline", "model"): base_source,
+        ("pipeline", "model", "_include_"): base_source,
+    }
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            merged.config,
+            source_map=source_map,
+            replacement_sites=merged.replacement_sites,
+            mapping_sites=merged.mapping_sites,
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_include_value"
+    assert context.config_path == "$.pipeline.model._include_"
+
+
+def test_expand_config_includes_fails_without_include_source_entry(
+    tmp_path: Path,
+) -> None:
+    _write_yaml(tmp_path / "base.yaml", "pipeline:\n  model:\n    _include_: included.yaml\n")
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            {"pipeline": {"model": {"_include_": "include.yaml"}}},
+            source_map={},
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "missing_include_source_map_entry"
+
+
+def test_expand_config_includes_rejects_included_non_mapping_root(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+    _write_yaml(base_path, "pipeline:\n  model:\n    _include_: ./included.yaml\n")
+    _write_yaml(included, "not-a-mapping\n")
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=(),
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            merged.config,
+            source_map=merged.source_map,
+            replacement_sites=merged.replacement_sites,
+            mapping_sites=merged.mapping_sites,
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "included_root_not_mapping"
+    assert context.config_path == "$.pipeline.model._include_"
+    assert context.details is not None
+    assert context.details["resolved_path"] == str(included)
+
+
+def test_expand_config_includes_requires_same_site_replace_to_swap_existing_mapping(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    overlay_path = tmp_path / "overlay.yaml"
+    included = tmp_path / "included.yaml"
+
+    _write_yaml(
+        base_path,
+        "pipeline:\n  model:\n    existing: base\n",
+    )
+    _write_yaml(
+        overlay_path,
+        "pipeline:\n  model:\n    _include_: ./included.yaml\n",
+    )
+    _write_yaml(included, "from_include: value\n")
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    overlay_config, overlay_source = load_config(overlay_path, kind="overlay", order=1)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=[(overlay_config, overlay_source)],
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            merged.config,
+            source_map=merged.source_map,
+            replacement_sites=merged.replacement_sites,
+            mapping_sites=merged.mapping_sites,
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "missing_required_replace_for_include"
+    assert context.details is not None
+    assert context.details["include_site_path"] == ["pipeline", "model", "_include_"]
+    assert context.details["reason"] == "include_over_existing_mapping"
+
+
+def test_expand_config_includes_allows_same_site_replace_included_mapping_swap(tmp_path: Path) -> None:
+    base_path = tmp_path / "base.yaml"
+    overlay_path = tmp_path / "overlay.yaml"
+    included = tmp_path / "included.yaml"
+
+    _write_yaml(
+        base_path,
+        "pipeline:\n  model:\n    existing: base\n",
+    )
+    _write_yaml(
+        overlay_path,
+        (
+            "pipeline:\n"
+            "  model:\n"
+            "    _replace_: true\n"
+            "    _include_: ./included.yaml\n"
+            "    override: from-overlay\n"
+        ),
+    )
+    _write_yaml(
+        included,
+        (
+            "override: from-include\n"
+            "base_only: value\n"
+        ),
+    )
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    overlay_config, overlay_source = load_config(overlay_path, kind="overlay", order=1)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=[(overlay_config, overlay_source)],
+    )
+    expanded = expand_config_includes(
+        merged.config,
+        source_map=merged.source_map,
+        replacement_sites=merged.replacement_sites,
+        mapping_sites=merged.mapping_sites,
+    )
+
+    model = _nested_mapping(expanded.config, "pipeline", "model")
+    assert model == {
+        "override": "from-overlay",
+        "base_only": "value",
+    }
+    local_customizations = [record.to_dict() for record in expanded.local_customizations]
+    assert len(local_customizations) == 1
+    assert local_customizations[0]["kind"] == "override"
+    assert local_customizations[0]["sibling_path"] == ["pipeline", "model", "override"]
+
+
+def test_expand_config_includes_rejects_unconsumed_local_replace_marker(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+    _write_yaml(
+        base_path,
+        (
+            "pipeline:\n"
+            "  model:\n"
+            "    _replace_: true\n"
+            "    _include_: ./included.yaml\n"
+        ),
+    )
+    _write_yaml(included, "from_include: value\n")
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=(),
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            merged.config,
+            source_map=merged.source_map,
+            replacement_sites=merged.replacement_sites,
+            mapping_sites=merged.mapping_sites,
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_include_replace_marker"
