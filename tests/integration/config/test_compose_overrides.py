@@ -53,6 +53,60 @@ def test_public_compose_replaces_existing_include_with_local_replay(tmp_path: Pa
     assert "marker" not in model
 
 
+def test_public_compose_rejects_add_operation_for_existing_include_site(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+
+    (include_dir / "model-old.yaml").write_text("shared: old\n", encoding="utf-8")
+    (include_dir / "model-new.yaml").write_text("shared: new\n", encoding="utf-8")
+
+    base.write_text(
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./include/model-old.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        compose_config(base, overrides=("+pipeline.model._include_=./include/model-new.yaml",))
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "existing_include_site"
+    assert context.details is not None
+    assert context.details["reason"] == "add_existing_include_site"
+    assert context.details["override_raw"] == "+pipeline.model._include_=./include/model-new.yaml"
+
+
+def test_public_compose_wraps_non_mapping_replacement_target_with_user_context(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+
+    (include_dir / "model-old.yaml").write_text("shared: old\n", encoding="utf-8")
+    (include_dir / "model-list.yaml").write_text("- not\n- mapping\n", encoding="utf-8")
+
+    base.write_text(
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./include/model-old.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        compose_config(base, overrides=("pipeline.model._include_=./include/model-list.yaml",))
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "included_root_not_mapping"
+    assert context.config_path == "$.pipeline.model._include_"
+    assert context.details is not None
+    assert context.details["reason"] == "replacement_root_not_mapping"
+    assert context.details["override_raw"] == "pipeline.model._include_=./include/model-list.yaml"
+    assert context.details["actual"] == "list"
+
+
 def test_public_compose_replaces_nested_existing_include_with_source_local_bare_target(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
     include_dir = tmp_path / "include"

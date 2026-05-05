@@ -11,7 +11,7 @@ from loom.fingerprints import Fingerprint
 from loom.serialization import PlainData, to_plain_data
 
 from .api import ComposedConfig
-from .errors import ConfigErrorContext, ConfigIncludeExpansionError, ConfigValidationError
+from .errors import ConfigErrorContext, ConfigIncludeExpansionError, ConfigLoadError, ConfigValidationError
 from .includes import (
     IncludeRecompositionContext,
     IncludeSiteRecord,
@@ -143,14 +143,6 @@ def _apply_user_composition_overrides(
         context = context_by_path.get(include_site_path)
         include_record = include_record_by_path.get(include_site_path)
 
-        if context is not None:
-            staged = _replace_existing_include_site(
-                staged,
-                include_override=override,
-                context=context,
-            )
-            continue
-
         if include_record is None:
             if override.operation != "add":
                 raise _user_composition_error(
@@ -169,6 +161,29 @@ def _apply_user_composition_overrides(
                 include_override=override,
                 include_site_path=include_site_path,
                 base_source=base_source,
+            )
+            continue
+
+        if override.operation == "add":
+            raise _user_composition_error(
+                "Cannot add an include at an existing recorded include site.",
+                code="existing_include_site",
+                source=_source_from_context(context) if context is not None else _source_from_record(include_record),
+                include_site_path=include_site_path,
+                override=override,
+                details={
+                    "reason": "add_existing_include_site",
+                    "recorded_source_path": include_record.source_path,
+                    "recorded_source_order": include_record.source_order,
+                    "recorded_source_kind": include_record.source_kind,
+                },
+            )
+
+        if context is not None:
+            staged = _replace_existing_include_site(
+                staged,
+                include_override=override,
+                context=context,
             )
             continue
 
@@ -210,6 +225,8 @@ def _replace_existing_include_site(
     replacement = _load_include_target(
         path=resolved.resolved_path,
         source=replacement_source,
+        include_site_path=context.include_site_path,
+        override=include_override,
     )
     replacement = _replay_local_customizations(replacement, context=context)
     return _set_value(
@@ -272,7 +289,12 @@ def _add_brand_new_include_site(
             },
         )
 
-    replacement = _load_include_target(path=resolved.resolved_path, source=base_source)
+    replacement = _load_include_target(
+        path=resolved.resolved_path,
+        source=base_source,
+        include_site_path=include_site_path,
+        override=include_override,
+    )
     parent[key] = replacement
     return config
 
@@ -303,8 +325,29 @@ def _load_include_target(
     *,
     path: str | Path,
     source: ConfigSource,
+    include_site_path: ConfigPath,
+    override: ParsedOverride,
 ) -> dict[str, PlainData]:
-    included_config, included_source = load_config(path, kind="overlay", order=0)
+    try:
+        included_config, included_source = load_config(path, kind="overlay", order=0)
+    except ConfigLoadError as exc:
+        if exc.context is None or exc.context.code != "non_mapping_root":
+            raise
+        raise _user_composition_error(
+            "Included include replacement target did not resolve to a mapping.",
+            code="included_root_not_mapping",
+            source=source,
+            include_site_path=include_site_path,
+            override=override,
+            details={
+                "reason": "replacement_root_not_mapping",
+                "resolved_path": str(path),
+                "included_source_path": exc.context.source_path,
+                "included_config_path": exc.context.config_path,
+                "expected": exc.context.expected,
+                "actual": exc.context.actual,
+            },
+        ) from exc
     expanded = expand_config_includes(
         included_config,
         source_map=build_base_source_map(included_config, included_source),
@@ -318,7 +361,8 @@ def _load_include_target(
             "Included include replacement target did not resolve to a mapping.",
             code="included_root_not_mapping",
             source=source,
-            include_site_path=(),
+            include_site_path=include_site_path,
+            override=override,
             details={
                 "reason": "replacement_root_not_mapping",
                 "resolved_path": str(path),

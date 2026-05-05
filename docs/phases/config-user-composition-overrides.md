@@ -225,13 +225,13 @@ make test-summary
 
 - Phase execution plan draft: used
 - Phase execution plan refine: used
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
 
 - Draft plan: completed in this artifact by `loom_phase_planner`.
-- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation refinement budget and PR review budget remain unused.
+- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation refinement budget is used and PR review budget remains unused.
 - Implementation summary:
   - Added `split_include_and_ordinary_overrides` in `src/loom/config/overrides.py` and preserved existing semantics for strict update/add value overrides.
   - Extended include expansion records in `src/loom/config/includes.py` with recomposition context (`IncludeRecompositionContext`) and source-local include-site metadata needed for nested existing-site swaps.
@@ -241,12 +241,26 @@ make test-summary
     - Support existing-site replacement with source-context replay of local customizations.
     - Support explicit brand-new `+..._include_=...` additions only, with explicit-target requirement for bare brand-new sites.
     - Preserve ordinary override relative order on recomposed concrete mappings.
+  - Refinement pass tightened strict operation semantics so `+path._include_=...` fails against an existing recorded include site instead of replacing it.
+  - Refinement pass wraps non-mapping user replacement targets as structured `ConfigIncludeExpansionError` values with user override metadata and include-site context.
 - Implementation validation:
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_overrides.py tests/integration/config/test_compose_overrides.py`
-  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_includes.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_config.py tests/contracts/test_config_error_contract.py tests/package/test_import_boundaries.py`
-  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
-  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
-- Refinement summary: completed expanded-path refinement for private-stage boundaries, exact Phase 6 include-site matching, source-local include context, local overlay replay, brand-new explicit relative source policy, override partitioning/order, source-aware errors, suite obligations, and implementation stop conditions.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_overrides.py tests/integration/config/test_compose_overrides.py` — 22 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_includes.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_config.py tests/contracts/test_config_error_contract.py tests/package/test_import_boundaries.py` — 73 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` — passed; wrote `build/test-summary.md`.
+- Refinement summary: completed expanded-path implementation refinement for private-stage boundaries, exact Phase 6 include-site matching, source-local include context, local overlay replay, brand-new explicit relative source policy, override partitioning/order, source-aware errors, suite obligations, and implementation stop conditions. Manager-noted checks confirmed two phase-scoped blockers, both fixed and covered: strict add/update semantics for existing include sites and structured user-context errors for non-mapping replacement roots.
+- Refinement scope:
+  - Validation output reviewed: executor targeted checks, `make validate-pr`, `make test-summary`, and refreshed validation from this pass.
+  - Blocking issues caused by this phase: `+..._include_=` could replace existing recorded include sites; non-mapping user replacement targets surfaced `ConfigLoadError` before composition-level user override context was attached.
+  - Issues confirmed out of scope: no public root exports, no new `ComposedConfig` fields, no artifact/manifest/fingerprint/provenance population, no CLI, no pipeline imports, no resolver execution, no future recipe ordering changes, and no `_copy_`.
+- Fixes made:
+  - Existing recorded include sites now reject `add` operations with structured code `existing_include_site`.
+  - Non-mapping replacement roots are wrapped as structured code `included_root_not_mapping` with override raw/order/path metadata, resolved path, and included source context.
+- Tests or validation re-run:
+  - Focused override/composition suite: 22 passed.
+  - Broader phase-targeted include/compose/error/import suite: 73 passed.
+  - PR gate: `make validate-pr` passed.
+  - Suite summary: `make test-summary` passed.
 - PR preparation:
 - Stack maintenance:
 - Remaining blockers: none.
