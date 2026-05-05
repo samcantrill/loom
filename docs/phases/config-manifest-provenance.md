@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; implementation refinement completed; user-authorized pre-submit blocker pass completed; PR body draft completed; expanded-path PR body refine pending
+- Status: implemented; implementation refinement completed; pre-submit blocker gate completed; user-authorized blocker-resolution pass completed; PR body draft completed; focused confirmation gate pending; expanded-path PR body refine pending
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 13: Provenance, Manifest, Source Records, And Redaction Population`
 - Branch: `codex/config-manifest-provenance`
@@ -24,8 +24,9 @@
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner` in this artifact; refine budget used.
 - Phase implementation refinement budget: used.
-- Pre-submit blocker gate budget: used by user authorization on 2026-05-06 to resolve stale user include source artifact records and nested plaintext secret override serialization leaks. Do not start another automated blocker/refinement pass without explicit user instruction.
-- PR review budget: unused; do not consume during planning or implementation. A later `loom_phase_reviewer` or manager review may consume it after PR preparation.
+- Pre-submit blocker gate budget: used on 2026-05-06 by a full diff/body/evidence review before PR submission. The gate found stale user include source artifact records and nested plaintext secret override serialization leaks.
+- User-authorized blocker-resolution budget: used on 2026-05-06 for the exact pre-submit blockers. Do not start another automated blocker/refinement pass without explicit user instruction.
+- PR review budget: consumed by the full pre-submit blocker gate. Because the submitted diff changed after blocker resolution, only a bounded confirmation gate focused on those blockers and evidence drift remains before PR submission.
 - PR body draft pass: completed in expanded-path draft pass; refine pass pending.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none known after the user-authorized pre-submit blocker pass.
@@ -240,8 +241,10 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used.
-- Pre-submit blocker gate: unused.
-- PR review: unused.
+- Pre-submit blocker gate: used.
+- User-authorized blocker-resolution pass: used.
+- Focused confirmation gate: pending.
+- PR review: consumed by the full pre-submit blocker gate; no separate general PR review remains unless the submitted diff changes after confirmation.
 
 ## Completion Notes
 
@@ -273,7 +276,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Confirmed PR title remains `Configuration - Phase 13: Provenance, Manifest, Source Records, And Redaction Population`.
   - Reviewed final diff vs `develop`, this phase plan, implementation plan Phase 13 scope, validation evidence in `build/test-summary.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and `.codex/templates/phase-pr-body.md`.
   - PR was not opened because Phase 13 is on the expanded path; `.codex/prompts/pr-body-refine.md` remains pending before PR submission.
-  - PR preparation preserved workflow budgets at draft time: implementation refinement used; pre-submit blocker gate was later consumed by explicit user authorization; PR review unused.
+  - PR preparation preserved workflow budgets at draft time: implementation refinement used; the later full pre-submit blocker gate consumed PR review budget, and the user-authorized blocker-resolution pass consumed the one scoped blocker-resolution allowance.
 - User-authorized pre-submit blocker pass, 2026-05-06:
   - Fixed stale include source artifact records after user composition overrides. User include replacements now remove the replaced file-authored include record and add an artifact-safe record/reference for the replacement include file; brand-new user include additions now add a source artifact and manifest reference.
   - Fixed artifact-facing plaintext secret override serialization. `ConfigProvenance.to_dict()`, manifest metadata, provenance metadata, ordinary override records, and warning facts now redact raw override strings and nested secret-like JSON values with the default redaction policy while preserving plaintext override acceptance.
