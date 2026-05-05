@@ -6,15 +6,15 @@
 - Source roadmap: `docs/implementation-plans/implementation-roadmap.md`
 - Previous version status: v0-post hardening is recorded as merged in
   `docs/implementation-plans/implementation-plan-v0-post.md`.
-- Planning notes status: draft
-- Current discussion stage: Practical design refinement - config decision review
+- Planning notes status: handed off to `docs/implementation-plans/implementation-plan-v1.md`
+- Current discussion stage: handed off to phase implementation
 - Stage gates:
   - Roadmap framing: confirmed
   - Intent discovery: confirmed
   - Feature brainstorming: confirmed
-  - Practical design refinement: open
-  - Phase shaping: pending
-  - Handoff: pending
+  - Practical design refinement: confirmed
+  - Phase shaping: confirmed
+  - Handoff: confirmed
 - Related implementation plans:
   - `docs/implementation-plans/implementation-plan-v0-post.md`
   - `docs/implementation-plans/implementation-plan-v1.md`
@@ -28,9 +28,9 @@
   - `docs/features/errors.md`
   - `docs/features/testing.md`
 - Blockers:
-  - No confirmed product blocker yet.
-  - `docs/implementation-plans/implementation-plan-v1.md` still has plan
-    quality gate status `pending`.
+  - No confirmed product blocker remains in the planning notes.
+  - `docs/implementation-plans/implementation-plan-v1.md` passed the plan
+    quality gate on 2026-05-05.
 
 ## Roadmap Extraction
 

@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft implementation plan
+- Status: ready for phase implementation
 - Related planning notes:
   `docs/implementation-plans/roadmap-v1-planning-notes.md`
 - Related brief: none; roadmap-version planning notes are the approved intent
@@ -17,9 +17,9 @@
   `.codex/prompts/specification-refine.md`,
   `.codex/prompts/implementation-plan-draft.md`, and
   `.codex/prompts/implementation-plan-refinement.md`
-- Plan quality gate: pending `loom_plan_reviewer`
-- Blockers: none recorded; phase execution must not begin until the plan quality
-  gate passes
+- Plan quality gate: passed on 2026-05-05 by `loom_plan_reviewer`
+  confirmation review; no blocking findings remain
+- Blockers: none recorded
 
 ## Goal
 
@@ -100,7 +100,9 @@ After v1 is complete:
 - Built-in OmegaConf resolver-style interpolation can execute at runtime, while
   artifact generation and default fingerprints preserve resolver expressions as
   authored text.
-- Custom resolver-style interpolation raises `NotImplementedError` in v1.
+- Custom resolver-style interpolation raises a structured
+  `ConfigUnsupportedResolverError` that is both a `ConfigError` subclass and a
+  `NotImplementedError` in v1.
 - Config artifacts do not persist resolved environment variables or other
   resolver outputs by default.
 - Runs can persist a narrow composition manifest and artifact-safe source records
@@ -145,20 +147,56 @@ cfg = compose_config(
 Composition directive expansion is part of `compose_config`; ordinary callers do
 not need a separate expansion step.
 
-V1 should also expose deliberately scoped lower-level inspection APIs for
-intermediate composition stages. These APIs should return stable records or
-plain serializable data suitable for debugging, tests, reviews, and future CLI
-inspection. They must not become a dependency of `loom.pipeline`.
+V1 keeps `ComposedConfig` as the public return object and extends it
+additively. Existing field names remain available:
 
-If `ComposedConfig` needs new fields, prefer explicit artifact data such as:
+- `resolved`: the in-memory runtime-resolved config for Python callers; this is
+  not the default persistence artifact.
+- `redacted`: the redacted artifact-safe config view. By Phase 13 this view is
+  based on the unresolved expanded config plus resolver-path metadata, not on
+  resolved resolver outputs.
+- `provenance`: `ConfigProvenance`, extended additively for v1 composition
+  facts.
+- `recipe_manifest`: the existing recipe manifest tuple, refined by Phase 9.
+- `fingerprint`: the primary default config fingerprint. By Phase 14 this is the
+  artifact-safe fingerprint computed before resolver execution.
 
-- unresolved expanded config;
-- in-memory runtime-resolved config;
-- redacted artifact config;
-- composition manifest;
-- provenance records;
-- source artifact records;
-- artifact-safe fingerprint records.
+V1 adds these fields with stable names and additive semantics:
+
+- `unresolved`: the expanded plain config after includes, user composition,
+  recipes, ordinary overrides, and pre-runtime validation, before resolver
+  execution.
+- `manifest`: `CompositionManifest`, the narrow versioned artifact contract for
+  run-store, resume, and future CLI inspection.
+- `source_artifacts`: a tuple of `SourceArtifactRecord` values for default
+  metadata/hash source records.
+- `fingerprint_records`: a tuple of `ConfigFingerprintRecord` values for
+  artifact-safe fingerprint details and later comparison.
+
+Phase 12 exposes one lower-level public inspection API:
+
+```python
+inspection = inspect_config_composition(
+    config_path="configs/experiment.yaml",
+    overlays=("configs/local.yaml",),
+    overrides=("run.seed=123",),
+    recipe_catalog=catalog,
+)
+```
+
+`inspect_config_composition(...)` accepts the same composition inputs as
+`compose_config(...)` and returns `ConfigCompositionInspection`. That object is
+plain serializable where practical and exposes stable, additive stage records
+for file-authored composition, user composition, recipe expansion, ordinary
+override application, validation, artifact generation, and runtime resolution.
+`compose_config(...)` may be implemented as a wrapper over this inspection path.
+Other lower-level helpers remain private unless this plan explicitly names and
+exports them.
+
+Stable artifact contracts in v1 are `CompositionManifest`,
+`SourceArtifactRecord`, `ConfigProvenance`, and `ConfigFingerprintRecord`.
+`ConfigCompositionInspection` is public for debugging and tests, but it is not a
+persistence contract and must not become a dependency of `loom.pipeline`.
 
 ## Config And Pipeline Boundary
 
@@ -547,7 +585,10 @@ only during runtime resolution by default. Artifact generation, manifests, and
 default fingerprints preserve resolver expressions as authored text.
 
 Custom resolver-style interpolation is not implemented in v1. Encountering a
-custom resolver should raise `NotImplementedError` with structured context.
+custom resolver must raise `ConfigUnsupportedResolverError`. That exception
+must be a `ConfigError` subclass with the same structured context fields as
+other config errors and must also satisfy the `NotImplementedError` contract so
+callers can catch either `ConfigError` or `NotImplementedError`.
 
 Composition control flow cannot depend on resolver execution in v1. These cases
 should fail explicitly:
@@ -612,21 +653,37 @@ V1 validates composition directives during expansion:
 - include over existing lower-precedence mapping content without `_replace_`;
 - unnecessary `_replace_` where no lower-precedence mapping exists.
 
-Stable schema validation remains scoped to `loom`-owned envelopes and contracts:
+Stable schema validation remains scoped to `loom`-owned envelopes and contracts.
+V1 must make this boundary concrete before public orchestration:
 
-- pipeline config envelopes, if any are owned by `loom`;
-- stage specs;
-- artifact/input/output specs;
-- recipe argument contracts;
-- composition manifest records;
-- provenance records;
-- source artifact records;
-- fingerprint records.
+- Generic `compose_config(...)` must not require arbitrary project configs to
+  have top-level `name`, `pipeline`, or `schema_version` keys.
+- Existing unconditional top-level validation such as `name` plus `pipeline`
+  must be narrowed, moved behind an explicit Loom pipeline-envelope validation
+  path, or replaced before it is used in the generic v1 composition path.
+- A Loom pipeline envelope is Loom-owned only when the caller explicitly chooses
+  the pipeline-config validation path or the composed value is otherwise inside a
+  documented Loom-owned envelope. Unknown keys fail only inside that envelope and
+  its documented stage, artifact, input, and output spec substructures.
+- Composition directive shapes are Loom-owned where they appear:
+  `_include_`, `_replace_`, `_copy_`, resolver-dependent composition controls,
+  recipe directives, override operation records, and instantiation directives
+  are validated by their owning phases.
+- Recipe argument contracts are Loom-owned only for registered Loom recipe
+  wrappers or explicit `RecipeCatalog` entries that declare Loom-owned
+  validation.
+- Composition manifest, provenance, source artifact, and fingerprint records are
+  Loom-owned artifact contracts and validate their own schema/version fields.
+- Project experiment, model, dataset, and stage parameter mappings pass through
+  globally as project-owned plain data unless they are inside one of the
+  documented Loom-owned envelopes or directive blocks above.
 
-Project experiment and stage config files may be composed as plain data, but
-project-owned mappings are not globally validated by `loom`. There is no YAML
-`_schema_`, project schema registry, project schema import from config, or
-automatic `_target_` schema inference in v1.
+The exact authored key `_schema_` is reserved and unsupported in v1; if it
+appears in authored YAML, composition fails with a structured unsupported-schema
+error rather than importing or consulting project schemas. `_target_` remains an
+instantiation directive only. V1 must not infer schemas from `_target_`
+constructors or validate project mappings against constructor signatures during
+composition.
 
 V1 explicitly supports separate Loom pipeline config and project experiment/stage
 config files. Each project stage may own its own config file. `loom.config`
@@ -763,7 +820,7 @@ V1 should add structured errors for:
 - update override for a missing path;
 - add override for an existing path;
 - literal-dot key override attempts if detected;
-- custom resolver-style interpolation;
+- custom resolver-style interpolation through `ConfigUnsupportedResolverError`;
 - resolver-dependent recipe output shape;
 - stable schema validation failure after composition;
 - unknown key in a `loom`-owned schema boundary.
@@ -895,14 +952,14 @@ or raw source bytes unless an explicit opt-in path is under test.
 | 5. Include resolution primitives | Accepted target forms resolve deterministically; explicit paths are exact; bare names append `.yaml`; unsupported/ambiguous/resolver-dependent targets fail. | Bare/relative/absolute/`file://` cases, `.yaml` rule, no `.yml` probing, unsafe normalization, missing target, unsupported URI, resolver expression target. | Contract tests for include resolution result/error records if exposed; no recursive integration yet. |
 | 6. File-defined recursive includes | File-authored includes expand recursively with include stacks, cycle detection, sibling customizations, strict replacement, and source-aware failures. | Nested include expansion, sibling merge, cycle detection, missing target, non-mapping include content, replacement requirement. | Contract tests for include stack/provenance records; integration tests for base and overlay-authored includes. |
 | 7. User composition overrides | User include swaps run after file composition; bare user include works only at existing include sites; brand-new include sites require explicit targets; ordinary overrides can target recomposed values. | Existing-site swap, brand-new explicit include, brand-new bare include failure, ordinary override path checks after recomposition. | Integration tests for recomposed subtree behavior and source-context errors. |
-| 8. Resolver security and runtime interpolation | Artifact paths scan but do not execute resolvers; built-in resolvers execute only at runtime; custom resolvers fail; resolver-dependent composition control flow fails. | Resolver scanner, no-execution sentinel resolver tests, built-in runtime resolution, custom resolver `NotImplementedError`, resolver-dependent include failure. | Integration tests proving artifacts/fingerprints preserve expressions and omit resolved values. |
+| 8. Resolver security and runtime interpolation | Artifact paths scan but do not execute resolvers; built-in resolvers execute only at runtime; custom resolvers fail; resolver-dependent composition control flow fails. | Resolver scanner, no-execution sentinel resolver tests, built-in runtime resolution, custom resolver `ConfigUnsupportedResolverError`/`NotImplementedError`, resolver-dependent include failure. | Integration tests proving artifacts/fingerprints preserve expressions and omit resolved values. |
 | 9. Recipe catalog and expansion | Explicit catalogs are preferred for deterministic composition; recipes expand before ordinary value overrides; pre-expansion arg overrides and resolver-dependent recipe shape fail. | Catalog lookup, expansion order, override-after-expansion, artifact-safe args/output hashes, failure cases. | Integration tests with include + recipe + ordinary override order; contract tests for recipe manifest records. |
-| 10. Loom validation boundaries | Only Loom-owned envelopes/contracts validate; project/stage mappings pass through; YAML `_schema_`, project schema registries, and automatic `_target_` schema inference are unsupported. | Loom-owned unknown-key failure, project pass-through, schema feature rejection, structured validation context. | Integration tests after include/override composition; no e2e until public compose is wired. |
+| 10. Loom validation boundaries | Only explicit Loom-owned envelopes/contracts validate; generic project configs do not need top-level `name`/`pipeline`; YAML `_schema_`, project schema registries, and automatic `_target_` schema inference are unsupported. | Loom-owned unknown-key failure, project pass-through, unconditional top-level validation removal/narrowing, schema feature rejection, structured validation context. | Integration tests after include/override composition; no e2e until public compose is wired. |
 | 11. Strict instantiation and runtime injection | Instantiation is separate; dotted/colon targets only; no nested lookup beyond final class/colon target; nested targets construct bottom-up; `_inject_` checks duplicates/missing keys. | Import form matrix, invalid target forms, bottom-up order, `_partial_`, `_inject_` duplicate/missing errors. | Integration only if existing instantiation public path needs full config inputs; no artifact contract changes. |
-| 12. Public compose orchestration and inspection APIs | `compose_config` executes the full accepted order; lower-level inspection APIs expose stable stage records; pipeline and persistence boundaries hold. | Orchestration collaborator tests and inspection API shape tests. | Package/API tests, full-order integration tests through runtime resolution, import-boundary tests; limited e2e through public `compose_config`. |
-| 13. Provenance, manifest, and redaction population | Artifact-safe provenance and manifest records explain composition without resolved runtime values; redaction applies before artifact serialization; plaintext-secret override warnings are documented. | Redaction rules, resolver-value omission, provenance population for includes/overrides/recipes/schema boundaries. | Contract tests for manifest/provenance serialization; integration tests for artifact output from public compose. |
-| 14. Artifact-safe fingerprints and resume comparison | Fingerprints are computed before resolver execution from artifact-safe inputs; abs paths are provenance context only; resume compares authored composition, not runtime values. | Fingerprint stability/change matrix, path portability, resolver-output exclusion, redacted override handling. | Contract tests for fingerprint records and resume comparison results; integration tests for changed included files/overrides. |
-| 15. Source artifacts and raw snapshot opt-in | Source metadata/hashes are default; raw source bytes are opt-in or deferred to run-store policy; duplicate raw payloads dedupe when enabled. | Source hash determinism, changed-source hashes, duplicate handling, opt-in raw payload behavior if implemented. | Contract tests for source artifact records and manifest references; integration tests for metadata-only equivalence checks; no default raw-byte e2e. |
+| 12. Public compose orchestration and inspection APIs | `compose_config` executes the full accepted order; `inspect_config_composition` exposes stable stage records; `ComposedConfig` has the additive v1 field shape; pipeline and persistence boundaries hold. | Orchestration collaborator tests, `ComposedConfig` compatibility tests, and inspection API shape tests. | Package/API tests, full-order integration tests through runtime resolution, import-boundary tests; limited e2e through public `compose_config`. |
+| 13. Provenance, manifest, source records, and redaction population | Artifact-safe provenance, default source metadata/hash records, manifest records, and redacted artifacts explain composition without resolved runtime values; plaintext-secret override warnings are documented. | Redaction rules, resolver-value omission, source-record population, provenance population for includes/overrides/recipes/schema boundaries. | Contract tests for manifest/provenance/source-record serialization; integration tests for artifact output from public compose. |
+| 14. Artifact-safe fingerprints and resume comparison | Fingerprints are computed before resolver execution from artifact-safe inputs and Phase 13 source records; abs paths are provenance context only; resume compares authored composition, not runtime values. | Fingerprint stability/change matrix, source-record hash usage, path portability, resolver-output exclusion, redacted override handling. | Contract tests for fingerprint records and resume comparison results; integration tests for changed included files/overrides. |
+| 15. Raw snapshot opt-in and source artifact hardening | Default source metadata/hashes already exist; raw source bytes are opt-in or explicitly deferred to run-store policy; duplicate raw payloads dedupe when enabled. | Duplicate handling, opt-in raw payload behavior if implemented, metadata-only rebuild limitations. | Contract tests for source artifact raw-snapshot fields and manifest references; integration tests for metadata-only equivalence checks; no default raw-byte e2e. |
 | 16. Hardening, docs, and e2e | Docs and examples match supported v1 only; final behavior is covered through public APIs; validation evidence is recorded. | Regression unit tests for gaps found during implementation. | E2E tests for representative config trees; `make validate-pr`; `make test-summary`. |
 
 ## Phase Design And Review Matrix
@@ -925,9 +982,9 @@ implementation, record it in that phase execution plan and PR body.
 | 10 | Defines Loom/project validation ownership. | Keeps domain-neutral project configs possible. | Rejects YAML schema systems in v1. | Validation-boundary tests should be narrow and clear. |
 | 11 | Keeps object construction separate while tightening import semantics. | Leaves pipeline/runtime object fingerprint policy outside config. | Rejects nested attribute lookup after final target. | Pure instantiation tests; no composition artifacts. |
 | 12 | Wires public composition and inspection APIs. | Future CLI and sweeps wrap this path. | Defers final artifact population to avoid one broad PR. | Main orchestration PR; scope controlled by prior helpers. |
-| 13 | Populates artifact-safe records and redaction. | Run-store/resume/CLI can persist/inspect records later. | Rejects resolved config persistence by default. | Contract-heavy PR; verify no secret/runtime leaks. |
-| 14 | Defines default config fingerprint and resume comparison semantics. | Leaves opt-in runtime-value fingerprints for later policy. | Accepts no exact resolver replay by default. | Fingerprint matrix should make review objective. |
-| 15 | Adds source identity and optional raw snapshot behavior. | Future run-store can persist returned records directly. | Rejects raw bytes by default. | Source hashing/dedupe behavior isolated. |
+| 13 | Populates artifact-safe records, default source metadata/hash records, and redaction before fingerprints depend on them. | Run-store/resume/CLI can persist/inspect coherent records later. | Rejects resolved config persistence and raw source bytes by default. | Contract-heavy PR; verify no secret/runtime leaks and source-record references are stable. |
+| 14 | Defines default config fingerprint and resume comparison semantics from Phase 13 artifact/source records. | Leaves opt-in runtime-value fingerprints for later policy. | Accepts no exact resolver replay by default. | Fingerprint matrix should make review objective. |
+| 15 | Adds only raw snapshot opt-in behavior or records an explicit run-store-policy deferral. | Future run-store can persist opted-in raw payloads without changing default source-record contracts. | Rejects raw bytes by default. | Raw snapshot/dedupe behavior isolated from manifest/fingerprint defaults. |
 | 16 | Consolidates docs, e2e, and final evidence. | Avoids promising deferred CLI/plugin/sweep/copy behavior. | No new features during hardening. | Evidence-focused final PR. |
 
 ### Phase 1 - Boundary And Artifact Contracts
@@ -1208,7 +1265,8 @@ Scope:
 - Resolver-expression scanning.
 - Artifact-safe no-execution paths.
 - Runtime-only built-in OmegaConf resolver execution.
-- `NotImplementedError` for custom resolvers.
+- `ConfigUnsupportedResolverError` for custom resolvers; this error must be both
+  a `ConfigError` and a `NotImplementedError`.
 - Failures for resolver-dependent composition control flow.
 
 Out of scope:
@@ -1280,8 +1338,11 @@ Goal:
 
 Scope:
 
-- Stable Loom-owned envelope/contract validation.
-- Project/stage config pass-through.
+- Stable Loom-owned envelope/contract validation only when an explicit Loom
+  envelope or artifact record is present.
+- Removal, narrowing, or replacement of generic top-level `name` plus
+  `pipeline` validation from the public `compose_config` path.
+- Project/stage config pass-through for generic composition inputs.
 - Rejection of YAML `_schema_`, project schema registries, and automatic
   `_target_` schema inference.
 - Structured validation errors with source context.
@@ -1294,15 +1355,22 @@ Out of scope:
 
 Acceptance criteria:
 
-- Unknown keys fail only inside Loom-owned schemas.
-- Project-owned mappings pass through globally.
-- Schema-authoring features are rejected or ignored as unsupported according to
-  their exact authored form.
+- Generic project configs can compose without top-level `name`, `pipeline`, or
+  `schema_version`.
+- Unknown keys fail only inside explicit Loom-owned pipeline envelopes, stage
+  specs, artifact/input/output specs, recipe contracts, and artifact record
+  schemas.
+- Project-owned mappings pass through globally unless they contain a reserved
+  Loom directive key whose owning phase must validate it.
+- Exact authored `_schema_` keys fail as unsupported schema-authoring
+  directives.
+- `_target_` nodes are not used for composition-time schema inference.
 
 Test expectations:
 
-- Unit/integration tests for Loom-owned validation, project-owned pass-through,
-  schema-feature rejection, and structured validation errors.
+- Unit/integration tests for Loom-owned validation, project-owned pass-through
+  without `name`/`pipeline`, schema-feature rejection, `_target_` inference
+  non-behavior, and structured validation errors.
 
 ### Phase 11 - Strict Instantiation And Runtime Injection
 
@@ -1353,7 +1421,11 @@ Scope:
 
 - Full staged composition order.
 - Simple public `compose_config`.
-- Scoped lower-level inspection APIs for intermediate stages.
+- Public `inspect_config_composition` API for intermediate stages.
+- Additive v1 `ComposedConfig` fields: `unresolved`, `manifest`,
+  `source_artifacts`, and `fingerprint_records`, while preserving existing
+  `resolved`, `redacted`, `provenance`, `recipe_manifest`, and `fingerprint`
+  names.
 - Config/pipeline independence.
 - Persistence-free config artifact return shape.
 
@@ -1368,7 +1440,10 @@ Acceptance criteria:
 - Full order works through includes, user composition overrides, recipes,
   ordinary value overrides, validation, runtime interpolation, and optional
   instantiation.
-- Inspection APIs expose stable records without leaking unstable internals.
+- `inspect_config_composition` exposes stable additive stage records without
+  leaking unstable internals.
+- `ComposedConfig` compatibility tests prove existing fields still work and new
+  v1 artifact fields are present.
 - Pipeline remains independent.
 
 Test expectations:
@@ -1378,7 +1453,7 @@ Test expectations:
 - Inspection API contract tests.
 - Import-boundary tests.
 
-### Phase 13 - Provenance, Manifest, And Redaction Population
+### Phase 13 - Provenance, Manifest, Source Records, And Redaction Population
 
 Status: pending
 Branch: `codex/config-manifest-provenance`
@@ -1386,12 +1461,16 @@ PR: pending
 
 Goal:
 
-- Populate artifact-safe provenance, manifest, and redacted artifact records.
+- Populate artifact-safe provenance, default source metadata/hash records,
+  manifest, and redacted artifact records.
 
 Scope:
 
 - Source/order/include/override/recipe/resolver/security facts.
+- Default source metadata and content-hash records for base configs, overlays,
+  includes, and recipe source references where available.
 - Versioned composition manifest.
+- Manifest references to source artifact records.
 - Default unresolved/redacted config artifact.
 - Warnings/docs for plaintext secrets in overrides.
 
@@ -1399,18 +1478,21 @@ Out of scope:
 
 - Fingerprint comparison logic.
 - Raw source bytes by default.
+- Raw snapshot opt-in and dedupe behavior.
 - Resolved config persistence.
 
 Acceptance criteria:
 
 - Manifest records all artifact-safe composition decisions needed for later
   resume and CLI inspection.
+- Manifest references the default source metadata/hash records it depends on.
 - Default artifact records contain no resolved runtime values.
 - Redaction applies before serializing sensitive authored paths.
 
 Test expectations:
 
 - Contract tests for manifest/provenance records.
+- Contract tests for default source artifact records and manifest references.
 - Redaction tests.
 - No-resolved-runtime-values artifact tests.
 - Docs snippets for secret handling.
@@ -1429,7 +1511,7 @@ Goal:
 Scope:
 
 - Fingerprints before resolver execution.
-- Source hashes.
+- Source hashes from Phase 13 source artifact records.
 - Stable composition context.
 - Unresolved expanded config.
 - Resolver expressions as authored text.
@@ -1456,7 +1538,7 @@ Test expectations:
 - Unit/contract tests for fingerprint stability and change cases,
   resolver-output exclusion, path portability, and resume comparison outcomes.
 
-### Phase 15 - Source Artifacts And Raw Snapshot Opt-In
+### Phase 15 - Raw Snapshot Opt-In And Source Artifact Hardening
 
 Status: pending
 Branch: `codex/config-source-artifacts`
@@ -1464,13 +1546,13 @@ PR: pending
 
 Goal:
 
-- Return source metadata/hashes by default and define explicit raw snapshot
-  behavior.
+- Define explicit raw snapshot behavior and harden source artifact limitations
+  after default source metadata/hash records are already populated.
 
 Scope:
 
-- Source metadata and content hashes for base configs, overlays, and includes.
-- Manifest references to source artifact records.
+- Backward-compatible extension of Phase 13 source artifact records.
+- Manifest references to raw snapshot availability or explicit deferral.
 - Duplicate-source handling.
 - Explicit raw source snapshot opt-in, or clear deferral to run-store security
   policy.
@@ -1483,17 +1565,17 @@ Out of scope:
 
 Acceptance criteria:
 
-- Source hashes are deterministic and change when source content changes.
-- Metadata-only source artifacts can verify authored composition when original
-  sources are available.
+- Default source metadata/hash records are already populated by Phase 13 and
+  remain backward-compatible.
 - Raw snapshot opt-in, if implemented, can reconstruct missing authored source
   files for supported local/file sources.
 - Duplicate raw payloads are deduped when raw snapshots are enabled.
 
 Test expectations:
 
-- Unit/contract tests for source hashes, manifest references, dedupe, opt-in raw
-  payload behavior if implemented, and metadata-only rebuild limitations.
+- Unit/contract tests for raw snapshot fields, manifest references, dedupe,
+  opt-in raw payload behavior if implemented, and metadata-only rebuild
+  limitations.
 
 ### Phase 16 - Hardening, Documentation, And End-To-End Coverage
 
@@ -1608,7 +1690,8 @@ Unit tests should cover:
 - recursive include expansion and include stacks;
 - user include replacement;
 - resolver scanning and runtime-only built-in resolution;
-- custom resolver `NotImplementedError`;
+- custom resolver `ConfigUnsupportedResolverError` and `NotImplementedError`
+  compatibility;
 - explicit recipe catalog behavior and expansion order;
 - validation boundaries and project pass-through;
 - `_target_` import forms and bottom-up instantiation;
@@ -1653,7 +1736,29 @@ make test-summary
 
 ## Plan Quality Gate
 
-Status: pending
+Status: passed on 2026-05-05 by `loom_plan_reviewer` confirmation review; no
+blocking findings remain.
+
+Gate budget status:
+
+- Initial `loom_plan_reviewer` review: used on 2026-05-05.
+- Automated plan refinement pass: used on 2026-05-05.
+- Confirmation review: used on 2026-05-05; no findings.
+
+Initial review findings addressed by the refinement pass:
+
+- Moved default source metadata/hash record population into Phase 13 so
+  manifest and fingerprint phases do not back-edit public-ish artifact
+  contracts.
+- Defined the additive v1 `ComposedConfig` field shape and the public
+  `inspect_config_composition` inspection API.
+- Made Loom-owned validation boundaries concrete, including removal or narrowing
+  of unconditional top-level `name`/`pipeline` validation for generic project
+  configs.
+- Resolved the custom resolver exception contract with
+  `ConfigUnsupportedResolverError`, a structured config error that is also a
+  `NotImplementedError`.
+- Aligned roadmap planning-note metadata with the implementation-plan handoff.
 
 Before implementation starts, review this v1 plan for:
 
@@ -1698,5 +1803,6 @@ Before implementation starts, review this v1 plan for:
 - Lists replace as whole lists.
 - Built-in OmegaConf resolvers may execute only during runtime resolution by
   default.
-- Custom OmegaConf-style resolvers are deferred and raise `NotImplementedError`
-  in v1.
+- Custom OmegaConf-style resolvers are deferred and raise
+  `ConfigUnsupportedResolverError`, which is also catchable as
+  `NotImplementedError`, in v1.
