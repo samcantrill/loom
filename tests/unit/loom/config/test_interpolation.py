@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from omegaconf import OmegaConf
+from omegaconf.resolvers import oc as omegaconf_oc
 
 from loom.config.errors import ConfigInterpolationError, ConfigUnsupportedResolverError
 from loom.config.interpolation import (
@@ -96,6 +97,50 @@ def test_resolve_allows_oc_env_during_runtime_resolution(monkeypatch: pytest.Mon
         path="$",
     )
     assert resolved["value"] == "injected"
+
+
+def test_resolve_uses_loom_owned_oc_env_when_global_resolver_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[str] = []
+
+    def replaced_oc_env(value: str) -> str:
+        called.append(value)
+        return "global-replacement"
+
+    monkeypatch.setenv("PHASE8_TEST_ENV", "loom-owned")
+    OmegaConf.register_new_resolver("oc.env", replaced_oc_env, replace=True)
+    try:
+        resolved = resolve_interpolation(
+            {"value": "${oc.env:PHASE8_TEST_ENV}"},
+            source_path="/tmp/base.yaml",
+            path="$",
+        )
+    finally:
+        OmegaConf.register_new_resolver("oc.env", omegaconf_oc.env, replace=True)
+
+    assert resolved["value"] == "loom-owned"
+    assert called == []
+
+
+def test_resolve_treats_oc_env_output_as_literal_interpolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[str] = []
+
+    def custom(value: str) -> str:
+        called.append(value)
+        return "custom-output"
+
+    monkeypatch.setenv("PHASE8_TEST_ENV", "${custom:payload}")
+    OmegaConf.register_new_resolver("custom", custom, replace=True)
+    try:
+        resolved = resolve_interpolation(
+            {"value": "${oc.env:PHASE8_TEST_ENV}"},
+            source_path="/tmp/base.yaml",
+            path="$",
+        )
+    finally:
+        OmegaConf.clear_resolver("custom")
+
+    assert resolved["value"] == "${custom:payload}"
+    assert called == []
 
 
 def test_resolve_rejects_non_allowlisted_builtin_resolver() -> None:

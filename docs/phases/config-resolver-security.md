@@ -268,3 +268,19 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 27 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 236 passed/431 deselected.
 - Stack maintenance: no predecessor and no retarget/rebase work in this draft pass; branch cleanup remains deferred until after merge and successor dependency checks.
 - Remaining blockers: none known after the single implementation refinement pass.
+
+## Post-Merge Blocker Resolution Notes
+
+- Follow-up branch: `codex/config-resolver-security-ocenv-blocker`.
+- Follow-up worktree: `/home/samcantrill/work/loom-worktrees/config-resolver-security-ocenv-blocker`.
+- PR target: `develop`; PR opening intentionally deferred for this scoped blocker-resolution task.
+- Blocker fixed: `resolve_interpolation()` no longer executes allow-listed `oc.env` through OmegaConf's mutable global resolver registry. Runtime `oc.env` now resolves through a Loom-owned implementation before final OmegaConf node interpolation, and resolver output that looks like interpolation is preserved as literal data rather than reparsed.
+- Regression coverage added:
+  - `tests/unit/loom/config/test_interpolation.py` proves replacing OmegaConf's global `oc.env` resolver does not execute the replacement and that resolver-looking environment output remains literal.
+  - `tests/integration/config/test_compose_resolvers.py` proves public `compose_config()` uses the Loom-owned `oc.env` path when OmegaConf's global `oc.env` binding is replaced.
+- Scope preserved: no public root exports, public `ComposedConfig` fields, manifest/source-artifact/fingerprint/provenance population, CLI behavior, pipeline imports, run-store writes, resolver plugins, remote resolvers, recipe behavior changes, or `_copy_`.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_interpolation.py tests/integration/config/test_compose_resolvers.py` passed: 18 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py tests/integration/config/test_compose_overrides.py tests/package/test_import_boundaries.py` passed: 37 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed; Pyright passed with 0 errors; default suite passed with 426 passed and 9 skipped; config-extra suite passed with 239 passed and 431 deselected; build succeeded.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 27 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 239 passed/431 deselected.
