@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; ready for implementation
+- Status: implemented; implementation refinement completed; ready for PR preparation
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 13: Provenance, Manifest, Source Records, And Redaction Population`
 - Branch: `codex/config-manifest-provenance`
@@ -23,7 +23,7 @@
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner` in this artifact; refine budget used.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used.
 - Pre-submit blocker gate budget: unused; before PR submission, the manager must review the phase plan, diff, PR body draft, validation evidence, scope boundary, artifact-safety assertions, and known review risks. Concrete blockers must be resolved by the implementation owner or the phase must be marked blocked before PR submission.
 - PR review budget: unused; do not consume during planning or implementation. A later `loom_phase_reviewer` or manager review may consume it after PR preparation.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
@@ -238,7 +238,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used.
 - Pre-submit blocker gate: unused.
 - PR review: unused.
 
@@ -247,22 +247,28 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; ready for implementation after commit `plan: refine phase execution plan`.
 - Implementation summary:
-- Composed `ComposedConfig`, `ConfigCompositionInspection`, and `CompositionManifest` with populated artifact-safe `source_artifacts` and `fingerprint_records` for base, overlays, includes, and safe recipe expansions.
+- Composed `ComposedConfig`, `ConfigCompositionInspection`, and `CompositionManifest` with populated artifact-safe `source_artifacts` for base, overlays, includes, and safe recipe expansions, plus an unresolved artifact-safe `fingerprint_records` entry for future Phase 14 consumption.
 - Added provenance metadata population for include/recomposition/customization records, override records (including redacted secret-like overrides), resolver scan records, recipe manifest facts, source-artifact references, and redaction/security policy facts.
 - Moved redaction to operate on artifact-safe unresolved composition prior to interpolation while preserving resolver expressions in unresolved/redacted artifacts; runtime values remain in `resolved` only.
 - Added plaintext-secret override warning snippet in `docs/features/config.md`.
 - Refinement summary: expanded-path refinement made artifact population semantics, source record identity/digest expectations, redaction boundaries, plaintext-secret warning scope, suite decisions, and blocker-gate expectations explicit.
+- Implementation refinement pass, 2026-05-06:
+  - Validation output reviewed: phase diff against `develop`, implementation baseline `1234e24`, phase-scoped tests, `make validate-pr`, and `make test-summary`.
+  - Blocking issues caused by this phase:
+    - `fingerprint_records` included a `resolved` record derived from runtime-resolved config; narrowed default fingerprint records to the unresolved artifact-safe digest only.
+    - Secret-like override artifact metadata and plaintext-secret warning facts retained raw override strings containing plaintext values; redacted those raw strings while preserving override acceptance.
+  - Issues confirmed out of scope: no Phase 14 fingerprint comparison/resume behavior, persistence, CLI/store behavior, raw snapshots, plugin/remote/global include resolvers, `_copy_`, or pipeline import-boundary changes were introduced.
+  - Fix evidence: targeted package/unit/contract/integration tests, `make validate-pr`, and `make test-summary` all passed after refinement.
 - Implementation validation:
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py` ✅
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_provenance.py tests/unit/loom/config/test_redaction.py tests/unit/loom/config/test_compose.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_provenance.py` ✅
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` ✅
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` ✅
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_provenance.py tests/unit/loom/config/test_redaction.py tests/unit/loom/config/test_compose.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_provenance.py` passed: 97 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed, Pyright reported 0 errors, default suite passed with 427 passed/10 skipped, config-extra passed with 276 passed/432 deselected, and build succeeded.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 28 passed/2 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 276 passed/432 deselected.
 - E2E/opt-in status:
-  - E2E: deferred per plan this phase.
+  - E2E: phase-scoped e2e coverage remains deferred per plan; existing harness e2e passed during `make test-summary`.
   - Opt-in suites: deferred per plan.
 - PR preparation:
   - Deferred by manager (`phase completion evidence recorded; PR preparation not requested in this executor run`).
 - Stack maintenance:
   - None required (root phase branch).
 - Remaining blockers:
-  - None known after implementation and validation.
+  - None known after implementation refinement and validation.

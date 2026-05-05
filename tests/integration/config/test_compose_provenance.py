@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -73,6 +74,19 @@ def test_public_compose_redaction_preserves_resolver_expressions_in_artifacts(tm
     artifact_safety = cast(dict[str, Any], security["artifact_safety"])
     assert artifact_safety["raw_source_bytes_included"] is False
     assert artifact_safety["resolved_runtime_values_included"] is False
+    assert [record.label for record in composed.fingerprint_records] == ["unresolved"]
+
+    artifact_payload = {
+        "manifest": composed.manifest.to_dict(),
+        "source_artifacts": [record.to_dict() for record in composed.source_artifacts],
+        "fingerprint_records": [record.to_dict() for record in composed.fingerprint_records],
+        "provenance_metadata": composed.provenance.metadata,
+        "redacted": composed.redacted,
+    }
+    serialized_artifacts = json.dumps(artifact_payload, sort_keys=True)
+    assert "/tmp/phase13-root" not in serialized_artifacts
+    assert "top-secret" not in serialized_artifacts
+    assert "sauce" not in serialized_artifacts
 
 
 def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monkeypatch) -> None:
@@ -95,6 +109,7 @@ def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monk
     assert warnings
     assert warnings[0]["warning_type"] == "plaintext_secret_override"
     assert warnings[0]["override_path"] == "pipeline.secret_token"
+    assert warnings[0]["override_raw"] == REDACTION_MARKER
 
     resolver_records = cast(
         list[dict[str, Any]],
@@ -111,6 +126,10 @@ def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monk
     assert "include_sites" in metadata_records
     assert "include_recomposition_contexts" in metadata_records
     assert "local_customizations" in metadata_records
+
+    ordinary_overrides = cast(list[dict[str, Any]], composed.provenance.metadata["ordinary_overrides"])
+    assert ordinary_overrides[0]["raw"] == REDACTION_MARKER
+    assert ordinary_overrides[0]["value"] == REDACTION_MARKER
 
 
 def test_public_compose_records_recipe_source_artifacts_when_safe(tmp_path: Path) -> None:

@@ -214,8 +214,9 @@ def test_compose_config_staged_path_matches_inspection(tmp_path: Path) -> None:
     assert resolved_pipeline["value"] == "/tmp/base/value"
     assert composed.source_artifacts == inspection.source_artifacts
     assert len(composed.source_artifacts) == 1
-    assert len(composed.fingerprint_records) == 2
-    assert len(composed.manifest.fingerprint_records) == 2
+    assert len(composed.fingerprint_records) == 1
+    assert composed.fingerprint_records[0].label == "unresolved"
+    assert len(composed.manifest.fingerprint_records) == 1
     assert composed.manifest.metadata["source_reference_count"] == len(composed.source_artifacts)
     assert composed.manifest.metadata["fingerprint_record_count"] == len(composed.fingerprint_records)
 

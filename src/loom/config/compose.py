@@ -227,12 +227,6 @@ def inspect_config_composition(
             label="unresolved",
             metadata={"resolution_stage": "artifact_safe"},
         ),
-        ConfigFingerprintRecord(
-            schema_version=ARTIFACT_SCHEMA_VERSION,
-            digest=resolved_fingerprint,
-            label="resolved",
-            metadata={"resolution_stage": "runtime"},
-        ),
     )
     provenance_metadata = _build_provenance_metadata(
         include_records=expanded_with_includes.include_sites,
@@ -1003,7 +997,8 @@ def _plaintext_secret_warnings(overrides: Sequence[ParsedOverride]) -> tuple[dic
                 "override_path": override.path,
                 "override_operation": override.operation,
                 "override_order": override.order,
-                "override_raw": override.raw,
+                "override_raw": REDACTION_MARKER,
+                "redacted": True,
             }
         )
 
@@ -1019,7 +1014,7 @@ def _override_to_dict(override: ParsedOverride, *, record_values: bool = False) 
         value = cast(PlainData, _to_plain_override_value(override.value))
 
     return {
-        "raw": override.raw,
+        "raw": REDACTION_MARKER if is_secret_key(final_key) else override.raw,
         "path": override.path,
         "operation": override.operation,
         "value": value,
