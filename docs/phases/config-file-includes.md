@@ -2,9 +2,10 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: pr_open
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 6: File-Defined Recursive Includes`
+- PR: https://github.com/samcantrill/loom/pull/31
 - Branch: `codex/config-file-includes`
 - Worktree: `/home/samcantrill/work/loom-worktrees/config-file-includes`
 - Phase execution plan path: `docs/phases/config-file-includes.md`
@@ -273,9 +274,20 @@ make test-summary
   `.codex/templates/phase-pr-body.md`; mentions `@samcantrill` near the top;
   keeps workflow internals out of the public body; summarizes implemented scope,
   implementation notes, tests, suite evidence, assumptions, and risks.
-- PR body refine pass: pending because expanded path is active.
-- PR opening: intentionally deferred to the PR-body refine pass per expanded
-  path instructions. No GitHub PR was opened in this draft pass.
+- PR body refine pass: completed using `.codex/prompts/pr-body-refine.md`.
+  The existing public body was checked against the final diff, phase plan,
+  accepted v1 decisions, acceptance criteria, scope boundaries, validation
+  evidence, assumptions, and risks; no public body changes were required.
+- PR opening: opened https://github.com/samcantrill/loom/pull/31 with explicit
+  base `develop`, head `codex/config-file-includes`, title
+  `Configuration - Phase 6: File-Defined Recursive Includes`, and body file
+  `docs/phases/config-file-includes-pr-body.md`.
+- PR verification: `gh pr view https://github.com/samcantrill/loom/pull/31
+  --json baseRefName,headRefName,state,url` returned base `develop`, head
+  `codex/config-file-includes`, state `OPEN`, URL
+  `https://github.com/samcantrill/loom/pull/31`.
+- Stack state: root PR with no stack predecessor; merge-eligible after review
+  because the verified target branch is `develop`.
 - Final validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed): Ruff passed,
     Pyright reported 0 errors, default suite passed 425/425 with 9 skipped,
@@ -288,5 +300,6 @@ make test-summary
     overall passed 639 with 8 skipped and 430 deselected.
 - Budget status confirmed during PR-body draft: implementation refinement used;
   PR review unused.
-- Stack maintenance: N/A pending open PR.
+- Stack maintenance: N/A for this root PR; no predecessor retargeting or rebase
+  work was performed during PR preparation.
 - Remaining blockers: none.
