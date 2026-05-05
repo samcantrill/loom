@@ -1717,7 +1717,7 @@ Completion notes:
 
 ### Phase 11 - Strict Instantiation And Runtime Injection
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-instantiation-strict`
 PR: https://github.com/samcantrill/loom/pull/38
 
@@ -1753,8 +1753,8 @@ Test expectations:
 Completion notes:
 
 - Phase execution plan: `docs/phases/config-instantiation-strict.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is open and
-  merge-eligible after CI and merge permissions allow.
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
+  `develop`.
 - Revised workflow gate: the pre-submit blocker gate ran before PR submission
   and found no blocking or non-blocking correctness, scope, import-boundary,
   test-evidence, or PR-body accuracy issues. It consumed the Phase 11 PR-review
@@ -1775,11 +1775,14 @@ Completion notes:
   `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 698
   passed, 0 failed, 0 errors, 8 skipped, and 432 deselected.
-- PR result: PR #38 opened against `develop`; `gh pr view 38 --json
-  baseRefName,headRefName,state,url` verified base `develop`, head
-  `codex/config-instantiation-strict`, state `OPEN`, URL
-  `https://github.com/samcantrill/loom/pull/38`. GitHub CI check `checks`
-  passed after PR submission.
+- Merge result: PR #38 merged into `develop` at 2026-05-05T13:57:08Z with
+  merge commit `68b7ec02753fd02640cace4ec05fd96e2dc1ee14`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-instantiation-strict` when PR #38 merged. The GitHub merge
+  command merged the PR but could not delete the local branch while its
+  worktree was attached; branch and worktree cleanup are safe after this
+  metadata update.
 
 ### Phase 12 - Public Compose Orchestration And Inspection APIs
 
