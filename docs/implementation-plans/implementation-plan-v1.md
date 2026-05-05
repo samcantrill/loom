@@ -1341,9 +1341,10 @@ PR-open notes:
 
 ### Phase 6 - File-Defined Recursive Includes
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-file-includes`
 PR: https://github.com/samcantrill/loom/pull/31
+Follow-up PR: https://github.com/samcantrill/loom/pull/32
 
 Goal:
 
@@ -1399,7 +1400,22 @@ PR-open notes:
   fields, manifest/provenance/source-artifact/fingerprint population, raw
   source persistence, CLI behavior, pipeline imports, plugin/remote/global
   resolvers, or root package exports were added.
-- PR review: pending.
+- PR review: `loom_phase_reviewer` found one blocking `_replace_` leakage
+  issue for markers authored inside included files. The user-authorized
+  blocker-resolution subagent fixed it, but PR #31 had already merged before
+  that commit reached `develop`.
+- Merge result: PR #31 merged into `develop` at 2026-05-05T09:53:09Z with
+  merge commit `5b8229fedf3ec939b93351fbff503d35dbab9ee5`.
+- Blocker follow-up: PR #32 cherry-picked the exact scoped fix onto updated
+  `develop`; it merged at 2026-05-05T10:06:34Z with merge commit
+  `a9ede97b26c37b3dcdab0db4bc34d2241d06e511`.
+- Follow-up validation: PR #32 GitHub CI `checks` passed; local
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; local
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall
+  642 passed, 0 failed, 0 errors, 8 skipped, and 430 deselected.
+- Follow-up notes: Phase 6 now rejects root and nested unconsumed `_replace_`
+  markers authored inside included files, while preserving valid overlay
+  same-site `_replace_: true` include swaps. No Phase 7+ scope was added.
 
 ### Phase 7 - User Composition Overrides
 
