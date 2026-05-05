@@ -23,8 +23,11 @@ pytestmark = [pytest.mark.package, pytest.mark.optional_dependency]
 def test_config_exports_and_signature() -> None:
     from loom.config import (
         ConfigError,
+        ConfigCompositionInspection,
+        ConfigCompositionStageRecord,
         Recipe,
         RecipeCatalog,
+        inspect_config_composition,
         compose_config,
         compose_config_with_catalog,
         instantiate,
@@ -37,6 +40,9 @@ def test_config_exports_and_signature() -> None:
     assert RecipeCatalog
     assert compose_config
     assert compose_config_with_catalog
+    assert inspect_config_composition
+    assert ConfigCompositionInspection
+    assert ConfigCompositionStageRecord
     assert instantiate
     assert register_recipe
 
@@ -62,6 +68,17 @@ def test_config_exports_and_signature() -> None:
     assert catalog_params[1].kind is inspect.Parameter.KEYWORD_ONLY
     assert catalog_params[2].default == ()
     assert catalog_params[3].default == ()
+
+    inspect_signature = inspect.signature(inspect_config_composition)
+    inspect_params = list(inspect_signature.parameters.values())
+    assert len(inspect_params) == 4
+    assert inspect_params[0].name == "config_path"
+    assert inspect_params[1].name == "overlays"
+    assert inspect_params[2].name == "overrides"
+    assert inspect_params[3].name == "recipe_catalog"
+    assert inspect_params[1].default == ()
+    assert inspect_params[2].default == ()
+    assert inspect_params[3].default is None
 
     register_signature = inspect.signature(register_recipe)
     register_params = list(register_signature.parameters.values())
@@ -105,6 +122,9 @@ def test_import_config_module_only() -> None:
         assert hasattr(loom.config, 'RecipeCatalog')
         assert hasattr(loom.config, 'compose_config')
         assert hasattr(loom.config, 'compose_config_with_catalog')
+        assert hasattr(loom.config, 'inspect_config_composition')
+        assert hasattr(loom.config, 'ConfigCompositionInspection')
+        assert hasattr(loom.config, 'ConfigCompositionStageRecord')
         assert hasattr(loom.config, 'instantiate')
         assert hasattr(loom.config, 'register_recipe')
         assert hasattr(loom.config, 'ConfigError')

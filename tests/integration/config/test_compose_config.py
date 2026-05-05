@@ -5,7 +5,7 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import RecipeCatalog, compose_config
+from loom.config import RecipeCatalog, compose_config, inspect_config_composition, instantiate
 from loom.config.errors import ConfigLoadError, OverrideApplyError
 from loom.config.provenance import build_config_fingerprint
 from loom.fingerprints import hash_mapping
@@ -244,3 +244,71 @@ def test_compose_rejects_schema_directive_in_overlay(tmp_path: Path) -> None:
     assert context.config_path == "$.model._schema_"
     assert context.directive == "_schema_"
     assert context.expected == "schema declarations from authored files"
+
+
+def test_public_inspect_vs_compose_consistency_and_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+
+    monkeypatch.setenv("PHASE12_PATH_ROOT", "/tmp/phase12")
+    base.write_text(
+        "name: base\n"
+        "paths:\n"
+        "  root: ${oc.env:PHASE12_PATH_ROOT}\n"
+        "pipeline:\n"
+        "  value: ${paths.root}/value\n",
+        encoding="utf-8",
+    )
+    overlay.write_text(
+        "pipeline:\n"
+        "  stage: overlay\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, overlays=(overlay,), overrides=("+pipeline.extra=true",))
+    inspection = inspect_config_composition(base, overlays=(overlay,), overrides=("+pipeline.extra=true",))
+    composed_from_inspection = inspection.to_composed_config()
+
+    assert composed == composed_from_inspection
+    unresolved_pipeline = cast(dict[str, Any], composed.unresolved["pipeline"])
+    resolved_pipeline = cast(dict[str, Any], composed.resolved["pipeline"])
+    assert unresolved_pipeline["value"] == "${paths.root}/value"
+    assert resolved_pipeline["value"] == "/tmp/phase12/value"
+    assert tuple(stage.name for stage in inspection.stages) == (
+        "source_load",
+        "overlay_merge",
+        "file_include_expansion",
+        "user_composition_overrides",
+        "recipe_argument_interpolation",
+        "recipe_expansion",
+        "ordinary_overrides",
+        "resolver_scan",
+        "runtime_interpolation",
+        "validation",
+        "redaction",
+        "provenance",
+        "fingerprint",
+        "artifact_placeholders",
+        "composed_config",
+    )
+
+
+def test_public_compose_retains_inert_targets_until_explicit_instantiate(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "dataset:\n"
+        "  _target_: tests.support.config_samples:concat\n"
+        "  prefix: left\n"
+        "  suffix: right\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base)
+    dataset = composed.resolved["dataset"]
+    assert isinstance(dataset, dict)
+    assert dataset == {
+        "_target_": "tests.support.config_samples:concat",
+        "prefix": "left",
+        "suffix": "right",
+    }
+    assert instantiate(dataset) == "leftright"
