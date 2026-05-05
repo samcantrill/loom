@@ -60,7 +60,7 @@ New tests implemented:
 | Remaining targeted group | Passed | `38 passed` |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff, Pyright, default tests, config-extra tests, and build completed |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Suite summary below from `build/test-summary.md` |
-| GitHub checks | Pending | PR not opened yet; local validation passed |
+| GitHub checks | Pending | PR submitted; local validation passed |
 
 ### Test Suite Summary
 

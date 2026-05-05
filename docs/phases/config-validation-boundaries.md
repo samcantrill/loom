@@ -271,10 +271,14 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Head branch: `codex/config-validation-boundaries`.
   - Target branch: `develop`.
   - Stack predecessor: none; this is a root phase PR.
-  - Merge eligibility: root phase targeting `develop`; eligible only after the
-    revised pre-submit blocker gate passes, PR-body refine/open pass completes,
-    and review/CI pass.
-  - PR submission: not opened or prepared in this draft pass by instruction.
+  - Merge eligibility: root phase targeting `develop`; eligible only after
+    GitHub CI and allowed review/merge checks pass. Do not approve or merge
+    during PR preparation.
+  - PR submission: opened as https://github.com/samcantrill/loom/pull/37.
+  - PR verification: `gh pr view 37 --json baseRefName,headRefName,state,url`
+    returned `baseRefName=develop`,
+    `headRefName=codex/config-validation-boundaries`, `state=OPEN`, and
+    `url=https://github.com/samcantrill/loom/pull/37`.
 - PR validation summary:
   - Targeted Phase 10 refinement group: `47 passed`.
   - Remaining targeted group: `38 passed`.
@@ -300,8 +304,18 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     registries, raw source persistence, resolver-output persistence,
     plugin/remote behavior, or Phase 11 instantiation behavior leaked in.
   - Budget note: this pre-submit gate consumes the Phase 10 PR-review budget
-    for the current diff. A post-submit PR review should run only if the
-    submitted diff changes.
+    for the implementation diff, draft PR body, suite evidence, scope boundary,
+    and known review risks. A post-submit PR review should run only if the
+    implementation or PR-body scope changes; PR-preparation metadata recorded
+    here does not change implementation scope.
+- GitHub/auth notes:
+  - Sandboxed `gh auth status` reported the stored token as invalid; approved
+    outside-sandbox `gh auth status` succeeded for account `samcantrill`.
+  - `gh auth setup-git` and `git ls-remote --heads origin develop` succeeded
+    before push; `origin/develop` resolved to
+    `80c1efba3918052a1673e962ecc023d2516852da`.
+  - `git push -u origin codex/config-validation-boundaries` succeeded before
+    PR creation.
 - Stack maintenance:
   - Root PR; no stack predecessor and no retarget/rebase action required before
     submission. Branch cleanup is safe only after the Phase 10 PR is merged and
