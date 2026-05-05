@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final scope-complete phase execution plan
+- Status: implemented; implementation refinement completed; pre-submit blocker gate completed; user-authorized blocker-resolution pass completed; PR body draft completed; focused confirmation gate pending; expanded-path PR body refine pending
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 14: Artifact-Safe Fingerprints And Resume Comparison`
 - Branch: `codex/config-artifact-fingerprints`
@@ -24,10 +24,11 @@
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner`; refine budget used.
 - Phase implementation refinement budget: used for the 2026-05-06 default validation blocker pass; no further automated implementation refinement pass remains.
-- Pre-submit blocker gate budget: user-authorized scoped blocker-resolution pass used on 2026-05-06 for the comparison-helper outcome blocker; no further automated blocker pass remains.
+- Pre-submit blocker gate budget: used on 2026-05-06 by a full diff/body/evidence review before PR submission. The gate found the comparison-helper outcome blocker.
+- User-authorized blocker-resolution budget: used on 2026-05-06 for the exact comparison-helper outcome blocker; no further automated blocker pass remains.
 - PR body draft pass: completed in this artifact; durable draft at `docs/phases/config-artifact-fingerprints-pr-body.md`.
 - PR body refine pass: pending; expanded-path PR opening is deferred to the later refine pass.
-- PR review budget: unused.
+- PR review budget: consumed by the full pre-submit blocker gate. Because the submitted diff changed after blocker resolution, only a bounded confirmation gate focused on that blocker and evidence drift remains before PR submission.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` and `git fetch origin` succeeded. Local `develop` and `origin/develop` matched the assigned base commit. Initial sandboxed `git worktree add` could not create the nested `codex/...` branch ref because `.git/refs/heads/codex` directory creation was blocked by sandbox filesystem policy; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none known.
 
@@ -252,10 +253,12 @@ make test-summary
 - Phase execution plan draft: used.
 - Phase execution plan refine: used.
 - Phase implementation refinement: used for the 2026-05-06 default validation blocker pass.
-- Pre-submit blocker gate: user-authorized scoped blocker-resolution pass used on 2026-05-06 for the comparison-helper outcome blocker.
+- Pre-submit blocker gate: used.
+- User-authorized blocker-resolution pass: used for the comparison-helper outcome blocker.
+- Focused confirmation gate: pending.
 - PR body draft: used.
 - PR body refine: pending.
-- PR review: unused.
+- PR review: consumed by the full pre-submit blocker gate; no separate general PR review remains unless the submitted diff changes after confirmation.
 
 ## Completion Notes
 
