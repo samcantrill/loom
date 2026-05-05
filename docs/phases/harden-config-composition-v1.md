@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: final phase execution plan
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 16: Hardening, Documentation, And End-To-End Coverage`
 - Branch: `codex/harden-config-composition-v1`
@@ -15,15 +15,15 @@
 - Base branch: `develop`
 - Target branch: `develop`
 - Base commit: `89749de201ac5ef045fac16818aacdcdc90ab6a7`
-- Merge eligibility: root phase PR targets `develop`; eligible for merge only after refine, implementation, phase-scoped validation, PR preparation, and review complete with no blocking findings
+- Merge eligibility: root phase PR targets `develop`; eligible for merge only after implementation, phase-scoped validation, PR preparation, and review complete with no blocking findings
 - Workflow path: expanded path
 - Successor dependency notes: no v1 successor phase is planned; branch can be deleted after merge if no later ad hoc branch depends on it
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v1.md` on 2026-05-05; no blocking findings remain
 - Plan quality gate loop budget: fully used before Phase 16 assignment; do not reopen
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: pending because the manager selected the expanded path
+- Refine pass: completed by `loom_phase_planner`; no additional automated plan refinement budget remains
 - Setup limitations: sandboxed `gh auth status` reported an invalid token, but network-enabled `gh auth status` succeeded; `gh auth setup-git`, `git fetch origin`, and worktree creation required approved filesystem/network access and then succeeded
-- Blockers: none for the draft plan
+- Blockers: none
 
 ## Objective
 
@@ -51,8 +51,13 @@ Phases 1-15 are merged into `develop` and supply the v1 config contracts: persis
 ## Current Source And Harness Findings
 
 - Existing files or modules that constrain this phase: `src/loom/config/compose.py`, `src/loom/config/artifacts.py`, `src/loom/config/provenance.py`, `src/loom/config/fingerprints.py`, `src/loom/config/includes.py`, `src/loom/config/overrides.py`, `src/loom/config/interpolation.py`, `src/loom/config/validation.py`, and `src/loom/config/__init__.py`.
-- Existing docs to audit: `docs/features/config.md`, `docs/features/provenance.md`, `docs/features/fingerprints.md`, `docs/features/resume.md`, `docs/features/testing.md`, plus `examples/config/**` and docs integration checks for examples.
-- Existing docs still include pre-v1 or future-looking text around `_copy_`, resolved config snapshots, source snapshots, CLI resume examples, and pipeline/resume dependence. Phase 16 should align those passages to v1 without rewriting unrelated roadmap material.
+- Existing docs to audit, with updates limited to stale v1 claims and explicit limitation notes:
+  - `docs/features/config.md`: Purpose and "Soon After v0" text that still lists `_copy_` and rebuildable source snapshots as part of the current post-v0 path; Package Boundary language that says `loom.pipeline` should call `loom.config`; Terminology sections for Resolved Config, Copy, and Composition Manifest; "Make Resolved Config Explicit"; recursive composition design constraints and examples that show `_copy_`; Composition Order text that treats CLI overrides and resolved snapshots as current runner/run-store behavior; Secrets and Redaction persistence wording; CLI Integration examples; Test Strategy bullets for `_copy_`, source snapshots, and resolved-config persistence.
+  - `docs/features/provenance.md`: config provenance responsibilities around CLI overrides and full resolved config locations; Full Versus Public Provenance; Relationship to Config fields such as `resolved config hash/path`; Phase 7 CLI Integration. Clarify that v1 config returns provenance/manifest/source/fingerprint records but does not persist run provenance or own CLI display.
+  - `docs/features/fingerprints.md`: Core Position dependency diagram if it implies config coupling; fingerprint record/payload guidance; Comparison/structured-input testing text only if it conflicts with artifact-safe config fingerprints. Add limitation wording that v1 config fingerprints preserve authored resolver expressions and do not persist resolved resolver outputs by default.
+  - `docs/features/resume.md`: `loom.config` responsibilities that say it persists snapshots; Required Inputs and fingerprint-input text that says "current resolved config" without allowing artifact-safe config fingerprint views; CLI Integration examples for `loom plan --resume` and `loom run --resume`. Clarify that v1 provides comparison artifacts for future resume policy, while resume remains pipeline-owned and does not depend on `loom.config` or manifests.
+  - `docs/features/testing.md`: suite ownership and e2e descriptions that make CLI e2e look current; public-Python guidance; CLI test sections; phase plan/test-structure sections that still list `_copy_`, broad CLI behavior, or future suites as current v1 obligations.
+  - `examples/config/**`: audit only examples referenced by docs/tests or claiming v1 behavior; update stale wording or examples that imply `_copy_`, default raw source bytes, default resolved-config persistence, CLI behavior, plugin/remote/global resolvers, or pipeline dependence on config artifacts.
 - Existing tests or harness behavior: config package/public API checks live in `tests/package/`; artifact and inspection contracts live under `tests/contracts/`; composition integration coverage lives in `tests/integration/config/`; example validation lives in `tests/integration/docs/`; e2e coverage currently lives in `tests/e2e/test_local_pipeline_run.py` and exercises local pipeline runs through Python APIs.
 - Import-boundary or dependency constraints: `loom.config` remains persistence-free and must not import pipeline execution, run stores, CLI, plugin discovery, or project code. `loom.pipeline` must not depend on `loom.config` or composition manifests.
 
@@ -64,6 +69,7 @@ Phases 1-15 are merged into `develop` and supply the v1 config contracts: persis
 - Audit structured error coverage for high-risk strict-composition failures and add focused regressions when current coverage misses accepted v1 behavior.
 - Add final hardening assertions that default artifacts do not persist resolver outputs, raw source bytes, or full resolved-config snapshots by default.
 - Keep any product-code changes limited to bug fixes exposed by docs/test/error audit against accepted v1 contracts.
+- Add concise limitation notes where needed instead of rewriting broad roadmap material; future-looking sections may remain when they are clearly labeled as future or post-v1.
 
 ## Out-of-Scope Work
 
@@ -72,6 +78,7 @@ Phases 1-15 are merged into `develop` and supply the v1 config contracts: persis
 - New public API shape, manifest schema redesign, persistence ownership changes, or new run-store config artifact writing.
 - Changes that make `loom.pipeline` depend on `loom.config`, manifests, or composition source artifacts.
 - New default persistence of resolver outputs, raw source bytes, or full resolved config snapshots.
+- Broad roadmap rewrites in the named docs, wholesale renaming of CLI terminology, or deletion of future planning material that can be made accurate with scoped v1 limitation notes.
 
 ## Assumptions
 
@@ -79,10 +86,13 @@ Phases 1-15 are merged into `develop` and supply the v1 config contracts: persis
 - Documentation can retain future roadmap concepts only when the text clearly says they are future work and not v1-supported behavior.
 - E2E composition coverage should use public Python APIs and temporary domain-neutral config trees rather than invoking CLI commands.
 - If the error audit finds missing diagnostics, small structured-error fixes are in scope only when they preserve accepted v1 semantics.
+- A representative e2e test can be config-composition-only. It does not need to run a full pipeline, because Phase 16 is hardening the public config composition surface and v1 explicitly avoids pipeline dependence on config artifacts.
 
 ## Scope Contract
 
 No new public contract changes are planned. The executor must preserve `compose_config`, `compose_config_with_catalog`, `inspect_config_composition`, `ComposedConfig`, composition manifest, provenance, source artifact, raw snapshot, fingerprint, and resume comparison semantics already established by Phases 1-15. The accepted v1 contract remains security-first: resolver outputs and raw source bytes are not persisted by default, raw source snapshots require explicit opt-in, fingerprinting uses artifact-safe authored inputs, `_copy_` is unsupported, and config composition is Python-API-only. Any code change must be a bug fix against those contracts, not a new semantic extension.
+
+The error audit is deliberately narrow. It may add regressions or fixes for accepted v1 failures such as unsupported `_copy_`, missing includes, include cycles, include swaps without `_replace_`, invalid `_replace_`, strict update/add override misuse, custom resolver expressions, resolver expressions in include targets, raw snapshot flag misuse, and artifact-safety violations. It must not create new error classes or public semantics unless the accepted contract already requires them and the current implementation is plainly incomplete.
 
 ## Design Impact
 
@@ -123,7 +133,7 @@ No new public contract changes are planned. The executor must preserve `compose_
 ## Implementation Steps
 
 1. Audit and align v1 documentation in the named feature docs and examples, focusing on `_copy_`, source snapshots, resolver-value persistence, resolved-config persistence, resume limitations, and Python-API-only behavior.
-2. Add representative e2e coverage for strict composition through public Python APIs, using domain-neutral temporary config trees and existing optional dependency markers.
+2. Add one representative e2e composition flow through public Python APIs, using a temporary domain-neutral config tree and existing optional dependency markers.
 3. Fill regression gaps found by the docs/error audit with focused package, unit, contract, or integration tests in existing source-mirrored test files.
 4. Apply only narrow product fixes required for current behavior to satisfy accepted v1 contracts and the new tests.
 5. Run targeted suites during implementation, then leave final `make validate-pr` and `make test-summary` for PR preparation evidence.
@@ -158,7 +168,7 @@ No new public contract changes are planned. The executor must preserve `compose_
 
 - Status: required
 - Expected paths: extend `tests/e2e/` with representative config-composition coverage or extend `tests/e2e/test_local_pipeline_run.py` when a full pipeline run is necessary
-- Required assertions or deferral reason: cover a realistic domain-neutral config tree through public Python APIs, including base plus overlays, nested includes, user include swaps or strict add/update overrides, recipe expansion, resolver expression handling, redacted output, manifest/provenance/source records, fingerprint comparison, and raw source snapshot limitations. Avoid CLI invocation.
+- Required assertions or deferral reason: add a config-composition e2e that calls `compose_config` or `inspect_config_composition` directly, not the CLI. Use a small temporary tree with base config, overlay, nested `_include_`, a user include swap with `_replace_: true` or an equivalent strict add/update override pair, a local recipe catalog, one built-in resolver expression, redaction, manifest/provenance/source metadata, artifact-safe fingerprint comparison, and raw source snapshot opt-in/default limitation assertions. Keep this representative instead of duplicating every integration matrix, and avoid running stages unless an existing e2e helper is clearly the smallest way to prove the public Python workflow.
 
 ### Opt-In Suites
 
@@ -185,33 +195,42 @@ uv run pytest tests/e2e -m e2e
 uv run pytest tests/unit/loom/config
 ```
 
+Use `UV_CACHE_DIR=/tmp/loom_uv_cache` for targeted `uv run` commands when the sandboxed/default uv cache is unavailable or when the command would otherwise write outside the worktree, for example:
+
+```sh
+UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/e2e -m e2e
+```
+
 Final PR-preparation commands:
 
 ```sh
-make validate-pr
-make test-summary
+UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr
+UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 ```
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: docs/examples audit first; e2e coverage second; regression/contract gaps third; narrow product fixes only if new or existing tests reveal behavior that violates accepted v1 contracts.
-- Tests to run with each slice: docs/example changes should run `tests/integration/docs/test_v0_python_examples.py` when examples change; e2e additions should run the new/changed e2e tests; artifact or API changes should run the relevant package, contract, integration, and unit paths above.
-- Decisions the executor must not revisit: persistence-free `loom.config`; no pipeline dependency on config/manifests; `_copy_` unsupported; default artifacts are security-first; resolver outputs and raw source bytes not persisted by default; v1 Python-API-only; no plugin, remote, global search, or custom include resolver behavior.
-- Conditions that require stopping for the manager: a required fix needs public API/schema redesign, a docs claim conflicts with the accepted v1 implementation plan in a way that cannot be resolved by scoped wording, validation reveals cross-phase behavior outside config hardening, or remote/auth limitations prevent required PR-preparation evidence.
-- Expanded-path refinement notes: refine this draft before implementation to confirm exact docs passages, the chosen e2e test shape, and any high-risk audit findings. Keep the refined plan concise and do not convert it into a file-by-file edit recipe.
+- Safe implementation slices: docs/examples audit first; one representative public-Python e2e second; focused error/artifact regression gaps third; narrow product fixes only if new or existing tests reveal behavior that violates accepted v1 contracts.
+- Tests to run with each slice: docs/example changes should run `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/docs/test_v0_python_examples.py` when examples change; e2e additions should run the new/changed e2e path with `UV_CACHE_DIR=/tmp/loom_uv_cache`; artifact or API changes should run the relevant package, contract, integration, and unit paths above.
+- Decisions the executor must not revisit: persistence-free `loom.config`; no pipeline dependency on config/manifests; `_copy_` unsupported; artifact-safe defaults; resolver outputs and raw source bytes not persisted by default; v1 Python-API-only; no plugin, remote, global search, custom include resolver, or CLI behavior.
+- Conditions that require stopping for the manager: a required fix needs public API/schema redesign, a docs claim conflicts with the accepted v1 implementation plan in a way that cannot be resolved by scoped wording, validation reveals cross-phase behavior outside config hardening, a representative e2e would require CLI or pipeline-coupled config semantics, satisfying an error audit requires new public semantics rather than a focused regression/bug fix, or remote/auth limitations prevent required PR-preparation evidence.
+- Final stop conditions before PR preparation: do not proceed if docs still promise `_copy_`, default raw source bytes, default resolved-config persistence, resolver-output persistence, config-owned run-store writes, CLI behavior, plugin/remote/global resolvers, or pipeline dependence on config artifacts; do not proceed if package, unit, contract, integration, e2e, or opt-in suite obligations above are unaddressed or intentionally deferring a suite without the explicit reason recorded in the PR body.
 
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused
+- Pre-submit blocker gate: unused
+- Blocker-resolution: unused
+- PR body: unused
 - PR review: unused
 
 ## Completion Notes
 
-- Draft plan: completed by `loom_phase_planner` in this commit
-- Final phase execution plan: pending expanded-path refine pass
+- Draft plan: completed by `loom_phase_planner` in commit `e2632a2`
+- Final phase execution plan: completed by `loom_phase_planner`; scope-complete for implementation
 - Implementation summary: pending
 - Implementation validation: pending
-- Refinement summary: pending
+- Refinement summary: expanded-path refine pass confirmed exact documentation audit targets, representative public-Python e2e shape, focused error-audit limits, final validation obligations, and explicit executor stop conditions
 - PR preparation: pending
 - Stack maintenance: pending
-- Remaining blockers: none known at draft time
+- Remaining blockers: none
