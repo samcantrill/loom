@@ -22,7 +22,7 @@
 - Plan quality gate: passed on 2026-05-05 by `loom_plan_reviewer` confirmation review; no blocking findings remain.
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact.
-- Refine pass: pending; required by expanded-path trigger before implementation.
+- Refine pass: completed by `loom_phase_planner`; expanded-path refinement tightened `_replace_` semantics, override parent-creation behavior, compose/recipe compatibility boundaries, error-structure decisions, suite obligations, and executor stop conditions.
 - Setup limitations: branch and worktree were created from local `develop`; initial sandboxed worktree creation could not create the nested `codex/...` branch ref, then succeeded with approved escalated Git worktree access.
 - Blockers: none.
 
@@ -48,12 +48,12 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
 
 - Goal: implement strict override and merge primitives.
 - Required scope: strict `path=value` update overrides, explicit `+path=value` add overrides, typed override parsing, simple dot paths with no escaping, recursive mapping merge, scalar/list/null replacement, and strict `_replace_` handling.
-- Required checkpoints: update overrides fail on missing paths; add overrides fail on existing paths; `_replace_` discards lower-precedence mappings only when required and fails when unnecessary or invalid; lists replace as whole lists.
+- Required checkpoints: update overrides fail on missing paths; add overrides fail on existing paths; mapping-over-mapping without `_replace_` recursively merges; `_replace_: true` is the only way to request whole-section mapping replacement and fails when unnecessary or invalid; scalar/list/null replacements do not require `_replace_`; lists replace as whole lists.
 - Acceptance criteria: helper behavior is covered with focused unit tests; public `compose_config` override behavior changes only through existing helper wiring needed for override tests; no include, recipe, persistence, CLI, provenance population, or source-authored overlay behavior is implemented.
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/config/overrides.py` already parses update/add operations, typed scalars, JSON arrays/objects, and applies overrides; `src/loom/config/merge.py` already recursively merges mappings and replaces scalar/list/null values; `src/loom/config/provenance.py` owns `ParsedOverride`; `src/loom/config/errors.py` has structured loader context but override/merge errors are still message-only `ConfigError` subclasses; `src/loom/config/compose.py` currently applies overrides before recipe expansion as v0 behavior.
+- Existing files or modules that constrain this phase: `src/loom/config/overrides.py` already parses update/add operations, typed scalars, JSON arrays/objects, and applies overrides; `src/loom/config/merge.py` already recursively merges mappings and replaces scalar/list/null values; `src/loom/config/provenance.py` owns `ParsedOverride`; `src/loom/config/errors.py` has structured loader context but override/merge errors are still message-only `ConfigError` subclasses; `src/loom/config/compose.py` currently applies overrides before recipe expansion as v0 behavior, which Phase 3 may test for strict ordinary override helper behavior but must not redesign into the final v1 order.
 - Existing tests or harness behavior: focused override tests live in `tests/unit/loom/config/test_overrides.py`; merge tests live in `tests/unit/loom/config/test_merge.py`; compose helper tests live in `tests/unit/loom/config/test_compose.py`; current integration compose tests are v0-oriented and should not become full v1 orchestration tests in this phase.
 - Import-boundary or dependency constraints: work should remain under `src/loom/config/` and config unit/contract/package tests. Do not add heavyweight dependencies, do not import pipeline, execution, stores, CLI, plugin discovery, or project code, and do not make `loom.pipeline` depend on config helpers.
 
@@ -66,9 +66,9 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
 - Apply add overrides strictly: the final key must not exist. Parent creation for missing mapping parents is allowed only for `+` add operations, and traversal through a scalar/list/null parent fails.
 - Preserve override order and apply sequentially so earlier operations can create or update paths observed by later operations.
 - Harden recursive merge behavior: mapping/mapping merges recurse, scalar/list/null values replace, plain-data validation remains enforced, and inputs are not mutated.
-- Add `_replace_: true` handling to the merge primitive: when an overlay mapping is merged over an existing destination mapping at the same path, `_replace_: true` discards the lower-precedence mapping before applying the overlay mapping and is omitted from the returned config.
-- Enforce strict `_replace_` failures: invalid values, use outside mapping-merge context, and use where no lower-precedence mapping exists. `_replace_` is required only for mapping-over-mapping whole-section replacement; ordinary scalar, list, or `null` overlay values still replace the lower-precedence value without a marker.
-- Use existing structured error context patterns where practical for new override/merge failures, especially path, operation, order, directive, expected/actual, and remediation fields, without broadening the root error contract.
+- Add `_replace_: true` handling to the merge primitive: when a higher-precedence mapping is merged over an existing lower-precedence mapping at the same path, `_replace_: true` discards the lower-precedence mapping before applying the higher-precedence mapping and is omitted from the returned config.
+- Enforce strict `_replace_` failures: invalid values; use where the lower-precedence value is absent; use where the lower-precedence value is not a mapping; or use where the higher-precedence value is not the mapping that owns the directive. `_replace_` is required only to request mapping-over-mapping whole-section replacement. Absence of `_replace_` means recursive merge for mapping-over-mapping and must not fail merely because a lower-precedence mapping exists. Ordinary scalar, list, `null`, or mapping-over-non-mapping replacements do not require `_replace_`.
+- Keep override and merge errors as stable `OverrideParseError`, `OverrideApplyError`, and `ConfigMergeError` subclasses in this phase. They may remain message-only if tests assert stable exception classes and behavioral cases. Add `ConfigErrorContext` only if it can be done locally without broadening scope; do not require it for Phase 3 because Phase 2 structured context was loader-focused and no public CLI/inspection API consumes override/merge diagnostics until later phases.
 - Add focused unit tests for parser values, invalid override forms, update/add success and failure, ordering, merge behavior, `_replace_` required/unnecessary/invalid cases, and list replacement.
 - Add contract tests only if the implementation exposes new override or merge record/context shapes beyond existing `ParsedOverride`.
 
@@ -89,13 +89,15 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
 - Override parser behavior should stay Python-API-friendly and future CLI-ready, but v1 ships no CLI commands.
 - JSON-quoted scalar strings are the preferred way to author literal strings that look like typed values if the parser supports them without weakening the plain-data contract.
 - `_replace_` validation belongs in the merge primitive now so Phase 4 overlays and Phase 6 includes can reuse one behavior instead of duplicating replacement logic.
-- The executor may keep override/merge error subclasses message-only if adding structured context would expand the phase too far, but tests must still lock actionable failure modes and stable exception classes.
+- Override/merge errors can remain message-only in Phase 3 because the immediate contract is helper behavior, stable exception classes, and future-compatible operation records. The executor should not convert every override/merge failure to `ConfigErrorContext` unless that change is small and local.
 
 ## Scope Contract
 
 - Public override language for this phase:
   - `path=value` is a strict update. It fails when any parent segment is missing, any parent segment is not a mapping, or the final key is absent.
-  - `+path=value` is an explicit add. It fails when an existing parent segment is not a mapping or the final key already exists. Missing mapping parents may be created for add operations.
+  - `+path=value` is an explicit add. It fails when an existing parent segment is not a mapping or the final key already exists. Missing parent segments may be created as mappings only for `+` add operations.
+  - Add parent creation is sequential and local to the override application result: a later override can update or add beneath a parent created by an earlier `+` override, but update overrides must never create parents themselves.
+  - Neither add nor update may traverse into lists, scalars, or `null`. Numeric-looking path segments are ordinary mapping keys, not list indexes.
   - Paths split on literal dots. Empty segments are invalid. No escaping, list indexes, deletion, or patch operations exist in v1.
   - Overrides apply in caller order and later overrides see earlier changes.
 - Typed parser contract:
@@ -106,13 +108,19 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
   - Other values remain strings, preserving authored whitespace except where existing local parser behavior intentionally strips control syntax.
 - Merge contract:
   - Mapping plus mapping recursively merges.
+  - Mapping plus mapping without `_replace_` is always recursive merge, including when the higher-precedence mapping only adds keys, only updates existing child keys, or does both. This must not be treated as an error or implicit whole-section replacement.
+  - A higher-precedence mapping may replace a lower-precedence mapping as a whole section only when the higher-precedence mapping contains `_replace_: true`. The returned mapping contains the higher-precedence siblings after the marker is consumed and none of the lower-precedence mapping's keys survive unless re-authored in the higher-precedence mapping.
   - Scalar, list, and explicit `null` overlay values replace the lower-precedence value.
+  - A higher-precedence mapping over a lower-precedence scalar/list/null replaces that value as an ordinary type replacement without `_replace_`; `_replace_: true` in that case is unnecessary and must fail.
+  - A higher-precedence scalar/list/null over a lower-precedence mapping replaces that mapping as an ordinary scalar/list/null replacement without `_replace_`; there is no marker location in the scalar/list/null value.
   - Lists always replace as whole lists.
   - `_replace_: true` is consumed as a merge directive and must not appear in the returned config.
   - `_replace_` must be exactly boolean `true`; any other value fails.
-  - `_replace_: true` is required when a higher-precedence mapping intentionally replaces an existing lower-precedence mapping as a whole section instead of recursively merging it, and fails when no lower-precedence mapping exists. Scalar, list, and `null` replacements do not require `_replace_`.
+  - `_replace_: true` fails when no lower-precedence value exists, when the lower-precedence value is not a mapping, or when the directive appears without sibling keys to apply as the replacement mapping.
 - Boundary contract:
   - This phase may update existing `compose_config` tests only to assert strict ordinary override behavior through the existing public helper path. It must not implement Phase 7 user composition overrides or Phase 12 public orchestration order.
+  - Existing `compose_config` currently applies ordinary overrides before recipe expansion. Phase 3 may keep that wiring and adjust tests for strict add/update failures, but the executor must stop if a failing recipe/compose test requires deciding the final v1 order of recipes, user composition overrides, or ordinary overrides.
+  - Do not add `inspect_config_composition`, v1 `ComposedConfig` fields, include-site records, or override stage records to solve Phase 3 test failures.
   - `loom.config` remains persistence-free and `loom.pipeline` must not depend on `loom.config` or manifests.
 
 ## Design Impact
@@ -146,7 +154,7 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
 
 | Debt | Reason accepted | Revisit trigger |
 | --- | --- | --- |
-| Override and merge errors may remain less structured than loader errors if strict context wiring would broaden the phase | Keeps Phase 3 focused on behavior primitives while preserving exception classes and actionable tests. | Revisit before Phase 7 or Phase 12 if future CLI/inspection paths need machine-readable override/merge diagnostics. |
+| Override and merge errors remain message-only unless local context wiring is trivial | Keeps Phase 3 focused on behavior primitives while preserving stable subclasses and avoiding premature public diagnostic payloads before CLI/inspection APIs exist. | Revisit in Phase 7 or Phase 12 when user composition records, inspection stages, or future CLI formatting need machine-readable override/merge diagnostics. |
 | No literal-dot key syntax | Accepted v1 simplification keeps override paths deterministic and reviewable. | Revisit only if real config authors repeatedly need dot-containing keys and an explicit escaping design can preserve provenance. |
 | Add overrides may create missing parent mappings | Useful for explicit additions without schema knowledge, but it can create larger new subtrees. | Revisit if Phase 10 validation or Phase 14 fingerprint review finds this too permissive for project-owned data. |
 
@@ -168,7 +176,7 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
 
 ### Package Suite
 
-- Status: deferred for targeted implementation; required through final PR validation.
+- Status: required if exports, imports, or exception class placement change; otherwise deferred for targeted implementation and covered through final PR validation.
 - Expected paths: `tests/package/test_import_boundaries.py` and `tests/package/test_config_api.py` through `make validate-pr`.
 - Required assertions or deferral reason: no new public modules, root exports, package exports, or import-boundary changes are expected. If implementation changes exports or exception imports, add targeted package assertions that cheap imports still do not pull pipeline, stores, CLI, plugin discovery, or optional config dependencies unexpectedly.
 
@@ -176,13 +184,13 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
 
 - Status: required.
 - Expected paths: `tests/unit/loom/config/test_overrides.py`, `tests/unit/loom/config/test_merge.py`, and narrowly `tests/unit/loom/config/test_compose.py` if strict public override behavior changes existing compose expectations.
-- Required assertions or deferral reason: typed parser values; invalid override forms; ordered update/add application; update missing-parent/final-key failures; add existing-final-key and non-mapping-parent failures; no list-index traversal; JSON plain-data validation; recursive mapping merge; scalar/list/null replacement; `_replace_` marker omission; `_replace_` required, unnecessary, and invalid-value failures; inputs are not mutated.
+- Required assertions or deferral reason: typed parser values; invalid override forms; ordered update/add application; update missing-parent/final-key failures; add existing-final-key and non-mapping-parent failures; add-created parent mappings can be used by later overrides; updates never create parents; no traversal through scalar/list/null; numeric path segments are mapping keys rather than list indexes; JSON plain-data validation; recursive mapping merge when `_replace_` is absent; adding and updating child keys inside mapping-over-mapping merges; scalar/list/null replacement; mapping-over-non-mapping and non-mapping-over-mapping replacement; `_replace_` marker omission; `_replace_` whole-section replacement; `_replace_` unnecessary/no-lower-mapping/no-sibling/invalid-value failures; inputs are not mutated.
 
 ### Contract Suite
 
 - Status: conditional.
 - Expected paths: existing `tests/contracts/test_config_error_contract.py` or a new focused override/merge contract test only if new structured context or serialized records are exposed.
-- Required assertions or deferral reason: `ParsedOverride` already has serialization coverage through provenance contracts. If new public-ish override/merge diagnostic payloads are added, contract tests must assert plain-data serialization, stable operation/path/directive fields, and absence of raw source bytes or resolved resolver values.
+- Required assertions or deferral reason: `ParsedOverride` already has serialization coverage through provenance contracts. No new contract suite is required if override/merge errors remain message-only and no record shape changes. If new public-ish override/merge diagnostic payloads are added, contract tests must assert plain-data serialization, stable operation/path/directive fields, and absence of raw source bytes or resolved resolver values.
 
 ### Integration Suite
 
@@ -204,9 +212,9 @@ Future behavior remains out of scope: Phase 4 source-authored overlay metadata, 
 
 ## Risks
 
-- `_replace_` strictness can conflict with existing v0 recursive merge tests or compose fixtures; update tests only to reflect accepted v1 primitive behavior and do not add Phase 4+ authorship logic.
+- `_replace_` strictness can conflict with existing v0 recursive merge tests or compose fixtures; update tests only to reflect accepted v1 primitive behavior and do not add Phase 4+ authorship logic. Missing `_replace_` must not be treated as an error for ordinary recursive mapping merges.
 - Applying strict overrides through current `compose_config` may affect recipe argument override tests because the existing v0 order applies overrides before recipes; keep changes narrow and stop if satisfying tests requires redesigning Phase 9 or Phase 12 order.
-- Structured override/merge diagnostics could expand the phase if every error is converted at once; prioritize strict behavior and stable exception classes unless the refine pass requires context fields.
+- Structured override/merge diagnostics could expand the phase if every error is converted at once; prioritize strict behavior and stable exception classes. Context fields are optional in this phase, not an executor design decision.
 - Parent creation for add overrides must not accidentally permit traversal through scalars, lists, or null.
 - `_replace_` marker removal must not mutate caller-provided base or overlay mappings.
 
@@ -231,24 +239,24 @@ make test-summary
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices: override parser/application hardening first, override unit coverage second, merge `_replace_` behavior third, merge unit coverage fourth, narrow compose compatibility tests last.
-- Tests to run with each slice: run `uv run pytest tests/unit/loom/config/test_overrides.py` after override changes; run `uv run pytest tests/unit/loom/config/test_merge.py` after merge changes; run `uv run pytest tests/unit/loom/config/test_compose.py` after any public helper wiring changes; run contract tests only if serialized diagnostics or records change.
+- Tests to run with each slice: run `uv run pytest tests/unit/loom/config/test_overrides.py` after override changes; run `uv run pytest tests/unit/loom/config/test_merge.py` after merge changes; run `uv run pytest tests/unit/loom/config/test_compose.py` after any current `compose_config` helper behavior changes; run package tests if exports/imports move; run contract tests only if serialized diagnostics or records change.
 - Decisions the executor must not revisit: `_copy_` remains unsupported; `_replace_` must be exactly boolean `true`; no literal-dot escaping; no list patching/indexing; no include loading; no Phase 4 source authorship; no Phase 7 user composition swaps; no Phase 12 public orchestration refactor; no persistence or CLI.
-- Conditions that require stopping for the manager: strict override behavior cannot be implemented without changing `ComposedConfig` or public inspection APIs; current recipe/compose tests require Phase 9 or Phase 12 ordering decisions; `_replace_` semantics need source-authorship metadata to be correct; error context changes require altering root `loom.errors.ConfigError`; optional dependencies or pipeline imports leak into helper modules; or implementation needs to reopen the fully used v1 plan quality gate.
+- Conditions that require stopping for the manager: strict override behavior cannot be implemented without changing `ComposedConfig` or public inspection APIs; current recipe/compose tests require Phase 7, Phase 9, or Phase 12 ordering decisions; `_replace_` behavior appears to require source-authorship metadata rather than pure merge inputs; satisfying tests would require treating missing `_replace_` as an error for ordinary recursive merge; error context changes require altering root `loom.errors.ConfigError`; optional dependencies or pipeline imports leak into helper modules; or implementation needs to reopen the fully used v1 plan quality gate.
 
 ## Refinement And Review Budget Status
 
 - Phase execution plan draft: used
-- Phase execution plan refine: unused; required before implementation because expanded path is selected
+- Phase execution plan refine: used
 - Phase implementation refinement: unused
 - PR review: unused
 
 ## Completion Notes
 
 - Draft plan: completed in this artifact by `loom_phase_planner`; implementation not started.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation not started.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: clarified `_replace_` as an explicit whole-section mapping replacement marker while absence of `_replace_` means recursive mapping merge; clarified scalar/list/null and mapping-over-non-mapping replacements do not require `_replace_`; clarified `+` add parent creation and update strictness; bounded current `compose_config` testing to strict helper behavior without Phase 7/9/12 ordering decisions; decided override/merge errors may remain message-only with stable subclasses/tests unless local `ConfigErrorContext` wiring is trivial; tightened suite obligations and Spark executor stop conditions.
 - PR preparation: pending.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
