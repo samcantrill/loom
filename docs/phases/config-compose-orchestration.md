@@ -261,5 +261,15 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e -k config` (existing e2e only; no new phase-12-specific e2e added due harness scope).
 - Refinement summary: expanded-path implementation refinement complete and budget consumed. Fixed the Phase 12 placeholder manifest to use the artifact schema constant explicitly while preserving provenance schema usage for `ConfigProvenance`; restored the config-local `compose.compose_config(...)` helper to return `ComposedConfig` so its name does not conflict with its behavior; added regression coverage for artifact schema placeholder semantics and the internal helper return type. No PR preparation, PR opening, approval, merge, persistence, CLI, pipeline, or workflow-file changes performed.
 - PR preparation:
+  - Expanded-path PR body draft pass completed on 2026-05-06 by `loom_pr_preparer`; refine pass remains pending and PR creation is intentionally deferred to the refine pass.
+  - Confirmed current worktree `/home/samcantrill/work/loom-worktrees/config-compose-orchestration`, branch `codex/config-compose-orchestration`, target branch `develop`, stack predecessor `none`, and HEAD `3fd564978e5d1091d491fb9d22f20307f38ce73f` match the phase handoff and execution-plan metadata.
+  - Confirmed `develop` is an ancestor of the phase branch; Phase 12 remains a root PR candidate targeting `develop`.
+  - Inspected the final diff vs `develop`, `.github/PULL_REQUEST_TEMPLATE.md`, `.codex/templates/phase-pr-body.md`, `build/test-summary.md`, implementation-plan Phase 12 scope, and completion validation evidence before drafting.
+  - Created reviewer-facing PR body artifact at `docs/phases/config-compose-orchestration-pr-body.md` using the public PR template shape and suite-level evidence from `build/test-summary.md`.
+  - Public PR body draft includes `@samcantrill` near the top, acceptance criteria, implementation notes, new tests, validation evidence, suite summary, and risks/follow-ups; workflow internals remain in this phase execution plan.
+  - PR title remains `Configuration - Phase 12: Public Compose Orchestration And Inspection APIs`.
+  - PR status: not opened in this pass because Phase 12 is expanded path and the user explicitly deferred PR creation to a later pass.
+  - Budget status preserved: phase implementation refinement used; pre-submit blocker gate remains unused until the manager runs the revised pre-submit blocker gate; PR review budget remains unused until consumed by the manager-assigned gate/review.
+  - Under `.codex/prompts/phase-loop-management.md`, a full pre-submit gate reviewing the implementation diff, PR body, and suite evidence consumes the Phase 12 PR-review budget unless the submitted diff changes.
 - Stack maintenance: none.
 - Remaining blockers: none known.
