@@ -257,4 +257,32 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Blockers:
   - None.
 - PR preparation:
+- PR facts:
+  - Draft pass: completed by `loom_pr_preparer` on 2026-05-05.
+  - Refine pass: pending because expanded path is active.
+  - PR body artifact: `docs/phases/config-validation-boundaries-pr-body.md`.
+  - Intended PR title: `Configuration - Phase 10: Loom Validation Boundaries`.
+  - Head branch: `codex/config-validation-boundaries`.
+  - Target branch: `develop`.
+  - Stack predecessor: none; this is a root phase PR.
+  - Merge eligibility: root phase targeting `develop`; eligible only after the
+    revised pre-submit blocker gate passes, PR-body refine/open pass completes,
+    and review/CI pass.
+  - PR submission: not opened or prepared in this draft pass by instruction.
+- PR validation summary:
+  - Targeted Phase 10 refinement group: `47 passed`.
+  - Remaining targeted group: `38 passed`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed; suite evidence
+    in `build/test-summary.md` records package `36 passed, 1 skipped`, unit
+    `354 passed, 1 skipped`, contract `28 passed, 1 skipped`, integration
+    `9 passed, 5 skipped`, e2e `5 passed`, config-extra
+    `253 passed, 432 deselected`.
+- Pre-submit blocker gate:
+  - Status: pending before PR submission.
+  - Required review scope: final diff, PR body draft, suite evidence, phase
+    scope boundary, and known review risks.
+  - Budget note: this gate remains unused in this draft pass; if it performs
+    the required full review before submission, it consumes the Phase 10
+    PR-review budget unless the submitted diff changes afterward.
 - Stack maintenance:
