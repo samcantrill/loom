@@ -2141,9 +2141,9 @@ Completion notes:
 
 ### Phase 16 - Hardening, Documentation, And End-To-End Coverage
 
-Status: pending
+Status: pr_open
 Branch: `codex/harden-config-composition-v1`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/43
 
 Goal:
 
@@ -2184,6 +2184,41 @@ Test expectations:
 - Regression coverage from implementation.
 - Contract tests for manifest/provenance/source artifact serialization.
 - Realistic domain-neutral integration and e2e composition flows.
+
+Completion notes:
+
+- Phase execution plan: `docs/phases/harden-config-composition-v1.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is open against
+  `develop`.
+- Implementation path note: the initial Spark executor hit the configured usage
+  limit before editing; the workflow's explicit fallback path used a
+  GPT-5.5/high implementation worker with the same scoped handoff and stop
+  conditions.
+- Implementation summary: aligned the named feature docs with supported v1
+  behavior and limitations; added one representative public-Python e2e
+  composition flow; and fixed a focused `CompositionManifest.to_dict()` plain
+  data serialization bug for nested recipe-manifest metadata, backed by
+  contract coverage.
+- Scope notes: no CLI behavior, plugin/remote/global resolvers, sweeps,
+  `_copy_`, default raw bytes, default resolved-config persistence, run-store
+  writes/storage policy, pipeline dependency on config artifacts, public API
+  redesign, or future roadmap feature semantics were added.
+- Revised workflow gate: expanded-path implementation refinement kept the e2e
+  domain-neutral and found no remaining product-code blocker. The full
+  pre-submit blocker gate found one docs blocker: `docs/features/config.md`
+  still said `Persist both:` in Secret Redaction wording. The
+  user-authorized scoped blocker-resolution pass changed it to `Expose both:`,
+  and the focused confirmation gate passed with no remaining blocking findings.
+- Validation: targeted e2e/contract regression passed with 10 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed before the final
+  docs-only wording fix; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary`
+  passed with package 36 passed/1 skipped, unit 354 passed/1 skipped, contract
+  31 passed/2 skipped, integration 9 passed/5 skipped, e2e 6 passed, and
+  config-extra 301 passed/436 deselected. The final docs-only wording fix was
+  confirmed with `git diff --check` and focused stale-phrase scans.
+- PR notes: opened and verified on PR #43 with base `develop`, head
+  `codex/harden-config-composition-v1`, and state `OPEN`. GitHub CI was pending
+  at this metadata update.
 
 ## Test Structure And Fixtures
 
