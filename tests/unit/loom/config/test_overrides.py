@@ -7,7 +7,7 @@ import pytest
 
 from loom.serialization import PlainData
 from loom.config.errors import OverrideApplyError, OverrideParseError
-from loom.config.overrides import apply_overrides, parse_overrides
+from loom.config.overrides import apply_overrides, parse_overrides, split_include_and_ordinary_overrides
 
 
 def plain_config(value: Mapping[str, PlainData]) -> dict[str, PlainData]:
@@ -136,3 +136,26 @@ def test_apply_override_does_not_mutate_input() -> None:
 
     assert config == original
     assert merged == {"a": {"b": 2}}
+
+
+def test_split_include_and_ordinary_overrides_keeps_original_order() -> None:
+    parsed = parse_overrides(
+        (
+            "model.name=base",
+            "model.component._include_=alternate.yaml",
+            "+pipeline.stage=overlay",
+            "pipeline.model._include_=another",
+            "+pipeline.leaf=final",
+        )
+    )
+    include_overrides, ordinary_overrides = split_include_and_ordinary_overrides(parsed)
+
+    assert [override.path for override in include_overrides] == [
+        "model.component._include_",
+        "pipeline.model._include_",
+    ]
+    assert [override.path for override in ordinary_overrides] == [
+        "model.name",
+        "pipeline.stage",
+        "pipeline.leaf",
+    ]

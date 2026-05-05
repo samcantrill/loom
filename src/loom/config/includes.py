@@ -54,6 +54,7 @@ class IncludeLocalCustomization:
     source_kind: ConfigSourceKind
     source_order: int
     kind: CustomizationKind
+    value: PlainData
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -63,6 +64,7 @@ class IncludeLocalCustomization:
             "source_kind": self.source_kind,
             "source_order": self.source_order,
             "kind": self.kind,
+            "value": self.value,
         }
 
 
@@ -73,6 +75,9 @@ class IncludeSiteRecord:
     source_path: str
     source_kind: ConfigSourceKind
     source_order: int
+    source_include_site_path: ConfigPath
+    source_content_digest: str
+    source_size_bytes: int
     resolved_path: str
     target_kind: IncludeTargetKind
     explicit_escape: bool
@@ -84,9 +89,36 @@ class IncludeSiteRecord:
             "source_path": self.source_path,
             "source_kind": self.source_kind,
             "source_order": self.source_order,
+            "source_include_site_path": _format_path(self.source_include_site_path),
+            "source_content_digest": self.source_content_digest,
+            "source_size_bytes": self.source_size_bytes,
             "resolved_path": self.resolved_path,
             "target_kind": self.target_kind,
             "explicit_escape": self.explicit_escape,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class IncludeRecompositionContext:
+    include_site_path: ConfigPath
+    source_include_site_path: ConfigPath
+    source_path: str
+    source_kind: ConfigSourceKind
+    source_order: int
+    source_content_digest: str
+    source_size_bytes: int
+    local_customizations: tuple[IncludeLocalCustomization, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "include_site_path": _format_path(self.include_site_path),
+            "source_include_site_path": _format_path(self.source_include_site_path),
+            "source_path": self.source_path,
+            "source_kind": self.source_kind,
+            "source_order": self.source_order,
+            "source_content_digest": self.source_content_digest,
+            "source_size_bytes": self.source_size_bytes,
+            "local_customizations": [record.to_dict() for record in self.local_customizations],
         }
 
 
@@ -119,6 +151,7 @@ class ExpandedConfigWithIncludes:
     config: dict[str, PlainData]
     include_sites: tuple[IncludeSiteRecord, ...]
     local_customizations: tuple[IncludeLocalCustomization, ...]
+    recomposition_contexts: tuple[IncludeRecompositionContext, ...]
 
 
 def _format_path(include_path: ConfigPath) -> list[str | int]:
@@ -131,11 +164,13 @@ def expand_config_includes(
     *,
     replacement_sites: Sequence[ConfigPath] = (),
     mapping_sites: Sequence[ConfigPath] = (),
+    reject_unconsumed_replace_markers: bool = False,
 ) -> ExpandedConfigWithIncludes:
     """Expand file-authored `_include_` directives recursively."""
 
     include_sites: list[IncludeSiteRecord] = []
     local_customizations: list[IncludeLocalCustomization] = []
+    recomposition_contexts: list[IncludeRecompositionContext] = []
     include_stack: list[IncludeStackFrame] = []
     expanded_mapping = _expand_value_with_includes(
         value=cast(dict[str, PlainData], config),
@@ -146,14 +181,16 @@ def expand_config_includes(
         mapping_sites=tuple(mapping_sites),
         include_sites=include_sites,
         local_customizations=local_customizations,
+        recomposition_contexts=recomposition_contexts,
         include_stack=include_stack,
-        reject_unconsumed_replace_markers=False,
+        reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
     )
 
     return ExpandedConfigWithIncludes(
         config=cast(dict[str, PlainData], expanded_mapping),
         include_sites=tuple(include_sites),
         local_customizations=tuple(local_customizations),
+        recomposition_contexts=tuple(recomposition_contexts),
     )
 
 
@@ -167,6 +204,7 @@ def _expand_value_with_includes(
     mapping_sites: tuple[ConfigPath, ...],
     include_sites: list[IncludeSiteRecord],
     local_customizations: list[IncludeLocalCustomization],
+    recomposition_contexts: list[IncludeRecompositionContext],
     include_stack: list[IncludeStackFrame],
     reject_unconsumed_replace_markers: bool,
 ) -> PlainData:
@@ -182,6 +220,7 @@ def _expand_value_with_includes(
                     mapping_sites=mapping_sites,
                     include_sites=include_sites,
                     local_customizations=local_customizations,
+                    recomposition_contexts=recomposition_contexts,
                     include_stack=include_stack,
                     reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
                 )
@@ -202,6 +241,7 @@ def _expand_value_with_includes(
             mapping_sites=mapping_sites,
             include_sites=include_sites,
             local_customizations=local_customizations,
+            recomposition_contexts=recomposition_contexts,
             include_stack=include_stack,
             reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
         )
@@ -232,6 +272,7 @@ def _expand_value_with_includes(
             mapping_sites=mapping_sites,
             include_sites=include_sites,
             local_customizations=local_customizations,
+            recomposition_contexts=recomposition_contexts,
             include_stack=include_stack,
             reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
         )
@@ -248,6 +289,7 @@ def _expand_including_mapping(
     mapping_sites: tuple[ConfigPath, ...],
     include_sites: list[IncludeSiteRecord],
     local_customizations: list[IncludeLocalCustomization],
+    recomposition_contexts: list[IncludeRecompositionContext],
     include_stack: list[IncludeStackFrame],
     reject_unconsumed_replace_markers: bool,
 ) -> dict[str, PlainData]:
@@ -299,6 +341,9 @@ def _expand_including_mapping(
             source_path=resolution.source_path,
             source_kind=include_source.kind,
             source_order=include_source.order,
+            source_include_site_path=source_include_site_path,
+            source_content_digest=include_source.content_digest,
+            source_size_bytes=include_source.size_bytes,
             resolved_path=str(resolution.resolved_path),
             target_kind=resolution.target_kind,
             explicit_escape=resolution.explicit_escape,
@@ -364,6 +409,7 @@ def _expand_including_mapping(
             mapping_sites=(),
             include_sites=include_sites,
             local_customizations=local_customizations,
+            recomposition_contexts=recomposition_contexts,
             include_stack=include_stack,
             reject_unconsumed_replace_markers=True,
         )
@@ -398,6 +444,7 @@ def _expand_including_mapping(
     )
     local_mapping = {key: value for key, value in mapping.items() if key not in {"_include_", "_replace_"}}
     local_expanded = {}
+    local_customizations_for_site: list[IncludeLocalCustomization] = []
     for key, child in local_mapping.items():
         sibling_path = include_site_path[:-1] + (key,)
         source_sibling_path = source_lookup_path + (key,)
@@ -407,17 +454,7 @@ def _expand_including_mapping(
             expect_path=source_sibling_path,
             path_kind="sibling",
         )
-        local_customizations.append(
-            IncludeLocalCustomization(
-                include_site_path=include_site_path,
-                sibling_path=sibling_path,
-                source_path=sibling_source.path,
-                source_kind=sibling_source.kind,
-                source_order=sibling_source.order,
-                kind="override" if key in included_mapping else "add",
-            )
-        )
-        local_expanded[key] = _expand_value_with_includes(
+        local_expanded_value = _expand_value_with_includes(
             value=child,
             source_map=source_map,
             path=sibling_path,
@@ -426,9 +463,36 @@ def _expand_including_mapping(
             mapping_sites=(),
             include_sites=include_sites,
             local_customizations=local_customizations,
+            recomposition_contexts=recomposition_contexts,
             include_stack=include_stack,
             reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
         )
+        custom_kind: CustomizationKind = "override" if key in included_mapping else "add"
+        customization_record = IncludeLocalCustomization(
+            include_site_path=include_site_path,
+            sibling_path=sibling_path,
+            source_path=sibling_source.path,
+            source_kind=sibling_source.kind,
+            source_order=sibling_source.order,
+            kind=custom_kind,
+            value=local_expanded_value,
+        )
+        local_customizations.append(customization_record)
+        local_customizations_for_site.append(customization_record)
+        local_expanded[key] = local_expanded_value
+
+    recomposition_contexts.append(
+        IncludeRecompositionContext(
+            include_site_path=include_site_path,
+            source_include_site_path=source_include_site_path,
+            source_path=include_source.path,
+            source_kind=include_source.kind,
+            source_order=include_source.order,
+            source_content_digest=include_source.content_digest,
+            source_size_bytes=include_source.size_bytes,
+            local_customizations=tuple(local_customizations_for_site),
+        )
+    )
 
     merged = merge_configs(
         included_mapping,
