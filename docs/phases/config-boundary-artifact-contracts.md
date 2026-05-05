@@ -259,9 +259,12 @@ make test-summary
   - PR body draft pass: completed by `loom_pr_preparer` using
     `.codex/prompts/pr-body-draft.md`; artifact written to
     `docs/phases/config-boundary-artifact-contracts-pr-body.md`.
-  - PR body refine pass: pending because this phase is on the expanded path.
-  - PR open status: not opened in this draft pass by instruction; expected
-    refine/open pass should use title
+  - PR body refine pass: completed by `loom_pr_preparer` using
+    `.codex/prompts/pr-body-refine.md`; public body was checked against the
+    final diff, phase plan, acceptance criteria, suite evidence, scope
+    boundaries, assumptions, and risks.
+  - PR open status: pending branch push and GitHub PR creation; expected PR
+    creation should use title
     `Configuration - Phase 1: Boundary and Artifact Contracts`, target
     `develop`, and head `codex/config-boundary-artifact-contracts`.
   - PR facts confirmed: root phase, stack predecessor none, base branch

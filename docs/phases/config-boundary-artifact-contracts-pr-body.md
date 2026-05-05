@@ -49,7 +49,7 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra, and build all passed. |
 | `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall suite status passed. |
-| GitHub checks | Not run | Expanded-path draft pass only; PR has not been opened yet. |
+| GitHub checks | Pending | GitHub checks run after PR creation. |
 
 ### Test Suite Summary
 
