@@ -3,7 +3,10 @@
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from loom.config import RecipeCatalog, compose_config
+from loom.config.errors import OverrideApplyError
 from tests.support.config_samples import DownstreamRecipe, argument_recipe
 
 
@@ -45,17 +48,48 @@ def test_public_compose_expands_recipes_and_nested_interpolation(tmp_path: Path)
         "  _recipe_: downstream\n"
         "  value: ${paths.cli}\n"
         "paths:\n"
+        "  cli: /cli\n"
         "  root: /tmp\n",
         encoding="utf-8",
     )
     overlay.write_text("pipeline:\n  marker: ${paths.root}-overlay\n", encoding="utf-8")
 
-    composed = compose_config(base, overlays=(overlay,), overrides=("+paths.cli=/cli",), recipe_catalog=catalog)
+    composed = compose_config(
+        base,
+        overlays=(overlay,),
+        overrides=("pipeline.value=resolved-by-override",),
+        recipe_catalog=catalog,
+    )
 
     pipeline = cast(dict[str, Any], composed.resolved["pipeline"])
-    assert pipeline["value"] == "/tmp-overlay:/cli"
+    manifest = cast(dict[str, Any], composed.recipe_manifest[0])
+    assert pipeline["value"] == "resolved-by-override"
     assert composed.recipe_manifest[0]["name"] == "downstream"
     assert composed.recipe_manifest[0]["path"] == "pipeline"
+    assert manifest["arguments"]["value"] == "/cli"
+    assert manifest["arguments"]["marker"] == "/tmp-overlay"
+
+
+def test_public_compose_rejects_ordinary_override_to_unexpanded_recipe_argument(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    catalog = RecipeCatalog()
+
+    def pass_through(value: str) -> dict[str, str]:
+        del value
+        return {"result": "kept"}
+
+    catalog.register("pass-through", pass_through)
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  _recipe_: pass-through\n"
+        "  value: recipe-value\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OverrideApplyError):
+        compose_config(base, recipe_catalog=catalog, overrides=("pipeline.value=changed",))
 
 
 def test_public_fingerprints_change_with_recipe_manifest(tmp_path: Path) -> None:

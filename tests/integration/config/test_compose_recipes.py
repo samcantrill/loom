@@ -7,7 +7,7 @@ import pytest
 
 from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
 import loom.config.api as config_api
-from loom.config.errors import UnknownRecipeError
+from loom.config.errors import InvalidRecipeOutputError, UnknownRecipeError
 from tests.support.config_samples import DownstreamRecipe, nested_argument_recipe, composed_output_recipe, argument_recipe
 
 
@@ -45,12 +45,49 @@ def test_recipe_output_final_interpolation(tmp_path: Path) -> None:
     assert nested["value"] == "nested:root-child"
 
 
+def test_compose_preserves_authored_resolver_argument_in_recipe_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.yaml"
+    catalog = RecipeCatalog()
+    catalog.register("argument", argument_recipe)
+    monkeypatch.setenv("PHASE9_RECIPE_VALUE", "runtime-value")
+
+    base.write_text(
+        "name: base\npipeline:\n  _recipe_: argument\n  value: ${oc.env:PHASE9_RECIPE_VALUE}\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, recipe_catalog=catalog)
+
+    manifest = cast(dict[str, Any], composed.recipe_manifest[0])
+    assert manifest["arguments"]["value"] == "${oc.env:PHASE9_RECIPE_VALUE}"
+    assert composed.resolved["pipeline"] == {"value": "runtime-value:0"}
+
+
 def test_unknown_recipe_rejected_in_integration_shape(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
 
     base.write_text("name: base\npipeline:\n  _recipe_: missing\n  value: one\n", encoding="utf-8")
     with pytest.raises(UnknownRecipeError):
         compose_config(base, recipe_catalog=RecipeCatalog())
+
+
+def test_compose_rejects_resolver_expression_in_recipe_output_key(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    catalog = RecipeCatalog()
+
+    def output_with_resolver_key(prefix: str) -> dict[str, str]:
+        return {f"${{{prefix}}}": "value"}
+
+    catalog.register("resolver-key", output_with_resolver_key)
+    base.write_text(
+        "name: base\npipeline:\n  _recipe_: resolver-key\n  prefix: value\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InvalidRecipeOutputError):
+        compose_config(base, recipe_catalog=catalog)
 
 
 def test_compose_config_with_catalog_isolated_from_global_recipe_registration(
