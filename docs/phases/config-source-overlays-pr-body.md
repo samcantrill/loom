@@ -33,7 +33,7 @@ New tests implemented:
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 423 passed/9 skipped; config-extra passed with 160 passed/428 deselected; build succeeded. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall suite evidence passed with 588 passed, 0 failed, 0 errors, 8 skipped, and 428 deselected. |
 | Targeted phase validation | Passed | Source-map unit tests: 11 passed; merge/compose unit tests: 28 passed; config integration tests: 5 passed; targeted Ruff check passed. |
-| GitHub checks | Not run | PR creation is intentionally deferred to the expanded-path `pr-body-refine.md` pass. |
+| GitHub checks | Pending | CI starts after PR creation; PR target/head verification is recorded in the phase notes. |
 
 ### Test Suite Summary
 

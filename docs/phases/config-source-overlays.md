@@ -238,6 +238,8 @@ make test-summary
 
 - Draft plan: completed in this artifact by `loom_phase_planner`; implementation completed by this phase executor.
 - Final phase execution plan: refined by `loom_phase_planner`; execution moved directly to scoped implementation.
+- PR body draft: completed in `docs/phases/config-source-overlays-pr-body.md` by the expanded-path PR draft pass.
+- PR body refine: completed in `docs/phases/config-source-overlays-pr-body.md`; refined body was checked against the final diff, phase plan, acceptance criteria, scope boundaries, and `build/test-summary.md`.
 - Implementation summary:
   - Added `src/loom/config/source_maps.py` with immutable path-based source map types, base-source map construction, path formatter, and source-aware overlay merge helper that mirrors Phase 3 merge and `_replace_` behavior.
   - Updated `src/loom/config/compose.py` to thread loaded overlay/base pairs through `compose_config_with_sources` while preserving current public `ComposedConfig` shape.
@@ -261,14 +263,14 @@ make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/source_maps.py tests/unit/loom/config/test_source_maps.py tests/integration/config/test_source_map_integration.py` ✅
 - PR preparation draft:
   - Draft pass status: completed by `loom_pr_preparer`; public draft written to `docs/phases/config-source-overlays-pr-body.md`.
-  - Refine pass status: pending; expanded path is active and PR creation is intentionally left for `.codex/prompts/pr-body-refine.md`.
+  - Refine pass status: completed by `loom_pr_preparer` using `.codex/prompts/pr-body-refine.md`; public body was checked against the final diff, phase plan, acceptance criteria, scope boundaries, and `build/test-summary.md`.
   - PR title: `Configuration - Phase 4: Source-Authored Overlays`
   - Branch: `codex/config-source-overlays`
   - Target branch: `develop`
   - Stack predecessor: none
   - Merge eligibility: merge-eligible after PR review because the target is `develop`.
   - PR review budget: unused.
-  - GitHub PR creation: not attempted in this draft pass per expanded-path instructions.
+  - GitHub PR creation: pending in the refine/open pass.
 - PR preparation validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` failed: Ruff passed, then Pyright reported one error in `tests/unit/loom/config/test_source_maps.py` because helper parameter `kind: str` is passed to `ConfigSource(kind=...)`, whose type expects `Literal["base", "overlay"]`.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` failed after writing `build/test-summary.md`: package, unit, contract, integration, and e2e suites passed; `config-extra` errored during collection because `tests/integration/config/test_source_maps.py` and `tests/unit/loom/config/test_source_maps.py` share the same basename under pytest import collection.
