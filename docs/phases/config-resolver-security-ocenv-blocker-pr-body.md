@@ -27,7 +27,7 @@ New regression tests cover both the lower-level interpolation helper and public 
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md`. |
 | Targeted resolver tests | Passed | `tests/unit/loom/config/test_interpolation.py` and `tests/integration/config/test_compose_resolvers.py`: 18 passed. |
 | Broader Phase 8 regression group | Passed | Config errors, error contracts, compose overrides, and import-boundary targets: 37 passed. |
-| GitHub checks | Pending | PR not opened yet. |
+| GitHub checks | Passed | PR #35 `checks` completed successfully. |
 
 ## Risks / Follow-Ups
 
