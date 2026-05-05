@@ -270,11 +270,14 @@ make test-summary
   - Target branch: `develop`
   - Stack predecessor: none
   - Merge eligibility: merge-eligible after PR review because target is `develop`
-  - PR opening: pending branch push and GitHub PR creation in the expanded-path refine/open pass.
+  - PR URL: https://github.com/samcantrill/loom/pull/29
+  - PR opening: completed on 2026-05-05 with `gh pr create --base develop --head codex/config-include-resolution --title "Configuration - Phase 5: Include Resolution Primitives" --body-file docs/phases/config-include-resolution-pr-body.md`
+  - PR verification: `gh pr view 29 --json baseRefName,headRefName,state,url` returned `baseRefName` `develop`, `headRefName` `codex/config-include-resolution`, `state` `OPEN`, and URL `https://github.com/samcantrill/loom/pull/29`.
+  - Reviewer notification: PR body mentions `@samcantrill` near the top; no GitHub reviewer was requested.
 - Final PR-preparation validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed: Ruff passed; Pyright 0 errors; default harness 424 passed, 9 skipped; config-extra 191 passed, 429 deselected; build succeeded)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed: wrote `build/test-summary.md`; overall 620 passed, 0 failed, 0 errors, 8 skipped, 429 deselected)
-- PR body workflow status: draft and refine completed; GitHub checks pending PR creation.
+- PR body workflow status: draft and refine completed; GitHub checks pending after PR creation.
 - Budget status confirmation: implementation refinement budget used; PR review budget remains unused.
-- Stack maintenance: none changed; no successor dependency in-flight.
+- Stack maintenance: root PR targets `develop`; stack predecessor is none; merge-eligible after review because the verified target is `develop`.
 - Remaining blockers: none.
