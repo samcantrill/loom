@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; implementation refinement completed; ready for PR preparation
+- Status: implemented; implementation refinement completed; PR body draft completed; expanded-path PR body refine pending
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 13: Provenance, Manifest, Source Records, And Redaction Population`
 - Branch: `codex/config-manifest-provenance`
@@ -26,6 +26,7 @@
 - Phase implementation refinement budget: used.
 - Pre-submit blocker gate budget: unused; before PR submission, the manager must review the phase plan, diff, PR body draft, validation evidence, scope boundary, artifact-safety assertions, and known review risks. Concrete blockers must be resolved by the implementation owner or the phase must be marked blocked before PR submission.
 - PR review budget: unused; do not consume during planning or implementation. A later `loom_phase_reviewer` or manager review may consume it after PR preparation.
+- PR body draft pass: completed in expanded-path draft pass; refine pass pending.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none known after expanded-path refinement.
 
@@ -267,8 +268,13 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - E2E: phase-scoped e2e coverage remains deferred per plan; existing harness e2e passed during `make test-summary`.
   - Opt-in suites: deferred per plan.
 - PR preparation:
-  - Deferred by manager (`phase completion evidence recorded; PR preparation not requested in this executor run`).
+  - Expanded-path draft PR body completed at `docs/phases/config-manifest-provenance-pr-body.md`.
+  - Confirmed worktree `/home/samcantrill/work/loom-worktrees/config-manifest-provenance`, branch `codex/config-manifest-provenance`, root target branch `develop`, and stack predecessor `none` match this phase plan.
+  - Confirmed PR title remains `Configuration - Phase 13: Provenance, Manifest, Source Records, And Redaction Population`.
+  - Reviewed final diff vs `develop`, this phase plan, implementation plan Phase 13 scope, validation evidence in `build/test-summary.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and `.codex/templates/phase-pr-body.md`.
+  - PR was not opened because Phase 13 is on the expanded path; `.codex/prompts/pr-body-refine.md` remains pending before PR submission.
+  - PR preparation preserved workflow budgets: implementation refinement used; pre-submit blocker gate unused until the manager runs the revised pre-submit blocker gate; PR review unused.
 - Stack maintenance:
   - None required (root phase branch).
 - Remaining blockers:
-  - None known after implementation refinement and validation.
+  - None known after implementation refinement and validation; expanded-path PR body refine and manager pre-submit blocker gate remain pending before PR opening.
