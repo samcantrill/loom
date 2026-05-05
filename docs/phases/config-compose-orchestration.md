@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 12: Public Compose Orchestration And Inspection APIs`
 - Branch: `codex/config-compose-orchestration`
@@ -22,15 +22,16 @@
 - Plan quality gate: passed on 2026-05-05 by `loom_plan_reviewer` confirmation review; no blocking findings remain.
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
-- Refine pass: pending for expanded path.
+- Refine pass: completed by `loom_phase_planner`; refine budget used.
 - Phase implementation refinement budget: unused.
-- Pre-submit/PR review budget: unused. The PR-preparation stage must run the revised pre-submit blocker gate against the phase diff, PR body draft, validation evidence, scope boundary, and known review risks before submission; unresolved blockers must be fixed or the phase marked blocked before any PR is opened.
+- Pre-submit blocker gate budget: unused. `loom_pr_preparer` must run one blocker gate before opening or preparing the PR, covering the implementation diff, PR body draft, suite evidence, scope boundary, import boundary, inspection public contract, artifact placeholder semantics, and known review risks. Known blockers must be fixed or the phase marked blocked before any PR is opened.
+- PR review budget: unused. Do not consume the PR review budget during implementation; a later manager-assigned review may consume it after PR preparation.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Sandboxed `gh auth setup-git` failed because `/home/samcantrill/.gitconfig` was read-only; approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop` and `origin/develop` both resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
-- Blockers: none known in the draft plan.
+- Blockers: none known after refinement.
 
 ## Objective
 
-Wire the public v1 composition entrypoints over the already-implemented staging helpers so `compose_config(...)` follows the accepted full order, `inspect_config_composition(...)` exposes stable additive stage records, and `ComposedConfig` gains the v1 artifact fields without breaking existing callers or coupling pipeline code to config artifacts.
+Wire the public v1 composition entrypoints over the already-implemented staging helpers so `compose_config(...)` follows the current accepted full order, `inspect_config_composition(...)` exposes stable additive stage records for that same path, and `ComposedConfig` gains the v1 artifact fields without breaking existing callers or coupling pipeline code to config artifacts.
 
 ## Full-Plan Context
 
@@ -55,9 +56,9 @@ Future phases remain out of scope: Phase 13 finalizes provenance/manifest/source
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/config/api.py` owns the public `ComposedConfig`, `compose_config(...)`, `compose_config_with_catalog(...)`, `instantiate(...)`, and package `__all__`. `src/loom/config/compose.py` currently owns lower-level orchestration, already performs base/overlay load, source-aware merge, include expansion, user include override recomposition, recipe expansion, ordinary overrides, resolver scanning/runtime resolution, validation, redaction, provenance, and current fingerprint construction. `src/loom/config/artifacts.py` already defines `CompositionManifest`, `SourceArtifactRecord`, and `ConfigFingerprintRecord` skeleton contracts. `src/loom/config/includes.py` exposes include-site and recomposition records. `src/loom/config/overrides.py`, `interpolation.py`, `recipes/expansion.py`, `validation.py`, `provenance.py`, and `redaction.py` are the main stage collaborators.
-- Existing tests or harness behavior: `tests/unit/loom/config/test_compose.py` and `tests/integration/config/test_compose_config.py` cover the current public compose path and compatibility fields. `tests/integration/config/test_compose_includes.py`, `test_compose_overrides.py`, `test_compose_recipes.py`, and `test_compose_resolvers.py` cover individual composition interactions. `tests/contracts/test_config_artifact_contract.py` covers artifact model round trips. `tests/package/test_config_api.py` checks public exports/signatures, and `tests/package/test_import_boundaries.py` checks config/pipeline import independence.
-- Import-boundary or dependency constraints: keep implementation inside `loom.config` and tests. Do not import `loom.pipeline`, stores, CLI modules, plugin discovery, project code, or add runtime dependencies. `loom.pipeline` package tests must continue proving pipeline imports do not import `loom.config`.
+- Existing files or modules that constrain this phase: `src/loom/config/api.py` is still v0-shaped and owns `ComposedConfig` with only `resolved`, `redacted`, `provenance`, `recipe_manifest`, and `fingerprint`; it has no `inspect_config_composition(...)` or inspection type yet. `src/loom/config/__init__.py` lazy-exports the public config surface. `src/loom/config/compose.py` currently owns the full orchestration and its order is: load base and overlays, source-aware merge, file include expansion, user include overrides/recomposition, recipe-argument interpolation, recipe expansion, ordinary overrides, resolver scan, runtime interpolation, validation, redaction, provenance, and fingerprint. Existing stage building blocks include include/recomposition records in `includes.py`, resolver expression records in `interpolation.py`, recipe manifest records in `recipes/manifest.py`, provenance/source/fingerprint skeleton contracts in `provenance.py` and `artifacts.py`, and source maps in `source_maps.py`.
+- Existing tests or harness behavior: `tests/unit/loom/config/test_compose.py` and `tests/integration/config/test_compose_config.py` cover the current public compose path and compatibility fields. `tests/integration/config/test_compose_includes.py`, `test_compose_overrides.py`, `test_compose_recipes.py`, and `test_compose_resolvers.py` cover individual composition interactions. `tests/contracts/test_config_artifact_contract.py` covers artifact model round trips. `tests/package/test_config_api.py` checks public exports/signatures, and `tests/package/test_import_boundaries.py` checks config/pipeline import independence. Current gaps are no public API test for `inspect_config_composition(...)`, no inspection-shape contract tests, no additive `ComposedConfig` compatibility tests, no comparison test that inspection final stage records match public `compose_config(...)`, and no import-boundary test for the new inspection surface.
+- Import-boundary or dependency constraints: keep implementation inside `loom.config` and tests. Do not import `loom.pipeline`, stores, CLI modules, plugin discovery, project code, or add runtime dependencies. `src/loom/pipeline/execution/models.py` type-check imports `ComposedConfig`, but no runtime `loom.config` imports were found in pipeline; keep any new inspection type out of pipeline runtime imports and out of pipeline annotations unless the manager explicitly assigns a pipeline boundary phase.
 
 ## In-Scope Work
 
@@ -66,9 +67,10 @@ Future phases remain out of scope: Phase 13 finalizes provenance/manifest/source
 - Define public inspection data classes with stable additive field names and plain-data-compatible stage records. Keep stage identifiers stable; keep internal helper object identities, private class names, and filesystem implementation details out of the public contract except where already represented as artifact-safe/source-aware records.
 - Extend `ComposedConfig` additively with `unresolved`, `manifest`, `source_artifacts`, and `fingerprint_records`, while preserving existing field names and compatibility behavior for current callers.
 - Populate Phase 12 placeholders only where later phases own final data: `manifest` should be a valid `CompositionManifest` carrying the current recipe manifest and empty source/fingerprint records unless already available as artifact-safe skeletons; `source_artifacts` and `fingerprint_records` may be empty tuples until Phases 13-14 populate them.
-- Make `unresolved` the expanded plain config after includes, user composition overrides, recipe expansion, ordinary value overrides, and pre-runtime validation, before runtime resolver execution.
+- Make `unresolved` the expanded plain config after includes, user composition overrides, recipe expansion, ordinary value overrides, and resolver-expression scanning, before runtime resolver execution. Phase 12 must not reorder current runtime validation by inventing new pre-runtime validation semantics.
 - Preserve `resolved` as the in-memory runtime-resolved config for Python callers and keep `redacted`, `provenance`, `recipe_manifest`, and `fingerprint` available under their existing names.
 - Demonstrate optional instantiation compatibility by keeping `_target_` inert during composition and proving the final `resolved` value can be passed explicitly to the public `instantiate(...)` path where applicable. Do not put constructed runtime objects into artifact fields.
+- Keep inspection records tied to the same stage outputs that build `compose_config(...)`; do not run a second divergent composition path for inspection.
 - Keep config artifacts as returned Python data only; do not write run directories, stores, raw snapshots, manifests, or resolved configs.
 
 ## Out-of-Scope Work
@@ -77,6 +79,7 @@ Future phases remain out of scope: Phase 13 finalizes provenance/manifest/source
 - Final provenance enrichment, source artifact metadata/hash population, redaction policy population, artifact-safe fingerprint population, or resume comparison.
 - Raw source snapshot opt-in, raw source byte persistence, source byte serialization, or rebuild-from-missing-source behavior.
 - Runtime object fingerprinting, constructed-object serialization, target registries, import allow-lists, project schema inference from `_target_`, or making instantiation default in `compose_config(...)`.
+- Any implicit construction of `_target_` values during composition or inspection. Runtime object construction is explicit caller use of `instantiate(...)` after composition and is never part of `unresolved`, `manifest`, `source_artifacts`, `fingerprint_records`, stage artifact payloads, or persisted artifacts.
 - Pipeline ownership changes, `loom.pipeline` imports from config, pipeline/store/runner/CLI behavior, run-store writes, or any config artifact persistence.
 - CLI commands, docs alignment for older feature docs, plugin include resolvers, remote URI resolvers beyond existing local/file behavior, global include search paths, Hydra defaults lists, `_copy_`, or broader include/override/recipe semantics.
 
@@ -87,14 +90,21 @@ Future phases remain out of scope: Phase 13 finalizes provenance/manifest/source
 - Current compatibility fields may retain their current population semantics until the assigned later phases replace them with final artifact-safe population. Phase 12 must avoid making those current semantics a new persistence guarantee.
 - The package-level public API can grow additively, but existing positional `compose_config(config_path, overlays=(), overrides=(), recipe_catalog=None)` usage must keep working.
 - Optional instantiation in Phase 12 means explicit caller-controlled use of `instantiate(...)` after runtime resolution, not default composition-time construction and not persistence of runtime objects.
+- Phase 12 may define the inspection public type in `loom.config.api` or a config-local module re-exported by `loom.config.api`; whichever choice is made, pipeline runtime modules must not import it.
 
 ## Scope Contract
 
 `compose_config(...)` remains the simple public composition entrypoint. It should delegate to the same staged path as `inspect_config_composition(...)`, return `ComposedConfig`, and keep existing fields source-compatible while adding `unresolved`, `manifest`, `source_artifacts`, and `fingerprint_records`. Existing callers that access `resolved`, `redacted`, `provenance`, `recipe_manifest`, or `fingerprint` must continue to pass.
 
-`inspect_config_composition(...)` is public under `loom.config` and `loom.config.api`. It accepts the same composition inputs and validation rules as `compose_config(...)`: `config_path`, optional `overlays`, optional `overrides`, and optional `recipe_catalog`. It returns `ConfigCompositionInspection`, a plain-data-friendly object with stable additive stage records for at least: source loading/overlay merge, file include expansion, user composition overrides, recipe expansion, ordinary override application, validation, artifact placeholder assembly, runtime resolver scan/resolution, and final composed result. Stage records should expose stable names, order, artifact-safe snapshots or summaries, and existing public record payloads where useful; they must not expose private callables, mutable internal state, raw source bytes, resolver outputs as artifact facts, or unstable helper class names.
+`inspect_config_composition(...)` is public under `loom.config` and `loom.config.api`. It accepts the same composition inputs and validation rules as `compose_config(...)`: `config_path`, optional `overlays`, optional `overrides`, and optional `recipe_catalog`. It returns `ConfigCompositionInspection`, a plain-data-friendly object with stable additive stage records for at least these stage identifiers in this order: `source_load`, `overlay_merge`, `file_include_expansion`, `user_composition_overrides`, `recipe_argument_interpolation`, `recipe_expansion`, `ordinary_overrides`, `resolver_scan`, `runtime_interpolation`, `validation`, `redaction`, `provenance`, `fingerprint`, `artifact_placeholders`, and `composed_config`. The executor may split source loading into base/overlay subrecords inside `source_load`, but public stage names and their relative order must stay stable and additive.
 
-The full order must be observable and preserved: load base, load overlays in order, merge overlays with source authorship, expand file includes, apply user composition overrides, reject unsupported/late directives, expand recipes, apply ordinary value overrides, validate Loom-owned boundaries, build Phase 12 artifact placeholders, scan resolver expressions without artifact-time execution, resolve runtime interpolation in memory, and leave optional instantiation as an explicit caller action after composition.
+Stage records should expose stable names, order, status, artifact-safe snapshots or summaries, and existing public record payloads where useful. Include records, recomposition records, resolver expression records, recipe manifest records, source-map summaries, provenance/source/fingerprint skeleton records, and placeholder manifest records are acceptable when represented as plain data or public dataclasses with plain-data conversion. Stage records must not expose private callables, mutable internal state, raw source bytes, constructed runtime objects, resolved resolver outputs as artifact facts, or unstable helper class names.
+
+The full order must be observable and preserved: load base, load overlays in order, merge overlays with source authorship, expand file includes, apply user composition overrides, resolve recipe-argument interpolation, expand recipes, apply ordinary value overrides, scan resolver expressions without artifact-time execution, resolve runtime interpolation in memory for `resolved`, validate Loom-owned boundaries, redact, build provenance, compute the existing compatibility fingerprint, assemble Phase 12 placeholder artifact fields, and return `ComposedConfig`. `compose_config(...)` should be built from the inspection result or the exact same stage outputs, and tests must compare the public `compose_config(...)` fields with the final inspection/composed-result records.
+
+`ComposedConfig.unresolved` is the artifact-safe expanded mapping after ordinary overrides and resolver-expression scanning, before runtime interpolation. `ComposedConfig.resolved` remains the in-memory runtime-resolved and validated config. `_target_` mappings remain inert during composition and inspection; optional instantiation means callers may explicitly pass composed values to `instantiate(...)` after composition. Constructed objects must not appear in `ComposedConfig` artifact fields, inspection artifact payloads, manifests, fingerprints, or source records.
+
+Phase 12 placeholder artifact shape is precise but intentionally not final population: `manifest` must be a valid `CompositionManifest` with the current recipe manifest and empty or currently available skeleton `source_artifacts` and `fingerprint_records`; `source_artifacts` and `fingerprint_records` on `ComposedConfig` may be empty tuples; final manifest, source metadata/hash, redaction, and artifact-safe fingerprint population remains assigned to later phases.
 
 ## Design Impact
 
@@ -139,10 +149,10 @@ The full order must be observable and preserved: load base, load overlays in ord
 ## Implementation Steps
 
 1. Introduce the public inspection data shape and export path, then add package/API tests for `inspect_config_composition`, `ConfigCompositionInspection`, and the additive `ComposedConfig` fields while preserving existing import behavior.
-2. Refactor the existing `compose.py` flow into one staged orchestration path that can return inspection data and also build `ComposedConfig`; keep stage helpers private unless the public contract requires otherwise.
+2. Refactor the existing `compose.py` flow into one staged orchestration path that records the current full order and can return inspection data and build `ComposedConfig`; keep stage helpers private unless the public contract requires otherwise.
 3. Add `ComposedConfig.unresolved`, `manifest`, `source_artifacts`, and `fingerprint_records` construction with Phase 12 placeholder semantics and compatibility tests for the existing field names.
-4. Add inspection contract tests for stable stage names/order and artifact-safe plain-data records, including absence of raw source bytes, private helper objects, and constructed runtime objects.
-5. Add or extend integration coverage for the full order through file includes, user composition overrides, recipe expansion, ordinary value overrides, validation, runtime interpolation, and explicit post-compose `instantiate(...)` compatibility.
+4. Add inspection contract tests for stable stage names/order and artifact-safe plain-data records, including absence of raw source bytes, private helper objects, resolved resolver values as artifact facts, and constructed runtime objects.
+5. Add or extend integration coverage for the full order through file includes, user composition overrides, recipe-argument interpolation, recipe expansion, ordinary value overrides, resolver scan/runtime resolution, validation, and explicit post-compose `instantiate(...)` compatibility.
 6. Run import-boundary/package checks, targeted config suites, then final PR-preparation validation after the pre-submit blocker gate has a PR body draft and suite evidence to review.
 
 ## Test Plan
@@ -151,31 +161,31 @@ The full order must be observable and preserved: load base, load overlays in ord
 
 - Status: required.
 - Expected paths: `tests/package/test_config_api.py`, `tests/package/test_import_boundaries.py`.
-- Required assertions or deferral reason: `loom.config` exports `inspect_config_composition`, `ConfigCompositionInspection`, and the updated `ComposedConfig` without eager optional dependency or pipeline imports; existing `compose_config`, `compose_config_with_catalog`, `instantiate`, `Recipe`, and `RecipeCatalog` exports still work; public signatures remain source-compatible; `loom.pipeline` import still does not import `loom.config`.
+- Required assertions or deferral reason: `loom.config` and `loom.config.api` export `inspect_config_composition`, `ConfigCompositionInspection`, and the updated `ComposedConfig` without eager optional dependency or pipeline imports; existing `compose_config`, `compose_config_with_catalog`, `instantiate`, `Recipe`, and `RecipeCatalog` exports still work; public signatures remain source-compatible; `loom.pipeline` import still does not import `loom.config`; the new inspection type is not imported by pipeline runtime modules.
 
 ### Unit Suite
 
 - Status: required.
 - Expected paths: `tests/unit/loom/config/test_compose.py` plus new focused unit tests if inspection/stage helpers live in a separate module.
-- Required assertions or deferral reason: `compose_config(...)` delegates to the staged path; `ComposedConfig` exposes old and new fields with expected placeholder values; `unresolved` is before runtime interpolation while `resolved` is after runtime interpolation; invalid public arguments still raise existing validation errors; inspection stage records have stable names/order and plain-data-compatible payloads; optional instantiation remains explicit and `_target_` mappings stay inert in composed artifacts.
+- Required assertions or deferral reason: `compose_config(...)` delegates to the staged path; `ComposedConfig` exposes old and new fields with expected placeholder values; `unresolved` is before runtime interpolation while `resolved` is after runtime interpolation and validation; invalid public arguments still raise existing validation errors; inspection stage records have stable names/order and plain-data-compatible payloads; the inspection final/composed-result record matches the public `compose_config(...)` output for shared fields; optional instantiation remains explicit and `_target_` mappings stay inert in composed artifacts.
 
 ### Contract Suite
 
 - Status: required.
 - Expected paths: `tests/contracts/test_config_artifact_contract.py` and either a new `tests/contracts/test_config_composition_inspection_contract.py` or equivalent focused contract coverage.
-- Required assertions or deferral reason: `CompositionManifest` placeholder round-trips with current recipe manifest and empty source/fingerprint records; `ConfigCompositionInspection` and stage records expose additive, stable, plain-data-compatible fields; contract tests reject unstable payloads such as private helper objects, raw bytes, or non-plain metadata if serialization helpers are provided.
+- Required assertions or deferral reason: `CompositionManifest` placeholder round-trips with current recipe manifest and empty source/fingerprint records; `ConfigCompositionInspection` and stage records expose additive, stable, plain-data-compatible fields and the required stage identifiers/order; contract tests reject unstable payloads such as private helper objects, raw bytes, constructed runtime objects, resolved resolver values as artifact facts, or non-plain metadata if serialization helpers are provided.
 
 ### Integration Suite
 
 - Status: required.
 - Expected paths: `tests/integration/config/test_compose_config.py`, `tests/integration/config/test_compose_includes.py`, `tests/integration/config/test_compose_overrides.py`, `tests/integration/config/test_compose_recipes.py`, `tests/integration/config/test_compose_resolvers.py`, and `tests/integration/pipeline/test_pipeline_config.py` only as an existing boundary consumer if no pipeline production code changes are made.
-- Required assertions or deferral reason: a full public flow covers base plus overlays, recursive includes, user include replacement, recipe expansion, ordinary overrides targeting recipe/include-produced values, generic validation pass-through, resolver scan/runtime resolution, artifact placeholder fields, and explicit `instantiate(...)` after composition where applicable. Existing pipeline-config integration should continue proving pipeline-facing code consumes plain composed data without importing config into pipeline modules.
+- Required assertions or deferral reason: a full public flow covers base plus overlays, recursive includes, user include replacement, recipe-argument interpolation, recipe expansion, ordinary overrides targeting recipe/include-produced values, generic validation pass-through after runtime resolution, resolver scan/runtime resolution, artifact placeholder fields, inspection-vs-compose comparison, and explicit `instantiate(...)` after composition where applicable. Existing pipeline-config integration should continue proving pipeline-facing code consumes plain composed data without importing config into pipeline modules.
 
 ### E2E Suite
 
 - Status: required but limited.
 - Expected paths: a small domain-neutral public composition e2e test under `tests/e2e/` only if it can avoid CLI, runner, store, and pipeline execution behavior.
-- Required assertions or deferral reason: use public `compose_config(...)` and `inspect_config_composition(...)` on a synthetic config tree and assert the returned unresolved/artifact-safe shape contains no `_include_`, `_replace_`, or `_copy_` markers, new fields are present, inspection stages are stable, and no persistence or CLI behavior is invoked. If the existing e2e harness is pipeline-runner-specific, record that broader e2e is deferred to Phase 16 and cover this phase through integration tests.
+- Required assertions or deferral reason: use public `compose_config(...)` and `inspect_config_composition(...)` on a synthetic config tree and assert the returned unresolved/artifact-safe shape contains no `_include_`, `_replace_`, or `_copy_` markers, new fields are present, inspection stages are stable, inspection final records match compose output, `_target_` remains inert until explicit `instantiate(...)`, and no persistence or CLI behavior is invoked. If the existing e2e harness is pipeline-runner-specific, record that broader e2e is deferred to Phase 16 and cover this phase through integration tests.
 
 ### Opt-In Suites
 
@@ -186,10 +196,12 @@ The full order must be observable and preserved: load base, load overlays in ord
 ## Risks
 
 - Stage refactoring can subtly reorder includes, user composition overrides, recipes, ordinary overrides, validation, or runtime resolution. Full-order integration tests must lock the accepted order.
+- Moving validation before runtime interpolation would change current behavior and risks rejecting values that are only valid after runtime resolution. Preserve the current resolver-scan, runtime-interpolation, validation order unless a failing test proves an already-existing helper requires otherwise.
 - Public inspection can accidentally expose private helper objects or unstable class names. Contract tests should assert stable names and plain-data-compatible payloads.
 - Adding `ComposedConfig` fields can break dataclass construction or tests that assume the old positional shape. Prefer keyword construction and compatibility tests.
 - Placeholder manifest/source/fingerprint fields can be mistaken for final artifact population. Names and tests should make empty/deferred population explicit.
 - Resolver outputs can leak into artifact fields if `unresolved`, `manifest`, stage records, or placeholder fingerprints are built after runtime resolution. Tests should distinguish `unresolved` from `resolved`.
+- Importing the new inspection type from pipeline runtime code would weaken the config/pipeline boundary. Keep runtime imports one-way and prove the boundary in package tests.
 - The pre-submit blocker gate may find missing suite evidence, public API ambiguity, or scope drift. Known blockers must be resolved before PR submission or the phase must be marked blocked; do not submit a PR expecting GitHub review or CI to rediscover known local blockers.
 
 ## Validation Commands
@@ -214,25 +226,25 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: start with public API and data-shape tests; add inspection/stage data classes; refactor orchestration into a single staged path; add `ComposedConfig` field construction; then fill integration/contract coverage around full order and artifact-safety.
-- Tests to run with each slice: package/API tests after export changes; unit/contract tests after inspection and `ComposedConfig` shape changes; integration config tests after orchestration changes; import-boundary tests after any package import edits; limited e2e only after integration passes.
-- Decisions the executor must not revisit: v1 remains Python-API-only; `loom.config` writes nothing; `loom.pipeline` does not depend on config or manifests; `_copy_` stays unsupported; no raw source bytes by default; no final manifest/fingerprint/source population; no default instantiation; no plugin/remote/global include resolvers; no CLI/store behavior.
+- Safe implementation slices: start with public API and data-shape tests; add inspection/stage data classes; refactor orchestration into a single staged path that preserves the current full order; add `ComposedConfig` field construction; then fill integration/contract coverage around full order, inspection-vs-compose comparison, and artifact-safety.
+- Tests to run with each slice: package/API/import-boundary tests after export changes; unit/contract tests after inspection and `ComposedConfig` shape changes; integration config tests after orchestration changes; import-boundary tests after any package import edits; limited e2e only after integration passes.
+- Decisions the executor must not revisit: v1 remains Python-API-only; `loom.config` writes nothing; `loom.pipeline` does not depend on config or manifests; `_copy_` stays unsupported; no raw source bytes by default; no final manifest/fingerprint/source population; resolver scan stays before runtime interpolation and current validation stays after runtime interpolation; `_target_` stays inert during composition/inspection; no default instantiation; no plugin/remote/global include resolvers; no CLI/store behavior.
 - Conditions that require stopping for the manager: satisfying the phase appears to require changing pipeline ownership, importing `loom.pipeline` from config, adding persistence/CLI/storage behavior, populating final fingerprints/manifests/source hashes, persisting raw source bytes, serializing runtime objects, broadening resolver/include/target semantics, or reopening the already-used plan quality gate.
-- Expanded-path refinement notes: pending. The refine pass should verify the public inspection shape and optional-instantiation interpretation are precise enough for implementation, then either finalize this artifact or record a blocker.
+- Expanded-path refinement notes: completed. The public inspection shape, full-order contract, placeholder artifact limits, optional-instantiation interpretation, suite decisions, and blocker-gate budgets are precise enough for implementation; no blocker is recorded.
 
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused.
-- Pre-submit blocker gate: unused; required before PR submission under the revised workflow.
-- PR review: unused; may be consumed by the pre-submit blocker gate if it reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks before submission.
+- Pre-submit blocker gate: unused; required before PR submission under the revised workflow and separate from the later PR review budget.
+- PR review: unused; may be consumed only by a later manager-assigned review after PR preparation.
 
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
-- Final phase execution plan:
+- Final phase execution plan: completed by `loom_phase_planner`; refined scope contract covers public compose orchestration, public inspection, additive `ComposedConfig` fields, placeholder artifact limits, explicit-only instantiation, suite obligations, and budget status.
 - Implementation summary:
 - Implementation validation:
-- Refinement summary:
+- Refinement summary: expanded-path refinement complete; no implementation, PR preparation, PR opening, approval, merge, or workflow-file changes performed.
 - PR preparation:
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none known.
