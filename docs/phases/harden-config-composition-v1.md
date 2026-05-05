@@ -222,7 +222,10 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Pre-submit blocker gate: used for the exact Secret Redaction wording blocker
 - Blocker-resolution: used by user-authorized scoped pre-submit docs blocker pass; no additional automated blocker-resolution budget remains
 - PR body draft: completed by `loom_pr_preparer`; durable draft created at `docs/phases/harden-config-composition-v1-pr-body.md`
-- PR body refine: pending for the expanded-path PR opening pass
+- PR body refine: completed by `loom_pr_preparer` in the expanded-path PR
+  opening pass; public body checked against the phase plan, final diff,
+  blocker-resolution commit, focused confirmation gate, suite evidence, scope
+  boundaries, assumptions, and risks
 - PR review: unused
 
 ## Completion Notes
@@ -299,4 +302,29 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   `resolved:`, and `redacted:` passed.
 - Stack maintenance: none needed in this draft pass; root phase has no stack
   predecessor
+- PR-body refine/open confirmation: dedicated worktree
+  `/home/samcantrill/work/loom-worktrees/harden-config-composition-v1`, branch
+  `codex/harden-config-composition-v1`, local target `develop`, and root stack
+  predecessor `none` match the phase plan. Local merge base with `develop` is
+  `89749de201ac5ef045fac16818aacdcdc90ab6a7`, matching the recorded phase base.
+  PR title remains `Configuration - Phase 16: Hardening, Documentation, And
+  End-To-End Coverage`.
+- PR-body refine scope confirmation: public body now reflects the final
+  implemented scope only: docs alignment, representative public-Python e2e
+  coverage, the focused nested recipe-manifest serialization bug fix, the
+  user-authorized docs-only blocker fix, and the latest suite evidence. Workflow
+  internals and budget details remain in phase notes, not the public PR body.
+- PR-body refine blocker confirmation: full pre-submit blocker gate found the
+  `Persist both:` wording issue in `docs/features/config.md`; the
+  user-authorized blocker-resolution pass fixed it in commit `41e9842`.
+  Focused confirmation gate on current branch found no remaining blockers.
+- PR-body refine validation confirmation: latest full validation evidence
+  remains the same-branch run before the final docs-only blocker commit:
+  targeted e2e/contract regression passed with 10 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; and
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with package 36
+  passed/1 skipped, unit 354 passed/1 skipped, contract 31 passed/2 skipped,
+  integration 9 passed/5 skipped, e2e 6 passed, and config-extra 301
+  passed/436 deselected. The final docs-only blocker commit was confirmed with
+  `git diff --check` and focused text scans, not a full validation rerun.
 - Remaining blockers: none

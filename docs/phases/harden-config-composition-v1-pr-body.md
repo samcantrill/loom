@@ -54,7 +54,8 @@ New tests implemented:
 | Targeted e2e/contract regression | Passed | `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/contracts/test_config_artifact_contract.py tests/e2e/test_config_composition_public_api.py`: 10 passed |
 | `make validate-pr` | Passed | Ruff passed, Pyright passed, default suite 430 passed/11 skipped, config-extra 301 passed/436 deselected, build succeeded |
 | `make test-summary` | Passed | Wrote `build/test-summary.md` with all suites passing |
-| GitHub checks | Not run in this pass | Expanded-path draft only; PR opening and remote checks are deferred to the PR-body refine/opening pass |
+| Focused confirmation after final docs-only blocker fix | Passed | `git diff --check`; focused text scans confirmed the `Persist both:` wording was removed and the `Expose both:`, `resolved:`, and `redacted:` wording remains |
+| GitHub checks | Pending | CI will run after PR creation |
 
 ### Test Suite Summary
 
@@ -69,7 +70,8 @@ New tests implemented:
 
 ## Risks / Follow-Ups
 
-- GitHub PR creation and CI evidence are intentionally not included yet because
-  this expanded-path pass only drafts the durable PR body.
 - Future CLI, plugin/remote resolver, sweep, `_copy_`, and run-store persistence
   work remains deferred to later roadmap phases.
+- The final blocker-resolution commit is docs-only and was confirmed with
+  focused text checks rather than a full validation rerun; the full validation
+  evidence above is from the same branch immediately before that wording fix.
