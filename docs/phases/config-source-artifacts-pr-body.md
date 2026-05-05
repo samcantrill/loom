@@ -37,7 +37,7 @@ New tests implemented:
 | Targeted Phase 15 suite | Passed | 78 tests passed across package/import-boundary, unit artifact/compose/fingerprint, contract artifact/inspection, and integration provenance/fingerprint/source-snapshot coverage. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff, Pyright, default pytest `429 passed, 10 skipped`, config-extra `301 passed, 434 deselected`, and build succeeded. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md` with all suites passing. |
-| GitHub checks | Pending | PR opening and GitHub check collection are intentionally deferred to the expanded-path PR-body refine pass. |
+| GitHub checks | Pending | GitHub checks will run after PR creation; local validation gates passed before submission. |
 
 ### Test Suite Summary
 
