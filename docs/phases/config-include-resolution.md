@@ -270,6 +270,17 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_includes.py` (32 passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (0 errors, 0 warnings)
+- Post-merge blocker follow-up: PR #29 merged before the blocker-fix commit
+  landed on the phase branch, so the manager cherry-picked the exact blocker
+  fix onto `codex/config-include-resolution-blocker` for a narrow follow-up PR
+  targeting `develop`.
+- Follow-up PR validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed: Ruff passed;
+    Pyright 0 errors; default harness 424 passed, 9 skipped; config-extra 192
+    passed, 429 deselected; build succeeded)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed: wrote
+    `build/test-summary.md`; overall 621 passed, 0 failed, 0 errors, 8
+    skipped, 429 deselected)
 - PR body draft: completed on 2026-05-05 in `docs/phases/config-include-resolution-pr-body.md`.
 - PR body refine: completed on 2026-05-05; verified the body against the phase plan, actual diff, accepted v1 decisions, suite evidence in `build/test-summary.md`, and scope boundaries. No product code or tests were changed during PR preparation.
 - Final PR-preparation validation evidence was carried forward from the draft pass:
