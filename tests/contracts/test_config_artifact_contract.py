@@ -48,6 +48,28 @@ def test_source_artifact_contract_plain_data_shape() -> None:
     assert record == SourceArtifactRecord.from_dict(payload)
 
 
+def test_source_artifact_contract_includes_future_source_roles() -> None:
+    include_record = SourceArtifactRecord(
+        schema_version=1,
+        kind="include",
+        path="/tmp/model/resnet.yaml",
+        order=1,
+        content_digest="sha256:5678",
+        size_bytes=20,
+    )
+    recipe_record = SourceArtifactRecord(
+        schema_version=1,
+        kind="recipe",
+        path="/tmp/recipes.py",
+        order=2,
+        content_digest="sha256:9012",
+        size_bytes=30,
+    )
+
+    assert SourceArtifactRecord.from_dict(include_record.to_dict()) == include_record
+    assert SourceArtifactRecord.from_dict(recipe_record.to_dict()) == recipe_record
+
+
 def test_config_fingerprint_record_contract_round_trip() -> None:
     record = _example_fingerprint()
     payload = record.to_dict()

@@ -219,7 +219,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -240,6 +240,21 @@ make test-summary
   - `make validate-pr` ✅ passed (ruff, pyright, targeted harness targets, build)
   - `make test-summary` ✅ `build/test-summary.md` written with all suite tiers passing
 - Refinement summary: expanded-path refinement completed; sharpened module placement, export boundaries, artifact skeleton naming, package/unit/contract suite obligations, and implementation stop conditions.
+- Implementation refinement validation review:
+  - Scope review: confirmed new artifact skeletons stay in `src/loom/config/artifacts.py`; no root exports, package-level `loom.config` exports, `ComposedConfig` changes, or compose/include/override/resolver/recipe/run-store/CLI behavior changes were introduced.
+  - Contract risk reviewed: `SourceArtifactRecord.kind` limited to only `base` and `overlay` was too narrow for the Phase 13 requirement to populate source metadata/hash records for includes and recipe source references. The refinement widened the accepted source roles to `base`, `overlay`, `include`, and `recipe`, while preserving rejection of unknown roles.
+  - Import-boundary review: local import probe confirmed `import loom.config.artifacts` does not load `yaml`, `omegaconf`, `pydantic`, `loom.pipeline`, `loom.cli`, execution, or store modules.
+  - Suite coverage review: package, unit, and contract obligations from the finalized phase plan remain satisfied; integration, e2e, and opt-in suites remain deferred for this phase because no composed behavior is wired yet.
+- Implementation refinement fixes:
+  - Widened `SourceArtifactRecord.kind` to include future Phase 13 source roles for include files and recipe source references.
+  - Added unit and contract round-trip coverage for `include` and `recipe` source artifact records, plus an unknown-kind rejection test.
+- Implementation refinement validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_provenance.py` ✅ 13 passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_config_artifact_contract.py` ✅ 6 passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py` ✅ 14 passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run python - <<'PY' ...` import probe ✅ forbidden modules absent after `import loom.config.artifacts`
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` ✅ passed (Ruff, Pyright 0 errors, default harness 419 passed / 9 skipped, config-extra 116 passed / 424 deselected, build)
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` ✅ wrote `build/test-summary.md` with package 36 passed / 1 skipped, unit 354 passed / 1 skipped, contract 20 passed / 1 skipped, integration 9 passed / 5 skipped, e2e 5 passed, config-extra 116 passed / 424 deselected
 - PR preparation: pending.
 - Stack maintenance: none yet.
 - Remaining blockers: none recorded.

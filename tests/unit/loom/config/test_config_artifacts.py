@@ -40,6 +40,32 @@ def test_source_artifact_defaults_round_trip() -> None:
     assert SourceArtifactRecord.from_dict(payload) == record
 
 
+def test_source_artifact_future_source_roles_round_trip() -> None:
+    for kind in ("include", "recipe"):
+        record = SourceArtifactRecord(
+            schema_version=SCHEMA_VERSION,
+            kind=kind,
+            path=f"/tmp/{kind}.yaml",
+            order=2,
+            content_digest="sha256:feed",
+            size_bytes=8,
+        )
+        assert SourceArtifactRecord.from_dict(record.to_dict()) == record
+
+
+def test_source_artifact_rejects_unknown_kind() -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "runtime",
+        "path": "/tmp/runtime.yaml",
+        "order": 0,
+        "content_digest": "sha256:beef",
+        "size_bytes": 4,
+    }
+    with pytest.raises(ConfigProvenanceError, match="kind"):
+        SourceArtifactRecord.from_dict(payload)
+
+
 def test_config_fingerprint_record_round_trip() -> None:
     record = ConfigFingerprintRecord(
         schema_version=SCHEMA_VERSION,

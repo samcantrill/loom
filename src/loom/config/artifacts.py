@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeAlias, cast
 
 from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data
 
 from .errors import ConfigProvenanceError
 
 SCHEMA_VERSION = 1
+_SourceArtifactKind: TypeAlias = Literal["base", "overlay", "include", "recipe"]
+_SOURCE_ARTIFACT_KINDS = frozenset({"base", "overlay", "include", "recipe"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +25,7 @@ class SourceArtifactRecord:
     """
 
     schema_version: int
-    kind: Literal["base", "overlay"]
+    kind: _SourceArtifactKind
     path: str
     order: int
     content_digest: str
@@ -33,7 +35,7 @@ class SourceArtifactRecord:
     def __post_init__(self) -> None:
         if not isinstance(self.schema_version, int) or isinstance(self.schema_version, bool) or self.schema_version < 1:
             raise ConfigProvenanceError("schema_version must be a positive integer")
-        if self.kind not in {"base", "overlay"}:
+        if self.kind not in _SOURCE_ARTIFACT_KINDS:
             raise ConfigProvenanceError(f"Invalid source artifact kind: {self.kind!r}")
         if not isinstance(self.path, str) or not self.path:
             raise ConfigProvenanceError(f"Invalid source artifact path: {self.path!r}")
@@ -96,7 +98,7 @@ class SourceArtifactRecord:
             raise ConfigProvenanceError(f"Invalid order: {order!r}")
         if not isinstance(path, str) or not path:
             raise ConfigProvenanceError(f"Invalid path: {path!r}")
-        if kind not in {"base", "overlay"}:
+        if kind not in _SOURCE_ARTIFACT_KINDS:
             raise ConfigProvenanceError(f"Invalid source artifact kind: {kind!r}")
         if not isinstance(content_digest, str) or not content_digest:
             raise ConfigProvenanceError(f"Invalid content_digest: {content_digest!r}")
@@ -107,7 +109,7 @@ class SourceArtifactRecord:
             raise ConfigProvenanceError("SourceArtifactRecord metadata must be a mapping")
         return cls(
             schema_version=schema_version,
-            kind=cast(Literal["base", "overlay"], kind),
+            kind=cast(_SourceArtifactKind, kind),
             path=path,
             order=order,
             content_digest=content_digest,
