@@ -1637,7 +1637,7 @@ Completion notes:
 
 ### Phase 10 - Loom Validation Boundaries
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-validation-boundaries`
 PR: https://github.com/samcantrill/loom/pull/37
 
@@ -1682,11 +1682,11 @@ Test expectations:
   without `name`/`pipeline`, schema-feature rejection, `_target_` inference
   non-behavior, and structured validation errors.
 
-PR-open notes:
+Completion notes:
 
 - Phase execution plan: `docs/phases/config-validation-boundaries.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is
-  merge-eligible after GitHub CI and allowed review/merge checks pass.
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
+  `develop`.
 - Revised workflow gate: the pre-submit blocker gate ran before PR submission
   and found no blocking correctness, scope, import-boundary, test-evidence, or
   PR-body accuracy issues. It consumed the Phase 10 PR-review budget for the
@@ -1706,9 +1706,14 @@ PR-open notes:
   `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall
   685 passed, 0 failed, 0 errors, 8 skipped, and 432 deselected.
-- PR notes: opened and verified on 2026-05-05 as PR #37 with base `develop`,
-  head `codex/config-validation-boundaries`, and state `OPEN`. GitHub CI check
-  `checks` was in progress when this metadata was recorded.
+- Merge result: PR #37 merged into `develop` at 2026-05-05T13:18:49Z with
+  merge commit `66ef93b71e831d658942479b6e6e12aabe624423`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-validation-boundaries` when PR #37 merged. The GitHub merge
+  command merged the PR but could not delete the local branch while its
+  worktree was attached; branch and worktree cleanup are safe after this
+  metadata update.
 
 ### Phase 11 - Strict Instantiation And Runtime Injection
 

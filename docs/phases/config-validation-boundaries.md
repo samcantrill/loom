@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: merged
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 10: Loom Validation Boundaries`
 - Branch: `codex/config-validation-boundaries`
@@ -279,6 +279,9 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     returned `baseRefName=develop`,
     `headRefName=codex/config-validation-boundaries`, `state=OPEN`, and
     `url=https://github.com/samcantrill/loom/pull/37`.
+  - PR CI: GitHub check `checks` passed on 2026-05-05T13:17:05Z.
+  - PR merge: PR #37 merged into `develop` at 2026-05-05T13:18:49Z with merge
+    commit `66ef93b71e831d658942479b6e6e12aabe624423`.
 - PR validation summary:
   - Targeted Phase 10 refinement group: `47 passed`.
   - Remaining targeted group: `38 passed`.
@@ -324,5 +327,10 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     body=@docs/phases/config-validation-boundaries-pr-body.md`.
 - Stack maintenance:
   - Root PR; no stack predecessor and no retarget/rebase action required before
-    submission. Branch cleanup is safe only after the Phase 10 PR is merged and
-    no successor branch depends on `codex/config-validation-boundaries`.
+    submission.
+  - No successor phase branch depended on `codex/config-validation-boundaries`
+    when PR #37 merged.
+  - `gh pr merge 37 --squash --delete-branch` merged the PR, but local branch
+    deletion failed because the branch was still attached to
+    `/home/samcantrill/work/loom-worktrees/config-validation-boundaries`.
+    Worktree and branch cleanup are safe after this metadata update.
