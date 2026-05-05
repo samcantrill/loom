@@ -30,8 +30,8 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Failed | Ruff passed; Pyright failed on `tests/unit/loom/config/test_source_maps.py` because helper parameter `kind: str` is passed to `ConfigSource.kind: Literal["base", "overlay"]`. |
-| `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Failed | Wrote `build/test-summary.md`; package, unit, contract, integration, and e2e suites passed, but `config-extra` errored during collection due duplicate `test_source_maps.py` module basenames. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 423 passed/9 skipped; config-extra passed with 160 passed/428 deselected; build succeeded. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall suite evidence passed with 588 passed, 0 failed, 0 errors, 8 skipped, and 428 deselected. |
 | Targeted phase validation | Passed | Source-map unit tests: 11 passed; merge/compose unit tests: 28 passed; config integration tests: 5 passed; targeted Ruff check passed. |
 | GitHub checks | Not run | PR creation is intentionally deferred to the expanded-path `pr-body-refine.md` pass. |
 
@@ -39,16 +39,15 @@ New tests implemented:
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.98s |
-| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 4.59s |
-| contract | passed | 24 | 0 | 0 | 1 | 0 | 25 | 1.57s |
-| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 2.15s |
-| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.37s |
-| config-extra | failed | 0 | 0 | 1 | 0 | 428 | 1 | 3.35s |
-| Overall | failed | 428 | 0 | 1 | 8 | 428 | 437 | 19.01s |
+| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.73s |
+| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 4.01s |
+| contract | passed | 24 | 0 | 0 | 1 | 0 | 25 | 1.53s |
+| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 1.86s |
+| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.43s |
+| config-extra | passed | 160 | 0 | 0 | 0 | 428 | 160 | 7.55s |
+| Overall | passed | 588 | 0 | 0 | 8 | 428 | 596 | 22.10s |
 
 ## Risks / Follow-Ups
 
-- Final PR validation is blocked by the Pyright test-helper type error and the `config-extra` duplicate test-module collection error noted above.
 - Source maps remain internal by design and may be reshaped additively when include expansion, public inspection, and artifact population phases define their final record needs.
 - Mapping container nodes can be overlay-authored while surviving descendants remain base-authored after recursive merges; reviewers should inspect both node and descendant source-map behavior.

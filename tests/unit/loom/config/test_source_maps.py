@@ -1,4 +1,4 @@
-from typing import Mapping, cast
+from typing import Literal, Mapping, cast
 
 import pytest
 
@@ -18,7 +18,7 @@ def plain_config(value: Mapping[str, PlainData]) -> dict[str, PlainData]:
     return cast(dict[str, PlainData], value)
 
 
-def source(*, kind: str, path: str, order: int = 0) -> ConfigSource:
+def source(*, kind: Literal["base", "overlay"], path: str, order: int = 0) -> ConfigSource:
     return ConfigSource(
         kind=kind,
         path=path,
