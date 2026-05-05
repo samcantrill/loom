@@ -46,6 +46,29 @@ def test_composition_manifest_contract_round_trip() -> None:
     assert CompositionManifest.from_dict(manifest.to_dict()) == manifest
 
 
+def test_composition_manifest_to_dict_thaws_nested_recipe_manifest_plain_data() -> None:
+    manifest = CompositionManifest(
+        schema_version=1,
+        recipe_manifest=(
+            {
+                "path": "pipeline.processor",
+                "arguments": {"name": "normalize", "input": "dataset"},
+            },
+        ),
+    )
+
+    payload = manifest.to_dict()
+
+    recipe_manifest = cast(list[dict[str, object]], payload["recipe_manifest"])
+    assert recipe_manifest == [
+        {
+            "path": "pipeline.processor",
+            "arguments": {"name": "normalize", "input": "dataset"},
+        }
+    ]
+    assert CompositionManifest.from_dict(payload) == manifest
+
+
 def test_source_artifact_contract_plain_data_shape() -> None:
     record = _example_source()
     payload = record.to_dict()

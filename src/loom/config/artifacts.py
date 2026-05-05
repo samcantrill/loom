@@ -601,7 +601,7 @@ def _to_recipe_manifest_payload(value: Sequence[object]) -> tuple[dict[str, Plai
 
 
 def to_plain_mapping(value: Mapping[str, Any]) -> dict[str, PlainData]:
-    return cast(dict[str, PlainData], ensure_plain_data(dict(value), path="mapping"))
+    return cast(dict[str, PlainData], thaw_plain_data(value, path="mapping"))
 
 
 __all__ = [
