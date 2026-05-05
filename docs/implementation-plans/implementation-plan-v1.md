@@ -989,9 +989,9 @@ implementation, record it in that phase execution plan and PR body.
 
 ### Phase 1 - Boundary And Artifact Contracts
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-boundary-artifact-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/23
 
 Goal:
 
@@ -1023,6 +1023,26 @@ Test expectations:
 
 - Package/import tests.
 - Contract serialization tests for empty or minimal artifact records.
+
+PR-open metadata:
+
+- Worktree: `/home/samcantrill/work/loom-worktrees/config-boundary-artifact-contracts`
+- Stack predecessor: none
+- Base branch: `develop`
+- PR target branch: `develop`
+- Merge eligibility: merge-eligible after phase review approval because this
+  root phase PR targets `develop`
+- Implementation summary: added `loom.config.artifacts` skeleton contracts for
+  `CompositionManifest`, `SourceArtifactRecord`, and
+  `ConfigFingerprintRecord`; added unit/contract serialization coverage and
+  import-boundary checks proving `loom.pipeline` remains independent from
+  `loom.config`.
+- Validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall suite
+  status `passed`; GitHub CI check `checks` passed on PR #23.
+- Follow-up notes: later phases populate these skeletons; no compose, include,
+  resolver, run-store, CLI, root-export, or `ComposedConfig` behavior was added
+  in Phase 1.
 
 ### Phase 2 - Strict Loading And Structured Errors
 
