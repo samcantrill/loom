@@ -1871,9 +1871,9 @@ Completion notes:
 
 ### Phase 13 - Provenance, Manifest, Source Records, And Redaction Population
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-manifest-provenance`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/40
 
 Goal:
 
@@ -1912,6 +1912,41 @@ Test expectations:
 - Redaction tests.
 - No-resolved-runtime-values artifact tests.
 - Docs snippets for secret handling.
+
+Completion notes:
+
+- Phase execution plan: `docs/phases/config-manifest-provenance.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is open against
+  `develop`.
+- Revised workflow gate: the pre-submit blocker gate ran before PR submission
+  and found two blockers. First, user include replacement/addition source
+  records could retain stale file-authored include references or omit added
+  includes. Second, artifact-facing provenance/manifest override metadata could
+  expose raw plaintext secret values, including nested JSON secret-like values.
+  The user-authorized scoped blocker-resolution pass fixed both blockers, and a
+  bounded confirmation gate passed with no remaining blocking findings.
+- Implementation summary: populates artifact-safe source metadata/hash records
+  for base, overlay, include, and safe recipe sources; builds composition
+  manifest references and provenance metadata from the effective composition
+  facts; emits default unresolved/redacted artifact views without raw source
+  bytes or resolved resolver outputs; keeps user include source records aligned
+  after include replacements/additions; and redacts raw plaintext secret
+  override strings and nested secret-like override values while continuing to
+  accept plaintext overrides.
+- Scope notes: no Phase 14 resume comparison/fingerprint comparison algorithm,
+  Phase 15 raw source snapshot opt-in/dedupe behavior, persistence, run-store or
+  CLI behavior, pipeline imports, `_copy_`, plugin/remote/global include
+  resolvers, resolved config persistence, or raw source-byte default artifacts
+  were added.
+- Validation: targeted Phase 13 package/import-boundary, unit config
+  artifact/provenance/redaction/compose, contract artifact/inspection, and
+  config integration provenance suites passed with 100 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 711
+  passed, 0 failed, 0 errors, 9 skipped, and 432 deselected.
+- PR notes: opened and verified on PR #40 with base `develop`, head
+  `codex/config-manifest-provenance`, and state `OPEN`. GitHub CI was not yet
+  complete at this metadata update.
 
 ### Phase 14 - Artifact-Safe Fingerprints And Resume Comparison
 
