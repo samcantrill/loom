@@ -1267,9 +1267,9 @@ Phase metadata:
 
 ### Phase 5 - Include Resolution Primitives
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-include-resolution`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/29
 
 Goal:
 
@@ -1303,6 +1303,23 @@ Test expectations:
 
 - Unit tests for every target form and failure case, including unsafe
   normalization and missing/ambiguous targets.
+
+PR-open notes:
+
+- Phase execution plan: `docs/phases/config-include-resolution.md`.
+- PR target: `develop`; stack predecessor: none.
+- PR verification: `gh pr view 29 --json baseRefName,headRefName,state,url`
+  returned `baseRefName` `develop`, `headRefName`
+  `codex/config-include-resolution`, `state` `OPEN`, and URL
+  `https://github.com/samcantrill/loom/pull/29`.
+- Implementation summary: added internal include target resolution primitives,
+  local-only `file://` handling, strict bare-name and explicit target
+  classification, structured include-resolution errors, and phase-scoped
+  unit/contract coverage. A user-authorized blocker pass added bare-name
+  containment validation for normalized symlink escapes.
+- Validation: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed
+  with overall 620 passed, 0 failed, 0 errors, 8 skipped, and 429 deselected.
+- PR review: pending.
 
 ### Phase 6 - File-Defined Recursive Includes
 
