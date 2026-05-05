@@ -257,9 +257,20 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; ready for `loom_phase_executor`.
-- Implementation summary: not started.
-- Implementation validation: not run; this planning refine pass was instructed not to run full validation.
-- Refinement summary: tightened default fingerprint record label/metadata, record agreement rules, path portability semantics, retained config-only comparison helper surface, suite-level test obligations, and executor stop conditions.
-- PR preparation: not started.
+- Implementation summary: implemented `artifact_safe_config`-labeled, artifact-safe composed-config fingerprints across composed config, inspection, and manifest records; introduced `src/loom/config/fingerprints.py` with default payload/record builders and `compare_config_artifact_fingerprints`; updated `src/loom/config/compose.py` to use authored-composition facts only for public defaults; added/updated imports in API package surface; added unit, contract, integration coverage for agreement, path portability, resolver expression identity, secret redaction, and comparison outcomes.
+- Implementation validation: targeted phase commands were executed in the dedicated phase worktree.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py`
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_compose.py tests/unit/loom/config/test_config_fingerprints.py`
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py`
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_fingerprints.py tests/integration/config/test_compose_provenance.py tests/integration/config/test_compose_resolvers.py`
+- Suite run/deferred:
+    - Run: package, unit, contract, integration required by this phase.
+    - Deferred: e2e and opt-in suites.
+    - Note: command in the plan references `tests/unit/loom/config/test_config_resume_comparison.py`; this file is not present in this phase worktree, so the equivalent new comparison coverage is covered in `tests/unit/loom/config/test_config_fingerprints.py` and `tests/integration/config/test_compose_fingerprints.py`.
+- Assumptions/risks:
+    - `ConfigFingerprintComparison` and `compare_config_artifact_fingerprints` are plain-data artifacts and do not claim resolver runtime replay; `runtime_values_replayed` is fixed to `False`.
+    - Legacy `ConfigProvenance.resolved_fingerprint` remains present for compatibility and is not used as the public default fingerprint.
+    - Secret-like override and config values are redacted before inclusion in artifact-safe fingerprint payloads; full resolver/runtime persistence remains deferred.
+- PR preparation: blocked pending merge-gate actions.
 - Stack maintenance: none; root phase targeting `develop`.
 - Remaining blockers: none known.
