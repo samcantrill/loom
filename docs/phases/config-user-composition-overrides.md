@@ -288,5 +288,12 @@ make test-summary
   - Confirmed `@samcantrill` remains near the top of the body and no GitHub reviewer request is included.
   - Confirmed the body describes only Phase 7 private user-composition overrides and does not claim future-phase work.
   - Refined the GitHub checks row so the public body remains accurate before remote CI exists.
+- PR opened: https://github.com/samcantrill/loom/pull/33
+- PR verification:
+  - `gh pr view 33 --json baseRefName,headRefName,state,url` — `baseRefName=develop`, `headRefName=codex/config-user-composition-overrides`, `state=OPEN`, `url=https://github.com/samcantrill/loom/pull/33`.
+  - Target branch: `develop`.
+  - Stack predecessor: none.
+  - Merge eligibility: merge-eligible after PR review because target is `develop`.
+  - GitHub/auth limitations: none; sandboxed `gh auth status` reported an invalid token, but approved network-backed `gh auth status` succeeded before push and PR creation.
 - Stack maintenance:
 - Remaining blockers: none.
