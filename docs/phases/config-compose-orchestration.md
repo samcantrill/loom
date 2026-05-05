@@ -23,7 +23,7 @@
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner`; refine budget used.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: used by expanded-path implementation refinement on 2026-05-06.
 - Pre-submit blocker gate budget: unused. `loom_pr_preparer` must run one blocker gate before opening or preparing the PR, covering the implementation diff, PR body draft, suite evidence, scope boundary, import boundary, inspection public contract, artifact placeholder semantics, and known review risks. Known blockers must be fixed or the phase marked blocked before any PR is opened.
 - PR review budget: unused. Do not consume the PR review budget during implementation; a later manager-assigned review may consume it after PR preparation.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Sandboxed `gh auth setup-git` failed because `/home/samcantrill/.gitconfig` was read-only; approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop` and `origin/develop` both resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
@@ -234,7 +234,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used by expanded-path implementation refinement on 2026-05-06.
 - Pre-submit blocker gate: unused; required before PR submission under the revised workflow and separate from the later PR review budget.
 - PR review: unused; may be consumed only by a later manager-assigned review after PR preparation.
 
@@ -248,15 +248,18 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Refactored orchestration so `compose_config(...)` and inspection share the same staged full-order flow and artifact-safe stage payloads.
   - Added/updated package, unit, contract, and integration coverage for inspection shape, import boundaries, stage ordering, and post-compose explicit instantiation semantics.
 - Implementation validation:
+  - Refinement validation reviewed: clean worktree at implementation baseline `b26dd6c`, final Phase 12 diff, relevant package/unit/contract/integration tests, prior `build/test-summary.md`, and the regenerated validation evidence below.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_compose.py tests/contracts/test_config_composition_inspection_contract.py tests/package/test_config_api.py tests/package/test_import_boundaries.py` passed after refinement with 31 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/pipeline/test_pipeline_config.py` passed after refinement with 42 passed.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (lint/typecheck + full targeted default + `config-extra` test runs) passed.
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` completed successfully and wrote `build/test-summary.md`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` completed successfully after refinement and wrote `build/test-summary.md`; summary: package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 28 passed/2 skipped, integration 9 passed/5 skipped, e2e 5 passed, config-extra 270 passed/433 deselected.
   - Required phase target suites run:
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py`
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_compose.py`
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py`
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/pipeline/test_pipeline_config.py`
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e -k config` (existing e2e only; no new phase-12-specific e2e added due harness scope).
-- Refinement summary: expanded-path implementation refinement complete; no implementation, PR preparation, PR opening, approval, merge, or workflow-file changes performed.
+- Refinement summary: expanded-path implementation refinement complete and budget consumed. Fixed the Phase 12 placeholder manifest to use the artifact schema constant explicitly while preserving provenance schema usage for `ConfigProvenance`; restored the config-local `compose.compose_config(...)` helper to return `ComposedConfig` so its name does not conflict with its behavior; added regression coverage for artifact schema placeholder semantics and the internal helper return type. No PR preparation, PR opening, approval, merge, persistence, CLI, pipeline, or workflow-file changes performed.
 - PR preparation:
 - Stack maintenance: none.
 - Remaining blockers: none known.

@@ -10,10 +10,14 @@ from loom.fingerprints import Fingerprint
 from loom.serialization import PlainData, ensure_plain_data, to_plain_data
 from loom.config.errors import ConfigValidationError
 
-from .artifacts import CompositionManifest, ConfigFingerprintRecord, SourceArtifactRecord
+from .artifacts import (
+    SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
+    CompositionManifest,
+    ConfigFingerprintRecord,
+    SourceArtifactRecord,
+)
 from .provenance import ConfigProvenance
 from .recipes import RecipeCatalog, RecipeImplementation
-from .provenance import SCHEMA_VERSION
 
 
 __default_recipe_catalog: RecipeCatalog | None = None
@@ -130,7 +134,7 @@ class ComposedConfig:
     unresolved: dict[str, PlainData] = field(default_factory=dict)
     manifest: CompositionManifest = field(
         default_factory=lambda: CompositionManifest(
-            schema_version=SCHEMA_VERSION,
+            schema_version=ARTIFACT_SCHEMA_VERSION,
             source_artifacts=(),
             fingerprint_records=(),
             recipe_manifest=(),

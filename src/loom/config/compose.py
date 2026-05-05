@@ -11,7 +11,7 @@ from typing import cast
 from loom.fingerprints import Fingerprint
 from loom.serialization import PlainData, to_plain_data
 
-from .api import ConfigCompositionInspection, ConfigCompositionStageRecord
+from .api import ComposedConfig, ConfigCompositionInspection, ConfigCompositionStageRecord
 from .errors import ConfigErrorContext, ConfigIncludeExpansionError, ConfigLoadError, ConfigValidationError
 from .includes import (
     IncludeRecompositionContext,
@@ -22,7 +22,12 @@ from .includes import (
 from .interpolation import resolve_interpolation, scan_resolver_expressions
 from .load import load_config
 from .merge import merge_configs
-from .artifacts import CompositionManifest, ConfigFingerprintRecord, SourceArtifactRecord
+from .artifacts import (
+    SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
+    CompositionManifest,
+    ConfigFingerprintRecord,
+    SourceArtifactRecord,
+)
 from .source_maps import ConfigPath, build_base_source_map, compose_config_with_sources, format_config_path
 from .overrides import (
     ParsedOverride,
@@ -31,7 +36,7 @@ from .overrides import (
     split_include_and_ordinary_overrides,
 )
 from .provenance import (
-    SCHEMA_VERSION,
+    SCHEMA_VERSION as PROVENANCE_SCHEMA_VERSION,
     ConfigProvenance,
     ConfigSource,
     build_config_fingerprint,
@@ -224,7 +229,7 @@ def inspect_config_composition(
         for index, record in enumerate(recipe_manifest)
     )
     placeholder_manifest = CompositionManifest(
-        schema_version=SCHEMA_VERSION,
+        schema_version=ARTIFACT_SCHEMA_VERSION,
         source_artifacts=(),
         fingerprint_records=(),
         recipe_manifest=recipe_manifest_payload,
@@ -276,13 +281,13 @@ def compose_config(
     recipe_catalog: RecipeCatalog,
     overlays: Sequence[str | Path] = (),
     overrides: Sequence[str] = (),
-) -> ConfigCompositionInspection:
+) -> ComposedConfig:
     return inspect_config_composition(
         config_path=config_path,
         recipe_catalog=recipe_catalog,
         overlays=overlays,
         overrides=overrides,
-    )
+    ).to_composed_config()
 
 
 def _apply_user_composition_overrides(
@@ -748,7 +753,7 @@ def _build_provenance(
     recipe_manifest_count: int,
 ) -> ConfigProvenance:
     return ConfigProvenance(
-        schema_version=SCHEMA_VERSION,
+        schema_version=PROVENANCE_SCHEMA_VERSION,
         config_path=config_path,
         sources=tuple(sources),
         overrides=overrides,

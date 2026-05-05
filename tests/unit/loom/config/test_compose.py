@@ -15,7 +15,10 @@ from loom.config import (
 )
 from loom.config.errors import ConfigLoadError
 from loom.config.errors import ConfigValidationError, UnknownRecipeError
+from loom.config.artifacts import SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION
+from loom.config.api import ComposedConfig
 import loom.config.api as config_api
+import loom.config.compose as config_compose
 from loom.serialization import PlainData
 from tests.support.config_samples import argument_recipe
 
@@ -113,6 +116,8 @@ def test_compose_expands_recipe_key(tmp_path: Path) -> None:
     assert composed.resolved["pipeline"] == {"value": "one:0"}
     assert composed.recipe_manifest[0]["name"] == "arg"
     assert composed.recipe_manifest[0]["path"] == "pipeline"
+    assert composed.manifest.schema_version == ARTIFACT_SCHEMA_VERSION
+    assert composed.manifest.recipe_manifest == composed.recipe_manifest
 
 
 def test_compose_rejects_recipe_catalog() -> None:
@@ -211,3 +216,13 @@ def test_compose_config_staged_path_matches_inspection(tmp_path: Path) -> None:
     assert composed.manifest.fingerprint_records == ()
     assert composed.source_artifacts == ()
     assert composed.fingerprint_records == ()
+
+
+def test_internal_compose_helper_returns_composed_config(tmp_path: Path) -> None:
+    path = tmp_path / "base.yaml"
+    path.write_text("name: demo\npipeline:\n  value: one\n", encoding="utf-8")
+
+    composed = config_compose.compose_config(path, recipe_catalog=RecipeCatalog())
+
+    assert isinstance(composed, ComposedConfig)
+    assert composed.resolved["pipeline"] == {"value": "one"}
