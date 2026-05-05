@@ -1196,9 +1196,9 @@ Phase metadata:
 
 ### Phase 4 - Source-Authored Overlays
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-source-overlays`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/28
 
 Goal:
 
@@ -1229,6 +1229,36 @@ Test expectations:
 
 - Unit/integration tests for overlay order, source-map preservation, and
   overlay-authored source context.
+
+Phase metadata:
+
+- Worktree: `/home/samcantrill/work/loom-worktrees/config-source-overlays`
+- Stack predecessor: none
+- Base branch: `develop`
+- PR target branch: `develop`
+- PR status: opened as PR #28 against `develop` on 2026-05-05; verified with
+  base `develop`, head `codex/config-source-overlays`, and state `OPEN`.
+- Merge eligibility: merge-eligible after Phase 4 PR review because this is a
+  root phase PR targeting `develop`.
+- Implementation summary: added internal immutable config path/source-map
+  helpers for loaded base plus ordered overlays, threaded the source-aware
+  overlay helper through `compose_config` without changing public
+  `ComposedConfig` fields, and added unit/integration coverage for overlay
+  order, source authorship, list/container coverage, `_replace_` replacement
+  parity with `merge_configs`, and overlay-authored `_include_` values as
+  ordinary data.
+- Validation summary: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr`
+  passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with
+  overall 588 passed, 0 failed, 0 errors, 8 skipped, and 428 deselected.
+- Blocker resolution: the expanded-path implementation refinement fixed
+  source-map `_replace_` replacement semantics to match Phase 3 `merge_configs`.
+  A user-authorized PR-validation blocker pass then fixed a Pyright test-helper
+  type issue and renamed the integration source-map test file to avoid pytest
+  optional-suite module basename collisions.
+- Follow-up notes: no include resolution, recursive includes, user include
+  replacement, public inspection/source-map API, manifest/provenance population,
+  fingerprint changes, raw source persistence, CLI behavior, pipeline imports,
+  or root package exports were added.
 
 ### Phase 5 - Include Resolution Primitives
 
