@@ -94,7 +94,7 @@ def test_composition_manifest_round_trip_minimal() -> None:
         schema_version=SCHEMA_VERSION,
         source_artifacts=(source_artifact,),
         fingerprint_records=(fingerprint_record,),
-        recipe_manifest=({"path": "pipeline", "name": "demo"},),
+        recipe_manifest=({"path": "pipeline", "name": "demo", "tags": ["base"]},),
         metadata={"run": {"id": "local"}},
     )
 
@@ -102,6 +102,20 @@ def test_composition_manifest_round_trip_minimal() -> None:
     assert round_trip == manifest
     assert isinstance(round_trip.source_artifacts, tuple)
     assert isinstance(round_trip.fingerprint_records, tuple)
+    assert manifest.to_dict()["recipe_manifest"] == [
+        {"path": "pipeline", "name": "demo", "tags": ["base"]}
+    ]
+    recipe_entry = cast(dict[str, PlainData], manifest.recipe_manifest[0])
+    with pytest.raises(TypeError):
+        recipe_entry["path"] = "other"
+
+
+def test_composition_manifest_rejects_non_plain_recipe_manifest_at_construction() -> None:
+    with pytest.raises(ConfigProvenanceError, match="recipe_manifest"):
+        CompositionManifest(
+            schema_version=SCHEMA_VERSION,
+            recipe_manifest=(cast(dict[str, PlainData], {"bad": {1, 2}}),),
+        )
 
 
 def test_composition_manifest_rejects_unknown_fields() -> None:

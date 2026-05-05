@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: blocked after post-merge PR review
+- Status: blocker resolution validated
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 1: Boundary and Artifact Contracts`
 - Branch: `codex/config-boundary-artifact-contracts`
@@ -22,8 +22,8 @@
 - Refine pass: completed by `loom_phase_planner`; expanded-path refinement sharpened module placement, export boundaries, artifact skeleton names, suite obligations, and executor stop conditions.
 - Setup limitations: `gh auth status` required approved network access because sandboxed status reported the token as invalid; `gh auth setup-git`, `git fetch origin`, and `git worktree add` required escalated filesystem access for Git metadata. `origin/develop` and local `develop` both resolve to `6f2956d7d9360a8ac3190ac7359372d32af8ff78`.
 - Blockers: post-merge phase PR review found a plain-data validation defect in
-  `CompositionManifest.recipe_manifest`; do not start Phase 2 until it is fixed
-  or explicitly accepted by the user.
+  `CompositionManifest.recipe_manifest`; resolved on the user-authorized
+  blocker branch `codex/config-artifact-contract-blocker`.
 
 ## Objective
 
@@ -223,6 +223,8 @@ make test-summary
 
 - Phase implementation refinement: used
 - PR review: used
+- User-authorized blocker-resolution pass: used for the post-merge
+  `CompositionManifest.recipe_manifest` plain-data validation blocker.
 
 ## Completion Notes
 
@@ -300,6 +302,22 @@ make test-summary
   - Required change: validate/normalize `recipe_manifest` during construction
     with the same plain-data path used by `from_dict()`/`to_dict()`, and add a
     unit or contract regression for non-plain `recipe_manifest` payloads.
-- Stack maintenance: none yet; successor Phase 2 must not start while this phase
-  is blocked.
-- Remaining blockers: post-merge Phase 1 artifact contract blocker remains.
+- Blocker-resolution pass:
+  - Branch/worktree: `codex/config-artifact-contract-blocker` in
+    `/home/samcantrill/work/loom-worktrees/config-artifact-contract-blocker`.
+  - Fix: `CompositionManifest.__post_init__` now normalizes
+    `recipe_manifest` through the same plain-data helper used by
+    `from_dict()`/`to_dict()`, freezes accepted mapping entries, and raises
+    `ConfigProvenanceError` for nested non-plain payloads such as sets at
+    construction time.
+  - Regression coverage: added unit coverage for construction-time rejection of
+    `CompositionManifest(schema_version=1, recipe_manifest=({"bad": {1, 2}},))`
+    and for immutable/artifact-safe plain recipe manifest entries after
+    construction.
+  - Validation:
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_config_artifacts.py` ✅ 9 passed
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_config_artifact_contract.py` ✅ 6 passed
+    - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` ✅ passed (Ruff, Pyright 0 errors, default harness 419 passed / 9 skipped, config-extra 117 passed / 424 deselected, build)
+    - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` ✅ wrote `build/test-summary.md` with package 36 passed / 1 skipped, unit 354 passed / 1 skipped, contract 20 passed / 1 skipped, integration 9 passed / 5 skipped, e2e 5 passed, config-extra 117 passed / 424 deselected
+- Stack maintenance: none yet.
+- Remaining blockers: none for the post-merge Phase 1 artifact contract blocker.

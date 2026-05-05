@@ -203,7 +203,7 @@ class CompositionManifest:
     schema_version: int
     source_artifacts: tuple[SourceArtifactRecord, ...] = ()
     fingerprint_records: tuple[ConfigFingerprintRecord, ...] = ()
-    recipe_manifest: tuple[dict[str, PlainData], ...] = ()
+    recipe_manifest: tuple[Mapping[str, PlainData], ...] = ()
     metadata: dict[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -212,10 +212,23 @@ class CompositionManifest:
         try:
             frozen_sources = tuple(self.source_artifacts)
             frozen_fingerprints = tuple(self.fingerprint_records)
-            frozen_recipe_manifest = tuple(self.recipe_manifest)
             frozen_metadata = freeze_plain_data(self.metadata, path="CompositionManifest.metadata")
         except Exception as exc:  # noqa: BLE001
             raise ConfigProvenanceError("CompositionManifest fields must be plain-data-compatible") from exc
+
+        try:
+            normalized_recipe_manifest = _to_recipe_manifest_payload(tuple(self.recipe_manifest))
+            frozen_recipe_manifest = tuple(
+                cast(
+                    Mapping[str, PlainData],
+                    freeze_plain_data(record, path=f"CompositionManifest.recipe_manifest[{index}]"),
+                )
+                for index, record in enumerate(normalized_recipe_manifest)
+            )
+        except ConfigProvenanceError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ConfigProvenanceError("CompositionManifest recipe_manifest must be plain data") from exc
 
         object.__setattr__(self, "source_artifacts", frozen_sources)
         object.__setattr__(self, "fingerprint_records", frozen_fingerprints)
