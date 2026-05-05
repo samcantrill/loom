@@ -244,7 +244,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - PR preparation:
   - Draft pass completed by `loom_pr_preparer` on 2026-05-05.
   - PR body artifact created: `docs/phases/config-recipes-catalog-pr-body.md`.
-  - PR body refine pass: pending because the expanded path is active.
+  - PR body refine pass: completed by `loom_pr_preparer` on 2026-05-05; draft body verified against the phase plan, implementation diff, acceptance criteria, validation evidence, scope boundaries, assumptions, and risks.
   - Intended PR title: `Configuration - Phase 9: Recipe Catalog And Expansion`.
   - Head branch: `codex/config-recipes-catalog`.
   - Target branch: `develop`.
@@ -253,8 +253,8 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Merge eligibility: root phase, merge-eligible only after PR body refine/open, review, and passing checks against `develop`.
   - Validation evidence reviewed: targeted Phase 9 suite passed with 97 tests; `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`.
   - Test-summary facts recorded in PR body: generated 2026-05-05T12:19:16+00:00; overall 677 passed, 0 failed, 0 errors, 8 skipped, 431 deselected across package/unit/contract/integration/e2e/config-extra suites.
-  - Public PR body facts: mentions `@samcantrill` near the top; records concise scope, implementation notes, new/changed tests, validation tables, and risks; omits commit lists, workflow budget accounting, GitHub JSON, and stack cleanup details.
-  - PR creation: intentionally not opened in this draft pass per expanded-path instruction; refine pass should create the PR with explicit `--base develop`, `--head codex/config-recipes-catalog`, and the intended title after review of the draft body.
+  - Public PR body facts: mentions `@samcantrill` near the top; records concise scope, implementation notes, new/changed tests, validation tables, and risks; omits commit lists, workflow budget accounting, GitHub JSON, and stack cleanup details. Refine pass corrected the GitHub checks row so it no longer refers to the prior draft-only state.
+  - PR creation: pending branch push and `gh pr create` in this refine/open pass with explicit `--base develop`, `--head codex/config-recipes-catalog`, and the intended title.
 - Stack maintenance:
   - No phase stack actions executed yet in this worktree phase pass.
 - Remaining blockers:
