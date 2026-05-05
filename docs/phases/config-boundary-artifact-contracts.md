@@ -255,6 +255,22 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run python - <<'PY' ...` import probe ✅ forbidden modules absent after `import loom.config.artifacts`
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` ✅ passed (Ruff, Pyright 0 errors, default harness 419 passed / 9 skipped, config-extra 116 passed / 424 deselected, build)
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` ✅ wrote `build/test-summary.md` with package 36 passed / 1 skipped, unit 354 passed / 1 skipped, contract 20 passed / 1 skipped, integration 9 passed / 5 skipped, e2e 5 passed, config-extra 116 passed / 424 deselected
-- PR preparation: pending.
+- PR preparation:
+  - PR body draft pass: completed by `loom_pr_preparer` using
+    `.codex/prompts/pr-body-draft.md`; artifact written to
+    `docs/phases/config-boundary-artifact-contracts-pr-body.md`.
+  - PR body refine pass: pending because this phase is on the expanded path.
+  - PR open status: not opened in this draft pass by instruction; expected
+    refine/open pass should use title
+    `Configuration - Phase 1: Boundary and Artifact Contracts`, target
+    `develop`, and head `codex/config-boundary-artifact-contracts`.
+  - PR facts confirmed: root phase, stack predecessor none, base branch
+    `develop`, target branch `develop`, merge eligibility after PR review
+    approval because the PR targets `develop`.
+  - PR preparation validation evidence: used recorded final validation from the
+    executor/refiner (`UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed and
+    `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with
+    `build/test-summary.md` generated); no implementation refinements or new
+    tests were created during PR preparation.
 - Stack maintenance: none yet.
 - Remaining blockers: none recorded.
