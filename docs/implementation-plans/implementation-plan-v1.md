@@ -2054,7 +2054,7 @@ Completion notes:
 
 ### Phase 15 - Raw Snapshot Opt-In And Source Artifact Hardening
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-source-artifacts`
 PR: https://github.com/samcantrill/loom/pull/42
 
@@ -2094,7 +2094,7 @@ Test expectations:
 Completion notes:
 
 - Phase execution plan: `docs/phases/config-source-artifacts.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is open against
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
   `develop`.
 - Implementation summary: adds the keyword-only Python API opt-in
   `include_raw_source_snapshots: bool = False`; returns caller-owned
@@ -2125,9 +2125,19 @@ Completion notes:
   `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 735
   passed, 0 failed, 0 errors, 9 skipped, and 434 deselected.
-- PR notes: opened and verified on PR #42 with base `develop`, head
-  `codex/config-source-artifacts`, and state `OPEN`. GitHub CI was pending at
-  this metadata update.
+- Pre-merge target check: PR #42 was verified immediately before merge with
+  base `develop`, head `codex/config-source-artifacts`, state `OPEN`, clean
+  merge state, and successful GitHub CI `checks`. A formal GitHub approval
+  review could not be posted because GitHub does not allow the PR author to
+  approve their own PR; the focused confirmation gate supplied the workflow
+  review approval.
+- Merge result: PR #42 merged into `develop` at 2026-05-05T17:45:21Z with
+  merge commit `146762d6da1f703d70f2ef870ff0671fc7693504`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-source-artifacts` when PR #42 merged. The GitHub merge command
+  merged the PR but could not delete the local branch while its worktree was
+  attached; branch and worktree cleanup are safe after this metadata update.
 
 ### Phase 16 - Hardening, Documentation, And End-To-End Coverage
 
