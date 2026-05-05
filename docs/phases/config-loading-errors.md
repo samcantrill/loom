@@ -253,6 +253,18 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py tests/unit/loom/config/test_load.py tests/unit/loom/config/test_compose.py` (pass; 28 passed)
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass; Ruff, Pyright, default harness, config-extra harness, and build passed)
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass; package, unit, contract, integration, e2e, and config-extra suites passed; wrote `build/test-summary.md`)
-- PR preparation: pending.
-- Stack maintenance: none yet.
+- PR preparation: completed in this artifact by `loom_pr_preparer`.
+- PR body path: `docs/phases/config-loading-errors-pr-body.md`.
+- PR branch/head: `codex/config-loading-errors`.
+- PR target branch: `develop`.
+- Stack predecessor: none; root phase PR targets `develop`.
+- PR title: `Configuration - Phase 2: Strict Loading and Structured Errors`.
+- PR scope summary: strict single-document UTF-8 YAML loading, non-empty mapping root enforcement, plain-data parsed config values, structured config error context, explicit `_copy_` unsupported-directive rejection, and phase-scoped unit/contract/compose coverage.
+- PR scope exclusions: no includes, overlays, override application, schema validation, resolver execution, run-store writes, CLI behavior, public compose orchestration changes, manifest/provenance population, fingerprint behavior, persistence, or future Phase 3+ semantics.
+- PR preparation validation: completed on 2026-05-05 using
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass; Ruff, Pyright, default harness with 423 passed and 9 skipped, config-extra harness with 125 passed and 428 deselected, and `uv build` passed)
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass; wrote `build/test-summary.md`; overall suite status `passed` with package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 24 passed/1 skipped, integration 9 passed/5 skipped, e2e 5 passed, and config-extra 125 passed/428 deselected)
+- PR preparation assumptions and risks: GitHub checks are pending until PR creation; structured context fields remain additive for later phases; `_copy_` remains deliberately unsupported in v1; redaction policy beyond avoiding raw source bytes and runtime/resolver values remains deferred to later artifact/provenance phases.
+- PR creation status: pending push and GitHub PR creation.
+- Stack maintenance: none required for this root phase.
 - Remaining blockers: none.
