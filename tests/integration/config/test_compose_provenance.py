@@ -34,13 +34,76 @@ def test_public_compose_populates_source_artifact_records(tmp_path: Path) -> Non
 
     source_artifact_references = cast(
         list[dict[str, Any]],
-        composed.manifest.metadata["source_artifact_references"],
+        cast(dict[str, Any], composed.manifest.to_dict()["metadata"])["source_artifact_references"],
     )
     assert len(source_artifact_references) == len(composed.source_artifacts)
     for artifact, reference in zip(composed.source_artifacts, source_artifact_references, strict=True):
         assert reference["kind"] == artifact.kind
         assert reference["path"] == artifact.path
         assert reference["order"] == artifact.order
+
+
+def test_public_compose_include_replacement_source_artifact_refs_replacement(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    include_dir = tmp_path / "includes"
+    include_dir.mkdir()
+    original = include_dir / "original.yaml"
+    replacement = include_dir / "replacement.yaml"
+
+    original.write_text("kind: original\n", encoding="utf-8")
+    replacement.write_text("kind: replacement\n", encoding="utf-8")
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./includes/original.yaml\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, overrides=("pipeline.model._include_=./includes/replacement.yaml",))
+
+    include_artifacts = [artifact for artifact in composed.source_artifacts if artifact.kind == "include"]
+    assert len(include_artifacts) == 1
+    assert include_artifacts[0].path == str(replacement.resolve())
+    assert include_artifacts[0].path != str(original.resolve())
+
+    source_artifact_references = cast(
+        list[dict[str, Any]],
+        cast(dict[str, Any], composed.manifest.to_dict()["metadata"])["source_artifact_references"],
+    )
+    serialized_references = json.dumps(source_artifact_references, sort_keys=True)
+    assert str(replacement.resolve()) in serialized_references
+    assert str(original.resolve()) not in serialized_references
+
+
+def test_public_compose_brand_new_include_addition_creates_source_artifact_ref(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    components = tmp_path / "components"
+    components.mkdir()
+    dataset = components / "dataset.yaml"
+
+    dataset.write_text("kind: tabular\nrows: 100\n", encoding="utf-8")
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  existing: true\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, overrides=("+pipeline.dataset._include_=./components/dataset.yaml",))
+
+    include_artifacts = [artifact for artifact in composed.source_artifacts if artifact.kind == "include"]
+    assert len(include_artifacts) == 1
+    assert include_artifacts[0].path == str(dataset.resolve())
+
+    source_artifact_references = cast(
+        list[dict[str, Any]],
+        composed.manifest.metadata["source_artifact_references"],
+    )
+    assert any(
+        reference["kind"] == "include" and reference["path"] == str(dataset.resolve())
+        for reference in source_artifact_references
+    )
 
 
 def test_public_compose_redaction_preserves_resolver_expressions_in_artifacts(tmp_path: Path, monkeypatch) -> None:
@@ -87,6 +150,45 @@ def test_public_compose_redaction_preserves_resolver_expressions_in_artifacts(tm
     assert "/tmp/phase13-root" not in serialized_artifacts
     assert "top-secret" not in serialized_artifacts
     assert "sauce" not in serialized_artifacts
+
+
+def test_public_compose_redacts_nested_secret_override_artifact_provenance(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: base\n"
+        "pipeline: {}\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(
+        base,
+        overrides=('+pipeline.auth={"token":"nested-sauce","mode":"safe"}',),
+    )
+
+    provenance_payload = composed.provenance.to_dict()
+    provenance_override = cast(list[dict[str, Any]], provenance_payload["overrides"])[0]
+    assert provenance_override["raw"] == REDACTION_MARKER
+    assert provenance_override["redacted"] is True
+    assert provenance_override["value"] == {"token": REDACTION_MARKER, "mode": "safe"}
+
+    ordinary_overrides = cast(list[dict[str, Any]], composed.provenance.metadata["ordinary_overrides"])
+    assert ordinary_overrides[0]["raw"] == REDACTION_MARKER
+    assert ordinary_overrides[0]["value"] == {"token": REDACTION_MARKER, "mode": "safe"}
+
+    security = cast(dict[str, Any], composed.provenance.metadata["security_facts"])
+    warnings = cast(list[dict[str, Any]], security["plaintext_secret_override_warnings"])
+    assert warnings[0]["override_path"] == "pipeline.auth"
+    assert warnings[0]["override_raw"] == REDACTION_MARKER
+
+    artifact_payload = {
+        "provenance": provenance_payload,
+        "manifest": composed.manifest.to_dict(),
+        "provenance_metadata": composed.provenance.metadata,
+        "redacted": composed.redacted,
+    }
+    serialized_artifacts = json.dumps(artifact_payload, sort_keys=True)
+    assert "nested-sauce" not in serialized_artifacts
+    assert "safe" in serialized_artifacts
 
 
 def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monkeypatch) -> None:

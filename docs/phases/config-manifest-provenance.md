@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; implementation refinement completed; PR body draft completed; expanded-path PR body refine pending
+- Status: implemented; implementation refinement completed; user-authorized pre-submit blocker pass completed; PR body draft completed; expanded-path PR body refine pending
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 13: Provenance, Manifest, Source Records, And Redaction Population`
 - Branch: `codex/config-manifest-provenance`
@@ -24,11 +24,11 @@
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner` in this artifact; refine budget used.
 - Phase implementation refinement budget: used.
-- Pre-submit blocker gate budget: unused; before PR submission, the manager must review the phase plan, diff, PR body draft, validation evidence, scope boundary, artifact-safety assertions, and known review risks. Concrete blockers must be resolved by the implementation owner or the phase must be marked blocked before PR submission.
+- Pre-submit blocker gate budget: used by user authorization on 2026-05-06 to resolve stale user include source artifact records and nested plaintext secret override serialization leaks. Do not start another automated blocker/refinement pass without explicit user instruction.
 - PR review budget: unused; do not consume during planning or implementation. A later `loom_phase_reviewer` or manager review may consume it after PR preparation.
 - PR body draft pass: completed in expanded-path draft pass; refine pass pending.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
-- Blockers: none known after expanded-path refinement.
+- Blockers: none known after the user-authorized pre-submit blocker pass.
 
 ## Objective
 
@@ -261,9 +261,9 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Issues confirmed out of scope: no Phase 14 fingerprint comparison/resume behavior, persistence, CLI/store behavior, raw snapshots, plugin/remote/global include resolvers, `_copy_`, or pipeline import-boundary changes were introduced.
   - Fix evidence: targeted package/unit/contract/integration tests, `make validate-pr`, and `make test-summary` all passed after refinement.
 - Implementation validation:
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_provenance.py tests/unit/loom/config/test_redaction.py tests/unit/loom/config/test_compose.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_provenance.py` passed: 97 passed.
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed, Pyright reported 0 errors, default suite passed with 427 passed/10 skipped, config-extra passed with 276 passed/432 deselected, and build succeeded.
-  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 28 passed/2 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 276 passed/432 deselected.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_provenance.py tests/unit/loom/config/test_redaction.py tests/unit/loom/config/test_compose.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_provenance.py` passed: 100 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff passed, Pyright reported 0 errors, default suite passed with 427 passed/10 skipped, config-extra passed with 279 passed/432 deselected, and build succeeded.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 28 passed/2 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 279 passed/432 deselected.
 - E2E/opt-in status:
   - E2E: phase-scoped e2e coverage remains deferred per plan; existing harness e2e passed during `make test-summary`.
   - Opt-in suites: deferred per plan.
@@ -273,8 +273,13 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Confirmed PR title remains `Configuration - Phase 13: Provenance, Manifest, Source Records, And Redaction Population`.
   - Reviewed final diff vs `develop`, this phase plan, implementation plan Phase 13 scope, validation evidence in `build/test-summary.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and `.codex/templates/phase-pr-body.md`.
   - PR was not opened because Phase 13 is on the expanded path; `.codex/prompts/pr-body-refine.md` remains pending before PR submission.
-  - PR preparation preserved workflow budgets: implementation refinement used; pre-submit blocker gate unused until the manager runs the revised pre-submit blocker gate; PR review unused.
+  - PR preparation preserved workflow budgets at draft time: implementation refinement used; pre-submit blocker gate was later consumed by explicit user authorization; PR review unused.
+- User-authorized pre-submit blocker pass, 2026-05-06:
+  - Fixed stale include source artifact records after user composition overrides. User include replacements now remove the replaced file-authored include record and add an artifact-safe record/reference for the replacement include file; brand-new user include additions now add a source artifact and manifest reference.
+  - Fixed artifact-facing plaintext secret override serialization. `ConfigProvenance.to_dict()`, manifest metadata, provenance metadata, ordinary override records, and warning facts now redact raw override strings and nested secret-like JSON values with the default redaction policy while preserving plaintext override acceptance.
+  - Added integration coverage for include replacement source artifact references, brand-new include addition references, and nested JSON secret override redaction across serialized provenance, manifest metadata, provenance metadata, and redacted artifacts.
+  - Fix evidence: targeted Phase 13 suite, `make validate-pr`, and `make test-summary` all passed after this blocker-resolution pass.
 - Stack maintenance:
   - None required (root phase branch).
 - Remaining blockers:
-  - None known after implementation refinement and validation; expanded-path PR body refine and manager pre-submit blocker gate remain pending before PR opening.
+  - None known after the user-authorized pre-submit blocker pass and validation; expanded-path PR body refine remains pending before PR opening.

@@ -15,11 +15,25 @@ def redact_secrets(value: Mapping[str, PlainData]) -> dict[str, PlainData]:
     return _redact_mapping(value)
 
 
+def redact_secret_like_value(key: str, value: PlainData) -> PlainData:
+    """Redact a single artifact-facing value using the default key policy."""
+    if is_secret_key(key):
+        return REDACTION_MARKER
+    return _redact_item(value)
+
+
+def contains_secret_like_value(key: str, value: PlainData) -> bool:
+    """Return whether a key/value pair contains data redacted by the policy."""
+    if is_secret_key(key):
+        return True
+    return _contains_secret_item(value)
+
+
 def _redact_mapping(mapping: Mapping[str, PlainData]) -> dict[str, PlainData]:
     redacted: dict[str, PlainData] = {}
     for key, value in mapping.items():
         if is_secret_key(key):
-            redacted[key] = "***REDACTED***"
+            redacted[key] = REDACTION_MARKER
             continue
         redacted[key] = _redact_item(value)
     return redacted
@@ -31,6 +45,14 @@ def _redact_item(value: PlainData) -> PlainData:
     if isinstance(value, list):
         return [_redact_item(item) for item in value]
     return value
+
+
+def _contains_secret_item(value: PlainData) -> bool:
+    if isinstance(value, dict):
+        return any(is_secret_key(key) or _contains_secret_item(item) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_contains_secret_item(item) for item in value)
+    return False
 
 
 def is_secret_key(key: str) -> bool:

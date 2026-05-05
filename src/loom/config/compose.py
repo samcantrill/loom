@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import cast
@@ -16,6 +17,7 @@ from .errors import ConfigErrorContext, ConfigIncludeExpansionError, ConfigLoadE
 from .includes import (
     IncludeRecompositionContext,
     IncludeLocalCustomization,
+    IncludeResolutionResult,
     IncludeSiteRecord,
     expand_config_includes,
     resolve_include_target,
@@ -42,7 +44,13 @@ from .provenance import (
     ConfigSource,
     build_config_fingerprint,
 )
-from .redaction import REDACTION_MARKER, is_secret_key, redaction_policy, redact_secrets
+from .redaction import (
+    REDACTION_MARKER,
+    contains_secret_like_value,
+    redaction_policy,
+    redact_secret_like_value,
+    redact_secrets,
+)
 from .recipes import RecipeCatalog
 from .recipes.expansion import expand_recipes, resolve_recipe_argument_interpolation
 from .interpolation import ResolverExpressionRecord
@@ -50,6 +58,12 @@ from .validation import validate_top_level_fields
 
 
 _BARE_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@dataclass(frozen=True, slots=True)
+class _UserCompositionResult:
+    config: dict[str, PlainData]
+    include_records: tuple[IncludeSiteRecord, ...]
 
 
 def inspect_config_composition(
@@ -122,13 +136,34 @@ def inspect_config_composition(
     include_overrides, ordinary_overrides = split_include_and_ordinary_overrides(parsed_overrides)
     _append_stage(stages, "user_composition_overrides", {"requested_include_overrides": len(include_overrides)})
 
+    effective_include_sites = expanded_with_includes.include_sites
     if include_overrides:
-        merged = _apply_user_composition_overrides(
+        user_composition = _apply_user_composition_overrides(
             merged,
             include_overrides=include_overrides,
             include_records=expanded_with_includes.include_sites,
             recomposition_contexts=expanded_with_includes.recomposition_contexts,
             base_source=base_source,
+        )
+        merged = user_composition.config
+        replaced_include_containers = {
+            _include_site_path(override.path)[:-1]
+            for override in include_overrides
+            if override.operation == "update"
+        }
+        replaced_include_paths = {
+            _include_site_path(override.path)
+            for override in include_overrides
+            if override.operation == "update"
+        }
+        effective_include_sites = (
+            *(
+                record
+                for record in expanded_with_includes.include_sites
+                if record.include_site_path not in replaced_include_paths
+                and not _is_descendant_include_record(record, replaced_include_containers)
+            ),
+            *user_composition.include_records,
         )
 
     _append_stage(
@@ -217,7 +252,7 @@ def inspect_config_composition(
 
     source_artifacts = _build_source_artifacts(
         sources=sources,
-        include_sites=expanded_with_includes.include_sites,
+        include_sites=effective_include_sites,
         recipe_manifest=recipe_manifest_payload,
     )
     fingerprint_records = (
@@ -229,7 +264,7 @@ def inspect_config_composition(
         ),
     )
     provenance_metadata = _build_provenance_metadata(
-        include_records=expanded_with_includes.include_sites,
+        include_records=effective_include_sites,
         recomposition_contexts=expanded_with_includes.recomposition_contexts,
         local_customizations=expanded_with_includes.local_customizations,
         include_overrides=include_overrides,
@@ -352,10 +387,11 @@ def _apply_user_composition_overrides(
     include_records: Sequence[IncludeSiteRecord],
     recomposition_contexts: Sequence[IncludeRecompositionContext],
     base_source: ConfigSource,
-) -> dict[str, PlainData]:
+) -> _UserCompositionResult:
     include_record_by_path = {record.include_site_path: record for record in include_records}
     context_by_path = {context.include_site_path: context for context in recomposition_contexts}
     staged = cast(dict[str, PlainData], dict(config))
+    user_include_records: list[IncludeSiteRecord] = []
 
     for override in include_overrides:
         include_site_path = _include_site_path(override.path)
@@ -375,12 +411,13 @@ def _apply_user_composition_overrides(
                     },
                 )
 
-            staged = _add_brand_new_include_site(
+            staged, include_record = _add_brand_new_include_site(
                 staged,
                 include_override=override,
                 include_site_path=include_site_path,
                 base_source=base_source,
             )
+            user_include_records.append(include_record)
             continue
 
         if override.operation == "add":
@@ -399,11 +436,12 @@ def _apply_user_composition_overrides(
             )
 
         if context is not None:
-            staged = _replace_existing_include_site(
+            staged, include_record = _replace_existing_include_site(
                 staged,
                 include_override=override,
                 context=context,
             )
+            user_include_records.append(include_record)
             continue
 
         raise _user_composition_error(
@@ -420,7 +458,7 @@ def _apply_user_composition_overrides(
             },
         )
 
-    return staged
+    return _UserCompositionResult(config=staged, include_records=tuple(user_include_records))
 
 
 def _replace_existing_include_site(
@@ -428,7 +466,7 @@ def _replace_existing_include_site(
     *,
     include_override: ParsedOverride,
     context: IncludeRecompositionContext,
-) -> dict[str, PlainData]:
+) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     authored_target = _as_include_target(
         include_override,
         source=_source_from_context(context),
@@ -441,20 +479,23 @@ def _replace_existing_include_site(
         include_site_path=context.source_include_site_path,
     )
 
-    replacement = _load_include_target(
+    replacement, include_record = _load_include_target(
         path=resolved.resolved_path,
         source=replacement_source,
         include_site_path=context.include_site_path,
+        source_include_site_path=context.source_include_site_path,
+        resolved=resolved,
         override=include_override,
     )
     replacement = _replay_local_customizations(replacement, context=context)
-    return _set_value(
+    staged = _set_value(
         config,
         path=context.include_site_path[:-1],
         value=replacement,
         source=replacement_source,
         override=include_override,
     )
+    return staged, include_record
 
 
 def _add_brand_new_include_site(
@@ -463,7 +504,7 @@ def _add_brand_new_include_site(
     include_override: ParsedOverride,
     include_site_path: ConfigPath,
     base_source: ConfigSource,
-) -> dict[str, PlainData]:
+) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     authored_target = _as_include_target(
         include_override,
         source=base_source,
@@ -508,14 +549,16 @@ def _add_brand_new_include_site(
             },
         )
 
-    replacement = _load_include_target(
+    replacement, include_record = _load_include_target(
         path=resolved.resolved_path,
         source=base_source,
         include_site_path=include_site_path,
+        source_include_site_path=include_site_path,
+        resolved=resolved,
         override=include_override,
     )
     parent[key] = replacement
-    return config
+    return config, include_record
 
 
 def _replay_local_customizations(
@@ -545,8 +588,10 @@ def _load_include_target(
     path: str | Path,
     source: ConfigSource,
     include_site_path: ConfigPath,
+    source_include_site_path: ConfigPath,
+    resolved: IncludeResolutionResult,
     override: ParsedOverride,
-) -> dict[str, PlainData]:
+) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     try:
         included_config, included_source = load_config(path, kind="overlay", order=0)
     except ConfigLoadError as exc:
@@ -589,7 +634,24 @@ def _load_include_target(
             },
         )
 
-    return cast(dict[str, PlainData], expanded.config)
+    include_record = IncludeSiteRecord(
+        include_site_path=include_site_path,
+        authored_target=resolved.authored_target,
+        source_path=resolved.source_path,
+        source_kind=source.kind,
+        source_order=source.order,
+        source_include_site_path=source_include_site_path,
+        source_content_digest=source.content_digest,
+        source_size_bytes=source.size_bytes,
+        resolved_path=str(resolved.resolved_path),
+        included_content_digest=included_source.content_digest,
+        included_size_bytes=included_source.size_bytes,
+        target_kind=resolved.target_kind,
+        explicit_escape=resolved.explicit_escape,
+        has_replace_marker=False,
+    )
+
+    return cast(dict[str, PlainData], expanded.config), include_record
 
 
 def _set_value(
@@ -715,6 +777,16 @@ def _ensure_include_parent_path(
 
 def _include_site_path(path: str) -> ConfigPath:
     return tuple(path.split(".")[:-1]) + ("_include_",)
+
+
+def _is_descendant_include_record(
+    record: IncludeSiteRecord,
+    replaced_include_containers: set[ConfigPath],
+) -> bool:
+    return any(
+        record.include_site_path[: len(container_path)] == container_path
+        for container_path in replaced_include_containers
+    )
 
 
 def _as_include_target(
@@ -988,7 +1060,7 @@ def _plaintext_secret_warnings(overrides: Sequence[ParsedOverride]) -> tuple[dic
     warnings: list[dict[str, PlainData]] = []
     for override in overrides:
         final_key = override.path.rsplit(".", 1)[-1]
-        if not is_secret_key(final_key):
+        if not contains_secret_like_value(final_key, override.value):
             continue
 
         warnings.append(
@@ -1008,34 +1080,18 @@ def _plaintext_secret_warnings(overrides: Sequence[ParsedOverride]) -> tuple[dic
 def _override_to_dict(override: ParsedOverride, *, record_values: bool = False) -> dict[str, PlainData]:
     value: PlainData = cast(PlainData, override.value)
     final_key = override.path.rsplit(".", 1)[-1]
-    if is_secret_key(final_key):
-        value = _redact_override_value(override.value)
-    elif record_values:
-        value = cast(PlainData, _to_plain_override_value(override.value))
+    redacted = contains_secret_like_value(final_key, override.value)
+    if redacted or record_values:
+        value = redact_secret_like_value(final_key, value)
 
     return {
-        "raw": REDACTION_MARKER if is_secret_key(final_key) else override.raw,
+        "raw": REDACTION_MARKER if redacted else override.raw,
         "path": override.path,
         "operation": override.operation,
         "value": value,
         "order": override.order,
-        "redacted": is_secret_key(final_key),
+        "redacted": redacted,
     }
-
-
-def _redact_override_value(value: object) -> PlainData:
-    if isinstance(value, dict):
-        return {key: REDACTION_MARKER for key in value}
-    if isinstance(value, list):
-        return [REDACTION_MARKER for _ in value]
-    if isinstance(value, tuple):
-        return [REDACTION_MARKER for _ in value]
-    return REDACTION_MARKER
-
-
-def _to_plain_override_value(value: object) -> PlainData:
-    return cast(PlainData, to_plain_data(value))
-
 
 def _append_stage(stages: list[ConfigCompositionStageRecord], name: str, payload: Mapping[str, object]) -> None:
     payload_data = cast(dict[str, PlainData], to_plain_data(dict(payload), path=f"stage[{name}]"))
