@@ -1341,9 +1341,9 @@ PR-open notes:
 
 ### Phase 6 - File-Defined Recursive Includes
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-file-includes`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/31
 
 Goal:
 
@@ -1377,6 +1377,29 @@ Test expectations:
 - Unit/contract tests for nested includes, cycles, sibling overrides,
   replacement requirements, include stack records, and include provenance
   serialization.
+
+PR-open notes:
+
+- Phase execution plan: `docs/phases/config-file-includes.md`.
+- PR target: `develop`; stack predecessor: none.
+- PR verification: `gh pr view https://github.com/samcantrill/loom/pull/31
+  --json baseRefName,headRefName,state,url` returned `baseRefName`
+  `develop`, `headRefName` `codex/config-file-includes`, `state` `OPEN`,
+  and URL `https://github.com/samcantrill/loom/pull/31`.
+- Implementation summary: added internal file-authored recursive include
+  expansion after source-aware file merge and before overrides/recipes,
+  include stack/cycle diagnostics, source-aware include expansion errors,
+  local customization/include-site records, and same-site `_replace_`
+  enforcement for include swaps over existing mappings.
+- Validation: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 639
+  passed, 0 failed, 0 errors, 8 skipped, and 430 deselected.
+- Scope notes: no user include swaps, recipes/order refactor, runtime
+  interpolation changes, public inspection API, new public `ComposedConfig`
+  fields, manifest/provenance/source-artifact/fingerprint population, raw
+  source persistence, CLI behavior, pipeline imports, plugin/remote/global
+  resolvers, or root package exports were added.
+- PR review: pending.
 
 ### Phase 7 - User Composition Overrides
 
