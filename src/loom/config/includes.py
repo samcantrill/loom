@@ -147,6 +147,7 @@ def expand_config_includes(
         include_sites=include_sites,
         local_customizations=local_customizations,
         include_stack=include_stack,
+        reject_unconsumed_replace_markers=False,
     )
 
     return ExpandedConfigWithIncludes(
@@ -167,6 +168,7 @@ def _expand_value_with_includes(
     include_sites: list[IncludeSiteRecord],
     local_customizations: list[IncludeLocalCustomization],
     include_stack: list[IncludeStackFrame],
+    reject_unconsumed_replace_markers: bool,
 ) -> PlainData:
     if not isinstance(value, Mapping):
         if isinstance(value, list):
@@ -181,6 +183,7 @@ def _expand_value_with_includes(
                     include_sites=include_sites,
                     local_customizations=local_customizations,
                     include_stack=include_stack,
+                    reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
                 )
                 for index, child in enumerate(value)
             ]
@@ -200,6 +203,23 @@ def _expand_value_with_includes(
             include_sites=include_sites,
             local_customizations=local_customizations,
             include_stack=include_stack,
+            reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
+        )
+
+    if reject_unconsumed_replace_markers and "_replace_" in mapping:
+        replace_marker_path = path + ("_replace_",)
+        source_replace_marker_path = source_lookup_path + ("_replace_",)
+        replace_source = _lookup_include_source(
+            source_map,
+            source_replace_marker_path,
+            expect_path=source_replace_marker_path,
+            path_kind="replace_marker",
+        )
+        _raise_unconsumed_included_replace_marker_error(
+            source=replace_source,
+            replace_marker_path=replace_marker_path,
+            source_replace_marker_path=source_replace_marker_path,
+            actual=mapping.get("_replace_"),
         )
 
     for key, child in mapping.items():
@@ -213,6 +233,7 @@ def _expand_value_with_includes(
             include_sites=include_sites,
             local_customizations=local_customizations,
             include_stack=include_stack,
+            reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
         )
     return expanded_mapping
 
@@ -228,6 +249,7 @@ def _expand_including_mapping(
     include_sites: list[IncludeSiteRecord],
     local_customizations: list[IncludeLocalCustomization],
     include_stack: list[IncludeStackFrame],
+    reject_unconsumed_replace_markers: bool,
 ) -> dict[str, PlainData]:
     include_site_path = path + ("_include_",)
     source_include_site_path = source_lookup_path + ("_include_",)
@@ -343,6 +365,7 @@ def _expand_including_mapping(
             include_sites=include_sites,
             local_customizations=local_customizations,
             include_stack=include_stack,
+            reject_unconsumed_replace_markers=True,
         )
 
         if not isinstance(shifted_included_map, Mapping):
@@ -404,6 +427,7 @@ def _expand_including_mapping(
             include_sites=include_sites,
             local_customizations=local_customizations,
             include_stack=include_stack,
+            reject_unconsumed_replace_markers=reject_unconsumed_replace_markers,
         )
 
     merged = merge_configs(
@@ -413,6 +437,30 @@ def _expand_including_mapping(
     )
 
     return merged
+
+
+def _raise_unconsumed_included_replace_marker_error(
+    *,
+    source: ConfigSource,
+    replace_marker_path: ConfigPath,
+    source_replace_marker_path: ConfigPath,
+    actual: object,
+) -> Never:
+    raise _include_expansion_error(
+        "Unexpected _replace_ marker in included content.",
+        code="invalid_included_replace_marker",
+        source=source,
+        include_site_path=replace_marker_path,
+        authored_target="",
+        actual=actual,
+        directive="_replace_",
+        details={
+            "reason": "unconsumed_included_replace_marker",
+            "replace_marker_path": _format_path(replace_marker_path),
+            "source_replace_marker_path": _format_path(source_replace_marker_path),
+            "container_path": _format_path(replace_marker_path[:-1]),
+        },
+    )
 
 
 def _validate_local_replace_marker(
@@ -476,7 +524,7 @@ def _lookup_include_source(
     include_site_path: ConfigPath,
     *,
     expect_path: ConfigPath | None = None,
-    path_kind: Literal["include", "sibling"] = "include",
+    path_kind: Literal["include", "sibling", "replace_marker"] = "include",
 ) -> ConfigSource:
     include_source = source_map.get(include_site_path)
     if include_source is not None:
@@ -525,6 +573,7 @@ def _include_expansion_error(
     source: ConfigSource,
     include_site_path: ConfigPath,
     authored_target: str,
+    directive: str = "_include_",
     expected: object | None = None,
     actual: object | None = None,
     details: dict[str, object] | None = None,
@@ -545,7 +594,7 @@ def _include_expansion_error(
             config_path=format_config_path(include_site_path),
             expected=_optional_plain_data(expected),
             actual=_optional_plain_data(actual),
-            directive="_include_",
+            directive=directive,
             details=cast(dict[str, PlainData], plain_details),
         ),
     )

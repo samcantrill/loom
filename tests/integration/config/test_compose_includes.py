@@ -18,6 +18,18 @@ def _model_mapping(config: dict[str, PlainData]) -> dict[str, PlainData]:
     return cast(dict[str, PlainData], model)
 
 
+def _assert_no_replace_markers(value: PlainData) -> None:
+    if isinstance(value, dict):
+        assert "_replace_" not in value
+        for child in value.values():
+            _assert_no_replace_markers(child)
+        return
+
+    if isinstance(value, list):
+        for child in value:
+            _assert_no_replace_markers(child)
+
+
 def test_public_compose_includes_base_and_overlay_after_source_aware_merge(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
     overlay = tmp_path / "overlay.yaml"
@@ -48,6 +60,7 @@ def test_public_compose_includes_base_and_overlay_after_source_aware_merge(tmp_p
         "local": "from-overlay",
         "overlay_only": "yes",
     }
+    _assert_no_replace_markers(composed.resolved)
 
 
 def test_public_compose_includes_nested_include_relative_to_including_file(tmp_path: Path) -> None:
@@ -140,6 +153,33 @@ def test_public_compose_includes_with_same_site_replace_stays_enabled(tmp_path: 
         "override": "overlay",
         "base_only": "keep",
     }
+    _assert_no_replace_markers(composed.resolved)
+
+
+def test_public_compose_rejects_replace_marker_authored_inside_included_file(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./included.yaml\n",
+        encoding="utf-8",
+    )
+    included.write_text("_replace_: true\nstage: included\n", encoding="utf-8")
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        compose_config(base)
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_included_replace_marker"
+    assert context.source_path == str(included)
+    assert context.config_path == "$.pipeline.model._replace_"
+    assert context.directive == "_replace_"
 
 
 def test_public_compose_user_overrides_apply_after_file_include_expansion(tmp_path: Path) -> None:

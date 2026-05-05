@@ -27,8 +27,9 @@ remain out of scope for later phases.
 
 `src/loom/config/includes.py` now owns the recursive expansion stage, including
 internal include-site records, include-stack frames, local customization records,
-cycle detection, source-aware include-root errors, and same-site replacement
-enforcement. It reuses the Phase 5 include resolver and strict loader rather
+cycle detection, source-aware include-root errors, same-site replacement
+enforcement, and fail-closed rejection of unconsumed `_replace_` markers inside
+included files. It reuses the Phase 5 include resolver and strict loader rather
 than adding another target parser.
 
 `src/loom/config/source_maps.py` now carries narrow internal mapping-site and
@@ -43,11 +44,20 @@ New tests implemented:
 
 - Unit coverage for nested includes, bare-name resolution from included files,
   cycle diagnostics, non-string include values, missing source-map entries,
-  non-mapping include roots, sibling customization records, and `_replace_`
-  edge cases.
+  non-mapping include roots, sibling customization records, root and nested
+  included-file `_replace_` marker rejection, and `_replace_` edge cases.
 - Integration coverage for public `compose_config` ordering across base,
-  overlays, file include expansion, and ordinary user overrides.
+  overlays, file include expansion, included-file `_replace_` rejection, and
+  ordinary user overrides.
 - Contract coverage for structured include expansion error serialization.
+
+### PR #31 Blocker Resolution
+
+The blocking review finding for included-file `_replace_` leakage is resolved.
+Unconsumed `_replace_` markers authored inside included files now raise
+structured `ConfigIncludeExpansionError` context for both root and nested
+locations, and successful include expansions assert that `_replace_` does not
+survive. Valid same-site overlay `_replace_` include swaps remain covered.
 
 ## Tests And Validation
 
@@ -55,6 +65,9 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default suite passed 425/425 with 9 skipped; config-extra suite passed 209/209 selected; build produced sdist and wheel. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall summary passed 639 tests with 8 skipped and 430 deselected. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_includes.py` | Passed | 43/43 include unit tests passed after blocker resolution. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_includes.py` | Passed | 6/6 compose include integration tests passed after blocker resolution. |
+| Changed-file Ruff/Pyright and `git diff --check` | Passed | Ruff passed; Pyright reported 0 errors; whitespace check passed. |
 | GitHub checks | Pending | Available after PR creation. |
 
 ### Test Suite Summary
