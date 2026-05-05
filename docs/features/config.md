@@ -4,7 +4,7 @@
 
 `loom.config` is the configuration composition and object construction layer for `loom`.
 
-It exists to keep experiment and pipeline configuration readable while preserving full access to ordinary Python code. It should compose YAML, validate stable boundaries, construct object graphs, record provenance, and hand the resolved result to `loom.pipeline`. Recipe expansion is introduced after the initial composition API is in place.
+It exists to keep experiment and workflow configuration readable while preserving full access to ordinary Python code. It should compose YAML, validate stable boundaries, construct object graphs, record provenance, and return the resolved result to the Python caller. Recipe expansion is introduced after the initial composition API is in place.
 
 The initial design should be intentionally narrow. The full v0 implementation should support two authoring modes:
 
@@ -14,12 +14,13 @@ The initial design should be intentionally narrow. The full v0 implementation sh
 It should avoid intermediate mechanisms at first, especially registry aliases, arbitrary include graphs, complex list merge operators, and large global component registries. Those can be added later if concrete use makes them necessary.
 
 After v0, `loom.config` should add explicit recursive composition through
-`_include_`, whole-section replacement through `_replace_`, in-document subtree
-reuse through `_copy_`, and rebuildable config source snapshots. This is not
-intended to mimic Hydra or depend on Hydra. The goal is a smaller,
+`_include_` and whole-section replacement through `_replace_`. V1 deliberately
+defers `_copy_` and defaults to metadata/hash source records rather than raw
+source snapshots. This is not intended to mimic Hydra or depend on Hydra. The
+goal is a smaller,
 deterministic composition feature that lets users split large configs into
-nested component files, swap components for experiments, reuse stage config
-templates, and preserve clear provenance, fingerprints, and path-aware errors.
+nested component files, swap components for experiments, and preserve clear
+provenance, fingerprints, and path-aware errors.
 
 ### 1.1 Alignment With `loom.md`
 
@@ -91,7 +92,7 @@ Responsibilities:
 ```text
 load YAML/OmegaConf configs
 apply overlays
-apply CLI overrides
+apply Python API override strings
 resolve interpolation
 expand named recipes
 validate configs
@@ -99,12 +100,11 @@ resolve import targets
 instantiate object graphs
 inject runtime dependencies when requested
 record config provenance
-produce serializable resolved config snapshots for the runner/run store
+return artifact-safe manifest/provenance/source/fingerprint records to callers
 redact secrets
 resolve explicit config includes after v0
 resolve explicit config replacements after v0
-resolve explicit config copies after v0
-produce rebuildable config composition manifests after v0
+leave resolved-config persistence and run-store writes to callers
 ```
 
 ### 3.3 `loom.pipeline`
@@ -124,7 +124,10 @@ run directory management
 sweeps
 ```
 
-`loom.pipeline` should call `loom.config`; `loom.config` should not call `loom.pipeline` except through optional protocol types.
+`loom.pipeline` must remain usable without `loom.config` or composition
+manifests. Config composition is an optional Python API path that can produce
+plain data for callers; `loom.config` must not call pipeline, stores, CLI
+modules, plugin discovery, or project code during composition.
 
 ---
 
@@ -137,15 +140,15 @@ YAML config loading
 OmegaConf interpolation and dot-path overrides
 base experiment config
 overlay files
-CLI overrides
+override strings
 named recipe expansion
 full `_target_` recursive instantiation
 runtime dependency injection
 partial construction or builder construction
 basic top-level validation
 recipe-level validation
-resolved config snapshot generation
-recipe provenance data for the runner/run store to persist
+in-memory resolved config generation
+recipe provenance data returned to callers
 secret redaction
 clear error messages
 ```
@@ -177,15 +180,13 @@ The most important constraint: v0 should have only two ways to express reusable 
 ```text
 explicit `_include_` composition inside mappings
 explicit `_replace_` mapping replacement for component swaps
-explicit `_copy_` subtree reuse for stage/component config templates
 strict update overrides plus explicit `+` add overrides
 relative include resolution based on the including config file and key path
 local path and `file://` include resolution
 recursive include expansion with cycle detection
-copy expansion with cycle detection
-composition provenance, source hashes, and resolved include/copy stacks
+composition provenance, source hashes, and resolved include stacks
 deterministic merge of included content with sibling overrides
-composition manifests and source snapshots for rebuildable runs
+composition manifests, source metadata/hashes, and opt-in raw source snapshots
 clear path-aware errors for missing, invalid, or cyclic composition directives
 ```
 
@@ -203,11 +204,13 @@ boundaries and recipe contracts.
 
 ### 5.1 Raw Config
 
-The config file as authored before composition, interpolation, recipe expansion, or CLI overrides.
+The config file as authored before composition, interpolation, recipe expansion,
+or override strings.
 
 ### 5.2 Composed Config
 
-The config after loading base files, overlays, and CLI overrides.
+The config after loading base files, overlays, file/user composition, recipe
+expansion, and ordinary Python API override strings.
 
 ### 5.3 Expanded Config
 
@@ -215,7 +218,10 @@ The config after recipe expansion. At this point, high-level recipe references s
 
 ### 5.4 Resolved Config
 
-The final config after interpolation, missing-value checks, redaction handling, and validation. This is what the runner/run store should save for reproducibility.
+The final in-memory config after interpolation and validation. V1 exposes this
+to Python callers but does not persist it by default; default artifacts use the
+artifact-safe unresolved/redacted view plus manifest, provenance, source, and
+fingerprint records.
 
 ### 5.5 Object Graph
 
@@ -287,8 +293,8 @@ configs/model/resnet50.yaml
 
 The included mapping is loaded first, then sibling keys such as `dropout` merge
 over the included content. The final resolved config should not require users to
-know whether a value came from the base file, an include, an overlay, or a CLI
-override; provenance records that source information explicitly.
+know whether a value came from the base file, an include, an overlay, or an
+override string; provenance records that source information explicitly.
 
 If an `_include_` is applied at a config path that already has lower-precedence
 mapping content, the same mapping must also contain `_replace_: true`. This
@@ -316,9 +322,9 @@ keys from a previous component from leaking into a replacement component during
 experiments or sweeps.
 
 `_replace_` is allowed only in mappings. It is a composition marker and should
-not appear in the resolved config. When a mapping with `_replace_: true` has no
-destination value to replace, the marker is stripped and the mapping is used as
-written.
+not appear in the resolved config. In v1, `_replace_: true` is valid only when
+there is lower-precedence mapping content to discard; unnecessary replacement
+markers fail as author-intent mismatches.
 
 When `_include_` appears while replacing an existing mapping, `_replace_: true`
 is required in the same mapping. A missing marker is a config error rather than
@@ -326,8 +332,8 @@ an implicit recursive merge.
 
 ### 5.10 Copy
 
-A config mapping that copies an existing subtree from the composed config before
-local sibling keys are applied.
+Future-only, not supported in v1: a config mapping that copies an existing
+subtree from the composed config before local sibling keys are applied.
 
 Example:
 
@@ -352,20 +358,21 @@ The copied subtree is deep-copied as plain config data, then local sibling keys
 merge over it. The copied result is not a live alias: later local changes at the
 copy site do not mutate the source subtree.
 
-`_copy_` should use explicit config paths, not implicit global names. Copy
-expansion must detect cycles and record both the source path and the destination
-path in provenance.
+If `_copy_` appears in v1 authored config, composition fails with an explicit
+unsupported-directive `ConfigError`. Future `_copy_` work should use explicit
+config paths, not implicit global names, and should define cycle detection and
+provenance before implementation.
 
 ### 5.11 Composition Manifest
 
-A persisted record of authoring-level composition operations used to build the
-resolved config.
+A versioned artifact-safe record of authoring-level composition operations used
+to build the composed config.
 
-The manifest should record includes, copies, replacements, overlays, parsed CLI
-overrides, source hashes, and source snapshots needed to reconstruct the
-composition process. This complements `resolved.yaml`: the resolved config shows
-what was used, while the manifest and snapshots explain how to rebuild it even
-if project files later move or change.
+The v1 manifest records includes, replacements, overlays, parsed Python API
+override strings, source hashes, fingerprint references, recipe records, and
+raw snapshot availability. It does not include `_copy_`, resolved resolver
+outputs, raw source bytes by default, or resolved-config persistence. Raw source
+snapshots are available only through explicit Python API opt-in.
 
 When stable `loom` schemas validate part of the config, the manifest or
 provenance should identify the schema boundary, schema version, and config path.
@@ -424,9 +431,11 @@ If a user regularly edits deeper than this, introduce a recipe.
 
 ### 6.2 Make Resolved Config Explicit
 
-The resolved config should be complete enough to reproduce the run without guessing which recipe, overlay, or CLI argument was used.
+The in-memory resolved config should be complete enough for the Python caller to
+run the workflow without guessing which recipe, overlay, or override string was
+used. V1 does not persist the resolved config by default.
 
-A run should save:
+Future runner/run-store policy may save:
 
 ```text
 config/raw.yaml
@@ -439,12 +448,10 @@ config/resolved.redacted.yaml
 config/source_snapshots/
 ```
 
-`resolved.yaml` is sufficient to inspect the exact final values used by a run.
-To rebuild the composition process from scratch, the run also needs the
-composition manifest and source snapshots for base configs, overlays, included
-files, including files that define copied source subtrees. Source snapshots
-should be content-addressed or otherwise tied to recorded hashes so the manifest
-can prove which authored inputs produced the resolved config.
+In v1, `loom.config` returns artifact-safe unresolved/redacted config data,
+composition manifests, source metadata/hashes, fingerprints, and optional raw
+source snapshot payloads to the caller. It does not choose run-store paths or
+write `resolved.yaml`.
 
 ### 6.3 Prefer Recipes Over Intermediate Aliases in v0
 
@@ -477,9 +484,8 @@ runner:
 
 ### 6.4 Add Explicit Composition Before Broader Config Language
 
-Recursive file composition, section replacement, and subtree copying are useful
-enough to add after the v0 kernel, but they should remain explicit and
-deterministic:
+Recursive file composition and section replacement are useful enough to add
+after the v0 kernel, but they should remain explicit and deterministic:
 
 ```yaml
 model:
@@ -501,9 +507,9 @@ URI includes are limited to built-in local and file:// resolution in v1
 include expansion records provenance and source hashes
 include expansion detects cycles and fails clearly
 _replace_ is allowed only in mappings and replaces the destination mapping
-_copy_ is allowed only in mappings and deep-copies a composed config subtree
-copy expansion records source/destination paths and detects cycles
-composition manifests and source snapshots make authored composition rebuildable
+_copy_ is unsupported in v1 and fails explicitly when authored
+composition manifests record artifact-safe source metadata/hashes by default
+raw source snapshots are explicit Python API opt-in, not default persistence
 ```
 
 Relative resolution should be path-based and predictable:
@@ -544,21 +550,8 @@ This means the previous `model` mapping is discarded before the replacement
 mapping is applied. Without `_replace_`, mappings recursively merge and sibling
 keys continue to override included content.
 
-Subtree reuse should also be explicit:
-
-```yaml
-pipeline:
-  stages:
-    train_alt:
-      config:
-        _copy_: stage_configs.train_base
-        optimizer:
-          lr: 0.0001
-```
-
-`_copy_` copies the source subtree as plain config data and then applies local
-siblings as normal overrides. This is useful for repeated stage configurations
-that differ by a small number of values.
+Subtree reuse through `_copy_` remains future roadmap work. V1 rejects `_copy_`
+instead of partially documenting or implementing copy semantics.
 
 This is not a Hydra defaults-list implementation. There is no implicit global
 search path, no launcher or sweeper behavior, no arbitrary expression language,
@@ -568,20 +561,20 @@ and no automatic registry aliasing for every component.
 
 ## 7. Composition Order
 
-Full v0 flow after recipes are implemented:
+Historical v0 flow after recipes are implemented:
 
 ```text
 1. Load raw base config.
 2. Load overlay configs in order.
 3. Merge overlays into base config.
-4. Apply CLI dot-path overrides.
+4. Apply override strings.
 5. Resolve enough interpolation for recipe arguments from the composed config.
 6. Expand recipes.
 7. Resolve interpolation again after expansion.
 8. Validate missing values and stable schemas.
 9. Redact secrets for persisted config views.
 10. Produce raw, overlay, override, recipe, and resolved provenance data for
-   the runner/run store to persist.
+   the caller.
 11. Instantiate object graph when requested.
 ```
 
@@ -610,44 +603,38 @@ Phase 4 composition writes nothing by itself. Persistence belongs to the runner
 and run store. Phase 5 replaces the unsupported-recipe bridge with deterministic
 recipe expansion and manifest records.
 
-Post-v0 composition with includes, replacement, and copies should preserve the
-core merge rules while treating base files, overlays, and CLI dot-path
-overrides as authoring-level inputs:
+V1 composition with includes and replacement preserves the core merge rules
+while treating base files, overlays, and Python API override strings as
+authoring-level inputs:
 
 ```text
 load base config
 load overlays
-parse CLI dot-path overrides into a highest-precedence override mapping
+parse override strings
 recursive merge overlays and override mapping into base config, honoring _replace_
 recursively expand includes
-recursively expand copies
 resolve enough interpolation for recipe args
 expand recipes
 resolve interpolation again
 validate
 redact
-compute config provenance and fingerprint
+compute artifact-safe manifest, provenance, source records, and fingerprint
 ```
 
-For ordinary values, CLI overrides remain the highest-precedence authoring
-input. Representing them as an override mapping before directive expansion lets
-experiments and sweeps replace component selections with values such as
-`model._include_=vit_b16` or by applying `_replace_: true` to an entire section.
+For ordinary values, override strings remain the highest-precedence authoring
+input. User-defined include swaps run after file-defined composition and before
+recipes; ordinary value overrides then target the expanded concrete config.
 
 Implementation should preserve source-location metadata through the merge so an
 include authored in an overlay still resolves relative to that overlay file. A
-bare include authored by CLI override should resolve relative to the root config
-file directory and the overridden config path unless it is an explicit path or
-URI.
-
-Copy expansion happens after include expansion so copied stage or component
-templates contain the same included defaults they would have had at their
-source location.
+brand-new user include sites require explicit relative paths, absolute paths, or
+`file://` URIs. Bare user include targets are allowed only at existing
+file-defined include sites with known source context.
 
 Directive validation happens during composition. Stable typed validation happens
 after directives, recipes, and interpolation have produced the resolved config
-shape. This keeps `_include_`, `_replace_`, and `_copy_` as composition
-directives rather than schema declarations.
+shape. This keeps `_include_` and `_replace_` as composition directives rather
+than schema declarations. `_copy_` is a reserved unsupported directive in v1.
 
 ---
 
@@ -684,16 +671,21 @@ recursively merging the new included component with stale keys.
 
 ---
 
-## 9. CLI Overrides
+## 9. Override Strings
 
-Support dot-path overrides with explicit add syntax:
+V1 exposes dot-path override strings through the Python API with explicit add
+syntax:
 
 ```text
-loom run experiment.yaml \
-  --set run.seed=123 \
-  --set serialization.codec.indent=2 \
-  --set data.root=/data/project \
-  --set +vars.learning_rate=0.0003
+compose_config(
+  "experiment.yaml",
+  overrides=(
+    "run.seed=123",
+    "serialization.codec.indent=2",
+    "data.root=/data/project",
+    "+vars.learning_rate=0.0003",
+  ),
+)
 ```
 
 Override forms:
@@ -713,16 +705,16 @@ typos in ordinary overrides without preventing rapid experimentation.
 Examples:
 
 ```text
---set +vars.learning_rate=0.0003
---set +evaluation.metrics='["accuracy", "loss"]'
---set +model._replace_=true --set model._include_=vit_b16
++vars.learning_rate=0.0003
++evaluation.metrics='["accuracy", "loss"]'
+model._include_=vit_b16
 ```
 
 The final example switches an existing included component. `model._include_`
-updates an existing include target, while `+model._replace_=true` explicitly
-adds the required replacement marker. If the config path does not already have
-a `model` mapping, a new included component can be introduced with
-`+model._include_=vit_b16`.
+updates a recorded file-defined include site and reuses its source context. A
+brand-new user include site must use `+` and an explicit relative path,
+absolute path, or `file://` URI; brand-new bare include targets are not
+supported in v1.
 
 Recommended parsing rules:
 
@@ -764,11 +756,12 @@ Environment interpolation should be explicit:
 
 ```yaml
 storage:
-  endpoint: ${env:LOOM_STORAGE_ENDPOINT}
-  token: ${env:LOOM_STORAGE_TOKEN}
+  endpoint: ${oc.env:LOOM_STORAGE_ENDPOINT}
+  token: ${oc.env:LOOM_STORAGE_TOKEN}
 ```
 
-Secrets resolved from environment variables should be redacted from persisted public views.
+Secrets resolved from environment variables should be redacted from artifact-safe
+public views and should not be persisted as resolved values by default.
 
 ---
 
@@ -989,8 +982,8 @@ Validation should be source-aware. A validation error should be able to report:
 
 ```text
 config path
-source file, overlay, include, copy, or CLI override
-include/copy stack when relevant
+source file, overlay, include, replacement mapping, or override string
+include stack when relevant
 schema boundary when relevant
 expected value shape
 actual value shape
@@ -1017,14 +1010,14 @@ api_key
 credential
 ```
 
-Persist both:
+Expose both:
 
 ```text
-resolved.yaml:
-  full resolved config, private and local-only
+resolved:
+  in-memory full resolved config returned to Python callers
 
-resolved.redacted.yaml:
-  safe for logs and bug reports
+redacted:
+  artifact-safe view returned for logs and bug reports
 ```
 
 Do not print unredacted secrets in error messages.
@@ -1086,10 +1079,17 @@ resolved
 redacted
 provenance
 recipe_manifest
-composition_manifest after v1
-source_snapshots after v1
+unresolved
+manifest
+source_artifacts
+fingerprint_records
+raw_source_snapshots
 fingerprint
 ```
+
+The `resolved` field is an in-memory caller result, not a default persistence
+artifact. Raw source snapshots are disabled by default and require
+`include_raw_source_snapshots=True`.
 
 `recipe_manifest` is empty when no recipes are expanded. When `_recipe_` blocks
 are present, composition expands them through the selected `RecipeCatalog` and
@@ -1121,8 +1121,8 @@ register_recipe("local_jsonl_manifest", LocalJsonlManifestRecipe)
 Config errors should identify the failing path and the exact problem.
 When composition provenance is available, errors should also identify the
 authored source that produced the failing value. That source may be the base
-config, an overlay, an included file or URI, a copied subtree, a replacement
-mapping, or a CLI override.
+config, an overlay, an included local/file source, a replacement mapping, or an
+override string. `_copy_` is unsupported in v1 and should be reported as such.
 
 Composition should fail clearly when:
 
@@ -1164,11 +1164,12 @@ Reason:
 
 ---
 
-## 17. CLI Integration
+## 17. Future CLI Integration
 
-`loom.config` should support the `loom` CLI without becoming CLI-specific.
+V1 ships Python API composition only. Future CLI commands should wrap the same
+public API without adding separate config semantics.
 
-CLI commands can call the Python API:
+Future CLI commands may call the Python API:
 
 ```text
 loom validate experiment.yaml
@@ -1181,9 +1182,8 @@ loom run experiment.yaml --set run.seed=123
 `plan` should show the resolved pipeline graph and recipe expansions.
 
 When functional CLI behavior is added, `run` should compose config, create a run
-directory, and hand execution to `PipelineRunner`. The runner, not
-`loom.config.instantiate`, parses `pipeline.stages` and imports stage targets
-with no constructor kwargs in v0.
+directory, and hand execution to `PipelineRunner`. The runner/run store, not
+`loom.config`, owns persistence.
 
 ---
 
@@ -1207,7 +1207,6 @@ tests/unit/loom/config/
   test_compose.py
   test_include_resolution.py
   test_includes.py
-  test_copies.py
   test_source_snapshots.py
   recipes/
     test_catalog.py
@@ -1223,7 +1222,6 @@ Recommended integration layout:
 ```text
 tests/integration/config/
   test_compose_includes.py
-  test_compose_copies.py
   test_compose_overrides.py
   test_compose_recipes.py
   test_compose_provenance.py
@@ -1252,7 +1250,7 @@ Generated fixtures should cover common composition shapes without creating
 large fixture directories. Golden config trees should be small and
 domain-neutral, and should be reserved for behavior where the authored file
 tree matters: bare include resolution, relative includes, `file://` includes,
-source snapshots, and provenance stacks.
+source metadata/raw snapshot opt-in, and provenance stacks.
 
 The unit suite should cover:
 
@@ -1270,12 +1268,11 @@ include path resolution
 recursive include expansion
 include cycle errors
 required _replace_ for include swaps
-_copy_ deep-copy behavior
-copy cycle errors
+unsupported _copy_ errors
 scoped validation of loom-owned sections
 project-owned pass-through mappings
 composition provenance records
-source snapshot hashing
+source metadata/hash records and raw snapshot opt-in behavior
 recipe catalog and expansion
 _target_ import and recursive instantiation
 runtime dependency injection
@@ -1285,23 +1282,23 @@ The integration suite should cover complete `compose_config` flows:
 
 ```text
 base config plus overlays
-strict and + CLI overrides
+strict and + override strings
 base and overlay includes
-CLI replacement of included components
-copying included defaults
-interpolation after include/copy expansion
+user replacement of included components
+interpolation after include expansion
 recipe expansion after composition
 redaction after composition
 stable schema validation after composition
-resolved config without composition markers
+in-memory resolved config without composition markers
 fingerprint changes from authored source changes
-composition manifest and source snapshots
+composition manifest, source metadata/hashes, and raw snapshot opt-in
 ```
 
 End-to-end config tests should stay small and public-API focused. They should
 compose synthetic domain-neutral configs through `compose_config` and assert the
-resolved config, redacted view, provenance, manifests, and fingerprints. Full
-pipeline execution belongs to `loom.pipeline` and runner tests.
+in-memory resolved config, redacted artifact view, provenance, manifests, source
+records, and fingerprints. Full pipeline execution belongs to `loom.pipeline`
+and runner tests.
 
 ---
 
@@ -1310,7 +1307,7 @@ pipeline execution belongs to `loom.pipeline` and runner tests.
 Build in this order:
 
 1. Config file loading and recursive merge.
-2. Dot-path CLI override parsing and application.
+2. Dot-path override string parsing and application.
 3. Interpolation and missing-value checks.
 4. Redaction, provenance data, empty recipe manifest, and clear rejection of
    `_recipe_` until recipe support lands.
@@ -1319,9 +1316,9 @@ Build in this order:
 7. Recursive `_target_` instantiation.
 8. Runtime dependency injection.
 9. Top-level validation and clear error formatting.
-10. Post-v0 `_include_`, `_replace_`, `_copy_`, composition manifests, and
-    source snapshots.
-11. Functional CLI wrappers after v0.
+10. V1 `_include_`, `_replace_`, composition manifests, source metadata/hashes,
+    raw snapshot opt-in, and explicit `_copy_` rejection.
+11. Functional CLI wrappers in a later roadmap version.
 
 Each step should include tests before the next step depends on it.
 
@@ -1339,12 +1336,12 @@ named recipe expansion
 simple overlay and override composition
 explicit recursive `_include_` composition after v0
 explicit `_replace_` component replacement after v0
-explicit `_copy_` subtree reuse after v0
+explicit `_copy_` rejection in v1; subtree reuse remains future work
 interpolation
 stable validation boundaries
-resolved config export
+in-memory resolved config for Python callers
 recipe provenance
-composition provenance and rebuildable source snapshots after v0
+artifact-safe composition provenance, source metadata/hashes, and opt-in raw snapshots
 secret redaction
 clear instantiation errors
 ```

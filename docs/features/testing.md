@@ -136,11 +136,15 @@ Responsibilities:
 
 ```text
 synthetic complete pipeline
-CLI run path
+public Python API workflow path
+future CLI run path
 status/log/artifact inspection
 resume behavior
 failure behavior
 ```
+
+V1 config-composition e2e coverage uses public Python APIs. Functional CLI e2e
+coverage remains future work until CLI behavior exists.
 
 ### 3.5 `tests/contracts`
 
@@ -1324,7 +1328,7 @@ runner lifecycle tests
 local executor tests
 ```
 
-### 22.5 Phase 5: CLI and E2E
+### 22.5 Phase 5: E2E and Future CLI
 
 Implement:
 
@@ -1334,6 +1338,10 @@ synthetic pipeline e2e
 resume e2e
 failure e2e
 ```
+
+Functional CLI command coverage is future work. Current e2e coverage should
+prefer public Python APIs, including config composition through `compose_config`
+or `inspect_config_composition`.
 
 ### 22.6 Phase 6: Plugins, Sweeps, SLURM
 
