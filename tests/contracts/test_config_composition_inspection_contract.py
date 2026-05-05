@@ -48,5 +48,9 @@ def test_inspection_shape_and_stage_contract(tmp_path: Path) -> None:
         assert isinstance(stage.payload, dict)
 
     assert inspection.unresolved == inspection.to_composed_config().unresolved
-    assert inspection.manifest.source_artifacts == ()
-    assert inspection.manifest.fingerprint_records == ()
+    assert inspection.manifest.source_artifacts == (inspection.source_artifacts)
+    assert len(inspection.manifest.fingerprint_records) == 1
+    assert inspection.manifest.fingerprint_records[0].label == "unresolved"
+    assert len(inspection.source_artifacts) == 1
+    assert inspection.manifest.metadata["source_reference_count"] == len(inspection.source_artifacts)
+    assert inspection.manifest.metadata["fingerprint_record_count"] == len(inspection.fingerprint_records)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import cast
@@ -15,6 +16,8 @@ from .api import ComposedConfig, ConfigCompositionInspection, ConfigCompositionS
 from .errors import ConfigErrorContext, ConfigIncludeExpansionError, ConfigLoadError, ConfigValidationError
 from .includes import (
     IncludeRecompositionContext,
+    IncludeLocalCustomization,
+    IncludeResolutionResult,
     IncludeSiteRecord,
     expand_config_includes,
     resolve_include_target,
@@ -41,13 +44,26 @@ from .provenance import (
     ConfigSource,
     build_config_fingerprint,
 )
-from .redaction import redact_secrets
+from .redaction import (
+    REDACTION_MARKER,
+    contains_secret_like_value,
+    redaction_policy,
+    redact_secret_like_value,
+    redact_secrets,
+)
 from .recipes import RecipeCatalog
 from .recipes.expansion import expand_recipes, resolve_recipe_argument_interpolation
+from .interpolation import ResolverExpressionRecord
 from .validation import validate_top_level_fields
 
 
 _BARE_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@dataclass(frozen=True, slots=True)
+class _UserCompositionResult:
+    config: dict[str, PlainData]
+    include_records: tuple[IncludeSiteRecord, ...]
 
 
 def inspect_config_composition(
@@ -120,13 +136,34 @@ def inspect_config_composition(
     include_overrides, ordinary_overrides = split_include_and_ordinary_overrides(parsed_overrides)
     _append_stage(stages, "user_composition_overrides", {"requested_include_overrides": len(include_overrides)})
 
+    effective_include_sites = expanded_with_includes.include_sites
     if include_overrides:
-        merged = _apply_user_composition_overrides(
+        user_composition = _apply_user_composition_overrides(
             merged,
             include_overrides=include_overrides,
             include_records=expanded_with_includes.include_sites,
             recomposition_contexts=expanded_with_includes.recomposition_contexts,
             base_source=base_source,
+        )
+        merged = user_composition.config
+        replaced_include_containers = {
+            _include_site_path(override.path)[:-1]
+            for override in include_overrides
+            if override.operation == "update"
+        }
+        replaced_include_paths = {
+            _include_site_path(override.path)
+            for override in include_overrides
+            if override.operation == "update"
+        }
+        effective_include_sites = (
+            *(
+                record
+                for record in expanded_with_includes.include_sites
+                if record.include_site_path not in replaced_include_paths
+                and not _is_descendant_include_record(record, replaced_include_containers)
+            ),
+            *user_composition.include_records,
         )
 
     _append_stage(
@@ -137,12 +174,19 @@ def inspect_config_composition(
     resolved_recipe_args = resolve_recipe_argument_interpolation(merged, path="$")
     _append_stage(stages, "recipe_expansion", {"recipe_manifest_count": 0})
     expanded, recipe_manifest = expand_recipes(resolved_recipe_args, catalog=recipe_catalog, path="$")
+    recipe_manifest_payload = tuple(
+        cast(
+            dict[str, PlainData],
+            to_plain_data(_ensure_mappingproxy_plain(record), path=f"recipe_manifest[{index}]"),
+        )
+        for index, record in enumerate(recipe_manifest)
+    )
     if stages[-1].name == "recipe_expansion":
         stages[-1] = ConfigCompositionStageRecord(
             name="recipe_expansion",
             status="completed",
             payload={
-                "recipe_manifest_count": len(recipe_manifest),
+                "recipe_manifest_count": len(recipe_manifest_payload),
             },
         )
 
@@ -182,6 +226,7 @@ def inspect_config_composition(
         },
     )
     unresolved = expanded_artifact_safe
+    redacted = redact_secrets(unresolved)
     resolved = resolve_interpolation(
         expanded_artifact_safe,
         path="$",
@@ -200,55 +245,100 @@ def inspect_config_composition(
             "has_schema_version": "schema_version" in validated,
         },
     )
-    redacted = redact_secrets(validated)
-    _append_stage(stages, "redaction", {"redacted_keys": _config_key_count(redacted)})
+    _append_stage(stages, "redaction", {"redacted_keys": _config_key_count(redacted), "marker": REDACTION_MARKER})
 
     resolved_fingerprint = build_resolved_fingerprint(validated)
+    unresolved_fingerprint = build_resolved_fingerprint(unresolved)
+
+    source_artifacts = _build_source_artifacts(
+        sources=sources,
+        include_sites=effective_include_sites,
+        recipe_manifest=recipe_manifest_payload,
+    )
+    fingerprint_records = (
+        ConfigFingerprintRecord(
+            schema_version=ARTIFACT_SCHEMA_VERSION,
+            digest=unresolved_fingerprint,
+            label="unresolved",
+            metadata={"resolution_stage": "artifact_safe"},
+        ),
+    )
+    provenance_metadata = _build_provenance_metadata(
+        include_records=effective_include_sites,
+        recomposition_contexts=expanded_with_includes.recomposition_contexts,
+        local_customizations=expanded_with_includes.local_customizations,
+        include_overrides=include_overrides,
+        ordinary_overrides=ordinary_overrides,
+        recipe_manifest=recipe_manifest_payload,
+        resolver_records=_resolver_records,
+        source_artifacts=source_artifacts,
+        redaction_policy=redaction_policy(),
+        warnings=_plaintext_secret_warnings(tuple(include_overrides) + tuple(ordinary_overrides)),
+    )
+    manifest_metadata = dict(provenance_metadata)
+    manifest_metadata["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
+    manifest_metadata["source_reference_count"] = len(source_artifacts)
+    manifest_metadata["fingerprint_record_count"] = len(fingerprint_records)
+    manifest_metadata["source_artifact_references"] = [
+        _to_source_artifact_reference(record) for record in source_artifacts
+    ]
+
     provenance = _build_provenance(
         config_path=str(base_source.path),
         sources=tuple(sources),
         overrides=parsed_overrides,
         resolved_fingerprint=resolved_fingerprint,
-        recipe_manifest_count=len(recipe_manifest),
+        recipe_manifest_count=len(recipe_manifest_payload),
+        metadata=provenance_metadata,
     )
-    _append_stage(stages, "provenance", {"source_count": len(sources), "override_count": len(parsed_overrides)})
+    _append_stage(
+        stages,
+        "provenance",
+        {
+            "source_count": len(sources),
+            "override_count": len(parsed_overrides),
+            "source_artifact_count": len(source_artifacts),
+            "resolver_record_count": len(_resolver_records),
+            "recipe_manifest_count": len(recipe_manifest_payload),
+            "fingerprint_record_count": len(fingerprint_records),
+        },
+    )
     fingerprint = build_config_fingerprint(
         resolved=validated,
         sources=provenance.sources,
         overrides=provenance.overrides,
-        recipe_manifest=recipe_manifest,
+        recipe_manifest=recipe_manifest_payload,
         schema_version=provenance.schema_version,
     )
-    _append_stage(stages, "fingerprint", {"fingerprint": fingerprint})
-
-    recipe_manifest_payload = tuple(
-        cast(
-            dict[str, PlainData],
-            to_plain_data(_ensure_mappingproxy_plain(record), path=f"recipe_manifest[{index}]"),
-        )
-        for index, record in enumerate(recipe_manifest)
+    _append_stage(
+        stages,
+        "fingerprint",
+        {
+            "fingerprint": fingerprint,
+            "fingerprint_record_count": len(fingerprint_records),
+        },
     )
+
     placeholder_manifest = CompositionManifest(
         schema_version=ARTIFACT_SCHEMA_VERSION,
-        source_artifacts=(),
-        fingerprint_records=(),
+        source_artifacts=source_artifacts,
+        fingerprint_records=fingerprint_records,
         recipe_manifest=recipe_manifest_payload,
-        metadata={"phase": "12"},
+        metadata=manifest_metadata,
     )
-    source_artifacts: tuple[SourceArtifactRecord, ...] = ()
-    fingerprint_records: tuple[ConfigFingerprintRecord, ...] = ()
     _append_stage(
         stages,
         "artifact_placeholders",
         {
             "manifest": {
                 "schema_version": placeholder_manifest.schema_version,
-                "source_artifacts": 0,
-                "fingerprint_records": 0,
+                "source_artifacts": len(placeholder_manifest.source_artifacts),
+                "fingerprint_records": len(placeholder_manifest.fingerprint_records),
                 "recipe_manifest_count": len(placeholder_manifest.recipe_manifest),
             },
-            "source_artifact_count": len(source_artifacts),
-            "fingerprint_record_count": len(fingerprint_records),
+            "source_artifact_count": len(placeholder_manifest.source_artifacts),
+            "fingerprint_record_count": len(placeholder_manifest.fingerprint_records),
+            "source_reference_count": len(manifest_metadata["source_artifact_references"]),
         },
     )
 
@@ -267,7 +357,7 @@ def inspect_config_composition(
         resolved=validated,
         redacted=redacted,
         provenance=provenance,
-        recipe_manifest=tuple(recipe_manifest),
+        recipe_manifest=tuple(recipe_manifest_payload),
         fingerprint=fingerprint,
         manifest=placeholder_manifest,
         source_artifacts=source_artifacts,
@@ -297,10 +387,11 @@ def _apply_user_composition_overrides(
     include_records: Sequence[IncludeSiteRecord],
     recomposition_contexts: Sequence[IncludeRecompositionContext],
     base_source: ConfigSource,
-) -> dict[str, PlainData]:
+) -> _UserCompositionResult:
     include_record_by_path = {record.include_site_path: record for record in include_records}
     context_by_path = {context.include_site_path: context for context in recomposition_contexts}
     staged = cast(dict[str, PlainData], dict(config))
+    user_include_records: list[IncludeSiteRecord] = []
 
     for override in include_overrides:
         include_site_path = _include_site_path(override.path)
@@ -320,12 +411,13 @@ def _apply_user_composition_overrides(
                     },
                 )
 
-            staged = _add_brand_new_include_site(
+            staged, include_record = _add_brand_new_include_site(
                 staged,
                 include_override=override,
                 include_site_path=include_site_path,
                 base_source=base_source,
             )
+            user_include_records.append(include_record)
             continue
 
         if override.operation == "add":
@@ -344,11 +436,12 @@ def _apply_user_composition_overrides(
             )
 
         if context is not None:
-            staged = _replace_existing_include_site(
+            staged, include_record = _replace_existing_include_site(
                 staged,
                 include_override=override,
                 context=context,
             )
+            user_include_records.append(include_record)
             continue
 
         raise _user_composition_error(
@@ -365,7 +458,7 @@ def _apply_user_composition_overrides(
             },
         )
 
-    return staged
+    return _UserCompositionResult(config=staged, include_records=tuple(user_include_records))
 
 
 def _replace_existing_include_site(
@@ -373,7 +466,7 @@ def _replace_existing_include_site(
     *,
     include_override: ParsedOverride,
     context: IncludeRecompositionContext,
-) -> dict[str, PlainData]:
+) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     authored_target = _as_include_target(
         include_override,
         source=_source_from_context(context),
@@ -386,20 +479,23 @@ def _replace_existing_include_site(
         include_site_path=context.source_include_site_path,
     )
 
-    replacement = _load_include_target(
+    replacement, include_record = _load_include_target(
         path=resolved.resolved_path,
         source=replacement_source,
         include_site_path=context.include_site_path,
+        source_include_site_path=context.source_include_site_path,
+        resolved=resolved,
         override=include_override,
     )
     replacement = _replay_local_customizations(replacement, context=context)
-    return _set_value(
+    staged = _set_value(
         config,
         path=context.include_site_path[:-1],
         value=replacement,
         source=replacement_source,
         override=include_override,
     )
+    return staged, include_record
 
 
 def _add_brand_new_include_site(
@@ -408,7 +504,7 @@ def _add_brand_new_include_site(
     include_override: ParsedOverride,
     include_site_path: ConfigPath,
     base_source: ConfigSource,
-) -> dict[str, PlainData]:
+) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     authored_target = _as_include_target(
         include_override,
         source=base_source,
@@ -453,14 +549,16 @@ def _add_brand_new_include_site(
             },
         )
 
-    replacement = _load_include_target(
+    replacement, include_record = _load_include_target(
         path=resolved.resolved_path,
         source=base_source,
         include_site_path=include_site_path,
+        source_include_site_path=include_site_path,
+        resolved=resolved,
         override=include_override,
     )
     parent[key] = replacement
-    return config
+    return config, include_record
 
 
 def _replay_local_customizations(
@@ -490,8 +588,10 @@ def _load_include_target(
     path: str | Path,
     source: ConfigSource,
     include_site_path: ConfigPath,
+    source_include_site_path: ConfigPath,
+    resolved: IncludeResolutionResult,
     override: ParsedOverride,
-) -> dict[str, PlainData]:
+) -> tuple[dict[str, PlainData], IncludeSiteRecord]:
     try:
         included_config, included_source = load_config(path, kind="overlay", order=0)
     except ConfigLoadError as exc:
@@ -534,7 +634,24 @@ def _load_include_target(
             },
         )
 
-    return cast(dict[str, PlainData], expanded.config)
+    include_record = IncludeSiteRecord(
+        include_site_path=include_site_path,
+        authored_target=resolved.authored_target,
+        source_path=resolved.source_path,
+        source_kind=source.kind,
+        source_order=source.order,
+        source_include_site_path=source_include_site_path,
+        source_content_digest=source.content_digest,
+        source_size_bytes=source.size_bytes,
+        resolved_path=str(resolved.resolved_path),
+        included_content_digest=included_source.content_digest,
+        included_size_bytes=included_source.size_bytes,
+        target_kind=resolved.target_kind,
+        explicit_escape=resolved.explicit_escape,
+        has_replace_marker=False,
+    )
+
+    return cast(dict[str, PlainData], expanded.config), include_record
 
 
 def _set_value(
@@ -662,6 +779,16 @@ def _include_site_path(path: str) -> ConfigPath:
     return tuple(path.split(".")[:-1]) + ("_include_",)
 
 
+def _is_descendant_include_record(
+    record: IncludeSiteRecord,
+    replaced_include_containers: set[ConfigPath],
+) -> bool:
+    return any(
+        record.include_site_path[: len(container_path)] == container_path
+        for container_path in replaced_include_containers
+    )
+
+
 def _as_include_target(
     override: ParsedOverride,
     *,
@@ -751,6 +878,7 @@ def _build_provenance(
     overrides: tuple[ParsedOverride, ...],
     resolved_fingerprint: Fingerprint,
     recipe_manifest_count: int,
+    metadata: dict[str, PlainData],
 ) -> ConfigProvenance:
     return ConfigProvenance(
         schema_version=PROVENANCE_SCHEMA_VERSION,
@@ -759,9 +887,211 @@ def _build_provenance(
         overrides=overrides,
         resolved_fingerprint=resolved_fingerprint,
         recipe_manifest_count=recipe_manifest_count,
-        metadata={},
+        metadata=metadata,
     )
 
+
+def _build_source_artifacts(
+    *,
+    sources: Sequence[ConfigSource],
+    include_sites: Sequence[IncludeSiteRecord],
+    recipe_manifest: Sequence[Mapping[str, PlainData]],
+) -> tuple[SourceArtifactRecord, ...]:
+    artifacts: list[SourceArtifactRecord] = []
+    for source in sources:
+        artifacts.append(
+            SourceArtifactRecord(
+                schema_version=ARTIFACT_SCHEMA_VERSION,
+                kind=source.kind,
+                path=source.path,
+                order=source.order,
+                content_digest=source.content_digest,
+                size_bytes=source.size_bytes,
+                metadata={"role": "base_or_overlay"},
+            )
+        )
+    start_order = len(sources)
+    artifacts.extend(_build_include_source_artifacts(include_sites=include_sites, start_order=start_order))
+    recipe_start = start_order + len(include_sites)
+    artifacts.extend(_build_recipe_source_artifacts(recipe_manifest=recipe_manifest, start_order=recipe_start))
+    return tuple(artifacts)
+
+
+def _build_include_source_artifacts(
+    *,
+    include_sites: Sequence[IncludeSiteRecord],
+    start_order: int,
+) -> tuple[SourceArtifactRecord, ...]:
+    artifacts: list[SourceArtifactRecord] = []
+    for offset, record in enumerate(include_sites):
+        artifacts.append(
+            SourceArtifactRecord(
+                schema_version=ARTIFACT_SCHEMA_VERSION,
+                kind="include",
+                path=record.resolved_path,
+                order=start_order + offset,
+                content_digest=record.included_content_digest,
+                size_bytes=record.included_size_bytes,
+                metadata={
+                    "include_site_path": list(record.include_site_path),
+                    "authored_target": record.authored_target,
+                    "source_path": record.source_path,
+                    "source_kind": record.source_kind,
+                    "source_order": record.source_order,
+                    "source_content_digest": record.source_content_digest,
+                    "source_size_bytes": record.source_size_bytes,
+                    "target_kind": record.target_kind,
+                    "explicit_escape": record.explicit_escape,
+                    "has_replace_marker": record.has_replace_marker,
+                    "resolved_path": record.resolved_path,
+                    "source_include_site_path": list(record.source_include_site_path),
+                },
+            )
+        )
+    return tuple(artifacts)
+
+
+def _build_recipe_source_artifacts(
+    *,
+    recipe_manifest: Sequence[Mapping[str, PlainData]],
+    start_order: int,
+) -> tuple[SourceArtifactRecord, ...]:
+    artifacts: list[SourceArtifactRecord] = []
+    for offset, manifest_record in enumerate(recipe_manifest):
+        expanded_hash = cast(str | None, manifest_record.get("expanded_hash"))
+        expanded_path = cast(str | None, manifest_record.get("expanded_path"))
+        name = manifest_record.get("name")
+        path = manifest_record.get("path")
+        target = manifest_record.get("target")
+        if not isinstance(expanded_hash, str) or not expanded_hash:
+            continue
+        artifact_path = expanded_path if isinstance(expanded_path, str) and expanded_path else f"recipe:{offset}"
+        artifacts.append(
+            SourceArtifactRecord(
+                schema_version=ARTIFACT_SCHEMA_VERSION,
+                kind="recipe",
+                path=artifact_path,
+                order=start_order + offset,
+                content_digest=expanded_hash,
+                size_bytes=len(expanded_hash),
+                metadata={
+                    "name": cast(str, name) if isinstance(name, str) else "",
+                    "path": cast(str, path) if isinstance(path, str) else artifact_path,
+                    "target": cast(str, target) if isinstance(target, str) else "",
+                    "expanded_hash": expanded_hash,
+                    "loom_version": manifest_record.get("loom_version"),
+                },
+            )
+        )
+    return tuple(artifacts)
+
+
+def _to_source_artifact_reference(record: SourceArtifactRecord) -> dict[str, PlainData]:
+    return {
+        "kind": record.kind,
+        "order": record.order,
+        "path": record.path,
+        "content_digest": record.content_digest,
+        "size_bytes": record.size_bytes,
+    }
+
+
+def _build_provenance_metadata(
+    *,
+    include_records: Sequence[IncludeSiteRecord],
+    recomposition_contexts: Sequence[IncludeRecompositionContext],
+    local_customizations: Sequence[IncludeLocalCustomization],
+    include_overrides: Sequence[ParsedOverride],
+    ordinary_overrides: Sequence[ParsedOverride],
+    recipe_manifest: Sequence[Mapping[str, PlainData]],
+    resolver_records: Sequence[ResolverExpressionRecord],
+    source_artifacts: Sequence[SourceArtifactRecord],
+    redaction_policy: dict[str, PlainData],
+    warnings: tuple[dict[str, PlainData], ...],
+) -> dict[str, PlainData]:
+    redacted_include_overrides = [
+        _override_to_dict(override, record_values=True) for override in include_overrides
+    ]
+    redacted_ordinary_overrides = [
+        _override_to_dict(override, record_values=True) for override in ordinary_overrides
+    ]
+
+    metadata = {
+        "provenance_version": PROVENANCE_SCHEMA_VERSION,
+        "source_fact_records": {
+            "sources": [source.to_dict() for source in source_artifacts],
+            "include_sites": [record.to_dict() for record in include_records],
+            "include_recomposition_contexts": [context.to_dict() for context in recomposition_contexts],
+            "local_customizations": [record.to_dict() for record in local_customizations],
+        },
+        "include_overrides": redacted_include_overrides,
+        "ordinary_overrides": redacted_ordinary_overrides,
+        "user_composition_override_count": len(include_overrides),
+        "ordinary_override_count": len(ordinary_overrides),
+        "recipe_manifest": [_ensure_mappingproxy_plain(record) for record in recipe_manifest],
+        "resolver_records": [
+            {
+                "config_path": record.config_path,
+                "token": record.token,
+                "resolver": record.resolver,
+                "expression": record.expression,
+            }
+            for record in resolver_records
+        ],
+        "source_artifact_references": [
+            _to_source_artifact_reference(record) for record in source_artifacts
+        ],
+        "redaction_policy": redaction_policy,
+        "security_facts": {
+            "artifact_safety": {
+                "raw_source_bytes_included": False,
+                "resolved_runtime_values_included": False,
+            },
+            "redaction_marker": REDACTION_MARKER,
+            "plaintext_secret_override_warnings": list(warnings),
+            "resolver_policy": "artifact_safe_runtime_resolve",
+        },
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+    }
+    return cast(dict[str, PlainData], to_plain_data(metadata, path="provenance_metadata"))
+
+
+def _plaintext_secret_warnings(overrides: Sequence[ParsedOverride]) -> tuple[dict[str, PlainData], ...]:
+    warnings: list[dict[str, PlainData]] = []
+    for override in overrides:
+        final_key = override.path.rsplit(".", 1)[-1]
+        if not contains_secret_like_value(final_key, override.value):
+            continue
+
+        warnings.append(
+            {
+                "warning_type": "plaintext_secret_override",
+                "override_path": override.path,
+                "override_operation": override.operation,
+                "override_order": override.order,
+                "override_raw": REDACTION_MARKER,
+                "redacted": True,
+            }
+        )
+
+    return tuple(warnings)
+
+
+def _override_to_dict(override: ParsedOverride, *, record_values: bool = False) -> dict[str, PlainData]:
+    value: PlainData = cast(PlainData, override.value)
+    final_key = override.path.rsplit(".", 1)[-1]
+    redacted = contains_secret_like_value(final_key, override.value)
+    if redacted or record_values:
+        value = redact_secret_like_value(final_key, value)
+
+    return {
+        "raw": REDACTION_MARKER if redacted else override.raw,
+        "path": override.path,
+        "operation": override.operation,
+        "value": value,
+        "order": override.order,
+        "redacted": redacted,
+    }
 
 def _append_stage(stages: list[ConfigCompositionStageRecord], name: str, payload: Mapping[str, object]) -> None:
     payload_data = cast(dict[str, PlainData], to_plain_data(dict(payload), path=f"stage[{name}]"))

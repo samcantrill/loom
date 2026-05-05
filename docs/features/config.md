@@ -1029,6 +1029,12 @@ resolved.redacted.yaml:
 
 Do not print unredacted secrets in error messages.
 
+Composition accepts plaintext secret-like overrides to preserve legacy behavior, but it records a warning in provenance metadata:
+
+- `plaintext_secret_override_warnings`: a warning list keyed by override path and operation when override keys match secret patterns.
+
+Prefer env-backed values or `oc.env` in authored config for runtime secrets; keep plaintext secrets for transition only and use the warning data to guide follow-up.
+
 ---
 
 ## 15. Public API

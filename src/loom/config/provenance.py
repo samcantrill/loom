@@ -10,6 +10,7 @@ from loom.fingerprints import Digest, Fingerprint, FingerprintError, hash_mappin
 from loom.serialization import PlainData, ensure_plain_data, to_plain_data
 
 from .errors import ConfigProvenanceError
+from .redaction import REDACTION_MARKER, contains_secret_like_value, redact_secret_like_value
 
 SCHEMA_VERSION = 1
 
@@ -133,7 +134,7 @@ class ConfigProvenance:
             "schema_version": self.schema_version,
             "config_path": self.config_path,
             "sources": [source.to_dict() for source in self.sources],
-            "overrides": [override.to_dict() for override in self.overrides],
+            "overrides": [_override_to_artifact_dict(override) for override in self.overrides],
             "resolved_fingerprint": self.resolved_fingerprint,
             "recipe_manifest_count": self.recipe_manifest_count,
             "metadata": self.metadata,
@@ -208,3 +209,16 @@ def build_config_fingerprint(
         return hash_mapping(payload)
     except FingerprintError as exc:
         raise ConfigProvenanceError("Failed to hash config fingerprint payload") from exc
+
+
+def _override_to_artifact_dict(override: ParsedOverride) -> dict[str, PlainData]:
+    final_key = override.path.rsplit(".", 1)[-1]
+    redacted = contains_secret_like_value(final_key, override.value)
+    return {
+        "raw": REDACTION_MARKER if redacted else override.raw,
+        "path": override.path,
+        "operation": override.operation,
+        "value": redact_secret_like_value(final_key, override.value),
+        "order": override.order,
+        "redacted": redacted,
+    }
