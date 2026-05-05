@@ -41,7 +41,7 @@ def test_composition_manifest_contract_round_trip() -> None:
         schema_version=1,
         source_artifacts=(_example_source(),),
         fingerprint_records=(_example_fingerprint(),),
-        recipe_manifest=({"path": "pipeline"},),
+        recipe_manifest=({"path": "workflow"},),
     )
     assert CompositionManifest.from_dict(manifest.to_dict()) == manifest
 
@@ -51,7 +51,7 @@ def test_composition_manifest_to_dict_thaws_nested_recipe_manifest_plain_data() 
         schema_version=1,
         recipe_manifest=(
             {
-                "path": "pipeline.processor",
+                "path": "workflow.processor",
                 "arguments": {"name": "normalize", "input": "dataset"},
             },
         ),
@@ -62,7 +62,7 @@ def test_composition_manifest_to_dict_thaws_nested_recipe_manifest_plain_data() 
     recipe_manifest = cast(list[dict[str, object]], payload["recipe_manifest"])
     assert recipe_manifest == [
         {
-            "path": "pipeline.processor",
+            "path": "workflow.processor",
             "arguments": {"name": "normalize", "input": "dataset"},
         }
     ]
@@ -133,7 +133,7 @@ def test_raw_source_snapshot_contract_round_trip() -> None:
             RawSourceSnapshotReference(
                 kind="recipe",
                 order=1,
-                path="pipeline",
+                path="workflow",
                 content_digest="sha256:recipe",
                 size_bytes=7,
                 availability="unavailable",

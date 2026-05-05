@@ -30,13 +30,13 @@ def _step_recipe(*, name: str, input: str) -> dict[str, PlainData]:
 
 def _write_config_tree(root: Path) -> Path:
     config_root = root / "configs"
-    (config_root / "pipeline" / "dataset" / "reader").mkdir(parents=True)
+    (config_root / "workflow" / "dataset" / "reader").mkdir(parents=True)
     (config_root / "swaps" / "reader").mkdir(parents=True)
 
     base = config_root / "experiment.yaml"
     overlay = config_root / "overlay.yaml"
-    baseline = config_root / "pipeline" / "dataset" / "baseline.yaml"
-    standard_reader = config_root / "pipeline" / "dataset" / "reader" / "standard.yaml"
+    baseline = config_root / "workflow" / "dataset" / "baseline.yaml"
+    standard_reader = config_root / "workflow" / "dataset" / "reader" / "standard.yaml"
     replacement = config_root / "swaps" / "dataset.yaml"
     fast_reader = config_root / "swaps" / "reader" / "fast.yaml"
 
@@ -44,14 +44,14 @@ def _write_config_tree(root: Path) -> Path:
         "name: composition-e2e\n"
         "paths:\n"
         "  runtime_root: ${oc.env:LOOM_E2E_RUNTIME_ROOT}\n"
-        "pipeline:\n"
+        "workflow:\n"
         "  dataset:\n"
         "    _include_: baseline\n"
         "    split: train\n"
         "  processor:\n"
         "    _recipe_: step\n"
         "    name: normalize\n"
-        "    input: ${pipeline.dataset.reader.kind}\n"
+        "    input: ${workflow.dataset.reader.kind}\n"
         "  auth:\n"
         "    api_key: ${oc.env:LOOM_E2E_API_KEY}\n"
         "  parameters:\n"
@@ -59,7 +59,7 @@ def _write_config_tree(root: Path) -> Path:
         encoding="utf-8",
     )
     overlay.write_text(
-        "pipeline:\n"
+        "workflow:\n"
         "  dataset:\n"
         "    split: validation\n"
         "  parameters:\n"
@@ -106,10 +106,10 @@ def test_public_python_config_composition_e2e(
     catalog = RecipeCatalog()
     catalog.register("step", _step_recipe)
     overrides = (
-        "pipeline.dataset._include_=./swaps/dataset.yaml",
-        "pipeline.parameters.seed=21",
-        "+pipeline.parameters.run_label=e2e",
-        "+pipeline.auth.token=inline-secret",
+        "workflow.dataset._include_=./swaps/dataset.yaml",
+        "workflow.parameters.seed=21",
+        "+workflow.parameters.run_label=e2e",
+        "+workflow.auth.token=inline-secret",
     )
 
     monkeypatch.setenv("LOOM_E2E_RUNTIME_ROOT", "/runtime/one")
@@ -122,12 +122,12 @@ def test_public_python_config_composition_e2e(
     )
     composed = inspection.to_composed_config()
 
-    pipeline = cast(dict[str, Any], composed.resolved["pipeline"])
-    dataset = cast(dict[str, Any], pipeline["dataset"])
+    workflow = cast(dict[str, Any], composed.resolved["workflow"])
+    dataset = cast(dict[str, Any], workflow["dataset"])
     reader = cast(dict[str, Any], dataset["reader"])
-    processor = cast(dict[str, Any], pipeline["processor"])
-    auth = cast(dict[str, Any], pipeline["auth"])
-    parameters = cast(dict[str, Any], pipeline["parameters"])
+    processor = cast(dict[str, Any], workflow["processor"])
+    auth = cast(dict[str, Any], workflow["auth"])
+    parameters = cast(dict[str, Any], workflow["parameters"])
 
     assert dataset == {
         "kind": "replacement",
@@ -148,7 +148,7 @@ def test_public_python_config_composition_e2e(
     _assert_no_composition_markers(composed.unresolved)
     _assert_no_composition_markers(composed.resolved)
 
-    redacted_auth = cast(dict[str, Any], cast(dict[str, Any], composed.redacted["pipeline"])["auth"])
+    redacted_auth = cast(dict[str, Any], cast(dict[str, Any], composed.redacted["workflow"])["auth"])
     assert redacted_auth == {"api_key": REDACTION_MARKER, "token": REDACTION_MARKER}
 
     assert inspection.stage("file_include_expansion") is not None
@@ -166,7 +166,7 @@ def test_public_python_config_composition_e2e(
     source_paths = {record.path for record in composed.source_artifacts}
     assert str((base.parent / "swaps" / "dataset.yaml").resolve()) in source_paths
     assert str((base.parent / "swaps" / "reader" / "fast.yaml").resolve()) in source_paths
-    assert str((base.parent / "pipeline" / "dataset" / "baseline.yaml").resolve()) not in source_paths
+    assert str((base.parent / "workflow" / "dataset" / "baseline.yaml").resolve()) not in source_paths
 
     artifact_payload = {
         "manifest": composed.manifest.to_dict(),

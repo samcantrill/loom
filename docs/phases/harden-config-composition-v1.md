@@ -218,7 +218,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used by `loom_phase_refiner`; no additional automated implementation refinement budget remains
 - Pre-submit blocker gate: unused
 - Blocker-resolution: unused
 - PR body: unused
@@ -245,7 +245,24 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   test-summary` wrote `build/test-summary.md` with package 36 passed/1 skipped,
   unit 354 passed/1 skipped, contract 31 passed/2 skipped, integration 9
   passed/5 skipped, e2e 6 passed, and config-extra 301 passed/436 deselected.
-- Refinement summary: expanded-path refine pass confirmed exact documentation audit targets, representative public-Python e2e shape, focused error-audit limits, final validation obligations, and explicit executor stop conditions
+- Refinement summary: expanded-path plan refine pass confirmed exact documentation audit targets, representative public-Python e2e shape, focused error-audit limits, final validation obligations, and explicit executor stop conditions
+- Implementation refinement summary: bounded expanded-path implementation refine
+  pass inspected the final diff, removed the remaining top-level docs wording
+  that implied handing config results to `loom.pipeline`, and renamed the
+  representative e2e fixture and related artifact-contract paths from
+  `pipeline` to domain-neutral `workflow` so the coverage stays public-Python
+  and config-only. No public API/schema redesign, CLI behavior, pipeline/store
+  behavior, remote/plugin/global resolver behavior, `_copy_`, default raw-byte
+  persistence, or default resolved-config persistence was added.
+- Implementation refinement validation: `UV_CACHE_DIR=/tmp/loom_uv_cache uv run
+  pytest tests/contracts/test_config_artifact_contract.py
+  tests/e2e/test_config_composition_public_api.py` passed with 10 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed with Ruff, Pyright,
+  default suite 430 passed/11 skipped, config-extra suite 301 passed/436
+  deselected, and package build success; `UV_CACHE_DIR=/tmp/loom_uv_cache make
+  test-summary` wrote `build/test-summary.md` with package 36 passed/1 skipped,
+  unit 354 passed/1 skipped, contract 31 passed/2 skipped, integration 9
+  passed/5 skipped, e2e 6 passed, and config-extra 301 passed/436 deselected.
 - PR preparation: pending PR body preparation
 - Stack maintenance: pending
 - Remaining blockers: none

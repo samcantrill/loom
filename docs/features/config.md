@@ -4,7 +4,7 @@
 
 `loom.config` is the configuration composition and object construction layer for `loom`.
 
-It exists to keep experiment and pipeline configuration readable while preserving full access to ordinary Python code. It should compose YAML, validate stable boundaries, construct object graphs, record provenance, and hand the resolved result to `loom.pipeline`. Recipe expansion is introduced after the initial composition API is in place.
+It exists to keep experiment and workflow configuration readable while preserving full access to ordinary Python code. It should compose YAML, validate stable boundaries, construct object graphs, record provenance, and return the resolved result to the Python caller. Recipe expansion is introduced after the initial composition API is in place.
 
 The initial design should be intentionally narrow. The full v0 implementation should support two authoring modes:
 
