@@ -1717,9 +1717,9 @@ Completion notes:
 
 ### Phase 11 - Strict Instantiation And Runtime Injection
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-instantiation-strict`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/38
 
 Goal:
 
@@ -1749,6 +1749,37 @@ Test expectations:
 
 - Unit tests for import forms, invalid targets, bottom-up construction order,
   partial construction, and injection errors.
+
+Completion notes:
+
+- Phase execution plan: `docs/phases/config-instantiation-strict.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is open and
+  merge-eligible after CI and merge permissions allow.
+- Revised workflow gate: the pre-submit blocker gate ran before PR submission
+  and found no blocking or non-blocking correctness, scope, import-boundary,
+  test-evidence, or PR-body accuracy issues. It consumed the Phase 11 PR-review
+  budget for the current implementation diff, PR body draft, suite evidence,
+  scope boundary, and known review risks.
+- Implementation summary: keeps runtime object construction on the explicit
+  `loom.config.instantiate(...)` path, preserves strict dotted and colon
+  `_target_` import semantics without nested lookup or fallback splitting,
+  verifies bottom-up nested construction and `_partial_` behavior, and tightens
+  `_inject_` runtime validation for invalid shapes, duplicate keys, missing
+  runtime values, and falsey non-mapping runtime inputs.
+- Scope notes: no compose-time instantiation, `loom.pipeline` imports,
+  registries, allow-lists, plugin/global target lookup, CLI behavior,
+  persistence, artifact/fingerprint/source-record changes, `_copy_` support, or
+  future-phase orchestration/inspection behavior were added.
+- Validation: targeted Phase 11 import, recursive, injection, package/import
+  boundary, and compose `_target_` guard tests passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 698
+  passed, 0 failed, 0 errors, 8 skipped, and 432 deselected.
+- PR result: PR #38 opened against `develop`; `gh pr view 38 --json
+  baseRefName,headRefName,state,url` verified base `develop`, head
+  `codex/config-instantiation-strict`, state `OPEN`, URL
+  `https://github.com/samcantrill/loom/pull/38`. GitHub CI check `checks`
+  passed after PR submission.
 
 ### Phase 12 - Public Compose Orchestration And Inspection APIs
 
