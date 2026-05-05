@@ -1,10 +1,17 @@
 """Contract tests for phase-1 configuration artifact records."""
 
+from typing import cast
+
 import pytest
 
 from loom.config.artifacts import CompositionManifest, ConfigFingerprintRecord, SourceArtifactRecord
 from loom.config.errors import ConfigProvenanceError
 from loom.config.provenance import ConfigProvenance, ConfigSource, ParsedOverride, SCHEMA_VERSION
+from loom.config.fingerprints import (
+    ARTIFACT_SAFE_FINGERPRINT_LABEL,
+    ARTIFACT_SAFE_FINGERPRINT_POLICY,
+    ARTIFACT_SAFE_FINGERPRINT_PAYLOAD_VERSION,
+)
 
 
 def _example_source() -> SourceArtifactRecord:
@@ -76,6 +83,28 @@ def test_config_fingerprint_record_contract_round_trip() -> None:
     assert payload["algorithm"] == "sha256"
     assert payload["label"] == "resolved"
     assert record == ConfigFingerprintRecord.from_dict(payload)
+
+
+def test_artifact_safe_fingerprint_record_contract_round_trip() -> None:
+    record = ConfigFingerprintRecord(
+        schema_version=1,
+        digest="sha256:abcd",
+        label=ARTIFACT_SAFE_FINGERPRINT_LABEL,
+    metadata={
+            "fingerprint_policy": ARTIFACT_SAFE_FINGERPRINT_POLICY,
+            "payload_schema_version": ARTIFACT_SAFE_FINGERPRINT_PAYLOAD_VERSION,
+            "semantic_scope": "authored_composition",
+        },
+    )
+    payload = record.to_dict()
+    assert payload["label"] == ARTIFACT_SAFE_FINGERPRINT_LABEL
+    fingerprint_metadata = cast(dict[str, object], payload["metadata"])
+    assert fingerprint_metadata["fingerprint_policy"] == ARTIFACT_SAFE_FINGERPRINT_POLICY
+    assert (
+        cast(int, fingerprint_metadata["payload_schema_version"])
+        == ARTIFACT_SAFE_FINGERPRINT_PAYLOAD_VERSION
+    )
+    assert ConfigFingerprintRecord.from_dict(payload) == record
 
 
 def test_config_provenance_contract_is_still_round_trippable() -> None:

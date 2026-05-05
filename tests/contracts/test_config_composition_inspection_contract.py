@@ -9,6 +9,7 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.config import inspect_config_composition
+from loom.config.fingerprints import ARTIFACT_SAFE_FINGERPRINT_LABEL
 
 pytestmark = [pytest.mark.contract, pytest.mark.optional_dependency]
 
@@ -50,7 +51,8 @@ def test_inspection_shape_and_stage_contract(tmp_path: Path) -> None:
     assert inspection.unresolved == inspection.to_composed_config().unresolved
     assert inspection.manifest.source_artifacts == (inspection.source_artifacts)
     assert len(inspection.manifest.fingerprint_records) == 1
-    assert inspection.manifest.fingerprint_records[0].label == "unresolved"
+    assert inspection.manifest.fingerprint_records[0].label == ARTIFACT_SAFE_FINGERPRINT_LABEL
+    assert inspection.fingerprint == inspection.manifest.fingerprint_records[0].digest
     assert len(inspection.source_artifacts) == 1
     assert inspection.manifest.metadata["source_reference_count"] == len(inspection.source_artifacts)
     assert inspection.manifest.metadata["fingerprint_record_count"] == len(inspection.fingerprint_records)

@@ -16,6 +16,11 @@ from loom.config import (
 from loom.config.errors import ConfigLoadError
 from loom.config.errors import ConfigValidationError, UnknownRecipeError
 from loom.config.artifacts import SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION
+from loom.config.fingerprints import (
+    ARTIFACT_SAFE_FINGERPRINT_LABEL,
+    ARTIFACT_SAFE_FINGERPRINT_POLICY,
+    compare_config_artifact_fingerprints,
+)
 from loom.config.api import ComposedConfig
 import loom.config.api as config_api
 import loom.config.compose as config_compose
@@ -215,10 +220,28 @@ def test_compose_config_staged_path_matches_inspection(tmp_path: Path) -> None:
     assert composed.source_artifacts == inspection.source_artifacts
     assert len(composed.source_artifacts) == 1
     assert len(composed.fingerprint_records) == 1
-    assert composed.fingerprint_records[0].label == "unresolved"
+    assert composed.fingerprint_records[0].label == ARTIFACT_SAFE_FINGERPRINT_LABEL
     assert len(composed.manifest.fingerprint_records) == 1
     assert composed.manifest.metadata["source_reference_count"] == len(composed.source_artifacts)
     assert composed.manifest.metadata["fingerprint_record_count"] == len(composed.fingerprint_records)
+    assert composed.fingerprint_records[0].metadata["fingerprint_policy"] == ARTIFACT_SAFE_FINGERPRINT_POLICY
+    assert composed.fingerprint == composed.fingerprint_records[0].digest
+    assert composed.manifest.fingerprint_records == composed.fingerprint_records
+    assert composed.fingerprint == composed.manifest.fingerprint_records[0].digest
+    assert (
+        compare_config_artifact_fingerprints(
+            left=composed.fingerprint_records[0],
+            right=composed.manifest,
+        ).status
+        == "match"
+    )
+    assert (
+        compare_config_artifact_fingerprints(
+            left=composed.fingerprint_records[0],
+            right=composed.manifest.to_dict(),
+        ).status
+        == "match"
+    )
 
 
 def test_internal_compose_helper_returns_composed_config(tmp_path: Path) -> None:

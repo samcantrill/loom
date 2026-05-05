@@ -25,6 +25,11 @@ def test_config_exports_and_signature() -> None:
         ConfigError,
         ConfigCompositionInspection,
         ConfigCompositionStageRecord,
+        ARTIFACT_SAFE_FINGERPRINT_LABEL,
+        ARTIFACT_SAFE_FINGERPRINT_POLICY,
+        ARTIFACT_SAFE_RUNTIME_REPLAY,
+        ConfigFingerprintComparison,
+        compare_config_artifact_fingerprints,
         Recipe,
         RecipeCatalog,
         inspect_config_composition,
@@ -43,6 +48,11 @@ def test_config_exports_and_signature() -> None:
     assert inspect_config_composition
     assert ConfigCompositionInspection
     assert ConfigCompositionStageRecord
+    assert compare_config_artifact_fingerprints
+    assert ConfigFingerprintComparison
+    assert ARTIFACT_SAFE_FINGERPRINT_LABEL == "artifact_safe_config"
+    assert ARTIFACT_SAFE_FINGERPRINT_POLICY == "artifact_safe_authored_composition_v1"
+    assert ARTIFACT_SAFE_RUNTIME_REPLAY == "unavailable"
     assert instantiate
     assert register_recipe
 
@@ -125,6 +135,11 @@ def test_import_config_module_only() -> None:
         assert hasattr(loom.config, 'inspect_config_composition')
         assert hasattr(loom.config, 'ConfigCompositionInspection')
         assert hasattr(loom.config, 'ConfigCompositionStageRecord')
+        assert hasattr(loom.config, 'compare_config_artifact_fingerprints')
+        assert hasattr(loom.config, 'ConfigFingerprintComparison')
+        assert hasattr(loom.config, 'ARTIFACT_SAFE_FINGERPRINT_LABEL')
+        assert hasattr(loom.config, 'ARTIFACT_SAFE_FINGERPRINT_POLICY')
+        assert hasattr(loom.config, 'ARTIFACT_SAFE_RUNTIME_REPLAY')
         assert hasattr(loom.config, 'instantiate')
         assert hasattr(loom.config, 'register_recipe')
         assert hasattr(loom.config, 'ConfigError')

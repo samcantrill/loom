@@ -16,6 +16,13 @@ from .artifacts import (
     ConfigFingerprintRecord,
     SourceArtifactRecord,
 )
+from .fingerprints import (
+    ARTIFACT_SAFE_FINGERPRINT_LABEL,
+    ARTIFACT_SAFE_FINGERPRINT_POLICY,
+    ARTIFACT_SAFE_RUNTIME_REPLAY,
+    ConfigFingerprintComparison,
+    compare_config_artifact_fingerprints,
+)
 from .provenance import ConfigProvenance
 from .recipes import RecipeCatalog, RecipeImplementation
 
@@ -239,6 +246,11 @@ __all__ = [
     "compose_config",
     "inspect_config_composition",
     "compose_config_with_catalog",
+    "compare_config_artifact_fingerprints",
+    "ConfigFingerprintComparison",
+    "ARTIFACT_SAFE_FINGERPRINT_LABEL",
+    "ARTIFACT_SAFE_FINGERPRINT_POLICY",
+    "ARTIFACT_SAFE_RUNTIME_REPLAY",
     "instantiate",
     "register_recipe",
 ]
