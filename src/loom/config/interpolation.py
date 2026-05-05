@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 from omegaconf import OmegaConf
 from omegaconf.errors import OmegaConfBaseException
+from omegaconf.grammar_parser import parse as parse_omegaconf_interpolation
+from omegaconf.grammar_visitor import GrammarVisitor
 
 from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization import to_plain_data
@@ -16,6 +20,8 @@ from .errors import ConfigErrorContext, ConfigInterpolationError, ConfigUnsuppor
 from .source_maps import ConfigPath, format_config_path
 
 _ALLOWED_RUNTIME_RESOLVERS = frozenset({"oc.env"})
+_ENV_DEFAULT_MISSING = object()
+_INTERPOLATION_OPEN_PATTERN: re.Pattern[str] = re.compile(r"(\\*)\$\{")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +48,12 @@ def resolve_interpolation(
         source_path=source_path,
     )
     try:
-        config = OmegaConf.create(dict(plain_config))
+        runtime_config = _resolve_allowed_runtime_resolvers(
+            plain_config,
+            root_path=path,
+            resolver_records=resolver_records,
+        )
+        config = OmegaConf.create(dict(runtime_config))
     except OmegaConfBaseException as exc:
         raise ConfigInterpolationError(f"Failed to prepare interpolation context at {path}") from exc
 
@@ -110,6 +121,126 @@ def _reject_unsupported_resolvers(
             }),
         ),
     )
+
+
+def _resolve_allowed_runtime_resolvers(
+    mapping: Mapping[str, PlainData],
+    *,
+    root_path: str,
+    resolver_records: Sequence[ResolverExpressionRecord],
+) -> dict[str, PlainData]:
+    resolver_paths = frozenset(
+        record.config_path for record in resolver_records if record.resolver in _ALLOWED_RUNTIME_RESOLVERS
+    )
+    if not resolver_paths:
+        return dict(mapping)
+
+    resolved = _resolve_runtime_resolver_values(
+        cast(PlainData, dict(mapping)),
+        root_path=root_path,
+        config_path=(),
+        resolver_paths=resolver_paths,
+    )
+    if not isinstance(resolved, dict):
+        raise ConfigInterpolationError(f"Runtime resolver preparation produced non-mapping root at {root_path}")
+    return resolved
+
+
+def _resolve_runtime_resolver_values(
+    value: PlainData,
+    *,
+    root_path: str,
+    config_path: ConfigPath,
+    resolver_paths: frozenset[str],
+) -> PlainData:
+    if isinstance(value, str):
+        if _format_scan_path(root_path, config_path) not in resolver_paths:
+            return value
+        return _resolve_runtime_string(value, path=_format_scan_path(root_path, config_path))
+
+    if isinstance(value, dict):
+        return {
+            key: _resolve_runtime_resolver_values(
+                child,
+                root_path=root_path,
+                config_path=config_path + (key,),
+                resolver_paths=resolver_paths,
+            )
+            for key, child in value.items()
+        }
+
+    if isinstance(value, list):
+        return [
+            _resolve_runtime_resolver_values(
+                child,
+                root_path=root_path,
+                config_path=config_path + (index,),
+                resolver_paths=resolver_paths,
+            )
+            for index, child in enumerate(value)
+        ]
+
+    return value
+
+
+def _resolve_runtime_string(value: str, *, path: str) -> PlainData:
+    visitor = GrammarVisitor(
+        node_interpolation_callback=cast(Any, _preserve_node_interpolation),
+        resolver_interpolation_callback=_resolve_runtime_resolver,
+        memo=set(),
+    )
+    try:
+        resolved = visitor.visit(parse_omegaconf_interpolation(value))
+    except ConfigInterpolationError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ConfigInterpolationError(f"Failed to resolve runtime resolver at {path}") from exc
+
+    try:
+        return ensure_plain_data(resolved, path=path)
+    except Exception as exc:  # noqa: BLE001
+        raise ConfigInterpolationError(f"Runtime resolver produced non-plain value at {path}") from exc
+
+
+def _preserve_node_interpolation(inter_key: str, memo: set[int] | None = None) -> str:
+    _ = memo
+    return f"${{{inter_key}}}"
+
+
+def _resolve_runtime_resolver(
+    *,
+    name: str,
+    args: tuple[Any, ...],
+    args_str: tuple[str, ...],
+) -> str | None:
+    _ = args_str
+    if name != "oc.env":
+        raise ConfigInterpolationError(f"Unsupported runtime resolver {name!r}")
+
+    value = _loom_oc_env(*args)
+    if isinstance(value, str):
+        return _escape_interpolation_openings(value)
+    return value
+
+
+def _loom_oc_env(key: object, default: object = _ENV_DEFAULT_MISSING) -> str | None:
+    if not isinstance(key, str):
+        raise TypeError(f"str expected, not {type(key).__name__}")
+    try:
+        return os.environ[key]
+    except KeyError:
+        if default is not _ENV_DEFAULT_MISSING:
+            return str(default) if default is not None else None
+        raise KeyError(f"Environment variable '{key}' not found")
+
+
+def _escape_interpolation_openings(value: str) -> str:
+    return _INTERPOLATION_OPEN_PATTERN.sub(_escape_interpolation_opening_match, value)
+
+
+def _escape_interpolation_opening_match(match: re.Match[str]) -> str:
+    slashes = match.group(1)
+    return ("\\" * (len(slashes) * 2 + 1)) + "${"
 
 
 def _collect_resolver_records(
