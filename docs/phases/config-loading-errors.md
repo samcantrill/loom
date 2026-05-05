@@ -224,7 +224,7 @@ make test-summary
 
 - Phase execution plan draft: used
 - Phase execution plan refine: used
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -235,7 +235,12 @@ make test-summary
 - Implementation validation: completed using
   - `UV_CACHE_DIR=/tmp PYTHONPATH=/usr/lib/python3/dist-packages:/usr/lib/python3.12/dist-packages uv run pytest tests/unit/loom/config/test_load.py tests/unit/loom/config/test_config_errors.py` (pass)
   - `uv run pytest tests/contracts/test_config_error_contract.py` (pass)
-  - `UV_CACHE_DIR=/tmp PYTHONPATH=/usr/lib/python3/dist-packages:/usr/lib/python3.12/dist-packages uv run pytest tests/unit/loom/config/test_compose.py` (blocked)
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_load.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py tests/unit/loom/config/test_compose.py` (pass; 23 passed)
+- Implementation refinement: completed the one allowed expanded-path pass; fixed Pyright narrowing for context `details`, returned `ConfigLoadError` instances from `_config_load_error()` so caller-side exception causes are preserved, and narrowed test `details` payloads before subscripting.
+- Refinement validation: completed using
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_load.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py tests/unit/loom/config/test_compose.py` (pass; 23 passed)
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass; Ruff, Pyright, default harness, config-extra harness, and build passed)
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass; package, unit, contract, integration, e2e, and config-extra suites passed; wrote `build/test-summary.md`)
 - PR preparation: pending.
 - Stack maintenance: none yet.
-- Remaining blockers: compose coverage command still requires optional dependencies (`omegaconf`, `pydantic`) not available in this workspace.
+- Remaining blockers: none.

@@ -23,7 +23,9 @@ def test_config_error_context_round_trip() -> None:
     assert payload["source_path"] == "/tmp/base.yaml"
     assert payload["config_path"] == "$.pipeline._copy_"
     assert payload["directive"] == "_copy_"
-    assert payload["details"]["reason"] == "deferred"
+    details = payload["details"]
+    assert isinstance(details, dict)
+    assert details["reason"] == "deferred"
     assert "raw_source_bytes" not in payload
 
     assert ConfigErrorContext.from_dict(payload) == context

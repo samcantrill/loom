@@ -63,7 +63,9 @@ def test_config_error_context_serializes_and_round_trips() -> None:
     assert payload["source_kind"] == context.source_kind
     assert payload["source_path"] == context.source_path
     assert payload["directive"] == context.directive
-    assert payload["details"]["path"] == "$.model"
+    details = payload["details"]
+    assert isinstance(details, dict)
+    assert details["path"] == "$.model"
     assert ConfigErrorContext.from_dict(payload) == context
 
     error = ConfigLoadError("unsupported directive", context=context)

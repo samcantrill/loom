@@ -172,7 +172,6 @@ def _ensure_plain_data(value: object, path: Path, *, kind: ConfigKind, order: in
             actual=type(value).__name__,
             remediation="Remove non-plain YAML values such as objects, sets, or non-string mapping keys.",
             details={"error": str(exc)},
-            cause=exc,
         ) from exc
     if not isinstance(plain, dict):
         raise _config_load_error(
@@ -254,6 +253,10 @@ def _build_context(
     remediation: str | None = None,
     details: object | None = None,
 ) -> ConfigErrorContext:
+    plain_details = ensure_plain_data(details) if details is not None else None
+    if plain_details is not None and not isinstance(plain_details, dict):
+        raise TypeError("Config error context details must be a mapping")
+
     return ConfigErrorContext(
         code=code,
         source_kind=kind,
@@ -264,7 +267,7 @@ def _build_context(
         actual=ensure_plain_data(actual) if actual is not None else None,
         directive=directive,
         remediation=remediation,
-        details=ensure_plain_data(details) if details is not None else None,
+        details=plain_details,
     )
 
 
@@ -281,7 +284,6 @@ def _config_load_error(
     directive: str | None = None,
     remediation: str | None = None,
     details: object | None = None,
-    cause: Exception | None = None,
 ) -> ConfigLoadError:
     context = _build_context(
         code=code,
@@ -296,4 +298,4 @@ def _config_load_error(
         details=details,
     )
 
-    raise ConfigLoadError(message, context=context) from cause
+    return ConfigLoadError(message, context=context)
