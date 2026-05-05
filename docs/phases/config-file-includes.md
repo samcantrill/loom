@@ -230,16 +230,33 @@ make test-summary
 
 - Phase execution plan draft: used
 - Phase execution plan refine: used
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
 
 - Draft plan: completed in this artifact by `loom_phase_planner`.
-- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation refinement and PR review budgets remain unused.
-- Implementation summary:
+- Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation refinement budget is now used and PR review budget remains unused.
+- Implementation summary: implemented file-authored recursive `_include_` expansion in `src/loom/config/includes.py` with include-stack tracking, cycle detection, source-aware include-root errors, local customization records, and same-site `_replace_` enforcement during expansion. Wired expansion into `compose_config` after source-aware merge and before overrides/recipes. Added consumed include replacement and mapping-site tracking support in `src/loom/config/source_maps.py` and include-expansion error type in `src/loom/config/errors.py`.
 - Implementation validation:
-- Refinement summary: completed by `loom_phase_planner`; tightened internal record boundaries, replacement-site detection after consumed `_replace_` markers, cycle identity by normalized resolved target path, source-aware error payloads for overlay-authored includes and non-mapping include roots, suite obligations, and stop conditions. No product code was implemented.
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers: none at refinement time.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_includes.py` (passed, 41/41).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_includes.py` (passed, 5/5).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_source_maps.py tests/integration/config/test_source_map_integration.py` (passed, 14/14).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_error_contract.py` (passed, 6/6).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` (passed, 11/11).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config ruff check src/loom/config/compose.py src/loom/config/errors.py src/loom/config/includes.py src/loom/config/source_maps.py tests/contracts/test_config_error_contract.py tests/unit/loom/config/test_compose.py tests/unit/loom/config/test_includes.py tests/unit/loom/config/test_source_maps.py tests/integration/config/test_compose_includes.py` (passed).
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/compose.py src/loom/config/errors.py src/loom/config/includes.py src/loom/config/source_maps.py tests/contracts/test_config_error_contract.py tests/unit/loom/config/test_compose.py tests/unit/loom/config/test_includes.py tests/unit/loom/config/test_source_maps.py tests/integration/config/test_compose_includes.py` (passed).
+- Refinement scope:
+  - Validation output reviewed: manager-provided blocking findings plus local reruns of include unit tests, include integration tests, source-map tests, error contract tests, compose unit tests, Ruff, and Pyright.
+  - Blocking issues caused by this phase: raw included-root `ConfigLoadError`, nested bare-name includes resolving from composed outer paths, unconsumed local `_replace_` handling, integration test expectation drift, and Pyright type errors in include helpers and changed tests.
+  - Issues confirmed out of scope: none remain from the requested targeted validation set.
+- Fixes made:
+  - Translated only included-root `ConfigLoadError` with `non_mapping_root` context into `ConfigIncludeExpansionError` carrying include-site and resolved-target details.
+  - Split global include-site record paths from file-local source lookup paths so nested bare-name targets resolve relative to the included file's own mapping path while records retain composed paths.
+  - Filtered consumed `_replace_` from local sibling merge and rejected unconsumed local `_replace_` markers beside `_include_` so base-local markers cannot replace away included content.
+  - Corrected integration tests for YAML boolean parsing, required top-level `name`, and explicit `+` add override syntax.
+  - Added type narrowing in changed tests and tightened include record source-kind typing for Pyright.
+- Refinement summary: completed the single expanded-path implementation/test refinement pass and added focused regression coverage for the manager blockers.
+- PR preparation: not started.
+- Stack maintenance: N/A pending open PR.
+- Remaining blockers: none from the targeted Phase 6 validation set.
