@@ -327,4 +327,13 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   integration 9 passed/5 skipped, e2e 6 passed, and config-extra 301
   passed/436 deselected. The final docs-only blocker commit was confirmed with
   `git diff --check` and focused text scans, not a full validation rerun.
+- PR opened: <https://github.com/samcantrill/loom/pull/43>
+- PR verification: `gh pr view 43 --json baseRefName,headRefName,state,url`
+  returned `baseRefName` `develop`, `headRefName`
+  `codex/harden-config-composition-v1`, `state` `OPEN`, and URL
+  <https://github.com/samcantrill/loom/pull/43>.
+- Stack state after PR open: root phase PR targets `develop`; stack
+  predecessor remains none; no stack retarget or rebase is needed. The PR is
+  merge-eligible only after review and required checks complete; no merge or
+  approval was performed in this pass.
 - Remaining blockers: none
