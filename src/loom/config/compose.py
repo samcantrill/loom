@@ -12,6 +12,7 @@ from .api import ComposedConfig
 from .errors import ConfigValidationError
 from .interpolation import resolve_interpolation
 from .load import load_config
+from .includes import expand_config_includes
 from .source_maps import compose_config_with_sources
 from .overrides import apply_overrides, parse_overrides
 from .provenance import (
@@ -51,10 +52,17 @@ def compose_config(
         sources.append(overlay_source)
         overlay_pairs.append((overlay_config, overlay_source))
 
-    merged = compose_config_with_sources(
+    merged_with_sources = compose_config_with_sources(
         base_config=base_config,
         base_source=base_source,
         overlays=overlay_pairs,
+    )
+    merged = merged_with_sources.config
+    merged = expand_config_includes(
+        merged,
+        source_map=merged_with_sources.source_map,
+        replacement_sites=merged_with_sources.replacement_sites,
+        mapping_sites=merged_with_sources.mapping_sites,
     ).config
 
     parsed_overrides = parse_overrides(overrides)

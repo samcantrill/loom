@@ -155,6 +155,10 @@ class ConfigIncludeResolutionError(_ConfigError):
     """Error while resolving include targets to concrete local files."""
 
 
+class ConfigIncludeExpansionError(_ConfigError):
+    """Error while expanding file-authored include directives."""
+
+
 class UnsupportedRecipeError(ConfigError):
     """Error for recipe-related behavior that is not supported by this phase."""
 
@@ -215,6 +219,8 @@ __all__ = [
     "UnsupportedRecipeError",
     "UnsupportedConfigDirectiveError",
     "ConfigErrorContext",
+    "ConfigIncludeResolutionError",
+    "ConfigIncludeExpansionError",
     "RecipeRegistrationError",
     "DuplicateRecipeError",
     "UnknownRecipeError",

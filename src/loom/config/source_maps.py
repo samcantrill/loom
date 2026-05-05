@@ -23,6 +23,8 @@ class ComposedConfigWithSources:
 
     config: dict[str, PlainData]
     source_map: dict[ConfigPath, ConfigSource]
+    replacement_sites: tuple[ConfigPath, ...]
+    mapping_sites: tuple[ConfigPath, ...]
 
 
 def compose_config_with_sources(
@@ -37,6 +39,10 @@ def compose_config_with_sources(
         key: _normalize_mapping_value(value, path=_format_config_path((key,))) for key, value in base_config.items()
     }
     source_map = build_base_source_map(normalized_base, base_source)
+    replacement_sites: list[ConfigPath] = []
+    mapping_sites: list[ConfigPath] = []
+    if overlays:
+        mapping_sites.append(())
 
     merged = normalized_base
     for overlay_config, overlay_source in overlays:
@@ -48,9 +54,16 @@ def compose_config_with_sources(
             path=(),
             source=overlay_source,
             source_map=source_map,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
         )
 
-    return ComposedConfigWithSources(config=merged, source_map=source_map)
+    return ComposedConfigWithSources(
+        config=merged,
+        source_map=source_map,
+        replacement_sites=tuple(replacement_sites),
+        mapping_sites=tuple(mapping_sites),
+    )
 
 
 def build_base_source_map(
@@ -144,13 +157,18 @@ def _merge_with_sources(
     path: ConfigPath,
     source: ConfigSource,
     source_map: dict[ConfigPath, ConfigSource],
+    replacement_sites: list[ConfigPath],
+    mapping_sites: list[ConfigPath],
 ) -> dict[str, PlainData]:
     if not isinstance(base, Mapping):
         raise ConfigMergeError(f"Invalid base mapping at {_format_config_path(path)}")
     if not isinstance(overlay, Mapping):
         raise ConfigMergeError(f"Invalid overlay mapping at {_format_config_path(path)}")
 
-    merged = {key: _normalize_mapping_value(value, path=f"{_format_config_path(path)}[{key!r}]") for key, value in base.items()}
+    merged = {
+        key: _normalize_mapping_value(value, path=f"{_format_config_path(path)}[{key!r}]")
+        for key, value in base.items()
+    }
 
     if _REPLACE_KEY in overlay:
         return _merge_replace_mapping_with_sources(
@@ -159,6 +177,8 @@ def _merge_with_sources(
             path=path,
             source=source,
             source_map=source_map,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
         )
 
     for key, overlay_raw_value in overlay.items():
@@ -170,6 +190,8 @@ def _merge_with_sources(
             path=child_path,
             source=source,
             source_map=source_map,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
         )
 
     return merged
@@ -182,6 +204,8 @@ def _merge_value_with_sources(
     path: ConfigPath,
     source: ConfigSource,
     source_map: dict[ConfigPath, ConfigSource],
+    replacement_sites: list[ConfigPath],
+    mapping_sites: list[ConfigPath],
 ) -> PlainData:
     if isinstance(overlay_value, dict):
         overlay_mapping = cast(dict[str, PlainData], overlay_value)
@@ -192,9 +216,12 @@ def _merge_value_with_sources(
                 path=path,
                 source=source,
                 source_map=source_map,
+                replacement_sites=replacement_sites,
+                mapping_sites=mapping_sites,
             )
 
         if isinstance(base_value, dict):
+            mapping_sites.append(path)
             source_map[path] = source
             return _merge_with_sources(
                 base=base_value,
@@ -202,6 +229,8 @@ def _merge_value_with_sources(
                 path=path,
                 source=source,
                 source_map=source_map,
+                replacement_sites=replacement_sites,
+                mapping_sites=mapping_sites,
             )
 
     _set_value_source(source_map, path=path, value=overlay_value, source=source)
@@ -215,6 +244,8 @@ def _merge_replace_mapping_with_sources(
     path: ConfigPath,
     source: ConfigSource,
     source_map: dict[ConfigPath, ConfigSource],
+    replacement_sites: list[ConfigPath],
+    mapping_sites: list[ConfigPath],
 ) -> dict[str, PlainData]:
     if not isinstance(base_value, Mapping):
         raise ConfigMergeError(
@@ -225,7 +256,11 @@ def _merge_replace_mapping_with_sources(
     if replace_marker is not True:
         raise ConfigMergeError(f"Invalid _replace_ value at {_format_config_path(path)}: expected true")
 
-    replacement_value: dict[str, PlainData] = {key: value for key, value in overlay_value.items() if key != _REPLACE_KEY}
+    replacement_sites.append(path)
+
+    replacement_value: dict[str, PlainData] = {
+        key: value for key, value in overlay_value.items() if key != _REPLACE_KEY
+    }
     if not replacement_value:
         raise ConfigMergeError(f"Invalid _replace_ usage at {_format_config_path(path)}: no replacement keys provided")
 
@@ -242,6 +277,8 @@ def _merge_replace_mapping_with_sources(
             path=child_path,
             source=source,
             source_map=source_map,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
         )
 
     return merged
@@ -254,6 +291,8 @@ def _normalize_replacement_value_with_sources(
     path: ConfigPath,
     source: ConfigSource,
     source_map: dict[ConfigPath, ConfigSource],
+    replacement_sites: list[ConfigPath],
+    mapping_sites: list[ConfigPath],
 ) -> PlainData:
     replacement_value = _normalize_mapping_value(value, path=_format_config_path(path))
     if not isinstance(replacement_value, dict):
@@ -268,6 +307,8 @@ def _normalize_replacement_value_with_sources(
             path=path,
             source=source,
             source_map=source_map,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
         )
 
     source_map[path] = source
@@ -281,6 +322,8 @@ def _normalize_replacement_value_with_sources(
             path=child_path,
             source=source,
             source_map=source_map,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
         )
 
     return merged

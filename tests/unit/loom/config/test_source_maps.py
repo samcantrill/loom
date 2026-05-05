@@ -261,3 +261,37 @@ def test_include_like_key_sources_are_overlay_authored() -> None:
 
     assert merged.config == {"pipeline": {"_include_": "overlay.yaml"}}
     assert_source(("pipeline", "_include_"), merged.source_map, overlay_source)
+
+
+def test_compose_config_with_sources_tracks_root_mapping_site_for_mapping_overlay() -> None:
+    base = plain_config({"pipeline": {"stage": "base"}})
+    overlay = plain_config({"pipeline": {"paths": {"root": "/tmp"}}})
+
+    base_source = source(kind="base", path="/base.yaml", order=0)
+    overlay_source = source(kind="overlay", path="/overlay.yaml", order=1)
+
+    merged = compose_config_with_sources(
+        base_config=base,
+        base_source=base_source,
+        overlays=[(overlay, overlay_source)],
+    )
+
+    assert () in merged.mapping_sites
+    assert ("pipeline",) in merged.mapping_sites
+
+
+def test_compose_config_with_sources_tracks_replacement_site_for_replace_marker() -> None:
+    base = plain_config({"pipeline": {"stage": "base"}})
+    overlay = plain_config({"pipeline": {"_replace_": True, "paths": {"root": "/tmp"}}})
+
+    base_source = source(kind="base", path="/base.yaml", order=0)
+    overlay_source = source(kind="overlay", path="/overlay.yaml", order=1)
+
+    merged = compose_config_with_sources(
+        base_config=base,
+        base_source=base_source,
+        overlays=[(overlay, overlay_source)],
+    )
+
+    assert () in merged.mapping_sites
+    assert ("pipeline",) in merged.replacement_sites

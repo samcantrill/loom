@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import Final, Literal, Never, cast
 from urllib.parse import ParseResult, unquote_to_bytes, urlparse
 
 from loom.serialization import PlainData, to_plain_data
 
-from .errors import ConfigErrorContext, ConfigIncludeResolutionError
+from .errors import (
+    ConfigErrorContext,
+    ConfigIncludeExpansionError,
+    ConfigIncludeResolutionError,
+    ConfigLoadError,
+)
+from .load import load_config
 from .provenance import ConfigSource
-from .source_maps import ConfigPath, format_config_path
+from .source_maps import ConfigPath, build_base_source_map, format_config_path
+from .merge import merge_configs
 
 IncludeTargetKind = Literal["bare_name", "explicit_relative", "absolute", "file_uri"]
+ConfigSourceKind = Literal["base", "overlay"]
 
 _INTERPOLATION_PATTERN: Final = re.compile(r"\$\{[^{}]+\}")
 _BARE_NAME_PATTERN: Final = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -32,6 +41,514 @@ class IncludeResolutionResult:
     resolved_path: Path
     target_kind: IncludeTargetKind
     explicit_escape: bool
+
+
+CustomizationKind = Literal["add", "override"]
+
+
+@dataclass(frozen=True, slots=True)
+class IncludeLocalCustomization:
+    include_site_path: ConfigPath
+    sibling_path: ConfigPath
+    source_path: str
+    source_kind: ConfigSourceKind
+    source_order: int
+    kind: CustomizationKind
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "include_site_path": _format_path(self.include_site_path),
+            "sibling_path": _format_path(self.sibling_path),
+            "source_path": self.source_path,
+            "source_kind": self.source_kind,
+            "source_order": self.source_order,
+            "kind": self.kind,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class IncludeSiteRecord:
+    include_site_path: ConfigPath
+    authored_target: str
+    source_path: str
+    source_kind: ConfigSourceKind
+    source_order: int
+    resolved_path: str
+    target_kind: IncludeTargetKind
+    explicit_escape: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "include_site_path": _format_path(self.include_site_path),
+            "authored_target": self.authored_target,
+            "source_path": self.source_path,
+            "source_kind": self.source_kind,
+            "source_order": self.source_order,
+            "resolved_path": self.resolved_path,
+            "target_kind": self.target_kind,
+            "explicit_escape": self.explicit_escape,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class IncludeStackFrame:
+    include_site_path: ConfigPath
+    authored_target: str
+    source_path: str
+    source_kind: ConfigSourceKind
+    source_order: int
+    resolved_path: str
+    target_kind: IncludeTargetKind
+    explicit_escape: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "include_site_path": _format_path(self.include_site_path),
+            "authored_target": self.authored_target,
+            "source_path": self.source_path,
+            "source_kind": self.source_kind,
+            "source_order": self.source_order,
+            "resolved_path": self.resolved_path,
+            "target_kind": self.target_kind,
+            "explicit_escape": self.explicit_escape,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ExpandedConfigWithIncludes:
+    config: dict[str, PlainData]
+    include_sites: tuple[IncludeSiteRecord, ...]
+    local_customizations: tuple[IncludeLocalCustomization, ...]
+
+
+def _format_path(include_path: ConfigPath) -> list[str | int]:
+    return [segment for segment in include_path]
+
+
+def expand_config_includes(
+    config: Mapping[str, PlainData],
+    source_map: dict[ConfigPath, ConfigSource],
+    *,
+    replacement_sites: Sequence[ConfigPath] = (),
+    mapping_sites: Sequence[ConfigPath] = (),
+) -> ExpandedConfigWithIncludes:
+    """Expand file-authored `_include_` directives recursively."""
+
+    include_sites: list[IncludeSiteRecord] = []
+    local_customizations: list[IncludeLocalCustomization] = []
+    include_stack: list[IncludeStackFrame] = []
+    expanded_mapping = _expand_value_with_includes(
+        value=cast(dict[str, PlainData], config),
+        source_map=source_map,
+        path=(),
+        source_lookup_path=(),
+        replacement_sites=tuple(replacement_sites),
+        mapping_sites=tuple(mapping_sites),
+        include_sites=include_sites,
+        local_customizations=local_customizations,
+        include_stack=include_stack,
+    )
+
+    return ExpandedConfigWithIncludes(
+        config=cast(dict[str, PlainData], expanded_mapping),
+        include_sites=tuple(include_sites),
+        local_customizations=tuple(local_customizations),
+    )
+
+
+def _expand_value_with_includes(
+    *,
+    value: PlainData,
+    source_map: Mapping[ConfigPath, ConfigSource],
+    path: ConfigPath,
+    source_lookup_path: ConfigPath,
+    replacement_sites: tuple[ConfigPath, ...],
+    mapping_sites: tuple[ConfigPath, ...],
+    include_sites: list[IncludeSiteRecord],
+    local_customizations: list[IncludeLocalCustomization],
+    include_stack: list[IncludeStackFrame],
+) -> PlainData:
+    if not isinstance(value, Mapping):
+        if isinstance(value, list):
+            return [
+                _expand_value_with_includes(
+                    value=child,
+                    source_map=source_map,
+                    path=path + (index,),
+                    source_lookup_path=source_lookup_path + (index,),
+                    replacement_sites=replacement_sites,
+                    mapping_sites=mapping_sites,
+                    include_sites=include_sites,
+                    local_customizations=local_customizations,
+                    include_stack=include_stack,
+                )
+                for index, child in enumerate(value)
+            ]
+
+        return value
+
+    mapping = cast(dict[str, PlainData], value)
+    expanded_mapping = {}
+    if "_include_" in mapping:
+        return _expand_including_mapping(
+            mapping=mapping,
+            source_map=source_map,
+            path=path,
+            source_lookup_path=source_lookup_path,
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
+            include_sites=include_sites,
+            local_customizations=local_customizations,
+            include_stack=include_stack,
+        )
+
+    for key, child in mapping.items():
+        expanded_mapping[key] = _expand_value_with_includes(
+            value=cast(PlainData, child),
+            source_map=source_map,
+            path=path + (key,),
+            source_lookup_path=source_lookup_path + (key,),
+            replacement_sites=replacement_sites,
+            mapping_sites=mapping_sites,
+            include_sites=include_sites,
+            local_customizations=local_customizations,
+            include_stack=include_stack,
+        )
+    return expanded_mapping
+
+
+def _expand_including_mapping(
+    *,
+    mapping: dict[str, PlainData],
+    source_map: Mapping[ConfigPath, ConfigSource],
+    path: ConfigPath,
+    source_lookup_path: ConfigPath,
+    replacement_sites: tuple[ConfigPath, ...],
+    mapping_sites: tuple[ConfigPath, ...],
+    include_sites: list[IncludeSiteRecord],
+    local_customizations: list[IncludeLocalCustomization],
+    include_stack: list[IncludeStackFrame],
+) -> dict[str, PlainData]:
+    include_site_path = path + ("_include_",)
+    source_include_site_path = source_lookup_path + ("_include_",)
+    include_source = _lookup_include_source(source_map, source_include_site_path)
+    authored_target = mapping.get("_include_")
+    if not isinstance(authored_target, str):
+        raise _include_expansion_error(
+            "Include target must be a string.",
+            code="invalid_include_value",
+            source=include_source,
+            include_site_path=include_site_path,
+            authored_target=_display_value(authored_target),
+            details={
+                "reason": "include_value_not_string",
+                "include_site_path": _format_path(include_site_path),
+            },
+        )
+
+    resolution = resolve_include_target(
+        authored_target,
+        source=include_source,
+        include_site_path=source_include_site_path,
+    )
+
+    _validate_include_cycle(
+        resolution=resolution,
+        include_site_path=include_site_path,
+        include_source=include_source,
+        include_stack=include_stack,
+    )
+
+    include_frame = IncludeStackFrame(
+        include_site_path=include_site_path,
+        authored_target=authored_target,
+        source_path=resolution.source_path,
+        source_kind=include_source.kind,
+        source_order=include_source.order,
+        resolved_path=str(resolution.resolved_path),
+        target_kind=resolution.target_kind,
+        explicit_escape=resolution.explicit_escape,
+    )
+    include_stack.append(include_frame)
+    include_sites.append(
+        IncludeSiteRecord(
+            include_site_path=include_site_path,
+            authored_target=authored_target,
+            source_path=resolution.source_path,
+            source_kind=include_source.kind,
+            source_order=include_source.order,
+            resolved_path=str(resolution.resolved_path),
+            target_kind=resolution.target_kind,
+            explicit_escape=resolution.explicit_escape,
+        ),
+    )
+
+    try:
+        container_path = path
+        container_source = source_map.get(container_path)
+        if container_source is not None:
+            if (
+                container_path in mapping_sites
+                and container_path not in replacement_sites
+                and container_source.order <= include_source.order
+            ):
+                raise _include_expansion_error(
+                    "Include replacement over existing mapping requires same-site _replace_: true.",
+                    code="missing_required_replace_for_include",
+                    source=include_source,
+                    include_site_path=include_site_path,
+                    authored_target=authored_target,
+                    details={
+                        "reason": "include_over_existing_mapping",
+                        "include_site_path": _format_path(include_site_path),
+                        "container_path": _format_path(container_path),
+                        "resolved_path": str(resolution.resolved_path),
+                        "container_source_order": container_source.order,
+                        "include_source_order": include_source.order,
+                    },
+                )
+
+        try:
+            included_config, included_source = load_config(
+                resolution.resolved_path,
+                kind="overlay",
+                order=0,
+            )
+        except ConfigLoadError as exc:
+            if exc.context is None or exc.context.code != "non_mapping_root":
+                raise
+            raise _include_expansion_error(
+                "Included root must be a mapping.",
+                code="included_root_not_mapping",
+                source=include_source,
+                include_site_path=include_site_path,
+                authored_target=authored_target,
+                expected=exc.context.expected,
+                actual=exc.context.actual,
+                details={
+                    "reason": "included_root_not_mapping",
+                    "include_site_path": _format_path(include_site_path),
+                    "resolved_path": str(resolution.resolved_path),
+                    "included_source_path": exc.context.source_path,
+                },
+            ) from exc
+        included_source_map = build_base_source_map(included_config, included_source)
+        shifted_included_map = _expand_value_with_includes(
+            value=included_config,
+            source_map=included_source_map,
+            path=container_path,
+            source_lookup_path=(),
+            replacement_sites=(),
+            mapping_sites=(),
+            include_sites=include_sites,
+            local_customizations=local_customizations,
+            include_stack=include_stack,
+        )
+
+        if not isinstance(shifted_included_map, Mapping):
+            raise _include_expansion_error(
+                "Included root must be a mapping.",
+                code="included_root_not_mapping",
+                source=include_source,
+                include_site_path=include_site_path,
+                authored_target=authored_target,
+                details={
+                    "reason": "included_root_not_mapping",
+                    "include_site_path": _format_path(include_site_path),
+                    "resolved_path": str(resolution.resolved_path),
+                    "resolved_kind": str(type(shifted_included_map)),
+                },
+            )
+    finally:
+        include_stack.pop()
+
+    included_mapping = cast(dict[str, PlainData], shifted_included_map)
+
+    _validate_local_replace_marker(
+        mapping=mapping,
+        include_source=include_source,
+        include_site_path=include_site_path,
+        authored_target=authored_target,
+        replacement_sites=replacement_sites,
+        path=container_path,
+        resolved_path=resolution.resolved_path,
+    )
+    local_mapping = {key: value for key, value in mapping.items() if key not in {"_include_", "_replace_"}}
+    local_expanded = {}
+    for key, child in local_mapping.items():
+        sibling_path = include_site_path[:-1] + (key,)
+        source_sibling_path = source_lookup_path + (key,)
+        sibling_source = _lookup_include_source(
+            source_map,
+            source_sibling_path,
+            expect_path=source_sibling_path,
+            path_kind="sibling",
+        )
+        local_customizations.append(
+            IncludeLocalCustomization(
+                include_site_path=include_site_path,
+                sibling_path=sibling_path,
+                source_path=sibling_source.path,
+                source_kind=sibling_source.kind,
+                source_order=sibling_source.order,
+                kind="override" if key in included_mapping else "add",
+            )
+        )
+        local_expanded[key] = _expand_value_with_includes(
+            value=child,
+            source_map=source_map,
+            path=sibling_path,
+            source_lookup_path=source_sibling_path,
+            replacement_sites=(),
+            mapping_sites=(),
+            include_sites=include_sites,
+            local_customizations=local_customizations,
+            include_stack=include_stack,
+        )
+
+    merged = merge_configs(
+        included_mapping,
+        local_expanded,
+        path=format_config_path(container_path),
+    )
+
+    return merged
+
+
+def _validate_local_replace_marker(
+    *,
+    mapping: Mapping[str, PlainData],
+    include_source: ConfigSource,
+    include_site_path: ConfigPath,
+    authored_target: str,
+    replacement_sites: tuple[ConfigPath, ...],
+    path: ConfigPath,
+    resolved_path: Path,
+) -> None:
+    if "_replace_" not in mapping or path in replacement_sites:
+        return
+
+    raise _include_expansion_error(
+        "Unexpected _replace_ marker beside _include_.",
+        code="invalid_include_replace_marker",
+        source=include_source,
+        include_site_path=include_site_path,
+        authored_target=authored_target,
+        details={
+            "reason": "unexpected_replace_marker",
+            "include_site_path": _format_path(include_site_path),
+            "container_path": _format_path(path),
+            "resolved_path": str(resolved_path),
+        },
+    )
+
+
+def _validate_include_cycle(
+    *,
+    resolution: IncludeResolutionResult,
+    include_site_path: ConfigPath,
+    include_source: ConfigSource,
+    include_stack: list[IncludeStackFrame],
+) -> None:
+    for frame in include_stack:
+        if frame.resolved_path == str(resolution.resolved_path):
+            raise _include_expansion_error(
+                "Include cycle detected.",
+                code="include_cycle",
+                source=include_source,
+                include_site_path=include_site_path,
+                authored_target=resolution.authored_target,
+                details={
+                    "reason": "include_cycle",
+                    "attempted_target": str(resolution.resolved_path),
+                    "attempted_include_site_path": _format_path(include_site_path),
+                    "include_stack": [_format_stack_frame(frame) for frame in include_stack],
+                },
+            )
+
+
+def _format_stack_frame(frame: IncludeStackFrame) -> dict[str, object]:
+    return frame.to_dict()
+
+
+def _lookup_include_source(
+    source_map: Mapping[ConfigPath, ConfigSource],
+    include_site_path: ConfigPath,
+    *,
+    expect_path: ConfigPath | None = None,
+    path_kind: Literal["include", "sibling"] = "include",
+) -> ConfigSource:
+    include_source = source_map.get(include_site_path)
+    if include_source is not None:
+        return include_source
+
+    details = {
+        "reason": f"missing_{path_kind}_source_map_entry",
+        "include_site_path": _format_path(include_site_path),
+    }
+    if expect_path is not None:
+        details["expected_path"] = _format_path(expect_path)
+    return _raise_include_source_error(include_site_path=include_site_path, details=details)
+
+
+def _display_value(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return repr(value)
+
+
+def _raise_include_source_error(
+    *,
+    include_site_path: ConfigPath,
+    details: dict[str, object],
+) -> Never:
+    raise _include_expansion_error(
+        "Could not locate include-site source metadata for include expansion.",
+        code="missing_include_source_map_entry",
+        source=ConfigSource(
+            kind="overlay",
+            path="<missing>",
+            order=-1,
+            content_digest="sha256:missing",
+            size_bytes=0,
+        ),
+        include_site_path=include_site_path,
+        authored_target="",
+        details=details,
+    )
+
+
+def _include_expansion_error(
+    message: str,
+    *,
+    code: str,
+    source: ConfigSource,
+    include_site_path: ConfigPath,
+    authored_target: str,
+    expected: object | None = None,
+    actual: object | None = None,
+    details: dict[str, object] | None = None,
+) -> ConfigIncludeExpansionError:
+    payload = dict(details or {})
+    payload["authored_target"] = authored_target
+    plain_details = to_plain_data(payload)
+    if not isinstance(plain_details, dict):
+        raise TypeError("Config include expansion error details must be a mapping")
+
+    return ConfigIncludeExpansionError(
+        message,
+        context=ConfigErrorContext(
+            code=code,
+            source_kind=source.kind,
+            source_order=source.order,
+            source_path=str(source.path),
+            config_path=format_config_path(include_site_path),
+            expected=_optional_plain_data(expected),
+            actual=_optional_plain_data(actual),
+            directive="_include_",
+            details=cast(dict[str, PlainData], plain_details),
+        ),
+    )
 
 
 def resolve_include_target(
