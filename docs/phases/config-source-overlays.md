@@ -236,11 +236,19 @@ make test-summary
 
 ## Completion Notes
 
-- Draft plan: completed in this artifact by `loom_phase_planner`; implementation not started.
-- Final phase execution plan: refined by `loom_phase_planner`; implementation not started.
+- Draft plan: completed in this artifact by `loom_phase_planner`; implementation completed by this phase executor.
+- Final phase execution plan: refined by `loom_phase_planner`; execution moved directly to scoped implementation.
 - Implementation summary:
+  - Added `src/loom/config/source_maps.py` with immutable path-based source map types, base-source map construction, path formatter, and source-aware overlay merge helper that mirrors Phase 3 merge and `_replace_` behavior.
+  - Updated `src/loom/config/compose.py` to thread loaded overlay/base pairs through `compose_config_with_sources` while preserving current public `ComposedConfig` shape.
+  - Added `tests/unit/loom/config/test_source_maps.py` covering tuple path identity, path formatting, recursive merge preservation, list/scalar/null replacement, `_replace_` behavior, and overlay-authored `_include_` context.
+  - Added `tests/integration/config/test_source_maps.py` loading a base plus two overlays and asserting ordered provenance by `ConfigSource` through the internal helper path.
 - Implementation validation:
-- Refinement summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_source_maps.py` ✅ (8 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_merge.py tests/unit/loom/config/test_compose.py` ✅ (28 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/config/test_compose_config.py tests/integration/config/test_source_maps.py` ✅ (5 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest ...` initially blocked on first run by read-only uv cache and DNS/network constraints; resolved by using writable cache directory and installing optional config extras once.
+- Refinement summary: implementation refinement budget remains unused.
+- PR preparation: not started (per user scope).
+- Stack maintenance: no stack changes required in this scope.
+- Remaining blockers: none.
