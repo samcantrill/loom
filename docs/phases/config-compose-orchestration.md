@@ -261,15 +261,17 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e -k config` (existing e2e only; no new phase-12-specific e2e added due harness scope).
 - Refinement summary: expanded-path implementation refinement complete and budget consumed. Fixed the Phase 12 placeholder manifest to use the artifact schema constant explicitly while preserving provenance schema usage for `ConfigProvenance`; restored the config-local `compose.compose_config(...)` helper to return `ComposedConfig` so its name does not conflict with its behavior; added regression coverage for artifact schema placeholder semantics and the internal helper return type. No PR preparation, PR opening, approval, merge, persistence, CLI, pipeline, or workflow-file changes performed.
 - PR preparation:
-  - Expanded-path PR body draft pass completed on 2026-05-06 by `loom_pr_preparer`; refine pass remains pending and PR creation is intentionally deferred to the refine pass.
-  - Confirmed current worktree `/home/samcantrill/work/loom-worktrees/config-compose-orchestration`, branch `codex/config-compose-orchestration`, target branch `develop`, stack predecessor `none`, and HEAD `3fd564978e5d1091d491fb9d22f20307f38ce73f` match the phase handoff and execution-plan metadata.
+  - Expanded-path PR body draft pass completed on 2026-05-06 by `loom_pr_preparer`.
+  - Expanded-path PR body refine/open pass completed on 2026-05-06 by `loom_pr_preparer`; public PR body was checked against the phase plan, final diff, acceptance criteria, suite evidence, scope boundaries, assumptions, risks, and resolved pre-submit blocker status.
+  - Confirmed current worktree `/home/samcantrill/work/loom-worktrees/config-compose-orchestration`, branch `codex/config-compose-orchestration`, target branch `develop`, stack predecessor `none`, and HEAD `539a86623f153a0c758d2af1b3f086868e6acde5` match the phase handoff and execution-plan metadata.
   - Confirmed `develop` is an ancestor of the phase branch; Phase 12 remains a root PR candidate targeting `develop`.
   - Inspected the final diff vs `develop`, `.github/PULL_REQUEST_TEMPLATE.md`, `.codex/templates/phase-pr-body.md`, `build/test-summary.md`, implementation-plan Phase 12 scope, and completion validation evidence before drafting.
   - Created reviewer-facing PR body artifact at `docs/phases/config-compose-orchestration-pr-body.md` using the public PR template shape and suite-level evidence from `build/test-summary.md`.
   - Public PR body draft includes `@samcantrill` near the top, acceptance criteria, implementation notes, new tests, validation evidence, suite summary, and risks/follow-ups; workflow internals remain in this phase execution plan.
   - PR title remains `Configuration - Phase 12: Public Compose Orchestration And Inspection APIs`.
-  - PR status: not opened in this pass because Phase 12 is expanded path and the user explicitly deferred PR creation to a later pass.
+  - PR status before GitHub submission: ready to open against `develop` with explicit base/head/title/body flags.
   - Budget status after pre-submit gate: phase implementation refinement used; pre-submit blocker gate used; PR review budget consumed by the pre-submit gate because it reviewed the implementation diff, PR body, and suite evidence.
+  - Confirmation gate status: passed with no remaining blockers; approved PR submission to `develop` subject to GitHub CI and permissions.
   - Under `.codex/prompts/phase-loop-management.md`, do not run another automated PR review unless the submitted diff changes and the manager explicitly authorizes it.
 - Scoped pre-submit blocker resolution:
   - Blocker resolved: `tests/contracts/test_config_composition_inspection_contract.py` was claimed as contract coverage in the PR body, but default contract evidence skipped it when config extras were unavailable and `config-extra` did not select it because it lacked `pytest.mark.optional_dependency`.

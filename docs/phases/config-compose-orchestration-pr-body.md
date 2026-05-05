@@ -33,21 +33,21 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ran after blocker resolution; includes Ruff, Pyright, default pytest, config-extra coverage, and build. |
-| `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md` with overall suite status `passed`; the inspection contract runs in the `config-extra` row. |
-| GitHub checks | Not run | PR was not opened in the expanded-path draft pass. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Reran in the refine/open pass; includes Ruff, Pyright, default pytest, config-extra coverage, and build. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Reran in the refine/open pass and wrote `build/test-summary.md` with overall suite status `passed`; the inspection contract runs in the `config-extra` row. |
+| GitHub checks | Pending | Expected to run after PR creation. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.71s | 22% |
-| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 3.94s | 58% |
-| contract | passed | 28 | 0 | 0 | 2 | 0 | 30 | 1.46s | 28% |
-| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 1.96s | 43% |
-| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.38s | 63% |
-| config-extra | passed | 271 | 0 | 0 | 0 | 432 | 271 | 8.11s | 76% |
-| Overall | passed | 703 | 0 | 0 | 9 | 432 | 712 | 22.57s | - |
+| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.93s | 22% |
+| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 3.83s | 58% |
+| contract | passed | 28 | 0 | 0 | 2 | 0 | 30 | 1.47s | 28% |
+| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 1.80s | 43% |
+| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.76s | 63% |
+| config-extra | passed | 271 | 0 | 0 | 0 | 432 | 271 | 8.26s | 76% |
+| Overall | passed | 703 | 0 | 0 | 9 | 432 | 712 | 23.05s | - |
 
 ## Risks / Follow-Ups
 
