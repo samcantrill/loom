@@ -6,6 +6,7 @@
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 11: Strict Instantiation And Runtime Injection`
 - Branch: `codex/config-instantiation-strict`
+- PR: https://github.com/samcantrill/loom/pull/38
 - Worktree: `/home/samcantrill/work/loom-worktrees/config-instantiation-strict`
 - Phase execution plan path: `docs/phases/config-instantiation-strict.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v1.md`
@@ -249,6 +250,9 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Existing validation evidence inspected from this artifact and `build/test-summary.md`: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall suite status `passed`.
   - Validation commands were not rerun during the PR-body draft/refine passes because those passes changed only PR preparation artifacts and phase notes; final implementation validation remains `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` and `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary`, both passed.
   - Revised-workflow pre-submit blocker gate completed before PR submission: `loom_phase_reviewer` reported no blocking or non-blocking findings, approved submission, and consumed the PR-review budget unless the submitted diff changes materially afterward.
+  - PR opened: https://github.com/samcantrill/loom/pull/38.
+  - PR verification: `gh pr view 38 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/config-instantiation-strict`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/38`.
+  - Merge eligibility status: root PR targets `develop`; merge-eligible after GitHub CI and required human/manager review gates pass.
 - Stack maintenance:
   - No stack predecessor changes; this is a root phase branch (`codex/config-instantiation-strict`) targeting `develop`.
 - Remaining blockers: none.
