@@ -10,6 +10,8 @@ pytest.importorskip("yaml")
 
 from loom.config import inspect_config_composition
 
+pytestmark = [pytest.mark.contract, pytest.mark.optional_dependency]
+
 
 def test_inspection_shape_and_stage_contract(tmp_path: Path) -> None:
     path = tmp_path / "base.yaml"

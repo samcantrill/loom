@@ -24,10 +24,10 @@
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner`; refine budget used.
 - Phase implementation refinement budget: used by expanded-path implementation refinement on 2026-05-06.
-- Pre-submit blocker gate budget: unused. `loom_pr_preparer` must run one blocker gate before opening or preparing the PR, covering the implementation diff, PR body draft, suite evidence, scope boundary, import boundary, inspection public contract, artifact placeholder semantics, and known review risks. Known blockers must be fixed or the phase marked blocked before any PR is opened.
-- PR review budget: unused. Do not consume the PR review budget during implementation; a later manager-assigned review may consume it after PR preparation.
+- Pre-submit blocker gate budget: used by the pre-submit gate on 2026-05-06; it found one suite-evidence blocker for the inspection contract test.
+- PR review budget: consumed by the pre-submit gate review of the implementation diff, PR body, and suite evidence. A later submitted-diff review is only available if the diff changes after this gate.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Sandboxed `gh auth setup-git` failed because `/home/samcantrill/.gitconfig` was read-only; approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop` and `origin/develop` both resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
-- Blockers: none known after refinement.
+- Blockers: none known after scoped pre-submit blocker resolution.
 
 ## Objective
 
@@ -235,8 +235,8 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used by expanded-path implementation refinement on 2026-05-06.
-- Pre-submit blocker gate: unused; required before PR submission under the revised workflow and separate from the later PR review budget.
-- PR review: unused; may be consumed only by a later manager-assigned review after PR preparation.
+- Pre-submit blocker gate: used by the pre-submit gate on 2026-05-06; the exact blocker was missing final suite evidence for `tests/contracts/test_config_composition_inspection_contract.py`.
+- PR review: consumed by the pre-submit gate review of the implementation diff, PR body, and suite evidence; do not run another automated PR review unless the submitted diff changes and the manager explicitly authorizes it.
 
 ## Completion Notes
 
@@ -269,7 +269,13 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Public PR body draft includes `@samcantrill` near the top, acceptance criteria, implementation notes, new tests, validation evidence, suite summary, and risks/follow-ups; workflow internals remain in this phase execution plan.
   - PR title remains `Configuration - Phase 12: Public Compose Orchestration And Inspection APIs`.
   - PR status: not opened in this pass because Phase 12 is expanded path and the user explicitly deferred PR creation to a later pass.
-  - Budget status preserved: phase implementation refinement used; pre-submit blocker gate remains unused until the manager runs the revised pre-submit blocker gate; PR review budget remains unused until consumed by the manager-assigned gate/review.
-  - Under `.codex/prompts/phase-loop-management.md`, a full pre-submit gate reviewing the implementation diff, PR body, and suite evidence consumes the Phase 12 PR-review budget unless the submitted diff changes.
+  - Budget status after pre-submit gate: phase implementation refinement used; pre-submit blocker gate used; PR review budget consumed by the pre-submit gate because it reviewed the implementation diff, PR body, and suite evidence.
+  - Under `.codex/prompts/phase-loop-management.md`, do not run another automated PR review unless the submitted diff changes and the manager explicitly authorizes it.
+- Scoped pre-submit blocker resolution:
+  - Blocker resolved: `tests/contracts/test_config_composition_inspection_contract.py` was claimed as contract coverage in the PR body, but default contract evidence skipped it when config extras were unavailable and `config-extra` did not select it because it lacked `pytest.mark.optional_dependency`.
+  - Fix: marked the inspection contract test module with `pytest.mark.contract` and `pytest.mark.optional_dependency`, matching the optional dependency contract-suite pattern while preserving dependency-safe imports/skips.
+  - Targeted validation: `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_composition_inspection_contract.py -m optional_dependency -q` passed with 1 passed; `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_composition_inspection_contract.py -m "not optional_dependency" -q` deselected the test as expected; `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --isolated --locked --group dev --extra config python -m tools.test_harness run config-extra` passed with 271 passed and 432 deselected, and listed `tests/contracts/test_config_composition_inspection_contract.py`.
+  - Final validation: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed after blocker resolution; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md` with package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 28 passed/2 skipped, integration 9 passed/5 skipped, e2e 5 passed, config-extra 271 passed/432 deselected, overall 703 passed/9 skipped/432 deselected.
+  - PR body updated so inspection contract coverage is described as config-extra contract evidence, and suite counts match the regenerated summary.
 - Stack maintenance: none.
 - Remaining blockers: none known.

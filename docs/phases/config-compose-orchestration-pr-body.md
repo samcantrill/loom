@@ -26,28 +26,28 @@ New tests implemented:
 
 - Package API coverage for the new exports and signatures.
 - Unit coverage for staged compose/inspection consistency, additive `ComposedConfig` fields, placeholder manifest schema semantics, and the internal compose helper return type.
-- Contract coverage for stable inspection stage names, completed statuses, plain payload shape, and placeholder artifact limits.
+- Config-extra contract coverage for stable inspection stage names, completed statuses, plain payload shape, and placeholder artifact limits.
 - Integration coverage comparing `compose_config(...)` with `inspect_config_composition(...).to_composed_config()`, locking stage order, distinguishing unresolved from resolved values, and proving explicit post-compose `instantiate(...)` behavior.
 
 ## Tests And Validation
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ran after refinement; includes Ruff, Pyright, default pytest, build, and config-extra coverage. |
-| `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md` with overall suite status `passed`. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ran after blocker resolution; includes Ruff, Pyright, default pytest, config-extra coverage, and build. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | Wrote `build/test-summary.md` with overall suite status `passed`; the inspection contract runs in the `config-extra` row. |
 | GitHub checks | Not run | PR was not opened in the expanded-path draft pass. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.65s | 22% |
-| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 3.95s | 58% |
+| package | passed | 36 | 0 | 0 | 1 | 0 | 37 | 3.71s | 22% |
+| unit | passed | 354 | 0 | 0 | 1 | 0 | 355 | 3.94s | 58% |
 | contract | passed | 28 | 0 | 0 | 2 | 0 | 30 | 1.46s | 28% |
-| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 1.78s | 43% |
-| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.71s | 63% |
-| config-extra | passed | 270 | 0 | 0 | 0 | 433 | 270 | 8.08s | 76% |
-| Overall | passed | 702 | 0 | 0 | 9 | 433 | 711 | 22.63s | - |
+| integration | passed | 9 | 0 | 0 | 5 | 0 | 14 | 1.96s | 43% |
+| e2e | passed | 5 | 0 | 0 | 0 | 0 | 5 | 3.38s | 63% |
+| config-extra | passed | 271 | 0 | 0 | 0 | 432 | 271 | 8.11s | 76% |
+| Overall | passed | 703 | 0 | 0 | 9 | 432 | 712 | 22.57s | - |
 
 ## Risks / Follow-Ups
 
