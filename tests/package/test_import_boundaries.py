@@ -263,3 +263,69 @@ def test_import_cli_remains_import_safe() -> None:
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_import_config_artifacts_does_not_import_forbidden_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.config.artifacts
+
+        for forbidden in (
+            "loom.pipeline",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.pipeline.stores",
+            "loom.cli",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.config.artifacts")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_pipeline_constructs_from_plain_data_without_config_import() -> None:
+    script = dedent(
+        """
+        import sys
+
+        from loom.pipeline import parse_pipeline_config
+
+        if "loom.config" in sys.modules:
+            raise SystemExit("loom.config was imported before pipeline construction")
+        if "yaml" in sys.modules or "omegaconf" in sys.modules or "pydantic" in sys.modules:
+            raise SystemExit("pipeline construction should not import config-only dependencies")
+
+        parse_pipeline_config(
+            {
+                "name": "demo",
+                "metadata": {"mode": "boundary"},
+                "schema_version": 1,
+                "stages": [
+                    {
+                        "name": "prepare",
+                        "factory": {
+                            "_target_": "tests.support.pipeline:noop",
+                            "init": {"seed": 1},
+                        },
+                        "outputs": {"model": {"artifact_type": "json"}},
+                    }
+                ],
+            }
+        )
+        print("ok")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
