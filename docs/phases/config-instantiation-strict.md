@@ -24,7 +24,7 @@
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner` in this artifact; refine budget used.
 - Phase implementation refinement budget: used by the expanded-path implementation refinement pass on 2026-05-05.
-- Pre-submit/PR review budget: unused. The revised workflow requires a pre-submit blocker gate before PR submission; if that gate reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks, it consumes the Phase 11 PR-review budget unless the submitted diff changes afterward.
+- Pre-submit/PR review budget: consumed by the revised-workflow pre-submit blocker gate on 2026-05-05. `loom_phase_reviewer` reviewed the implementation diff, PR body, suite evidence, scope boundary, and known review risks with no blocking or non-blocking findings. The root PR is approved for submission to `develop`, subject to GitHub CI and permissions, unless the submitted diff changes materially afterward.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Sandboxed `gh auth setup-git` failed because `/home/samcantrill/.gitconfig` was read-only; approved `gh auth setup-git` succeeded. Sandboxed `git fetch origin` failed when writing `.git/FETCH_HEAD`; approved `git fetch origin` succeeded. Local `develop`, `origin/develop`, and `HEAD` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none.
 
@@ -214,8 +214,8 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used on 2026-05-05. This was the single expanded-path implementation refinement pass.
-- Pre-submit blocker gate: unused. Must run before PR submission against the phase plan, implementation diff, draft PR body, suite evidence, scope boundary, and known review risks; it consumes the Phase 11 PR-review budget when it reviews that full set unless the submitted diff changes afterward.
-- PR review: unused. A post-submit PR review should run only if the pre-submit gate did not review the full diff/body/evidence set or if the submitted diff changes after that gate.
+- Pre-submit blocker gate: passed on 2026-05-05. `loom_phase_reviewer` found no blocking or non-blocking findings and approved submission of the root PR to `develop`.
+- PR review: budget consumed by the pre-submit blocker gate unless the submitted diff changes materially afterward.
 
 ## Completion Notes
 
@@ -243,11 +243,12 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Scope remains within Phase 11 and public API surfaces were not expanded.
   - Draft PR body pass completed on 2026-05-05 using `.codex/prompts/pr-body-draft.md` and `.codex/templates/phase-pr-body.md`.
   - PR body artifact created at `docs/phases/config-instantiation-strict-pr-body.md`.
-  - PR body refine pass is pending because Phase 11 is on the expanded path; no PR was opened in the draft pass.
+  - PR body refine pass completed on 2026-05-05 using `.codex/prompts/pr-body-refine.md`; public PR body was kept concise and corrected to remove stale pre-submit-gate wording before submission.
   - Confirmed worktree `/home/samcantrill/work/loom-worktrees/config-instantiation-strict`, branch `codex/config-instantiation-strict`, target branch `develop`, stack predecessor `none`, and PR title `Configuration - Phase 11: Strict Instantiation And Runtime Injection` match this phase plan.
   - Final diff inspected against `develop` at implementation HEAD `2e061038836fce32248f4929a843a630ae3a6cad`: phase plan artifact, injection/recursive instantiation runtime validation, config sample probes, and focused instantiation tests only.
   - Existing validation evidence inspected from this artifact and `build/test-summary.md`: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall suite status `passed`.
-  - Validation commands were not rerun during this draft pass because the pass changed only PR preparation artifacts and phase notes; the revised pre-submit blocker gate remains pending before PR submission.
+  - Validation commands were not rerun during the PR-body draft/refine passes because those passes changed only PR preparation artifacts and phase notes; final implementation validation remains `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` and `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary`, both passed.
+  - Revised-workflow pre-submit blocker gate completed before PR submission: `loom_phase_reviewer` reported no blocking or non-blocking findings, approved submission, and consumed the PR-review budget unless the submitted diff changes materially afterward.
 - Stack maintenance:
   - No stack predecessor changes; this is a root phase branch (`codex/config-instantiation-strict`) targeting `develop`.
 - Remaining blockers: none.

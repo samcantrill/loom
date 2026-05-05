@@ -36,7 +36,7 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff, Pyright, default suite, config-extra suite, and build passed at implementation HEAD. |
 | `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | `build/test-summary.md` generated with overall suite status `passed`. |
-| GitHub checks | Not run | PR not opened in this expanded-path draft pass. |
+| GitHub checks | Pending | GitHub CI will run after PR submission. |
 
 ### Test Suite Summary
 
@@ -64,4 +64,3 @@ Targeted phase checks also passed:
 
 - The target import contract intentionally remains narrow; future registry, allow-list, or plugin target discovery work needs a separate public design.
 - Runtime object fingerprinting and artifact policy for injected objects remain deferred to later pipeline/runtime phases.
-- The expanded-path pre-submit blocker gate is still pending and should review this PR body, the final diff, suite evidence, and scope boundary before PR submission.
