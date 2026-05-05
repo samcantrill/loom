@@ -1786,9 +1786,9 @@ Completion notes:
 
 ### Phase 12 - Public Compose Orchestration And Inspection APIs
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-compose-orchestration`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/39
 
 Goal:
 
@@ -1829,6 +1829,42 @@ Test expectations:
 - Integration tests for full order through recipes and runtime resolution.
 - Inspection API contract tests.
 - Import-boundary tests.
+
+Completion notes:
+
+- Phase execution plan: `docs/phases/config-compose-orchestration.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is open and
+  merge-eligible after CI and merge permissions allow.
+- Revised workflow gate: the pre-submit blocker gate ran before PR submission
+  and found one blocker: inspection contract coverage was claimed in the PR
+  body but was not included in final suite evidence. A scoped
+  blocker-resolution pass marked the inspection contract test as
+  `contract`/`optional_dependency`, reran validation, refreshed the PR body and
+  phase notes, and confirmation review found no remaining blockers. The
+  pre-submit gate consumed the Phase 12 PR-review budget for the current
+  implementation diff, PR body, suite evidence, scope boundary, and known
+  review risks.
+- Implementation summary: adds public `inspect_config_composition(...)`,
+  `ConfigCompositionInspection`, and `ConfigCompositionStageRecord`; routes
+  public composition and inspection through the same staged full-order flow;
+  extends `ComposedConfig` additively with `unresolved`, `manifest`,
+  `source_artifacts`, and `fingerprint_records`; and keeps Phase 12 artifact
+  fields as placeholders for later population phases.
+- Scope notes: no final manifest/source/fingerprint/redaction/provenance
+  population, raw source snapshots, resolver-output persistence, default
+  instantiation, pipeline imports, CLI behavior, store writes, plugin/remote
+  include behavior, `_copy_` support, or broader resolver/include/target
+  semantics were added.
+- Validation: targeted package/API/import-boundary, unit compose,
+  config-extra inspection contract, integration config/pipeline, and existing
+  e2e checks passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 703
+  passed, 0 failed, 0 errors, 9 skipped, and 432 deselected.
+- PR result: PR #39 opened against `develop`; `gh pr view 39 --json
+  baseRefName,headRefName,state,url` verified base `develop`, head
+  `codex/config-compose-orchestration`, state `OPEN`, URL
+  `https://github.com/samcantrill/loom/pull/39`. GitHub CI was in progress when
+  this metadata was recorded.
 
 ### Phase 13 - Provenance, Manifest, Source Records, And Redaction Population
 
