@@ -316,6 +316,12 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     `80c1efba3918052a1673e962ecc023d2516852da`.
   - `git push -u origin codex/config-validation-boundaries` succeeded before
     PR creation.
+  - After the PR body artifact changed from "PR not opened yet" to "PR
+    submitted", `gh pr edit 37 --body-file ...` failed with an unrelated
+    GitHub CLI GraphQL `repository.pullRequest.projectCards` deprecation error.
+    The PR body was updated successfully with `gh api --method PATCH
+    repos/{owner}/{repo}/pulls/37 -F
+    body=@docs/phases/config-validation-boundaries-pr-body.md`.
 - Stack maintenance:
   - Root PR; no stack predecessor and no retarget/rebase action required before
     submission. Branch cleanup is safe only after the Phase 10 PR is merged and
