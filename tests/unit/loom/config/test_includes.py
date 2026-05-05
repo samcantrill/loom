@@ -482,6 +482,18 @@ def _nested_mapping(config: dict[str, PlainData], *path: str) -> dict[str, Plain
     return cast(dict[str, PlainData], value)
 
 
+def _assert_no_replace_markers(value: PlainData) -> None:
+    if isinstance(value, dict):
+        assert "_replace_" not in value
+        for child in value.values():
+            _assert_no_replace_markers(child)
+        return
+
+    if isinstance(value, list):
+        for child in value:
+            _assert_no_replace_markers(child)
+
+
 def test_expand_config_includes_recursively_expands_nested_includes(
     tmp_path: Path,
 ) -> None:
@@ -531,6 +543,7 @@ def test_expand_config_includes_recursively_expands_nested_includes(
         "nested": {"value": 7},
     }
     assert "_include_" not in model
+    _assert_no_replace_markers(expanded.config)
 
     include_sites = [record.to_dict() for record in expanded.include_sites]
     assert len(include_sites) == 2
@@ -745,6 +758,88 @@ def test_expand_config_includes_rejects_included_non_mapping_root(
     assert context.details["resolved_path"] == str(included)
 
 
+def test_expand_config_includes_rejects_root_replace_marker_in_included_file(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+    _write_yaml(base_path, "pipeline:\n  model:\n    _include_: ./included.yaml\n")
+    _write_yaml(included, "_replace_: true\nstage: included\n")
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=(),
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            merged.config,
+            source_map=merged.source_map,
+            replacement_sites=merged.replacement_sites,
+            mapping_sites=merged.mapping_sites,
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_included_replace_marker"
+    assert context.source_path == str(included)
+    assert context.source_kind == "overlay"
+    assert context.config_path == "$.pipeline.model._replace_"
+    assert context.directive == "_replace_"
+    assert context.actual is True
+    details = context.details
+    assert details is not None
+    assert details["reason"] == "unconsumed_included_replace_marker"
+    assert details["replace_marker_path"] == ["pipeline", "model", "_replace_"]
+    assert details["source_replace_marker_path"] == ["_replace_"]
+
+
+def test_expand_config_includes_rejects_nested_replace_marker_in_included_file(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+    _write_yaml(base_path, "pipeline:\n  model:\n    _include_: ./included.yaml\n")
+    _write_yaml(
+        included,
+        "stage:\n"
+        "  _replace_: true\n"
+        "  value: included\n",
+    )
+
+    base_config, base_source = load_config(base_path, kind="base", order=0)
+    merged = compose_config_with_sources(
+        base_config=base_config,
+        base_source=base_source,
+        overlays=(),
+    )
+
+    with pytest.raises(ConfigIncludeExpansionError) as exc:
+        expand_config_includes(
+            merged.config,
+            source_map=merged.source_map,
+            replacement_sites=merged.replacement_sites,
+            mapping_sites=merged.mapping_sites,
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_included_replace_marker"
+    assert context.source_path == str(included)
+    assert context.config_path == "$.pipeline.model.stage._replace_"
+    assert context.directive == "_replace_"
+    assert context.details is not None
+    assert context.details["replace_marker_path"] == [
+        "pipeline",
+        "model",
+        "stage",
+        "_replace_",
+    ]
+    assert context.details["source_replace_marker_path"] == ["stage", "_replace_"]
+
+
 def test_expand_config_includes_requires_same_site_replace_to_swap_existing_mapping(
     tmp_path: Path,
 ) -> None:
@@ -832,6 +927,7 @@ def test_expand_config_includes_allows_same_site_replace_included_mapping_swap(t
         "override": "from-overlay",
         "base_only": "value",
     }
+    _assert_no_replace_markers(expanded.config)
     local_customizations = [record.to_dict() for record in expanded.local_customizations]
     assert len(local_customizations) == 1
     assert local_customizations[0]["kind"] == "override"
