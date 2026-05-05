@@ -240,8 +240,15 @@ make test-summary
 - Draft plan: completed in this artifact by `loom_phase_planner`.
 - Final phase execution plan: refined by `loom_phase_planner` in this artifact; implementation refinement and PR review budgets remain unused.
 - Implementation summary:
+  - Added internal include target resolver in `src/loom/config/includes.py` with deterministic classification for bare-name, explicit relative, absolute, and local `file://` forms.
+  - Added `ConfigIncludeResolutionError` to `loom.config.errors` (unexported from package root) and structured source/site/error-context payloads for resolver failures.
+  - Added `tests/unit/loom/config/test_includes.py` covering accepted forms and documented failure branches for this phase.
+  - Added include-error shape and contract coverage in `tests/unit/loom/config/test_config_errors.py` and `tests/contracts/test_config_error_contract.py`.
 - Implementation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_includes.py` (23 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py` (10 passed)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py` (14 passed, 1 skipped)
 - Refinement summary: completed; manager review focus was incorporated without changing branch, base, target, or implementation/PR-review budgets.
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers: none after refine.
+- PR preparation: not performed (user requested stop after implementation and initial validation).
+- Stack maintenance: none changed; no successor dependency in-flight.
+- Remaining blockers: none.
