@@ -1060,9 +1060,9 @@ Phase metadata:
 
 ### Phase 2 - Strict Loading And Structured Errors
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-loading-errors`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/25
 
 Goal:
 
@@ -1094,6 +1094,26 @@ Test expectations:
 
 - Unit tests for loader failures, `_copy_` rejection, and structured error
   fields without resolved secret values.
+
+Phase metadata:
+
+- Worktree: `/home/samcantrill/work/loom-worktrees/config-loading-errors`
+- Stack predecessor: none
+- Base branch: `develop`
+- PR target branch: `develop`
+- PR status: opened as PR #25 at
+  https://github.com/samcantrill/loom/pull/25; verified base `develop`, head
+  `codex/config-loading-errors`, state `OPEN`.
+- Implementation summary: added config-domain structured error context,
+  context-bearing loader errors, single-document UTF-8 YAML enforcement,
+  non-empty mapping-root enforcement, plain-data parsed values, and recursive
+  `_copy_` unsupported-directive rejection.
+- Validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall suite
+  status `passed`; GitHub CI check `checks` passed on PR #25.
+- Follow-up notes: no includes, overlays, override application, schema
+  validation, resolver execution, persistence, CLI, manifest/provenance
+  population, fingerprint behavior, or Phase 3+ semantics were added.
 
 ### Phase 3 - Overrides And Merge Primitives
 
