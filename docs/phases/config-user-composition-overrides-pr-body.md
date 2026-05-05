@@ -36,7 +36,7 @@ New tests implemented:
 | `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall 651 passed, 0 failed, 8 skipped, 430 deselected. |
 | Focused override/composition suite | Passed | `tests/unit/loom/config/test_overrides.py` and `tests/integration/config/test_compose_overrides.py`: 22 passed after refinement. |
 | Broader phase-targeted config suite | Passed | Include, compose, error-contract, and import-boundary targeted suite: 73 passed after refinement. |
-| GitHub checks | Pending | PR is not opened in the expanded-path draft pass. |
+| GitHub checks | Pending | Not available before PR creation; review the opened PR checks for remote CI status. |
 
 ### Test Suite Summary
 

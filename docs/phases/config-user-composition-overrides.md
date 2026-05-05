@@ -227,7 +227,7 @@ make test-summary
 - Phase execution plan refine: used
 - Phase implementation refinement: used
 - PR body draft: used
-- PR body refine: pending; expanded path is active and PR opening is reserved for the refine pass
+- PR body refine: used
 - PR review: unused
 
 ## Completion Notes
@@ -282,5 +282,11 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` — passed; Ruff, Pyright, default harness, config-extra harness, and build succeeded.
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` — passed; refreshed `build/test-summary.md` with overall 651 passed, 0 failed, 8 skipped, 430 deselected.
 - PR opening status: intentionally not opened in this draft pass because expanded path is active. PR body refine pass remains pending.
+- Refine/open pass completed on 2026-05-05 using `.codex/prompts/pr-body-refine.md`.
+- PR body verification:
+  - Reviewed against the final diff, source implementation plan, phase execution plan, public PR template, phase PR body template, and refreshed validation evidence.
+  - Confirmed `@samcantrill` remains near the top of the body and no GitHub reviewer request is included.
+  - Confirmed the body describes only Phase 7 private user-composition overrides and does not claim future-phase work.
+  - Refined the GitHub checks row so the public body remains accurate before remote CI exists.
 - Stack maintenance:
 - Remaining blockers: none.
