@@ -219,8 +219,8 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used by `loom_phase_refiner`; no additional automated implementation refinement budget remains
-- Pre-submit blocker gate: unused
-- Blocker-resolution: unused
+- Pre-submit blocker gate: used for the exact Secret Redaction wording blocker
+- Blocker-resolution: used by user-authorized scoped pre-submit docs blocker pass; no additional automated blocker-resolution budget remains
 - PR body draft: completed by `loom_pr_preparer`; durable draft created at `docs/phases/harden-config-composition-v1-pr-body.md`
 - PR body refine: pending for the expanded-path PR opening pass
 - PR review: unused
@@ -286,6 +286,17 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   test-summary` wrote `build/test-summary.md` with package 36 passed/1 skipped,
   unit 354 passed/1 skipped, contract 31 passed/2 skipped, integration 9
   passed/5 skipped, e2e 6 passed, and config-extra 301 passed/436 deselected.
+- Blocker-resolution summary: user-authorized scoped pass changed the Secret
+  Redaction wording in `docs/features/config.md` from `Persist both:` to
+  `Expose both:` so the section no longer promises default resolved-config
+  persistence while preserving the following `resolved` in-memory caller result
+  and `redacted` artifact-safe view content.
+- Blocker-resolution evidence: quick named-feature-doc search found no
+  remaining `Persist both` wording; close-variant hits were existing negative
+  or limitation statements such as `not a default persistence artifact` and
+  `do not persist resolved resolver outputs by default`; `git diff --check`
+  passed; focused text sanity checks for `Persist both`, `Expose both`,
+  `resolved:`, and `redacted:` passed.
 - Stack maintenance: none needed in this draft pass; root phase has no stack
   predecessor
 - Remaining blockers: none

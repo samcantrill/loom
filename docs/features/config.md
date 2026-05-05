@@ -1010,7 +1010,7 @@ api_key
 credential
 ```
 
-Persist both:
+Expose both:
 
 ```text
 resolved:
