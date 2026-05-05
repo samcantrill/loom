@@ -292,7 +292,10 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Refined `docs/phases/config-manifest-provenance-pr-body.md` to keep workflow details in phase notes and make the GitHub checks row accurate for PR submission.
   - Confirmed `@samcantrill` remains near the top of the PR body.
   - Re-ran PR-preparation validation: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed and `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 711 passed / 9 skipped / 432 deselected.
+  - GitHub auth and remote access were available after approved network-backed checks; branch `codex/config-manifest-provenance` was pushed to `origin`.
+  - Opened PR #40: https://github.com/samcantrill/loom/pull/40
+  - Verified PR #40 with `gh pr view 40 --json baseRefName,headRefName,state,url`: base `develop`, head `codex/config-manifest-provenance`, state `OPEN`.
 - Stack maintenance:
-  - None required (root phase branch).
+  - None required (root phase branch). PR #40 targets `develop` directly and is merge-eligible only after human review/CI; no predecessor retargeting or rebase is needed.
 - Remaining blockers:
   - None known after the user-authorized pre-submit blocker pass, focused confirmation gate, validation, and expanded-path PR body refine.
