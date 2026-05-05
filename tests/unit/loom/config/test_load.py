@@ -50,6 +50,25 @@ def test_load_rejects_non_string_keys(tmp_path: Path) -> None:
     assert exc.value.context.config_path == "$"
 
 
+def test_load_rejects_recursive_yaml_aliases_with_structured_context(tmp_path: Path) -> None:
+    source_path = tmp_path / "recursive.yaml"
+    source_path.write_text(
+        "root: &root\n"
+        "  child: *root\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigLoadError) as exc:
+        load_config(source_path, kind="base", order=0)
+
+    assert exc.value.context is not None
+    assert exc.value.context.code == "non_plain_data"
+    assert exc.value.context.config_path == "$.root.child"
+    assert exc.value.context.expected == "acyclic plain YAML value"
+    assert exc.value.context.actual == "recursive alias"
+    assert exc.value.context.details == {"referenced_path": "$.root"}
+
+
 def test_load_rejects_multiple_yaml_documents(tmp_path: Path) -> None:
     source_path = tmp_path / "multi.yaml"
     source_path.write_text("a: 1\n---\nb: 2\n", encoding="utf-8")

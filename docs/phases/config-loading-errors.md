@@ -228,7 +228,13 @@ make test-summary
 - User-authorized blocker-resolution pass: used for the direct-construction
   `ConfigErrorContext` plain-data validation blocker after the normal
   implementation refinement budget was consumed.
-- PR review: unused
+- User-authorized post-merge alias-cycle blocker-resolution pass: used on
+  branch `codex/config-loading-errors-alias-cycle` after PR #25 was merged
+  before approval; limited to recursive YAML alias detection, regression
+  coverage, and this phase evidence.
+- PR review: attempted after PR #25 merge; surfaced the recursive YAML alias
+  blocker recorded below, then resolved through the explicit user-authorized
+  post-merge pass.
 
 ## Completion Notes
 
@@ -272,4 +278,17 @@ make test-summary
 - Stack maintenance: none required for this root phase; verified PR target is
   `develop`, head is `codex/config-loading-errors`, and stack predecessor is
   none.
+- Post-merge alias-cycle blocker resolution: completed on branch
+  `codex/config-loading-errors-alias-cycle` in worktree
+  `/home/samcantrill/work/loom-worktrees/config-loading-errors-alias-cycle`
+  after PR #25 was merged before approval. Added loader validation that rejects
+  recursive YAML aliases before `_copy_` directive scanning can recurse
+  indefinitely, returning `ConfigLoadError` with structured
+  `code="non_plain_data"` context and the recursive alias path. Added a unit
+  regression for a self-referential YAML alias and preserved existing `_copy_`
+  path reporting and successful plain mapping/list behavior.
+- Post-merge alias-cycle validation: completed on 2026-05-05 using
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_load.py tests/unit/loom/config/test_config_errors.py tests/contracts/test_config_error_contract.py tests/unit/loom/config/test_compose.py` (pass; 29 passed)
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass; Ruff, Pyright, default harness with 423 passed and 9 skipped, config-extra harness with 126 passed and 428 deselected, and `uv build` passed)
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass; wrote `build/test-summary.md`; package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 24 passed/1 skipped, integration 9 passed/5 skipped, e2e 5 passed, config-extra 126 passed/428 deselected)
 - Remaining blockers: none.
