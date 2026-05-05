@@ -8,6 +8,7 @@
 - Branch: `codex/config-overrides-merge`
 - Worktree: `/home/samcantrill/work/loom-worktrees/config-overrides-merge`
 - Phase execution plan path: `docs/phases/config-overrides-merge.md`
+- PR body path: `docs/phases/config-overrides-merge-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v1.md`
 - Planning notes: `docs/implementation-plans/roadmap-v1-planning-notes.md`
 - Source phase: Phase 3 - Overrides And Merge Primitives
@@ -258,13 +259,50 @@ make test-summary
 - Implementation validation: targeted tests and PR validation passed for override/merge/compose scope.
 - Refinement summary: clarified `_replace_` as an explicit whole-section mapping replacement marker while absence of `_replace_` means recursive mapping merge; clarified scalar/list/null and mapping-over-non-mapping replacements do not require `_replace_`; clarified `+` add parent creation and update strictness; bounded current `compose_config` testing to strict helper behavior without Phase 7/9/12 ordering decisions; decided override/merge errors may remain message-only with stable subclasses/tests unless local `ConfigErrorContext` wiring is trivial; tightened suite obligations and Spark executor stop conditions.
 - Implementation refinement summary: consumed the one allowed expanded-path implementation refinement pass. Root-level `_replace_` in the higher-precedence overlay passed directly to `merge_configs()` is supported as whole-root mapping replacement because the top-level merge is still a mapping-over-existing-mapping merge; the marker is consumed, omitted from the result, and invalid root marker values or marker-only root overlays fail with `ConfigMergeError`. No Phase 4/6 source authorship or Phase 12 orchestration decision was required. No additional strict override edge was changed; message-only override/merge subclasses remain the phase-scoped diagnostic contract.
-- PR preparation: pending.
+- PR preparation: completed locally on 2026-05-05; branch push, PR creation,
+  and target verification pending at artifact update time.
 
 ### Completion Validation
 
 - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_overrides.py tests/unit/loom/config/test_merge.py` (pass: 28 passed)
 - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` (pass: 10 passed)
-- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass: Ruff passed; Pyright 0 errors; default suite 423 passed, 9 skipped; config-extra suite 145 passed, 428 deselected; build succeeded)
-- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 24 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 145 passed/428 deselected; overall 573 passed, 8 skipped, 428 deselected)
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` rerun during PR preparation on 2026-05-05 (pass: Ruff passed; Pyright 0 errors; default suite 423 passed, 9 skipped; config-extra suite 145 passed, 428 deselected; build succeeded)
+- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` rerun during PR preparation on 2026-05-05 (pass: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 24 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 145 passed/428 deselected; overall 573 passed, 8 skipped, 428 deselected; summary generated 2026-05-05T07:01:43Z)
 - Stack maintenance: none yet.
 - Remaining blockers: none.
+
+### PR Preparation Facts
+
+- Prepared by: `loom_pr_preparer`
+- Prepared on: 2026-05-05
+- Feature focus: Configuration
+- PR title: `Configuration - Phase 3: Overrides and Merge Primitives`
+- Branch/head: `codex/config-overrides-merge`
+- Target branch: `develop`
+- Stack predecessor: none
+- Stack state: root phase PR; no retargeting or rebase required before opening;
+  merge-eligible only after PR review approval because it targets `develop`.
+- Worktree: `/home/samcantrill/work/loom-worktrees/config-overrides-merge`
+- Base commit recorded for this phase: `dd1ff1b`
+- PR body path: `docs/phases/config-overrides-merge-pr-body.md`
+- Final diff scope inspected against `develop`: `docs/phases/config-overrides-merge.md`,
+  `docs/phases/config-overrides-merge-pr-body.md`, `src/loom/config/merge.py`,
+  `tests/unit/loom/config/test_merge.py`, and
+  `tests/unit/loom/config/test_overrides.py`.
+- Implemented scope confirmed: strict `_replace_` merge primitive including
+  root-level replacement, recursive mapping merge when `_replace_` is absent,
+  scalar/list/null and type replacement behavior, marker validation and
+  omission, input non-mutation, and focused override/merge tests.
+- Explicit scope exclusions confirmed: no include loading, source-authored
+  overlays, recursive include expansion, recipe ordering changes, public
+  inspection API, persistence, CLI, provenance population, fingerprints,
+  `_copy_`, escaped-dot override paths, list indexing, or list patching.
+- Validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall 573
+  passed, 8 skipped, and 428 deselected.
+- Assumptions and risks for reviewers: override and merge errors remain
+  message-only stable subclasses; explicit `+` overrides may create missing
+  mapping parents but ordinary updates remain strict; final v1 composition
+  ordering remains later-phase work.
+- PR creation status: pending branch push and `gh pr create` at artifact update
+  time.
