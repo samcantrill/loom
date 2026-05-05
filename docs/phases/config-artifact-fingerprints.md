@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: final scope-complete phase execution plan
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 14: Artifact-Safe Fingerprints And Resume Comparison`
 - Branch: `codex/config-artifact-fingerprints`
@@ -22,16 +22,16 @@
 - Plan quality gate: passed on 2026-05-05 by `loom_plan_reviewer` confirmation review; no blocking findings remain.
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
-- Refine pass: pending because the manager selected the expanded path; refine budget unused.
+- Refine pass: completed by `loom_phase_planner`; refine budget used.
 - Phase implementation refinement budget: unused.
 - Pre-submit blocker gate budget: unused.
 - PR review budget: unused.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` and `git fetch origin` succeeded. Local `develop` and `origin/develop` matched the assigned base commit. Initial sandboxed `git worktree add` could not create the nested `codex/...` branch ref because `.git/refs/heads/codex` directory creation was blocked by sandbox filesystem policy; approved `git worktree add` created the branch and worktree successfully.
-- Blockers: none known for the draft plan.
+- Blockers: none known.
 
 ## Objective
 
-Compute the default config fingerprint from artifact-safe authored-composition inputs before resolver execution, using Phase 13 source artifact records and unresolved/redacted composition facts, and add narrow config-layer comparison helpers that can tell whether two artifacts match as authored composition without claiming exact runtime-value replay.
+Compute the default config fingerprint from artifact-safe authored-composition inputs before resolver execution, using Phase 13 source artifact records and unresolved/redacted composition facts, and add narrow config-layer comparison helpers that tell whether two config artifact records match as authored composition without claiming exact runtime-value replay.
 
 ## Full-Plan Context
 
@@ -67,7 +67,7 @@ Future work remains out of scope: Phase 15 raw source snapshot opt-in and harden
 - Include source artifact roles/order/content digests, stable source-artifact references, include site paths and authored include targets, replacement/customization facts, recipe manifest facts, resolver expressions as authored text, redacted or allowed override facts, redacted/unresolved config content, schema/policy version metadata, and other Phase 13 artifact-safe composition facts needed for authored-composition equivalence.
 - Exclude resolved resolver outputs, resolved environment variables, runtime objects, raw source bytes, and machine-local absolute path identity from semantic fingerprint inputs.
 - Normalize path-bearing fingerprint inputs so content and authored composition remain comparable across different checkout/tmp roots. Absolute paths may remain in provenance/manifest metadata, but fingerprint semantics must use portable references where available, such as source role/order, include site path, authored target, content digest, target kind, explicit escape flag, and relative or URI-authored path facts.
-- Add narrow authored-composition comparison helpers in `loom.config` if the refined plan keeps them in v1 scope. The helper should compare current/prior config fingerprint records or manifests and return plain-data-friendly outcomes such as match, mismatch, incompatible policy/schema, or insufficient data, while explicitly stating that runtime resolver values were not replayed.
+- Add the retained v1 authored-composition comparison helpers in `loom.config`. They must compare current/prior config fingerprint records or manifests and return plain-data-friendly outcomes for match, mismatch, incompatible policy/schema, or insufficient data, while explicitly stating that runtime resolver values were not replayed.
 - Keep comparison helpers independent from run-store reads/writes, CLI output, pipeline planning, and exact runtime-value replay.
 
 ## Out-of-Scope Work
@@ -85,24 +85,43 @@ Future work remains out of scope: Phase 15 raw source snapshot opt-in and harden
 
 - Phase 13 source artifact records and manifest/provenance metadata are the primary inputs; the executor should avoid rereading source files solely to build fingerprints.
 - The existing `fingerprint` stage name can remain stable while its payload changes from resolved-oriented to artifact-safe summary facts, with contract tests updated for the deliberate semantic change.
-- The old `ConfigProvenance.resolved_fingerprint` field may remain as compatibility metadata, but the public `ComposedConfig.fingerprint` should become the artifact-safe default by this phase. If preserving `resolved_fingerprint` requires a clearer label or metadata note, keep that additive and artifact-safe.
+- The old `ConfigProvenance.resolved_fingerprint` field may remain as compatibility metadata, but the public `ComposedConfig.fingerprint` becomes the artifact-safe default by this phase. If preserving `resolved_fingerprint` requires a clearer metadata note, keep it additive and do not use it for the default public fingerprint or comparison helper.
 - Absolute paths are allowed in Phase 13 provenance and source artifact metadata, but Phase 14 fingerprint equality must not depend on local checkout or temp directory prefixes when source content and authored composition are otherwise identical.
 - Redacted secret override facts are acceptable fingerprint inputs; raw secret-like override values are not.
 - Authored-composition comparison belongs in `loom.config` only as plain artifact comparison. Pipeline/stage resume policy remains owned by `loom.pipeline` and later run-store/CLI work.
 
 ## Scope Contract
 
-The default config fingerprint is an artifact-safe authored-composition fingerprint. It must be computed from plain data before runtime interpolation output is used as a fingerprint input. The canonical payload must be deterministic, versioned or policy-labeled, and reviewable in tests. It must not include resolved resolver outputs, environment-derived values, runtime objects, raw source bytes, or absolute path prefixes as semantic identity.
+The default config fingerprint is an artifact-safe authored-composition fingerprint. It must be computed from plain data before runtime interpolation output is used as a fingerprint input. The canonical payload must be deterministic, policy-labeled, schema-versioned, and reviewable in tests. It must not include resolved resolver outputs, environment-derived values, runtime objects, raw source bytes, or resolved absolute path prefixes as semantic identity.
 
-`ConfigFingerprintRecord` should describe the default artifact-safe fingerprint with a stable label and metadata that names the policy/schema version and source inputs at a summary level. If additional record labels are useful, keep them additive and clearly distinct from the default public `ComposedConfig.fingerprint`. `CompositionManifest.fingerprint_records`, `ComposedConfig.fingerprint_records`, and `ConfigCompositionInspection.fingerprint_records` must agree.
+The default `ConfigFingerprintRecord` label is `artifact_safe_config`. Its metadata must use stable plain-data names including:
 
-Source artifact digests are semantic fingerprint inputs. Path strings from `SourceArtifactRecord.path` are provenance context unless normalized into a portable authored fact. For local files under different temporary roots, identical authored composition and source contents should produce the same default fingerprint. For explicit absolute paths or `file://` authoring, include the authored intent and explicit-escape/path-kind facts without treating the machine-local resolved absolute prefix as the sole identity.
+- `fingerprint_policy`: `artifact_safe_authored_composition_v1`.
+- `payload_schema_version`: `1`.
+- `artifact_schema_version`: the current config artifact schema version.
+- `semantic_scope`: `authored_composition`.
+- `runtime_values_included`: `false`.
+- `resolver_outputs_included`: `false`.
+- `raw_source_bytes_included`: `false`.
+- `runtime_value_replay`: `unavailable`.
+- concise counts or summaries such as `source_artifact_count`, `resolver_expression_count`, `include_record_count`, `override_count`, and `recipe_manifest_count`.
+
+`ComposedConfig.fingerprint`, `ConfigCompositionInspection.fingerprint`, the `fingerprint` composition stage payload, `CompositionManifest.fingerprint_records`, `ComposedConfig.fingerprint_records`, and `ConfigCompositionInspection.fingerprint_records` must all derive from the same default record: the public fingerprint equals the default record digest, the manifest contains that record, and inspection/composed views expose the same record tuple. Do not keep the current `label="unresolved"` as the default public record. If an additional unresolved-content digest is retained, it must use a non-default label and must not be confused with the public artifact-safe default.
+
+Source artifact digests are semantic fingerprint inputs. Path strings from `SourceArtifactRecord.path`, `ConfigSource.path`, `IncludeSiteRecord.source_path`, and `IncludeSiteRecord.resolved_path` are provenance context unless normalized into a portable authored fact. For local files under different temporary roots, identical source content, role/order, authored include targets, include-site paths, overrides, recipe facts, and unresolved/redacted composition should produce the same default fingerprint. For base and overlay source records, use role/order/content digest/size and omit resolved absolute path identity from the semantic payload. For include records, use include-site path, source role/order/content digest, authored target, target kind, explicit escape flag, included content digest/size, replacement marker facts, and source include-site path. For explicit absolute paths or `file://` authoring, preserve the authored target string, `target_kind`, and `explicit_escape` as authored intent; do not replace that authored intent with the machine-local resolved path, and do not promise portability when the authored absolute/file URI text itself changes.
 
 Resolver expressions are authored text in fingerprint inputs. The fingerprint may include resolver token, resolver name, expression text, and config path from resolver scan records. It must not include the runtime value produced by `${oc.env:...}` or any other resolver.
 
 Override facts are fingerprint inputs only after applying the Phase 13 artifact safety rules. Secret-like override values must be redacted before fingerprinting. Allowed non-secret override values, override paths, operation kinds, and order are in scope.
 
-Authored-composition comparison must compare artifact records, not recompose configs and not read run stores. It should distinguish at least: authored composition match; authored composition mismatch; incompatible/missing fingerprint policy or schema; and match with runtime-value replay unavailable. A match must not mean exact runtime resolver values matched. The helper must be plain-data-oriented and usable by future run-store/CLI code without importing pipeline modules.
+Authored-composition comparison is retained in v1 with this narrow surface:
+
+- Location: a new `loom.config` module such as `src/loom/config/fingerprints.py`; lazy public export through `loom.config.api` and `loom.config.__init__` is allowed only if package import-boundary tests remain clean.
+- Inputs: `ConfigFingerprintRecord`, `CompositionManifest`, or their plain mapping forms. The helper must extract the single default `artifact_safe_config` record from each side and must not accept or require `ComposedConfig`, run IDs, store paths, pipeline objects, or CLI arguments.
+- Output: an immutable plain-data-friendly result such as `ConfigFingerprintComparison` with `status` in `match`, `mismatch`, `incompatible_policy`, or `insufficient_data`; left/right digests; policy/schema labels when available; a concise reason; and `runtime_values_replayed` fixed to `False`.
+- Function names should say config artifact/authored composition rather than resume safety, for example `compare_config_artifact_fingerprints(...)` or `compare_authored_config_fingerprints(...)`.
+
+The helper must compare artifact records, not recompose configs and not read run stores. A `match` means the default artifact-safe authored-composition records match under the same policy/schema; it must not mean exact runtime resolver values matched. `incompatible_policy` covers schema/policy/label/algorithm mismatches. `insufficient_data` covers missing default records or invalid plain mapping shapes. `mismatch` covers valid comparable records with different digests.
 
 ## Design Impact
 
@@ -139,8 +158,8 @@ Authored-composition comparison must compare artifact records, not recompose con
 
 ## Reviewability
 
-- Expected PR size and shape: focused config artifact/fingerprint semantics, small comparison helper surface if kept in v1, and targeted package/unit/contract/integration tests. No run-store, pipeline, CLI, raw snapshot, or docs/e2e broadening beyond narrow comments or test names needed to explain the contract.
-- Files and areas to inspect: `src/loom/config/compose.py`; `src/loom/config/artifacts.py`; `src/loom/config/provenance.py` if the old helper is replaced or renamed; `src/loom/config/api.py` if exports or public dataclasses change; a new narrow `src/loom/config/fingerprints.py` or `src/loom/config/resume.py` only if that better isolates policy; `src/loom/fingerprints.py` only for generic digest helpers. Test areas: `tests/unit/loom/config/test_config_artifacts.py`, `tests/unit/loom/config/test_compose.py`, new or existing config fingerprint/comparison unit tests, `tests/contracts/test_config_artifact_contract.py`, `tests/contracts/test_config_composition_inspection_contract.py`, `tests/integration/config/test_compose_provenance.py`, and focused config integration tests for resolver/path cases.
+- Expected PR size and shape: focused config artifact/fingerprint semantics, small comparison helper surface in `loom.config`, and targeted package/unit/contract/integration tests. No run-store, pipeline, CLI, raw snapshot, or docs/e2e broadening beyond narrow comments or test names needed to explain the contract.
+- Files and areas to inspect: `src/loom/config/compose.py`; `src/loom/config/artifacts.py`; `src/loom/config/provenance.py` if the old resolved-oriented helper is replaced or renamed; `src/loom/config/api.py` and `src/loom/config/__init__.py` if exports or public dataclasses change; new narrow `src/loom/config/fingerprints.py` for policy and comparison; `src/loom/fingerprints.py` only for generic digest helpers. Test areas: `tests/unit/loom/config/test_config_artifacts.py`, `tests/unit/loom/config/test_compose.py`, new or existing config fingerprint/comparison unit tests, `tests/contracts/test_config_artifact_contract.py`, `tests/contracts/test_config_composition_inspection_contract.py`, `tests/integration/config/test_compose_provenance.py`, and focused config integration tests for resolver/path cases.
 - Scope-control checks: no resolved resolver outputs in `fingerprint`, `fingerprint_records`, manifest fingerprint metadata, or comparison payloads; no raw source bytes; no absolute-path-only semantic equality; no run-store writes; no CLI behavior; no pipeline imports; no `_copy_`; no plugin/remote/global resolvers.
 
 ## Implementation Steps
@@ -148,7 +167,7 @@ Authored-composition comparison must compare artifact records, not recompose con
 1. Define the artifact-safe fingerprint payload policy and isolate its builder so compose, records, and tests use one source of truth.
 2. Wire the staged compose path to use the artifact-safe digest for `ComposedConfig.fingerprint`, inspection fingerprint, `ConfigFingerprintRecord`, manifest records, and the `fingerprint` stage payload.
 3. Normalize/portable-map source artifact and manifest inputs so source content and authored composition affect the digest while machine-local absolute path prefixes do not.
-4. Add the narrow authored-composition comparison helper if retained in v1 scope, including plain outcome data and runtime-replay limitation metadata.
+4. Add the narrow authored-composition comparison helper in `loom.config.fingerprints`, including plain outcome data and runtime-replay limitation metadata.
 5. Add focused unit and contract tests for fingerprint record shape, policy metadata, path portability, resolver-output exclusion, redacted override handling, and comparison outcomes.
 6. Add integration cases through public `compose_config(...)` for base/overlay/include/override/recipe/resolver combinations that prove meaningful changes alter fingerprints and portable path changes alone do not.
 
@@ -163,20 +182,20 @@ Authored-composition comparison must compare artifact records, not recompose con
 ### Unit Suite
 
 - Status: required.
-- Expected paths: `tests/unit/loom/config/test_config_artifacts.py`, `tests/unit/loom/config/test_compose.py`, new or existing focused tests such as `tests/unit/loom/config/test_config_fingerprints.py` and `tests/unit/loom/config/test_config_resume_comparison.py`; `tests/unit/loom/test_fingerprints.py` only if generic digest helpers change.
-- Required assertions or deferral reason: artifact-safe payloads are deterministic; source artifact content digests, role/order, include site paths, authored targets, recipe facts, resolver authored expressions, unresolved/redacted config, and redacted/allowed override facts affect the default fingerprint as specified; resolved resolver values do not; raw source bytes are absent; secret-like override values are redacted before fingerprinting; `ComposedConfig.fingerprint`, inspection fingerprint, manifest fingerprint records, and `fingerprint_records` agree; comparison outcomes distinguish match, mismatch, incompatible/missing policy, and no runtime-value replay.
+- Expected paths: `tests/unit/loom/config/test_config_artifacts.py`, `tests/unit/loom/config/test_compose.py`, new or existing focused tests such as `tests/unit/loom/config/test_config_fingerprints.py` and `tests/unit/loom/config/test_config_fingerprint_comparison.py`; `tests/unit/loom/test_fingerprints.py` only if generic digest helpers change.
+- Required assertions or deferral reason: artifact-safe payloads are deterministic; source artifact content digests, role/order, include site paths, authored targets, target kind, explicit escape flag, recipe facts, resolver authored expressions, unresolved/redacted config, and redacted/allowed override facts affect the default fingerprint as specified; resolved resolver values do not; raw source bytes are absent; secret-like override values are redacted before fingerprinting; `ComposedConfig.fingerprint`, inspection fingerprint, manifest fingerprint records, and `fingerprint_records` agree; comparison outcomes distinguish match, mismatch, incompatible policy/schema/label/algorithm, insufficient data, and runtime-value replay unavailable.
 
 ### Contract Suite
 
 - Status: required.
 - Expected paths: `tests/contracts/test_config_artifact_contract.py`, `tests/contracts/test_config_composition_inspection_contract.py`.
-- Required assertions or deferral reason: `ConfigFingerprintRecord` round-trips with the new default artifact-safe label/metadata; `CompositionManifest.fingerprint_records` references the same default digest returned by compose/inspection; populated records remain plain data, reject invalid or unknown fields according to existing conventions, and include no resolved resolver outputs, raw source bytes, runtime objects, or absolute-path-only semantic identity. Inspection stage names/order should remain stable unless the diff deliberately updates the contract.
+- Required assertions or deferral reason: `ConfigFingerprintRecord` round-trips with `label="artifact_safe_config"` and the required policy metadata; `CompositionManifest.fingerprint_records` references the same default digest returned by compose/inspection; populated records and comparison results remain plain data, reject invalid or unknown fields according to existing conventions, and include no resolved resolver outputs, raw source bytes, runtime objects, or absolute-path-only semantic identity. Inspection stage names/order should remain stable unless the diff deliberately updates the contract.
 
 ### Integration Suite
 
 - Status: required.
 - Expected paths: `tests/integration/config/test_compose_provenance.py`, `tests/integration/config/test_compose_config.py`, `tests/integration/config/test_compose_includes.py`, `tests/integration/config/test_compose_overrides.py`, `tests/integration/config/test_compose_recipes.py`, and `tests/integration/config/test_compose_resolvers.py` or a focused new integration file such as `tests/integration/config/test_compose_fingerprints.py`.
-- Required assertions or deferral reason: public `compose_config(...)` changes the default fingerprint when included file content, overlay content/order, authored include target, replacement marker, ordinary override value, recipe output, or unresolved expanded config changes; it does not change solely because equivalent files live under different temporary roots; resolver environment value changes do not affect the default fingerprint while authored resolver expression changes do; comparison helpers report authored-composition match/mismatch without claiming runtime replay.
+- Required assertions or deferral reason: public `compose_config(...)` changes the default fingerprint when included file content, overlay content/order, authored include target, target kind/explicit escape intent, replacement marker, ordinary override value, recipe output, or unresolved expanded config changes; it does not change solely because equivalent files live under different temporary roots; resolver environment value changes do not affect the default fingerprint while authored resolver expression changes do; secret-like override values are redacted in fingerprint inputs while ordinary non-secret override values remain meaningful; comparison helpers report authored-composition match/mismatch/incompatible policy/insufficient data without claiming runtime replay.
 
 ### E2E Suite
 
@@ -219,16 +238,17 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: first isolate the artifact-safe payload policy; then wire compose records to it; then add path portability and resolver exclusion tests; then add comparison helper/outcome tests if retained by the refined plan.
-- Tests to run with each slice: run focused unit tests for payload/record changes first, then contract tests after record metadata changes, then integration tests for public compose behavior and path/resolver cases.
-- Decisions the executor must not revisit: default fingerprints are artifact-safe and pre-runtime; resolver outputs and raw source bytes are excluded; absolute paths are provenance context, not semantic identity; `loom.config` writes nothing; `loom.pipeline` must not depend on config or manifests; `_copy_` remains unsupported; v1 has no CLI; plugin/remote/global include resolvers remain out of scope.
-- Conditions that require stopping for the manager: satisfying acceptance appears to require run-store or pipeline integration, exact resolver replay, secret-aware runtime fingerprints, raw source persistence, changing Phase 13 source artifact contracts incompatibly, importing pipeline/stores/CLI from config, or reopening the already-used v1 plan quality gate.
-- Expanded-path refinement notes: the refine pass should confirm the exact comparison helper surface and default `ConfigFingerprintRecord.label`/metadata naming before implementation, and should tighten any path-normalization decision that remains ambiguous after reviewing current source artifact metadata.
+- Safe implementation slices: first isolate the `artifact_safe_authored_composition_v1` payload builder and default record constants; then wire compose records/stage payloads to the one default record; then add path portability, resolver-output exclusion, and redacted-override tests; then add the `loom.config.fingerprints` comparison helper and outcome tests; finally add focused integration matrix coverage through public compose APIs.
+- Tests to run with each slice: run focused unit tests for payload/record changes first, then contract tests after record metadata changes, then comparison unit tests, then integration tests for public compose behavior and path/resolver/override cases.
+- Decisions the executor must not revisit: default record label is `artifact_safe_config`; default policy is `artifact_safe_authored_composition_v1`; default fingerprints are artifact-safe and pre-runtime; resolver outputs and raw source bytes are excluded; resolved absolute paths are provenance context, not semantic identity; explicit absolute/file URI authored target text remains authored intent; `loom.config` writes nothing; `loom.pipeline` must not depend on config or manifests; `_copy_` remains unsupported; v1 has no CLI; plugin/remote/global include resolvers remain out of scope.
+- Conditions that require stopping for the manager: satisfying acceptance appears to require run-store or pipeline integration, exact resolver replay, secret-aware runtime fingerprints, raw source persistence, changing Phase 13 source artifact contracts incompatibly, making path portability depend on a new global source-root model, accepting `ComposedConfig`/run IDs/store paths in the comparison helper, importing pipeline/stores/CLI from config, or reopening the already-used v1 plan quality gate.
+- Stop before implementation if current source proves the default record cannot be made to agree across `ComposedConfig.fingerprint`, inspection fingerprint, manifest records, and stage payload without widening Phase 14 scope.
+- Expanded-path refinement notes: completed. This pass fixed the comparison helper surface, default label/metadata naming, and path-portability semantics from Phase 13 source artifact metadata.
 
 ## Refinement And Review Budget Status
 
 - Phase execution plan draft: used.
-- Phase execution plan refine: pending; unused.
+- Phase execution plan refine: used.
 - Phase implementation refinement: unused.
 - Pre-submit blocker gate: unused.
 - PR review: unused.
@@ -236,10 +256,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
-- Final phase execution plan:
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Final phase execution plan: completed by `loom_phase_planner`; ready for `loom_phase_executor`.
+- Implementation summary: not started.
+- Implementation validation: not run; this planning refine pass was instructed not to run full validation.
+- Refinement summary: tightened default fingerprint record label/metadata, record agreement rules, path portability semantics, retained config-only comparison helper surface, suite-level test obligations, and executor stop conditions.
+- PR preparation: not started.
+- Stack maintenance: none; root phase targeting `develop`.
+- Remaining blockers: none known.
