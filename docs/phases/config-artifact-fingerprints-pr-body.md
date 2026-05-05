@@ -6,7 +6,7 @@ This PR implements Phase 14's artifact-safe default config fingerprint contract.
 
 It also adds a narrow config-layer comparison helper for persisted fingerprint records or manifest-shaped plain data. The helper reports authored-composition match, mismatch, incompatible policy/schema, or insufficient data without claiming exact runtime resolver replay.
 
-Pre-submit blocker resolution tightened comparison outcomes so valid wrong-label records or record-shaped mappings report `incompatible_policy`, while malformed plain mappings report `insufficient_data` without escaping validation errors.
+The comparison surface treats valid wrong-label records or record-shaped mappings as `incompatible_policy`, while malformed plain mappings report `insufficient_data` without escaping validation errors.
 
 ## Acceptance Criteria
 
@@ -38,7 +38,7 @@ New tests implemented:
 | Focused comparison-helper unit check | Passed | `uv run --extra config pytest tests/unit/loom/config/test_config_fingerprints.py`: 5 passed. |
 | Targeted default contract check | Passed | `uv run --isolated --locked --group dev pytest tests/contracts/test_config_artifact_contract.py`: 7 passed. |
 | Targeted config-extra contract check | Passed | `uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py`: 8 passed. |
-| GitHub checks | Not run | PR intentionally not opened in this expanded-path draft pass. |
+| GitHub checks | Pending at submission | PR verification is recorded in the phase notes; CI had not completed when this body was prepared. |
 
 ### Test Suite Summary
 
