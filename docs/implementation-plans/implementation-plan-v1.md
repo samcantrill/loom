@@ -1786,7 +1786,7 @@ Completion notes:
 
 ### Phase 12 - Public Compose Orchestration And Inspection APIs
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-compose-orchestration`
 PR: https://github.com/samcantrill/loom/pull/39
 
@@ -1833,8 +1833,8 @@ Test expectations:
 Completion notes:
 
 - Phase execution plan: `docs/phases/config-compose-orchestration.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is open and
-  merge-eligible after CI and merge permissions allow.
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
+  `develop`.
 - Revised workflow gate: the pre-submit blocker gate ran before PR submission
   and found one blocker: inspection contract coverage was claimed in the PR
   body but was not included in final suite evidence. A scoped
@@ -1860,11 +1860,14 @@ Completion notes:
   e2e checks passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 703
   passed, 0 failed, 0 errors, 9 skipped, and 432 deselected.
-- PR result: PR #39 opened against `develop`; `gh pr view 39 --json
-  baseRefName,headRefName,state,url` verified base `develop`, head
-  `codex/config-compose-orchestration`, state `OPEN`, URL
-  `https://github.com/samcantrill/loom/pull/39`. GitHub CI was in progress when
-  this metadata was recorded.
+- Merge result: PR #39 merged into `develop` at 2026-05-05T14:48:03Z with
+  merge commit `16cc13cb15643b0ef113af2d67f2bc44b5b479ae`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-compose-orchestration` when PR #39 merged. The GitHub merge
+  command merged the PR but could not delete the local branch while its
+  worktree was attached; branch and worktree cleanup are safe after this
+  metadata update.
 
 ### Phase 13 - Provenance, Manifest, Source Records, And Redaction Population
 
