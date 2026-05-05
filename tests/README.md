@@ -24,14 +24,29 @@ Use the Makefile harness for suite runs:
 
 ```sh
 make test
+make test-help
 make test-package
 make test-unit
 make test-contract
 make test-integration
 make test-e2e
+make test-unit-summary
 make test-summary
 make validate-pr
 ```
+
+Summary targets run the selected suite with JUnit XML and coverage artifacts
+under `build/test-summary/`, then write Markdown tables with pass, failure,
+error, skip, deselection, duration, and informational coverage totals. Use
+`make test-<suite>-summary` for a focused report or `make test-summary` for all
+groups.
+
+Contract tests are executable compatibility checks for Loom extension points.
+They should cover protocol and behavior expectations for codecs, sources,
+stages, executors, stores, recipes, and future plugin-style extension surfaces.
+Support modules are not a runnable suite; `tests/support` holds trusted
+test-only helpers and synthetic implementations that are validated through the
+package, unit, contract, integration, and e2e suites that consume them.
 
 Empty future suite directories are reported as `not present` by suite-specific
 targets. Once a suite contains tests, target failures should be treated as phase

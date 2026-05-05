@@ -25,10 +25,19 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "coverage",
     "pytest",
     "ruff",
     "pyright",
 ]
+
+[tool.coverage.run]
+source = [
+    "src/loom",
+]
+
+[tool.coverage.report]
+skip_empty = true
 
 [tool.pytest.ini_options]
 pythonpath = [

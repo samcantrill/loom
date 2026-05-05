@@ -129,6 +129,10 @@ requirements.
 
 ```sh
 uv sync --all-groups
+make help
+make setup-help
+make dev-help
+make test-help
 make validate-pr
 make test-summary
 make build

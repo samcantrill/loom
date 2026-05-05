@@ -20,9 +20,13 @@ make check
 `make validate-pr` before opening a PR to run Ruff, Pyright, the default test
 suite, and the package build.
 
+Use `make help` to list target groups, then `make setup-help`, `make dev-help`,
+or `make test-help` for grouped target details.
+
 Focused test targets are available for phase work:
 
 ```sh
+make test-help
 make test-package
 make test-unit
 make test-contract
