@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, ensure_plain_data, to_plain_data
@@ -15,10 +15,12 @@ from .artifacts import (
     ConfigFingerprintRecord,
     SourceArtifactRecord,
 )
-from .includes import IncludeSiteRecord
-from .interpolation import ResolverExpressionRecord
 from .provenance import ParsedOverride
 from .redaction import REDACTION_MARKER, contains_secret_like_value, redact_secret_like_value
+
+if TYPE_CHECKING:
+    from .includes import IncludeSiteRecord
+    from .interpolation import ResolverExpressionRecord
 
 FingerprintComparisonStatus = Literal[
     "match",

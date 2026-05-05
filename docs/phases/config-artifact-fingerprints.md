@@ -23,8 +23,8 @@
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
 - Refine pass: completed by `loom_phase_planner`; refine budget used.
-- Phase implementation refinement budget: unused.
-- Pre-submit blocker gate budget: unused.
+- Phase implementation refinement budget: used for the 2026-05-06 default validation blocker pass; no further automated implementation refinement pass remains.
+- Pre-submit blocker gate budget: used by the same 2026-05-06 default validation blocker pass; no further automated blocker pass remains.
 - PR review budget: unused.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. Approved `gh auth setup-git` and `git fetch origin` succeeded. Local `develop` and `origin/develop` matched the assigned base commit. Initial sandboxed `git worktree add` could not create the nested `codex/...` branch ref because `.git/refs/heads/codex` directory creation was blocked by sandbox filesystem policy; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none known.
@@ -249,8 +249,8 @@ make test-summary
 
 - Phase execution plan draft: used.
 - Phase execution plan refine: used.
-- Phase implementation refinement: unused.
-- Pre-submit blocker gate: unused.
+- Phase implementation refinement: used for the 2026-05-06 default validation blocker pass.
+- Pre-submit blocker gate: used by the same 2026-05-06 default validation blocker pass.
 - PR review: unused.
 
 ## Completion Notes
@@ -271,6 +271,12 @@ make test-summary
     - `ConfigFingerprintComparison` and `compare_config_artifact_fingerprints` are plain-data artifacts and do not claim resolver runtime replay; `runtime_values_replayed` is fixed to `False`.
     - Legacy `ConfigProvenance.resolved_fingerprint` remains present for compatibility and is not used as the public default fingerprint.
     - Secret-like override and config values are redacted before inclusion in artifact-safe fingerprint payloads; full resolver/runtime persistence remains deferred.
+- Refinement summary: resolved the default no-extra validation blocker by removing runtime imports of optional config dependency modules from `src/loom/config/fingerprints.py`; `IncludeSiteRecord` and `ResolverExpressionRecord` are now imported only for type checking, preserving explicit `loom[config]` execution coverage while allowing default artifact contract collection without `yaml`/`omegaconf`.
+- Refinement validation:
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --isolated --locked --group dev pytest tests/contracts/test_config_artifact_contract.py` passed: 7 passed.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py` passed: 8 passed.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed: Ruff, Pyright, default isolated suite, config-extra isolated suite, and build.
+    - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 29 passed/2 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 286 passed/433 deselected.
 - PR preparation: blocked pending merge-gate actions.
 - Stack maintenance: none; root phase targeting `develop`.
 - Remaining blockers: none known.
