@@ -221,7 +221,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -235,15 +235,70 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Added/updated phase-scoped unit, contract, and integration tests for compose ordering, ordinary-overrides targeting expanded paths, resolver expression preservation in manifest arguments, and resolver-shaped recipe output key failure behavior.
 - Implementation validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_recipes.py tests/contracts/test_recipe_contract.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_resolvers.py tests/unit/loom/config/test_compose.py tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_error_contract.py tests/package/test_config_api.py tests/package/test_import_boundaries.py tests/unit/loom/config/recipes/test_manifest.py tests/unit/loom/config/recipes/test_catalog.py`
-    - Result: 95 passed.
+    - Result: 97 passed.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr`
     - Result: passed (ruff/pyright + default + config-extra harness + build).
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary`
     - Result: wrote `build/test-summary.md`; summary passed across package/unit/contract/integration/e2e/config-extra.
-- Refinement summary: recorded current compose order and intentional test updates for the Phase 9 ordering change; tightened explicit catalog/default catalog compatibility guidance; clarified resolver-bearing recipe argument and resolver-dependent shape behavior; updated targeted and final validation commands to use `UV_CACHE_DIR=/tmp/loom_uv_cache` and `uv run --extra config` where applicable.
+- Refinement summary: fixed exact resolver-style recipe arguments so `resolve_recipe_argument_interpolation` preserves authored `${...:...}` strings instead of attempting ordinary interpolation lookup; added unit and integration coverage proving recipe records keep authored resolver arguments and resolver-bearing output keys fail closed without resolver execution.
 - PR preparation:
   - Not started. No PR was opened or prepared in this phase by request.
 - Stack maintenance:
   - No phase stack actions executed yet in this worktree phase pass.
 - Remaining blockers:
   - None blocking; no further implementation changes required to satisfy the finalized phase scope.
+
+## Implementation Refinement Report
+
+### Metadata
+
+- Phase: Phase 9 - Recipe Catalog And Expansion
+- Branch: `codex/config-recipes-catalog`
+- Worktree: `/home/samcantrill/work/loom-worktrees/config-recipes-catalog`
+- Phase execution plan: `docs/phases/config-recipes-catalog.md`
+- Refiner: `loom_phase_refiner`
+- Refinement date: 2026-05-05
+- Phase implementation refinement budget status after this pass: used
+
+### Refinement Scope
+
+- Validation output reviewed: executor-reported targeted 95-test run, `make validate-pr`, `make test-summary`, and the refreshed validation runs listed below.
+- Blocking issues caused by this phase: exact resolver-style recipe arguments such as `${oc.env:KEY}` were still routed through ordinary recipe-argument interpolation lookup before expansion, so public compose would fail instead of preserving the authored resolver expression in the recipe record.
+- Issues confirmed out of scope: no PR preparation, CLI behavior, public inspection API, validation-boundary redesign, artifact/fingerprint population beyond recipe manifest records, source snapshots, resolver-output persistence, recipe sandboxing, or future recipe argument override syntax.
+
+### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Exact resolver-style recipe arguments were not preserved before recipe expansion. | Updated recipe argument interpolation to preserve a whole-string `${...:...}` token exactly as authored, matching the existing embedded resolver-token behavior. | `tests/unit/loom/config/recipes/test_expansion.py::test_expand_preserves_argument_resolver_expressions`; `tests/integration/config/test_compose_recipes.py::test_compose_preserves_authored_resolver_argument_in_recipe_manifest`. |
+| Resolver-dependent output shape coverage did not prove the resolver-bearing argument path. | Added coverage where a preserved resolver argument is used as a recipe output key and rejected via `InvalidRecipeOutputError` without requiring resolver execution. | `tests/unit/loom/config/recipes/test_expansion.py::test_expand_rejects_resolver_argument_used_as_output_key`. |
+
+### Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/recipes/test_expansion.py
+result: 15 passed
+
+command: UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_recipes.py
+result: 6 passed
+
+command: UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/recipes/test_expansion.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_recipes.py tests/contracts/test_recipe_contract.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_resolvers.py tests/unit/loom/config/test_compose.py tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_error_contract.py tests/package/test_config_api.py tests/package/test_import_boundaries.py tests/unit/loom/config/recipes/test_manifest.py tests/unit/loom/config/recipes/test_catalog.py
+result: 97 passed
+
+command: UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr
+result: passed; Ruff, Pyright, default tests, config-extra tests, and build passed
+
+command: UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
+result: passed; package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 27 passed/1 skipped, integration 9 passed/5 skipped, e2e 5 passed, config-extra 246 passed/431 deselected
+```
+
+### Remaining Blockers
+
+- None.
+
+### PR Preparation Handoff
+
+- Completion notes updated in phase execution plan: yes.
+- Budget status updated: yes; Phase implementation refinement is used.
+- Final validation recommended: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` and `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` already passed after refinement; PR preparation can rerun if it needs fresh PR-body evidence.
+- Suite evidence still needed: none known.

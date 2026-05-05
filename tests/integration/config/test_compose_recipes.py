@@ -45,6 +45,26 @@ def test_recipe_output_final_interpolation(tmp_path: Path) -> None:
     assert nested["value"] == "nested:root-child"
 
 
+def test_compose_preserves_authored_resolver_argument_in_recipe_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.yaml"
+    catalog = RecipeCatalog()
+    catalog.register("argument", argument_recipe)
+    monkeypatch.setenv("PHASE9_RECIPE_VALUE", "runtime-value")
+
+    base.write_text(
+        "name: base\npipeline:\n  _recipe_: argument\n  value: ${oc.env:PHASE9_RECIPE_VALUE}\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, recipe_catalog=catalog)
+
+    manifest = cast(dict[str, Any], composed.recipe_manifest[0])
+    assert manifest["arguments"]["value"] == "${oc.env:PHASE9_RECIPE_VALUE}"
+    assert composed.resolved["pipeline"] == {"value": "runtime-value:0"}
+
+
 def test_unknown_recipe_rejected_in_integration_shape(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
 

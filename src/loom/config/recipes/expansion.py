@@ -134,7 +134,10 @@ def _resolve_string(value: str, *, root: Mapping[str, Any], path: str) -> Any:
         return str(_to_plain_output(resolved))
 
     if len(matches) == 1 and matches[0].span() == (0, len(value)):
-        return _to_plain_output(_lookup_interpolation_token(matches[0].group(1), root=root, path=path))
+        token = matches[0].group(1)
+        if ":" in token:
+            return value
+        return _to_plain_output(_lookup_interpolation_token(token, root=root, path=path))
 
     output = value
     for match in reversed(matches):

@@ -35,10 +35,10 @@ def test_expand_preserves_argument_resolver_expressions() -> None:
     catalog = RecipeCatalog()
     catalog.register("argument", ArgumentRecipe)
 
-    expanded, manifest = expand_recipes(
+    resolved_args = resolve_recipe_argument_interpolation(
         {"pipeline": {"_recipe_": "argument", "value": "${oc.env:PHASE9_RECIPE_VALUE}"}},
-        catalog=catalog,
     )
+    expanded, manifest = expand_recipes(resolved_args, catalog=catalog)
     record = cast(dict[str, Any], manifest[0])
 
     assert expanded["pipeline"] == {"value": "${oc.env:PHASE9_RECIPE_VALUE}"}
@@ -108,6 +108,21 @@ def test_expand_rejects_resolver_expression_in_output_key() -> None:
     catalog.register("resolver-key", output_with_resolver_key)
     with pytest.raises(InvalidRecipeOutputError):
         expand_recipes({"x": {"_recipe_": "resolver-key", "prefix": "value"}}, catalog=catalog)
+
+
+def test_expand_rejects_resolver_argument_used_as_output_key() -> None:
+    catalog = RecipeCatalog()
+
+    def output_key_from_argument(prefix: str) -> dict[str, str]:
+        return {prefix: "value"}
+
+    catalog.register("argument-key", output_key_from_argument)
+    resolved_args = resolve_recipe_argument_interpolation(
+        {"x": {"_recipe_": "argument-key", "prefix": "${oc.env:PHASE9_RECIPE_KEY}"}}
+    )
+
+    with pytest.raises(InvalidRecipeOutputError):
+        expand_recipes(resolved_args, catalog=catalog)
 
 
 def test_expand_unknown_recipe() -> None:
