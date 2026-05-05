@@ -1871,7 +1871,7 @@ Completion notes:
 
 ### Phase 13 - Provenance, Manifest, Source Records, And Redaction Population
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-manifest-provenance`
 PR: https://github.com/samcantrill/loom/pull/40
 
@@ -1916,7 +1916,7 @@ Test expectations:
 Completion notes:
 
 - Phase execution plan: `docs/phases/config-manifest-provenance.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is open against
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
   `develop`.
 - Revised workflow gate: the pre-submit blocker gate ran before PR submission
   and found two blockers. First, user include replacement/addition source
@@ -1944,9 +1944,20 @@ Completion notes:
   `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall 711
   passed, 0 failed, 0 errors, 9 skipped, and 432 deselected.
-- PR notes: opened and verified on PR #40 with base `develop`, head
-  `codex/config-manifest-provenance`, and state `OPEN`. GitHub CI was not yet
-  complete at this metadata update.
+- Pre-merge target check: PR #40 was verified immediately before merge with
+  base `develop`, head `codex/config-manifest-provenance`, state `OPEN`, clean
+  merge state, and successful GitHub CI `checks`. A formal GitHub approval
+  review could not be posted because GitHub does not allow the PR author to
+  approve their own PR; the focused confirmation gate supplied the workflow
+  review approval.
+- Merge result: PR #40 merged into `develop` at 2026-05-05T15:57:54Z with
+  merge commit `389161f6102e12e7f4c7a1b55d42144e06c01f04`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-manifest-provenance` when PR #40 merged. The GitHub merge
+  command merged the PR but could not delete the local branch while its
+  worktree was attached; branch and worktree cleanup are safe after this
+  metadata update.
 
 ### Phase 14 - Artifact-Safe Fingerprints And Resume Comparison
 
