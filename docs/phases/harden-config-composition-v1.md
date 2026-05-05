@@ -336,6 +336,6 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   predecessor remains none; no stack retarget or rebase is needed. The PR is
   merge-eligible only after review and required checks complete; no merge or
   approval was performed in this pass.
-- GitHub checks after PR open: `gh pr checks 43` reported the `checks` workflow
-  pending at <https://github.com/samcantrill/loom/actions/runs/25394831757/job/74478665515>.
+- GitHub checks after PR open: `gh pr checks 43` reported the `checks`
+  workflow pending. Later phase-note pushes may create newer check runs.
 - Remaining blockers: none
