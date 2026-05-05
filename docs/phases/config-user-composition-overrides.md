@@ -233,8 +233,20 @@ make test-summary
 - Draft plan: completed in this artifact by `loom_phase_planner`.
 - Final phase execution plan: refined in this artifact by `loom_phase_planner`; implementation refinement budget and PR review budget remain unused.
 - Implementation summary:
+  - Added `split_include_and_ordinary_overrides` in `src/loom/config/overrides.py` and preserved existing semantics for strict update/add value overrides.
+  - Extended include expansion records in `src/loom/config/includes.py` with recomposition context (`IncludeRecompositionContext`) and source-local include-site metadata needed for nested existing-site swaps.
+  - Implemented a private user-composition stage in `src/loom/config/compose.py`:
+    - Parse once, split include-composition overrides from ordinary overrides.
+    - Apply include-composition overrides before ordinary overrides.
+    - Support existing-site replacement with source-context replay of local customizations.
+    - Support explicit brand-new `+..._include_=...` additions only, with explicit-target requirement for bare brand-new sites.
+    - Preserve ordinary override relative order on recomposed concrete mappings.
 - Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_overrides.py tests/integration/config/test_compose_overrides.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_includes.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_config.py tests/contracts/test_config_error_contract.py tests/package/test_import_boundaries.py`
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
 - Refinement summary: completed expanded-path refinement for private-stage boundaries, exact Phase 6 include-site matching, source-local include context, local overlay replay, brand-new explicit relative source policy, override partitioning/order, source-aware errors, suite obligations, and implementation stop conditions.
 - PR preparation:
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none.
