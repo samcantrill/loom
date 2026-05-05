@@ -18,7 +18,7 @@ from .includes import (
     expand_config_includes,
     resolve_include_target,
 )
-from .interpolation import resolve_interpolation
+from .interpolation import resolve_interpolation, scan_resolver_expressions
 from .load import load_config
 from .merge import merge_configs
 from .source_maps import ConfigPath, build_base_source_map, compose_config_with_sources, format_config_path
@@ -96,7 +96,14 @@ def compose_config(
 
     resolved_recipe_args = resolve_recipe_argument_interpolation(merged, path="$")
     expanded, recipe_manifest = expand_recipes(resolved_recipe_args, catalog=recipe_catalog, path="$")
-    resolved = resolve_interpolation(expanded, path="$")
+    expanded_artifact_safe, _resolver_records = scan_resolver_expressions(expanded, path="$")
+    resolved = resolve_interpolation(
+        expanded_artifact_safe,
+        path="$",
+        source_kind=base_source.kind,
+        source_order=base_source.order,
+        source_path=str(base_source.path),
+    )
 
     validated = validate_top_level_fields(resolved)
     redacted = redact_secrets(validated)

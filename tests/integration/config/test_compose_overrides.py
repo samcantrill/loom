@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 from loom.config import compose_config
-from loom.config.errors import ConfigIncludeExpansionError
+from loom.config.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError
 from loom.serialization import PlainData
 
 
@@ -236,3 +236,41 @@ def test_public_compose_applies_ordinary_overrides_after_include_recomposition(t
     assert model["added"] == "from-repl"
     pipeline = _mapping(composed.resolved["pipeline"])
     assert pipeline["flags"] is True
+
+
+def test_public_compose_rejects_existing_include_override_with_resolver_expression(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+
+    (include_dir / "model-old.yaml").write_text("shared: old\n", encoding="utf-8")
+
+    base.write_text(
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./include/model-old.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigIncludeResolutionError) as exc:
+        compose_config(base, overrides=("pipeline.model._include_=${oc.env:PHASE8_MODEL}",))
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "resolver_dependent"
+    assert context.details is not None
+    assert context.details["reason"] == "interpolation_token"
+
+
+def test_public_compose_rejects_brand_new_include_override_with_resolver_expression(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text("pipeline: {}\n", encoding="utf-8")
+
+    with pytest.raises(ConfigIncludeResolutionError) as exc:
+        compose_config(base, overrides=("+pipeline.dataset._include_=${oc.env:PHASE8_DATASET}",))
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "resolver_dependent"
+    assert context.details is not None
+    assert context.details["reason"] == "interpolation_token"

@@ -139,6 +139,10 @@ class ConfigInterpolationError(ConfigError):
     """Error while resolving config-node interpolation."""
 
 
+class ConfigUnsupportedResolverError(_ConfigError, NotImplementedError):
+    """Error for unsupported OmegaConf resolver execution."""
+
+
 class ConfigValidationError(ConfigError):
     """Error while validating config ownership and required fields."""
 
@@ -221,6 +225,7 @@ __all__ = [
     "ConfigErrorContext",
     "ConfigIncludeResolutionError",
     "ConfigIncludeExpansionError",
+    "ConfigUnsupportedResolverError",
     "RecipeRegistrationError",
     "DuplicateRecipeError",
     "UnknownRecipeError",

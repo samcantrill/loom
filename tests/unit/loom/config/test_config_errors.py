@@ -11,6 +11,7 @@ from loom.config.errors import (
     ConfigIncludeResolutionError,
     ConfigLoadError,
     ConfigMergeError,
+    ConfigUnsupportedResolverError,
     DuplicateRecipeError,
     InvalidRecipeOutputError,
     RecipeExpansionError,
@@ -37,6 +38,8 @@ def test_config_error_shapes() -> None:
     assert issubclass(OverrideParseError, ConfigError)
     assert issubclass(OverrideApplyError, ConfigError)
     assert issubclass(ConfigInterpolationError, ConfigError)
+    assert issubclass(ConfigUnsupportedResolverError, ConfigError)
+    assert issubclass(ConfigUnsupportedResolverError, NotImplementedError)
     assert issubclass(ConfigValidationError, ConfigError)
     assert issubclass(ConfigProvenanceError, ConfigError)
     assert issubclass(ConfigRedactionError, ConfigError)
@@ -98,6 +101,34 @@ def test_config_error_context_normalizes_plain_data_at_construction() -> None:
     assert context.expected == ["mapping", "plain"]
     assert context.actual == {"items": ["tuple"]}
     assert context.details == {"paths": ["$.model", "$.dataset"]}
+
+
+def test_config_unsupported_resolver_error_shape_and_context() -> None:
+    error = ConfigUnsupportedResolverError(
+        "unsupported resolver",
+        context=ConfigErrorContext(
+            code="unsupported_resolver",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/config.yaml",
+            config_path="$.pipeline.value",
+            directive="interpolation",
+            expected="oc.env",
+            actual="env",
+            remediation="Phase 8 allows only oc.env.",
+            details={
+                "resolver_expression_count": 1,
+                "unsupported_resolver": "env",
+            },
+        ),
+    )
+
+    assert isinstance(error, ConfigUnsupportedResolverError)
+    assert isinstance(error, NotImplementedError)
+    payload = error.to_dict()
+    assert payload["context"]["code"] == "unsupported_resolver"
+    assert payload["context"]["source_path"] == "/tmp/config.yaml"
+    assert payload["context"]["config_path"] == "$.pipeline.value"
 
 
 def test_config_error_context_rejects_invalid_details_at_construction() -> None:

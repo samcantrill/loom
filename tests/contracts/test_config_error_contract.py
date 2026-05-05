@@ -4,6 +4,7 @@ import pytest
 
 from loom.config.errors import (
     ConfigErrorContext,
+    ConfigUnsupportedResolverError,
     ConfigIncludeExpansionError,
     ConfigIncludeResolutionError,
     ConfigLoadError,
@@ -149,4 +150,33 @@ def test_config_include_expansion_error_serializes_structured_context() -> None:
     assert isinstance(context_details, dict)
     assert context_details["include_site_path"] == ["pipeline", "model", "_include_"]
     assert context_details["resolved_path"] == "/tmp/model.yaml"
+    assert ConfigErrorContext.from_dict(payload["context"]) == error.context
+
+
+def test_config_unsupported_resolver_error_serializes_structured_context() -> None:
+    error = ConfigUnsupportedResolverError(
+        "unsupported resolver",
+        context=ConfigErrorContext(
+            code="unsupported_resolver",
+            source_kind="base",
+            source_order=0,
+            source_path="/tmp/config.yaml",
+            config_path="$.pipeline.value",
+            directive="interpolation",
+            expected="oc.env",
+            actual="env",
+            remediation="Phase 8 only allows oc.env.",
+            details={
+                "resolver_expression_count": 1,
+                "unsupported_resolver": "env",
+            },
+        ),
+    )
+
+    payload = error.to_dict()
+    assert payload["context"]["code"] == "unsupported_resolver"
+    assert payload["context"]["source_path"] == "/tmp/config.yaml"
+    assert payload["context"]["config_path"] == "$.pipeline.value"
+    assert payload["context"]["directive"] == "interpolation"
+    assert payload["context"]["details"]["unsupported_resolver"] == "env"
     assert ConfigErrorContext.from_dict(payload["context"]) == error.context
