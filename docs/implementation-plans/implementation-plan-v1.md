@@ -1489,9 +1489,9 @@ Completion notes:
 
 ### Phase 8 - Resolver Security And Runtime Interpolation
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-resolver-security`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/34
 
 Goal:
 
@@ -1523,6 +1523,30 @@ Test expectations:
 
 - Unit/integration tests proving no resolver execution during artifact
   generation, built-in runtime resolution, and custom resolver failure.
+
+PR-open notes:
+
+- Phase execution plan: `docs/phases/config-resolver-security.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is
+  merge-eligible after review.
+- Implementation summary: adds private no-execution resolver scanning for
+  authored resolver-expression metadata, enforces the Phase 8 runtime resolver
+  allow-list of `oc.env` only, raises structured
+  `ConfigUnsupportedResolverError` for custom and non-allow-listed resolver
+  expressions before execution, and preserves the existing
+  `ConfigIncludeResolutionError` / `resolver_dependent` contract for
+  resolver-dependent include targets and user-composition include overrides.
+- Scope notes: no public root exports, public `ComposedConfig` fields,
+  manifest/source-artifact/fingerprint/provenance population, CLI behavior,
+  pipeline imports, run-store writes, resolver plugins, remote resolvers,
+  recipe behavior changes, or `_copy_` support were added.
+- Validation: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall
+  667 passed, 0 failed, 0 errors, 8 skipped, and 431 deselected. Focused
+  Phase 8 targeted checks passed with 24 resolver/error tests and 83
+  include/recipe/compose/import tests.
+- PR notes: opened and verified on 2026-05-05 as PR #34 with base `develop`,
+  head `codex/config-resolver-security`, and state `OPEN`.
 
 ### Phase 9 - Recipe Catalog And Expansion
 
