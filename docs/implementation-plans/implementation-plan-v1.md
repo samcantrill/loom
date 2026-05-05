@@ -954,7 +954,8 @@ Before implementation starts, review this v1 plan for:
 ## Assumptions And Defaults
 
 - V1 begins after v0 config composition, merge, provenance, redaction,
-  fingerprints, and recipe expansion are available.
+  fingerprints, recipe expansion, and the v0-post hardening closeout (migration
+  notes, docs refresh, and closeout behavior coverage) are complete.
 - `_include_` is trusted project config, consistent with the v0 trusted-config
   model.
 - Local filesystem and `file://` include resolution are required.

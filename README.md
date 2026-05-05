@@ -5,7 +5,7 @@ resuming small Python pipelines.
 
 The v0 implementation is deliberately local-only:
 
-- trusted config composition and `_target_` / `_recipe_` construction
+- trusted config composition, recipe expansion, and `_target_` construction
 - local artifact + run stores on disk
 - deterministic planning with conservative same-run resume
 - local in-process execution
@@ -30,7 +30,8 @@ pipeline:
   name: demo
   stages:
     - name: build
-      _target_: tests.support.pipeline_execution_stages.JsonProducerStage
+      factory:
+        _target_: tests.support.pipeline_execution_stages.JsonProducerStage
       config:
         value: 1
       outputs:
@@ -38,7 +39,8 @@ pipeline:
           artifact_type: json
           codec_key: json.v1
     - name: report
-      _target_: tests.support.pipeline_execution_stages.TextConsumerStage
+      factory:
+        _target_: tests.support.pipeline_execution_stages.TextConsumerStage
       inputs:
         data: build.data
       outputs:
@@ -107,8 +109,10 @@ runs/RUN_ID/
 ## Extension Contracts
 
 - Stage implementations follow `run(context, inputs) -> Mapping[str, ArtifactRef]`.
-- Artifact stores implement `save`, `register`, `load`, `exists`, and `validate`.
-- Run stores implement stage status/input/output/fingerprint documents and run metadata.
+- Artifact stores implement `save`, `register`, `load`, `exists`,
+  `verify_checksum`, and `validate` for one bound run.
+- Run stores implement run documents, user metadata, stage state documents,
+  events, and run locks.
 
 These are structural protocol checks (`isinstance(..., Protocol)`), not inheritance
 requirements.
@@ -119,6 +123,7 @@ requirements.
 - [docs/features/config.md](docs/features/config.md)
 - [docs/structure.md](docs/structure.md)
 - [implementation-plan-v0.md](docs/implementation-plans/implementation-plan-v0.md)
+- [v0 public API migration notes](docs/briefs/v0_public_api_migration_notes.md)
 
 ## Development
 

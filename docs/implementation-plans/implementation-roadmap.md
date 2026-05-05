@@ -147,6 +147,10 @@ Primary feature docs:
   `pipeline.md`, `pipeline-graph.md`, `run-store.md`, `artifacts.md`,
   `state.md`, `resume.md`, `provenance.md`, `execution.md`, and `testing.md`.
 
+V1 should begin after the `v0-post-hardening-docs` closeout pass has landed
+because that pass finalizes the migration notes, docs consistency, and hardening
+coverage required before composition and CLI layers rely on these contracts.
+
 ## v1 - Rebuildable Config Composition
 
 Goal:

@@ -1097,8 +1097,9 @@ codec = instantiate(cfg["serialization"]["codec"])
 
 Do not use generic `instantiate()` on `pipeline` stage mappings in v0.
 `PipelineRunner` parses `pipeline.stages` into `PipelineSpec`/`StageSpec`
-objects, where authored `_target_` is stored as `StageSpec.target_path` and
-authored `config` is stored as `StageSpec.stage_config`. Stage targets are not
+objects, where authored `factory._target_` is stored as
+`StageSpec.factory.target_path` and authored `config` is stored as
+`StageSpec.stage_config`. Stage targets are not
 constructed during config composition or generic pipeline parsing.
 
 `register_recipe`:
