@@ -1961,9 +1961,9 @@ Completion notes:
 
 ### Phase 14 - Artifact-Safe Fingerprints And Resume Comparison
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-artifact-fingerprints`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/41
 
 Goal:
 
@@ -1999,6 +1999,47 @@ Test expectations:
 
 - Unit/contract tests for fingerprint stability and change cases,
   resolver-output exclusion, path portability, and resume comparison outcomes.
+
+Completion notes:
+
+- Phase execution plan: `docs/phases/config-artifact-fingerprints.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is open against
+  `develop`.
+- Implementation summary: replaces the public default config fingerprint with
+  one `artifact_safe_config` record built from artifact-safe authored
+  composition facts before runtime resolver output is considered; keeps
+  `ComposedConfig.fingerprint`, inspection fingerprint, manifest
+  `fingerprint_records`, and the fingerprint stage aligned; and adds a narrow
+  config-only comparison helper for fingerprint records/manifests that reports
+  match, mismatch, incompatible policy/schema/label/algorithm, or insufficient
+  data without claiming runtime-value replay.
+- Scope notes: no run-store persistence, pipeline resume integration, CLI
+  behavior, raw source snapshot opt-in/dedupe, secret-aware runtime-value
+  fingerprints, plugin/remote/global resolvers, `_copy_`, exact resolver replay,
+  or Phase 16 docs/e2e broadening was added.
+- Validation blocker: the first implementation pass introduced a default
+  no-extra validation failure by importing optional config dependency modules at
+  runtime from `src/loom/config/fingerprints.py`. The implementation refinement
+  pass moved those imports behind type checking, preserving explicit
+  `loom[config]` coverage while restoring default contract collection.
+- Revised workflow gate: the full pre-submit blocker gate ran before PR
+  submission and found one blocker in the new comparison helper outcome
+  contract. Valid wrong-label fingerprint records or record-shaped mappings
+  returned `insufficient_data` instead of `incompatible_policy`, and malformed
+  mappings could escape plain-data validation instead of returning
+  `insufficient_data`. The user-authorized scoped blocker-resolution pass fixed
+  the outcome behavior and added focused unit coverage; the bounded
+  confirmation gate passed with no remaining blocking findings.
+- Validation: focused comparison-helper unit check passed with 5 tests;
+  targeted config-extra artifact/inspection contract check passed with 8 tests;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with package 36
+  passed/1 skipped, unit 354 passed/1 skipped, contract 29 passed/2 skipped,
+  integration 9 passed/5 skipped, e2e 5 passed, and config-extra 288
+  passed/433 deselected.
+- PR notes: opened and verified on PR #41 with base `develop`, head
+  `codex/config-artifact-fingerprints`, and state `OPEN`. GitHub CI was pending
+  at this metadata update.
 
 ### Phase 15 - Raw Snapshot Opt-In And Source Artifact Hardening
 
