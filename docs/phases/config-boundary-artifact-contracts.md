@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: blocked after post-merge PR review
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 1: Boundary and Artifact Contracts`
 - Branch: `codex/config-boundary-artifact-contracts`
@@ -21,7 +21,9 @@
 - Draft pass: completed by `loom_phase_planner`
 - Refine pass: completed by `loom_phase_planner`; expanded-path refinement sharpened module placement, export boundaries, artifact skeleton names, suite obligations, and executor stop conditions.
 - Setup limitations: `gh auth status` required approved network access because sandboxed status reported the token as invalid; `gh auth setup-git`, `git fetch origin`, and `git worktree add` required escalated filesystem access for Git metadata. `origin/develop` and local `develop` both resolve to `6f2956d7d9360a8ac3190ac7359372d32af8ff78`.
-- Blockers: none recorded.
+- Blockers: post-merge phase PR review found a plain-data validation defect in
+  `CompositionManifest.recipe_manifest`; do not start Phase 2 until it is fixed
+  or explicitly accepted by the user.
 
 ## Objective
 
@@ -220,7 +222,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used
-- PR review: unused
+- PR review: used
 
 ## Completion Notes
 
@@ -270,6 +272,13 @@ make test-summary
     reported `baseRefName=develop`,
     `headRefName=codex/config-boundary-artifact-contracts`, `state=OPEN`,
     and `url=https://github.com/samcantrill/loom/pull/23`.
+  - Post-review PR state: a later `gh pr view 23 --json
+    state,baseRefName,headRefName,url,mergedAt,mergeCommit,statusCheckRollup`
+    check reported `state=MERGED`, `baseRefName=develop`,
+    `headRefName=codex/config-boundary-artifact-contracts`,
+    `mergedAt=2026-05-05T05:10:57Z`, merge commit
+    `f146e1bc49cd49c069fbdd47491c61dbc2f8ef5f`, and CI `checks=SUCCESS`.
+    This merge occurred before the bounded phase PR review approved the phase.
   - PR facts confirmed: root phase, stack predecessor none, base branch
     `develop`, target branch `develop`, merge eligibility after PR review
     approval because the PR targets `develop`.
@@ -278,5 +287,19 @@ make test-summary
     `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with
     `build/test-summary.md` generated); no implementation refinements or new
     tests were created during PR preparation.
-- Stack maintenance: none yet.
-- Remaining blockers: none recorded.
+- PR review:
+  - PR review budget: used by `loom_phase_reviewer` on 2026-05-05.
+  - Decision: not approved.
+  - Blocking finding: `CompositionManifest.__post_init__` only tuple-copies
+    `recipe_manifest` and checks each item is a mapping; it does not validate or
+    normalize nested plain data at construction time. Local verification in the
+    control checkout confirmed
+    `CompositionManifest(schema_version=1, recipe_manifest=({"bad": {1, 2}},))`
+    creates an in-memory record containing a `set`, violating the Phase 1
+    plain-data artifact contract.
+  - Required change: validate/normalize `recipe_manifest` during construction
+    with the same plain-data path used by `from_dict()`/`to_dict()`, and add a
+    unit or contract regression for non-plain `recipe_manifest` payloads.
+- Stack maintenance: none yet; successor Phase 2 must not start while this phase
+  is blocked.
+- Remaining blockers: post-merge Phase 1 artifact contract blocker remains.

@@ -989,9 +989,9 @@ implementation, record it in that phase execution plan and PR body.
 
 ### Phase 1 - Boundary And Artifact Contracts
 
-Status: pr_open
+Status: blocked
 Branch: `codex/config-boundary-artifact-contracts`
-PR: https://github.com/samcantrill/loom/pull/23
+PR: https://github.com/samcantrill/loom/pull/23 (merged before phase review approval)
 
 Goal:
 
@@ -1024,14 +1024,15 @@ Test expectations:
 - Package/import tests.
 - Contract serialization tests for empty or minimal artifact records.
 
-PR-open metadata:
+Phase metadata:
 
 - Worktree: `/home/samcantrill/work/loom-worktrees/config-boundary-artifact-contracts`
 - Stack predecessor: none
 - Base branch: `develop`
 - PR target branch: `develop`
-- Merge eligibility: merge-eligible after phase review approval because this
-  root phase PR targets `develop`
+- Merge result: GitHub reports PR #23 merged into `develop` at
+  `f146e1bc49cd49c069fbdd47491c61dbc2f8ef5f` on 2026-05-05 before the
+  bounded phase PR review approved it.
 - Implementation summary: added `loom.config.artifacts` skeleton contracts for
   `CompositionManifest`, `SourceArtifactRecord`, and
   `ConfigFingerprintRecord`; added unit/contract serialization coverage and
@@ -1040,9 +1041,18 @@ PR-open metadata:
 - Validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall suite
   status `passed`; GitHub CI check `checks` passed on PR #23.
+- Blocking review finding: `CompositionManifest.__post_init__` does not validate
+  or normalize nested plain data inside `recipe_manifest` when constructed
+  directly. A local probe confirmed
+  `CompositionManifest(schema_version=1, recipe_manifest=({"bad": {1, 2}},))`
+  creates a record containing a `set`, violating the Phase 1 plain-data artifact
+  contract. The single implementation refinement pass and single PR-review pass
+  are consumed, so the phase loop must stop instead of launching Phase 2.
 - Follow-up notes: later phases populate these skeletons; no compose, include,
   resolver, run-store, CLI, root-export, or `ComposedConfig` behavior was added
-  in Phase 1.
+  in Phase 1. Before Phase 2 begins, fix the post-merge Phase 1 artifact
+  contract blocker with a focused follow-up approved by the user or human
+  maintainer.
 
 ### Phase 2 - Strict Loading And Structured Errors
 
