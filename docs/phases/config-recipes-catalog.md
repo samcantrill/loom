@@ -259,7 +259,7 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - PR verification: `gh pr view 36 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/config-recipes-catalog`, state `OPEN`, url `https://github.com/samcantrill/loom/pull/36`.
   - Target branch verification: confirmed root PR target is `develop`; stack predecessor remains none.
   - Merge eligibility: root phase PR targets `develop`; merge-eligible only after review approval and passing required GitHub checks. No merge or approval was performed.
-  - GitHub/auth notes: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded for account `samcantrill`. `gh auth setup-git`, `git ls-remote --heads origin develop`, `git push -u origin codex/config-recipes-catalog`, `gh pr create`, and `gh pr view` succeeded with approved access.
+  - GitHub/auth notes: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded for account `samcantrill`. `gh auth setup-git`, `git ls-remote --heads origin develop`, `git push -u origin codex/config-recipes-catalog`, `gh pr create`, and `gh pr view` succeeded with approved access. Post-open `gh pr edit 36 --body-file docs/phases/config-recipes-catalog-pr-body.md` failed on a deprecated Projects classic GraphQL field; `gh api repos/{owner}/{repo}/pulls/36 --method PATCH --field body=@docs/phases/config-recipes-catalog-pr-body.md --silent` succeeded and updated the PR body.
 - Stack maintenance:
   - No phase stack actions executed yet in this worktree phase pass.
 - Remaining blockers:
