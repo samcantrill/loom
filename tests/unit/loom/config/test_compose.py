@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
+from loom.config.errors import ConfigLoadError
 from loom.config.errors import ConfigValidationError, UnknownRecipeError
 import loom.config.api as config_api
 from tests.support.config_samples import argument_recipe
@@ -37,13 +38,22 @@ def test_compose_base_overlay_override_flow(tmp_path: Path) -> None:
     assert [source.kind for source in result.provenance.sources] == ["base", "overlay", "overlay"]
 
 
-def test_compose_preserves_include_like_keys(tmp_path: Path) -> None:
+def test_compose_preserves_include_replace_keys(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
-    base.write_text("name: demo\npipeline: {}\n_include_: true\n_copy_: true\n_replace_: true\n", encoding="utf-8")
+    base.write_text("name: demo\npipeline: {}\n_include_: true\n_replace_: true\n", encoding="utf-8")
     result = compose_config(base)
     assert result.resolved["_include_"] is True
-    assert result.resolved["_copy_"] is True
     assert result.resolved["_replace_"] is True
+
+
+def test_compose_rejects_copy_directive_in_config(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text("name: demo\npipeline: {}\n_copy_: true\n", encoding="utf-8")
+    with pytest.raises(ConfigLoadError) as exc:
+        compose_config(base)
+    assert exc.value.context is not None
+    assert exc.value.context.code == "unsupported_directive"
+    assert exc.value.context.config_path == "$._copy_"
 
 
 def test_compose_expands_recipe_key(tmp_path: Path) -> None:
