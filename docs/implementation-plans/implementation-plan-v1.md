@@ -1060,7 +1060,7 @@ Phase metadata:
 
 ### Phase 2 - Strict Loading And Structured Errors
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-loading-errors`
 PR: https://github.com/samcantrill/loom/pull/25
 
@@ -1101,9 +1101,9 @@ Phase metadata:
 - Stack predecessor: none
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR status: opened as PR #25 at
-  https://github.com/samcantrill/loom/pull/25; verified base `develop`, head
-  `codex/config-loading-errors`, state `OPEN`.
+- Merge result: PR #25 merged into `develop` at
+  `bc748ff58c61614bca1177de2bd1b1e8051e3b6d` on 2026-05-05 before the
+  bounded phase PR review approved it.
 - Implementation summary: added config-domain structured error context,
   context-bearing loader errors, single-document UTF-8 YAML enforcement,
   non-empty mapping-root enforcement, plain-data parsed values, and recursive
@@ -1111,6 +1111,16 @@ Phase metadata:
 - Validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall suite
   status `passed`; GitHub CI check `checks` passed on PR #25.
+- Blocking review finding: recursive YAML aliases could trigger unstructured
+  `RecursionError` during `_copy_` directive scanning before plain-data
+  normalization. A self-referential alias such as `root: &root` with
+  `child: *root` violated the Phase 2 structured loader-failure contract.
+- Blocker resolution: user authorized one scoped post-merge blocker-resolution
+  pass. Follow-up PR https://github.com/samcantrill/loom/pull/26 merged into
+  `develop` at `e03f1c1dfd7426a5ffd962e90cb915267bcb3a15` on 2026-05-05
+  after local validation and GitHub CI `checks` passed. The fix rejects
+  recursive YAML aliases as structured `ConfigLoadError` values with
+  `code="non_plain_data"` before directive scanning.
 - Follow-up notes: no includes, overlays, override application, schema
   validation, resolver execution, persistence, CLI, manifest/provenance
   population, fingerprint behavior, or Phase 3+ semantics were added.
