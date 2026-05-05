@@ -241,6 +241,13 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Preserved the accepted Phase 11 boundaries: no compose-time instantiation, registries, allow-lists, target lookup broadening, artifact changes, CLI, pipeline imports, persistence, or future-phase behavior.
 - PR preparation:
   - Scope remains within Phase 11 and public API surfaces were not expanded.
+  - Draft PR body pass completed on 2026-05-05 using `.codex/prompts/pr-body-draft.md` and `.codex/templates/phase-pr-body.md`.
+  - PR body artifact created at `docs/phases/config-instantiation-strict-pr-body.md`.
+  - PR body refine pass is pending because Phase 11 is on the expanded path; no PR was opened in the draft pass.
+  - Confirmed worktree `/home/samcantrill/work/loom-worktrees/config-instantiation-strict`, branch `codex/config-instantiation-strict`, target branch `develop`, stack predecessor `none`, and PR title `Configuration - Phase 11: Strict Instantiation And Runtime Injection` match this phase plan.
+  - Final diff inspected against `develop` at implementation HEAD `2e061038836fce32248f4929a843a630ae3a6cad`: phase plan artifact, injection/recursive instantiation runtime validation, config sample probes, and focused instantiation tests only.
+  - Existing validation evidence inspected from this artifact and `build/test-summary.md`: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall suite status `passed`.
+  - Validation commands were not rerun during this draft pass because the pass changed only PR preparation artifacts and phase notes; the revised pre-submit blocker gate remains pending before PR submission.
 - Stack maintenance:
   - No stack predecessor changes; this is a root phase branch (`codex/config-instantiation-strict`) targeting `develop`.
 - Remaining blockers: none.
