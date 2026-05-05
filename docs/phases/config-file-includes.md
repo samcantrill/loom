@@ -273,6 +273,17 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py tests/integration/config/test_compose_includes.py` (passed).
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py tests/integration/config/test_compose_includes.py` (passed, 0 errors).
   - `git diff --check` (passed).
+- Post-merge blocker follow-up: PR #31 merged before the `_replace_` blocker
+  fix landed on the phase branch, so the manager cherry-picked the exact
+  blocker fix onto `codex/config-file-includes-replace-blocker` for a narrow
+  follow-up PR targeting `develop`.
+- Follow-up PR validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed: Ruff passed;
+    Pyright 0 errors; default harness 425 passed, 9 skipped; config-extra 212
+    passed, 430 deselected; build succeeded)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed: wrote
+    `build/test-summary.md`; overall 642 passed, 0 failed, 0 errors, 8
+    skipped, 430 deselected)
 - PR facts confirmed for draft body: branch/head `codex/config-file-includes`;
   target/base `develop`; stack predecessor none; root PR; merge eligibility
   remains merge-eligible after PR review because target is `develop`; PR title
