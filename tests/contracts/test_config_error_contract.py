@@ -4,6 +4,7 @@ import pytest
 
 from loom.config.errors import (
     ConfigErrorContext,
+    ConfigValidationError,
     ConfigUnsupportedResolverError,
     ConfigIncludeExpansionError,
     ConfigIncludeResolutionError,
@@ -179,4 +180,28 @@ def test_config_unsupported_resolver_error_serializes_structured_context() -> No
     assert payload["context"]["config_path"] == "$.pipeline.value"
     assert payload["context"]["directive"] == "interpolation"
     assert payload["context"]["details"]["unsupported_resolver"] == "env"
+    assert ConfigErrorContext.from_dict(payload["context"]) == error.context
+
+
+def test_config_validation_error_can_carry_structured_context() -> None:
+    context = ConfigErrorContext(
+        code="invalid_project_schema_boundary",
+        source_kind="base",
+        source_order=0,
+        source_path="/tmp/base.yaml",
+        config_path="$.pipeline",
+        expected="project-owned key map",
+        actual="integer",
+        directive="_schema_",
+        remediation="Keep schema metadata in external project tooling; composition does not inspect `_schema_`.",
+        details={"boundary": "compose"},
+    )
+    error = ConfigValidationError("Invalid config boundary", context=context)
+
+    payload = error.to_dict()
+    assert payload["message"] == "Invalid config boundary"
+    assert payload["context"]["code"] == "invalid_project_schema_boundary"
+    assert payload["context"]["source_kind"] == "base"
+    assert payload["context"]["directive"] == "_schema_"
+    assert payload["context"]["details"]["boundary"] == "compose"
     assert ConfigErrorContext.from_dict(payload["context"]) == error.context

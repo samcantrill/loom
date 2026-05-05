@@ -255,19 +255,33 @@ def _ensure_no_unsupported_directives(
     if isinstance(value, dict):
         for key, child in value.items():
             child_path = f"{path}.{key}" if path != "$" else f"$.{key}"
-            if key == "_copy_":
+            if key in {"_copy_", "_schema_"}:
+                directive = key
+                expected = (
+                    "v1-supported authored directives"
+                    if key == "_copy_"
+                    else "schema declarations from authored files"
+                )
+                remediation = (
+                    "Use explicit overlays or include/replace behavior instead; _copy_ is deferred."
+                    if key == "_copy_"
+                    else (
+                        "Remove `_schema_` from authored config files. "
+                        "Phase 10 composition treats schema authorship directives as unsupported."
+                    )
+                )
                 raise UnsupportedConfigDirectiveError(
-                    f"Unsupported _copy_ directive in {kind} config (order={order}) at {source_path}",
+                    f"Unsupported {directive} directive in {kind} config (order={order}) at {source_path}",
                     context=_build_context(
                         code="unsupported_directive",
                         kind=kind,
                         order=order,
                         source_path=source_path,
                         config_path=child_path,
-                        directive="_copy_",
-                        expected="v1-supported authored directives",
-                        actual="_copy_",
-                        remediation="Use explicit overlays or include/replace behavior instead; _copy_ is deferred.",
+                        directive=directive,
+                        expected=expected,
+                        actual=directive,
+                        remediation=remediation,
                     ),
                 )
             _ensure_no_unsupported_directives(

@@ -143,7 +143,7 @@ class ConfigUnsupportedResolverError(_ConfigError, NotImplementedError):
     """Error for unsupported OmegaConf resolver execution."""
 
 
-class ConfigValidationError(ConfigError):
+class ConfigValidationError(_ConfigError):
     """Error while validating config ownership and required fields."""
 
 

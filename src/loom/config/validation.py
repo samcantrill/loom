@@ -10,21 +10,15 @@ from .errors import ConfigValidationError, UnsupportedRecipeError
 
 
 def validate_top_level_fields(config: Mapping[str, PlainData]) -> dict[str, PlainData]:
-    name = config.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise ConfigValidationError("Top-level config validation failed: name must be a non-empty string")
+    # Project-owned configs are passed through as opaque payloads at the public
+    # compose boundary; this validation only preserves explicit mappings and
+    # leaves composition ownership in explicit helpers.
+    if not isinstance(config, Mapping):
+        raise ConfigValidationError(
+            "Top-level config validation failed: expected mapping for composition boundary",
+        )
 
-    pipeline = config.get("pipeline")
-    if not isinstance(pipeline, Mapping):
-        raise ConfigValidationError("Top-level config validation failed: pipeline must be a mapping")
-
-    schema_version = config.get("schema_version", 1)
-    if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version != 1:
-        raise ConfigValidationError("Top-level config validation failed: schema_version must be 1 when provided")
-
-    validated = dict(config)
-    validated.setdefault("schema_version", 1)
-    return validated
+    return dict(config)
 
 
 def validate_no_recipe_keys(config: Mapping[str, PlainData], *, path: str = "$") -> None:

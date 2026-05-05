@@ -6,7 +6,9 @@ from typing import Any, cast
 import pytest
 
 from loom.config import RecipeCatalog, compose_config
-from loom.config.errors import OverrideApplyError
+from loom.config.errors import ConfigLoadError, OverrideApplyError
+from loom.config.provenance import build_config_fingerprint
+from loom.fingerprints import hash_mapping
 from tests.support.config_samples import DownstreamRecipe, argument_recipe
 
 
@@ -130,3 +132,115 @@ def test_compose_does_not_instantiate_targets(tmp_path: Path) -> None:
     target = composed.resolved["target"]
     assert isinstance(target, dict)
     assert target["_target_"] == "tests.support.config_samples:concat"
+
+
+def test_compose_allows_generic_configs_without_name_or_pipeline(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "experiment:\n"
+        "  architecture: transformer\n"
+        "  params:\n"
+        "    width: 256\n",
+        encoding="utf-8",
+    )
+    composed = compose_config(base)
+    assert composed.resolved["experiment"] == {"architecture": "transformer", "params": {"width": 256}}
+    assert "schema_version" not in composed.resolved
+
+
+def test_compose_uses_generic_payload_for_redaction_and_fingerprints(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "experiment:\n"
+        "  architecture: transformer\n"
+        "  secret_token: keep-private\n"
+        "metadata:\n"
+        "  owner: project\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base)
+
+    assert composed.resolved == {
+        "experiment": {
+            "architecture": "transformer",
+            "secret_token": "keep-private",
+        },
+        "metadata": {
+            "owner": "project",
+        },
+    }
+    redacted_experiment = cast(dict[str, Any], composed.redacted["experiment"])
+    assert redacted_experiment == {
+        "architecture": "transformer",
+        "secret_token": "***REDACTED***",
+    }
+    assert "schema_version" not in composed.redacted
+    assert composed.provenance.resolved_fingerprint == hash_mapping(composed.resolved)
+    assert composed.fingerprint == build_config_fingerprint(
+        resolved=composed.resolved,
+        sources=composed.provenance.sources,
+        overrides=composed.provenance.overrides,
+        recipe_manifest=composed.recipe_manifest,
+        schema_version=composed.provenance.schema_version,
+    )
+
+
+def test_compose_keeps_project_scoped_target_nodes_inert(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "dataset:\n"
+        "  _target_: tests.support.config_samples:concat\n"
+        "  prefix: left\n"
+        "  suffix: right\n",
+        encoding="utf-8",
+    )
+    composed = compose_config(base)
+
+    dataset = cast(dict[str, Any], composed.resolved["dataset"])
+    assert dataset == {
+        "_target_": "tests.support.config_samples:concat",
+        "prefix": "left",
+        "suffix": "right",
+    }
+
+
+def test_compose_rejects_schema_directive_in_base(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "model:\n"
+        "  _schema_: {}\n"
+        "  value: from-base\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigLoadError) as exc:
+        compose_config(base)
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "unsupported_directive"
+    assert context.source_kind == "base"
+    assert context.source_order == 0
+    assert context.config_path == "$.model._schema_"
+    assert context.directive == "_schema_"
+    assert context.expected == "schema declarations from authored files"
+
+
+def test_compose_rejects_schema_directive_in_overlay(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    base.write_text("model:\n  value: from-base\n", encoding="utf-8")
+    overlay.write_text("model:\n  _schema_: {}\n", encoding="utf-8")
+
+    with pytest.raises(ConfigLoadError) as exc:
+        compose_config(base, overlays=[overlay])
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "unsupported_directive"
+    assert context.source_kind == "overlay"
+    assert context.source_order == 1
+    assert context.config_path == "$.model._schema_"
+    assert context.directive == "_schema_"
+    assert context.expected == "schema declarations from authored files"
