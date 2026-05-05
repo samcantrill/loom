@@ -242,7 +242,19 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
     - Result: wrote `build/test-summary.md`; summary passed across package/unit/contract/integration/e2e/config-extra.
 - Refinement summary: fixed exact resolver-style recipe arguments so `resolve_recipe_argument_interpolation` preserves authored `${...:...}` strings instead of attempting ordinary interpolation lookup; added unit and integration coverage proving recipe records keep authored resolver arguments and resolver-bearing output keys fail closed without resolver execution.
 - PR preparation:
-  - Not started. No PR was opened or prepared in this phase by request.
+  - Draft pass completed by `loom_pr_preparer` on 2026-05-05.
+  - PR body artifact created: `docs/phases/config-recipes-catalog-pr-body.md`.
+  - PR body refine pass: pending because the expanded path is active.
+  - Intended PR title: `Configuration - Phase 9: Recipe Catalog And Expansion`.
+  - Head branch: `codex/config-recipes-catalog`.
+  - Target branch: `develop`.
+  - Stack predecessor: none; root phase.
+  - Stack state: root PR target remains `develop`; no retarget or rebase work is required before PR creation.
+  - Merge eligibility: root phase, merge-eligible only after PR body refine/open, review, and passing checks against `develop`.
+  - Validation evidence reviewed: targeted Phase 9 suite passed with 97 tests; `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed and wrote `build/test-summary.md`.
+  - Test-summary facts recorded in PR body: generated 2026-05-05T12:19:16+00:00; overall 677 passed, 0 failed, 0 errors, 8 skipped, 431 deselected across package/unit/contract/integration/e2e/config-extra suites.
+  - Public PR body facts: mentions `@samcantrill` near the top; records concise scope, implementation notes, new/changed tests, validation tables, and risks; omits commit lists, workflow budget accounting, GitHub JSON, and stack cleanup details.
+  - PR creation: intentionally not opened in this draft pass per expanded-path instruction; refine pass should create the PR with explicit `--base develop`, `--head codex/config-recipes-catalog`, and the intended title after review of the draft body.
 - Stack maintenance:
   - No phase stack actions executed yet in this worktree phase pass.
 - Remaining blockers:
