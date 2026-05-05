@@ -249,7 +249,8 @@ make test-summary
 - Phase execution plan draft: used
 - Phase execution plan refine: used
 - Phase implementation refinement: used
-- PR review: unused
+- User-authorized blocker-resolution pass: used for PR #27 nested `_replace_` marker blocker after normal PR review
+- PR review: used; one blocking finding was addressed by the user-authorized blocker-resolution pass
 
 ## Completion Notes
 
@@ -262,6 +263,17 @@ make test-summary
 - PR preparation: completed on 2026-05-05; PR #27 opened at
   `https://github.com/samcantrill/loom/pull/27` and verified with base
   `develop`, head `codex/config-overrides-merge`, and state `OPEN`.
+- User-authorized blocker-resolution summary: completed after the normal PR
+  review found nested `_replace_` markers could leak out of whole-section
+  replacements. `_merge_replace_mapping()` now normalizes replacement subtrees
+  through replacement-aware recursion: nested `_replace_` markers are consumed
+  only when the corresponding lower-precedence mapping exists, otherwise they
+  fail with `ConfigMergeError`, and ordinary replacement children still do not
+  merge lower-precedence keys back into a whole-section replacement. Focused
+  tests cover nested markers under a replaced section, under root replacement,
+  and the missing-lower-mapping failure case. No Phase 4+ source authorship,
+  include behavior, resolver/schema/CLI/persistence, public orchestration,
+  `_copy_`, list patching/indexing, or escaped-dot override behavior was added.
 
 ### Completion Validation
 
@@ -269,6 +281,10 @@ make test-summary
 - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` (pass: 10 passed)
 - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` rerun during PR preparation on 2026-05-05 (pass: Ruff passed; Pyright 0 errors; default suite 423 passed, 9 skipped; config-extra suite 145 passed, 428 deselected; build succeeded)
 - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` rerun during PR preparation on 2026-05-05 (pass: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 24 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 145 passed/428 deselected; overall 573 passed, 8 skipped, 428 deselected; summary generated 2026-05-05T07:01:43Z)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/config/test_merge.py tests/unit/loom/config/test_overrides.py` rerun during blocker resolution on 2026-05-05 (pass: 31 passed)
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` rerun during blocker resolution on 2026-05-05 (pass: 10 passed)
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` rerun during blocker resolution on 2026-05-05 (pass: Ruff passed; Pyright 0 errors; default suite 423 passed, 9 skipped; config-extra suite 148 passed, 428 deselected; build succeeded)
+- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` rerun during blocker resolution on 2026-05-05 (pass: package 36 passed/1 skipped; unit 354 passed/1 skipped; contract 24 passed/1 skipped; integration 9 passed/5 skipped; e2e 5 passed; config-extra 148 passed/428 deselected; overall 576 passed, 8 skipped, 428 deselected)
 - Stack maintenance: none yet.
 - Remaining blockers: none.
 
@@ -293,13 +309,14 @@ make test-summary
 - Implemented scope confirmed: strict `_replace_` merge primitive including
   root-level replacement, recursive mapping merge when `_replace_` is absent,
   scalar/list/null and type replacement behavior, marker validation and
-  omission, input non-mutation, and focused override/merge tests.
+  omission, nested marker handling inside replacement subtrees, input
+  non-mutation, and focused override/merge tests.
 - Explicit scope exclusions confirmed: no include loading, source-authored
   overlays, recursive include expansion, recipe ordering changes, public
   inspection API, persistence, CLI, provenance population, fingerprints,
   `_copy_`, escaped-dot override paths, list indexing, or list patching.
 - Validation evidence: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
-  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall 573
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall 576
   passed, 8 skipped, and 428 deselected.
 - Assumptions and risks for reviewers: override and merge errors remain
   message-only stable subclasses; explicit `+` overrides may create missing

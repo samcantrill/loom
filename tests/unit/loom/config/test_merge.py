@@ -61,6 +61,28 @@ def test_merge_replace_marker_removes_marker_from_result() -> None:
     assert "_replace_" not in section
 
 
+def test_merge_nested_replace_marker_under_replaced_section_is_consumed() -> None:
+    base = plain_config({"section": {"nested": {"old": 1}, "stale": True}})
+    overlay = plain_config({"section": {"_replace_": True, "nested": {"_replace_": True, "new": 2}}})
+
+    assert merge_configs(base, overlay) == {"section": {"nested": {"new": 2}}}
+
+
+def test_merge_nested_replace_marker_under_root_replacement_is_consumed() -> None:
+    base = plain_config({"nested": {"old": 1}, "stale": True})
+    overlay = plain_config({"_replace_": True, "nested": {"_replace_": True, "new": 2}})
+
+    assert merge_configs(base, overlay) == {"nested": {"new": 2}}
+
+
+def test_merge_nested_replace_marker_in_replacement_requires_lower_mapping() -> None:
+    base = plain_config({"section": {"other": 1}})
+    overlay = plain_config({"section": {"_replace_": True, "nested": {"_replace_": True, "new": 2}}})
+
+    with pytest.raises(ConfigMergeError):
+        merge_configs(base, overlay)
+
+
 def test_merge_replace_marker_fails_when_lower_value_missing() -> None:
     base = plain_config({})
     overlay = plain_config({"section": {"_replace_": True, "a": 1}})

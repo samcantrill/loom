@@ -79,8 +79,41 @@ def _merge_replace_mapping(
         raise ConfigMergeError(f"Invalid _replace_ usage at {path}: no replacement keys provided")
 
     return {
-        key: _normalize_mapping_value(value, path=f"{path}[{key!r}]")
+        key: _normalize_replacement_value(
+            value,
+            base_value=base_value.get(key),
+            path=f"{path}[{key!r}]",
+        )
         for key, value in replacement_value.items()
+    }
+
+
+def _normalize_replacement_value(
+    value: object,
+    *,
+    base_value: PlainData | None,
+    path: str,
+) -> PlainData:
+    replacement_value = _normalize_mapping_value(value, path=path)
+    if not isinstance(replacement_value, Mapping):
+        return replacement_value
+
+    replacement_mapping = cast(dict[str, PlainData], replacement_value)
+    if _REPLACE_KEY in replacement_mapping:
+        return _merge_replace_mapping(
+            base_value=base_value,
+            overlay_value=replacement_mapping,
+            path=path,
+        )
+
+    base_mapping = base_value if isinstance(base_value, Mapping) else {}
+    return {
+        key: _normalize_replacement_value(
+            child_value,
+            base_value=base_mapping.get(key),
+            path=f"{path}[{key!r}]",
+        )
+        for key, child_value in replacement_mapping.items()
     }
 
 
