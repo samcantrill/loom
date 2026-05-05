@@ -1419,9 +1419,9 @@ PR-open notes:
 
 ### Phase 7 - User Composition Overrides
 
-Status: pending
+Status: pr_open
 Branch: `codex/config-user-composition-overrides`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/33
 
 Goal:
 
@@ -1452,6 +1452,32 @@ Test expectations:
 - Integration tests for user include swaps, brand-new include restrictions,
   ordinary overrides targeting recomposed included values, and source-context
   errors.
+
+Completion notes:
+
+- Phase execution plan:
+  `docs/phases/config-user-composition-overrides.md`.
+- PR target: `develop`; stack predecessor: none; root phase PR is
+  merge-eligible after review.
+- Implementation summary: adds the private user-composition stage between
+  file-defined include expansion and ordinary value overrides. The phase
+  partitions include-composition overrides from ordinary overrides, replaces
+  exact recorded include sites with source-local context, replays local sibling
+  customizations over replacement includes, supports brand-new explicit
+  relative/absolute/`file://` include additions, rejects brand-new bare include
+  targets, rejects `+` against existing include sites, and preserves ordinary
+  override relative order after recomposition.
+- Scope notes: no public root exports, new `ComposedConfig` fields,
+  manifest/artifact/fingerprint/provenance population, CLI behavior, pipeline
+  imports, resolver execution, recipe-ordering changes, or `_copy_` support
+  were added.
+- Validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall
+  651 passed, 0 failed, 0 errors, 8 skipped, and 430 deselected. Focused
+  Phase 7 targeted checks passed with 22 override/composition tests and
+  73 broader config/import-boundary tests.
+- PR notes: opened and verified on 2026-05-05 as PR #33 with base `develop`,
+  head `codex/config-user-composition-overrides`, and state `OPEN`.
 
 ### Phase 8 - Resolver Security And Runtime Interpolation
 
