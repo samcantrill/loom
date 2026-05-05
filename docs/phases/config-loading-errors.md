@@ -265,6 +265,11 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` (pass; Ruff, Pyright, default harness with 423 passed and 9 skipped, config-extra harness with 125 passed and 428 deselected, and `uv build` passed)
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` (pass; wrote `build/test-summary.md`; overall suite status `passed` with package 36 passed/1 skipped, unit 354 passed/1 skipped, contract 24 passed/1 skipped, integration 9 passed/5 skipped, e2e 5 passed, and config-extra 125 passed/428 deselected)
 - PR preparation assumptions and risks: GitHub checks are pending until PR creation; structured context fields remain additive for later phases; `_copy_` remains deliberately unsupported in v1; redaction policy beyond avoiding raw source bytes and runtime/resolver values remains deferred to later artifact/provenance phases.
-- PR creation status: pending push and GitHub PR creation.
-- Stack maintenance: none required for this root phase.
+- PR creation status: opened as PR #25 at
+  `https://github.com/samcantrill/loom/pull/25`.
+- PR verification: `gh pr view 25 --json baseRefName,headRefName,state,url`
+  returned `{"baseRefName":"develop","headRefName":"codex/config-loading-errors","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/25"}`.
+- Stack maintenance: none required for this root phase; verified PR target is
+  `develop`, head is `codex/config-loading-errors`, and stack predecessor is
+  none.
 - Remaining blockers: none.
