@@ -79,8 +79,11 @@ class IncludeSiteRecord:
     source_content_digest: str
     source_size_bytes: int
     resolved_path: str
+    included_content_digest: str
+    included_size_bytes: int
     target_kind: IncludeTargetKind
     explicit_escape: bool
+    has_replace_marker: bool
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -92,9 +95,12 @@ class IncludeSiteRecord:
             "source_include_site_path": _format_path(self.source_include_site_path),
             "source_content_digest": self.source_content_digest,
             "source_size_bytes": self.source_size_bytes,
+            "included_content_digest": self.included_content_digest,
+            "included_size_bytes": self.included_size_bytes,
             "resolved_path": self.resolved_path,
             "target_kind": self.target_kind,
             "explicit_escape": self.explicit_escape,
+            "has_replace_marker": self.has_replace_marker,
         }
 
 
@@ -334,22 +340,6 @@ def _expand_including_mapping(
         explicit_escape=resolution.explicit_escape,
     )
     include_stack.append(include_frame)
-    include_sites.append(
-        IncludeSiteRecord(
-            include_site_path=include_site_path,
-            authored_target=authored_target,
-            source_path=resolution.source_path,
-            source_kind=include_source.kind,
-            source_order=include_source.order,
-            source_include_site_path=source_include_site_path,
-            source_content_digest=include_source.content_digest,
-            source_size_bytes=include_source.size_bytes,
-            resolved_path=str(resolution.resolved_path),
-            target_kind=resolution.target_kind,
-            explicit_escape=resolution.explicit_escape,
-        ),
-    )
-
     try:
         container_path = path
         container_source = source_map.get(container_path)
@@ -400,6 +390,24 @@ def _expand_including_mapping(
                 },
             ) from exc
         included_source_map = build_base_source_map(included_config, included_source)
+        include_sites.append(
+            IncludeSiteRecord(
+                include_site_path=include_site_path,
+                authored_target=authored_target,
+                source_path=resolution.source_path,
+                source_kind=include_source.kind,
+                source_order=include_source.order,
+                source_include_site_path=source_include_site_path,
+                source_content_digest=include_source.content_digest,
+                source_size_bytes=include_source.size_bytes,
+                resolved_path=str(resolution.resolved_path),
+                included_content_digest=included_source.content_digest,
+                included_size_bytes=included_source.size_bytes,
+                has_replace_marker=("_replace_" in mapping),
+                target_kind=resolution.target_kind,
+                explicit_escape=resolution.explicit_escape,
+            ),
+        )
         shifted_included_map = _expand_value_with_includes(
             value=included_config,
             source_map=included_source_map,

@@ -247,8 +247,22 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
 - Final phase execution plan: completed by `loom_phase_planner`; ready for implementation after commit `plan: refine phase execution plan`.
 - Implementation summary:
-- Implementation validation:
+- Composed `ComposedConfig`, `ConfigCompositionInspection`, and `CompositionManifest` with populated artifact-safe `source_artifacts` and `fingerprint_records` for base, overlays, includes, and safe recipe expansions.
+- Added provenance metadata population for include/recomposition/customization records, override records (including redacted secret-like overrides), resolver scan records, recipe manifest facts, source-artifact references, and redaction/security policy facts.
+- Moved redaction to operate on artifact-safe unresolved composition prior to interpolation while preserving resolver expressions in unresolved/redacted artifacts; runtime values remain in `resolved` only.
+- Added plaintext-secret override warning snippet in `docs/features/config.md`.
 - Refinement summary: expanded-path refinement made artifact population semantics, source record identity/digest expectations, redaction boundaries, plaintext-secret warning scope, suite decisions, and blocker-gate expectations explicit.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/package/test_import_boundaries.py` ✅
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py tests/contracts/test_config_composition_inspection_contract.py tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_provenance.py tests/unit/loom/config/test_redaction.py tests/unit/loom/config/test_compose.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_resolvers.py tests/integration/config/test_compose_provenance.py` ✅
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` ✅
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` ✅
+- E2E/opt-in status:
+  - E2E: deferred per plan this phase.
+  - Opt-in suites: deferred per plan.
 - PR preparation:
+  - Deferred by manager (`phase completion evidence recorded; PR preparation not requested in this executor run`).
 - Stack maintenance:
-- Remaining blockers: none known.
+  - None required (root phase branch).
+- Remaining blockers:
+  - None known after implementation and validation.

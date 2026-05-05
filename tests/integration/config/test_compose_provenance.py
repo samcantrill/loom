@@ -1,0 +1,165 @@
+"""Cross-feature integration checks for compose provenance and artifacts."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, cast
+
+from loom.config import RecipeCatalog, compose_config, inspect_config_composition
+from loom.config.redaction import REDACTION_MARKER
+from tests.support.config_samples import argument_recipe
+
+
+def test_public_compose_populates_source_artifact_records(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    included = tmp_path / "included.yaml"
+
+    included.write_text("shared: from-include\n", encoding="utf-8")
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: included.yaml\n"
+        "    local: from-base\n",
+        encoding="utf-8",
+    )
+    overlay.write_text("pipeline:\n  model:\n    local: from-overlay\n", encoding="utf-8")
+
+    composed = compose_config(base, overlays=(overlay,))
+    assert composed.source_artifacts
+    assert len(composed.source_artifacts) == 3
+    assert [artifact.kind for artifact in composed.source_artifacts] == ["base", "overlay", "include"]
+
+    source_artifact_references = cast(
+        list[dict[str, Any]],
+        composed.manifest.metadata["source_artifact_references"],
+    )
+    assert len(source_artifact_references) == len(composed.source_artifacts)
+    for artifact, reference in zip(composed.source_artifacts, source_artifact_references, strict=True):
+        assert reference["kind"] == artifact.kind
+        assert reference["path"] == artifact.path
+        assert reference["order"] == artifact.order
+
+
+def test_public_compose_redaction_preserves_resolver_expressions_in_artifacts(tmp_path: Path, monkeypatch) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: base\n"
+        "paths:\n"
+        "  root: ${oc.env:PHASE13_PROVENANCE_ROOT}\n"
+        "pipeline:\n"
+        "  data: ${paths.root}/value\n"
+        "api_key: top-secret\n"
+        "seed: 11\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PHASE13_PROVENANCE_ROOT", "/tmp/phase13-root")
+    composed = compose_config(base, overrides=("+pipeline.secret_token=sauce",))
+
+    unresolved_pipeline = cast(dict[str, Any], composed.unresolved["pipeline"])
+    redacted_pipeline = cast(dict[str, Any], composed.redacted["pipeline"])
+    redacted_root = cast(dict[str, Any], composed.redacted)
+    resolved_pipeline = cast(dict[str, Any], composed.resolved["pipeline"])
+
+    assert unresolved_pipeline["data"] == "${paths.root}/value"
+    assert redacted_pipeline["data"] == "${paths.root}/value"
+    assert resolved_pipeline["data"] == "/tmp/phase13-root/value"
+    assert redacted_root["api_key"] == REDACTION_MARKER
+    assert redacted_pipeline["secret_token"] == REDACTION_MARKER
+
+    security = cast(dict[str, Any], composed.provenance.metadata["security_facts"])
+    artifact_safety = cast(dict[str, Any], security["artifact_safety"])
+    assert artifact_safety["raw_source_bytes_included"] is False
+    assert artifact_safety["resolved_runtime_values_included"] is False
+
+
+def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monkeypatch) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: base\n"
+        "paths:\n"
+        "  root: ${oc.env:PHASE13_PATH}\n"
+        "pipeline:\n"
+        "  value: ${paths.root}/value\n"
+        "note: keep\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PHASE13_PATH", "/tmp/phase13")
+    composed = compose_config(base, overrides=("+pipeline.secret_token=keep-secret",))
+
+    security = cast(dict[str, Any], composed.provenance.metadata["security_facts"])
+    warnings = cast(list[dict[str, Any]], security["plaintext_secret_override_warnings"])
+    assert warnings
+    assert warnings[0]["warning_type"] == "plaintext_secret_override"
+    assert warnings[0]["override_path"] == "pipeline.secret_token"
+
+    resolver_records = cast(
+        list[dict[str, Any]],
+        composed.provenance.metadata["resolver_records"],
+    )
+    assert resolver_records
+    assert resolver_records[0]["resolver"] == "oc.env"
+
+    metadata_records = cast(
+        dict[str, Any],
+        composed.provenance.metadata["source_fact_records"],
+    )
+    assert "sources" in metadata_records
+    assert "include_sites" in metadata_records
+    assert "include_recomposition_contexts" in metadata_records
+    assert "local_customizations" in metadata_records
+
+
+def test_public_compose_records_recipe_source_artifacts_when_safe(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    catalog = RecipeCatalog()
+    catalog.register("arg", argument_recipe)
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  _recipe_: arg\n"
+        "  value: one\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base, recipe_catalog=catalog)
+
+    recipe_records = [artifact for artifact in composed.source_artifacts if artifact.kind == "recipe"]
+    assert recipe_records
+    recipe_record = recipe_records[0]
+    assert recipe_record.path == "pipeline"
+    manifest_recipes = cast(
+        list[dict[str, Any]],
+        composed.manifest.metadata["recipe_manifest"],
+    )
+    assert len(manifest_recipes) == 1
+    assert manifest_recipes[0]["expanded_hash"] == recipe_record.content_digest
+    assert manifest_recipes[0]["name"] == "arg"
+    assert cast(list[dict[str, Any]], composed.manifest.metadata["source_artifact_references"])[-1] == {
+        "kind": "recipe",
+        "order": recipe_record.order,
+        "path": recipe_record.path,
+        "content_digest": recipe_record.content_digest,
+        "size_bytes": recipe_record.size_bytes,
+    }
+
+
+def test_public_compose_inspection_and_payload_artifacts_stay_in_sync(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  value: 1\n",
+        encoding="utf-8",
+    )
+
+    inspection = inspect_config_composition(base)
+    composed = inspection.to_composed_config()
+    assert composed.source_artifacts == inspection.source_artifacts
+    assert composed.fingerprint_records == inspection.fingerprint_records
+    assert composed.manifest.source_artifacts == inspection.manifest.source_artifacts
+    assert composed.provenance.metadata == inspection.provenance.metadata
