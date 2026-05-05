@@ -92,11 +92,11 @@ def compose_config(
             base_source=base_source,
         )
 
-    merged = apply_overrides(merged, ordinary_overrides)
-
     resolved_recipe_args = resolve_recipe_argument_interpolation(merged, path="$")
     expanded, recipe_manifest = expand_recipes(resolved_recipe_args, catalog=recipe_catalog, path="$")
-    expanded_artifact_safe, _resolver_records = scan_resolver_expressions(expanded, path="$")
+    merged = apply_overrides(expanded, ordinary_overrides)
+
+    expanded_artifact_safe, _resolver_records = scan_resolver_expressions(merged, path="$")
     resolved = resolve_interpolation(
         expanded_artifact_safe,
         path="$",

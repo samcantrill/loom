@@ -9,6 +9,7 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.config.recipes import Recipe, RecipeCatalog
+from loom.config.errors import InvalidRecipeOutputError
 from loom.config.recipes.expansion import expand_recipes
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, NestedOutputRecipe, function_recipe, nested_output_recipe
 
@@ -57,6 +58,17 @@ def test_structural_recipe_can_be_a_protocol_object() -> None:
     catalog.register("protocol", ProtocolRecipe)
     expanded, _ = expand_recipes({"pipeline": {"_recipe_": "protocol", "value": "v"}}, catalog=catalog)
     assert expanded["pipeline"] == {"value": "v"}
+
+
+def test_resolver_expression_in_recipe_output_key_is_rejected() -> None:
+    catalog = RecipeCatalog()
+
+    def output_with_resolver_key(prefix: str) -> dict[str, str]:
+        return {f"${{{prefix}}}": "value"}
+
+    catalog.register("resolver-key", output_with_resolver_key)
+    with pytest.raises(InvalidRecipeOutputError):
+        expand_recipes({"pipeline": {"_recipe_": "resolver-key", "prefix": "value"}}, catalog=catalog)
 
 
 def test_contract_recipe_output_can_be_nested_recipe() -> None:

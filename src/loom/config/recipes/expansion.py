@@ -18,6 +18,7 @@ _RESERVED_KEYS = frozenset({"_target_", "_args_", "_partial_", "_inject_", "_rec
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SEGMENT_RE = re.compile(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<indices>(?:\[[0-9]+\])*)")
 _INTERPOLATION_RE = re.compile(r"\$\{([^{}]+)\}")
+_RESOLVER_IN_KEY_RE = re.compile(r"\$\{")
 
 
 def resolve_recipe_argument_interpolation(
@@ -124,11 +125,11 @@ def _resolve_string(value: str, *, root: Mapping[str, Any], path: str) -> Any:
     if not matches:
         return value
 
-    if any(":" in match.group(1) for match in matches):
-        raise ConfigInterpolationError(f"Resolver-style interpolation is not supported at {path}")
-
     def replacement(match: re.Match[str]) -> str:
         token = match.group(1)
+        if ":" in token:
+            return match.group(0)
+
         resolved = _lookup_interpolation_token(token, root=root, path=path)
         return str(_to_plain_output(resolved))
 
@@ -234,6 +235,7 @@ def _expand_recipe_node(
         raise InvalidRecipeOutputError(f"Recipe {name!r} at {path} must return a mapping")
 
     expanded_output, nested_manifest = _expand_node(expanded_plain, catalog=catalog, path=path)
+    _reject_resolver_shape_dependency(expanded_output, path=path, recipe=name)
     if not isinstance(expanded_output, dict):
         raise InvalidRecipeOutputError(f"Expanded recipe output for {name!r} at {path} must remain mapping")
 
@@ -245,6 +247,24 @@ def _expand_recipe_node(
         expanded=expanded_output,
     )
     return expanded_output, (manifest, *nested_manifest)
+
+
+def _reject_resolver_shape_dependency(value: Any, *, path: str, recipe: str) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(key, str) and _RESOLVER_IN_KEY_RE.search(key):
+                raise InvalidRecipeOutputError(f"Recipe {recipe!r} at {path} returned resolver-shaped output key {key!r}")
+            _reject_resolver_shape_dependency(child, path=_child_path(path, key), recipe=recipe)
+        return
+
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_resolver_shape_dependency(child, path=_child_path(path, index), recipe=recipe)
+        return
+
+    if isinstance(value, tuple):
+        for index, child in enumerate(value):
+            _reject_resolver_shape_dependency(child, path=_child_path(path, index), recipe=recipe)
 
 
 def _run_recipe(

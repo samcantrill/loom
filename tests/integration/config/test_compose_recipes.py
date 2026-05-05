@@ -7,7 +7,7 @@ import pytest
 
 from loom.config import RecipeCatalog, compose_config, compose_config_with_catalog, register_recipe
 import loom.config.api as config_api
-from loom.config.errors import UnknownRecipeError
+from loom.config.errors import InvalidRecipeOutputError, UnknownRecipeError
 from tests.support.config_samples import DownstreamRecipe, nested_argument_recipe, composed_output_recipe, argument_recipe
 
 
@@ -51,6 +51,23 @@ def test_unknown_recipe_rejected_in_integration_shape(tmp_path: Path) -> None:
     base.write_text("name: base\npipeline:\n  _recipe_: missing\n  value: one\n", encoding="utf-8")
     with pytest.raises(UnknownRecipeError):
         compose_config(base, recipe_catalog=RecipeCatalog())
+
+
+def test_compose_rejects_resolver_expression_in_recipe_output_key(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    catalog = RecipeCatalog()
+
+    def output_with_resolver_key(prefix: str) -> dict[str, str]:
+        return {f"${{{prefix}}}": "value"}
+
+    catalog.register("resolver-key", output_with_resolver_key)
+    base.write_text(
+        "name: base\npipeline:\n  _recipe_: resolver-key\n  prefix: value\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InvalidRecipeOutputError):
+        compose_config(base, recipe_catalog=catalog)
 
 
 def test_compose_config_with_catalog_isolated_from_global_recipe_registration(
