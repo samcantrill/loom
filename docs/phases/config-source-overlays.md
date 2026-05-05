@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: merged
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 4: Source-Authored Overlays`
 - Branch: `codex/config-source-overlays`
@@ -15,7 +15,8 @@
 - Base branch: `develop`
 - Base commit: `8396040efc6b60e0aebf56c664922b6e533b9ccf`
 - Target branch: `develop`
-- Merge eligibility: merge-eligible after PR review because the target is `develop`
+- Merge eligibility: merged into `develop`; successor phases may use updated
+  `develop` as their base once metadata is committed.
 - Workflow path: expanded path
 - Workflow path rationale: source authorship and provenance context become durable config behavior used by later include, manifest, provenance, and source-artifact phases.
 - Successor dependency notes: Phase 5 include resolution and Phase 6 file-defined includes will depend on overlay-authored values retaining the correct source file context. This phase must not implement include resolution or public inspection APIs.
@@ -232,7 +233,7 @@ make test-summary
 - Phase execution plan draft: used
 - Phase execution plan refine: used
 - Phase implementation refinement: used
-- PR review: unused
+- PR review: used
 
 ## Completion Notes
 
@@ -269,12 +270,12 @@ make test-summary
   - Target branch: `develop`
   - Stack predecessor: none
   - Merge eligibility: merge-eligible after PR review because the target is `develop`.
-  - PR review budget: unused.
+  - PR review budget: used after the single `loom_phase_reviewer` pass.
   - GitHub PR creation: completed in the refine/open pass.
   - PR URL: https://github.com/samcantrill/loom/pull/28
-  - PR state: `OPEN`
+  - PR state: `MERGED`
   - Verified PR base/head: `develop` / `codex/config-source-overlays`
-  - Verified merge eligibility: merge-eligible after PR review because this root phase PR targets `develop` and has no stack predecessor.
+  - Verified merge eligibility: merge-eligible after PR review because this root phase PR targeted `develop` and had no stack predecessor.
 - PR preparation validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` failed: Ruff passed, then Pyright reported one error in `tests/unit/loom/config/test_source_maps.py` because helper parameter `kind: str` is passed to `ConfigSource(kind=...)`, whose type expects `Literal["base", "overlay"]`.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` failed after writing `build/test-summary.md`: package, unit, contract, integration, and e2e suites passed; `config-extra` errored during collection because `tests/integration/config/test_source_maps.py` and `tests/unit/loom/config/test_source_maps.py` share the same basename under pytest import collection.
@@ -296,5 +297,18 @@ make test-summary
   - `gh pr create --base develop --head codex/config-source-overlays --title "Configuration - Phase 4: Source-Authored Overlays" --body-file docs/phases/config-source-overlays-pr-body.md` opened https://github.com/samcantrill/loom/pull/28.
   - `gh pr view 28 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/config-source-overlays`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/28`.
   - Stack predecessor: none; merge eligibility remains merge-eligible after PR review because the PR targets `develop`.
+- PR review:
+  - `loom_phase_reviewer` consumed the Phase 4 PR-review budget and found no
+    blocking implementation findings.
+  - Review verified the PR target as `develop` / `codex/config-source-overlays`
+    and noted that live GitHub state had already advanced to `MERGED` before
+    the manager merge step.
+  - Residual risk: source-map merge logic mirrors `merge_configs()` in a
+    separate helper, so later include and user-composition phases should keep
+    parity tests close as they expand the merge surface.
+- Merge result:
+  - `gh pr view 28 --json baseRefName,headRefName,state,url,mergedAt,mergeCommit,statusCheckRollup,reviewDecision` returned base `develop`, head `codex/config-source-overlays`, state `MERGED`, URL `https://github.com/samcantrill/loom/pull/28`, merged at `2026-05-05T07:58:06Z`, merge commit `6b825fe971b1e2043861b84161b4ba2462813660`, and GitHub CI check `checks` with conclusion `SUCCESS`.
+  - Local `develop` was fast-forwarded to `origin/develop` at
+    `6b825fe971b1e2043861b84161b4ba2462813660`.
 - Remaining blockers:
   - None after the user-authorized blocker-resolution pass.

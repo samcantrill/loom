@@ -1196,7 +1196,7 @@ Phase metadata:
 
 ### Phase 4 - Source-Authored Overlays
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-source-overlays`
 PR: https://github.com/samcantrill/loom/pull/28
 
@@ -1236,10 +1236,11 @@ Phase metadata:
 - Stack predecessor: none
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR status: opened as PR #28 against `develop` on 2026-05-05; verified with
-  base `develop`, head `codex/config-source-overlays`, and state `OPEN`.
-- Merge eligibility: merge-eligible after Phase 4 PR review because this is a
-  root phase PR targeting `develop`.
+- Merge result: PR #28 merged into `develop` at
+  `6b825fe971b1e2043861b84161b4ba2462813660` on 2026-05-05 after local
+  validation, GitHub CI `checks` passed, and PR review found no blocking
+  implementation issues. Live PR facts were verified with base `develop`, head
+  `codex/config-source-overlays`, and state `MERGED`.
 - Implementation summary: added internal immutable config path/source-map
   helpers for loaded base plus ordered overlays, threaded the source-aware
   overlay helper through `compose_config` without changing public
@@ -1250,11 +1251,15 @@ Phase metadata:
 - Validation summary: `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr`
   passed; `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with
   overall 588 passed, 0 failed, 0 errors, 8 skipped, and 428 deselected.
+  GitHub CI check `checks` passed on PR #28.
 - Blocker resolution: the expanded-path implementation refinement fixed
   source-map `_replace_` replacement semantics to match Phase 3 `merge_configs`.
   A user-authorized PR-validation blocker pass then fixed a Pyright test-helper
   type issue and renamed the integration source-map test file to avoid pytest
   optional-suite module basename collisions.
+- PR review: `loom_phase_reviewer` found no blocking implementation findings;
+  the only note was process metadata staleness after PR #28 had already merged
+  before the manager merge step.
 - Follow-up notes: no include resolution, recursive includes, user include
   replacement, public inspection/source-map API, manifest/provenance population,
   fingerprint changes, raw source persistence, CLI behavior, pipeline imports,
