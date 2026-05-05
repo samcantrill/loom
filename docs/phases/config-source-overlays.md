@@ -270,7 +270,11 @@ make test-summary
   - Stack predecessor: none
   - Merge eligibility: merge-eligible after PR review because the target is `develop`.
   - PR review budget: unused.
-  - GitHub PR creation: pending in the refine/open pass.
+  - GitHub PR creation: completed in the refine/open pass.
+  - PR URL: https://github.com/samcantrill/loom/pull/28
+  - PR state: `OPEN`
+  - Verified PR base/head: `develop` / `codex/config-source-overlays`
+  - Verified merge eligibility: merge-eligible after PR review because this root phase PR targets `develop` and has no stack predecessor.
 - PR preparation validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` failed: Ruff passed, then Pyright reported one error in `tests/unit/loom/config/test_source_maps.py` because helper parameter `kind: str` is passed to `ConfigSource(kind=...)`, whose type expects `Literal["base", "overlay"]`.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` failed after writing `build/test-summary.md`: package, unit, contract, integration, and e2e suites passed; `config-extra` errored during collection because `tests/integration/config/test_source_maps.py` and `tests/unit/loom/config/test_source_maps.py` share the same basename under pytest import collection.
@@ -288,5 +292,9 @@ make test-summary
   - Final diff reviewed against `develop`; changed files are limited to this phase plan, `src/loom/config/compose.py`, `src/loom/config/source_maps.py`, `tests/unit/loom/config/test_source_maps.py`, and `tests/integration/config/test_source_map_integration.py`.
   - No future-phase implementation observed: no include resolution, recursive includes, user include replacement, public inspection/API fields, manifests/provenance population, fingerprints, raw source persistence, CLI, pipeline imports, run-store writes, or root package exports.
 - Stack maintenance: no stack changes required in this scope.
+- PR verification:
+  - `gh pr create --base develop --head codex/config-source-overlays --title "Configuration - Phase 4: Source-Authored Overlays" --body-file docs/phases/config-source-overlays-pr-body.md` opened https://github.com/samcantrill/loom/pull/28.
+  - `gh pr view 28 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/config-source-overlays`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/28`.
+  - Stack predecessor: none; merge eligibility remains merge-eligible after PR review because the PR targets `develop`.
 - Remaining blockers:
   - None after the user-authorized blocker-resolution pass.
