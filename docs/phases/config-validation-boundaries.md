@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 10: Loom Validation Boundaries`
 - Branch: `codex/config-validation-boundaries`
@@ -22,7 +22,9 @@
 - Plan quality gate: passed on 2026-05-05 by `loom_plan_reviewer` confirmation review; no blocking findings remain.
 - Plan quality gate loop budget: fully used by the v1 implementation plan; do not reopen.
 - Draft pass: completed by `loom_phase_planner` in this artifact; draft budget used.
-- Refine pass: pending because the manager selected expanded path.
+- Refine pass: completed by `loom_phase_planner` in this artifact; refine budget used.
+- Phase implementation refinement budget: unused.
+- Pre-submit/PR review budget: unused. The revised workflow requires a pre-submit blocker gate before PR submission; if that gate reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks, it consumes the Phase 10 PR-review budget unless the submitted diff changes afterward.
 - Setup limitations: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded. `gh auth setup-git` and `git fetch origin` succeeded with approved access. Local `develop`, `origin/develop`, and `HEAD` resolved to the assigned base commit. Initial sandboxed `git worktree add` could not create the branch ref; approved `git worktree add` created the branch and worktree successfully.
 - Blockers: none.
 
@@ -51,18 +53,18 @@ Phases 1-9 established config/pipeline boundaries, artifact skeletons, strict lo
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/config/compose.py` currently calls `validate_top_level_fields(resolved)` unconditionally after runtime interpolation and before redaction/provenance/fingerprints. `src/loom/config/validation.py` currently requires top-level `name`, requires top-level `pipeline` to be a mapping, defaults `schema_version` to `1`, and has stale `validate_no_recipe_keys` messaging. `src/loom/config/load.py` already rejects `_copy_` with structured source context during loading; Phase 10 should add `_schema_` rejection without disturbing `_copy_`. `src/loom/config/errors.py` has structured `ConfigErrorContext`, but `ConfigValidationError` is currently unstructured. Artifact contracts in `src/loom/config/artifacts.py` already reject unknown fields in `from_dict` and validate their own schema/version fields.
-- Existing tests or harness behavior: `tests/unit/loom/config/test_validation.py` currently encodes the obsolete unconditional top-level validation and should be replaced with boundary-focused tests. Public compose tests under `tests/integration/config/` mostly author `name` and `pipeline` because old validation required them; Phase 10 needs explicit pass-through integration coverage for generic configs without those keys. Structured error contracts live in `tests/contracts/test_config_error_contract.py`; package/import-boundary coverage lives in `tests/package/test_import_boundaries.py`.
-- Import-boundary or dependency constraints: keep implementation inside `src/loom/config/` and config tests unless package tests need updates. Do not import `loom.pipeline`, stores, CLI modules, plugin discovery, project packages, network clients, or add runtime dependencies. Existing `loom.pipeline` spec validation remains the pipeline module's responsibility and must not be pulled into generic config composition.
+- Existing files or modules that constrain this phase: `src/loom/config/compose.py` currently performs include expansion, user composition overrides, recipe argument interpolation, recipe expansion, ordinary override application, resolver scanning/runtime interpolation, and then calls `validate_top_level_fields(resolved)` before redaction, provenance, and fingerprints. That top-level validator is the only validation gate in the public compose path today. `src/loom/config/validation.py` currently requires top-level `name`, requires top-level `pipeline` to be a mapping, defaults `schema_version` to `1`, and has stale `validate_no_recipe_keys` messaging. `src/loom/config/load.py` already rejects `_copy_` with structured source context during authored loading; `_schema_` currently has no code or test coverage. Phase 10 should add source-aware `_schema_` rejection for base, overlays, and included files without persisting raw source bytes. `src/loom/config/errors.py` has structured `ConfigErrorContext`, but `ConfigValidationError` is currently unstructured. Artifact contracts in `src/loom/config/artifacts.py` already reject unknown fields in `from_dict` and validate their own schema/version fields.
+- Existing tests or harness behavior: `tests/unit/loom/config/test_validation.py` currently encodes the obsolete unconditional top-level validation and should be intentionally updated to boundary-focused tests. Public compose tests under `tests/integration/config/` mostly author `name` and `pipeline` because old validation required them; Phase 10 needs explicit pass-through integration coverage for generic configs without those keys, `_target_` inertness, and `_schema_` rejection in base, overlay, and included-file cases. Structured error contracts live in `tests/contracts/test_config_error_contract.py`; package/import-boundary coverage lives in `tests/package/test_import_boundaries.py`.
+- Import-boundary or dependency constraints: keep implementation inside `src/loom/config/` and config tests unless package tests need updates. Do not import `loom.pipeline`, stores, CLI modules, plugin discovery, project packages, network clients, or add runtime dependencies. `loom.pipeline.specs` owns explicit pipeline/stage/artifact validation today; Phase 10 must not pull those validators into generic config composition. Any config-local Loom-owned validation retained or added in this phase must be opt-in/narrow and must not make `loom.config` depend on pipeline schemas.
 
 ## In-Scope Work
 
 - Replace or narrow `validate_top_level_fields(...)` so public `compose_config(...)` no longer requires top-level `name`, top-level `pipeline`, or top-level `schema_version` for generic project-owned configs.
 - Preserve project-owned mappings and scalar/list values after composition, interpolation, redaction, provenance, recipe expansion, and fingerprinting. Generic composition should not inject `schema_version` into project configs merely because Loom artifact records have schema versions.
-- Add recursive authored-config rejection for the exact key `_schema_` with a structured, source-aware unsupported schema-authoring error. This should apply to authored YAML from base, overlays, and included files before project schema import or registry behavior could be inferred.
+- Add recursive authored-config rejection for the exact key `_schema_` with a structured, source-aware unsupported schema-authoring error. This must apply to authored YAML from base, overlays, and included files before project schema import or registry behavior could be inferred, and it must not require raw source persistence.
 - Keep `_target_` as pass-through composition data. Composition must not import targets, inspect constructors, infer schemas, or reject unknown project fields because `_target_` is present.
-- Validate unknown keys only inside explicit Loom-owned boundaries already owned by config phases: composition directives (`_include_`, `_replace_`, `_copy_`), recipe blocks, override operation records, instantiation directive blocks when `instantiate(...)` is called, and artifact record `from_dict` contracts.
-- If an explicit Loom pipeline envelope validation helper is retained or introduced in `loom.config`, keep it config-local and opt-in. Do not call pipeline parsers from `compose_config(...)` and do not make generic config composition depend on pipeline schema parsing.
+- Validate unknown keys only inside explicit Loom-owned boundaries already owned by config phases: composition directives (`_include_`, `_replace_`, `_copy_`), recipe blocks, override operation records, instantiation directive blocks when `instantiate(...)` is called, config-local Loom-owned validation helpers when explicitly invoked, and artifact record `from_dict` contracts.
+- If an explicit Loom pipeline envelope validation helper is retained or introduced in `loom.config`, keep it config-local and opt-in. Do not call pipeline parsers from `compose_config(...)`, do not import `loom.pipeline`, and do not make generic config composition depend on pipeline schema parsing.
 - Add or refine `ConfigValidationError` structured context for validation-boundary failures, including config path, source kind/order/path when available, directive or boundary name, expected/actual shape, and remediation.
 - Update tests that assumed top-level `name`/`pipeline` were mandatory so they now assert the v1 ownership boundary.
 
@@ -80,11 +82,12 @@ Phases 1-9 established config/pipeline boundaries, artifact skeletons, strict lo
 - Existing `ComposedConfig.resolved`, `redacted`, `provenance`, `recipe_manifest`, and `fingerprint` fields remain the public return shape until Phase 12 adds v1 fields.
 - Top-level `schema_version` can remain ordinary project data in generic configs. Loom artifact record schema versions remain validated by their artifact contract classes, not by generic config validation.
 - The exact key `_schema_` is reserved everywhere in authored YAML for v1, even inside project-owned mappings, because the plan explicitly rejects schema-authoring directives.
-- Existing recipe, include, override, and instantiate validators own their own reserved directive semantics. Phase 10 should coordinate with them, not duplicate all directive validation.
+- Existing recipe, include, override, artifact, and instantiate validators own their own reserved directive semantics. Phase 10 should coordinate with them, not duplicate all directive validation.
+- If `_schema_` is discovered through final composed-tree scanning because that is the smallest local implementation, the implementation must still carry source context from the authored source maps for base/overlay values and include expansion context for included values. A final-tree-only error with no authored source context is not sufficient.
 
 ## Scope Contract
 
-Generic `compose_config(...)` must be domain-neutral pass-through composition plus Loom-owned directive/artifact validation. A config like `model: {...}` or `stages: {...}` must compose without `name`, `pipeline`, or `schema_version`, and the returned `resolved`/`redacted` config must not gain a Loom schema key solely from generic validation. Unknown keys are accepted in project-owned mappings. Unknown-key failures are valid only in explicit Loom-owned contracts: include/replace/copy directive shapes, recipe blocks, override operation records, instantiation directive blocks during `instantiate(...)`, explicit opt-in pipeline-envelope validation if kept, and artifact record `from_dict` schemas. `_schema_` is the one reserved schema-authoring directive that must fail anywhere it is authored. `_target_` remains inert during composition and must not trigger imports, constructor signature checks, or project schema inference.
+Generic `compose_config(...)` must be domain-neutral pass-through composition plus Loom-owned directive/artifact validation. A config like `model: {...}` or `stages: {...}` must compose without `name`, `pipeline`, or `schema_version`, and the returned `resolved`/`redacted` config must not gain a Loom schema key solely from generic validation. Unknown keys are accepted in project-owned mappings. Unknown-key failures are valid only in explicit Loom-owned contracts: include/replace/copy directive shapes, recipe blocks, override operation records, instantiation directive blocks during `instantiate(...)`, explicit config-local opt-in pipeline-envelope validation if kept, and artifact record `from_dict` schemas. `_schema_` is the one reserved schema-authoring directive that must fail anywhere it is authored. `_target_` remains inert during composition and must not trigger imports, constructor signature checks, or project schema inference. Top-level `pipeline` is just a project key in generic composition unless an explicit Loom-owned validation path is invoked outside the public compose default.
 
 ## Design Impact
 
@@ -123,15 +126,15 @@ Generic `compose_config(...)` must be domain-neutral pass-through composition pl
 ## Reviewability
 
 - Expected PR size and shape: focused validation helper changes, compose wiring to remove/narrow unconditional top-level validation, structured validation error context, `_schema_` rejection, and phase-scoped tests. No public orchestration API, artifact population, pipeline schema import, CLI, persistence, or instantiation behavior changes.
-- Files and areas to inspect: likely `src/loom/config/compose.py`, `src/loom/config/validation.py`, `src/loom/config/load.py` if `_schema_` rejection belongs with authored directive scanning, `src/loom/config/errors.py` if `ConfigValidationError` gains structured context, `tests/unit/loom/config/test_validation.py`, `tests/unit/loom/config/test_config_errors.py`, `tests/contracts/test_config_error_contract.py`, `tests/integration/config/test_compose_config.py`, `tests/integration/config/test_compose_includes.py`, `tests/integration/config/test_compose_overrides.py`, `tests/integration/config/test_compose_recipes.py`, `tests/integration/config/test_compose_resolvers.py`, `tests/package/test_import_boundaries.py`, and artifact contract tests only if touched.
+- Files and areas to inspect: likely `src/loom/config/compose.py`, `src/loom/config/validation.py`, `src/loom/config/load.py` if `_schema_` rejection belongs with authored directive scanning, `src/loom/config/includes.py` if included-file `_schema_` source context must be detected during include loading/expansion, `src/loom/config/errors.py` if `ConfigValidationError` gains structured context, `tests/unit/loom/config/test_validation.py`, `tests/unit/loom/config/test_config_errors.py`, `tests/contracts/test_config_error_contract.py`, `tests/integration/config/test_compose_config.py`, `tests/integration/config/test_compose_includes.py`, `tests/integration/config/test_compose_overrides.py`, `tests/integration/config/test_compose_recipes.py`, `tests/integration/config/test_compose_resolvers.py`, `tests/package/test_import_boundaries.py`, and artifact contract tests only if touched.
 - Scope-control checks: no pipeline imports from `loom.config`; no project imports; no automatic `_target_` import or constructor inspection; no schema registry; no CLI commands; no `_copy_`; no raw-source or resolver-output persistence; no public `ComposedConfig` v1 field additions; no manifest/source/fingerprint population beyond existing skeleton behavior.
 
 ## Implementation Steps
 
 1. Replace the unconditional top-level validator with boundary-aware validation that returns the composed project payload unchanged for generic configs.
-2. Add structured `_schema_` reserved-directive rejection for authored YAML across base, overlays, and included files, preserving source path and config path context.
-3. Add focused validation helpers for any explicit Loom-owned config boundaries that already exist in `loom.config`, keeping them opt-in or internally scoped and avoiding `loom.pipeline` imports.
-4. Update compose wiring so redaction, provenance, and fingerprints operate on the boundary-validated project payload without adding `schema_version` to generic configs.
+2. Update compose wiring so redaction, provenance, and fingerprints operate on the boundary-validated project payload without adding `schema_version` to generic configs.
+3. Add structured `_schema_` reserved-directive rejection for authored YAML across base, overlays, and included files, preserving source path and config path context without persisting raw source bytes.
+4. Add focused validation helpers for any explicit Loom-owned config boundaries that already exist in `loom.config`, keeping them opt-in or internally scoped and avoiding `loom.pipeline` imports.
 5. Refactor validation tests away from required top-level `name`/`pipeline` and add project pass-through, `_target_` inertness, unknown-key scoping, `_schema_` failure, and structured context coverage.
 6. Run targeted package/unit/contract/integration checks and fix only Phase 10 regressions.
 
@@ -147,7 +150,7 @@ Generic `compose_config(...)` must be domain-neutral pass-through composition pl
 
 - Status: required.
 - Expected paths: `tests/unit/loom/config/test_validation.py`, `tests/unit/loom/config/test_config_errors.py`, and `tests/unit/loom/config/test_compose.py` if compose collaborator behavior is unit-tested there.
-- Required assertions or deferral reason: generic mappings without `name`, `pipeline`, or `schema_version` validate/pass through unchanged; top-level `schema_version` is not injected into generic project configs; unknown keys are accepted in project-owned mappings; unknown keys fail only in explicit Loom-owned boundary helpers; `_schema_` fails anywhere authored with a validation/schema-authoring error; `_target_` mappings are left as data during validation and do not import or inspect targets; `ConfigValidationError` structured context is plain-data serializable and includes source/config path where available.
+- Required assertions or deferral reason: generic mappings without `name`, `pipeline`, or `schema_version` validate/pass through unchanged; top-level `schema_version` is not injected into generic project configs; unknown keys are accepted in project-owned mappings; unknown keys fail only in explicit Loom-owned boundary helpers; `_schema_` fails anywhere authored with a validation/schema-authoring error; `_target_` mappings are left as data during validation and do not import or inspect targets; `ConfigValidationError` structured context is plain-data serializable and includes source/config path where available. Existing tests that require `name`/`pipeline` or assert schema-version defaulting should be intentionally rewritten rather than preserved.
 
 ### Contract Suite
 
@@ -159,7 +162,7 @@ Generic `compose_config(...)` must be domain-neutral pass-through composition pl
 
 - Status: required.
 - Expected paths: `tests/integration/config/test_compose_config.py`, `tests/integration/config/test_compose_includes.py`, `tests/integration/config/test_compose_overrides.py`, `tests/integration/config/test_compose_recipes.py`, and `tests/integration/config/test_compose_resolvers.py`.
-- Required assertions or deferral reason: public `compose_config(...)` composes domain-neutral project configs without top-level `name`, `pipeline`, or `schema_version`; includes, overlays, user composition overrides, recipes, ordinary overrides, resolver scanning/runtime interpolation, redaction, provenance, recipe manifest, and fingerprints still work for generic keys; project-owned unknown keys pass through; `_schema_` in base, overlay, or included file fails with source-aware context; `_target_` nodes remain dictionaries in composed output and are not used for schema inference.
+- Required assertions or deferral reason: public `compose_config(...)` composes domain-neutral project configs without top-level `name`, `pipeline`, or `schema_version`; includes, overlays, user composition overrides, recipes, ordinary overrides, resolver scanning/runtime interpolation, redaction, provenance, recipe manifest, and fingerprints still work for generic keys; project-owned unknown keys pass through; `_schema_` in base, overlay, or included file fails with source-aware context; `_target_` nodes remain dictionaries in composed output and are not used for schema inference. At least one integration test should use no `pipeline` key at all, and at least one should use `_target_` under a project-owned mapping that would fail if composition tried to import or infer schema.
 
 ### E2E Suite
 
@@ -180,6 +183,7 @@ Generic `compose_config(...)` must be domain-neutral pass-through composition pl
 - Reusing pipeline spec validators would be tempting for Loom-owned envelopes, but it would violate import boundaries and make generic config composition pipeline-shaped.
 - Treating `_target_` as a globally reserved validation key during composition would break project pass-through and Phase 11 separation. Only instantiation owns `_target_` validation.
 - Structured error context can leak authored secret-like strings. Tests should assert plain context and no resolved resolver outputs or raw source bytes; full redaction policy population remains later-phase work.
+- The pre-submit blocker gate may find scope drift if validation changes touch public compose orchestration too broadly. Such blockers must be resolved before PR submission or the phase must be marked blocked; do not submit a PR expecting GitHub review to rediscover known local blockers.
 
 ## Validation Commands
 
@@ -209,24 +213,25 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: start by replacing the top-level validator and updating unit tests; add `_schema_` authored-source rejection and structured context; update compose integration tests for generic pass-through; then run package/import-boundary checks.
+- Safe implementation slices: start by replacing the top-level validator and updating unit tests; adjust compose to keep the composed project payload unchanged through redaction/provenance/fingerprints; add `_schema_` authored-source rejection and structured context; update compose integration tests for generic pass-through and `_target_` inertness; then run package/import-boundary checks.
 - Tests to run with each slice: validation unit tests after helper changes; config error contract tests after structured context changes; compose integration tests after wiring changes; package import-boundary tests after any validation import changes.
 - Decisions the executor must not revisit: generic `compose_config` is domain-neutral; no required top-level `name`/`pipeline`; no `schema_version` injection for generic project configs; `_schema_` is unsupported; `_target_` does not imply composition-time schema inference; no project schema registry; no pipeline imports; no CLI, persistence, plugin/remote resolver, `_copy_`, public inspection, or artifact/fingerprint population work.
 - Conditions that require stopping for the manager: satisfying acceptance criteria appears to require importing `loom.pipeline` from config, adding a project schema API, changing public `ComposedConfig` fields early, implementing Phase 11 instantiation behavior, persisting resolver outputs/raw source bytes, or weakening existing structured include/recipe/override contracts.
-- Expanded-path refinement notes: pending. The refine pass should verify the exact Loom-owned envelope vocabulary against the implementation after the draft context is compacted or reset, and should keep the plan scope-first rather than adding line-by-line code recipes.
+- Expanded-path refinement notes: completed. The refined plan incorporates the current compose order, confirms `validate_top_level_fields(...)` is the only public compose validation gate today, requires source-aware `_schema_` rejection for base/overlay/included files, keeps `loom.pipeline.specs` ownership out of `loom.config`, and records the revised pre-submit blocker gate without consuming implementation or PR-review budgets.
 
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused.
+- Pre-submit blocker gate: unused.
 - PR review: unused. The revised workflow requires a pre-submit blocker gate before PR submission; when that gate reviews the implementation diff, PR body, suite evidence, scope boundary, and known review risks, it consumes the Phase 10 PR-review budget unless the submitted diff changes afterward.
 
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed as `plan: add phase execution plan`.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: completed by `loom_phase_planner`; committed as `plan: refine phase execution plan`.
 - Implementation summary:
 - Implementation validation:
-- Refinement summary:
+- Refinement summary: expanded-path refine pass incorporated manager and architecture findings about current compose order, obsolete top-level validation, `_schema_` coverage gaps, config/pipeline validation ownership, required generic pass-through integration coverage, and the revised pre-submit blocker gate.
 - PR preparation:
 - Stack maintenance:
 - Remaining blockers:
