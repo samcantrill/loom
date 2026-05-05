@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: merged
 - Feature focus: Configuration
 - PR title: `Configuration - Phase 9: Recipe Catalog And Expansion`
 - Branch: `codex/config-recipes-catalog`
@@ -222,7 +222,8 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used
-- PR review: unused
+- PR review: used by the `loom_phase_reviewer` pass after PR #36 merged; no
+  blocking findings.
 
 ## Completion Notes
 
@@ -260,10 +261,18 @@ UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary
   - Target branch verification: confirmed root PR target is `develop`; stack predecessor remains none.
   - Merge eligibility: root phase PR targets `develop`; merge-eligible only after review approval and passing required GitHub checks. No merge or approval was performed.
   - GitHub/auth notes: sandboxed `gh auth status` reported the stored token as invalid; approved outside-sandbox `gh auth status` succeeded for account `samcantrill`. `gh auth setup-git`, `git ls-remote --heads origin develop`, `git push -u origin codex/config-recipes-catalog`, `gh pr create`, and `gh pr view` succeeded with approved access. Post-open `gh pr edit 36 --body-file docs/phases/config-recipes-catalog-pr-body.md` failed on a deprecated Projects classic GraphQL field; `gh api repos/{owner}/{repo}/pulls/36 --method PATCH --field body=@docs/phases/config-recipes-catalog-pr-body.md --silent` succeeded and updated the PR body.
+- PR review:
+  - `loom_phase_reviewer` consumed the Phase 9 PR review budget after PR #36 merged.
+  - Findings: none. No blocking correctness, scope, import-boundary, or test-evidence issues were found.
+  - Review checks: PR #36 targeted `develop`, head `codex/config-recipes-catalog`, and merged at merge commit `b3f579cc8c719e526915f902960b1a47ee5018a8`; GitHub CI check `checks` passed on 2026-05-05T12:29:45Z.
+  - Residual risk: resolver-dependent shape detection remains conservative for opaque trusted Python recipes, matching the accepted debt recorded in this plan.
+- Merge result:
+  - PR #36 merged into `develop` at 2026-05-05T12:30:17Z with merge commit `b3f579cc8c719e526915f902960b1a47ee5018a8`.
+  - GitHub CI check `checks` passed.
 - Stack maintenance:
-  - No phase stack actions executed yet in this worktree phase pass.
+  - No successor phase branch depended on `codex/config-recipes-catalog` when PR #36 merged. Branch and worktree cleanup are safe after this metadata update.
 - Remaining blockers:
-  - None blocking; no further implementation changes required to satisfy the finalized phase scope.
+  - None.
 
 ## Implementation Refinement Report
 

@@ -1567,7 +1567,7 @@ Completion notes:
 
 ### Phase 9 - Recipe Catalog And Expansion
 
-Status: pr_open
+Status: merged
 Branch: `codex/config-recipes-catalog`
 PR: https://github.com/samcantrill/loom/pull/36
 
@@ -1603,11 +1603,11 @@ Test expectations:
   artifact-safe output hashes, override-after-expansion behavior, and
   resolver-dependent shape failure.
 
-PR-open notes:
+Completion notes:
 
 - Phase execution plan: `docs/phases/config-recipes-catalog.md`.
-- PR target: `develop`; stack predecessor: none; root phase PR is
-  merge-eligible after review.
+- PR target: `develop`; stack predecessor: none; root phase PR was merged into
+  `develop`.
 - Implementation summary: reorders composition so include expansion and user
   composition overrides run before recipe expansion, ordinary overrides apply
   to recipe-expanded concrete paths, recipe argument handling preserves authored
@@ -1624,9 +1624,16 @@ PR-open notes:
   `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` passed;
   `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` passed with overall
   677 passed, 0 failed, 0 errors, 8 skipped, and 431 deselected.
-- PR notes: opened and verified on 2026-05-05 as PR #36 with base `develop`,
-  head `codex/config-recipes-catalog`, and state `OPEN`. GitHub CI check
-  `checks` passed on PR #36.
+- PR review: `loom_phase_reviewer` consumed the Phase 9 PR review budget after
+  PR #36 merged and found no blocking correctness, scope, import-boundary, or
+  test-evidence issues. The only residual risk is the documented conservative
+  resolver-dependent shape detection for opaque trusted Python recipes.
+- Merge result: PR #36 merged into `develop` at 2026-05-05T12:30:17Z with
+  merge commit `b3f579cc8c719e526915f902960b1a47ee5018a8`; GitHub CI check
+  `checks` passed.
+- Stack maintenance: no successor phase branch depended on
+  `codex/config-recipes-catalog` when PR #36 merged; branch and worktree
+  cleanup are safe after this metadata update.
 
 ### Phase 10 - Loom Validation Boundaries
 
