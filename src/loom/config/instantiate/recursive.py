@@ -65,9 +65,6 @@ def _instantiate_mapping(*, mapping: Mapping[str, Any], runtime: Mapping[str, ob
         raise ReservedConfigKeyError(f"_args_ must be a sequence at {path}")
 
     inject_value = mapping.get("_inject_")
-    if inject_value is not None and not isinstance(inject_value, Mapping):
-        raise ReservedConfigKeyError(f"_inject_ must be a mapping at {path}")
-
     if "_partial_" in mapping and not isinstance(mapping["_partial_"], bool):
         raise ReservedConfigKeyError(f"_partial_ must be a bool at {path}")
 
@@ -83,15 +80,7 @@ def _instantiate_mapping(*, mapping: Mapping[str, Any], runtime: Mapping[str, ob
     partial_mode = bool(mapping.get("_partial_", False))
 
     if inject_value is not None:
-        if not inject_value:
-            # empty inject mapping is valid and passes through unchanged
-            pass
-        for name, runtime_key in inject_value.items():
-            if not isinstance(name, str) or not name:
-                raise ReservedConfigKeyError(f"Injected key {name!r} must be a non-empty string at {path}._inject_")
-            if not isinstance(runtime_key, str) or not runtime_key:
-                raise ReservedConfigKeyError(f"Runtime key {runtime_key!r} for {name!r} at {path} must be a non-empty string")
-        kwargs = injection.apply_injected_kwargs(kwargs=kwargs, injected=inject_value, runtime=runtime or {}, path=_child_path(path, "_inject_"))
+        kwargs = injection.apply_injected_kwargs(kwargs=kwargs, injected=inject_value, runtime=runtime, path=_child_path(path, "_inject_"))
 
     target_callable = import_target(target, path=_child_path(path, "_target_"))
     if not callable(target_callable):

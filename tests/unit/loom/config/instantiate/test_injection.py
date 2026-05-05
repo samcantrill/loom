@@ -3,6 +3,7 @@
 import pytest
 
 from loom.config.errors import RuntimeInjectionError
+from loom.config.instantiate import injection
 from loom.config.instantiate import instantiate
 from tests.support.config_samples import EchoService
 
@@ -31,5 +32,42 @@ def test_injection_rejects_duplicate_keys() -> None:
                 "value": "static",
                 "_inject_": {"value": "runtime"},
             },
+            runtime={"runtime": "svc"},
+        )
+
+
+def test_injection_rejects_non_mapping_runtime() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate({"_target_": "tests.support.config_samples:EchoService", "value": "static"}, runtime="not-a-mapping")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("runtime", [[], 0])
+def test_injection_helper_rejects_falsey_non_mapping_runtime(runtime: object) -> None:
+    with pytest.raises(RuntimeInjectionError):
+        injection.apply_injected_kwargs(
+            kwargs={},
+            injected={"value": "runtime"},
+            runtime=runtime,  # type: ignore[arg-type]
+            path="$._inject_",
+        )
+
+
+def test_injection_rejects_invalid_inject_shape() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate({"_target_": "tests.support.config_samples:EchoService", "_inject_": ["value"]}, runtime={})  # type: ignore[arg-type]
+
+
+def test_injection_rejects_invalid_inject_key_shape() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate(
+            {"_target_": "tests.support.config_samples:RuntimePlaceholder", "_inject_": {1: "runtime"}},
+            runtime={"runtime": "svc"},  # type: ignore[arg-type]
+        )
+
+
+def test_injection_rejects_invalid_injected_key_shape() -> None:
+    with pytest.raises(RuntimeInjectionError):
+        instantiate(
+            {"_target_": "tests.support.config_samples:RuntimePlaceholder", "_inject_": {"value": ""}},
             runtime={"runtime": "svc"},
         )

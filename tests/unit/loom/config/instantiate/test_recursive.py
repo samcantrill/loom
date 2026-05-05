@@ -6,7 +6,13 @@ import pytest
 
 from loom.config.errors import ReservedConfigKeyError, TargetInstantiationError
 from loom.config.instantiate import instantiate
-from tests.support.config_samples import AddService, EchoService
+from tests.support.config_samples import (
+    AddService,
+    EchoService,
+    reset_instantiate_probe_state,
+    construction_event_log,
+    partial_target_calls,
+)
 
 
 def test_instantiate_scalar_passthrough() -> None:
@@ -76,3 +82,96 @@ def test_instantiate_constructor_failure_wraps() -> None:
     with pytest.raises(TargetInstantiationError) as exc:
         instantiate({"_target_": "tests.support.config_samples:Concat", "_args_": ["left", "middle", "right"]})
     assert exc.value.__cause__ is not None
+
+
+def test_instantiate_preserves_bottom_up_order_in_kwargs() -> None:
+    reset_instantiate_probe_state()
+    instantiate(
+        {
+            "_target_": "tests.support.config_samples:ConstructionProbeTarget",
+            "left": {"_target_": "tests.support.config_samples:log_and_return", "tag": "left", "value": "L"},
+            "right": {"_target_": "tests.support.config_samples:log_and_return", "tag": "right", "value": "R"},
+        }
+    )
+    assert construction_event_log == ["left", "right", "parent"]
+
+
+def test_instantiate_preserves_bottom_up_order_in_args() -> None:
+    reset_instantiate_probe_state()
+    instantiate(
+        {
+            "_target_": "tests.support.config_samples:ConstructionProbeTarget",
+            "_args_": (
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "tuple-0", "value": "T0"},
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "tuple-1", "value": "T1"},
+            ),
+        }
+    )
+    assert construction_event_log == ["tuple-0", "tuple-1", "parent"]
+
+
+def test_instantiate_preserves_bottom_up_order_for_nested_lists_and_tuples() -> None:
+    reset_instantiate_probe_state()
+    instantiate(
+        {
+            "_target_": "tests.support.config_samples:ConstructionProbeTarget",
+            "items": [
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "list-0", "value": "L0"},
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "list-1", "value": "L1"},
+            ],
+            "pairs": (
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "tuple-0", "value": "U0"},
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "tuple-1", "value": "U1"},
+            ),
+        }
+    )
+    assert construction_event_log == ["list-0", "list-1", "tuple-0", "tuple-1", "parent"]
+
+
+def test_instantiate_partial_mode_recursively_constructs_args_kwargs_and_injects_runtime() -> None:
+    reset_instantiate_probe_state()
+    partial_target_calls.clear()
+    runtime = {"injected_value": "runtime-object"}
+
+    partial_call = instantiate(
+        {
+            "_target_": "tests.support.config_samples:record_partial_target",
+            "_partial_": True,
+            "_args_": [
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "arg", "value": "A"},
+            ],
+            "_inject_": {"runtime_value": "injected_value"},
+            "left": {"_target_": "tests.support.config_samples:log_and_return", "tag": "kw", "value": "K"},
+            "right": {"_target_": "tests.support.config_samples:log_and_return", "tag": "kw-right", "value": "R"},
+            "sequence": (
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "seq-0", "value": "S0"},
+                {"_target_": "tests.support.config_samples:log_and_return", "tag": "seq-1", "value": "S1"},
+            ),
+            "value": "static",
+        },
+        runtime=runtime,
+    )
+
+    assert partial_target_calls == []
+    assert isinstance(partial_call, partial)
+    assert partial_call.args == ("A",)
+    assert partial_call.keywords["left"] == "K"
+    assert partial_call.keywords["right"] == "R"
+    assert partial_call.keywords["sequence"] == ["S0", "S1"]
+    assert partial_call.keywords["runtime_value"] == "runtime-object"
+    assert partial_call.keywords["value"] == "static"
+
+    result = partial_call()
+    assert partial_target_calls == [
+        (
+            ("A",),
+            {
+                "left": "K",
+                "right": "R",
+                "sequence": ["S0", "S1"],
+                "runtime_value": "runtime-object",
+                "value": "static",
+            },
+        )
+    ]
+    assert isinstance(result, dict)

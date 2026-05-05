@@ -43,6 +43,45 @@ class Concat:
     def value(self) -> str:
         return f"{self.left}{self.right}"
 
+
+class Parent:
+    """Container used to ensure dotted targets do not recurse through nested attributes."""
+
+    class Inner:
+        pass
+
+
+construction_event_log: list[str] = []
+partial_target_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+
+def reset_instantiate_probe_state() -> None:
+    """Clear probe state used by instantiation contract tests."""
+    construction_event_log.clear()
+    partial_target_calls.clear()
+
+
+def log_and_return(*, tag: str, value: object) -> object:
+    """Emit an ordered construction marker and return the provided value."""
+    construction_event_log.append(tag)
+    return value
+
+
+class ConstructionProbeTarget:
+    """Target object that records bottom-up instantiation order."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        construction_event_log.append("parent")
+        self.args = args
+        self.kwargs = kwargs
+
+
+def record_partial_target(*args: object, **kwargs: object) -> dict[str, object]:
+    """Target callable used for `_partial_` contract tests."""
+    partial_target_calls.append((args, kwargs))
+    return {"args": list(args), "kwargs": dict(kwargs)}
+
+
 def concat(prefix: str, suffix: str = "") -> str:
     return prefix + suffix
 
