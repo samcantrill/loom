@@ -233,6 +233,8 @@ make test-summary
 - Phase execution plan draft: used
 - Phase execution plan refine: used
 - Phase implementation refinement: used
+- PR body draft: completed
+- PR body refine: pending
 - PR review: unused
 
 ## Completion Notes
@@ -256,6 +258,18 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/config/test_includes.py` (31 passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (passed)
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pyright src/loom/config/includes.py tests/unit/loom/config/test_includes.py` (0 errors, 0 warnings)
-- PR preparation: not performed (user requested stop after implementation and initial validation).
+- PR preparation draft: completed on 2026-05-05 by `loom_pr_preparer`; PR body artifact written to `docs/phases/config-include-resolution-pr-body.md` using `.codex/templates/phase-pr-body.md` and `.github/PULL_REQUEST_TEMPLATE.md`.
+- PR facts:
+  - Title: `Configuration - Phase 5: Include Resolution Primitives`
+  - Head branch: `codex/config-include-resolution`
+  - Target branch: `develop`
+  - Stack predecessor: none
+  - Merge eligibility: merge-eligible after PR review because target is `develop`
+  - PR opening: deferred to expanded-path PR body refine pass; no PR created in this draft pass.
+- Final PR-preparation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` (passed: Ruff passed; Pyright 0 errors; default harness 424 passed, 9 skipped; config-extra 191 passed, 429 deselected; build succeeded)
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` (passed: wrote `build/test-summary.md`; overall 620 passed, 0 failed, 0 errors, 8 skipped, 429 deselected)
+- PR body workflow status: draft completed; refine pass pending for expanded path; GitHub checks pending PR creation.
+- Budget status confirmation: implementation refinement budget used; PR review budget remains unused.
 - Stack maintenance: none changed; no successor dependency in-flight.
 - Remaining blockers: none.
