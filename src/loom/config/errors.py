@@ -151,6 +151,10 @@ class ConfigProvenanceError(ConfigError):
     """Error while constructing config provenance metadata."""
 
 
+class ConfigIncludeResolutionError(_ConfigError):
+    """Error while resolving include targets to concrete local files."""
+
+
 class UnsupportedRecipeError(ConfigError):
     """Error for recipe-related behavior that is not supported by this phase."""
 
