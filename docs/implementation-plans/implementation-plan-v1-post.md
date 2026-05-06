@@ -482,7 +482,7 @@ Phase metadata:
 
 ### Phase 5. Pipeline Persistence And Runtime Fingerprints
 
-Status: pending
+Status: merged
 
 Goal:
 
@@ -534,6 +534,39 @@ Required evidence:
 - E2E: public Python runner coverage for manifest persistence if practical.
 - Opt-in/config-extra: planning/fingerprint tests for explicit runtime-object
   fingerprint inputs when config extras participate.
+
+Phase metadata:
+
+- Branch: `codex/v1-post-pipeline-persistence`
+- Worktree:
+  `/home/samcantrill/work/loom-worktrees/v1-post-pipeline-persistence`
+- Stack predecessor: none
+- PR target: `develop`
+- PR: https://github.com/samcantrill/loom/pull/53
+- Merge: squash-merged into `develop` on 2026-05-06 after expanded-path
+  planning, implementation refinement, PR review with no blocking findings,
+  passing local validation, and passing GitHub CI `checks`.
+- Implementation summary: added plain-data composition manifest read/write
+  methods to the run-store protocol; implemented strict local
+  `config/composition_manifest.json` wrapper persistence; updated
+  `PipelineRunner` composed-config persistence to write composition manifest,
+  recipe manifest, and config provenance metadata without default
+  `config/resolved.yaml` or `config/resolved.redacted.yaml`; preserved plain
+  mapping snapshot behavior as caller-provided config data; and added explicit
+  runtime fingerprint coverage through `StageSpec.fingerprint_fields`,
+  `FingerprintContext.extra`, and caller-converted `Fingerprintable` values
+  while keeping config fingerprints runtime-free.
+- Review notes: Phase review found no blocking correctness, scope,
+  import-boundary, or artifact-safety issues. Low metadata staleness findings
+  were fixed before merge by updating PR and phase evidence to show passing
+  GitHub CI.
+- Validation: `make validate-pr` passed with Ruff, Pyright, default harness
+  `447 passed, 11 skipped`, config-extra harness `362 passed, 454 deselected`,
+  and `uv build`; `make test-summary` passed with overall `816 passed,
+  9 skipped, 454 deselected`; GitHub CI `checks` passed on PR #53.
+- Follow-up notes: Phase 6 still owns recipe residual-risk coverage. Plain
+  mapping configs still write legacy resolved snapshots as caller-provided
+  runtime data; a neutral all-config snapshot policy remains future v2 work.
 
 ### Phase 6. Recipe Residual Risk And Coverage Hardening
 
