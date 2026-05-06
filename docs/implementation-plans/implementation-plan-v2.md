@@ -1255,9 +1255,9 @@ Completion summary:
 
 ### Phase 6 - Hardening, Docs, And E2E Coverage
 
-Status: pending
+Status: merged
 Branch: `codex/harden-cli-core`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/64
 
 Goal:
 
@@ -1329,7 +1329,21 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- PR opened and merged into `develop`: https://github.com/samcantrill/loom/pull/64
+- Merge commit: `f74763b115193e705eafcfa21abf8e76cfa56b0a`.
+- Implementation updates `README.md` and `docs/features/cli.md` for the
+  supported v2 `validate`/`plan`/`run` surface, strict local `file://` run URI
+  behavior, the `--check-targets` consent boundary, JSON envelopes, and
+  deferred later command families.
+- E2E coverage added in `tests/e2e/test_cli_core.py` for validate,
+  `--check-targets`, plan, run, failed run, dry-run, resume, explicit/default
+  run URI behavior, JSON output, unsupported executor errors, and strict run URI
+  rejection through `main(argv)`.
+- Validation passed with `make validate-pr`, `make test-summary`,
+  managing-agent review, and GitHub CI. Final suite summary: package 43
+  passed/1 skipped; unit 417 passed/1 skipped; contract 36 passed/2 skipped;
+  integration 9 passed/5 skipped; e2e 14 passed; config-extra 380 passed/519
+  deselected.
 
 ## Overall Test Plan
 
