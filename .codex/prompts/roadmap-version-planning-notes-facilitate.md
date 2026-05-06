@@ -46,9 +46,13 @@ Task:
    relevant source files before asking design-decision questions. Treat the
    confirmed functionality and behavior as the stable baseline for the design
    pass unless the user explicitly reopens it.
-8. When all stages are confirmed, mark the planning notes ready for
+8. At the start of the design decision review, draft the complete
+   design-decision review queue implied by the confirmed functionality and
+   behavior, record it in the planning notes, and get user feedback on each
+   decision before marking it confirmed.
+9. When all stages are confirmed, mark the planning notes ready for
    implementation-plan drafting and summarize the handoff inputs.
-9. Ask for explicit confirmation before drafting the implementation plan. If
+10. Ask for explicit confirmation before drafting the implementation plan. If
    the user confirms, create or update
    `docs/implementation-plans/implementation-plan-<VERSION>.md` by following
    `.codex/prompts/implementation-plan-draft.md` and using the completed
@@ -94,20 +98,32 @@ Discussion stages:
      planning notes are the source of truth.
 6. Design decision review
    - Map confirmed functionality and behavior to the current Loom architecture.
-   - Step through the core design decisions before phase shaping. Cover public
-     Python APIs, CLI surface, persisted records and schemas, file layout,
-     ownership boundaries, import boundaries, optional dependencies, security
-     and trust assumptions, failure modes, compatibility, extension points,
-     flexibility boundaries, future expansion paths, maintainability,
-     extensibility, scalability, and accepted debt.
-   - For each core decision, record the selected approach, rejected
-     alternatives, rationale, maintainability impact, extensibility/flexibility
-     impact, future expansion impact, debt introduced, and revisit trigger.
+   - Before asking the user to settle individual choices, draft the complete
+     design-decision review queue for this roadmap version from the confirmed
+     functionality and behavior. Include every decision that affects public
+     behavior, public Python APIs, CLI surface, persisted records and schemas,
+     file layout, ownership boundaries, import boundaries, optional
+     dependencies, security and trust assumptions, failure modes,
+     compatibility, extension points, flexibility boundaries, future expansion
+     paths, maintainability, extensibility, scalability, testing strategy, or
+     accepted debt.
+   - Present the drafted decision queue to the user and ask whether any
+     decision is missing, mis-scoped, or should be split before detailed review.
+   - Discuss each queued decision with the user in small batches. For each
+     decision, state the implementation-relevant alternatives, the recommended
+     default, the tradeoffs, and the feedback needed from the user.
+   - Do not mark a design decision confirmed until user feedback has accepted
+     the selected approach or provided enough direction to choose one.
+   - For each confirmed decision, record the selected approach, user feedback,
+     rejected alternatives, rationale, maintainability impact,
+     extensibility/flexibility impact, future expansion impact, debt
+     introduced, and revisit trigger.
    - Use `docs/implementation-plans/implementation-plan-v2.md` as an example
      of the expected plan-level design-decision depth.
-   - Gate: core design decisions, rejected alternatives, maintainability and
-     extensibility assessment, flexibility and expansion assessment, and debt
-     revisit triggers are confirmed.
+   - Gate: the decision queue is complete, every queued decision is reviewed
+     with user feedback, and core design decisions, rejected alternatives,
+     maintainability and extensibility assessment, flexibility and expansion
+     assessment, and debt revisit triggers are confirmed.
 7. Phase shaping
    - Convert the design into reviewable implementation phases.
    - Discuss phase order, granularity, dependencies, and review boundaries with
@@ -136,6 +152,9 @@ Question rules:
 - At the end of each user exchange, give a short readback of locked decisions,
   defaults, open questions, and the next stage focus, then record that readback
   in the planning notes.
+- During design decision review, keep the decision queue visible in the notes
+  and update each decision's status as `draft`, `reviewing`, `confirmed`, or
+  `deferred`.
 
 Rules:
 
@@ -148,6 +167,9 @@ Rules:
 - Do not begin the design decision review until functionality and behavior are
   confirmed, a checkpoint is written, and context has been compacted, or reset
   only when compaction is unavailable.
+- Do not enter phase shaping until the design-decision review queue has been
+  drafted, reviewed with the user, and either confirmed or explicitly deferred
+  with a rationale.
 - Do not invent requirements not grounded in the roadmap, feature docs, current
   repository state, or confirmed user decisions.
 - Keep `loom` domain-neutral.

@@ -255,9 +255,9 @@ For roadmap-version work before an implementation plan exists:
    `.codex/prompts/roadmap-version-planning-notes-facilitate.md` before
    drafting downstream artifacts. The planning notes must confirm
    functionality and behavior, checkpoint and compact context when available,
-   then complete a separate design-decision review before the
-   implementation-plan draft. Use a reset or explicit resume handoff only when
-   direct compaction is unavailable.
+   then draft and review a complete design-decision queue with the user before
+   the implementation-plan draft. Use a reset or explicit resume handoff only
+   when direct compaction is unavailable.
 2. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`,
    using completed roadmap-version planning notes as source input when present.
 3. Review and refine the implementation plan using the plan quality gate below.

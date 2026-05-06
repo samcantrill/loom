@@ -116,11 +116,17 @@ Context compaction/reset checkpoint:
 - Resume instruction:
 - Functionality and behavior reopened after checkpoint:
 
+## Design Decision Review Queue
+
+| Decision | Why it matters | User feedback needed | Status |
+| --- | --- | --- | --- |
+|  |  |  | draft / reviewing / confirmed / deferred |
+
 ## Design Decisions
 
-| Decision | Selected approach | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Debt and revisit trigger |
-| --- | --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |  |
+| Decision | Selected approach | User feedback | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Debt and revisit trigger |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+|  |  |  |  |  |  |  |  |
 
 ## Practical Design Notes
 

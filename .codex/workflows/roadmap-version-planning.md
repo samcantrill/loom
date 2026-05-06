@@ -46,8 +46,10 @@ Ask small batches of high-impact questions and update the planning notes after
 each confirmed stage. After functionality and behavior are confirmed, record a
 complete checkpoint in the planning notes and compact or reset context before
 starting the design decision review. The resumed design pass should reload the
-planning notes and step through the core design decisions, including
-maintainability, extensibility, flexibility, expansion paths, accepted debt, and
-rejected alternatives. Do not start phase implementation from this entrypoint;
-the drafted implementation plan still needs the normal plan quality gate before
-phase work begins.
+planning notes, draft the full design-decision review queue implied by the
+confirmed functionality, and then discuss each decision with the user before
+marking it confirmed. Each decision discussion should cover maintainability,
+extensibility, flexibility, expansion paths, accepted debt, rejected
+alternatives, and user feedback. Do not start phase implementation from this
+entrypoint; the drafted implementation plan still needs the normal plan quality
+gate before phase work begins.

@@ -16,7 +16,7 @@ canonical behavior in `.codex/prompts/`.
 
 | Entrypoint | Use when | Canonical prompts |
 | --- | --- | --- |
-| `roadmap-version-planning.md` | The user wants interactive roadmap planning, a functionality and behavior checkpoint, context compaction, then a design-decision review before an implementation-plan draft after final confirmation | `roadmap-version-planning-notes-facilitate.md`, then `implementation-plan-draft.md` |
+| `roadmap-version-planning.md` | The user wants interactive roadmap planning, a functionality and behavior checkpoint, context compaction, then a design-decision queue review with user feedback before an implementation-plan draft after final confirmation | `roadmap-version-planning-notes-facilitate.md`, then `implementation-plan-draft.md` |
 | `roadmap-version-implementation.md` | A roadmap-version implementation plan exists and Codex should execute phases through PRs and merges | `phase-loop-management.md` plus phase/PR prompts |
 
 ## Internal Capabilities
