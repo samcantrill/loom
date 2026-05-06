@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; ready for implementation
+- Status: implementation complete; implementation refinement used; awaiting PR preparation/review
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 7: Final Hardening Documentation And Evidence`
 - Branch: `codex/v1-post-final-hardening`
@@ -269,7 +269,10 @@ make test-summary
 
 - Plan draft: completed by `loom_phase_planner` in draft commit `78c7118`.
 - Plan refinement: completed by `loom_phase_planner` in the follow-up refine commit because expanded planning is active.
-- Phase implementation refinement: unused; reserved for the later implementation workflow because expanded path is active or if validation/coverage obligations are missed.
+- Phase implementation refinement: used by `loom_phase_refiner` in the single
+  expanded-path refinement pass after implementation evidence was recorded. The
+  pass found no product-code or docs/test behavior gaps beyond stale
+  phase-artifact budget/commit metadata.
 - PR review: unused.
 - PR body draft/refine: unused; reserved for `loom_pr_preparer`.
 
@@ -303,6 +306,24 @@ make test-summary
 | Commit | Summary |
 | --- | --- |
 | `5c5f2c1` | Docs and e2e hardening for v1-post artifact-safe composed-config evidence. |
+| `226497e` | Phase 7 implementation-plan and phase-plan validation evidence. |
+| this refinement pass | Phase-artifact refinement metadata. |
+
+### Implementation Refinement Pass
+
+- Used the single expanded-path implementation refinement budget after the
+  implementation validation evidence was present.
+- Reviewed the current branch diff, Phase 7 docs/test changes, representative
+  e2e assertions, and implementation-plan Phase 1-7 metadata. No product-code
+  changes, CLI behavior, console script entry points, `_copy_` behavior, remote
+  stores, resolver expansion, persistence helpers, or pipeline imports of config
+  classes were introduced or required.
+- Found and fixed stale phase-plan metadata: the top-level status still said the
+  plan was ready for implementation, the implementation refinement budget still
+  read as unused, and the commit table omitted the validation-evidence commit.
+- Focused validation after the refinement review:
+  `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e/test_local_pipeline_run.py::test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_snapshots tests/e2e/test_config_composition_public_api.py::test_public_python_config_composition_e2e`
+  passed with `2 passed`.
 
 ### Scope Control
 
