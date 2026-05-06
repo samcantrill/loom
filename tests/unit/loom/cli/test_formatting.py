@@ -68,6 +68,6 @@ def test_text_formatters_are_concise() -> None:
         == "OK plan pipeline.yaml: 1 stage action, run_uri=file://./runs/example\n"
         "a: RUN [RESUME_DISABLED]"
     )
-    assert format_run_text(RunCliResult(run_uri="file://./runs/example", status="succeeded")) == (
-        "OK run file://./runs/example: succeeded"
+    assert format_run_text(RunCliResult(run_uri="file://./runs/example", status="SUCCEEDED")) == (
+        "OK run file://./runs/example: SUCCEEDED"
     )

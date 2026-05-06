@@ -1,0 +1,301 @@
+"""Unit tests for ``loom run`` command orchestration."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import io
+import json
+from pathlib import Path
+
+import pytest
+
+from loom.cli.main import main
+from loom.cli.results import PlanCliResult
+import loom.cli.plan as plan_command
+import loom.cli.run as run_command
+from loom.pipeline.planning import PlanAction, PlanReason, PlanReasonCode, PlanSelectors
+from loom.pipeline.status import RunStatus, StageStatus
+
+
+pytestmark = pytest.mark.unit
+
+
+@dataclass(frozen=True, slots=True)
+class FakeComposedConfig:
+    resolved: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class FakePlan:
+    summary: dict[str, int]
+    stage_order: tuple[str, ...] = ("build",)
+
+
+@dataclass(frozen=True, slots=True)
+class FakeStageResult:
+    action: PlanAction = PlanAction.RUN
+    status: StageStatus | None = StageStatus.SUCCEEDED
+    attempt: int | None = 1
+    outputs: dict[str, object] | None = None
+    failure: object | None = None
+    reasons: tuple[PlanReason, ...] = (
+        PlanReason(PlanReasonCode.RESUME_DISABLED, "resume is disabled", stage_name="build"),
+    )
+
+    def __post_init__(self) -> None:
+        if self.outputs is None:
+            object.__setattr__(self, "outputs", {"data": object()})
+
+
+@dataclass(frozen=True, slots=True)
+class FakeFailure:
+    stage_name: str = "build"
+    failure_type: str = "stage_exception"
+    message: str = "boom"
+    exception_type: str | None = "builtins.RuntimeError"
+    exit_code: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRunResult:
+    run_uri: str = "file:///abs/runs/generated"
+    status: RunStatus = RunStatus.SUCCEEDED
+    plan: FakePlan = FakePlan(summary={"RUN": 1, "REUSE": 0})
+    stage_results: dict[str, FakeStageResult] | None = None
+    failure: FakeFailure | None = None
+    artifact_index: dict[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if self.stage_results is None:
+            object.__setattr__(self, "stage_results", {"build": FakeStageResult()})
+        if self.artifact_index is None:
+            object.__setattr__(self, "artifact_index", {"build.data": object()})
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRunRequest:
+    run_uri: str | None
+    open_existing: bool
+    selectors: PlanSelectors
+
+
+class FakeRunStore:
+    def __init__(self, *, exists: bool = False) -> None:
+        self.exists = exists
+        self.opened: list[str] = []
+
+    def resolve_run_uri(self, run_uri: str) -> str:
+        assert run_uri == "file://./runs/demo"
+        return "file:///abs/runs/demo"
+
+    def open_run(self, run_uri: str) -> None:
+        self.opened.append(run_uri)
+
+    def run_uri_exists(self, run_uri: str) -> bool:
+        assert run_uri == "file:///abs/runs/demo"
+        return self.exists
+
+    def allocate_run_uri(self) -> str:
+        raise AssertionError("CLI must leave default allocation to PipelineRunner")
+
+
+def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None = None) -> dict[str, object]:
+    calls: dict[str, object] = {}
+    fake_store = store or FakeRunStore()
+
+    def compose(config_path: object, *, overlays: tuple[Path, ...], overrides: tuple[str, ...]) -> FakeComposedConfig:
+        calls["config_path"] = config_path
+        calls["overlays"] = overlays
+        calls["overrides"] = overrides
+        return FakeComposedConfig(resolved={"pipeline": {}})
+
+    def run_pipeline(request: object, run_store: object) -> FakeRunResult:
+        calls["request_run_uri"] = getattr(request, "run_uri")
+        calls["open_existing"] = getattr(request, "open_existing")
+        calls["selectors"] = getattr(request, "selectors")
+        calls["run_store"] = run_store
+        return FakeRunResult()
+
+    def build_run_request(
+        _config: object,
+        *,
+        run_uri: str | None,
+        open_existing: bool,
+        selectors: PlanSelectors,
+    ) -> FakeRunRequest:
+        return FakeRunRequest(
+            run_uri=run_uri,
+            open_existing=open_existing,
+            selectors=selectors,
+        )
+
+    monkeypatch.setattr(run_command, "_compose_config", compose)
+    monkeypatch.setattr(run_command, "_create_default_run_store", lambda: fake_store)
+    monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
+    monkeypatch.setattr(run_command, "_run_pipeline", run_pipeline)
+    return calls
+
+
+def test_run_default_uri_is_allocated_by_runner_not_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_common(monkeypatch)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                "base.yaml",
+                "--overlay",
+                "team.yaml",
+                "--set",
+                "a=1",
+                "--only-stage",
+                "build",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    assert "OK run file:///abs/runs/generated: SUCCEEDED" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+    assert calls["config_path"] == Path("base.yaml")
+    assert calls["overlays"] == (Path("team.yaml"),)
+    assert calls["overrides"] == ("a=1",)
+    assert calls["request_run_uri"] is None
+    selectors = calls["selectors"]
+    assert isinstance(selectors, PlanSelectors)
+    assert selectors.only_stages == ("build",)
+
+
+def test_run_explicit_existing_uri_fails_before_composition(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_common(monkeypatch, store=FakeRunStore(exists=True))
+    monkeypatch.setattr(
+        run_command,
+        "_compose_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("compose should not run")),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--run-uri", "file://./runs/demo", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 4
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["error"]["type"] == "RunAlreadyExistsError"
+
+
+def test_run_resume_requires_run_uri(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_command, "_create_default_run_store", lambda: FakeRunStore())
+    monkeypatch.setattr(
+        run_command,
+        "_compose_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("compose should not run")),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert main(["run", "base.yaml", "--resume"], stdout=stdout, stderr=stderr) == 4
+    assert "`loom run --resume` requires --run-uri" in stderr.getvalue()
+
+
+def test_run_resume_opens_existing_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FakeRunStore()
+    calls = _patch_common(monkeypatch, store=store)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--run-uri", "file://./runs/demo", "--resume"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    assert store.opened == ["file:///abs/runs/demo"]
+    assert calls["request_run_uri"] == "file:///abs/runs/demo"
+    assert calls["open_existing"] is True
+
+
+def test_run_unsupported_executor_returns_executor_exit_code() -> None:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--executor", "slurm", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 7
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["error"]["code"] == "cli.run.unsupported_executor"
+
+
+def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    def build_plan_result(*_args: object, **_kwargs: object) -> PlanCliResult:
+        return PlanCliResult(
+            config_path=Path("base.yaml"),
+            stage_actions=({"stage": "build", "action": "RUN", "reason_codes": ("RESUME_DISABLED",)},),
+        )
+
+    monkeypatch.setattr(plan_command, "build_plan_result", build_plan_result)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--dry-run", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == "loom.cli.plan.v2"
+    assert payload["result"]["stage_actions"][0]["stage"] == "build"
+
+
+def test_run_failed_result_returns_run_failed_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_common(monkeypatch)
+
+    def failed_run(_request: object, _run_store: object) -> FakeRunResult:
+        failure = FakeFailure()
+        return FakeRunResult(
+            status=RunStatus.FAILED,
+            stage_results={
+                "build": FakeStageResult(
+                    status=StageStatus.FAILED,
+                    outputs={},
+                    failure=failure,
+                )
+            },
+            failure=failure,
+            artifact_index={},
+        )
+
+    monkeypatch.setattr(run_command, "_run_pipeline", failed_run)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert main(["run", "base.yaml", "--format", "json"], stdout=stdout, stderr=stderr) == 5
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["ok"] is False
+    assert payload["result"]["status"] == "FAILED"
+    assert payload["result"]["failure_summary"]["message"] == "boom"
