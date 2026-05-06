@@ -207,9 +207,10 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on `codex/v1-post-contract-docs`.
 - Final phase execution plan: completed by expanded-path refinement.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: removed the `loom.pipeline.execution.models` type-only import from `loom.config` by replacing the concrete `ComposedConfig` annotation with a private duck-typed protocol; preserved runtime mapping and composed-config validation behavior; added package subprocess coverage that constructs a direct `PipelineSpec`, runs it through `PipelineRunner.run(...)` with `LocalRunStore`, verifies the expected artifact index, and asserts `loom.config`, `loom.cli`, `project`, `yaml`, `omegaconf`, and `pydantic` stay unloaded before and after the run; added unit coverage for direct `PipelineSpec`, plain mapping config, and duck-typed composed config acceptance; updated config docs for trusted project-code policy, `inspect_config_composition` inspection-only boundaries, dot-path override no-escape behavior, and strict dotted/colon `_target_` syntax; cleaned stale `_copy_` implementation-scope wording from the active roadmap and corrected D01, D03, and D23 planning-note statuses to `confirmed`.
+- Implementation validation: `uv --cache-dir /tmp/loom-uv-cache run pytest tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 25 tests; `uv --cache-dir /tmp/loom-uv-cache run pyright src/loom/pipeline/execution/models.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 0 errors, 0 warnings, and 0 informations. Initial unqualified `uv run pytest ...` attempts could not write to `~/.cache/uv` in the sandbox; rerun used a writable `/tmp` uv cache, with approved network access to fetch missing dev dependencies.
+- Integration evidence: no separate integration file was added because the package subprocess regression executes the full local runner path with a direct `PipelineSpec` and local run store while proving the config import boundary.
 - Refinement summary: made suite obligations explicit, named required test homes and stop conditions, confirmed root stack metadata, and preserved implementation/PR review budgets as unused.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none after expanded-path refinement.
+- Remaining blockers: none after implementation and initial validation.
