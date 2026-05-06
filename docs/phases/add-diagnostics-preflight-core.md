@@ -434,7 +434,8 @@ make test-summary
   config dependencies in this repository. A later manager `make validate-pr`
   attempt exposed duplicate pytest module basenames in the new diagnostics tests;
   the tests were renamed to unique basenames and targeted diagnostics unit plus
-  integration tests passed afterward.
+  integration tests passed afterward. Final `make validate-pr` and
+  `make test-summary` passed.
 - Implementation refinement: completed on 2026-05-07 by `loom_phase_refiner`;
   verified Phase 1 scope, public names, deterministic aggregation,
   selected-group ordering, unknown and empty group errors, missing-`RUN_URI`
@@ -538,6 +539,16 @@ the new diagnostics test files to unique basenames before rerunning validation.
 
 command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/diagnostics tests/integration/diagnostics
 result: passed, 16 tests after diagnostics test file renames
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; Ruff passed, Pyright reported 0 errors, the default isolated
+suite passed with 523 passed and 13 skipped, config-extra passed with 380 passed
+and 541 deselected, and uv build produced sdist and wheel artifacts
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: passed and wrote build/test-summary.md; package 46 passed/1 skipped,
+unit 429 passed/1 skipped, contract 39 passed/2 skipped, integration 9
+passed/6 skipped, e2e 14 passed, and config-extra 380 passed/541 deselected
 ```
 
 #### Known Issues Or Blockers
