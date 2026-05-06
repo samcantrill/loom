@@ -245,6 +245,25 @@ def test_compose_rejects_schema_directive_in_overlay(tmp_path: Path) -> None:
     assert context.expected == "schema declarations from authored files"
 
 
+def test_compose_rejects_copy_directive_in_overlay(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    base.write_text("model:\n  value: from-base\n", encoding="utf-8")
+    overlay.write_text("model:\n  _copy_: true\n", encoding="utf-8")
+
+    with pytest.raises(ConfigLoadError) as exc:
+        compose_config(base, overlays=[overlay])
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "unsupported_directive"
+    assert context.source_kind == "overlay"
+    assert context.source_order == 1
+    assert context.source_path == str(overlay.resolve())
+    assert context.config_path == "$.model._copy_"
+    assert context.directive == "_copy_"
+
+
 def test_public_inspect_vs_compose_consistency_and_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = tmp_path / "base.yaml"
     overlay = tmp_path / "overlay.yaml"

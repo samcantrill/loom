@@ -54,6 +54,27 @@ def test_parse_override_primitive_variants() -> None:
     assert overrides[9].value == 1.0
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('value="true"', "true"),
+        ('value="false"', "false"),
+        ('value="null"', "null"),
+        ('value="123"', "123"),
+        ('value="1.5"', "1.5"),
+        ('value=""', ""),
+        (r'value="escaped\nvalue"', "escaped\nvalue"),
+        (r'value="quote: \"yes\""', 'quote: "yes"'),
+        ('value="ordinary"', "ordinary"),
+    ],
+)
+def test_parse_override_json_quoted_scalar_strings(raw: str, expected: str) -> None:
+    parsed = parse_overrides((raw,))
+
+    assert parsed[0].value == expected
+    assert isinstance(parsed[0].value, str)
+
+
 def test_parse_override_errors_for_invalid_forms() -> None:
     with pytest.raises(OverrideParseError):
         parse_overrides(("no-equal",))
@@ -63,6 +84,18 @@ def test_parse_override_errors_for_invalid_forms() -> None:
         parse_overrides(("+ =1",))
     with pytest.raises(OverrideParseError):
         parse_overrides(("value=[1,]",))
+
+
+@pytest.mark.parametrize(
+    ("raw",),
+    [
+        ('value="unterminated',),
+        (r'value="bad\qescape"',),
+    ],
+)
+def test_parse_override_rejects_malformed_json_quoted_scalar_strings(raw: str) -> None:
+    with pytest.raises(OverrideParseError):
+        parse_overrides((raw,))
 
 
 def test_parse_override_rejects_nonfinite_json_float() -> None:

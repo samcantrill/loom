@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 from loom.config import compose_config
-from loom.config.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError
+from loom.config.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError, OverrideApplyError
 from loom.serialization import PlainData
 
 
@@ -236,6 +236,36 @@ def test_public_compose_applies_ordinary_overrides_after_include_recomposition(t
     assert model["added"] == "from-repl"
     pipeline = _mapping(composed.resolved["pipeline"])
     assert pipeline["flags"] is True
+
+
+def test_public_compose_override_paths_do_not_address_literal_dot_keys(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text('"model.name": literal\n', encoding="utf-8")
+
+    with pytest.raises(OverrideApplyError):
+        compose_config(base, overrides=("model.name=changed",))
+
+
+def test_public_compose_override_backslash_is_not_literal_dot_escape(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text('"model.name": literal\n', encoding="utf-8")
+
+    with pytest.raises(OverrideApplyError):
+        compose_config(base, overrides=(r"model\.name=changed",))
+
+
+def test_public_compose_add_override_with_dotted_path_creates_nested_segments_not_literal_key(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text('"model.name": literal\n', encoding="utf-8")
+
+    composed = compose_config(base, overrides=("+model.name=segmented",))
+
+    assert composed.resolved == {
+        "model.name": "literal",
+        "model": {"name": "segmented"},
+    }
 
 
 def test_public_compose_rejects_existing_include_override_with_resolver_expression(tmp_path: Path) -> None:

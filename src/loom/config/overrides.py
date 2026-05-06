@@ -96,6 +96,17 @@ def _parse_override_value(value_text: str, *, path: str, order: int) -> PlainDat
             raise OverrideParseError(f"Non-finite float at override path {path} (order={order})")
         return value
 
+    if stripped.startswith('"'):
+        try:
+            parsed_string = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise OverrideParseError(
+                f"Invalid JSON string value at override path {path} (order={order}): {exc.msg}"
+            ) from exc
+        if not isinstance(parsed_string, str):
+            raise OverrideParseError(f"Invalid JSON string value at override path {path} (order={order})")
+        return parsed_string
+
     if stripped.startswith("[") or stripped.startswith("{"):
         try:
             parsed = json.loads(stripped)
