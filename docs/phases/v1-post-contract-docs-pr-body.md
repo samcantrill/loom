@@ -32,7 +32,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors, 0 warnings, 0 informations; default suite passed 435 tests with 11 skipped; config-extra suite passed 314 tests with 441 deselected; build succeeded. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; all suites passed with 755 total passing tests and 9 skipped. |
-| GitHub checks | Pending | GitHub checks run after the expanded-path refine/open pass creates the PR. |
+| GitHub checks | Passed | GitHub CI `checks` completed successfully on PR #44. |
 
 ### Test Suite Summary
 
@@ -48,5 +48,5 @@ New tests implemented:
 
 ## Risks / Follow-Ups
 
-- GitHub checks still need to run after the expanded-path refine pass opens the PR.
+- Phase 1 is merge-eligible after review because PR #44 targets `develop` and GitHub CI has passed.
 - Later v1-post phases still own strict YAML duplicate-key rejection, JSON-quoted scalar override parsing, artifact-safe provenance/fingerprint ordering, default resolved snapshot persistence changes, run-store composition manifests, structured-error expansion, and recipe/resolver residual-risk hardening.
