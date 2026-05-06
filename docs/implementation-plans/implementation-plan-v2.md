@@ -1155,9 +1155,9 @@ Completion summary:
 
 ### Phase 5 - Run Command
 
-Status: pending
+Status: merged
 Branch: `codex/add-cli-run`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/63
 
 Goal:
 
@@ -1244,7 +1244,14 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- PR opened and merged into `develop`: https://github.com/samcantrill/loom/pull/63
+- Merge commit: `eb8794fc9d069d8bcc0ba300c016d1a7d1cff4a5`.
+- Implementation adds `loom run`, default store-owned run URI execution,
+  explicit run URI handling, strict resume setup, dry-run delegation to
+  `loom plan`, local-only executor rejection, text/JSON run results, and
+  failure summaries without CLI-owned runtime state writes.
+- Validation passed with `make validate-pr`, `make test-summary`, managing-agent
+  review, and GitHub CI.
 
 ### Phase 6 - Hardening, Docs, And E2E Coverage
 

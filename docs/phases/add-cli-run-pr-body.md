@@ -30,7 +30,7 @@ New tests cover run orchestration, default and explicit run URIs, resume, dry-ru
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright passed; default harness 505 passed / 11 skipped; config-extra 380 passed / 512 deselected; build succeeded. |
 | `make test-summary` | Passed | Suite summary below. |
-| GitHub checks | Pending | To be populated after PR creation. |
+| GitHub checks | Passed | CI check `checks` completed successfully. |
 
 ### Test Suite Summary
 

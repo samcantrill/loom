@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 5: Run Command`
 - Branch: `codex/add-cli-run`
@@ -23,7 +23,8 @@
 - Setup limitations: `git worktree add` required approved git metadata access after the sandbox could not create the branch ref. `origin/develop` was verified before branch creation.
 - PR: https://github.com/samcantrill/loom/pull/63
 - PR body artifact: `docs/phases/add-cli-run-pr-body.md`
-- PR verification: `baseRefName=develop`, `headRefName=codex/add-cli-run`, `state=OPEN`, CI check `checks` initially `IN_PROGRESS`.
+- PR verification: `baseRefName=develop`, `headRefName=codex/add-cli-run`, `state=OPEN`, CI check `checks` initially `IN_PROGRESS` and completed with `SUCCESS`.
+- Merge: PR #63 squash-merged into `develop` as `eb8794fc9d069d8bcc0ba300c016d1a7d1cff4a5`.
 - Blockers: none known.
 
 ## Objective
@@ -235,5 +236,5 @@ make test-summary
 - Implementation validation: targeted `uv run pytest tests/unit/loom/cli tests/package/test_import_boundaries.py -q` passed with 56 tests; targeted `uv run --extra config pytest tests/integration/config/test_cli_run.py -q` passed with 7 tests; `uv run ruff check .` passed; `uv run --extra config pyright` passed with 0 errors; `make validate-pr` passed with default 505 passed / 11 skipped and config-extra 380 passed / 512 deselected plus build success; `make test-summary` passed with package 43 passed / 1 skipped, unit 417 passed / 1 skipped, contract 36 passed / 2 skipped, integration 9 passed / 5 skipped, e2e 7 passed, and config-extra 380 passed / 512 deselected.
 - Refinement summary: not needed; targeted and full validation passed without a phase-refiner pass.
 - PR preparation: completed in `252d9e5`; PR opened and verified against `develop` as https://github.com/samcantrill/loom/pull/63.
-- Stack maintenance: not needed yet.
+- Stack maintenance: not needed; no successor branch depended on `codex/add-cli-run` when it merged.
 - Remaining blockers: none known.
