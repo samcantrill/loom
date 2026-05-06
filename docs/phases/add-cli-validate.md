@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; implementation pending
+- Status: implemented; PR preparation pending
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 3: Validate Command`
 - Branch: `codex/add-cli-validate`
@@ -17,7 +17,7 @@
 - Workflow path: expanded path, selected because this phase is the first behavior-bearing CLI command and adds narrow public validation/target-check facades.
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v2.md`; no blocking plan-review findings remain.
 - Draft/refine status: scope-complete plan drafted in this artifact; no separate refinement pass needed unless validation or review exposes a blocker.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: not needed; targeted validation and the PR gate passed without a refinement pass.
 - PR review budget: unused.
 - Blockers: none known.
 
@@ -103,8 +103,14 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed in this commit.
-- Implementation summary:
+- Implementation summary: added `loom validate`, static pipeline validation through a pipeline facade, opt-in stage/generic target construction checks through owning-package facades, stable text/JSON validate output, target-constructor warnings, JSON error warning propagation, and package/unit/integration coverage.
 - Implementation validation:
+  - `uv run pytest tests/unit/loom/cli tests/unit/loom/config/test_target_checks.py tests/unit/loom/pipeline/test_pipeline_validation.py tests/package/test_import_boundaries.py tests/package/test_config_api.py tests/package/test_pipeline_api.py -q`: passed, 52 passed, 1 skipped.
+  - `uv run --extra config pytest tests/integration/config/test_cli_validate.py -q`: passed, 3 passed.
+  - `uv run ruff check .`: passed.
+  - `uv run --extra config pyright`: passed, 0 errors.
+  - `make validate-pr`: passed; Ruff, Pyright, default no-extra suite, config-extra suite, and build passed.
+  - `make test-summary`: passed; overall 865 passed, 9 skipped, 497 deselected.
 - PR preparation:
 - Merge notes:
-- Remaining blockers:
+- Remaining blockers: none known.
