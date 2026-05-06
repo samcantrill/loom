@@ -141,7 +141,7 @@ def _run(argv: Sequence[str] | None) -> int:
     except KeyboardInterrupt as exc:
         sys.stderr.write("interrupted\n")
         return int(exit_code_for(exc))
-    except BaseException as exc:
+    except Exception as exc:
         output_format = output_format_from_namespace(namespace)
         traceback_enabled = bool(getattr(namespace, "traceback", False))
         formatted = format_error(exc, traceback_enabled=traceback_enabled, output_format=output_format)

@@ -18,7 +18,7 @@
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v2.md`; no blocking plan-review findings remain.
 - Draft/refine status: scope-complete plan drafted in this artifact; no separate refinement pass needed unless validation or review exposes a blocker.
 - Phase implementation refinement budget: not needed; targeted validation and the PR gate passed without a refinement pass.
-- PR review budget: unused.
+- PR review budget: used by managing-agent local review; one catch-scope issue fixed and no blocking findings remain.
 - Blockers: none known.
 
 ## Objective
