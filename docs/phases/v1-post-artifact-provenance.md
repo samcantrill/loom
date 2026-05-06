@@ -237,6 +237,10 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_provenance.py tests/unit/loom/config/test_compose.py` passed with 34 tests.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/integration/config/test_compose_recipes.py` passed.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pyright src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/integration/config/test_compose_recipes.py` passed.
-- PR preparation: pending.
-- Stack maintenance: pending.
+- PR scope confirmation: final diff is limited to `loom.config` composition/provenance changes, config feature docs, the phase plan, the PR body artifact, and package/unit/contract/integration/e2e/config-extra tests. No Phase 5 pipeline/run-store API changes, `PipelineRunner` persistence changes, `config/composition_manifest.json` run-store persistence, or default resolved-config persistence changes were found.
+- Final PR validation:
+  - `make validate-pr` passed: Ruff, Pyright, default harness `439 passed, 11 skipped`, config-extra harness `360 passed, 445 deselected`, and `uv build`.
+  - `make test-summary` passed and wrote `build/test-summary.md` with suite evidence: package `38 passed, 1 skipped`; unit `357 passed, 1 skipped`; contract `35 passed, 2 skipped`; integration `9 passed, 5 skipped`; e2e `6 passed`; config-extra `360 passed, 445 deselected`; overall `805 passed, 9 skipped, 445 deselected`.
+- PR preparation: PR body artifact written at `docs/phases/v1-post-artifact-provenance-pr-body.md`; expanded-path PR body draft/refine requirements completed in this preparation pass; GitHub PR creation pending.
+- Stack maintenance: root PR targets `develop`; no predecessor branch and no stack retargeting required.
 - Remaining blockers: none after the expanded-path implementation refinement pass.
