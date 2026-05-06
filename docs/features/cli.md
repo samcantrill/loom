@@ -232,21 +232,21 @@ loom --version
 loom validate CONFIG
 loom plan CONFIG
 loom run CONFIG
-loom status RUN_DIR
+loom status RUN_URI
 basic top-level exception formatting
 non-zero exit codes for failures
 config overlays and CLI overrides
 resume selector flags shared by plan and run
 local executor selection
 machine-readable JSON output for plan/status where practical
-loom logs RUN_DIR STAGE
-loom artifacts list RUN_DIR
-loom artifacts show RUN_DIR ARTIFACT_ID
+loom logs RUN_URI STAGE
+loom artifacts list RUN_URI
+loom artifacts show RUN_URI ARTIFACT_ID
 loom plan CONFIG --resume --explain STAGE
-loom status RUN_DIR --jobs
-loom cancel RUN_DIR
-loom slurm status RUN_DIR
-loom slurm cancel RUN_DIR
+loom status RUN_URI --jobs
+loom cancel RUN_URI
+loom slurm status RUN_URI
+loom slurm cancel RUN_URI
 shell completion, if parser supports it cheaply
 ```
 
@@ -332,9 +332,9 @@ Examples:
 
 ```bash
 loom validate experiment.yaml
-loom plan experiment.yaml --resume
-loom run experiment.yaml --run-dir runs/example
-loom status runs/example
+loom plan experiment.yaml --run-uri file:///abs/project/runs/example --resume
+loom run experiment.yaml --run-uri file:///abs/project/runs/example
+loom status file:///abs/project/runs/example
 ```
 
 ### 6.2 Subcommand Groups
@@ -357,7 +357,7 @@ Use explicit names:
 
 ```text
 CONFIG
-RUN_DIR
+RUN_URI
 STAGE
 ARTIFACT_ID
 ```
@@ -370,12 +370,11 @@ current directory.
 Use long, readable options:
 
 ```text
---run-dir
+--run-uri
 --overlay
 --set
 --executor
 --resume
---strict
 --from-stage
 --only-stage
 --force-stage
@@ -441,15 +440,15 @@ run
 Recommended:
 
 ```text
---run-dir RUN_DIR
---run-id RUN_ID
+--run-uri RUN_URI
 --resume
---strict
 --dry-run
 ```
 
-`--run-dir` should be explicit for reproducible scripts. If omitted, pipeline
-APIs can choose the default run directory policy.
+For v2, `--run-uri` replaces the earlier `--run-dir` and `--run-id` forms.
+Explicit run URIs must use strict local `file://` syntax until remote stores
+exist. If omitted for `loom run`, store/runtime APIs own default local run URI
+allocation. `loom plan` does not allocate a default run URI.
 
 ### 7.3 Stage Selector Options
 
@@ -526,7 +525,7 @@ Human output should be concise and stable.
 Good:
 
 ```text
-Run: runs/example
+Run: file:///abs/project/runs/example
 Status: FAILED
 
 Stage           Status     Action  Reason
@@ -548,8 +547,8 @@ Commands that inspect or plan should support JSON eventually:
 
 ```bash
 loom plan experiment.yaml --format json
-loom status runs/example --format json
-loom artifacts list runs/example --format json
+loom status file:///abs/project/runs/example --format json
+loom artifacts list file:///abs/project/runs/example --format json
 ```
 
 Machine output should come from structured API results, not by parsing human
@@ -705,7 +704,7 @@ Recommended:
 --overlay PATH, repeatable
 --set KEY=VALUE, repeatable
 --format text|json
---strict
+--check-targets
 ```
 
 ### 11.3 Behavior
@@ -721,6 +720,11 @@ build PipelineSpec
 validate stage specs and DAG
 print success or errors
 ```
+
+Default validation should stay static. `--check-targets` is the explicit consent
+boundary for importing and constructing all `_target_` blocks through
+config-owned APIs after static validation succeeds. The command should warn that
+trusted project constructors may run.
 
 Should not:
 
@@ -770,9 +774,8 @@ Recommended:
 ```text
 --overlay PATH, repeatable
 --set KEY=VALUE, repeatable
---run-dir RUN_DIR
+--run-uri RUN_URI
 --resume
---strict
 --from-stage STAGE
 --only-stage STAGE
 --force-stage STAGE, repeatable
@@ -788,13 +791,19 @@ Should:
 ```text
 compose config
 build PipelineSpec
-open prior run state when --resume or --run-dir requires it
+open prior run state read-only when --resume requires --run-uri
 compute stage actions through planner APIs
 show action reasons
 not execute stages
 not submit jobs
-not mutate prior run state except optional plan cache if explicitly designed
+not allocate default run URIs
+not mutate prior run state
 ```
+
+Without `--run-uri`, `loom plan` is a fresh hypothetical plan. With
+`--run-uri` and no `--resume`, planning is still read-only and should fail if
+the target already exists. With `--resume`, the run URI must identify an
+existing valid run and strict resume behavior applies.
 
 ### 12.4 Human Output
 
@@ -850,11 +859,9 @@ Recommended:
 ```text
 --overlay PATH, repeatable
 --set KEY=VALUE, repeatable
---run-dir RUN_DIR
---run-id RUN_ID
+--run-uri RUN_URI
 --executor local|subprocess|slurm-single-job|slurm-afterok
 --resume
---strict
 --dry-run
 --from-stage STAGE
 --only-stage STAGE
@@ -878,6 +885,11 @@ print concise run summary
 return non-zero on run failure
 ```
 
+If `--run-uri` is omitted, `loom run` should request a default local run URI
+from store/runtime APIs. Non-resume execution should fail if the target run URI
+already exists. Resume should require an existing valid run URI and use strict
+resume behavior.
+
 Should not:
 
 ```text
@@ -890,20 +902,20 @@ generate SLURM scripts directly
 ### 13.4 Local Example
 
 ```bash
-loom run experiment.yaml --run-dir runs/example --executor local
+loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor local
 ```
 
 ### 13.5 Resume Example
 
 ```bash
-loom run experiment.yaml --run-dir runs/example --resume
+loom run experiment.yaml --run-uri file:///abs/project/runs/example --resume
 ```
 
 ### 13.6 SLURM Example
 
 ```bash
 loom run experiment.yaml \
-  --run-dir runs/example \
+  --run-uri file:///abs/project/runs/example \
   --executor slurm-afterok
 ```
 
@@ -942,7 +954,7 @@ future remote workers
 Command:
 
 ```bash
-loom stage run --run-dir RUN_DIR --stage STAGE
+loom stage run --run-uri RUN_URI --stage STAGE
 ```
 
 ### 14.2 Options
@@ -950,7 +962,7 @@ loom stage run --run-dir RUN_DIR --stage STAGE
 Recommended:
 
 ```text
---run-dir RUN_DIR, required
+--run-uri RUN_URI, required
 --stage STAGE, required
 --attempt ATTEMPT
 --executor-name NAME, optional metadata
@@ -999,7 +1011,7 @@ It should not require pickled Python objects passed over the command line.
 ### 14.5 Example
 
 ```bash
-loom stage run --run-dir runs/example --stage train --attempt 1
+loom stage run --run-uri file:///abs/project/runs/example --stage train --attempt 1
 ```
 
 ---
@@ -1013,7 +1025,7 @@ Show current or final run state without importing project stage code.
 Command:
 
 ```bash
-loom status RUN_DIR
+loom status RUN_URI
 ```
 
 ### 15.2 Options
@@ -1055,7 +1067,7 @@ query scheduler unless --jobs or executor-specific status is requested
 Example:
 
 ```text
-Run: runs/example
+Run: file:///abs/project/runs/example
 Status: FAILED
 Started: 2026-05-02T00:00:00Z
 Finished: 2026-05-02T00:10:00Z
@@ -1077,7 +1089,7 @@ Show or locate logs for a stage.
 Command:
 
 ```bash
-loom logs RUN_DIR STAGE
+loom logs RUN_URI STAGE
 ```
 
 ### 16.2 Options
@@ -1122,8 +1134,8 @@ Inspect artifacts recorded for a run.
 Initial commands:
 
 ```bash
-loom artifacts list RUN_DIR
-loom artifacts show RUN_DIR ARTIFACT_ID
+loom artifacts list RUN_URI
+loom artifacts show RUN_URI ARTIFACT_ID
 ```
 
 ### 17.2 `artifacts list`
@@ -1158,7 +1170,7 @@ They should not load arbitrary artifact contents unless an explicit command is
 added:
 
 ```bash
-loom artifacts cat RUN_DIR ARTIFACT_ID
+loom artifacts cat RUN_URI ARTIFACT_ID
 ```
 
 Loading artifact contents requires codec resolution and can execute project
@@ -1176,10 +1188,10 @@ into general status commands.
 Possible commands:
 
 ```bash
-loom status RUN_DIR --jobs
-loom cancel RUN_DIR
-loom slurm status RUN_DIR
-loom slurm cancel RUN_DIR
+loom status RUN_URI --jobs
+loom cancel RUN_URI
+loom slurm status RUN_URI
+loom slurm cancel RUN_URI
 ```
 
 ### 18.2 Post-v0 Starting Point
@@ -1187,7 +1199,7 @@ loom slurm cancel RUN_DIR
 When functional CLI behavior exists, start with:
 
 ```text
-loom status RUN_DIR
+loom status RUN_URI
 ```
 
 and let SLURM run submission print job IDs and status hints.
@@ -1231,7 +1243,7 @@ The CLI should eventually support:
 ```text
 loom sweep plan SWEEP_CONFIG
 loom sweep run SWEEP_CONFIG
-loom sweep status SWEEP_RUN_DIR
+loom sweep status SWEEP_RUN_URI
 ```
 
 V0 can defer sweep commands until the sweep planning API exists.
@@ -1245,11 +1257,11 @@ underlying Python APIs already exist:
 
 ```text
 loom graph CONFIG --format dot
-loom preflight CONFIG --run-dir RUN_DIR
+loom preflight CONFIG --run-uri RUN_URI
 loom diff RUN_A RUN_B
-loom clean RUN_DIR --failed-temp
+loom clean RUN_URI --failed-temp
 loom gc RUNS_DIR --older-than 30d
-loom export RUN_DIR ARCHIVE
+loom export RUN_URI ARCHIVE
 loom inspect ARCHIVE
 ```
 
@@ -1564,7 +1576,7 @@ Implement:
 
 ```text
 loom stage run
-run-dir/stage/attempt args
+run-uri/stage/attempt args
 stage worker API integration
 worker result exit codes
 ```

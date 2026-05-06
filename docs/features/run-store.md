@@ -34,7 +34,24 @@ The local filesystem run store is the v0 implementation. Its files should be
 plain and human-inspectable so users can debug failed cluster jobs without
 special tooling.
 
-### 1.1 Alignment With `loom.md`
+### 1.1 V2 Run URI Migration
+
+The v0 sections below use `run_id` as the run-scoped identifier because that is
+the local-kernel contract. The v2 CLI-core implementation plan intentionally
+hard-swaps public, protocol, and persisted run identity to `run_uri`.
+
+After the v2 migration:
+
+```text
+public/protocol/persisted run identity: run_uri
+local implementation detail: resolved file:// URI -> local run directory
+```
+
+V2 does not need to preserve compatibility with old v0 run documents that only
+contain `run_id`. `ArtifactRef` remains physical artifact metadata; cross-run
+artifact identity uses `ArtifactAddress(run_uri, artifact_id)`.
+
+### 1.2 Alignment With `loom.md`
 
 This document turns the run directory, status tracking, artifact index, and
 resume-inspection goals from [loom.md](../loom.md) into a persistence contract.
@@ -884,6 +901,12 @@ defines where this file belongs and how it is written.
 
 ## 9. RunStore Protocol
 
+The v0-oriented protocol sketch below uses `run_id`. For v2, the same public
+and protocol methods should hard-swap that argument and serialized field to
+`run_uri`. Local store implementations may derive private path components from a
+resolved local `file://` run URI, but callers should not pass or receive
+`run_id`.
+
 ### 9.1 Recommended Interface
 
 ```python
@@ -1345,7 +1368,7 @@ When functional CLI behavior is added, the run store should support CLI commands
 without becoming CLI-specific. V0 exposes public Python APIs and import-safe CLI
 stubs only.
 
-### 16.1 `loom status RUN_DIR`
+### 16.1 `loom status RUN_URI`
 
 Should read:
 
@@ -1369,7 +1392,7 @@ artifact counts
 log paths
 ```
 
-### 16.2 `loom logs RUN_DIR STAGE`
+### 16.2 `loom logs RUN_URI STAGE`
 
 Should resolve:
 
@@ -1380,11 +1403,11 @@ stages/STAGE/logs/stderr.log
 
 It should not guess paths independently from the run store.
 
-### 16.3 `loom artifacts list RUN_DIR`
+### 16.3 `loom artifacts list RUN_URI`
 
 Should read `artifacts.json` and show logical artifact names, types, and URIs.
 
-### 16.4 `loom inspect RUN_DIR`
+### 16.4 `loom inspect RUN_URI`
 
 Can later run consistency checks:
 
