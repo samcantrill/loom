@@ -268,6 +268,28 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase execution plan` at `9122e75`.
 - Final phase execution plan: completed by expanded-path refinement.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed by workflow-authorized fallback executor. Added plain-data `RunConfigStore.read_composition_manifest(...)` and `write_composition_manifest(...)`; implemented strict local `config/composition_manifest.json` wrapper persistence; updated composed-config duck typing and `PipelineRunner` persistence to write composition manifest, recipe manifest, and config provenance metadata without default composed-config `resolved.yaml` or `resolved.redacted.yaml`; preserved plain mapping snapshot behavior as caller-provided config data; added explicit runtime fingerprint coverage through `StageSpec.fingerprint_fields`, `FingerprintContext.extra`, and caller-converted `Fingerprintable.fingerprint()` values while keeping config fingerprints runtime-free.
+- Implementation commits:
+  - `9bb8dfb` `feat: persist composition manifests`
+  - `e992932` `test: cover pipeline manifest persistence`
+- Scope control: no `loom.config` persistence helpers were added; no pipeline/store imports of `loom.config`, `CompositionManifest`, `ConfigProvenance`, or config classes were introduced; no new config snapshot names or full redacted config artifact paths were added; CLI, `_copy_`, remote stores, bundles, catalogs, resolver support, runtime replay guarantees, automatic runtime object fingerprinting, and Phase 6 recipe residual-risk scope were not touched.
+- Tests added or updated:
+  - Package: `tests/package/test_pipeline_store_api.py`, `tests/package/test_import_boundaries.py`
+  - Unit: `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/execution/test_execution_models.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, `tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`
+  - Contract: `tests/contracts/test_store_contract.py`
+  - Integration: `tests/integration/pipeline/test_local_stores.py`, `tests/integration/pipeline/test_local_execution.py`, `tests/integration/config/test_compose_fingerprints.py`
+  - E2E: `tests/e2e/test_local_pipeline_run.py`
+  - Opt-in/config-extra: composed-config runner persistence and runtime-free config fingerprint coverage in config-extra rows.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/contracts/test_store_contract.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py`: passed, 25 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py`: passed, 20 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/execution/test_execution_models.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`: passed, 22 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/pipeline/test_local_stores.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_planning_resume.py`: passed, 9 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest -m optional_dependency tests/integration/config/test_compose_fingerprints.py tests/e2e/test_local_pipeline_run.py`: passed, 5 selected config fingerprint tests passed; e2e file was deselected by marker expression.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e/test_local_pipeline_run.py`: passed, 6 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check <touched files>`: passed.
+  - `make validate-pr`: passed with Ruff, Pyright, default harness `447 passed, 11 skipped`, config-extra harness `362 passed, 454 deselected`, and `uv build`.
+  - `make test-summary`: passed; suite summary written to `build/test-summary.md` with package `38 passed, 1 skipped`, unit `364 passed, 1 skipped`, contract `36 passed, 2 skipped`, integration `9 passed, 5 skipped`, e2e `7 passed`, and config-extra `362 passed, 454 deselected`.
+- Known issues or blockers: none.
+- Phase implementation refinement: unused by executor; no refinement pass performed.
 - PR preparation: pending.
