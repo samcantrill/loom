@@ -421,8 +421,16 @@ make test-summary
   `plan: add phase execution plan`.
 - Final phase execution plan: refined on 2026-05-07 by `loom_phase_planner`;
   public contracts and suite obligations pinned for implementation.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed Phase 1 diagnostics foundation and local
+  preflight core. Added import-light `loom.diagnostics` public exports, typed
+  preflight status/severity/group/request/result models, stable check IDs,
+  deterministic group selection and aggregation, local preflight runner checks
+  for config, pipeline, selectors, run URI, artifact store, codec registry,
+  local executor, and filesystem inputs, plus plain-data serialization.
+- Implementation validation: targeted package, unit, contract, integration,
+  Ruff, and Pyright checks passed as recorded below. The integration test command
+  was run with `--extra config` because config composition requires optional
+  config dependencies in this repository.
 - Refinement summary: public model/export names, aggregation semantics,
   selected-group behavior, missing `RUN_URI` skip behavior, import-light
   expectations, test obligations, and lower-layer facade scope were tightened
@@ -430,3 +438,81 @@ make test-summary
 - PR preparation: pending.
 - Stack maintenance: root phase; no predecessor maintenance pending.
 - Remaining blockers: none.
+
+### Implementation Handoff
+
+#### Metadata
+
+- Phase: Phase 1 - Diagnostics Foundation And Preflight Core
+- Branch: `codex/add-diagnostics-preflight-core`
+- Worktree: `/home/samcantrill/work/loom-worktrees/add-diagnostics-preflight-core`
+- Phase execution plan: `docs/phases/add-diagnostics-preflight-core.md`
+- Executor: fallback manager implementation pass
+- Handoff date: 2026-05-07
+
+#### Commits
+
+| Commit | Summary |
+| --- | --- |
+| `0e6d2d7` | `feat: implement diagnostics preflight core` |
+| `25bcf5c` | `test: add diagnostics preflight coverage` |
+
+#### Scope Control
+
+- Implements only the assigned phase: yes; added public Python diagnostics
+  models/request/runner APIs and local preflight checks only.
+- Future-phase work avoided: no CLI commands, no `loom run` behavior changes, no
+  persisted preflight reports, and no status/log/artifact inspection facades.
+- Unrelated refactors avoided: yes; changes were limited to diagnostics,
+  phase-scoped tests, and `docs/structure.md`.
+- Public contract decisions changed: no.
+
+#### Tests Added Or Updated
+
+- Package: added public diagnostics export and import-boundary coverage.
+- Unit: added diagnostics model, aggregation, group selection, request, selected
+  group, missing `RUN_URI`, and filesystem input tests.
+- Contract: added stable status/severity/group/check ID and plain-data schema
+  tests.
+- Integration: added synthetic local preflight coverage for full checks, selected
+  groups, omitted `RUN_URI` skips, selector validation failure, and no run-store
+  writes.
+- E2E: deferred; Phase 1 has no user-facing CLI diagnostics command.
+- Opt-in: deferred; no external service, scheduler, container, plugin, network,
+  or remote-store behavior was introduced.
+
+#### Validation Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py -m package
+result: passed, 27 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/diagnostics
+result: passed, 12 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_diagnostics_preflight_contract.py
+result: passed, 3 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/diagnostics
+result: passed, 4 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/diagnostics tests/unit/loom/diagnostics tests/contracts/test_diagnostics_preflight_contract.py tests/integration/diagnostics tests/package/test_import.py tests/package/test_import_boundaries.py
+result: passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright src/loom/diagnostics tests/unit/loom/diagnostics tests/contracts/test_diagnostics_preflight_contract.py tests/integration/diagnostics
+result: passed, 0 errors
+```
+
+#### Known Issues Or Blockers
+
+- None known.
+
+#### Refiner Handoff
+
+- Areas most likely to need validation attention: review that run-path checks
+  remain non-persistent and that root diagnostics imports stay light when Phase 2
+  adds CLI wiring.
+- Failing or unavailable checks: none in targeted validation. A first sandboxed
+  `uv run pytest` attempt failed because the sandbox could not write
+  `/home/samcantrill/.cache/uv`; successful reruns used `UV_CACHE_DIR=/tmp/uv-cache`.
+- Completion notes added to phase execution plan: yes.
