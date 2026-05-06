@@ -34,7 +34,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 448 passed, 11 skipped; config-extra harness passed with 363 passed, 455 deselected; `uv build` succeeded. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; overall 818 passed, 9 skipped, 455 deselected in 24.50s. |
-| GitHub checks | Pending | Will run after PR creation. |
+| GitHub checks | Passed | CI workflow `checks` completed successfully on PR #55. |
 
 ### Test Suite Summary
 
@@ -51,4 +51,4 @@ New tests implemented:
 ## Risks / Follow-Ups
 
 - Accepted debt: v1-post still does not prove arbitrary trusted Python recipe internals avoided branching on unresolved resolver text. Revisit if users need deterministic recipe shape certification, sandboxed recipe execution, or reproducibility guarantees for unreviewed third-party recipes.
-- GitHub CI remains pending until the PR is opened.
+- GitHub CI passed on PR #55.
