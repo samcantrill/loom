@@ -1,5 +1,6 @@
 """End-to-end local pipeline run through public Python APIs."""
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -173,10 +174,13 @@ def test_local_pipeline_run_and_resume_from_config(tmp_path: Path) -> None:
 
 def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_snapshots(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "name: composed-e2e\n"
+        "metadata:\n"
+        "  runtime_root: ${oc.env:LOOM_E2E_RUNNER_ROOT}\n"
         "pipeline:\n"
         "  name: demo\n"
         "  stages:\n"
@@ -189,6 +193,7 @@ def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_
         "          codec_key: json.v1\n",
         encoding="utf-8",
     )
+    monkeypatch.setenv("LOOM_E2E_RUNNER_ROOT", "/runtime/from-env")
     composed = compose_config(config_path)
     run_store = LocalRunStore(tmp_path / "runs")
 
@@ -197,10 +202,29 @@ def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_
     )
 
     run_dir = tmp_path / "runs" / "run1"
+    composition_manifest_path = run_dir / "config" / "composition_manifest.json"
+    recipe_manifest_path = run_dir / "config" / "recipe_manifest.json"
+    persisted_wrapper = json.loads(composition_manifest_path.read_text(encoding="utf-8"))
+    serialized_wrapper = json.dumps(persisted_wrapper, sort_keys=True)
+
     assert result.status == RunStatus.SUCCEEDED
+    assert composed.resolved["metadata"] == {"runtime_root": "/runtime/from-env"}
     assert run_store.read_composition_manifest("run1") == composed.manifest.to_dict()
-    assert (run_dir / "config" / "composition_manifest.json").is_file()
-    assert (run_dir / "config" / "recipe_manifest.json").is_file()
+    assert run_store.read_recipe_manifest("run1") == composed.recipe_manifest
+    assert composition_manifest_path.is_file()
+    assert recipe_manifest_path.is_file()
+    assert persisted_wrapper["schema_version"] == 1
+    assert persisted_wrapper["run_id"] == "run1"
+    assert set(persisted_wrapper) == {
+        "schema_version",
+        "run_id",
+        "created_at",
+        "composition_manifest",
+    }
+    assert persisted_wrapper["composition_manifest"] == composed.manifest.to_dict()
+    assert "oc.env:LOOM_E2E_RUNNER_ROOT" in serialized_wrapper
+    assert "/runtime/from-env" not in serialized_wrapper
+    assert "source_snapshots" not in serialized_wrapper
     assert not (run_dir / "config" / "resolved.yaml").exists()
     assert not (run_dir / "config" / "resolved.redacted.yaml").exists()
 

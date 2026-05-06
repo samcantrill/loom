@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft
+- Status: Phase 7 PR #57 open against `develop`; awaiting review/merge
 - Related implementation plan:
   `docs/implementation-plans/implementation-plan-v1.md`
 - Related planning notes:
@@ -646,7 +646,7 @@ Phase metadata:
 
 ### Phase 7. Final Hardening, Documentation, And Evidence
 
-Status: pending
+Status: pr_open
 
 Goal:
 
@@ -691,6 +691,51 @@ Suite obligations:
 - Opt-in/config-extra: final `make test-summary` evidence must show config
   extras coverage or explain why unavailable.
 
+Phase metadata:
+
+- Branch: `codex/v1-post-final-hardening`
+- Worktree:
+  `/home/samcantrill/work/loom-worktrees/v1-post-final-hardening`
+- Stack predecessor: none
+- PR target: `develop`
+- PR: https://github.com/samcantrill/loom/pull/57, open against `develop`
+  from `codex/v1-post-final-hardening`.
+- Implementation summary: audited and updated the v1-post feature docs and
+  `docs/loom.md` so current composed-config behavior is Python-API-only,
+  persistence-free in `loom.config`, and artifact-safe in runner/run-store
+  defaults. Current run-layout examples now use
+  `config/composition_manifest.json`, `config/recipe_manifest.json`, and
+  run metadata config provenance, and explicitly avoid default
+  `config/resolved.yaml` / `config/resolved.redacted.yaml` snapshots for
+  composed configs. The representative public-Python e2e runner path now proves
+  a composed config object persists a plain-data composition manifest wrapper,
+  writes the recipe manifest, omits resolved snapshots, preserves authored
+  resolver expressions, and does not persist resolver outputs or raw source
+  payloads by default.
+- Validation: `make validate-pr` passed with Ruff, Pyright, default harness
+  `448 passed, 11 skipped`, config-extra harness
+  `363 passed, 455 deselected`, and `uv build`; `make test-summary` passed with
+  package `39 passed, 1 skipped`, unit `364 passed, 1 skipped`, contract
+  `36 passed, 2 skipped`, integration `9 passed, 5 skipped`, e2e `7 passed`,
+  and config-extra `363 passed, 455 deselected`.
+- GitHub checks: PR #57 GitHub Actions `checks` completed successfully after
+  PR preparation.
+- Targeted evidence: package/import and store API targeted tests passed
+  (`23 passed`); config provenance/fingerprint/source snapshot integration
+  targeted tests passed (`21 passed`); pipeline local execution/store targeted
+  tests passed (`5 passed`); representative config/pipeline e2e targeted tests
+  passed (`7 passed`).
+- Review/blocker notes: a user-authorized blocker-resolution pass corrected
+  stale Phase 7 PR metadata, clarified current versus future config provenance
+  wording in `docs/loom.md`, and updated PR-body check evidence. This pass was
+  docs/metadata-only and did not mark Phase 7 merged.
+- Follow-up notes for v2: CLI, remote stores, sweeps, `_copy_`, plugin/remote
+  resolvers, default raw source persistence, default resolved composed-config
+  snapshots, and exact runtime resolver replay remain deferred. V2 planning
+  should treat config fingerprints as artifact-safe authored-composition
+  records, not exact runtime-value replay digests, and keep runtime object
+  fingerprinting as explicit pipeline policy.
+
 ## Technical Debt Ledger
 
 | Debt | Reason accepted | Revisit trigger |
@@ -700,6 +745,8 @@ Suite obligations:
 | Non-`oc.env` OmegaConf built-in resolvers remain deferred. | Artifact-safe resolver policy should grow by explicit allow-list and tests, not by broad enablement. | A concrete supported built-in resolver is requested and can be proven artifact-safe. |
 | Runtime object fingerprinting is explicit pipeline policy, not automatic config behavior. | Arbitrary object hashing is domain-specific and can be unsafe or unstable. | Pipeline/runtime design adds declared fingerprint interfaces for runtime resources. |
 | Existing global recipe registration remains Python convenience. | Explicit `RecipeCatalog` is the reproducible path, but the global helper supports notebooks and scripts. | Process-global recipe state causes reproducibility or test isolation failures despite explicit catalog docs. |
+| Plain mapping config snapshots may still use legacy resolved snapshot names. | Plain mappings are caller-provided runtime data, not v1 composed-config artifacts, and changing them would be a broader snapshot policy decision. | V2 designs a neutral all-config snapshot policy or users need consistent names across config input types. |
+| Feature docs retain future CLI examples while v1-post remains Python-API-only. | Clearly labeled future sections preserve planning continuity without implying current command support. | Readers or tests confuse future CLI examples with current v1 behavior. |
 
 ## Plan Quality Gate
 
@@ -758,3 +805,19 @@ Refinement summary for confirmation reviewer:
 - `loom.config` remains persistence-free.
 - `loom.pipeline` must not depend on `loom.config` imports, manifests, or
   composition artifact classes.
+
+## V2 Handoff Notes
+
+- V1-post final hardening has local evidence for docs, package/import,
+  contract, integration, e2e, config-extra, and build gates.
+- Current composed-config persistence is plain-data runner/run-store behavior:
+  `config/composition_manifest.json`, `config/recipe_manifest.json`, and
+  artifact-safe config provenance in run metadata.
+- `loom.config` returns in-memory resolved config and artifact-safe records to
+  Python callers but does not write run-store paths or expose persistence helper
+  APIs.
+- V2 CLI work should wrap public Python APIs and avoid introducing separate
+  config semantics.
+- V2 resolved snapshot, raw source, secret-aware fingerprint, remote-store,
+  sweep, `_copy_`, and exact replay designs need explicit security and
+  compatibility policies before implementation.

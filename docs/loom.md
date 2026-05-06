@@ -25,6 +25,10 @@ commands, subprocess workers, SLURM execution, containers, sweeps, remote
 stores, plugin discovery, retries, timeouts, cleanup, retention, and v1 config
 composition are roadmap work after v0.
 
+V1-post adds config composition through public Python APIs only. It still does
+not expose functional CLI commands, remote stores, sweeps, `_copy_`, or default
+resolved composed-config snapshots.
+
 ---
 
 ## 2. Design Goals
@@ -334,6 +338,10 @@ The runner should treat stages as black boxes with explicit inputs, outputs, and
 
 Every run should have a stable directory layout.
 
+The original v0 layout used resolved config snapshots for caller-provided
+runtime config mappings. Current v1 composed-config runs instead persist
+artifact-safe config records and do not write default resolved snapshots.
+
 ```text
 runs/RUN_ID/
   run.json
@@ -342,11 +350,7 @@ runs/RUN_ID/
   artifacts.json
 
   config/
-    raw.yaml
-    overlays.yaml
-    cli_overrides.yaml
-    resolved.yaml
-    resolved.redacted.yaml
+    composition_manifest.json
     recipe_manifest.json
 
   stages/
@@ -372,6 +376,13 @@ runs/RUN_ID/
     dependencies.json
 
 ```
+
+For composed configs, config provenance is recorded in run metadata as
+artifact-safe plain data. `loom.config` returns in-memory resolved config to
+Python callers, while the run-store defaults avoid resolver outputs, raw source
+bytes, and full `config/resolved.yaml` / `config/resolved.redacted.yaml`
+snapshots. Plain mapping configs may still use legacy snapshot names as
+caller-provided runtime data.
 
 The layout should favor debuggability over cleverness.
 
@@ -413,7 +424,8 @@ Stages can opt into stricter or looser checks through declared policies, but def
 
 ## 11. Provenance
 
-`loom` should record:
+Long-term provenance work should be able to record the following facts when the
+corresponding feature exists:
 
 ```text
 raw config
@@ -432,6 +444,12 @@ stage fingerprints
 input artifact references
 output artifact references
 ```
+
+Current v1-post composed-config defaults are narrower: runner persistence writes
+`config/composition_manifest.json`, `config/recipe_manifest.json`, and
+artifact-safe config provenance in run metadata. It does not write default raw
+config, resolved config, redacted resolved config, or CLI override snapshot
+files for composed configs.
 
 Provenance structures should remain generic. User code can add application-specific metadata to records, resources, artifacts, and stage provenance.
 
@@ -472,10 +490,12 @@ Migration and rename notes for the v0 hardening closeout are in
 
 ## 13. CLI
 
-The functional CLI is post-v0. V0 may contain import-safe CLI modules or entry
-points that fail with an explicit unsupported error.
+The functional CLI remains future roadmap work. V1-post is Python-API-only and
+does not expose functional `loom` commands or console script entry points. Older
+v0 import-safe CLI modules, when present, fail with an explicit unsupported
+error.
 
-Post-v0, `loom` can expose low-level commands:
+Future `loom` CLI work can expose low-level commands:
 
 ```text
 loom validate CONFIG
@@ -529,10 +549,11 @@ Build `loom` in small, testable layers:
 5. Resume behavior.
 6. Hardening, docs, and import-safe unsupported CLI stubs for v0.
 
-Roadmap versions after v0 add functional CLI wrappers, v1 config composition,
-subprocess execution, SLURM execution, containers, sweeps, remote stores,
-plugin discovery, retries, timeouts, cleanup, retention, and broader
-reliability policies.
+Roadmap versions after v0 add capabilities incrementally. V1-post adds Python
+API config composition; functional CLI wrappers, subprocess execution, SLURM
+execution, containers, sweeps, remote stores, plugin discovery, retries,
+timeouts, cleanup, retention, and broader reliability policies remain future
+work.
 
 Each layer should include focused tests before the next layer depends on it.
 
