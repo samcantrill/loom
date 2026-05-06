@@ -332,7 +332,7 @@ Phase metadata:
 
 ### Phase 3. Source Authorship And Structured Error Completion
 
-Status: pending
+Status: merged
 
 Goal:
 
@@ -375,6 +375,32 @@ Required evidence:
 - E2E: deferred unless the phase changes public runner behavior.
 - Opt-in/config-extra: redaction tests proving secret-like override values are
   not exposed.
+
+Phase metadata:
+
+- Branch: `codex/v1-post-source-errors`
+- Worktree: `/home/samcantrill/work/loom-worktrees/v1-post-source-errors`
+- Stack predecessor: none
+- PR target: `develop`
+- PRs:
+  - https://github.com/samcantrill/loom/pull/48
+  - https://github.com/samcantrill/loom/pull/49
+- Merge: PR #48 squash-merged into `develop` on 2026-05-06; a post-review
+  blocker fix landed through PR #49 after the original phase PR merged
+  unexpectedly with review blockers outstanding.
+- Implementation summary: added metadata-only source authorship facts,
+  structured context for config composition/instantiation diagnostics,
+  include-stack/remediation details, source-aware interpolation/resolver
+  diagnostics, and redaction-safe authorship/error/provenance/fingerprint
+  metadata. PR #49 completed the missing structured context for recipe argument
+  interpolation and artifact/provenance construction/serialization failures.
+- Test results summary: PR #48 `make validate-pr` passed and `make
+  test-summary` passed with 788 passed and 9 skipped. PR #49 focused tests,
+  Ruff, Pyright, and GitHub CI `checks` passed before merge.
+- Follow-up notes: Phase 4 still owns artifact-before-resolver ordering and
+  provenance schema-version-2 writes; Phase 5 still owns run-store composition
+  manifest persistence and default resolved-config persistence removal. No
+  successor branch depended on the Phase 3 branch at merge time.
 
 ### Phase 4. Artifact-Safe Ordering And Provenance
 
