@@ -395,8 +395,7 @@ result: passed; package 39 passed and 1 skipped, unit 364 passed and 1 skipped, 
 - PR-prep commit: `5276d88` (`docs: add phase 7 pr body`) added the public PR
   body artifact before PR creation.
 - GitHub checks: `gh pr checks 57` reported GitHub Actions `checks` as pending
-  after the final metadata push:
-  https://github.com/samcantrill/loom/actions/runs/25418821825/job/74556050439
+  after the latest push; no failing GitHub checks were reported.
 
 ### PR-Preparation Validation Rerun
 
