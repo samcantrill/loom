@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; implementation pending
+- Status: implemented; PR preparation pending
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 2: Foundation and Shared Output`
 - Branch: `codex/add-cli-foundation`
@@ -17,7 +17,7 @@
 - Workflow path: expanded path, selected because this phase introduces the public console script, shared CLI error/JSON output contracts, and import-boundary policy used by later command phases.
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v2.md`; no blocking plan-review findings remain.
 - Draft/refine status: scope-complete plan drafted in this artifact; no separate refinement pass needed unless validation or review exposes a blocker.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: not needed; targeted validation and the PR gate passed without a refinement pass.
 - PR review budget: unused.
 - Blockers: none known.
 
@@ -104,8 +104,13 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed in this commit.
-- Implementation summary:
+- Implementation summary: added the `loom` console script entry point, import-light parser/help/version handling, return-code preserving `main(argv)`, placeholder `validate`/`plan`/`run` registrations, shared output format adapters, warning/result payloads, JSON envelope formatting, structured text/JSON error rendering, exit-code mapping, and traceback handling.
 - Implementation validation:
+  - `uv run pytest tests/unit/loom/cli tests/package/test_import.py tests/package/test_import_boundaries.py tests/package/test_public_api.py -q`: passed, 43 passed.
+  - `uv run ruff check .`: passed.
+  - `uv run --extra config pyright`: passed, 0 errors.
+  - `make validate-pr`: passed; Ruff, Pyright, default no-extra suite, config-extra suite, and build passed.
+  - `make test-summary`: passed; overall 850 passed, 9 skipped, 487 deselected.
 - PR preparation:
 - Merge notes:
-- Remaining blockers:
+- Remaining blockers: none known.
