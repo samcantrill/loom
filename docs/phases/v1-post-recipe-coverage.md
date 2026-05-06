@@ -289,6 +289,8 @@ make test-summary
   - `gh pr view 55 --json baseRefName,headRefName,state,url` returned
     `baseRefName=develop`, `headRefName=codex/v1-post-recipe-coverage`,
     `state=OPEN`, `url=https://github.com/samcantrill/loom/pull/55`.
+  - `gh pr checks 55` reported GitHub `checks` as pending immediately after
+    PR creation.
 - Known issues or blockers: none.
 - Refiner handoff: no failing or unavailable checks. Phase implementation
   refinement remains unused on the fast path.
