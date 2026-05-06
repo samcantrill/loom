@@ -105,6 +105,24 @@ def test_public_fingerprints_change_with_recipe_manifest(tmp_path: Path) -> None
     second = compose_config(base, recipe_catalog=catalog)
 
     assert first.fingerprint != second.fingerprint
+    first_fingerprint_recipe = cast(
+        list[dict[str, Any]],
+        first.fingerprint_records[0].metadata["recipe_manifest"],
+    )[0]
+    second_fingerprint_recipe = cast(
+        list[dict[str, Any]],
+        second.fingerprint_records[0].metadata["recipe_manifest"],
+    )[0]
+    assert first_fingerprint_recipe["arguments"] == {"value": "one"}
+    assert second_fingerprint_recipe["arguments"] == {"value": "two"}
+    assert first_fingerprint_recipe["expanded_hash"] != second_fingerprint_recipe["expanded_hash"]
+    assert (
+        compare_config_artifact_fingerprints(
+            left=first.fingerprint_records[0],
+            right=second.fingerprint_records[0],
+        ).status
+        == "mismatch"
+    )
     first_pipeline = cast(dict[str, Any], first.resolved["pipeline"])
     second_pipeline = cast(dict[str, Any], second.resolved["pipeline"])
     assert first_pipeline["value"] != second_pipeline["value"]
