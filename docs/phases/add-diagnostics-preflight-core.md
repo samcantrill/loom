@@ -451,8 +451,8 @@ make test-summary
   selected-group behavior, missing `RUN_URI` skip behavior, import-light
   expectations, test obligations, and lower-layer facade scope were tightened
   without changing stack target/base or expanding beyond Phase 1.
-- PR preparation: in progress on 2026-05-07 by `loom_pr_preparer`; public PR
-  body drafted at `docs/phases/add-diagnostics-preflight-core-pr-body.md`.
+- PR preparation: complete on 2026-05-07 by `loom_pr_preparer`; public PR body
+  drafted at `docs/phases/add-diagnostics-preflight-core-pr-body.md`.
 - PR body draft pass: complete on 2026-05-07.
 - PR body refine pass: not needed; using the fast PR-body path because the
   draft is concise, scope-complete, and evidence-backed.
@@ -461,7 +461,12 @@ make test-summary
 - PR target confirmed: `develop`.
 - PR head confirmed: `codex/add-diagnostics-preflight-core`.
 - PR feature focus confirmed: `Local Diagnostics`.
-- PR GitHub state: pending push and PR creation.
+- PR GitHub state: opened and verified.
+- PR URL: https://github.com/samcantrill/loom/pull/65
+- PR verification: `gh pr view 65 --json baseRefName,headRefName,state,url`
+  returned `baseRefName=develop`,
+  `headRefName=codex/add-diagnostics-preflight-core`, `state=OPEN`, and
+  `url=https://github.com/samcantrill/loom/pull/65`.
 - Stack maintenance: root phase; no predecessor maintenance pending. Branch was
   replayed onto `origin/develop` after validation to remove unrelated unpublished
   `.codex` workflow changes from the PR-facing diff while retaining the v3 plan
