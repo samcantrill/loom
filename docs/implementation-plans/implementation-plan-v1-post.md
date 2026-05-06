@@ -570,7 +570,7 @@ Phase metadata:
 
 ### Phase 6. Recipe Residual Risk And Coverage Hardening
 
-Status: pending
+Status: merged
 
 Goal:
 
@@ -617,6 +617,32 @@ Required evidence:
 - E2E: deferred; no full workflow behavior changes.
 - Opt-in/config-extra: config-marked rows must include the new recipe and
   compose coverage.
+
+Phase metadata:
+
+- Branch: `codex/v1-post-recipe-coverage`
+- Worktree: `/home/samcantrill/work/loom-worktrees/v1-post-recipe-coverage`
+- Stack predecessor: none
+- PR target: `develop`
+- PR: https://github.com/samcantrill/loom/pull/55
+- Merge: squash-merged into `develop` on 2026-05-06 after fast-path
+  implementation, PR review with no blocking findings, passing local
+  validation, and passing GitHub CI `checks`.
+- Implementation summary: added docs/tests only; recorded accepted debt for
+  opaque trusted-Python recipe branching on unresolved resolver text; added
+  public recipe artifact-safety assertions across recipe manifest, provenance,
+  composition manifest, and fingerprint records; added recipe fingerprint
+  mismatch coverage; added explicit `../shared/foo.yaml` include escape and
+  sibling local-customization provenance/manifest assertions; and guarded that
+  v1-post exposes no console script entry points.
+- Review notes: Phase review found no blocking issues. Low stale GitHub-check
+  wording in the PR body/phase notes was fixed before merge.
+- Validation: `make validate-pr` passed with Ruff, Pyright, default harness
+  `448 passed, 11 skipped`, config-extra harness `363 passed, 455 deselected`,
+  and `uv build`; `make test-summary` passed with overall `818 passed,
+  9 skipped, 455 deselected`; GitHub CI `checks` passed on PR #55.
+- Follow-up notes: Phase 7 still owns the final documentation/evidence sweep
+  and v2 handoff readiness check.
 
 ### Phase 7. Final Hardening, Documentation, And Evidence
 
