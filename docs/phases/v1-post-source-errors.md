@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open; expanded-path PR body refine/open pass complete
+- Status: pr_open; expanded-path PR body refine/open pass complete; user-authorized PR-review blocker-resolution pass complete
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 3: Source Authorship And Structured Error Completion`
 - Branch: `codex/v1-post-source-errors`
@@ -21,7 +21,7 @@
 - Draft pass: completed by `loom_phase_planner`
 - Refine pass: completed by `loom_phase_planner`; expanded path selected because this phase affects structured errors and source authorship across composition and instantiation behavior.
 - Setup limitations: `gh auth status` initially reported an invalid token inside the sandbox, then succeeded with approved network access; `gh auth setup-git` succeeded with approved access. `git fetch origin` and `git worktree add` required approved access after sandbox attempts could not write git metadata.
-- Blockers: none
+- Blockers: none after user-authorized PR-review blocker-resolution pass
 
 ## Objective
 
@@ -214,7 +214,9 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used
-- PR review: unused
+- PR review: used; review blockers addressed by one user-authorized scoped
+  blocker-resolution pass after the review budget was already consumed. This
+  pass did not reset the PR-review or implementation-refinement budgets.
 
 ## Completion Notes
 
@@ -392,3 +394,64 @@ make test-summary
   no stack predecessor to retarget or rebase.
 - Remaining blockers:
 - None.
+- User-authorized PR-review blocker-resolution pass:
+- Metadata: Phase 3, PR #48, branch `codex/v1-post-source-errors`, worktree
+  `/home/samcantrill/work/loom-worktrees/v1-post-source-errors`; pass date
+  2026-05-06. This was a scoped blocker-resolution pass, not a new
+  implementation-refinement loop.
+- Concrete blockers resolved:
+- Recipe argument interpolation lookup failures in
+  `src/loom/config/recipes/expansion.py` now raise `ConfigInterpolationError`
+  with `ConfigErrorContext` for invalid recipe names, invalid interpolation
+  tokens, unresolved paths, non-mapping parents, non-sequence indexes, and
+  out-of-range indexes. Context includes code, config path, stage
+  `recipe_argument_interpolation`, and redacted token details for
+  secret-like token paths.
+- Useful provenance and artifact construction/from_dict/serialization failures
+  in `src/loom/config/provenance.py` and `src/loom/config/artifacts.py` now
+  attach phase-scoped `ConfigErrorContext` with code, config path, stage,
+  expected/actual type facts, and exception type where relevant. A default
+  provenance context remains on any intentionally generic
+  `ConfigProvenanceError` paths, including raw-source snapshot helpers, so
+  public exception names stay context-bearing without broad hierarchy changes.
+- Tests added: unit coverage for unresolved, invalid, and secret-like
+  recipe-argument interpolation tokens; unit and contract coverage for
+  provenance source/override/provenance failures and artifact/manifest
+  construction/from_dict/serialization context.
+- Validation re-run:
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pytest tests/unit/loom/config/recipes/test_expansion.py
+  tests/unit/loom/config/test_config_provenance.py
+  tests/unit/loom/config/test_config_artifacts.py
+  tests/contracts/test_config_artifact_contract.py` passed: 49 passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pytest tests/unit/loom/config/test_config_errors.py
+  tests/contracts/test_config_error_contract.py` passed: 15 passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config ruff
+  check src/loom/config/errors.py src/loom/config/recipes/expansion.py
+  src/loom/config/provenance.py src/loom/config/artifacts.py
+  tests/unit/loom/config/recipes/test_expansion.py
+  tests/unit/loom/config/test_config_provenance.py
+  tests/unit/loom/config/test_config_artifacts.py
+  tests/contracts/test_config_artifact_contract.py` passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pyright src/loom/config/errors.py src/loom/config/recipes/expansion.py
+  src/loom/config/provenance.py src/loom/config/artifacts.py
+  tests/unit/loom/config/recipes/test_expansion.py
+  tests/unit/loom/config/test_config_provenance.py
+  tests/unit/loom/config/test_config_artifacts.py
+  tests/contracts/test_config_artifact_contract.py` passed: 0 errors.
+- `UV_CACHE_DIR=/tmp/uv-cache make test-config-extra` passed: 353 passed,
+  443 deselected.
+- GitHub state reviewed: `gh pr view 48 --json
+  state,baseRefName,headRefName,url,statusCheckRollup` reported
+  `state=MERGED`, `baseRefName=develop`,
+  `headRefName=codex/v1-post-source-errors`, and prior CI check `checks`
+  successful. This pass did not approve or merge the PR.
+- Scope confirmation: no Phase 4 provenance schema-version-2,
+  resolved-fingerprint removal, artifact-before-resolver ordering, or
+  artifact-safe ordering changes; no Phase 5 pipeline/store/run-store
+  persistence; no resolver allow-list, CLI, `_copy_`, or public error
+  hierarchy redesign.
+- Remaining blockers:
+- None for the concrete PR-review blockers in this user-authorized pass.

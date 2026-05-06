@@ -29,7 +29,8 @@ New tests implemented:
 - Source-aware resolver errors for overlay- and override-authored values.
 - Include-stack/remediation coverage for nested include resolution failures.
 - Structured context contract coverage for existing public error names.
-- Unit coverage for merge, override, recipe, target import, target instantiation, and fingerprint redaction paths.
+- Unit coverage for merge, override, recipe, recipe-argument interpolation, provenance, artifact/manifest, target import, target instantiation, and fingerprint redaction paths.
+- Contract coverage for context-bearing provenance and artifact/manifest from_dict failures.
 - Public redaction matrix coverage for parent secret-like override paths, include local customizations, recipe arguments, provenance, manifests, fingerprints, and serialized errors.
 
 ## Tests And Validation
@@ -38,7 +39,8 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default suite passed with 436 passed/11 skipped; config-extra passed with 346 passed/442 deselected; `uv build` produced sdist and wheel. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md` on 2026-05-06T02:43:20+00:00; overall 788 passed, 9 skipped, 442 deselected. |
-| GitHub checks | Pending | Expected to run after this refine/open pass creates the PR. |
+| PR #48 GitHub checks | Passed before blocker-resolution pass | `checks` completed successfully on 2026-05-06T02:50:43Z. On 2026-05-06, `gh pr view 48 --json state,baseRefName,headRefName,url,statusCheckRollup` reported `state=MERGED`, `baseRefName=develop`, and `headRefName=codex/v1-post-source-errors`; this pass did not approve or merge the PR. |
+| Blocker-resolution focused tests | Passed | Recipe/provenance/artifact contract focus: 49 passed; config error contract focus: 15 passed; focused Ruff passed; focused Pyright reported 0 errors; `make test-config-extra` passed with 353 passed/443 deselected. |
 
 ### Test Suite Summary
 

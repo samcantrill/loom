@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from loom.serialization import PlainData, to_plain_data
 from loom.serialization.errors import PlainDataError
@@ -15,6 +15,7 @@ from loom.config.errors import (
     RecipeExpansionError,
     ReservedConfigKeyError,
 )
+from loom.config.redaction import REDACTION_MARKER, is_secret_path
 
 from .base import ConfigRecipe, Recipe, RecipeImplementation
 from .catalog import RecipeCatalog
@@ -123,9 +124,23 @@ def _resolve_recipe_arguments(node: Any, *, root: Mapping[str, Any], path: str) 
 def _resolve_recipe_args_node(node: Mapping[str, Any], *, root: Mapping[str, Any], path: str) -> dict[str, Any]:
     recipe_name = node.get("_recipe_")
     if not isinstance(recipe_name, str):
-        raise ConfigInterpolationError(f"_recipe_ must be a string at {path}")
+        _raise_recipe_argument_interpolation_error(
+            f"_recipe_ must be a string at {path}",
+            code="recipe_argument_recipe_name_not_string",
+            path=path,
+            expected="string",
+            actual=type(recipe_name).__name__,
+            directive="_recipe_",
+        )
     if recipe_name == "":
-        raise ConfigInterpolationError(f"_recipe_ must be a non-empty string at {path}")
+        _raise_recipe_argument_interpolation_error(
+            f"_recipe_ must be a non-empty string at {path}",
+            code="recipe_argument_recipe_name_empty",
+            path=path,
+            expected="non-empty string",
+            actual="empty string",
+            directive="_recipe_",
+        )
 
     _validate_recipe_reserved_keys(node, path=path)
     _reject_nested_recipe(node, path=path)
@@ -189,31 +204,128 @@ def _lookup_interpolation_token(token: str, *, root: Mapping[str, Any], path: st
 
     for segment in token.split("."):
         if not segment:
-            raise ConfigInterpolationError(f"Invalid interpolation token {token!r} at {path}")
+            _raise_recipe_argument_interpolation_error(
+                f"Invalid interpolation token {token!r} at {path}",
+                code="recipe_argument_interpolation_invalid_token",
+                path=path,
+                token=token,
+            )
 
         if segment.startswith("["):
-            raise ConfigInterpolationError(f"Interpolation token {token!r} must start with a mapping key at {path}")
+            _raise_recipe_argument_interpolation_error(
+                f"Interpolation token {token!r} must start with a mapping key at {path}",
+                code="recipe_argument_interpolation_invalid_token_root",
+                path=path,
+                token=token,
+                segment=segment,
+                expected="mapping key",
+                actual="index",
+            )
 
         match = _SEGMENT_RE.fullmatch(segment)
         if not match:
-            raise ConfigInterpolationError(f"Invalid interpolation path segment {segment!r} in {token!r} at {path}")
+            _raise_recipe_argument_interpolation_error(
+                f"Invalid interpolation path segment {segment!r} in {token!r} at {path}",
+                code="recipe_argument_interpolation_invalid_segment",
+                path=path,
+                token=token,
+                segment=segment,
+                expected="identifier with optional list indexes",
+                actual="invalid segment",
+            )
 
         name = match.group("name")
         if not isinstance(current, Mapping):
-            raise ConfigInterpolationError(f"Cannot resolve interpolation token {token!r} at {path}: {name!r} is not a mapping")
+            _raise_recipe_argument_interpolation_error(
+                f"Cannot resolve interpolation token {token!r} at {path}: {name!r} is not a mapping",
+                code="recipe_argument_interpolation_non_mapping_parent",
+                path=path,
+                token=token,
+                segment=name,
+                expected="mapping",
+                actual=type(current).__name__,
+            )
         if name not in current:
-            raise ConfigInterpolationError(f"Interpolation token {token!r} at {path} is unresolved")
+            _raise_recipe_argument_interpolation_error(
+                f"Interpolation token {token!r} at {path} is unresolved",
+                code="recipe_argument_interpolation_unresolved",
+                path=path,
+                token=token,
+                segment=name,
+                expected="existing config path",
+                actual="missing",
+            )
 
         current = current[name]
         for index_text in re.findall(r"\[([0-9]+)\]", match.group("indices")):
             index = int(index_text)
             if not isinstance(current, list):
-                raise ConfigInterpolationError(f"Cannot apply index [{index}] for {token!r} at {path}")
+                _raise_recipe_argument_interpolation_error(
+                    f"Cannot apply index [{index}] for {token!r} at {path}",
+                    code="recipe_argument_interpolation_non_sequence_index",
+                    path=path,
+                    token=token,
+                    segment=name,
+                    expected="list",
+                    actual=type(current).__name__,
+                    details={"index": index},
+                )
             if index < 0 or index >= len(current):
-                raise ConfigInterpolationError(f"Interpolation index [{index}] out of range for {token!r} at {path}")
+                _raise_recipe_argument_interpolation_error(
+                    f"Interpolation index [{index}] out of range for {token!r} at {path}",
+                    code="recipe_argument_interpolation_index_out_of_range",
+                    path=path,
+                    token=token,
+                    segment=name,
+                    expected="valid list index",
+                    actual="out of range",
+                    details={"index": index, "sequence_length": len(current)},
+                )
             current = current[index]
 
     return current
+
+
+def _raise_recipe_argument_interpolation_error(
+    message: str,
+    *,
+    code: str,
+    path: str,
+    token: str | None = None,
+    segment: str | None = None,
+    expected: object | None = None,
+    actual: object | None = None,
+    directive: str | None = None,
+    details: dict[str, object] | None = None,
+) -> NoReturn:
+    safe_details = _safe_recipe_token_details(token=token, segment=segment)
+    if details is not None:
+        safe_details.update(details)
+    raise ConfigInterpolationError(
+        message,
+        context=_recipe_context(
+            code=code,
+            path=path,
+            stage="recipe_argument_interpolation",
+            expected=expected,
+            actual=actual,
+            directive=directive,
+            details=safe_details,
+        ),
+    )
+
+
+def _safe_recipe_token_details(*, token: str | None, segment: str | None) -> dict[str, object]:
+    details: dict[str, object] = {}
+    if token is not None:
+        token_is_secret_path = is_secret_path(token)
+        details["token"] = REDACTION_MARKER if token_is_secret_path else token
+        details["token_redacted"] = token_is_secret_path
+    if segment is not None:
+        segment_is_secret_path = is_secret_path(segment)
+        details["token_segment"] = REDACTION_MARKER if segment_is_secret_path else segment
+        details["token_segment_redacted"] = segment_is_secret_path
+    return details
 
 
 def _expand_node(node: Any, *, catalog: RecipeCatalog, path: str) -> tuple[PlainData, tuple[RecipeManifestRecord, ...]]:

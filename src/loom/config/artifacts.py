@@ -6,9 +6,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias, cast
 
-from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data
+from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data, to_plain_data
 
-from .errors import ConfigProvenanceError
+from .errors import ConfigErrorContext, ConfigProvenanceError
 
 SCHEMA_VERSION = 1
 _SourceArtifactKind: TypeAlias = Literal["base", "overlay", "include", "recipe"]
@@ -313,21 +313,71 @@ class SourceArtifactRecord:
 
     def __post_init__(self) -> None:
         if not isinstance(self.schema_version, int) or isinstance(self.schema_version, bool) or self.schema_version < 1:
-            raise ConfigProvenanceError("schema_version must be a positive integer")
+            raise _artifact_error(
+                "schema_version must be a positive integer",
+                code="invalid_source_artifact_schema_version",
+                path="SourceArtifactRecord.schema_version",
+                stage="artifact_construction",
+                expected="positive integer",
+                actual=self.schema_version,
+            )
         if self.kind not in _SOURCE_ARTIFACT_KINDS:
-            raise ConfigProvenanceError(f"Invalid source artifact kind: {self.kind!r}")
+            raise _artifact_error(
+                f"Invalid source artifact kind: {self.kind!r}",
+                code="invalid_source_artifact_kind",
+                path="SourceArtifactRecord.kind",
+                stage="artifact_construction",
+                expected="base, overlay, include, or recipe",
+                actual=self.kind,
+            )
         if not isinstance(self.path, str) or not self.path:
-            raise ConfigProvenanceError(f"Invalid source artifact path: {self.path!r}")
+            raise _artifact_error(
+                f"Invalid source artifact path: {self.path!r}",
+                code="invalid_source_artifact_path",
+                path="SourceArtifactRecord.path",
+                stage="artifact_construction",
+                expected="non-empty string",
+                actual=self.path,
+            )
         if not isinstance(self.order, int) or self.order < 0:
-            raise ConfigProvenanceError(f"Invalid source artifact order: {self.order!r}")
+            raise _artifact_error(
+                f"Invalid source artifact order: {self.order!r}",
+                code="invalid_source_artifact_order",
+                path="SourceArtifactRecord.order",
+                stage="artifact_construction",
+                expected="non-negative integer",
+                actual=self.order,
+            )
         if not isinstance(self.content_digest, str) or not self.content_digest:
-            raise ConfigProvenanceError(f"Invalid source artifact digest: {self.content_digest!r}")
+            raise _artifact_error(
+                f"Invalid source artifact digest: {self.content_digest!r}",
+                code="invalid_source_artifact_digest",
+                path="SourceArtifactRecord.content_digest",
+                stage="artifact_construction",
+                expected="non-empty string",
+                actual=self.content_digest,
+            )
         if not isinstance(self.size_bytes, int) or self.size_bytes < 0:
-            raise ConfigProvenanceError(f"Invalid source artifact size: {self.size_bytes!r}")
+            raise _artifact_error(
+                f"Invalid source artifact size: {self.size_bytes!r}",
+                code="invalid_source_artifact_size",
+                path="SourceArtifactRecord.size_bytes",
+                stage="artifact_construction",
+                expected="non-negative integer",
+                actual=self.size_bytes,
+            )
         try:
             frozen_metadata = freeze_plain_data(self.metadata, path="SourceArtifactRecord.metadata")
         except Exception as exc:  # noqa: BLE001
-            raise ConfigProvenanceError("source artifact metadata must be plain data") from exc
+            raise _artifact_error(
+                "source artifact metadata must be plain data",
+                code="source_artifact_metadata_not_plain_data",
+                path="SourceArtifactRecord.metadata",
+                stage="artifact_construction",
+                expected="plain-data mapping",
+                actual=self.metadata,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
         object.__setattr__(self, "metadata", cast(dict[str, PlainData], frozen_metadata))
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -343,9 +393,27 @@ class SourceArtifactRecord:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "SourceArtifactRecord":
-        payload = ensure_plain_data(value, path="SourceArtifactRecord")
+        try:
+            payload = ensure_plain_data(value, path="SourceArtifactRecord")
+        except Exception as exc:  # noqa: BLE001
+            raise _artifact_error(
+                "Invalid source artifact data",
+                code="source_artifact_invalid_plain_data",
+                path="SourceArtifactRecord",
+                stage="artifact_from_dict",
+                expected="plain-data mapping",
+                actual=value,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
         if not isinstance(payload, Mapping):
-            raise ConfigProvenanceError("Invalid source artifact payload; expected a mapping")
+            raise _artifact_error(
+                "Invalid source artifact payload; expected a mapping",
+                code="source_artifact_payload_not_mapping",
+                path="SourceArtifactRecord",
+                stage="artifact_from_dict",
+                expected="mapping",
+                actual=payload,
+            )
 
         payload_keys = set(payload)
         allowed_keys = {
@@ -359,9 +427,15 @@ class SourceArtifactRecord:
         }
         unknown = payload_keys - allowed_keys
         if unknown:
-            raise ConfigProvenanceError(
+            raise _artifact_error(
                 "SourceArtifactRecord.from_dict received unknown fields: "
-                f"{', '.join(sorted(unknown))}"
+                f"{', '.join(sorted(unknown))}",
+                code="source_artifact_unknown_fields",
+                path="SourceArtifactRecord",
+                stage="artifact_from_dict",
+                expected="known SourceArtifactRecord fields",
+                actual="unknown fields",
+                details={"unknown_fields": sorted(unknown)},
             )
 
         schema_version = payload.get("schema_version")
@@ -372,20 +446,69 @@ class SourceArtifactRecord:
         size_bytes = payload.get("size_bytes")
         metadata = payload.get("metadata", {})
         if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:
-            raise ConfigProvenanceError(f"Invalid schema_version: {schema_version!r}")
+            raise _artifact_error(
+                f"Invalid schema_version: {schema_version!r}",
+                code="invalid_source_artifact_schema_version",
+                path="SourceArtifactRecord.schema_version",
+                stage="artifact_from_dict",
+                expected="positive integer",
+                actual=schema_version,
+            )
         if not isinstance(order, int) or order < 0:
-            raise ConfigProvenanceError(f"Invalid order: {order!r}")
+            raise _artifact_error(
+                f"Invalid order: {order!r}",
+                code="invalid_source_artifact_order",
+                path="SourceArtifactRecord.order",
+                stage="artifact_from_dict",
+                expected="non-negative integer",
+                actual=order,
+            )
         if not isinstance(path, str) or not path:
-            raise ConfigProvenanceError(f"Invalid path: {path!r}")
+            raise _artifact_error(
+                f"Invalid path: {path!r}",
+                code="invalid_source_artifact_path",
+                path="SourceArtifactRecord.path",
+                stage="artifact_from_dict",
+                expected="non-empty string",
+                actual=path,
+            )
         if kind not in _SOURCE_ARTIFACT_KINDS:
-            raise ConfigProvenanceError(f"Invalid source artifact kind: {kind!r}")
+            raise _artifact_error(
+                f"Invalid source artifact kind: {kind!r}",
+                code="invalid_source_artifact_kind",
+                path="SourceArtifactRecord.kind",
+                stage="artifact_from_dict",
+                expected="base, overlay, include, or recipe",
+                actual=kind,
+            )
         if not isinstance(content_digest, str) or not content_digest:
-            raise ConfigProvenanceError(f"Invalid content_digest: {content_digest!r}")
+            raise _artifact_error(
+                f"Invalid content_digest: {content_digest!r}",
+                code="invalid_source_artifact_digest",
+                path="SourceArtifactRecord.content_digest",
+                stage="artifact_from_dict",
+                expected="non-empty string",
+                actual=content_digest,
+            )
         if not isinstance(size_bytes, int) or size_bytes < 0:
-            raise ConfigProvenanceError(f"Invalid size_bytes: {size_bytes!r}")
+            raise _artifact_error(
+                f"Invalid size_bytes: {size_bytes!r}",
+                code="invalid_source_artifact_size",
+                path="SourceArtifactRecord.size_bytes",
+                stage="artifact_from_dict",
+                expected="non-negative integer",
+                actual=size_bytes,
+            )
 
         if not isinstance(metadata, Mapping):
-            raise ConfigProvenanceError("SourceArtifactRecord metadata must be a mapping")
+            raise _artifact_error(
+                "SourceArtifactRecord metadata must be a mapping",
+                code="source_artifact_metadata_not_mapping",
+                path="SourceArtifactRecord.metadata",
+                stage="artifact_from_dict",
+                expected="mapping",
+                actual=metadata,
+            )
         return cls(
             schema_version=schema_version,
             kind=cast(_SourceArtifactKind, kind),
@@ -409,17 +532,53 @@ class ConfigFingerprintRecord:
 
     def __post_init__(self) -> None:
         if not isinstance(self.schema_version, int) or isinstance(self.schema_version, bool) or self.schema_version < 1:
-            raise ConfigProvenanceError("schema_version must be a positive integer")
+            raise _artifact_error(
+                "schema_version must be a positive integer",
+                code="invalid_config_fingerprint_schema_version",
+                path="ConfigFingerprintRecord.schema_version",
+                stage="artifact_construction",
+                expected="positive integer",
+                actual=self.schema_version,
+            )
         if not isinstance(self.digest, str) or not self.digest:
-            raise ConfigProvenanceError("digest must be a non-empty string")
+            raise _artifact_error(
+                "digest must be a non-empty string",
+                code="invalid_config_fingerprint_digest",
+                path="ConfigFingerprintRecord.digest",
+                stage="artifact_construction",
+                expected="non-empty string",
+                actual=self.digest,
+            )
         if not isinstance(self.label, str) or not self.label:
-            raise ConfigProvenanceError("label must be a non-empty string")
+            raise _artifact_error(
+                "label must be a non-empty string",
+                code="invalid_config_fingerprint_label",
+                path="ConfigFingerprintRecord.label",
+                stage="artifact_construction",
+                expected="non-empty string",
+                actual=self.label,
+            )
         if not isinstance(self.algorithm, str) or not self.algorithm:
-            raise ConfigProvenanceError("algorithm must be a non-empty string")
+            raise _artifact_error(
+                "algorithm must be a non-empty string",
+                code="invalid_config_fingerprint_algorithm",
+                path="ConfigFingerprintRecord.algorithm",
+                stage="artifact_construction",
+                expected="non-empty string",
+                actual=self.algorithm,
+            )
         try:
             frozen_metadata = freeze_plain_data(self.metadata, path="ConfigFingerprintRecord.metadata")
         except Exception as exc:  # noqa: BLE001
-            raise ConfigProvenanceError("ConfigFingerprintRecord metadata must be plain data") from exc
+            raise _artifact_error(
+                "ConfigFingerprintRecord metadata must be plain data",
+                code="config_fingerprint_metadata_not_plain_data",
+                path="ConfigFingerprintRecord.metadata",
+                stage="artifact_construction",
+                expected="plain-data mapping",
+                actual=self.metadata,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
         object.__setattr__(self, "metadata", cast(dict[str, PlainData], frozen_metadata))
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -433,17 +592,41 @@ class ConfigFingerprintRecord:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ConfigFingerprintRecord":
-        payload = ensure_plain_data(value, path="ConfigFingerprintRecord")
+        try:
+            payload = ensure_plain_data(value, path="ConfigFingerprintRecord")
+        except Exception as exc:  # noqa: BLE001
+            raise _artifact_error(
+                "Invalid fingerprint data",
+                code="config_fingerprint_invalid_plain_data",
+                path="ConfigFingerprintRecord",
+                stage="artifact_from_dict",
+                expected="plain-data mapping",
+                actual=value,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
         if not isinstance(payload, Mapping):
-            raise ConfigProvenanceError("Invalid fingerprint payload; expected a mapping")
+            raise _artifact_error(
+                "Invalid fingerprint payload; expected a mapping",
+                code="config_fingerprint_payload_not_mapping",
+                path="ConfigFingerprintRecord",
+                stage="artifact_from_dict",
+                expected="mapping",
+                actual=payload,
+            )
 
         payload_keys = set(payload)
         allowed_keys = {"schema_version", "digest", "label", "algorithm", "metadata"}
         unknown = payload_keys - allowed_keys
         if unknown:
-            raise ConfigProvenanceError(
+            raise _artifact_error(
                 "ConfigFingerprintRecord.from_dict received unknown fields: "
-                f"{', '.join(sorted(unknown))}"
+                f"{', '.join(sorted(unknown))}",
+                code="config_fingerprint_unknown_fields",
+                path="ConfigFingerprintRecord",
+                stage="artifact_from_dict",
+                expected="known ConfigFingerprintRecord fields",
+                actual="unknown fields",
+                details={"unknown_fields": sorted(unknown)},
             )
 
         schema_version = payload.get("schema_version")
@@ -452,15 +635,50 @@ class ConfigFingerprintRecord:
         algorithm = payload.get("algorithm", "sha256")
         metadata = payload.get("metadata", {})
         if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:
-            raise ConfigProvenanceError(f"Invalid schema_version: {schema_version!r}")
+            raise _artifact_error(
+                f"Invalid schema_version: {schema_version!r}",
+                code="invalid_config_fingerprint_schema_version",
+                path="ConfigFingerprintRecord.schema_version",
+                stage="artifact_from_dict",
+                expected="positive integer",
+                actual=schema_version,
+            )
         if not isinstance(digest, str) or not digest:
-            raise ConfigProvenanceError(f"Invalid digest: {digest!r}")
+            raise _artifact_error(
+                f"Invalid digest: {digest!r}",
+                code="invalid_config_fingerprint_digest",
+                path="ConfigFingerprintRecord.digest",
+                stage="artifact_from_dict",
+                expected="non-empty string",
+                actual=digest,
+            )
         if not isinstance(label, str) or not label:
-            raise ConfigProvenanceError(f"Invalid label: {label!r}")
+            raise _artifact_error(
+                f"Invalid label: {label!r}",
+                code="invalid_config_fingerprint_label",
+                path="ConfigFingerprintRecord.label",
+                stage="artifact_from_dict",
+                expected="non-empty string",
+                actual=label,
+            )
         if not isinstance(algorithm, str) or not algorithm:
-            raise ConfigProvenanceError(f"Invalid algorithm: {algorithm!r}")
+            raise _artifact_error(
+                f"Invalid algorithm: {algorithm!r}",
+                code="invalid_config_fingerprint_algorithm",
+                path="ConfigFingerprintRecord.algorithm",
+                stage="artifact_from_dict",
+                expected="non-empty string",
+                actual=algorithm,
+            )
         if not isinstance(metadata, Mapping):
-            raise ConfigProvenanceError("ConfigFingerprintRecord metadata must be a mapping")
+            raise _artifact_error(
+                "ConfigFingerprintRecord metadata must be a mapping",
+                code="config_fingerprint_metadata_not_mapping",
+                path="ConfigFingerprintRecord.metadata",
+                stage="artifact_from_dict",
+                expected="mapping",
+                actual=metadata,
+            )
 
         return cls(
             schema_version=schema_version,
@@ -487,13 +705,28 @@ class CompositionManifest:
 
     def __post_init__(self) -> None:
         if not isinstance(self.schema_version, int) or isinstance(self.schema_version, bool) or self.schema_version < 1:
-            raise ConfigProvenanceError("schema_version must be a positive integer")
+            raise _artifact_error(
+                "schema_version must be a positive integer",
+                code="invalid_composition_manifest_schema_version",
+                path="CompositionManifest.schema_version",
+                stage="manifest_construction",
+                expected="positive integer",
+                actual=self.schema_version,
+            )
         try:
             frozen_sources = tuple(self.source_artifacts)
             frozen_fingerprints = tuple(self.fingerprint_records)
             frozen_metadata = freeze_plain_data(self.metadata, path="CompositionManifest.metadata")
         except Exception as exc:  # noqa: BLE001
-            raise ConfigProvenanceError("CompositionManifest fields must be plain-data-compatible") from exc
+            raise _artifact_error(
+                "CompositionManifest fields must be plain-data-compatible",
+                code="composition_manifest_fields_not_plain_data",
+                path="CompositionManifest",
+                stage="manifest_construction",
+                expected="plain-data-compatible fields",
+                actual=self.metadata,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
 
         try:
             normalized_recipe_manifest = _to_recipe_manifest_payload(tuple(self.recipe_manifest))
@@ -507,7 +740,15 @@ class CompositionManifest:
         except ConfigProvenanceError:
             raise
         except Exception as exc:  # noqa: BLE001
-            raise ConfigProvenanceError("CompositionManifest recipe_manifest must be plain data") from exc
+            raise _artifact_error(
+                "CompositionManifest recipe_manifest must be plain data",
+                code="composition_manifest_recipe_manifest_not_plain_data",
+                path="CompositionManifest.recipe_manifest",
+                stage="manifest_construction",
+                expected="plain-data sequence",
+                actual=self.recipe_manifest,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
 
         object.__setattr__(self, "source_artifacts", frozen_sources)
         object.__setattr__(self, "fingerprint_records", frozen_fingerprints)
@@ -515,15 +756,34 @@ class CompositionManifest:
         object.__setattr__(self, "metadata", cast(dict[str, PlainData], frozen_metadata))
         for index, source_artifact in enumerate(self.source_artifacts):
             if not isinstance(source_artifact, SourceArtifactRecord):
-                raise ConfigProvenanceError(f"source_artifacts[{index}] must be SourceArtifactRecord")
+                raise _artifact_error(
+                    f"source_artifacts[{index}] must be SourceArtifactRecord",
+                    code="composition_manifest_invalid_source_artifact",
+                    path=f"CompositionManifest.source_artifacts[{index}]",
+                    stage="manifest_construction",
+                    expected="SourceArtifactRecord",
+                    actual=source_artifact,
+                )
         for index, fingerprint_record in enumerate(self.fingerprint_records):
             if not isinstance(fingerprint_record, ConfigFingerprintRecord):
-                raise ConfigProvenanceError(
-                    f"fingerprint_records[{index}] must be ConfigFingerprintRecord"
+                raise _artifact_error(
+                    f"fingerprint_records[{index}] must be ConfigFingerprintRecord",
+                    code="composition_manifest_invalid_fingerprint_record",
+                    path=f"CompositionManifest.fingerprint_records[{index}]",
+                    stage="manifest_construction",
+                    expected="ConfigFingerprintRecord",
+                    actual=fingerprint_record,
                 )
         for index, record in enumerate(self.recipe_manifest):
             if not isinstance(record, Mapping):
-                raise ConfigProvenanceError(f"recipe_manifest[{index}] must be mapping")
+                raise _artifact_error(
+                    f"recipe_manifest[{index}] must be mapping",
+                    code="composition_manifest_invalid_recipe_manifest_record",
+                    path=f"CompositionManifest.recipe_manifest[{index}]",
+                    stage="manifest_construction",
+                    expected="mapping",
+                    actual=record,
+                )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -536,9 +796,27 @@ class CompositionManifest:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CompositionManifest":
-        payload = ensure_plain_data(value, path="CompositionManifest")
+        try:
+            payload = ensure_plain_data(value, path="CompositionManifest")
+        except Exception as exc:  # noqa: BLE001
+            raise _artifact_error(
+                "Invalid composition manifest data",
+                code="composition_manifest_invalid_plain_data",
+                path="CompositionManifest",
+                stage="manifest_from_dict",
+                expected="plain-data mapping",
+                actual=value,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
         if not isinstance(payload, Mapping):
-            raise ConfigProvenanceError("Invalid composition manifest payload; expected a mapping")
+            raise _artifact_error(
+                "Invalid composition manifest payload; expected a mapping",
+                code="composition_manifest_payload_not_mapping",
+                path="CompositionManifest",
+                stage="manifest_from_dict",
+                expected="mapping",
+                actual=payload,
+            )
 
         payload_keys = set(payload)
         allowed_keys = {
@@ -550,29 +828,77 @@ class CompositionManifest:
         }
         unknown = payload_keys - allowed_keys
         if unknown:
-            raise ConfigProvenanceError(
+            raise _artifact_error(
                 "CompositionManifest.from_dict received unknown fields: "
-                f"{', '.join(sorted(unknown))}"
+                f"{', '.join(sorted(unknown))}",
+                code="composition_manifest_unknown_fields",
+                path="CompositionManifest",
+                stage="manifest_from_dict",
+                expected="known CompositionManifest fields",
+                actual="unknown fields",
+                details={"unknown_fields": sorted(unknown)},
             )
 
         schema_version = payload.get("schema_version")
         if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:
-            raise ConfigProvenanceError(f"Invalid schema_version: {schema_version!r}")
+            raise _artifact_error(
+                f"Invalid schema_version: {schema_version!r}",
+                code="invalid_composition_manifest_schema_version",
+                path="CompositionManifest.schema_version",
+                stage="manifest_from_dict",
+                expected="positive integer",
+                actual=schema_version,
+            )
 
         source_artifacts = payload.get("source_artifacts", ())
         if not isinstance(source_artifacts, Sequence):
-            raise ConfigProvenanceError("CompositionManifest source_artifacts must be a sequence")
+            raise _artifact_error(
+                "CompositionManifest source_artifacts must be a sequence",
+                code="composition_manifest_source_artifacts_not_sequence",
+                path="CompositionManifest.source_artifacts",
+                stage="manifest_from_dict",
+                expected="sequence",
+                actual=source_artifacts,
+            )
         if isinstance(source_artifacts, (bytes, str, Mapping)):
-            raise ConfigProvenanceError("CompositionManifest source_artifacts must be a sequence")
+            raise _artifact_error(
+                "CompositionManifest source_artifacts must be a sequence",
+                code="composition_manifest_source_artifacts_not_sequence",
+                path="CompositionManifest.source_artifacts",
+                stage="manifest_from_dict",
+                expected="sequence",
+                actual=source_artifacts,
+            )
         fingerprint_records = payload.get("fingerprint_records", ())
         if not isinstance(fingerprint_records, Sequence) or isinstance(fingerprint_records, (bytes, str, Mapping)):
-            raise ConfigProvenanceError("CompositionManifest fingerprint_records must be a sequence")
+            raise _artifact_error(
+                "CompositionManifest fingerprint_records must be a sequence",
+                code="composition_manifest_fingerprint_records_not_sequence",
+                path="CompositionManifest.fingerprint_records",
+                stage="manifest_from_dict",
+                expected="sequence",
+                actual=fingerprint_records,
+            )
         recipe_manifest = payload.get("recipe_manifest", ())
         if not isinstance(recipe_manifest, Sequence) or isinstance(recipe_manifest, (bytes, str, Mapping)):
-            raise ConfigProvenanceError("CompositionManifest recipe_manifest must be a sequence")
+            raise _artifact_error(
+                "CompositionManifest recipe_manifest must be a sequence",
+                code="composition_manifest_recipe_manifest_not_sequence",
+                path="CompositionManifest.recipe_manifest",
+                stage="manifest_from_dict",
+                expected="sequence",
+                actual=recipe_manifest,
+            )
 
         if not isinstance(payload.get("metadata", {}), Mapping):
-            raise ConfigProvenanceError("CompositionManifest metadata must be a mapping")
+            raise _artifact_error(
+                "CompositionManifest metadata must be a mapping",
+                code="composition_manifest_metadata_not_mapping",
+                path="CompositionManifest.metadata",
+                stage="manifest_from_dict",
+                expected="mapping",
+                actual=payload.get("metadata", {}),
+            )
 
         return cls(
             schema_version=schema_version,
@@ -592,16 +918,120 @@ def _to_recipe_manifest_payload(value: Sequence[object]) -> tuple[dict[str, Plai
     manifest_records: list[dict[str, PlainData]] = []
     for index, item in enumerate(value):
         if not isinstance(item, Mapping):
-            raise ConfigProvenanceError(f"recipe_manifest[{index}] must be mapping")
-        payload = ensure_plain_data(item, path=f"CompositionManifest.recipe_manifest[{index}]")
+            raise _artifact_error(
+                f"recipe_manifest[{index}] must be mapping",
+                code="recipe_manifest_record_not_mapping",
+                path=f"CompositionManifest.recipe_manifest[{index}]",
+                stage="manifest_serialization",
+                expected="mapping",
+                actual=item,
+            )
+        try:
+            payload = ensure_plain_data(item, path=f"CompositionManifest.recipe_manifest[{index}]")
+        except Exception as exc:  # noqa: BLE001
+            raise _artifact_error(
+                f"recipe_manifest[{index}] must be plain data",
+                code="recipe_manifest_record_not_plain_data",
+                path=f"CompositionManifest.recipe_manifest[{index}]",
+                stage="manifest_serialization",
+                expected="plain-data mapping",
+                actual=item,
+                details={"exception_type": type(exc).__name__},
+            ) from exc
         if not isinstance(payload, dict):
-            raise ConfigProvenanceError(f"recipe_manifest[{index}] must be a mapping")
+            raise _artifact_error(
+                f"recipe_manifest[{index}] must be a mapping",
+                code="recipe_manifest_record_not_plain_mapping",
+                path=f"CompositionManifest.recipe_manifest[{index}]",
+                stage="manifest_serialization",
+                expected="plain-data mapping",
+                actual=payload,
+            )
         manifest_records.append(payload)
     return tuple(manifest_records)
 
 
 def to_plain_mapping(value: Mapping[str, Any]) -> dict[str, PlainData]:
-    return cast(dict[str, PlainData], thaw_plain_data(value, path="mapping"))
+    try:
+        return cast(dict[str, PlainData], thaw_plain_data(value, path="mapping"))
+    except Exception as exc:  # noqa: BLE001
+        raise _artifact_error(
+            "mapping must be plain data",
+            code="artifact_mapping_serialization_failed",
+            path="mapping",
+            stage="artifact_serialization",
+            expected="plain-data mapping",
+            actual=value,
+            details={"exception_type": type(exc).__name__},
+        ) from exc
+
+
+def _artifact_error(
+    message: str,
+    *,
+    code: str,
+    path: str,
+    stage: str,
+    expected: object | None = None,
+    actual: object | None = None,
+    details: dict[str, object] | None = None,
+) -> ConfigProvenanceError:
+    return ConfigProvenanceError(
+        message,
+        context=_artifact_context(
+            code=code,
+            path=path,
+            stage=stage,
+            expected=expected,
+            actual=actual,
+            details=details,
+        ),
+    )
+
+
+def _artifact_context(
+    *,
+    code: str,
+    path: str,
+    stage: str,
+    expected: object | None = None,
+    actual: object | None = None,
+    details: dict[str, object] | None = None,
+) -> ConfigErrorContext:
+    context_details: dict[str, object] = {
+        "stage": stage,
+        "actual_type": type(actual).__name__ if actual is not None else None,
+    }
+    if details is not None:
+        context_details.update(details)
+    return ConfigErrorContext(
+        code=code,
+        source_kind="artifact",
+        source_order=0,
+        source_path="<composition-artifact>",
+        config_path=path,
+        expected=to_plain_data(expected) if expected is not None else None,
+        actual=_safe_context_actual(actual),
+        details=cast(dict[str, PlainData], to_plain_data(context_details)),
+    )
+
+
+def _safe_context_actual(value: object | None) -> PlainData | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, Mapping):
+        return "mapping"
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        return "sequence"
+    return type(value).__name__
 
 
 __all__ = [
