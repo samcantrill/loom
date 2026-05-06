@@ -111,6 +111,6 @@ make test-summary
   - `uv run --extra config pyright`: passed, 0 errors.
   - `make validate-pr`: passed; Ruff, Pyright, default no-extra suite, config-extra suite, and build passed.
   - `make test-summary`: passed; overall 850 passed, 9 skipped, 487 deselected.
-- PR preparation:
+- PR preparation: PR body drafted at `docs/phases/add-cli-foundation-pr-body.md`; PR not opened yet.
 - Merge notes:
 - Remaining blockers: none known.
