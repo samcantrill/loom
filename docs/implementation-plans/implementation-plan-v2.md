@@ -878,9 +878,9 @@ Completion summary:
 
 ### Phase 2 - CLI Foundation And Shared Infrastructure
 
-Status: pending
+Status: pr_open
 Branch: `codex/add-cli-foundation`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/60
 
 Goal:
 
@@ -961,7 +961,10 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- PR opened against `develop`: https://github.com/samcantrill/loom/pull/60
+- Implementation adds the import-light CLI foundation and shared output/error
+  helpers without implementing command behavior early.
+- Local validation passed with `make validate-pr` and `make test-summary`.
 
 ### Phase 3 - Validate Command
 
