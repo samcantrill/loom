@@ -301,12 +301,12 @@ def test_public_inspect_vs_compose_consistency_and_order(tmp_path: Path, monkeyp
         "recipe_expansion",
         "ordinary_overrides",
         "resolver_scan",
-        "runtime_interpolation",
-        "validation",
         "redaction",
         "provenance",
         "fingerprint",
         "artifact_placeholders",
+        "runtime_interpolation",
+        "validation",
         "composed_config",
     )
 

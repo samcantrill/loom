@@ -120,6 +120,16 @@ def test_examples_catalog_manifests_are_valid() -> None:
         seen_ids.add(example_id)
 
 
+def test_config_docs_warn_against_plaintext_secret_overrides() -> None:
+    config_docs = (EXAMPLES_ROOT.parent / "docs" / "features" / "config.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "+auth.token=plaintext-secret" in config_docs
+    assert "${oc.env:AUTH_TOKEN}" in config_docs
+    assert "plaintext_secret_override_warnings" in config_docs
+
+
 def _example_manifest_paths() -> list[Path]:
     return sorted(EXAMPLES_ROOT.rglob("example.yaml"))
 
