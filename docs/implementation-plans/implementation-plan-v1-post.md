@@ -591,6 +591,15 @@ Scope:
 - Add optional package metadata guard that v1-post still has no console script
   entry point.
 
+Accepted debt note:
+
+- Opaque Python recipes remain trusted project code. V1-post preserves authored
+  resolver expressions in artifact-safe records and rejects resolver-shaped
+  output keys, but it does not prove arbitrary recipe internals avoided
+  branching on unresolved resolver text. Revisit only if users need deterministic
+  recipe shape certification, sandboxed recipe execution, or reproducibility
+  guarantees for unreviewed third-party recipes.
+
 Out of scope:
 
 - Recipe sandboxing.

@@ -224,3 +224,56 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase execution plan`.
+- Executor: workflow-authorized fallback executor; completed on 2026-05-06 in
+  `/home/samcantrill/work/loom-worktrees/v1-post-recipe-coverage`.
+- Implementation summary: added public coverage for artifact-safe recipe
+  resolver arguments across recipe manifests, provenance metadata, composition
+  manifests, and fingerprint metadata; tightened public fingerprint assertions
+  so recipe argument and output-hash facts drive artifact-safe mismatch records;
+  added public provenance/manifest coverage for `../shared/foo.yaml` explicit
+  relative include escapes and exact non-secret sibling local-customization
+  path/kind/value payloads; added a package metadata guard that v1-post exposes
+  no console script entry points.
+- Accepted debt: opaque Python recipe branching on unresolved resolver text
+  remains accepted v1-post debt. Loom preserves authored resolver expressions in
+  artifact-safe records and rejects resolver-shaped output keys, but does not
+  prove arbitrary trusted recipe internals avoided branching on unresolved
+  resolver text.
+- Commits:
+  - `bab118b` - `test: harden recipe artifact coverage`
+  - `docs: record phase 6 implementation notes`
+- Scope control: product code was unchanged; no recipe sandboxing, recipe
+  argument override syntax, CLI, console script entry point, `_copy_`,
+  plugin/remote resolver, persistence, runtime replay, or Phase 7 work was
+  added. Public contract decisions were not changed.
+- Tests added or updated:
+  - Package: `tests/package/test_import.py` asserts `pyproject.toml` exposes no
+    `[project.scripts]` or GUI script entry points.
+  - Unit: no unit files changed; existing unit recipe output-key, fingerprint,
+    and include coverage was run as phase evidence.
+  - Contract: deferred because recipe protocol shape and config artifact schemas
+    were unchanged.
+  - Integration: `tests/integration/config/test_compose_recipes.py`,
+    `tests/integration/config/test_compose_config.py`, and
+    `tests/integration/config/test_compose_provenance.py` add the required
+    public artifact-safe recipe, fingerprint, include escape, and local
+    customization assertions.
+  - E2E: deferred because this phase changed no full workflow, runner,
+    persistence, or CLI behavior.
+  - Opt-in: config-extra integration coverage was run with `--extra config`.
+- Validation run:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_provenance.py`
+    passed, `31 passed`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/package` passed,
+    `43 passed`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_includes.py tests/unit/loom/config/recipes/test_expansion.py tests/unit/loom/config/test_config_fingerprints.py tests/unit/loom/config/test_includes.py`
+    passed, `75 passed`.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_config.py tests/integration/config/test_compose_provenance.py tests/package/test_import.py`
+    passed.
+  - `make validate-pr` passed with Ruff, Pyright, default harness
+    `448 passed, 11 skipped`, config-extra harness `363 passed, 455 deselected`,
+    and `uv build`.
+- Known issues or blockers: none. `make test-summary` remains for PR
+  preparation.
+- Refiner handoff: no failing or unavailable checks. Phase implementation
+  refinement remains unused on the fast path.
