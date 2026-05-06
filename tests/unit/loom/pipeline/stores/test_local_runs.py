@@ -336,10 +336,20 @@ def test_local_run_validates_composition_manifest_wrapper(tmp_path: Path) -> Non
         "created_at": valid_timestamp,
         "composition_manifest": {"source_artifacts": []},
     }
+    missing_field_cases = [
+        {key: value for key, value in valid.items() if key != field_name}
+        for field_name in (
+            "schema_version",
+            "run_id",
+            "created_at",
+            "composition_manifest",
+        )
+    ]
     cases = [
-        {key: value for key, value in valid.items() if key != "composition_manifest"},
+        *missing_field_cases,
         {**valid, "unexpected": True},
         {**valid, "schema_version": 2},
+        {**valid, "schema_version": True},
         {**valid, "run_id": "other"},
         {**valid, "created_at": "2020-01-01 00:00:00"},
         {**valid, "composition_manifest": []},

@@ -261,7 +261,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded path means one implementation refinement pass is expected after executor work or earlier if validation/coverage requires it.
+- Phase implementation refinement: used; expanded-path implementation/test refinement pass completed after executor work.
 - PR review: unused.
 
 ## Completion Notes
@@ -291,5 +291,8 @@ make test-summary
   - `make validate-pr`: passed with Ruff, Pyright, default harness `447 passed, 11 skipped`, config-extra harness `362 passed, 454 deselected`, and `uv build`.
   - `make test-summary`: passed; suite summary written to `build/test-summary.md` with package `38 passed, 1 skipped`, unit `364 passed, 1 skipped`, contract `36 passed, 2 skipped`, integration `9 passed, 5 skipped`, e2e `7 passed`, and config-extra `362 passed, 454 deselected`.
 - Known issues or blockers: none.
-- Phase implementation refinement: unused by executor; no refinement pass performed.
+- Phase implementation refinement: used. The refinement pass confirmed the Phase 5 store/pipeline/import-boundary/runtime-fingerprint scope controls, tightened local-store unit coverage so `config/composition_manifest.json` read validation rejects each missing exact wrapper field and boolean schema versions, and reran focused validation for the touched store tests.
+- Refinement validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py`: passed, 20 passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check tests/unit/loom/pipeline/stores/test_local_runs.py docs/phases/v1-post-pipeline-persistence.md`: passed.
 - PR preparation: pending.
