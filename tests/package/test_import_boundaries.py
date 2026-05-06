@@ -291,6 +291,39 @@ def test_import_cli_remains_import_safe() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_cli_help_remains_import_light() -> None:
+    script = dedent(
+        """
+        import sys
+
+        from loom.cli.main import main
+
+        exit_code = main(["--help"])
+        if exit_code != 0:
+            raise SystemExit(f"help returned {exit_code}")
+
+        for forbidden in (
+            "loom.config",
+            "loom.pipeline",
+            "loom.pipeline.stores",
+            "loom.pipeline.executors",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through CLI help")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage: loom" in result.stdout
+
+
 def test_import_config_artifacts_does_not_import_forbidden_layers() -> None:
     script = dedent(
         """
