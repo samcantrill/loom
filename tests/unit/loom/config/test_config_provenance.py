@@ -84,6 +84,27 @@ def test_config_provenance_round_trip() -> None:
     assert ConfigProvenance.from_dict(payload) == provenance
 
 
+def test_config_provenance_v2_write_requires_artifact_fingerprint() -> None:
+    provenance = ConfigProvenance(
+        schema_version=SCHEMA_VERSION,
+        config_path="/tmp/base.yaml",
+        sources=(ConfigSource(kind="base", path="/tmp/base.yaml", order=0, content_digest="sha256:abcd", size_bytes=1),),
+        overrides=(),
+        recipe_manifest_count=0,
+        metadata={},
+    )
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        provenance.to_dict()
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_config_provenance_artifact_fingerprint"
+    assert context.config_path == "ConfigProvenance.artifact_fingerprint"
+    assert context.details is not None
+    assert context.details["stage"] == "provenance_serialization"
+
+
 def test_config_provenance_reads_legacy_v1_resolved_fingerprint_only_as_metadata() -> None:
     provenance = ConfigProvenance.from_dict(
         {

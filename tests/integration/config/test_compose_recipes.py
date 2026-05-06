@@ -1,5 +1,6 @@
 """Integration coverage for recipe nesting and interpolation behavior."""
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -63,6 +64,48 @@ def test_compose_preserves_authored_resolver_argument_in_recipe_manifest(
     manifest = cast(dict[str, Any], composed.recipe_manifest[0])
     assert manifest["arguments"]["value"] == "${oc.env:PHASE9_RECIPE_VALUE}"
     assert composed.resolved["pipeline"] == {"value": "runtime-value:0"}
+
+
+def test_compose_recipe_resolver_arguments_keep_default_artifacts_env_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "base.yaml"
+    catalog = RecipeCatalog()
+    catalog.register("argument", argument_recipe)
+    base.write_text(
+        "name: base\npipeline:\n  _recipe_: argument\n  value: ${oc.env:PHASE4_RECIPE_VALUE}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PHASE4_RECIPE_VALUE", "recipe-runtime-one")
+    first = compose_config(base, recipe_catalog=catalog)
+    monkeypatch.setenv("PHASE4_RECIPE_VALUE", "recipe-runtime-two")
+    second = compose_config(base, recipe_catalog=catalog)
+
+    assert first.resolved["pipeline"] == {"value": "recipe-runtime-one:0"}
+    assert second.resolved["pipeline"] == {"value": "recipe-runtime-two:0"}
+    assert first.recipe_manifest == second.recipe_manifest
+    manifest = cast(dict[str, Any], first.recipe_manifest[0])
+    assert manifest["arguments"]["value"] == "${oc.env:PHASE4_RECIPE_VALUE}"
+    assert first.fingerprint == second.fingerprint
+    assert first.provenance.artifact_fingerprint == second.provenance.artifact_fingerprint
+    assert first.provenance.metadata["fingerprint"] == second.provenance.metadata["fingerprint"]
+    assert first.manifest.to_dict() == second.manifest.to_dict()
+    assert [record.to_dict() for record in first.fingerprint_records] == [
+        record.to_dict() for record in second.fingerprint_records
+    ]
+
+    serialized = json.dumps(
+        {
+            "recipe_manifest": first.recipe_manifest,
+            "provenance": first.provenance.to_dict(),
+            "manifest": first.manifest.to_dict(),
+            "fingerprint_records": [record.to_dict() for record in first.fingerprint_records],
+        },
+        sort_keys=True,
+    )
+    assert "recipe-runtime-one" not in serialized
+    assert "recipe-runtime-two" not in serialized
 
 
 def test_unknown_recipe_rejected_in_integration_shape(tmp_path: Path) -> None:

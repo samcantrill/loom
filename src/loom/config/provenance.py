@@ -227,6 +227,15 @@ class ConfigProvenance:
     artifact_fingerprint: Fingerprint | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
+        if self.schema_version == SCHEMA_VERSION and not self.artifact_fingerprint:
+            raise _provenance_error(
+                "schema-version-2 ConfigProvenance writes require artifact_fingerprint",
+                code="invalid_config_provenance_artifact_fingerprint",
+                path="ConfigProvenance.artifact_fingerprint",
+                stage="provenance_serialization",
+                expected="non-empty string",
+                actual=self.artifact_fingerprint,
+            )
         payload: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "config_path": self.config_path,

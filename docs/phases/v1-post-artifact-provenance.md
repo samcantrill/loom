@@ -212,7 +212,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used by `loom_phase_refiner` in this pass.
 - PR review: unused
 
 ## Completion Notes
@@ -231,6 +231,12 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pyright src/loom/config tests/unit/loom/config/test_compose.py tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py tests/integration/config/test_compose_provenance.py tests/integration/docs/test_v0_python_examples.py tests/e2e/test_config_composition_public_api.py` passed.
   - `make validate-pr` passed: Ruff, Pyright, default harness `439 passed, 11 skipped`, config-extra harness `358 passed, 445 deselected`, and `uv build`.
 - Refinement summary: pinned the schema-version-2 `ConfigProvenance` write contract, legacy schema-version-1 read compatibility through `metadata.legacy_resolved_fingerprint`, artifact-before-runtime-resolver-execution boundary, Phase 5 exclusions, and explicit package/unit/contract/integration/e2e/opt-in suite obligations.
+- Implementation refinement pass: used the single expanded-path pass to enforce schema-version-2 direct provenance serialization requires a non-empty top-level `artifact_fingerprint`, add integration coverage that env-backed recipe arguments keep recipe manifests, provenance, manifests, and fingerprint records stable across environment value changes, and confirm no Phase 5 pipeline/run-store/default persistence scope was added.
+- Implementation refinement validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed with 23 tests.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_recipes.py tests/integration/config/test_compose_provenance.py tests/unit/loom/config/test_compose.py` passed with 34 tests.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/integration/config/test_compose_recipes.py` passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pyright src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/integration/config/test_compose_recipes.py` passed.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none after the expanded-path refinement pass.
+- Remaining blockers: none after the expanded-path implementation refinement pass.
