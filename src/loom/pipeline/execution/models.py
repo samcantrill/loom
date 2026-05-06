@@ -46,10 +46,17 @@ _VALID_FAILURE_TYPES = {
 
 
 class _ComposedConfigLike(Protocol):
-    resolved: Mapping[str, PlainData]
-    redacted: Mapping[str, PlainData]
-    provenance: object
-    recipe_manifest: Sequence[Mapping[str, PlainData]]
+    @property
+    def resolved(self) -> Mapping[str, PlainData]: ...
+
+    @property
+    def redacted(self) -> Mapping[str, PlainData]: ...
+
+    @property
+    def provenance(self) -> object: ...
+
+    @property
+    def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]: ...
 
 
 @dataclass(frozen=True, slots=True)

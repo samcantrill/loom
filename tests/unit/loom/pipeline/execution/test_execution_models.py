@@ -1,5 +1,8 @@
 """Unit tests for execution models."""
 
+from collections.abc import Mapping, Sequence
+from typing import cast
+
 import pytest
 
 from loom.pipeline import PipelineSpec
@@ -10,6 +13,7 @@ from loom.pipeline.execution import (
     RunRequest,
     RunRequestError,
 )
+from loom.serialization import PlainData
 
 
 def _minimal_pipeline_spec() -> PipelineSpec:
@@ -43,19 +47,22 @@ def test_run_request_accepts_direct_pipeline_spec() -> None:
 
 
 def test_run_request_accepts_plain_mapping_config() -> None:
-    config = {
-        "pipeline": {
-            "stages": [
-                {
-                    "name": "build",
-                    "factory": {
-                        "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+    config = cast(
+        Mapping[str, PlainData],
+        {
+            "pipeline": {
+                "stages": [
+                    {
+                        "name": "build",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                        },
+                        "outputs": {"data": {"artifact_type": "json"}},
                     },
-                    "outputs": {"data": {"artifact_type": "json"}},
-                }
-            ]
-        }
-    }
+                ]
+            }
+        },
+    )
 
     request = RunRequest(config=config, run_id="run1")
 
@@ -64,10 +71,21 @@ def test_run_request_accepts_plain_mapping_config() -> None:
 
 def test_run_request_accepts_duck_typed_composed_config() -> None:
     class FakeComposedConfig:
-        resolved = {"pipeline": {"stages": []}}
-        redacted = {"pipeline": {"stages": []}}
-        provenance = object()
-        recipe_manifest = ()
+        @property
+        def resolved(self) -> Mapping[str, PlainData]:
+            return {"pipeline": {"stages": []}}
+
+        @property
+        def redacted(self) -> Mapping[str, PlainData]:
+            return {"pipeline": {"stages": []}}
+
+        @property
+        def provenance(self) -> object:
+            return object()
+
+        @property
+        def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]:
+            return ()
 
     config = FakeComposedConfig()
 
