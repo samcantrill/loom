@@ -29,7 +29,7 @@ New or changed tests cover store protocol/API shape, import boundaries, local-st
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 447 passed and 11 skipped; config-extra harness passed with 362 passed and 454 deselected; `uv build` produced sdist and wheel. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; overall 816 passed, 0 failed, 0 errors, 9 skipped, 454 deselected. |
-| GitHub checks | Pending | PR opened from `codex/v1-post-pipeline-persistence` to `develop`; remote checks run after PR creation. |
+| GitHub checks | Passed | CI workflow `checks` completed successfully on PR #53. |
 
 ### Test Suite Summary
 

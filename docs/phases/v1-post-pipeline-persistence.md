@@ -316,5 +316,5 @@ make test-summary
   - Head: `codex/v1-post-pipeline-persistence`
   - URL: https://github.com/samcantrill/loom/pull/53
   - Verification: `gh pr view 53 --json baseRefName,headRefName,state,url` returned `baseRefName=develop`, `headRefName=codex/v1-post-pipeline-persistence`, `state=OPEN`, and `url=https://github.com/samcantrill/loom/pull/53`.
-  - GitHub checks: `gh pr view 53 --json statusCheckRollup` reported CI workflow `checks` as pending after PR creation; final metadata pushes retriggered the check run.
+  - GitHub checks: `gh pr view 53 --json statusCheckRollup` reported CI workflow `checks` completed successfully.
 - PR blockers: none.
