@@ -969,7 +969,7 @@ Completion summary:
 
 ### Phase 3 - Validate Command
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-cli-validate`
 PR: https://github.com/samcantrill/loom/pull/61
 
@@ -1053,11 +1053,13 @@ Notes:
 
 Completion summary:
 
-- PR opened against `develop`: https://github.com/samcantrill/loom/pull/61
+- PR opened and merged into `develop`: https://github.com/samcantrill/loom/pull/61
+- Merge commit: `ea413effa9c84101d5dc3c58f1f49ccba99f7679`.
 - Implementation adds `loom validate`, static-by-default pipeline validation,
   opt-in target checks, owning-package validation/target facades, stable
   text/JSON output, and warning propagation for JSON errors.
-- Local validation passed with `make validate-pr` and `make test-summary`.
+- Validation passed with `make validate-pr`, `make test-summary`, managing-agent
+  review, and GitHub CI.
 - Pending.
 
 ### Phase 4 - Plan Command

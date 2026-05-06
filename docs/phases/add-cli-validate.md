@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 3: Validate Command`
 - Branch: `codex/add-cli-validate`
@@ -18,7 +18,7 @@
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v2.md`; no blocking plan-review findings remain.
 - Draft/refine status: scope-complete plan drafted in this artifact; no separate refinement pass needed unless validation or review exposes a blocker.
 - Phase implementation refinement budget: not needed; targeted validation and the PR gate passed without a refinement pass.
-- PR review budget: unused.
+- PR review budget: used by managing-agent local review; no blocking findings remained before merge.
 - Blockers: none known.
 
 ## Objective
@@ -112,5 +112,5 @@ make test-summary
   - `make validate-pr`: passed; Ruff, Pyright, default no-extra suite, config-extra suite, and build passed.
   - `make test-summary`: passed; overall 865 passed, 9 skipped, 497 deselected.
 - PR preparation: PR opened against `develop`: https://github.com/samcantrill/loom/pull/61
-- Merge notes:
+- Merge notes: PR #61 merged into `develop` at `ea413effa9c84101d5dc3c58f1f49ccba99f7679` after `make validate-pr`, `make test-summary`, managing-agent review, and GitHub CI passed.
 - Remaining blockers: none known.
