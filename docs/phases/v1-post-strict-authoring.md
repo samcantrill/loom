@@ -13,6 +13,7 @@
 - Stack predecessor: none; Phase 1 PR #44 has merged into `develop`
 - Base branch: `origin/develop` at `5341d2e` (`docs: record v1-post phase 1 merged (#45)`)
 - Target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/46
 - Merge eligibility: root phase PR is merge-eligible after review/checks because target is `develop`
 - Workflow path: expanded path
 - Successor dependency notes: later v1-post phases should start from this phase branch only after its PR is opened or prepared, validated, and recorded as `pr_open`; no current successor depends on this refined plan.
@@ -220,5 +221,7 @@ make test-summary
 - PR preparation validation: passed with `/tmp` uv cache. `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed, Pyright reported 0 errors, default harness passed with 435 passed and 11 skipped, config-extra passed with 338 passed and 441 deselected, and `uv build` produced sdist and wheel artifacts. `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`; overall suite summary was 779 passed, 0 failed, 0 errors, 9 skipped, and 441 deselected.
 - Pre-submit blocker gate: passed for the draft pass. The final diff matches Phase 2 strict authoring and override semantics, relevant unit and config-extra public compose coverage exists, validation evidence is recorded, the PR body is concise and evidence-backed, and no future-phase `_copy_` implementation, literal-dot path grammar, list patching, schema registry, provenance/fingerprint, pipeline persistence, recipe hardening, CLI behavior, or broad structured-error expansion was found.
 - PR body refinement: completed by `loom_pr_preparer` on 2026-05-06 using `.codex/prompts/pr-body-refine.md`. Confirmed the worktree, branch, source implementation plan, phase execution plan, final diff, acceptance criteria, suite evidence, scope boundaries, assumptions, and risks. Updated the public PR body GitHub-checks row from draft-only wording to pending-at-creation wording. No blocker was found and no implementation or test changes were made.
+- PR open facts: opened https://github.com/samcantrill/loom/pull/46 on 2026-05-06 with explicit `--base develop`, `--head codex/v1-post-strict-authoring`, and title `V1 Post Configuration - Phase 2: Strict Authoring And Override Semantics`. Verification passed with `baseRefName=develop`, `headRefName=codex/v1-post-strict-authoring`, and `state=OPEN`.
+- Merge eligibility: root phase PR targets `develop`, so it is merge-eligible after review and checks pass. No stack predecessor or successor branch is currently recorded for this phase.
 - Stack maintenance: pending.
-- Remaining blockers: none after PR-body draft preparation.
+- Remaining blockers: none after PR-body refine/open preparation.
