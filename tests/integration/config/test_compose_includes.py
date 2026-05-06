@@ -234,3 +234,32 @@ def test_public_compose_rejects_schema_directive_in_included_file(tmp_path: Path
     assert context.directive == "_schema_"
     assert context.expected == "schema declarations from authored files"
     assert context.source_path == str(included.resolve())
+
+
+def test_public_compose_rejects_copy_directive_in_included_file(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: included.yaml\n",
+        encoding="utf-8",
+    )
+    included.write_text(
+        "source: included\n"
+        "_copy_: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigLoadError) as exc:
+        compose_config(base)
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "unsupported_directive"
+    assert context.source_kind == "overlay"
+    assert context.config_path == "$._copy_"
+    assert context.directive == "_copy_"
+    assert context.source_path == str(included.resolve())

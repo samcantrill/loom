@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Hashable
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +16,70 @@ from .errors import ConfigErrorContext, ConfigLoadError, UnsupportedConfigDirect
 from .provenance import ConfigSource
 
 ConfigKind = Literal["base", "overlay"]
+
+
+class _DuplicateYamlKeyError(Exception):
+    """Internal marker for duplicate YAML keys detected by the local loader."""
+
+    def __init__(self, *, key: object, config_path: str) -> None:
+        super().__init__(f"Duplicate YAML key at {config_path}: {_display_yaml_key(key)}")
+        self.key = key
+        self.config_path = config_path
+
+
+class _StrictConfigLoader(yaml.SafeLoader):
+    """Safe YAML loader variant with local duplicate-key rejection."""
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self._loom_node_paths: dict[int, str] = {}
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Hashable, object]:  # noqa: FBT001, FBT002
+        if not isinstance(node, yaml.MappingNode):
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                f"expected a mapping node, but found {node.id}",
+                node.start_mark,
+            )
+
+        self.flatten_mapping(node)
+        mapping: dict[Hashable, object] = {}
+        mapping_path = self._loom_node_paths.get(id(node), "$")
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, Hashable):
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found unhashable key",
+                    key_node.start_mark,
+                )
+
+            child_path = _format_yaml_config_path(mapping_path, key)
+            if key in mapping:
+                raise _DuplicateYamlKeyError(key=key, config_path=child_path)
+
+            self._loom_node_paths.setdefault(id(value_node), child_path)
+            mapping[key] = self.construct_object(value_node, deep=deep)
+
+        return mapping
+
+    def construct_sequence(self, node: yaml.SequenceNode, deep: bool = False) -> list[object]:  # noqa: FBT001, FBT002
+        if not isinstance(node, yaml.SequenceNode):
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                f"expected a sequence node, but found {node.id}",
+                node.start_mark,
+            )
+
+        sequence_path = self._loom_node_paths.get(id(node), "$")
+        sequence = []
+        for index, child_node in enumerate(node.value):
+            self._loom_node_paths.setdefault(id(child_node), f"{sequence_path}[{index}]")
+            sequence.append(self.construct_object(child_node, deep=deep))
+        return sequence
 
 
 def load_config(path: str | Path, *, kind: ConfigKind, order: int) -> tuple[dict[str, PlainData], ConfigSource]:
@@ -107,7 +172,21 @@ def _decode_utf8(data: bytes, path: Path, *, kind: ConfigKind, order: int) -> st
 
 def _parse_yaml(text: str, path: Path, *, kind: ConfigKind, order: int) -> object:
     try:
-        documents = tuple(yaml.safe_load_all(text))
+        documents = tuple(yaml.load_all(text, Loader=_StrictConfigLoader))
+    except _DuplicateYamlKeyError as exc:
+        key_display = _display_yaml_key(exc.key)
+        raise _config_load_error(
+            f"Duplicate YAML key in {kind} config (order={order}) at {path}: {key_display}",
+            code="duplicate_key",
+            resolved_path=path,
+            kind=kind,
+            order=order,
+            config_path=exc.config_path,
+            expected="unique YAML mapping keys",
+            actual=key_display,
+            remediation="Remove the duplicate key or merge the intended values explicitly.",
+            details={"key": key_display},
+        ) from exc
     except yaml.YAMLError as exc:
         raise _config_load_error(
             f"Failed to parse YAML in {kind} config (order={order}) at {path}",
@@ -142,6 +221,19 @@ def _parse_yaml(text: str, path: Path, *, kind: ConfigKind, order: int) -> objec
         )
 
     return documents[0]
+
+
+def _display_yaml_key(key: object) -> str:
+    if isinstance(key, str):
+        return key
+    return repr(key)
+
+
+def _format_yaml_config_path(parent: str, key: object) -> str:
+    key_display = _display_yaml_key(key)
+    if parent == "$":
+        return f"$.{key_display}"
+    return f"{parent}.{key_display}"
 
 
 def _validate_root_mapping(value: object, path: Path, *, kind: ConfigKind, order: int) -> dict[str, PlainData]:
