@@ -35,12 +35,19 @@ Expected flow:
 1. Roadmap framing.
 2. Intent discovery.
 3. Feature brainstorming.
-4. Practical design refinement.
-5. Phase shaping.
-6. Final planning confirmation.
-7. Implementation-plan draft from the confirmed planning notes.
+4. Functionality and behavior confirmation.
+5. Context compaction/reset checkpoint.
+6. Design decision review.
+7. Phase shaping.
+8. Final planning confirmation.
+9. Implementation-plan draft from the confirmed planning notes.
 
 Ask small batches of high-impact questions and update the planning notes after
-each confirmed stage. Do not start phase implementation from this entrypoint;
+each confirmed stage. After functionality and behavior are confirmed, record a
+complete checkpoint in the planning notes and compact or reset context before
+starting the design decision review. The resumed design pass should reload the
+planning notes and step through the core design decisions, including
+maintainability, extensibility, flexibility, expansion paths, accepted debt, and
+rejected alternatives. Do not start phase implementation from this entrypoint;
 the drafted implementation plan still needs the normal plan quality gate before
 phase work begins.

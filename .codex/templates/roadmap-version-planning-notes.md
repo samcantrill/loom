@@ -11,7 +11,9 @@
   - Roadmap framing:
   - Intent discovery:
   - Feature brainstorming:
-  - Practical design refinement:
+  - Functionality and behavior confirmation:
+  - Context compaction/reset checkpoint:
+  - Design decision review:
   - Phase shaping:
   - Handoff:
 - Related implementation plans:
@@ -69,7 +71,9 @@ Constraints:
 | Roadmap framing |  |  |  |  |
 | Intent discovery |  |  |  |  |
 | Feature brainstorming |  |  |  |  |
-| Practical design refinement |  |  |  |  |
+| Functionality and behavior confirmation |  |  |  |  |
+| Context compaction/reset checkpoint |  |  |  |  |
+| Design decision review |  |  |  |  |
 | Phase shaping |  |  |  |  |
 | Handoff |  |  |  |  |
 
@@ -79,11 +83,44 @@ Constraints:
 | --- | --- | --- | --- |
 |  | include / maybe / defer / out of scope |  |  |
 
+## Confirmed Functionality And Behavior
+
+Included functionality:
+
+- TBD
+
+User-visible behavior:
+
+- TBD
+
+Default behavior:
+
+- TBD
+
+Failure behavior and diagnostics:
+
+- TBD
+
+Explicit deferrals:
+
+- TBD
+
+Out-of-scope behavior:
+
+- TBD
+
+Context compaction/reset checkpoint:
+
+- Checkpoint status:
+- Notes path:
+- Resume instruction:
+- Functionality and behavior reopened after checkpoint:
+
 ## Design Decisions
 
-| Decision | Selected approach | Alternatives rejected | Rationale | Revisit trigger |
-| --- | --- | --- | --- | --- |
-|  |  |  |  |  |
+| Decision | Selected approach | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Debt and revisit trigger |
+| --- | --- | --- | --- | --- | --- | --- |
+|  |  |  |  |  |  |  |
 
 ## Practical Design Notes
 
@@ -107,7 +144,19 @@ Failure modes and diagnostics:
 
 - TBD
 
-Maintainability and extensibility:
+Extension points and flexibility boundaries:
+
+- TBD
+
+Maintainability assessment:
+
+- TBD
+
+Extensibility assessment:
+
+- TBD
+
+Flexibility and expansion assessment:
 
 - TBD
 
