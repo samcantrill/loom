@@ -16,6 +16,8 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
+from loom.config import compose_config
+
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
@@ -66,6 +68,45 @@ def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None
         "stage.started",
         "stage.completed",
     ]
+
+
+def test_local_runner_persists_composed_config_manifest_without_resolved_snapshots(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "name: composed-run\n"
+        "pipeline:\n"
+        "  name: demo\n"
+        "  stages:\n"
+        "    - name: build\n"
+        "      factory:\n"
+        "        _target_: tests.support.pipeline_execution_stages.JsonProducerStage\n"
+        "      config:\n"
+        "        value: 3\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n"
+        "          codec_key: json.v1\n",
+        encoding="utf-8",
+    )
+    composed = compose_config(config_path)
+    run_store = LocalRunStore(tmp_path / "runs")
+
+    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
+        RunRequest(config=composed, run_id="run1")
+    )
+
+    run_dir = run_store.local_run_dir("run1")
+    metadata = run_store.read_run_user_metadata("run1")
+    assert result.status == RunStatus.SUCCEEDED
+    assert run_store.read_composition_manifest("run1") == composed.manifest.to_dict()
+    assert run_store.read_recipe_manifest("run1") == ()
+    assert metadata["config_provenance"] == composed.provenance.to_dict()
+    assert (run_dir / "config" / "composition_manifest.json").is_file()
+    assert (run_dir / "config" / "recipe_manifest.json").is_file()
+    assert not (run_dir / "config" / "resolved.yaml").exists()
+    assert not (run_dir / "config" / "resolved.redacted.yaml").exists()
 
 
 def test_local_runner_applies_selector_skip(tmp_path: Path) -> None:

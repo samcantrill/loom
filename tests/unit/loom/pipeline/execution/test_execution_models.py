@@ -1,7 +1,7 @@
 """Unit tests for execution models."""
 
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -80,6 +80,10 @@ def test_run_request_accepts_duck_typed_composed_config() -> None:
             return {"pipeline": {"stages": []}}
 
         @property
+        def manifest(self) -> Mapping[str, PlainData]:
+            return {"source_artifacts": []}
+
+        @property
         def provenance(self) -> object:
             return object()
 
@@ -92,6 +96,40 @@ def test_run_request_accepts_duck_typed_composed_config() -> None:
     request = RunRequest(config=config, run_id="run1")
 
     assert request.config is config
+
+
+def test_run_request_requires_manifest_for_composed_config_duck_type() -> None:
+    class AlmostComposedConfig:
+        @property
+        def resolved(self) -> Mapping[str, PlainData]:
+            return {"pipeline": {"stages": []}}
+
+        @property
+        def redacted(self) -> Mapping[str, PlainData]:
+            return {"pipeline": {"stages": []}}
+
+        @property
+        def provenance(self) -> object:
+            return object()
+
+        @property
+        def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]:
+            return ()
+
+    with pytest.raises(RunRequestError, match="ComposedConfig or mapping"):
+        RunRequest(config=cast(Any, AlmostComposedConfig()), run_id="run1")
+
+
+def test_config_snapshot_inputs_remain_explicit_user_provided_fields() -> None:
+    snapshots = ConfigSnapshotInputs(
+        raw="raw", overlays="overlays", cli_overrides="cli"
+    )
+
+    assert snapshots.raw == "raw"
+    assert snapshots.overlays == "overlays"
+    assert snapshots.cli_overrides == "cli"
+    assert not hasattr(snapshots, "resolved")
+    assert not hasattr(snapshots, "resolved_redacted")
 
 
 def test_run_request_rejects_continue_on_failure() -> None:

@@ -4,7 +4,12 @@ from pathlib import Path
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent
-from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
+from loom.pipeline.status import (
+    RunStatus,
+    RunStatusRecord,
+    StageStatus,
+    StageStatusRecord,
+)
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
 
 
@@ -46,11 +51,14 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     assert (artifact_root / "stage" / "report.txt").exists()
     assert artifact_store.exists(json_ref)
 
-    run_store.write_artifact_index(run_id, {
-        "stage.data": json_ref,
-        "stage.report": text_ref,
-        "stage.pre": registered,
-    })
+    run_store.write_artifact_index(
+        run_id,
+        {
+            "stage.data": json_ref,
+            "stage.report": text_ref,
+            "stage.pre": registered,
+        },
+    )
     read_index = run_store.read_artifact_index(run_id)
     assert isinstance(read_index["stage.data"], ArtifactRef)
 
@@ -93,6 +101,13 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     run_store.write_config_snapshot(run_id, "raw", "a: b\n")
     assert run_store.read_config_snapshot(run_id, "raw") == "a: b\n"
 
+    run_store.write_composition_manifest(
+        run_id,
+        {"source_artifacts": [{"kind": "config", "path": "base.yaml"}]},
+    )
+    assert run_store.read_composition_manifest(run_id) == {
+        "source_artifacts": [{"kind": "config", "path": "base.yaml"}]
+    }
     run_store.write_recipe_manifest(run_id, ({"name": "demo"},))
     assert run_store.read_recipe_manifest(run_id) == ({"name": "demo"},)
 
@@ -127,6 +142,7 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     required_files = [
         run_store.local_run_dir(run_id) / "run.json",
         run_store.local_run_dir(run_id) / "config" / "raw.yaml",
+        run_store.local_run_dir(run_id) / "config" / "composition_manifest.json",
         run_store.local_run_dir(run_id) / "config" / "recipe_manifest.json",
         run_store.local_run_dir(run_id) / "provenance" / "git.json",
         run_store.local_run_dir(run_id) / "stages" / "stage" / "inputs.json",

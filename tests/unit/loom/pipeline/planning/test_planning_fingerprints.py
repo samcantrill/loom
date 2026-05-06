@@ -7,19 +7,21 @@ from loom.pipeline.planning import (
     StageFingerprintError,
     build_stage_fingerprint,
 )
+from loom.protocols import Fingerprintable
 from loom.serialization import PlainData
 
 
 def _stage(
     *,
     config: dict[str, PlainData] | None = None,
+    fingerprint_fields: dict[str, PlainData] | None = None,
     resources: dict[str, PlainData] | None = None,
 ) -> StageSpec:
     return StageSpec(
         name="report",
         factory=StageFactorySpec(target_path="project.Report", init={}),
         stage_config=config or {"thresholds": [1, 2]},
-        fingerprint_fields={},
+        fingerprint_fields=fingerprint_fields or {},
         inputs={"data": "build.data"},
         outputs={"summary": OutputSpec(artifact_type="json", codec_key="json.v1")},
         resources=resources or {},
@@ -37,6 +39,14 @@ def _input_ref(
         checksum=checksum,
         created_at="2020-01-01T00:00:00Z",
     )
+
+
+class _RuntimeParameter:
+    def __init__(self, digest: str) -> None:
+        self.digest = digest
+
+    def fingerprint(self) -> str:
+        return self.digest
 
 
 def test_fingerprint_changes_for_semantic_inputs_and_excludes_noisy_values() -> None:
@@ -118,6 +128,60 @@ def test_fingerprint_tracks_factory_init_and_declared_fingerprint_fields() -> No
     assert base.fingerprint != with_fingerprint_fields.fingerprint
     assert with_fingerprint_fields.payload.fingerprint_fields == {
         "input_subset": ["foo", "bar"]
+    }
+
+
+def test_runtime_fingerprints_are_explicit_stage_or_context_inputs() -> None:
+    context = FingerprintContext(python_version="3.12.0", loom_version="0.1.0")
+    first_runtime: Fingerprintable = _RuntimeParameter("sha256:" + "a" * 64)
+    second_runtime: Fingerprintable = _RuntimeParameter("sha256:" + "b" * 64)
+    runtime_free_first = build_stage_fingerprint(
+        _stage(),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=context,
+    )
+    runtime_free_second = build_stage_fingerprint(
+        _stage(),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=context,
+    )
+    stage_explicit_first = build_stage_fingerprint(
+        _stage(fingerprint_fields={"runtime_model": first_runtime.fingerprint()}),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=context,
+    )
+    stage_explicit_second = build_stage_fingerprint(
+        _stage(fingerprint_fields={"runtime_model": second_runtime.fingerprint()}),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=context,
+    )
+    context_explicit_first = build_stage_fingerprint(
+        _stage(),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=FingerprintContext(
+            python_version="3.12.0",
+            loom_version="0.1.0",
+            extra={"runtime_model": first_runtime.fingerprint()},
+        ),
+    )
+    context_explicit_second = build_stage_fingerprint(
+        _stage(),
+        bound_inputs={"data": _input_ref()},
+        fingerprint_context=FingerprintContext(
+            python_version="3.12.0",
+            loom_version="0.1.0",
+            extra={"runtime_model": second_runtime.fingerprint()},
+        ),
+    )
+
+    assert runtime_free_first.fingerprint == runtime_free_second.fingerprint
+    assert stage_explicit_first.fingerprint != stage_explicit_second.fingerprint
+    assert context_explicit_first.fingerprint != context_explicit_second.fingerprint
+    assert stage_explicit_first.payload.fingerprint_fields == {
+        "runtime_model": first_runtime.fingerprint()
+    }
+    assert context_explicit_first.payload.extra == {
+        "runtime_model": first_runtime.fingerprint()
     }
 
 

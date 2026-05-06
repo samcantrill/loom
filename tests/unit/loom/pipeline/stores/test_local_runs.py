@@ -1,5 +1,6 @@
 """Unit tests for local run-store behavior."""
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from loom.pipeline.stores import (
     RunLockConflictError,
     RunLockReleaseError,
     RunNotFoundError,
+    UnsafeStorePathError,
     atomic_write_json,
 )
 from loom.serialization import PlainData
@@ -121,7 +123,9 @@ def test_local_run_acquires_reads_and_releases_lock(tmp_path: Path) -> None:
     assert not (store.local_run_dir("run1") / "lock.json").exists()
 
 
-def test_local_run_lock_conflict_and_release_errors_preserve_lock(tmp_path: Path) -> None:
+def test_local_run_lock_conflict_and_release_errors_preserve_lock(
+    tmp_path: Path,
+) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1")
     record = store.acquire_run_lock("run1")
@@ -187,7 +191,28 @@ def test_local_run_snapshots_and_provenance(tmp_path: Path) -> None:
 
     store.write_config_snapshot("run1", "raw", "a: b\n")
     assert store.read_config_snapshot("run1", "raw") == "a: b\n"
-    store.write_recipe_manifest("run1", ( {"name": "demo"}, ))
+    manifest: dict[str, PlainData] = {
+        "source_artifacts": [{"kind": "config", "path": "config.yaml"}],
+        "metadata": {"fingerprint": "sha256:abc"},
+    }
+    store.write_composition_manifest("run1", manifest)
+    assert store.read_composition_manifest("run1") == manifest
+    read_manifest = store.read_composition_manifest("run1")
+    assert read_manifest is not None
+    read_manifest["metadata"] = {}
+    assert store.read_composition_manifest("run1") == manifest
+    wrapper_path = store.local_run_dir("run1") / "config" / "composition_manifest.json"
+    wrapper = json.loads(wrapper_path.read_text(encoding="utf-8"))
+    assert set(wrapper) == {
+        "schema_version",
+        "run_id",
+        "created_at",
+        "composition_manifest",
+    }
+    assert wrapper["schema_version"] == 1
+    assert wrapper["run_id"] == "run1"
+    assert wrapper["composition_manifest"] == manifest
+    store.write_recipe_manifest("run1", ({"name": "demo"},))
     assert store.read_recipe_manifest("run1") == ({"name": "demo"},)
 
     store.write_provenance_document("run1", "environment", {"python": "3.12"})
@@ -290,7 +315,46 @@ def test_local_run_rejects_corrupt_stage_plain_mapping(tmp_path: Path) -> None:
         store.read_stage_fingerprint("run1", "stage")
 
 
-def test_local_run_rejects_corrupt_wrapper_fields_with_document_path(tmp_path: Path) -> None:
+def test_local_run_rejects_non_mapping_composition_manifest_write(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+
+    with pytest.raises(UnsafeStorePathError, match="composition manifest"):
+        store.write_composition_manifest("run1", ["not", "a", "mapping"])  # type: ignore[arg-type]
+
+
+def test_local_run_validates_composition_manifest_wrapper(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    store.create_run("run1")
+    path = store.local_run_dir("run1") / "config" / "composition_manifest.json"
+    valid_timestamp = "2020-01-01T00:00:00Z"
+    valid = {
+        "schema_version": 1,
+        "run_id": "run1",
+        "created_at": valid_timestamp,
+        "composition_manifest": {"source_artifacts": []},
+    }
+    cases = [
+        {key: value for key, value in valid.items() if key != "composition_manifest"},
+        {**valid, "unexpected": True},
+        {**valid, "schema_version": 2},
+        {**valid, "run_id": "other"},
+        {**valid, "created_at": "2020-01-01 00:00:00"},
+        {**valid, "composition_manifest": []},
+    ]
+
+    for payload in cases:
+        atomic_write_json(path, payload)
+        with pytest.raises(CorruptStoreDocumentError) as exc_info:
+            store.read_composition_manifest("run1")
+        assert str(path) in str(exc_info.value)
+
+
+def test_local_run_rejects_corrupt_wrapper_fields_with_document_path(
+    tmp_path: Path,
+) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1")
     run_dir = store.local_run_dir("run1")
@@ -326,6 +390,15 @@ def test_local_run_rejects_corrupt_wrapper_fields_with_document_path(tmp_path: P
                 "artifacts": {},
             },
             lambda: store.read_artifact_index("run1"),
+        ),
+        (
+            run_dir / "config" / "composition_manifest.json",
+            {
+                "schema_version": 1,
+                "run_id": "run1",
+                "created_at": valid_timestamp,
+            },
+            lambda: store.read_composition_manifest("run1"),
         ),
         (
             run_dir / "config" / "recipe_manifest.json",
@@ -406,7 +479,9 @@ def test_local_run_rejects_corrupt_artifact_index_refs(tmp_path: Path) -> None:
     assert str(path) in str(exc_info.value)
 
 
-def test_local_run_wraps_unsafe_root_artifact_index_keys_as_corrupt(tmp_path: Path) -> None:
+def test_local_run_wraps_unsafe_root_artifact_index_keys_as_corrupt(
+    tmp_path: Path,
+) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1")
     run_dir = store.local_run_dir("run1")
@@ -426,7 +501,9 @@ def test_local_run_wraps_unsafe_root_artifact_index_keys_as_corrupt(tmp_path: Pa
     assert str(path) in str(exc_info.value)
 
 
-def test_local_run_wraps_stage_artifact_index_failures_as_corrupt(tmp_path: Path) -> None:
+def test_local_run_wraps_stage_artifact_index_failures_as_corrupt(
+    tmp_path: Path,
+) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     store.create_run("run1")
     path = store.local_stage_dir("run1", "stage") / "outputs.json"
@@ -438,7 +515,9 @@ def test_local_run_wraps_stage_artifact_index_failures_as_corrupt(tmp_path: Path
         "created_at": "2020-01-01T00:00:00Z",
     }
 
-    atomic_write_json(path, {**wrapper, "outputs": {"bad/name": _artifact_ref().to_dict()}})
+    atomic_write_json(
+        path, {**wrapper, "outputs": {"bad/name": _artifact_ref().to_dict()}}
+    )
     with pytest.raises(CorruptStoreDocumentError) as unsafe_key_exc:
         store.read_stage_outputs("run1", "stage")
     assert str(path) in str(unsafe_key_exc.value)
