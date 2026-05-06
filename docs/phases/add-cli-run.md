@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation pending
+- Status: pr_open
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 5: Run Command`
 - Branch: `codex/add-cli-run`
@@ -21,6 +21,9 @@
 - Draft pass: completed by the managing agent in this artifact.
 - Refine pass: not needed on the fast path.
 - Setup limitations: `git worktree add` required approved git metadata access after the sandbox could not create the branch ref. `origin/develop` was verified before branch creation.
+- PR: https://github.com/samcantrill/loom/pull/63
+- PR body artifact: `docs/phases/add-cli-run-pr-body.md`
+- PR verification: `baseRefName=develop`, `headRefName=codex/add-cli-run`, `state=OPEN`, CI check `checks` initially `IN_PROGRESS`.
 - Blockers: none known.
 
 ## Objective
@@ -231,6 +234,6 @@ make test-summary
 - Implementation summary: completed in `4bd72bf` (`feat: implement run command`). The phase adds `loom run`, local-only executor handling, default URI delegation to `PipelineRunner`/`LocalRunStore`, explicit URI existence checks, strict resume setup, dry-run delegation to Phase 4 plan output, final run JSON/text formatting, failure summaries, and import-boundary/unit/integration coverage.
 - Implementation validation: targeted `uv run pytest tests/unit/loom/cli tests/package/test_import_boundaries.py -q` passed with 56 tests; targeted `uv run --extra config pytest tests/integration/config/test_cli_run.py -q` passed with 7 tests; `uv run ruff check .` passed; `uv run --extra config pyright` passed with 0 errors; `make validate-pr` passed with default 505 passed / 11 skipped and config-extra 380 passed / 512 deselected plus build success; `make test-summary` passed with package 43 passed / 1 skipped, unit 417 passed / 1 skipped, contract 36 passed / 2 skipped, integration 9 passed / 5 skipped, e2e 7 passed, and config-extra 380 passed / 512 deselected.
 - Refinement summary: not needed; targeted and full validation passed without a phase-refiner pass.
-- PR preparation: pending.
+- PR preparation: completed in `252d9e5`; PR opened and verified against `develop` as https://github.com/samcantrill/loom/pull/63.
 - Stack maintenance: not needed yet.
 - Remaining blockers: none known.
