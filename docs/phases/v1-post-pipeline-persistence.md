@@ -295,7 +295,7 @@ make test-summary
 - Refinement validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py`: passed, 20 passed.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check tests/unit/loom/pipeline/stores/test_local_runs.py docs/phases/v1-post-pipeline-persistence.md`: passed.
-- PR preparation: in progress by `loom_pr_preparer`.
+- PR preparation: completed by `loom_pr_preparer`.
 - PR body artifact: `docs/phases/v1-post-pipeline-persistence-pr-body.md`.
 - PR body draft/refine status: completed in this PR-preparation pass for the expanded path; body checked against the phase execution plan, final diff, validation evidence, and `.github/PULL_REQUEST_TEMPLATE.md`.
 - PR preparation scope inspection:
@@ -314,6 +314,6 @@ make test-summary
   - Title: `V1 Post Configuration - Phase 5: Pipeline Persistence And Runtime Fingerprints`
   - Base: `develop`
   - Head: `codex/v1-post-pipeline-persistence`
-  - URL: pending GitHub PR creation.
-  - Verification: pending `gh pr view <PR> --json baseRefName,headRefName,state,url`.
-- PR blockers: none at local validation/body preparation stage.
+  - URL: https://github.com/samcantrill/loom/pull/53
+  - Verification: `gh pr view 53 --json baseRefName,headRefName,state,url` returned `baseRefName=develop`, `headRefName=codex/v1-post-pipeline-persistence`, `state=OPEN`, and `url=https://github.com/samcantrill/loom/pull/53`.
+- PR blockers: none.
