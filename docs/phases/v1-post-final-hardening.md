@@ -394,6 +394,9 @@ result: passed; package 39 passed and 1 skipped, unit 364 passed and 1 skipped, 
   behavior was added.
 - PR-prep commit: `5276d88` (`docs: add phase 7 pr body`) added the public PR
   body artifact before PR creation.
+- GitHub checks: `gh pr checks 57` reported GitHub Actions `checks` as pending
+  after the final metadata push:
+  https://github.com/samcantrill/loom/actions/runs/25418821825/job/74556050439
 
 ### PR-Preparation Validation Rerun
 
@@ -413,5 +416,4 @@ deselected; overall 818 passed, 0 failed, 0 errors, 9 skipped, 455 deselected
 ### Known Issues Or Blockers
 
 - No blockers.
-- GitHub CI was triggered by PR creation and may still be pending after the
-  final metadata push.
+- GitHub CI is pending; no failing GitHub checks were reported.
