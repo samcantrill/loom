@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 4: Plan Command`
 - Branch: `codex/add-cli-plan`
@@ -23,7 +23,8 @@
 - Setup limitations: `git worktree add` required approved git metadata access after the sandbox could not create the branch ref. GitHub auth and `origin/develop` were verified before branch creation.
 - PR: https://github.com/samcantrill/loom/pull/62
 - PR body artifact: `docs/phases/add-cli-plan-pr-body.md`
-- PR verification: `baseRefName=develop`, `headRefName=codex/add-cli-plan`, `state=OPEN`, CI check `checks` initially `IN_PROGRESS`.
+- PR verification: `baseRefName=develop`, `headRefName=codex/add-cli-plan`, `state=OPEN`, CI check `checks` initially `IN_PROGRESS` and completed with `SUCCESS`.
+- Merge: PR #62 squash-merged into `develop` as `de037446d512505d08a6b0b9b3408a4c36455659`.
 - Blockers: none known.
 
 ## Objective
@@ -234,5 +235,5 @@ make test-summary
 - Implementation validation: targeted `uv run pytest tests/unit/loom/cli tests/package/test_import_boundaries.py -q` passed with 48 tests; targeted `uv run --extra config pytest tests/integration/config/test_cli_plan.py -q` passed with 5 tests; `uv run ruff check .` passed; `uv run --extra config pyright` passed with 0 errors; `make validate-pr` passed with default 497 passed / 11 skipped and config-extra 373 passed / 504 deselected plus build success; `make test-summary` passed with package 42 passed / 1 skipped, unit 410 passed / 1 skipped, contract 36 passed / 2 skipped, integration 9 passed / 5 skipped, e2e 7 passed, and config-extra 373 passed / 504 deselected.
 - Refinement summary: not needed; targeted and full validation passed without a phase-refiner pass.
 - PR preparation: completed in `822ef87`; PR opened and verified against `develop` as https://github.com/samcantrill/loom/pull/62.
-- Stack maintenance: not needed yet.
+- Stack maintenance: not needed; no successor branch depended on `codex/add-cli-plan` when it merged.
 - Remaining blockers: none known.

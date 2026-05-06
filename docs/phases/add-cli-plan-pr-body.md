@@ -27,7 +27,7 @@ New tests cover plan command orchestration, JSON/text output, import boundaries,
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright passed; default harness 497 passed / 11 skipped; config-extra 373 passed / 504 deselected; build succeeded. |
 | `make test-summary` | Passed | Suite summary below. |
-| GitHub checks | Pending | To be populated after PR creation. |
+| GitHub checks | Passed | CI check `checks` completed successfully. |
 
 ### Test Suite Summary
 

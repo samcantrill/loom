@@ -1064,9 +1064,9 @@ Completion summary:
 
 ### Phase 4 - Plan Command
 
-Status: pending
+Status: merged
 Branch: `codex/add-cli-plan`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/62
 
 Goal:
 
@@ -1144,7 +1144,14 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- PR opened and merged into `develop`: https://github.com/samcantrill/loom/pull/62
+- Merge commit: `de037446d512505d08a6b0b9b3408a4c36455659`.
+- Implementation adds `loom plan`, read-only fresh planning, explicit local
+  run URI validation/existence checks, strict resume planning, selector
+  forwarding, optional stage explanations, and CLI-specific text/JSON plan
+  output without executing stages or writing run state.
+- Validation passed with `make validate-pr`, `make test-summary`, managing-agent
+  review, and GitHub CI.
 
 ### Phase 5 - Run Command
 
