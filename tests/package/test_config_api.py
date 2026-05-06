@@ -41,7 +41,9 @@ def test_config_exports_and_signature() -> None:
         inspect_config_composition,
         compose_config,
         compose_config_with_catalog,
+        check_config_targets,
         instantiate,
+        TargetCheckResult,
         register_recipe,
     )
 
@@ -51,6 +53,8 @@ def test_config_exports_and_signature() -> None:
     assert RecipeCatalog
     assert compose_config
     assert compose_config_with_catalog
+    assert check_config_targets
+    assert TargetCheckResult
     assert inspect_config_composition
     assert ConfigCompositionInspection
     assert ConfigCompositionStageRecord
@@ -122,6 +126,13 @@ def test_config_exports_and_signature() -> None:
     assert instantiate_params[1].name == "runtime"
     assert instantiate_params[1].default is None
 
+    target_check_signature = inspect.signature(check_config_targets)
+    target_check_params = list(target_check_signature.parameters.values())
+    assert len(target_check_params) == 2
+    assert target_check_params[0].name == "value"
+    assert target_check_params[1].name == "skip_paths"
+    assert target_check_params[1].default == ()
+
 
 def test_config_instantiate_callable_survives_submodule_import_order() -> None:
     import loom.config
@@ -150,6 +161,7 @@ def test_import_config_module_only() -> None:
         assert hasattr(loom.config, 'RecipeCatalog')
         assert hasattr(loom.config, 'compose_config')
         assert hasattr(loom.config, 'compose_config_with_catalog')
+        assert hasattr(loom.config, 'check_config_targets')
         assert hasattr(loom.config, 'inspect_config_composition')
         assert hasattr(loom.config, 'ConfigCompositionInspection')
         assert hasattr(loom.config, 'ConfigCompositionStageRecord')
@@ -159,6 +171,7 @@ def test_import_config_module_only() -> None:
         assert hasattr(loom.config, 'ARTIFACT_SAFE_FINGERPRINT_POLICY')
         assert hasattr(loom.config, 'ARTIFACT_SAFE_RUNTIME_REPLAY')
         assert hasattr(loom.config, 'instantiate')
+        assert hasattr(loom.config, 'TargetCheckResult')
         assert hasattr(loom.config, 'register_recipe')
         assert hasattr(loom.config, 'ConfigError')
         print('ok')

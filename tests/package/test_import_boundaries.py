@@ -324,6 +324,36 @@ def test_cli_help_remains_import_light() -> None:
     assert "usage: loom" in result.stdout
 
 
+def test_import_cli_validate_remains_import_light() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.cli.validate
+
+        for forbidden in (
+            "loom.config",
+            "loom.pipeline",
+            "loom.pipeline.stores",
+            "loom.pipeline.executors",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.cli.validate")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_config_artifacts_does_not_import_forbidden_layers() -> None:
     script = dedent(
         """
