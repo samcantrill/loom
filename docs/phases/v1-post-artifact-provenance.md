@@ -249,4 +249,7 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed with 24 tests.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pyright src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed with 0 errors.
+- Post-blocker PR validation:
+  - `make validate-pr` passed: Ruff, Pyright, default harness `440 passed, 11 skipped`, config-extra harness `360 passed, 446 deselected`, and `uv build`.
+  - `make test-summary` passed and wrote `build/test-summary.md` with suite evidence: package `38 passed, 1 skipped`; unit `357 passed, 1 skipped`; contract `36 passed, 2 skipped`; integration `9 passed, 5 skipped`; e2e `6 passed`; config-extra `360 passed, 446 deselected`; overall `806 passed, 9 skipped, 446 deselected`.
 - Remaining blockers: none after the user-authorized blocker-resolution pass.
