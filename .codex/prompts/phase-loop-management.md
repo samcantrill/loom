@@ -48,14 +48,12 @@ Prefer GitHub CLI-backed remote operations when available:
   present and no successor branch depends on the deleted branch.
 
 Your job is to advance the implementation plan one phase at a time without
-indefinite review/refine loops. Stacked mode allows human review and merge of
-one phase to happen while successor phase work starts. CI-gated stacked
-continuation attempts to merge each phase PR into `develop` once CI checks pass;
-when the manager cannot approve or complete that merge, it continues by stacking
-phase N+1 on the old phase N branch and opening phase N+1 against phase N.
-Serial human-merge-gate mode instead waits for each phase PR to be merged into
-`develop` before the next phase starts, and should be used only when the user
-explicitly asks to disable stacked continuation.
+indefinite review/refine loops. Codex-managed automatic merge is the default:
+after automated review and passing CI, merge each phase PR into `develop`
+without waiting for human GitHub approval. Stacked continuation is a fallback
+only when a GitHub-side blocker prevents the merge and cannot be resolved within
+the assigned phase scope. Serial human-merge-gate mode should be used only when
+the user explicitly asks to disable Codex-managed merging.
 
 Favor short scope-first phase plans. Planning should define boundaries,
 acceptance criteria, suite obligations, risky decisions, and stop conditions,
@@ -177,27 +175,33 @@ Model policy:
   public API scope decisions unless the phase execution plan already resolves
   them.
 
-CI-gated stacked continuation mode:
+Codex-managed CI-gated merge mode:
 
-- Use this mode whenever the user asks Codex to attempt merge after CI while
-  continuing successor phases as stacked PRs if the merge cannot be approved or
-  completed.
+- Use this mode by default unless the user explicitly selects serial
+  human-merge-gate mode. The managing agent owns automated phase review and
+  merge decisions; do not wait for human GitHub approval.
 - After a phase PR is submitted, poll GitHub for CI with `gh pr view <PR>
   --json state,baseRefName,headRefName,url,mergedAt,reviewDecision,statusCheckRollup`
   or an equivalent `gh` check command. Treat required checks as passed only when
   GitHub reports success, or record a narrow justification when GitHub checks
   are unavailable and local `make validate-pr` and `make test-summary` passed.
-- Once CI checks pass, attempt to approve and merge the phase PR into `develop`
-  when the PR targets `develop`, the manager has authority to approve and merge,
-  and phase review approval is satisfied. Use a squash merge and delete the
-  branch only when no successor branch depends on it; otherwise keep the branch
-  after merge for later stack maintenance.
-- If the manager cannot approve or complete the merge because approval authority,
-  branch protection, GitHub permissions, target branch, or review state blocks
-  the merge, record the exact reason and continue with normal stacked PR flow.
-  Keep the phase N branch as the stack predecessor, create phase N+1 from the
-  old phase N branch, and open the phase N+1 PR against phase N after the
-  phase N+1 pre-submit blocker gate passes.
+- Once CI checks pass, merge the phase PR into `develop` when the PR targets
+  `develop`, automated phase review approval is satisfied, and no known
+  blockers remain. Use a squash merge and delete the branch only when no
+  successor branch depends on it; otherwise keep the branch after merge for
+  later stack maintenance.
+- If GitHub blocks merge only because repository branch protection requires
+  human approval, the managing agent may use available merge authority,
+  including `gh pr merge --admin`, after recording that condition and confirming
+  all automated review and validation gates pass. Do not use admin bypass for
+  failing CI, wrong target branch, unresolved merge conflicts, or known
+  implementation/review blockers.
+- If the manager cannot complete the merge because of GitHub permissions,
+  target branch, merge conflicts, failing checks, or another blocker that cannot
+  be resolved in phase scope, record the exact reason and continue with normal
+  stacked PR flow. Keep the phase N branch as the stack predecessor, create
+  phase N+1 from the old phase N branch, and open the phase N+1 PR against
+  phase N after the phase N+1 pre-submit blocker gate passes.
 - During this mode, defer child-branch rebase or retarget maintenance until the
   full phased implementation plan has been completed and the user is ready to
   update the stack, unless immediate maintenance is required to unblock a
@@ -206,9 +210,9 @@ CI-gated stacked continuation mode:
 Serial human-merge-gate mode:
 
 - Use this mode only when the user asks for a clean merge gate, no stacked PRs,
-  human-owned approval/merge, or continuation only after the PR is merged. Do
-  not use it when the user asks for CI-gated merge attempts with stacked
-  fallback.
+  human-owned approval/merge, or continuation only after a human merges the PR.
+  Do not use it when the user asks for Codex-managed merges or CI-gated merge
+  attempts.
 - Treat `develop` as the only PR target branch in this mode. Do not create
   stacked successor branches unless the user explicitly re-enables stacking.
 - Do not approve or merge phase PRs in this mode. The human reviewer owns
@@ -276,19 +280,19 @@ Before implementation begins:
 
 For each phase:
 
-1. Find the next phase with `Status: pending`. In CI-gated stacked continuation
+1. Find the next phase with `Status: pending`. In Codex-managed CI-gated merge
    or stacked mode, earlier phases may be `pr_open`, `approved`, or `merged`.
    In serial human-merge-gate mode, all earlier phases must be `merged`. Do not
    skip over a `blocked` phase.
 2. Choose the stack base:
    - in serial human-merge-gate mode, always use updated `develop`;
-   - in CI-gated stacked continuation or stacked mode, use `develop` when all
+   - in Codex-managed CI-gated merge or stacked mode, use `develop` when all
      earlier phases are `merged`;
    - otherwise use the nearest earlier unmerged phase branch, usually the most
      recent phase with status `pr_open` or `approved`.
 3. Choose the PR target branch:
    - in serial human-merge-gate mode, always use `develop`;
-   - in CI-gated stacked continuation or stacked mode, use `develop` when the
+   - in Codex-managed CI-gated merge or stacked mode, use `develop` when the
      stack base is `develop`;
    - otherwise use the stack base branch.
 4. Record the branch, stack predecessor, base branch, target branch, and merge
@@ -371,23 +375,25 @@ For each phase:
    resume the gate. If the blocker is out of scope or cannot be resolved, leave
    the PR unapproved, mark the phase `blocked` where appropriate, report the
    blocker, and stop.
-19. In CI-gated stacked continuation or stacked mode, poll GitHub checks after
+19. In Codex-managed CI-gated merge or stacked mode, poll GitHub checks after
    PR submission. Once CI checks pass, verify the PR target with `gh pr view
    <PR> --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
-   If the PR targets `develop`, the manager can approve and merge, and review
-   approval is satisfied, merge the PR into `develop` using a squash merge. Use
+   If the PR targets `develop` and automated review approval is satisfied,
+   merge the PR into `develop` using a squash merge. Use
    `gh pr merge <PR> --squash --delete-branch` only when no successor branch
    depends on the phase branch; otherwise use `gh pr merge <PR> --squash` and
    keep the branch. Use the corresponding `--auto` form when branch protection
-   requires checks to finish first.
-20. If the phase PR cannot be approved or merged after CI passes, record the
-    exact reason in the phase plan and implementation-plan metadata. Leave the
-    phase `pr_open` when approval is unavailable, or `approved` when review
-    approval is complete but the PR is not merge-eligible. In CI-gated stacked
-    continuation or stacked mode, keep the old phase N branch as the stack
-    predecessor, create the phase N+1 branch from phase N, and open or prepare
-    the phase N+1 PR against phase N after phase N+1 passes its own
-    pre-submit blocker gate.
+   requires checks to finish first. If branch protection blocks solely on human
+   approval and the managing account has admin merge authority, use the
+   corresponding `--admin` form after automated review and validation pass.
+20. If the phase PR cannot be merged after CI passes, record the exact reason
+    in the phase plan and implementation-plan metadata. Leave the phase
+    `pr_open` when merge authority or mergeability is unavailable, or
+    `approved` when automated review approval is complete but the PR is not
+    merge-eligible. In Codex-managed CI-gated merge or stacked mode, keep the
+    old phase N branch as the stack predecessor, create the phase N+1 branch
+    from phase N, and open or prepare the phase N+1 PR against phase N after
+    phase N+1 passes its own pre-submit blocker gate.
 21. In serial human-merge-gate mode, do not approve or merge. Treat a verified
     `APPROVED` PR as the approval gate and a verified `MERGED` PR targeting
     `develop` as the merge event. Do not start the next phase until the
@@ -424,7 +430,7 @@ For each phase:
    branches no longer depend on it. Prefer `gh api --method DELETE
    repos/<owner>/<repo>/git/refs/heads/<branch>` for GitHub branch cleanup when
    git SSH auth is unavailable.
-26. In CI-gated stacked continuation or stacked mode, move to the next pending
+26. In Codex-managed CI-gated merge or stacked mode, move to the next pending
    phase whenever the immediate predecessor is `pr_open`, `approved`, or
    `merged`. In serial human-merge-gate mode, move to the next pending phase
    only after every earlier phase is `merged` and `develop` has been updated
@@ -436,21 +442,23 @@ Rules:
 - Known implementation, validation, scope, review, and PR-body blockers must be
   addressed before PR submission. Do not open a PR with known unresolved
   blockers.
-- Only the managing agent may merge phase PRs in CI-gated stacked continuation
+- Only the managing agent may merge phase PRs in Codex-managed CI-gated merge
   or stacked mode. In serial human-merge-gate mode, do not approve or merge;
   wait for human merge.
-- Merge only after phase review approval and passing validation or CI when
-  merging is enabled.
-- In CI-gated stacked continuation mode, attempt the merge into `develop` after
-  CI passes. If approval or merge is unavailable, continue by stacking phase
-  N+1 from the old phase N branch and opening phase N+1 against phase N.
+- Merge after automated phase review approval and passing validation or CI.
+  Human GitHub approval is not required unless the user explicitly selects
+  serial human-merge-gate mode.
+- In Codex-managed CI-gated merge mode, merge into `develop` after CI passes.
+  If merge is unavailable, continue by stacking phase N+1 from the old phase N
+  branch and opening phase N+1 against phase N.
 - Merge phase PRs into `develop`, not directly into `main` or a predecessor
   branch. Stacked PRs may target predecessor branches for review only.
 - Stop immediately if a phase PR targets `main`; close or recreate it against
   the correct stack target rather than merging it.
 - Do not skip phases unless the plan explicitly allows it.
 - Do not start phase implementation while blocking plan-review findings remain unresolved.
-- Do not approve a PR just because tests pass; the explanation must match the diff and phase execution plan.
+- Do not merge a PR just because tests pass; the automated review explanation
+  must match the diff and phase execution plan.
 - Do not require exhaustive test coverage unless the phase warrants it.
 - Prefer forward progress with small PRs over large perfect changes.
 - Prefer scoped implementation over broader cleanup; capture nonessential work

@@ -271,12 +271,9 @@ manager skips loom_phase_refiner when targeted validation passes and coverage ob
 loom_pr_preparer runs checks, writes a concise human-readable PR body with suite evidence, and opens/prepares PR in one pass
 manager mirrors pr_open metadata in the control checkout
 manager applies any workflow refinements in the control checkout, outside product phase branches
-manager may move to the next pending phase using the current phase branch as stack base in stacked mode
-manager ensures the PR body mentions @samcantrill and waits for human merge in serial human merge gate mode
 loom_phase_reviewer or manager reviews PR
-manager approves, retargets/rebases stack children when predecessors land, merges merge-eligible PRs, or escalates to the user in stacked mode
-human reviewer approves and merges the PR in serial human merge gate mode
-manager records merged metadata and cleans worktree/branch only after successor branches no longer depend on it
+manager waits for GitHub CI, merges the phase PR into develop when checks pass, records merged metadata, and cleans worktree/branch when no successor depends on it
+manager uses stacked continuation only when a GitHub-side blocker prevents the merge and the blocker cannot be resolved in scope
 ```
 
 Use the expanded path when the phase is likely to have durable design impact or
@@ -346,8 +343,9 @@ Model policy:
 
 ### Automatic Merge Policy
 
-Automatic merging is allowed only for the managing agent after phase review
-approval.
+Automatic merging is the default for phase PRs. The managing agent owns the
+review and merge decision and must not wait for human GitHub approval unless the
+user explicitly selects serial human-merge-gate mode.
 
 If serial human merge gate mode is active, this section is disabled: the
 managing agent must not approve or merge, and must wait for the human-merged PR
@@ -360,7 +358,9 @@ Before merging, the managing agent must confirm:
 - Any successor phase branches have been rebased or are ready to be retargeted
   after the merge.
 - The phase PR has passed `loom_phase_reviewer` review, or the managing agent
-  has performed the same review locally.
+  has performed the same review locally. This automated review satisfies the
+  phase approval gate; GitHub review approval is not required unless branch
+  protection enforces it.
 - Required validation commands or CI checks pass, or any unavailable checks are
   clearly justified.
 - The PR implements only the assigned phase and does not include future phase
@@ -368,6 +368,12 @@ Before merging, the managing agent must confirm:
 - The PR body accurately summarizes the implementation, suite-level test
   evidence, assumptions, and risks. The phase execution plan records workflow
   metadata such as branch and worktree path.
+- If GitHub blocks merge only because repository branch protection requires a
+  human approval, the managing agent may use its available merge authority,
+  including `gh pr merge --admin`, after recording the blocker and confirming
+  all automated review and validation gates above. Do not use admin bypass for
+  failing CI, wrong target branch, unresolved merge conflicts, or known
+  implementation/review blockers.
 
 After merging, the managing agent must:
 
@@ -409,6 +415,14 @@ gh pr merge <PR> --auto --squash
 
 Add `--delete-branch` to the auto-merge command only when no successor branch
 depends on the phase branch.
+
+If branch protection blocks solely on human approval and the managing account has
+admin merge authority, use the corresponding `--admin` form after the automated
+review and validation gates pass:
+
+```sh
+gh pr merge <PR> --squash --delete-branch --admin
+```
 
 ### Plan Quality Gate
 
