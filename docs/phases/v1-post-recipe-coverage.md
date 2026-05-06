@@ -283,8 +283,12 @@ make test-summary
 - PR body artifact: `docs/phases/v1-post-recipe-coverage-pr-body.md`.
 - PR preparation status: fast-path draft completed; refine pass not needed.
   Branch, stack predecessor (`none`), target branch (`develop`), merge
-  eligibility, and scope were confirmed before PR creation. PR URL and GitHub
-  verification remain pending until the branch is pushed and the PR is opened.
+  eligibility, and scope were confirmed before PR creation.
+- PR: https://github.com/samcantrill/loom/pull/55
+- GitHub verification:
+  - `gh pr view 55 --json baseRefName,headRefName,state,url` returned
+    `baseRefName=develop`, `headRefName=codex/v1-post-recipe-coverage`,
+    `state=OPEN`, `url=https://github.com/samcantrill/loom/pull/55`.
 - Known issues or blockers: none.
 - Refiner handoff: no failing or unavailable checks. Phase implementation
   refinement remains unused on the fast path.
