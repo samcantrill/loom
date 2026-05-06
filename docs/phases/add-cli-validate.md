@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR preparation pending
+- Status: pr_open
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 3: Validate Command`
 - Branch: `codex/add-cli-validate`
@@ -111,6 +111,6 @@ make test-summary
   - `uv run --extra config pyright`: passed, 0 errors.
   - `make validate-pr`: passed; Ruff, Pyright, default no-extra suite, config-extra suite, and build passed.
   - `make test-summary`: passed; overall 865 passed, 9 skipped, 497 deselected.
-- PR preparation:
+- PR preparation: PR opened against `develop`: https://github.com/samcantrill/loom/pull/61
 - Merge notes:
 - Remaining blockers: none known.
