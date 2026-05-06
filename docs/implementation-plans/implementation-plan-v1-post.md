@@ -11,8 +11,9 @@
   `docs/phases/harden-config-composition-v1.md`
 - Trigger: D01-D36 validation after v1 Phase 16 merge
 - Workflow: phase-based workflow after plan quality gate
-- Plan quality gate: pending
-- Blockers: unresolved v1 contract gaps recorded below
+- Plan quality gate: passed
+- Blockers: none after plan-quality confirmation review; v1 contract gaps are
+  assigned to phases below
 
 ## Goal
 
@@ -114,9 +115,17 @@ with that if it is emitted by default.
 
 Selected resolution:
 
-- New provenance writes must expose artifact-safe fingerprint record facts, not
-  resolved-runtime fingerprints.
-- Readers may accept legacy `resolved_fingerprint` for old artifacts.
+- New provenance writes use `schema_version: 2` and omit top-level
+  `resolved_fingerprint`.
+- New provenance writes include top-level `artifact_fingerprint`, equal to the
+  artifact-safe `ComposedConfig.fingerprint`, plus artifact-safe fingerprint
+  facts in `metadata.fingerprint`.
+- `ConfigProvenance.from_dict(...)` must continue to accept legacy
+  `schema_version: 1` documents that contain top-level `resolved_fingerprint`.
+  Legacy reads may expose that value through an explicitly named compatibility
+  field or metadata key such as `metadata.legacy_resolved_fingerprint`; new
+  writes must not re-emit it.
+- `schema_version: 2` readers remain strict about unknown top-level fields.
 - Any future resolved-runtime fingerprint must be explicit opt-in with security
   warnings and a distinct policy label.
 
@@ -160,6 +169,40 @@ Selected resolution:
 - Revisit only if users need deterministic recipe shape certification beyond
   trusted Python conventions.
 
+### Run-Store Composition Manifest Contract
+
+D32 requires pipeline persistence to retain full composition manifests without
+making `loom.pipeline` depend on `loom.config` classes.
+
+Selected resolution:
+
+- Add a plain-data run-store protocol surface:
+  `read_composition_manifest(run_id) -> dict[str, PlainData] | None` and
+  `write_composition_manifest(run_id, manifest: Mapping[str, PlainData])`.
+- Store the manifest in local runs at
+  `config/composition_manifest.json`.
+- Use a wrapper with exactly these top-level fields for schema version 1:
+  `schema_version`, `run_id`, `created_at`, and `composition_manifest`.
+- The wrapped `composition_manifest` payload is the plain serialized
+  composition manifest produced by `loom.config`; store and pipeline code must
+  treat it as plain data and must not import `loom.config` or manifest classes.
+- `PipelineRunner` must not write `config/resolved.yaml` or
+  `config/resolved.redacted.yaml` by default when the input is a composed config
+  object. It should write artifact-safe config data and the composition manifest
+  only when those plain/duck-typed fields are available.
+- Plain mapping configs are still caller-provided data, not v1 composed-config
+  artifacts. Existing snapshot behavior for plain mappings may remain
+  conservative, but it must not be described as resolved-config replay.
+
+## Suite Evidence Expectations
+
+Every phase execution plan must translate this section into phase-scoped
+package, unit, contract, integration, e2e, and opt-in suite obligations. A suite
+may be explicitly deferred only when the phase does not touch behavior covered
+by that suite. PR preparation should run `make validate-pr` and
+`make test-summary` before opening or preparing a PR, or record why a narrower
+validation set is the maximum available evidence.
+
 ## Phase Strategy
 
 ### Phase 1. Contract And Documentation Cleanup
@@ -194,9 +237,15 @@ Out of scope:
 
 Required evidence:
 
-- Package/import-boundary tests.
-- Docs/example validation when touched.
-- Focused tests for direct Python pipeline construction without config import.
+- Package: import-boundary tests for direct Python pipeline use without config
+  extras imported.
+- Unit: focused test for the removed source-level type import if unit coverage
+  is practical.
+- Contract: deferred; no extension protocol contract changes.
+- Integration: `PipelineRunner.run(...)` with direct `PipelineSpec` and no
+  `loom.config` import.
+- E2E: deferred; no user workflow behavior changes beyond documentation.
+- Opt-in/config-extra: docs/example checks when touched.
 
 ### Phase 2. Strict Authoring And Override Semantics
 
@@ -230,9 +279,15 @@ Out of scope:
 
 Required evidence:
 
-- Loader tests for duplicate YAML keys with path/source context.
-- Override parser tests for typed and JSON-quoted scalar values.
-- Public compose regression tests for overlay/include unsupported directives.
+- Package: deferred; no package surface changes.
+- Unit: loader tests for duplicate YAML keys and override parser tests for typed
+  and JSON-quoted scalar values.
+- Contract: deferred; no extension protocol contract changes.
+- Integration: public compose regression tests for duplicate keys,
+  literal-dot/no-escape behavior, and overlay/include unsupported directives.
+- E2E: deferred; compose public API coverage is sufficient.
+- Opt-in/config-extra: config-marked suite rows must include the new loader and
+  compose cases.
 
 ### Phase 3. Source Authorship And Structured Error Completion
 
@@ -270,10 +325,15 @@ Out of scope:
 
 Required evidence:
 
-- Contract tests for error `to_dict()` shape and round-trip behavior.
-- Unit/integration tests for merge, override, include, resolver, recipe, target,
-  and artifact/provenance failures.
-- Redaction tests proving secret-like override values are not exposed.
+- Package: public error exports stay stable or receive package import coverage
+  when touched.
+- Unit: tests for authorship propagation and structured error construction.
+- Contract: tests for error `to_dict()` shape and round-trip behavior.
+- Integration: merge, override, include, resolver, recipe, target, and
+  artifact/provenance failure cases through public composition APIs.
+- E2E: deferred unless the phase changes public runner behavior.
+- Opt-in/config-extra: redaction tests proving secret-like override values are
+  not exposed.
 
 ### Phase 4. Artifact-Safe Ordering And Provenance
 
@@ -290,11 +350,11 @@ Scope:
   records, provenance metadata, and composition manifest before runtime
   interpolation executes.
 - Preserve resolver expressions and resolver paths in artifact-safe records.
-- Remove default writing of `ConfigProvenance.resolved_fingerprint` in new
-  outputs.
-- Add a schema-versioned or compatibility reader path for old provenance
-  documents that still contain `resolved_fingerprint`.
-- Store artifact-safe fingerprint facts in provenance metadata or manifest
+- Write new `ConfigProvenance` documents as `schema_version: 2` with
+  top-level `artifact_fingerprint` and no top-level `resolved_fingerprint`.
+- Keep a legacy `schema_version: 1` reader for old provenance documents that
+  contain `resolved_fingerprint`, without re-emitting that field on new writes.
+- Store artifact-safe fingerprint facts in `metadata.fingerprint` or manifest
   records instead of a resolved-runtime digest.
 - Keep public `ComposedConfig.fingerprint` as the artifact-safe digest.
 - Add docs warning not to pass plaintext secrets through overrides, including a
@@ -309,11 +369,16 @@ Out of scope:
 
 Required evidence:
 
-- Tests proving environment value changes do not affect any default fingerprint
-  or provenance-emitted digest.
-- Tests proving artifact-safe records are available before resolver execution.
-- Provenance/manifest contract tests for new and legacy serialized shapes.
-- Docs tests or example checks for secret warning wording.
+- Package: public config API compatibility coverage if `ConfigProvenance`
+  exports or construction signatures change.
+- Unit: tests proving environment value changes do not affect any default
+  fingerprint or provenance-emitted digest.
+- Contract: provenance/manifest contract tests for schema-version-2 writes and
+  legacy schema-version-1 reads.
+- Integration: public compose tests proving artifact-safe records are produced
+  before resolver execution and preserve resolver expressions.
+- E2E: deferred unless runner behavior is touched.
+- Opt-in/config-extra: docs tests or example checks for secret warning wording.
 
 ### Phase 5. Pipeline Persistence And Runtime Fingerprints
 
@@ -330,11 +395,15 @@ Scope:
   for `ComposedConfig`.
 - Persist artifact-safe/redacted config records and the full composition
   manifest through run-store APIs.
+- Add the run-store protocol methods
+  `read_composition_manifest(run_id)` and
+  `write_composition_manifest(run_id, manifest)`.
+- Add the local-store file `config/composition_manifest.json` with wrapper
+  fields `schema_version`, `run_id`, `created_at`, and
+  `composition_manifest`.
 - Keep plain mapping config snapshot behavior conservative: if a plain mapping
   is persisted, it must be treated as caller-provided config data and not as a
   v1 resolved-config artifact.
-- Add run-store protocol and local-store methods for composition manifest
-  read/write using plain-data mappings, not `loom.config` classes.
 - Ensure pipeline construction and execution remain usable without importing
   `loom.config`; use duck-typing or plain-data conversion at the boundary.
 - Define runtime object fingerprinting outside `loom.config`. The accepted v1
@@ -353,11 +422,18 @@ Out of scope:
 
 Required evidence:
 
-- Store contract and local-store tests for composition manifest persistence.
-- Runner tests proving no default full resolved config snapshot is written for
-  composed configs.
-- Import-boundary tests proving pipeline/store modules do not import config.
-- Planning/fingerprint tests for explicit runtime-object fingerprint inputs.
+- Package: import-boundary tests proving pipeline/store modules do not import
+  config.
+- Unit: local-store tests for the `config/composition_manifest.json` wrapper and
+  path validation.
+- Contract: store protocol tests for composition manifest read/write using
+  plain mappings.
+- Integration: runner tests proving no default full resolved config snapshot is
+  written for composed configs and that plain mappings keep conservative
+  caller-provided behavior.
+- E2E: public Python runner coverage for manifest persistence if practical.
+- Opt-in/config-extra: planning/fingerprint tests for explicit runtime-object
+  fingerprint inputs when config extras participate.
 
 ### Phase 6. Recipe Residual Risk And Coverage Hardening
 
@@ -391,9 +467,14 @@ Out of scope:
 
 Required evidence:
 
-- Recipe unit/integration tests.
-- Public compose tests for relative escapes and include local customizations.
-- Package metadata test if practical.
+- Package: optional package metadata guard that no console script exists.
+- Unit: recipe manifest artifact-safe args/output hash tests where gaps remain.
+- Contract: deferred; recipe protocol shape is unchanged.
+- Integration: public compose/provenance tests for relative escapes and include
+  local customizations.
+- E2E: deferred; no full workflow behavior changes.
+- Opt-in/config-extra: config-marked rows must include the new recipe and
+  compose coverage.
 
 ### Phase 7. Final Hardening, Documentation, And Evidence
 
@@ -429,6 +510,19 @@ make validate-pr
 make test-summary
 ```
 
+Suite obligations:
+
+- Package: final import and metadata guard sweep.
+- Unit: targeted hardening tests for any final doc-discovered behavior gap.
+- Contract: final config/provenance/store contract rows must pass.
+- Integration: representative public Python artifact-safe compose and runner
+  workflow coverage.
+- E2E: at least one public Python v1-post workflow proving the repaired
+  artifact-safe path end to end, unless already covered by integration and
+  explicitly justified in the phase plan.
+- Opt-in/config-extra: final `make test-summary` evidence must show config
+  extras coverage or explain why unavailable.
+
 ## Technical Debt Ledger
 
 | Debt | Reason accepted | Revisit trigger |
@@ -441,7 +535,7 @@ make test-summary
 
 ## Plan Quality Gate
 
-Status: pending.
+Status: passed.
 
 Before phase implementation starts, this plan must pass review for:
 
@@ -460,9 +554,26 @@ Before phase implementation starts, this plan must pass review for:
 
 Gate budget status:
 
-- Initial `loom_plan_reviewer` review: unused.
-- Automated plan refinement pass: unused.
-- Confirmation review: unused.
+- Initial `loom_plan_reviewer` review: used; blocking findings were provenance
+  schema transition and run-store persistence contract, with a high-severity
+  suite-obligation gap.
+- Automated plan refinement pass: used; this revision chose the provenance
+  schema-version-2 contract, the run-store composition manifest API/path/wrapper,
+  and per-suite evidence obligations.
+- Confirmation review: used; no blocking findings remained and the plan was
+  judged ready for phase implementation.
+
+Refinement summary for confirmation reviewer:
+
+- Resolved the provenance blocker by specifying new `ConfigProvenance`
+  `schema_version: 2` writes with `artifact_fingerprint`, no top-level
+  `resolved_fingerprint`, and legacy schema-version-1 read compatibility.
+- Resolved the run-store blocker by specifying plain-data
+  `read_composition_manifest` and `write_composition_manifest` methods, local
+  file path `config/composition_manifest.json`, wrapper fields, and composed
+  versus plain mapping runner behavior.
+- Resolved the suite-obligation gap by adding a plan-level suite evidence rule
+  and per-phase package/unit/contract/integration/e2e/opt-in expectations.
 
 ## Assumptions And Defaults
 
