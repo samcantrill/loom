@@ -12,7 +12,7 @@ def test_id_aliases_are_string_types() -> None:
     assert ids.ArtifactType is str
     assert ids.Checksum is str
     assert ids.Fingerprint is str
-    assert ids.RunID is str
+    assert ids.RunURI is str
     assert ids.StageID is str
 
 
@@ -22,7 +22,7 @@ def test_ids_are_usable_as_string_aliases() -> None:
     assert isinstance("codecs", ids.CodecKey)
     assert isinstance("artifact", ids.ArtifactID)
     assert isinstance("dataset", ids.ArtifactType)
-    assert isinstance("run", ids.RunID)
+    assert isinstance("run", ids.RunURI)
     assert isinstance("stage", ids.StageID)
     assert isinstance("abc", ids.Checksum)
     assert isinstance("def", ids.Fingerprint)
@@ -38,6 +38,6 @@ def test_ids_export_surface() -> None:
         "ArtifactType",
         "Checksum",
         "Fingerprint",
-        "RunID",
+        "RunURI",
         "StageID",
     ]

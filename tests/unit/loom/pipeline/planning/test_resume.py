@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from loom.io import uri_to_path
-from loom.pipeline import OutputSpec, StageFactorySpec, StageSpec, StageStatus, StageStatusRecord
+from loom.pipeline import (
+    OutputSpec,
+    StageFactorySpec,
+    StageSpec,
+    StageStatus,
+    StageStatusRecord,
+)
 from loom.pipeline.planning import (
     PlanAction,
     PlanReasonCode,
@@ -15,7 +21,7 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
 )
 from loom.pipeline.planning.resume import check_stage_resume
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
 def _stage() -> StageSpec:
@@ -26,9 +32,9 @@ def _stage() -> StageSpec:
     )
 
 
-def _status(run_id: str) -> StageStatusRecord:
+def _status(run_uri: str) -> StageStatusRecord:
     return StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name="build",
         status=StageStatus.SUCCEEDED,
         attempt=1,
@@ -36,21 +42,26 @@ def _status(run_id: str) -> StageStatusRecord:
     )
 
 
-def _stores(tmp_path: Path) -> tuple[LocalRunStore, LocalArtifactStore]:
+def _run_uri(tmp_path: Path) -> str:
+    return path_to_run_uri(tmp_path / "runs" / "run1")
+
+
+def _stores(tmp_path: Path) -> tuple[LocalRunStore, LocalArtifactStore, str]:
     run_store = LocalRunStore(tmp_path / "runs")
-    run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
-    return run_store, artifact_store
+    run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri)
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root(run_uri))
+    return run_store, artifact_store, run_uri
 
 
 def test_direct_resume_requires_positive_prior_state(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
 
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -63,7 +74,7 @@ def test_direct_resume_requires_positive_prior_state(tmp_path: Path) -> None:
 
 
 def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -73,15 +84,15 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
         artifact_type="json",
         codec_key="json.v1",
     )
-    run_store.write_stage_status("run1", "build", _status("run1"))
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
-    run_store.write_artifact_index("run1", {"build.data": output})
+    run_store.write_stage_status(run_uri, "build", _status(run_uri))
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
+    run_store.write_artifact_index(run_uri, {"build.data": output})
 
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -93,8 +104,10 @@ def test_direct_resume_reuses_valid_succeeded_outputs(tmp_path: Path) -> None:
     assert result.check.outputs == {"data": output}
 
 
-def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(
+    tmp_path: Path,
+) -> None:
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -104,11 +117,11 @@ def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(tmp_path: 
         artifact_type="json",
         codec_key="json.v1",
     )
-    run_store.write_stage_status("run1", "build", _status("run1"))
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_status(run_uri, "build", _status(run_uri))
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
     run_store.write_stage_fingerprint(
-        "run1",
+        run_uri,
         "build",
         {
             "schema_version": 1,
@@ -148,11 +161,11 @@ def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(tmp_path: 
         },
         attempt=1,
     )
-    run_store.write_artifact_index("run1", {"build.data": output})
+    run_store.write_artifact_index(run_uri, {"build.data": output})
 
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -166,7 +179,7 @@ def test_direct_resume_flags_legacy_v1_fingerprints_as_policy_changed(tmp_path: 
 
 
 def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -177,23 +190,23 @@ def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
         codec_key="json.v1",
     )
     run_store.write_stage_status(
-        "run1",
+        run_uri,
         "build",
         StageStatusRecord(
-            run_id="run1",
+            run_uri=run_uri,
             stage_name="build",
             status=StageStatus.RUNNING,
             attempt=1,
             updated_at="2020-01-01T00:00:00Z",
         ),
     )
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
 
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -206,7 +219,7 @@ def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
 
 
 def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -217,23 +230,23 @@ def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
         codec_key="json.v1",
     )
     run_store.write_stage_status(
-        "run1",
+        run_uri,
         "build",
         StageStatusRecord(
-            run_id="run1",
+            run_uri=run_uri,
             stage_name="build",
             status=StageStatus.FAILED,
             attempt=1,
             updated_at="2020-01-01T00:00:00Z",
         ),
     )
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
 
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -246,7 +259,7 @@ def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
 
 
 def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -257,14 +270,14 @@ def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
         codec_key="json.v1",
     )
     uri_to_path(output.uri).unlink()
-    run_store.write_stage_status("run1", "build", _status("run1"))
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+    run_store.write_stage_status(run_uri, "build", _status(run_uri))
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
 
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -277,26 +290,26 @@ def test_direct_resume_does_not_reuse_missing_artifact(tmp_path: Path) -> None:
 
 
 def test_direct_resume_marks_missing_outputs_as_stale(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     run_store.write_stage_status(
-        "run1",
+        run_uri,
         "build",
         StageStatusRecord(
-            run_id="run1",
+            run_uri=run_uri,
             stage_name="build",
             status=StageStatus.SUCCEEDED,
             attempt=1,
             updated_at="2020-01-01T00:00:00Z",
         ),
     )
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
 
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -309,7 +322,7 @@ def test_direct_resume_marks_missing_outputs_as_stale(tmp_path: Path) -> None:
 
 
 def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -320,27 +333,27 @@ def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
         codec_key="json.v1",
     )
     run_store.write_stage_status(
-        "run1",
+        run_uri,
         "build",
         StageStatusRecord(
-            run_id="run1",
+            run_uri=run_uri,
             stage_name="build",
             status=StageStatus.SUCCEEDED,
             attempt=1,
             updated_at="2020-01-01T00:00:00Z",
         ),
     )
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
     with pytest.raises(ResumeStateError, match="corrupt"):
         # Corrupt the persisted output document, then attempt resume.
-        atomic_path = run_store.local_stage_dir("run1", "build") / "outputs.json"
-        atomic_path.write_text("[\"bad\"]", encoding="utf-8")
+        atomic_path = run_store.local_stage_dir(run_uri, "build") / "outputs.json"
+        atomic_path.write_text('["bad"]', encoding="utf-8")
 
         check_stage_resume(
             stage,
-            run_id="run1",
+            run_uri=run_uri,
             run_store=run_store,
             artifact_store=artifact_store,
             current_fingerprint=current,
@@ -350,7 +363,7 @@ def test_direct_resume_refuses_corrupt_outputs_json(tmp_path: Path) -> None:
 
 
 def test_direct_resume_rejects_corrupt_prior_fingerprint(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -361,26 +374,26 @@ def test_direct_resume_rejects_corrupt_prior_fingerprint(tmp_path: Path) -> None
         codec_key="json.v1",
     )
     run_store.write_stage_status(
-        "run1",
+        run_uri,
         "build",
         StageStatusRecord(
-            run_id="run1",
+            run_uri=run_uri,
             stage_name="build",
             status=StageStatus.SUCCEEDED,
             attempt=1,
             updated_at="2020-01-01T00:00:00Z",
         ),
     )
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
     run_store.write_stage_fingerprint(
-        "run1", "build", {"schema_version": "bad"}, attempt=1
+        run_uri, "build", {"schema_version": "bad"}, attempt=1
     )
 
     with pytest.raises(ResumeStateError, match="malformed prior fingerprint"):
         check_stage_resume(
             stage,
-            run_id="run1",
+            run_uri=run_uri,
             run_store=run_store,
             artifact_store=artifact_store,
             current_fingerprint=current,
@@ -390,7 +403,7 @@ def test_direct_resume_rejects_corrupt_prior_fingerprint(tmp_path: Path) -> None
 
 
 def test_direct_resume_checks_artifact_checksum(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -401,20 +414,20 @@ def test_direct_resume_checks_artifact_checksum(tmp_path: Path) -> None:
         codec_key="json.v1",
     )
     run_store.write_stage_status(
-        "run1",
+        run_uri,
         "build",
-        _status("run1"),
+        _status(run_uri),
     )
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
-    run_store.write_artifact_index("run1", {"build.data": output})
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
+    run_store.write_artifact_index(run_uri, {"build.data": output})
 
     path = artifact_store.local_path(output)
     path.write_text("corrupted", encoding="utf-8")
     result = check_stage_resume(
         stage,
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         current_fingerprint=current,
@@ -426,7 +439,7 @@ def test_direct_resume_checks_artifact_checksum(tmp_path: Path) -> None:
 
 
 def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
     current = build_stage_fingerprint(stage, bound_inputs={})
     output = artifact_store.save(
@@ -437,19 +450,23 @@ def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
         codec_key="json.v1",
     )
     run_store.write_stage_status(
-        "run1",
+        run_uri,
         "build",
-        _status("run1"),
+        _status(run_uri),
     )
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
-    run_store.write_stage_fingerprint("run1", "build", current.to_dict(), attempt=1)
-    run_store.write_artifact_index("run1", {"build.data": replace(output, artifact_id="build.other")})
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
+    run_store.write_artifact_index(
+        run_uri, {"build.data": replace(output, artifact_id="build.other")}
+    )
 
-    with pytest.raises(ResumeStateError, match="artifact index conflict for build.data"):
+    with pytest.raises(
+        ResumeStateError, match="artifact index conflict for build.data"
+    ):
         check_stage_resume(
             stage,
-            run_id="run1",
+            run_uri=run_uri,
             run_store=run_store,
             artifact_store=artifact_store,
             current_fingerprint=current,
@@ -459,18 +476,18 @@ def test_direct_resume_flags_artifact_index_conflict(tmp_path: Path) -> None:
 
 
 def test_direct_resume_raises_on_corrupt_prior_state(tmp_path: Path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
-    (run_store.local_stage_dir("run1", "build") / "status.json").parent.mkdir(
+    run_store, artifact_store, run_uri = _stores(tmp_path)
+    (run_store.local_stage_dir(run_uri, "build") / "status.json").parent.mkdir(
         parents=True, exist_ok=True
     )
-    (run_store.local_stage_dir("run1", "build") / "status.json").write_text(
+    (run_store.local_stage_dir(run_uri, "build") / "status.json").write_text(
         "{bad json", encoding="utf-8"
     )
 
     with pytest.raises(ResumeStateError):
         check_stage_resume(
             _stage(),
-            run_id="run1",
+            run_uri=run_uri,
             run_store=run_store,
             artifact_store=artifact_store,
             current_fingerprint=build_stage_fingerprint(_stage(), bound_inputs={}),

@@ -33,6 +33,10 @@ class UnsafeStorePathError(StoreError):
     """Raised when a filesystem path component is unsafe."""
 
 
+class InvalidRunURIError(RunStoreError):
+    """Raised when a run URI is malformed or unsupported."""
+
+
 class AtomicWriteError(StoreError):
     """Raised when atomic file writes cannot complete."""
 
@@ -89,6 +93,7 @@ __all__ = [
     "RunLockConflictError",
     "RunLockReleaseError",
     "UnsafeStorePathError",
+    "InvalidRunURIError",
     "UnsupportedArtifactURIError",
     "ArtifactNotFoundError",
     "MissingArtifactCodecError",

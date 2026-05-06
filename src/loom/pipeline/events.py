@@ -87,7 +87,9 @@ class PipelineEvent:
         object.__setattr__(
             self,
             "payload",
-            freeze_plain_data(_plain_mapping(self.payload, field="payload"), path="payload"),
+            freeze_plain_data(
+                _plain_mapping(self.payload, field="payload"), path="payload"
+            ),
         )
         object.__setattr__(
             self,
@@ -106,7 +108,7 @@ class PipelineEvent:
 
 @dataclass(frozen=True, slots=True)
 class PipelineEventRecord:
-    run_id: str
+    run_uri: str
     sequence: int
     timestamp: str
     scope: EventScope
@@ -117,27 +119,31 @@ class PipelineEventRecord:
     def __post_init__(self) -> None:
         _require_schema_version(self.schema_version)
         object.__setattr__(
-            self, "run_id", _require_non_empty_string(self.run_id, field="run_id")
+            self, "run_uri", _require_non_empty_string(self.run_uri, field="run_uri")
         )
         object.__setattr__(
             self,
             "sequence",
             _positive_int(self.sequence, field="sequence"),
         )
-        object.__setattr__(self, "timestamp", _timestamp(self.timestamp, field="timestamp"))
+        object.__setattr__(
+            self, "timestamp", _timestamp(self.timestamp, field="timestamp")
+        )
         if not isinstance(self.scope, EventScope):
             raise PipelineEventError("PipelineEventRecord.scope must be an EventScope")
         object.__setattr__(self, "event_type", _validate_event_type(self.event_type))
         object.__setattr__(
             self,
             "payload",
-            freeze_plain_data(_plain_mapping(self.payload, field="payload"), path="payload"),
+            freeze_plain_data(
+                _plain_mapping(self.payload, field="payload"), path="payload"
+            ),
         )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "schema_version": self.schema_version,
-            "run_id": self.run_id,
+            "run_uri": self.run_uri,
             "sequence": self.sequence,
             "timestamp": self.timestamp,
             "scope": self.scope.to_dict(),
@@ -152,7 +158,7 @@ class PipelineEventRecord:
                 data,
                 current_version=EVENT_SCHEMA_VERSION,
                 required={
-                    "run_id",
+                    "run_uri",
                     "sequence",
                     "timestamp",
                     "scope",
@@ -166,7 +172,7 @@ class PipelineEventRecord:
             raise PipelineEventError(f"PipelineEventRecord.from_dict: {exc}") from exc
         return cls(
             schema_version=_require_schema_version(mapping["schema_version"]),
-            run_id=_require_non_empty_string(mapping["run_id"], field="run_id"),
+            run_uri=_require_non_empty_string(mapping["run_uri"], field="run_uri"),
             sequence=_positive_int(mapping["sequence"], field="sequence"),
             timestamp=_timestamp(mapping["timestamp"], field="timestamp"),
             scope=EventScope.from_dict(mapping["scope"]),
@@ -250,7 +256,9 @@ def _timestamp(value: object, *, field: str) -> str:
     try:
         parse_timestamp(text)
     except ValueError as exc:
-        raise PipelineEventError(f"{field} must be a valid loom timestamp: {exc}") from exc
+        raise PipelineEventError(
+            f"{field} must be a valid loom timestamp: {exc}"
+        ) from exc
     return text
 
 

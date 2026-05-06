@@ -4,12 +4,19 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from loom.artifacts import ArtifactRef
 from loom.pipeline import OutputSpec, PipelineSpec, Stage, StageFactorySpec, StageSpec
 from loom.pipeline.context import StageContext
 from loom.pipeline.errors import StageContractError
-from loom.pipeline.execution import ConfigSnapshotInputs, PipelineRunner, RunRequest
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.execution import (
+    ConfigSnapshotInputs,
+    PipelineRunner,
+    RunRequest,
+    RunRequestError,
+)
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
 from loom.provenance.models import ProvenanceCaptureOptions
 from loom.serialization import PlainData
 
@@ -78,6 +85,10 @@ class _ComposedConfig:
 
 def _runner(tmp_path: Path) -> PipelineRunner:
     return PipelineRunner(run_store=LocalRunStore(tmp_path / "runs"))
+
+
+def _run_uri(tmp_path: Path) -> str:
+    return path_to_run_uri(tmp_path / "runs" / "run1")
 
 
 def _stage(
@@ -150,16 +161,59 @@ def test_construct_stage_rejects_non_empty_init_for_prebuilt_instance(
         raise AssertionError("non-empty init for prebuilt stage must fail")
 
 
+def test_runner_allocates_default_run_uri_under_store_root(tmp_path: Path) -> None:
+    run_store = LocalRunStore(tmp_path / "runs")
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    run_path = run_uri_to_path(result.run_uri)
+    assert run_path.parent == (tmp_path / "runs").resolve()
+    assert (run_path / "run.json").is_file()
+    assert run_store.read_run_document(result.run_uri)["run_uri"] == result.run_uri
+
+
+def test_runner_requires_run_uri_for_open_existing(tmp_path: Path) -> None:
+    with pytest.raises(RunRequestError, match="open_existing requires run_uri"):
+        PipelineRunner(run_store=LocalRunStore(tmp_path / "runs")).run(
+            RunRequest(
+                pipeline=PipelineSpec(
+                    stages=(
+                        _stage(
+                            target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                        ),
+                    )
+                ),
+                open_existing=True,
+            )
+        )
+
+
 def test_runner_persists_composed_config_artifact_manifest_without_resolved_snapshots(
     tmp_path: Path,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
-    run_store.create_run("run1", metadata={"caller": "unit"})
+    run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri, metadata={"caller": "unit"})
     runner = PipelineRunner(run_store=run_store)
     config = _ComposedConfig()
     request = RunRequest(
         config=config,
-        run_id="run1",
+        run_uri=run_uri,
         config_snapshots=ConfigSnapshotInputs(raw="name: demo\n"),
         provenance_options=ProvenanceCaptureOptions(
             capture_git=False,
@@ -169,20 +223,20 @@ def test_runner_persists_composed_config_artifact_manifest_without_resolved_snap
         metadata={"caller": "unit"},
     )
 
-    runner._write_config_and_provenance("run1", request, config.resolved)
+    runner._write_config_and_provenance(run_uri, request, config.resolved)
 
-    config_dir = run_store.local_run_dir("run1") / "config"
+    config_dir = run_store.local_run_dir(run_uri) / "config"
     assert not (config_dir / "resolved.yaml").exists()
     assert not (config_dir / "resolved.redacted.yaml").exists()
-    assert run_store.read_config_snapshot("run1", "raw") == "name: demo\n"
-    assert run_store.read_composition_manifest("run1") == {
+    assert run_store.read_config_snapshot(run_uri, "raw") == "name: demo\n"
+    assert run_store.read_composition_manifest(run_uri) == {
         "source_artifacts": [{"kind": "config", "path": "config.yaml"}],
         "metadata": {"artifact_safe": True},
     }
-    assert run_store.read_recipe_manifest("run1") == (
+    assert run_store.read_recipe_manifest(run_uri) == (
         {"name": "demo", "path": "pipeline"},
     )
-    assert run_store.read_run_user_metadata("run1") == {
+    assert run_store.read_run_user_metadata(run_uri) == {
         "caller": "unit",
         "config_provenance": {"artifact_fingerprint": "sha256:abc"},
     }
@@ -192,7 +246,8 @@ def test_runner_preserves_plain_mapping_config_as_caller_provided_snapshot(
     tmp_path: Path,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
-    run_store.create_run("run1")
+    run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri)
     runner = PipelineRunner(run_store=run_store)
     config = cast(
         Mapping[str, PlainData],
@@ -212,7 +267,7 @@ def test_runner_preserves_plain_mapping_config_as_caller_provided_snapshot(
     )
     request = RunRequest(
         config=config,
-        run_id="run1",
+        run_uri=run_uri,
         provenance_options=ProvenanceCaptureOptions(
             capture_git=False,
             capture_environment=False,
@@ -220,9 +275,9 @@ def test_runner_preserves_plain_mapping_config_as_caller_provided_snapshot(
         ),
     )
 
-    runner._write_config_and_provenance("run1", request, config)
+    runner._write_config_and_provenance(run_uri, request, config)
 
-    assert run_store.read_config_snapshot("run1", "resolved") is not None
-    assert run_store.read_config_snapshot("run1", "resolved_redacted") is not None
-    assert run_store.read_composition_manifest("run1") is None
-    assert run_store.read_recipe_manifest("run1") == ()
+    assert run_store.read_config_snapshot(run_uri, "resolved") is not None
+    assert run_store.read_config_snapshot(run_uri, "resolved_redacted") is not None
+    assert run_store.read_composition_manifest(run_uri) is None
+    assert run_store.read_recipe_manifest(run_uri) == ()

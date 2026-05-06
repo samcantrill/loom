@@ -39,6 +39,7 @@ def test_pipeline_store_public_exports() -> None:
         "RunLockConflictError",
         "RunLockReleaseError",
         "UnsafeStorePathError",
+        "InvalidRunURIError",
         "UnsupportedArtifactURIError",
         "ArtifactNotFoundError",
         "MissingArtifactCodecError",
@@ -62,13 +63,19 @@ def test_pipeline_store_public_exports() -> None:
         "artifact_index_to_dict",
         "artifact_index_from_dict",
         "merge_artifact_index",
+        "LocalRunURI",
+        "resolve_local_run_uri",
+        "validate_run_uri",
+        "run_uri_to_path",
+        "path_to_run_uri",
+        "allocate_local_run_uri",
     }
     assert "read_composition_manifest" in stores.RunConfigStore.__dict__
     assert "write_composition_manifest" in stores.RunConfigStore.__dict__
     write_signature = inspect.signature(
         stores.RunConfigStore.write_composition_manifest
     )
-    assert list(write_signature.parameters) == ["self", "run_id", "manifest"]
+    assert list(write_signature.parameters) == ["self", "run_uri", "manifest"]
 
 
 @pytest.mark.parametrize(

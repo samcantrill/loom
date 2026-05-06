@@ -12,37 +12,39 @@ from loom.serialization import PlainData
 
 @dataclass(frozen=True, slots=True)
 class ActiveRunLock:
-    run_id: str
+    run_uri: str
     token: str
 
     @classmethod
     def from_record(cls, record: RunLockRecord) -> "ActiveRunLock":
-        return cls(run_id=record.run_id, token=record.token)
+        return cls(run_uri=record.run_uri, token=record.token)
 
 
-def build_lock_owner(*, component: str, run_id: str, executor: str) -> dict[str, PlainData]:
+def build_lock_owner(
+    *, component: str, run_uri: str, executor: str
+) -> dict[str, PlainData]:
     """Build canonical lock owner metadata for execution-held locks."""
 
     return {
         "component": component,
-        "run_id": run_id,
+        "run_uri": run_uri,
         "executor": executor,
     }
 
 
 def acquire_run_lock(
     run_store: RunLockStore,
-    run_id: str,
+    run_uri: str,
     *,
     owner: Mapping[str, PlainData] | None = None,
 ) -> ActiveRunLock:
-    return ActiveRunLock.from_record(run_store.acquire_run_lock(run_id, owner=owner))
+    return ActiveRunLock.from_record(run_store.acquire_run_lock(run_uri, owner=owner))
 
 
 def release_run_lock(run_store: RunLockStore, lock: ActiveRunLock | None) -> None:
     if lock is None:
         return
-    run_store.release_run_lock(lock.run_id, lock.token)
+    run_store.release_run_lock(lock.run_uri, lock.token)
 
 
 __all__ = ["ActiveRunLock", "acquire_run_lock", "build_lock_owner", "release_run_lock"]

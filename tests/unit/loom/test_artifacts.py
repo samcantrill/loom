@@ -64,7 +64,14 @@ def test_artifact_ref_rejects_invalid() -> None:
             created_at="not-a-timestamp",
         )
     with pytest.raises(ArtifactValidationError):
-        ArtifactRef.from_dict({"artifact_id": "a", "artifact_type": "text", "uri": "file:///a", "extra": True})
+        ArtifactRef.from_dict(
+            {
+                "artifact_id": "a",
+                "artifact_type": "text",
+                "uri": "file:///a",
+                "extra": True,
+            }
+        )
 
 
 def test_artifact_ref_has_no_loading_behavior() -> None:
@@ -98,21 +105,36 @@ def test_artifact_ref_metadata_is_immutable_and_to_dict_mutations_are_local() ->
 
 
 def test_artifact_address_round_trip() -> None:
-    address = ArtifactAddress(run_id="run-1", artifact_id="artifact:best")
+    address = ArtifactAddress(
+        run_uri="file:///abs/project/runs/run-1", artifact_id="artifact:best"
+    )
     restored = ArtifactAddress.from_dict(address.to_dict())
 
     assert restored == address
-    assert restored.to_dict() == {"run_id": "run-1", "artifact_id": "artifact:best"}
+    assert restored.to_dict() == {
+        "run_uri": "file:///abs/project/runs/run-1",
+        "artifact_id": "artifact:best",
+    }
 
 
 def test_artifact_address_rejects_invalid_payloads() -> None:
     with pytest.raises(ArtifactValidationError):
-        ArtifactAddress.from_dict({"run_id": "run-1"})
+        ArtifactAddress.from_dict({"run_uri": "file:///abs/project/runs/run-1"})
     with pytest.raises(ArtifactValidationError):
-        ArtifactAddress.from_dict({"run_id": "run-1", "artifact_id": "artifact:best", "unexpected": 1})
+        ArtifactAddress.from_dict(
+            {
+                "run_uri": "file:///abs/project/runs/run-1",
+                "artifact_id": "artifact:best",
+                "unexpected": 1,
+            }
+        )
+    with pytest.raises(ArtifactValidationError):
+        ArtifactAddress.from_dict({"run_id": "run-1", "artifact_id": "artifact:best"})
     with pytest.raises(ArtifactValidationError):
         ArtifactAddress.from_dict("bad")
     with pytest.raises(ArtifactValidationError):
-        ArtifactAddress(run_id="", artifact_id="artifact:best")
+        ArtifactAddress(run_uri="", artifact_id="artifact:best")
     with pytest.raises(ArtifactValidationError):
-        ArtifactAddress.from_dict({"run_id": "run-1", "artifact_id": ""})
+        ArtifactAddress.from_dict(
+            {"run_uri": "file:///abs/project/runs/run-1", "artifact_id": ""}
+        )

@@ -35,7 +35,9 @@ def capture_code_provenance(
 
     git = None
     if project_root is not None:
-        git = capture_git_provenance(project_root, include_remote=include_git_remote, strict=strict)
+        git = capture_git_provenance(
+            project_root, include_remote=include_git_remote, strict=strict
+        )
 
     version_value: str | None = None
     if package_name is not None:
@@ -43,7 +45,9 @@ def capture_code_provenance(
             version_value = package_version(package_name)
         except PackageNotFoundError as exc:
             if strict:
-                raise ProvenanceCaptureError(f"Package {package_name!r} is not installed") from exc
+                raise ProvenanceCaptureError(
+                    f"Package {package_name!r} is not installed"
+                ) from exc
             version_value = None
 
     return CodeProvenance(
@@ -88,7 +92,9 @@ def capture_command_provenance(
     if cwd is None:
         cwd = str(Path.cwd())
     command_string = " ".join(argv)
-    return CommandProvenance(argv=tuple(argv), cwd=cwd, launcher=launcher, command_string=command_string)
+    return CommandProvenance(
+        argv=tuple(argv), cwd=cwd, launcher=launcher, command_string=command_string
+    )
 
 
 def capture_artifact_lineage(
@@ -115,9 +121,8 @@ def capture_artifact_lineage(
 
 
 def capture_run_provenance(
-    run_id: str,
+    run_uri: str,
     *,
-    run_dir: str | None = None,
     options: ProvenanceCaptureOptions | None = None,
     command: CommandProvenance | None = None,
     config: Mapping[str, object] | None = None,
@@ -141,16 +146,19 @@ def capture_run_provenance(
     if capture_options.capture_environment:
         from .environment import capture_environment_provenance as impl
 
-        environment = impl(env_keys=capture_options.env_keys, include_user=capture_options.include_user)
+        environment = impl(
+            env_keys=capture_options.env_keys, include_user=capture_options.include_user
+        )
     if capture_options.capture_dependencies:
         from .packages import capture_dependency_provenance as impl
 
-        dependencies = impl(packages=capture_options.packages, strict=capture_options.strict)
+        dependencies = impl(
+            packages=capture_options.packages, strict=capture_options.strict
+        )
 
     return RunProvenance(
-        run_id=run_id,
+        run_uri=run_uri,
         created_at=utc_timestamp(),
-        run_dir=run_dir,
         command=provenance_command,
         code=code,
         environment=environment,

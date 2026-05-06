@@ -25,7 +25,7 @@ class RunLockValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class RunLockRecord:
-    run_id: str
+    run_uri: str
     token: str
     acquired_at: str
     owner: Mapping[str, PlainData] = field(default_factory=dict)
@@ -33,9 +33,15 @@ class RunLockRecord:
 
     def __post_init__(self) -> None:
         _require_schema_version(self.schema_version)
-        object.__setattr__(self, "run_id", _require_non_empty_string(self.run_id, field="run_id"))
-        object.__setattr__(self, "token", _require_non_empty_string(self.token, field="token"))
-        object.__setattr__(self, "acquired_at", _timestamp(self.acquired_at, field="acquired_at"))
+        object.__setattr__(
+            self, "run_uri", _require_non_empty_string(self.run_uri, field="run_uri")
+        )
+        object.__setattr__(
+            self, "token", _require_non_empty_string(self.token, field="token")
+        )
+        object.__setattr__(
+            self, "acquired_at", _timestamp(self.acquired_at, field="acquired_at")
+        )
         object.__setattr__(
             self,
             "owner",
@@ -45,7 +51,7 @@ class RunLockRecord:
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "schema_version": self.schema_version,
-            "run_id": self.run_id,
+            "run_uri": self.run_uri,
             "token": self.token,
             "acquired_at": self.acquired_at,
             "owner": thaw_plain_data(self.owner, path="owner"),
@@ -57,7 +63,7 @@ class RunLockRecord:
             mapping = load_versioned_document(
                 data,
                 current_version=LOCK_SCHEMA_VERSION,
-                required={"run_id", "token", "acquired_at", "owner"},
+                required={"run_uri", "token", "acquired_at", "owner"},
                 optional=(),
                 path="RunLockRecord",
             )
@@ -65,7 +71,7 @@ class RunLockRecord:
             raise RunLockValidationError(f"RunLockRecord.from_dict: {exc}") from exc
         return cls(
             schema_version=_require_schema_version(mapping["schema_version"]),
-            run_id=_require_non_empty_string(mapping["run_id"], field="run_id"),
+            run_uri=_require_non_empty_string(mapping["run_uri"], field="run_uri"),
             token=_require_non_empty_string(mapping["token"], field="token"),
             acquired_at=_timestamp(mapping["acquired_at"], field="acquired_at"),
             owner=_plain_mapping(mapping["owner"], field="owner"),
@@ -93,7 +99,9 @@ def _timestamp(value: object, *, field: str) -> str:
     try:
         parse_timestamp(text)
     except ValueError as exc:
-        raise RunLockValidationError(f"{field} must be a valid loom timestamp: {exc}") from exc
+        raise RunLockValidationError(
+            f"{field} must be a valid loom timestamp: {exc}"
+        ) from exc
     return text
 
 

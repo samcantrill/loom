@@ -25,6 +25,7 @@ from loom.pipeline.stores import (
     StageLogStore,
     StageStateStore,
     StageWorkspaceStore,
+    path_to_run_uri,
 )
 from loom.serialization import PlainData
 
@@ -80,82 +81,88 @@ class DummyArtifactStore:
 
 
 class DummyRunStore:
+    def resolve_run_uri(self, run_uri: str) -> str:
+        return run_uri
+
+    def allocate_run_uri(self) -> str:
+        return "file:///tmp/loom-runs/run-1"
+
     def create_run(
-        self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None
+        self, run_uri: str, *, metadata: Mapping[str, PlainData] | None = None
     ) -> None:
         return None
 
-    def open_run(self, run_id: str) -> None:
+    def open_run(self, run_uri: str) -> None:
         return None
 
-    def read_run_document(self, run_id: str) -> dict[str, PlainData]:
+    def read_run_document(self, run_uri: str) -> dict[str, PlainData]:
         return {}
 
-    def read_run_user_metadata(self, run_id: str) -> dict[str, PlainData]:
+    def read_run_user_metadata(self, run_uri: str) -> dict[str, PlainData]:
         return {}
 
     def write_run_user_metadata(
-        self, run_id: str, metadata: Mapping[str, PlainData]
+        self, run_uri: str, metadata: Mapping[str, PlainData]
     ) -> None:
         return None
 
-    def read_run_status(self, run_id: str) -> RunStatusRecord | None:
+    def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
         return None
 
-    def write_run_status(self, run_id: str, status: RunStatusRecord) -> None:
+    def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:
         return None
 
-    def read_plan(self, run_id: str) -> dict[str, PlainData] | None:
+    def read_plan(self, run_uri: str) -> dict[str, PlainData] | None:
         return None
 
-    def write_plan(self, run_id: str, plan: Mapping[str, PlainData]) -> None:
+    def write_plan(self, run_uri: str, plan: Mapping[str, PlainData]) -> None:
         return None
 
-    def read_artifact_index(self, run_id: str) -> dict[str, ArtifactRef]:
+    def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
         return {}
 
     def write_artifact_index(
-        self, run_id: str, index: Mapping[str, ArtifactRef]
+        self, run_uri: str, index: Mapping[str, ArtifactRef]
     ) -> None:
         return None
 
-    def read_config_snapshot(self, run_id: str, name: str) -> str | None:
+    def read_config_snapshot(self, run_uri: str, name: str) -> str | None:
         return None
 
-    def write_config_snapshot(self, run_id: str, name: str, content: str) -> None:
+    def write_config_snapshot(self, run_uri: str, name: str, content: str) -> None:
         return None
 
-    def read_composition_manifest(self, run_id: str) -> dict[str, PlainData] | None:
+    def read_composition_manifest(self, run_uri: str) -> dict[str, PlainData] | None:
         return {"schema_version": 1}
 
     def write_composition_manifest(
-        self, run_id: str, manifest: Mapping[str, PlainData]
+        self, run_uri: str, manifest: Mapping[str, PlainData]
     ) -> None:
         return None
 
     def read_recipe_manifest(
-        self, run_id: str
+        self, run_uri: str
     ) -> tuple[dict[str, PlainData], ...] | None:
         return None
 
     def write_recipe_manifest(
-        self, run_id: str, records: Sequence[Mapping[str, PlainData]]
+        self, run_uri: str, records: Sequence[Mapping[str, PlainData]]
     ) -> None:
         return None
 
     def read_provenance_document(
-        self, run_id: str, name: str
+        self, run_uri: str, name: str
     ) -> dict[str, PlainData] | None:
         return {}
 
     def write_provenance_document(
-        self, run_id: str, name: str, document: Mapping[str, PlainData]
+        self, run_uri: str, name: str, document: Mapping[str, PlainData]
     ) -> None:
         return None
 
-    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord:
+    def append_event(self, run_uri: str, event: PipelineEvent) -> PipelineEventRecord:
         return PipelineEventRecord(
-            run_id=run_id,
+            run_uri=run_uri,
             sequence=1,
             timestamp="2020-01-01T00:00:00Z",
             scope=EventScope.run(),
@@ -163,46 +170,46 @@ class DummyRunStore:
             payload=event.payload,
         )
 
-    def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]:
+    def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
         return ()
 
     def acquire_run_lock(
         self,
-        run_id: str,
+        run_uri: str,
         *,
         owner: Mapping[str, PlainData] | None = None,
     ) -> RunLockRecord:
         return RunLockRecord(
-            run_id=run_id,
+            run_uri=run_uri,
             token="token",
             acquired_at="2020-01-01T00:00:00Z",
             owner=owner or {},
         )
 
-    def read_run_lock(self, run_id: str) -> RunLockRecord | None:
+    def read_run_lock(self, run_uri: str) -> RunLockRecord | None:
         return None
 
-    def release_run_lock(self, run_id: str, token: str) -> None:
+    def release_run_lock(self, run_uri: str, token: str) -> None:
         return None
 
     def read_stage_status(
-        self, run_id: str, stage_name: str
+        self, run_uri: str, stage_name: str
     ) -> StageStatusRecord | None:
         return None
 
     def write_stage_status(
-        self, run_id: str, stage_name: str, status: StageStatusRecord
+        self, run_uri: str, stage_name: str, status: StageStatusRecord
     ) -> None:
         return None
 
     def read_stage_inputs(
-        self, run_id: str, stage_name: str
+        self, run_uri: str, stage_name: str
     ) -> dict[str, ArtifactRef] | None:
         return None
 
     def write_stage_inputs(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         inputs: Mapping[str, ArtifactRef],
         *,
@@ -211,13 +218,13 @@ class DummyRunStore:
         return None
 
     def read_stage_outputs(
-        self, run_id: str, stage_name: str
+        self, run_uri: str, stage_name: str
     ) -> dict[str, ArtifactRef] | None:
         return None
 
     def write_stage_outputs(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         outputs: Mapping[str, ArtifactRef],
         *,
@@ -226,13 +233,13 @@ class DummyRunStore:
         return None
 
     def read_stage_fingerprint(
-        self, run_id: str, stage_name: str
+        self, run_uri: str, stage_name: str
     ) -> dict[str, PlainData] | None:
         return None
 
     def write_stage_fingerprint(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         fingerprint: Mapping[str, PlainData],
         *,
@@ -241,13 +248,13 @@ class DummyRunStore:
         return None
 
     def read_stage_failure(
-        self, run_id: str, stage_name: str
+        self, run_uri: str, stage_name: str
     ) -> dict[str, PlainData] | None:
         return None
 
     def write_stage_failure(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         failure: Mapping[str, PlainData],
         *,
@@ -256,13 +263,13 @@ class DummyRunStore:
         return None
 
     def read_stage_provenance(
-        self, run_id: str, stage_name: str
+        self, run_uri: str, stage_name: str
     ) -> dict[str, PlainData] | None:
         return None
 
     def write_stage_provenance(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         provenance: Mapping[str, PlainData],
         *,
@@ -270,15 +277,15 @@ class DummyRunStore:
     ) -> None:
         return None
 
-    def read_stage_log(self, run_id: str, stage_name: str, stream: str) -> str | None:
+    def read_stage_log(self, run_uri: str, stage_name: str, stream: str) -> str | None:
         return None
 
     def write_stage_log(
-        self, run_id: str, stage_name: str, stream: str, content: str
+        self, run_uri: str, stage_name: str, stream: str, content: str
     ) -> None:
         return None
 
-    def prepare_stage_workspace(self, run_id: str, stage_name: str) -> None:
+    def prepare_stage_workspace(self, run_uri: str, stage_name: str) -> None:
         return None
 
 
@@ -288,34 +295,40 @@ class IncompleteArtifactStore:
 
 
 class IncompleteRunStore:
-    def create_run(self, run_id: str) -> None:
+    def create_run(self, run_uri: str) -> None:
         return None
 
 
 class DummyRunStorePaths:
-    def local_run_dir(self, run_id: str) -> Path:
-        return Path(run_id)
+    def resolve_run_uri(self, run_uri: str) -> str:
+        return run_uri
 
-    def local_stage_dir(self, run_id: str, stage_name: str) -> Path:
-        return Path(run_id) / stage_name
+    def allocate_run_uri(self) -> str:
+        return "file:///tmp/loom-runs/run-1"
 
-    def local_artifact_root(self, run_id: str) -> Path:
-        return Path(run_id) / "artifacts"
+    def local_run_dir(self, run_uri: str) -> Path:
+        return Path(run_uri)
 
-    def local_stage_artifact_dir(self, run_id: str, stage_name: str) -> Path:
-        return Path(run_id) / "artifacts" / stage_name
+    def local_stage_dir(self, run_uri: str, stage_name: str) -> Path:
+        return Path(run_uri) / stage_name
 
-    def local_config_path(self, run_id: str, name: str) -> Path:
-        return Path(run_id) / f"{name}.yaml"
+    def local_artifact_root(self, run_uri: str) -> Path:
+        return Path(run_uri) / "artifacts"
 
-    def local_provenance_path(self, run_id: str, name: str) -> Path:
-        return Path(run_id) / f"{name}.json"
+    def local_stage_artifact_dir(self, run_uri: str, stage_name: str) -> Path:
+        return Path(run_uri) / "artifacts" / stage_name
 
-    def local_stage_log_path(self, run_id: str, stage_name: str, stream: str) -> Path:
-        return Path(run_id) / stage_name / f"{stream}.log"
+    def local_config_path(self, run_uri: str, name: str) -> Path:
+        return Path(run_uri) / f"{name}.yaml"
 
-    def local_stage_workspace_dir(self, run_id: str, stage_name: str) -> Path:
-        return Path(run_id) / stage_name / "workspace"
+    def local_provenance_path(self, run_uri: str, name: str) -> Path:
+        return Path(run_uri) / f"{name}.json"
+
+    def local_stage_log_path(self, run_uri: str, stage_name: str, stream: str) -> Path:
+        return Path(run_uri) / stage_name / f"{stream}.log"
+
+    def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path:
+        return Path(run_uri) / stage_name / "workspace"
 
 
 def test_local_artifact_store_satisfies_protocol() -> None:
@@ -344,15 +357,19 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)
     assert isinstance(DummyRunStore(), RunStore)
-    assert DummyRunStore().read_composition_manifest("run1") == {"schema_version": 1}
+    assert DummyRunStore().read_composition_manifest("file:///tmp/run1") == {
+        "schema_version": 1
+    }
 
 
 def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
 
     assert isinstance(store, RunEventStore)
     assert isinstance(store, RunLockStore)
     assert isinstance(store, RunStore)
+    assert store.resolve_run_uri(run_uri) == run_uri
 
 
 def test_fake_run_store_does_not_satisfy_local_paths() -> None:

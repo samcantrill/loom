@@ -5,7 +5,14 @@ from datetime import datetime, timezone
 import pytest
 
 from loom.pipeline.errors import StatusSerializationError
-from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord, parse_run_status, parse_stage_status
+from loom.pipeline.status import (
+    RunStatus,
+    RunStatusRecord,
+    StageStatus,
+    StageStatusRecord,
+    parse_run_status,
+    parse_stage_status,
+)
 from loom.timestamps import utc_timestamp
 
 
@@ -26,7 +33,7 @@ def test_run_status_parse() -> None:
 def test_run_status_round_trip() -> None:
     created, updated = _common_ts()
     record = RunStatusRecord(
-        run_id="run-1",
+        run_uri="run-1",
         status=RunStatus.RUNNING,
         created_at=created,
         updated_at=updated,
@@ -41,7 +48,7 @@ def test_run_status_round_trip() -> None:
 def test_stage_status_round_trip_and_owner_metadata() -> None:
     _, updated = _common_ts()
     record = StageStatusRecord(
-        run_id="run-1",
+        run_uri="run-1",
         stage_name="build",
         status=StageStatus.SUCCEEDED,
         updated_at=updated,
@@ -62,7 +69,7 @@ def test_stage_status_round_trip_and_owner_metadata() -> None:
 def test_blocked_stage_status_round_trip_is_distinct() -> None:
     _, updated = _common_ts()
     record = StageStatusRecord(
-        run_id="run-1",
+        run_uri="run-1",
         stage_name="downstream",
         status=StageStatus.BLOCKED,
         updated_at=updated,
@@ -87,7 +94,7 @@ def test_blocked_stage_status_round_trip_is_distinct() -> None:
 def test_status_record_rejects_invalid_schema_version() -> None:
     created, updated = _common_ts()
     payload = {
-        "run_id": "run-1",
+        "run_uri": "run-1",
         "status": "RUNNING",
         "created_at": created,
         "updated_at": updated,
@@ -102,7 +109,7 @@ def test_stage_status_record_rejects_invalid_schema_version() -> None:
     with pytest.raises(StatusSerializationError, match="unsupported schema version"):
         StageStatusRecord.from_dict(
             {
-                "run_id": "run-1",
+                "run_uri": "run-1",
                 "stage_name": "build",
                 "status": "SUCCEEDED",
                 "attempt": 1,
@@ -117,7 +124,7 @@ def test_status_record_rejects_unknown_fields() -> None:
     with pytest.raises(StatusSerializationError, match="unknown field"):
         RunStatusRecord.from_dict(
             {
-                "run_id": "run-1",
+                "run_uri": "run-1",
                 "status": "RUNNING",
                 "created_at": created,
                 "updated_at": updated,
@@ -131,7 +138,7 @@ def test_status_record_rejects_non_timestamp() -> None:
     with pytest.raises(StatusSerializationError, match="timestamp"):
         StageStatusRecord.from_dict(
             {
-                "run_id": "run-1",
+                "run_uri": "run-1",
                 "stage_name": "build",
                 "status": "SUCCEEDED",
                 "updated_at": "not-a-timestamp",
@@ -146,7 +153,7 @@ def test_status_record_rejects_bad_attempts() -> None:
     with pytest.raises(StatusSerializationError, match="positive integer"):
         StageStatusRecord.from_dict(
             {
-                "run_id": "run-1",
+                "run_uri": "run-1",
                 "stage_name": "build",
                 "status": "SUCCEEDED",
                 "updated_at": updated,

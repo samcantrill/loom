@@ -1091,7 +1091,7 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True, slots=True)
 class StageContext:
-    run_id: str
+    run_uri: str
     stage_name: str
     resolved_config: Mapping[str, Any]
     stage_config: Mapping[str, Any]
@@ -1549,7 +1549,7 @@ class Executor(Protocol):
 The request should include:
 
 ```text
-run_id
+run_uri
 stage spec
 stage context
 bound inputs
@@ -1865,8 +1865,7 @@ result = runner.run(spec, resolved_config=cfg)
 The runner should return a structured result:
 
 ```text
-run_id
-run_dir
+run_uri
 final status
 stage results
 artifact index

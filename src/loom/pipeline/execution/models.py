@@ -25,8 +25,6 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.serialization import PlainData, ensure_plain_data, load_versioned_document
 from loom.serialization.errors import PlainDataError
 from loom.serialization.errors import SchemaVersionError
-from loom.timestamps import safe_timestamp_for_path
-
 from .errors import RunRequestError
 
 if TYPE_CHECKING:
@@ -92,7 +90,7 @@ class FailurePolicy:
 class RunRequest:
     config: _ComposedConfigLike | Mapping[str, PlainData] | None = None
     pipeline: PipelineSpec | None = None
-    run_id: str | None = None
+    run_uri: str | None = None
     open_existing: bool = False
     selectors: PlanSelectors = field(default_factory=PlanSelectors)
     resume: ResumeOptions = field(default_factory=ResumeOptions)
@@ -148,19 +146,17 @@ class RunRequest:
         object.__setattr__(
             self, "failure_policy", _coerce_failure_policy(self.failure_policy)
         )
-        if self.run_id is None:
-            object.__setattr__(
-                self, "run_id", safe_timestamp_for_path(timespec="seconds")
-            )
-        if not isinstance(self.run_id, str) or not self.run_id:
-            raise RunRequestError("RunRequest.run_id must be a non-empty string")
+        if self.run_uri is not None and (
+            not isinstance(self.run_uri, str) or not self.run_uri
+        ):
+            raise RunRequestError("RunRequest.run_uri must be a non-empty string")
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionFailure:
     schema_version: int
-    run_id: str
+    run_uri: str
     stage_name: str
     attempt: int
     failed_at: str
@@ -178,8 +174,8 @@ class ExecutionFailure:
     def __post_init__(self) -> None:
         if self.schema_version != EXECUTION_FAILURE_SCHEMA_VERSION:
             raise RunRequestError("ExecutionFailure.schema_version must be 1")
-        if not isinstance(self.run_id, str) or not self.run_id:
-            raise RunRequestError("ExecutionFailure.run_id must be a non-empty string")
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise RunRequestError("ExecutionFailure.run_uri must be a non-empty string")
         if not isinstance(self.stage_name, str) or not self.stage_name:
             raise RunRequestError(
                 "ExecutionFailure.stage_name must be a non-empty string"
@@ -231,7 +227,7 @@ class ExecutionFailure:
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "schema_version": self.schema_version,
-            "run_id": self.run_id,
+            "run_uri": self.run_uri,
             "stage_name": self.stage_name,
             "attempt": self.attempt,
             "failed_at": self.failed_at,
@@ -254,7 +250,7 @@ class ExecutionFailure:
                 data,
                 current_version=EXECUTION_FAILURE_SCHEMA_VERSION,
                 required={
-                    "run_id",
+                    "run_uri",
                     "stage_name",
                     "attempt",
                     "failed_at",
@@ -277,7 +273,7 @@ class ExecutionFailure:
 
         return cls(
             schema_version=_int(mapping["schema_version"], "schema_version"),
-            run_id=_str(mapping["run_id"], "run_id"),
+            run_uri=_str(mapping["run_uri"], "run_uri"),
             stage_name=_str(mapping["stage_name"], "stage_name"),
             attempt=_int(mapping["attempt"], "attempt"),
             failed_at=_str(mapping["failed_at"], "failed_at"),
@@ -305,7 +301,7 @@ class ExecutionFailure:
 
 @dataclass(frozen=True, slots=True)
 class StageExecutionRequest:
-    run_id: str
+    run_uri: str
     stage: StageSpec
     stage_plan: StagePlan
     stage_object: Stage
@@ -319,9 +315,9 @@ class StageExecutionRequest:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_id, str) or not self.run_id:
+        if not isinstance(self.run_uri, str) or not self.run_uri:
             raise RunRequestError(
-                "StageExecutionRequest.run_id must be a non-empty string"
+                "StageExecutionRequest.run_uri must be a non-empty string"
             )
         if not isinstance(self.stage, StageSpec):
             raise RunRequestError("StageExecutionRequest.stage must be a StageSpec")
@@ -463,8 +459,7 @@ class StageRunResult:
 
 @dataclass(frozen=True, slots=True)
 class RunResult:
-    run_id: str
-    run_dir: Path
+    run_uri: str
     status: RunStatus
     started_at: str
     finished_at: str
@@ -476,9 +471,8 @@ class RunResult:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_id, str) or not self.run_id:
-            raise RunRequestError("RunResult.run_id must be a non-empty string")
-        object.__setattr__(self, "run_dir", Path(self.run_dir))
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise RunRequestError("RunResult.run_uri must be a non-empty string")
         object.__setattr__(self, "status", _run_status(self.status))
         if not isinstance(self.started_at, str) or not self.started_at:
             raise RunRequestError("RunResult.started_at must be a non-empty string")

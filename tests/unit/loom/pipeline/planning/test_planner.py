@@ -8,7 +8,7 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
     plan_pipeline,
 )
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
 def _spec() -> PipelineSpec:
@@ -61,15 +61,24 @@ def _control_spec() -> PipelineSpec:
     )
 
 
+def _run_uri(tmp_path) -> str:
+    return path_to_run_uri(tmp_path / "runs" / "run1")
+
+
 def _stores(tmp_path):
     run_store = LocalRunStore(tmp_path / "runs")
-    run_store.create_run("run1")
-    return run_store, LocalArtifactStore(run_store.local_artifact_root("run1"))
+    run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri)
+    return (
+        run_store,
+        LocalArtifactStore(run_store.local_artifact_root(run_uri)),
+        run_uri,
+    )
 
 
-def _succeeded(run_id: str, stage_name: str) -> StageStatusRecord:
+def _succeeded(run_uri: str, stage_name: str) -> StageStatusRecord:
     return StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name=stage_name,
         status=StageStatus.SUCCEEDED,
         attempt=1,
@@ -77,7 +86,7 @@ def _succeeded(run_id: str, stage_name: str) -> StageStatusRecord:
     )
 
 
-def _seed_reusable_build(run_store, artifact_store) -> None:
+def _seed_reusable_build(run_store, artifact_store, run_uri: str) -> None:
     spec = _spec()
     build = spec.get_stage("build")
     output = artifact_store.save(
@@ -87,22 +96,22 @@ def _seed_reusable_build(run_store, artifact_store) -> None:
         artifact_type="json",
         codec_key="json.v1",
     )
-    run_store.write_stage_status("run1", "build", _succeeded("run1", "build"))
-    run_store.write_stage_inputs("run1", "build", {}, attempt=1)
-    run_store.write_stage_outputs("run1", "build", {"data": output}, attempt=1)
+    run_store.write_stage_status(run_uri, "build", _succeeded(run_uri, "build"))
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
     run_store.write_stage_fingerprint(
-        "run1",
+        run_uri,
         "build",
         build_stage_fingerprint(build, bound_inputs={}).to_dict(),
         attempt=1,
     )
-    run_store.write_artifact_index("run1", {"build.data": output})
+    run_store.write_artifact_index(run_uri, {"build.data": output})
 
 
 def test_fresh_plan_runs_first_stage_and_pends_downstream_inputs(tmp_path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     plan = plan_pipeline(
-        _spec(), run_id="run1", run_store=run_store, artifact_store=artifact_store
+        _spec(), run_uri=run_uri, run_store=run_store, artifact_store=artifact_store
     )
 
     assert plan.stage_order == ("build", "report")
@@ -116,10 +125,10 @@ def test_fresh_plan_runs_first_stage_and_pends_downstream_inputs(tmp_path) -> No
 
 
 def test_skip_selector_blocks_downstream_consumers(tmp_path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     plan = plan_pipeline(
         _spec(),
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         selectors=PlanSelectors(skip_stages=("build",)),
@@ -137,10 +146,10 @@ def test_skip_selector_blocks_downstream_consumers(tmp_path) -> None:
 
 
 def test_skip_selector_blocks_control_dependency_consumers(tmp_path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
     plan = plan_pipeline(
         _control_spec(),
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         selectors=PlanSelectors(skip_stages=("prepare",)),
@@ -154,12 +163,12 @@ def test_skip_selector_blocks_control_dependency_consumers(tmp_path) -> None:
 def test_from_stage_forces_selected_reusable_stage_and_invalidates_downstream(
     tmp_path,
 ) -> None:
-    run_store, artifact_store = _stores(tmp_path)
-    _seed_reusable_build(run_store, artifact_store)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
+    _seed_reusable_build(run_store, artifact_store, run_uri)
 
     plan = plan_pipeline(
         _spec(),
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         selectors=PlanSelectors(from_stage="build"),
@@ -170,18 +179,20 @@ def test_from_stage_forces_selected_reusable_stage_and_invalidates_downstream(
     assert build.base_action == PlanAction.REUSE
     assert build.reusable_outputs == {}
     assert build.selected_by == (PlanReasonCode.FROM_STAGE_SELECTED,)
-    assert PlanReasonCode.FROM_STAGE_SELECTED in {reason.code for reason in build.reasons}
+    assert PlanReasonCode.FROM_STAGE_SELECTED in {
+        reason.code for reason in build.reasons
+    }
     assert report.action == PlanAction.RUN
     assert report.pending_inputs[0].reason.code == PlanReasonCode.UPSTREAM_WILL_RUN
 
 
 def test_only_stage_runs_with_reusable_provider(tmp_path) -> None:
-    run_store, artifact_store = _stores(tmp_path)
-    _seed_reusable_build(run_store, artifact_store)
+    run_store, artifact_store, run_uri = _stores(tmp_path)
+    _seed_reusable_build(run_store, artifact_store, run_uri)
 
     plan = plan_pipeline(
         _spec(),
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         selectors=PlanSelectors(only_stages=("report",)),

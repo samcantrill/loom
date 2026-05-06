@@ -1280,7 +1280,7 @@ from loom.pipeline.stores import ArtifactStore, LocalArtifactStore
 Example:
 
 ```python
-store = LocalArtifactStore(root=run_dir / "artifacts")
+store = LocalArtifactStore(root=run_path / "artifacts")
 
 ref = store.save(
     {"loss": 0.1},

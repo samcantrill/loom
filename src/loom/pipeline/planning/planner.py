@@ -41,7 +41,7 @@ from .selectors import Selection, normalize_selectors, selector_reason
 def plan_pipeline(
     spec: PipelineSpec,
     *,
-    run_id: str,
+    run_uri: str,
     run_store: RunStore,
     artifact_store: ArtifactStore,
     selectors: PlanSelectors | None = None,
@@ -63,7 +63,7 @@ def plan_pipeline(
         plans[stage_name] = _plan_stage(
             spec=spec,
             stage=stage,
-            run_id=run_id,
+            run_uri=run_uri,
             run_store=run_store,
             artifact_store=artifact_store,
             selection=selection,
@@ -82,7 +82,7 @@ def plan_pipeline(
     ordered_plans = tuple(plans[name] for name in selection.stage_order)
     plan = ExecutionPlan(
         schema_version=PLAN_SCHEMA_VERSION,
-        run_id=run_id,
+        run_uri=run_uri,
         pipeline_name=spec.name,
         selectors=selection.selectors,
         resume=resume_options,
@@ -93,7 +93,7 @@ def plan_pipeline(
         summary=summary_for(ordered_plans),
     )
     if persist:
-        _persist_plan(run_store, run_id, plan)
+        _persist_plan(run_store, run_uri, plan)
     return plan
 
 
@@ -101,7 +101,7 @@ def _plan_stage(
     *,
     spec: PipelineSpec,
     stage: StageSpec,
-    run_id: str,
+    run_uri: str,
     run_store: RunStore,
     artifact_store: ArtifactStore,
     selection: Selection,
@@ -162,12 +162,14 @@ def _plan_stage(
     else:
         current_fingerprint = build_stage_fingerprint(
             stage,
-            bound_inputs={name: bound.artifact_ref for name, bound in bound_inputs.items()},
+            bound_inputs={
+                name: bound.artifact_ref for name, bound in bound_inputs.items()
+            },
             fingerprint_context=fingerprint_context,
         )
         direct = check_stage_resume(
             stage,
-            run_id=run_id,
+            run_uri=run_uri,
             run_store=run_store,
             artifact_store=artifact_store,
             current_fingerprint=current_fingerprint,
@@ -268,10 +270,10 @@ def _output_spec_to_dict(output: OutputSpec) -> dict[str, PlainData]:
     }
 
 
-def _persist_plan(run_store: RunStore, run_id: str, plan: ExecutionPlan) -> None:
+def _persist_plan(run_store: RunStore, run_uri: str, plan: ExecutionPlan) -> None:
     try:
-        run_store.write_plan(run_id, plan.to_dict())
-        persisted = run_store.read_plan(run_id)
+        run_store.write_plan(run_uri, plan.to_dict())
+        persisted = run_store.read_plan(run_uri)
         if persisted is None:
             raise PlanPersistenceError("plan persistence returned no plan document")
         ExecutionPlan.from_dict(persisted)
@@ -279,11 +281,11 @@ def _persist_plan(run_store: RunStore, run_id: str, plan: ExecutionPlan) -> None
         raise
     except StoreError as exc:
         raise PlanPersistenceError(
-            f"could not persist execution plan for run {run_id!r}: {exc}"
+            f"could not persist execution plan for run {run_uri!r}: {exc}"
         ) from exc
     except Exception as exc:
         raise PlanPersistenceError(
-            f"persisted execution plan for run {run_id!r} is invalid: {exc}"
+            f"persisted execution plan for run {run_uri!r} is invalid: {exc}"
         ) from exc
 
 

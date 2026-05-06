@@ -8,25 +8,25 @@ from loom.pipeline.stores import RunStoreError
 
 
 class _FailingRunStore:
-    def read_stage_status(self, run_id: str, stage_name: str) -> None:
+    def read_stage_status(self, run_uri: str, stage_name: str) -> None:
         return None
 
-    def read_stage_inputs(self, run_id: str, stage_name: str) -> None:
+    def read_stage_inputs(self, run_uri: str, stage_name: str) -> None:
         return None
 
-    def read_stage_fingerprint(self, run_id: str, stage_name: str) -> None:
+    def read_stage_fingerprint(self, run_uri: str, stage_name: str) -> None:
         return None
 
-    def read_stage_outputs(self, run_id: str, stage_name: str) -> None:
+    def read_stage_outputs(self, run_uri: str, stage_name: str) -> None:
         return None
 
-    def read_artifact_index(self, run_id: str) -> dict[str, object]:
+    def read_artifact_index(self, run_uri: str) -> dict[str, object]:
         return {}
 
-    def write_plan(self, run_id: str, plan: object) -> None:
+    def write_plan(self, run_uri: str, plan: object) -> None:
         raise RunStoreError("cannot write")
 
-    def read_plan(self, run_id: str) -> object:
+    def read_plan(self, run_uri: str) -> object:
         return None
 
 
@@ -50,7 +50,7 @@ def test_plan_persistence_errors_wrap_store_failures() -> None:
     with pytest.raises(PlanPersistenceError, match="could not persist"):
         plan_pipeline(
             spec,
-            run_id="run1",
+            run_uri="run1",
             run_store=_FailingRunStore(),  # type: ignore[arg-type]
             artifact_store=_ArtifactStore(),  # type: ignore[arg-type]
             persist=True,

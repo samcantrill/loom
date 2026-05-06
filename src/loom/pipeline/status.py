@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Mapping, cast
 
-from loom.ids import RunID, StageID
+from loom.ids import RunURI, StageID
 from loom.serialization import PlainData, ensure_plain_data, load_versioned_document
 from loom.serialization.errors import PlainDataError, SchemaVersionError
 from loom.timestamps import parse_timestamp
@@ -61,7 +61,9 @@ def _validate_status_schema_version(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise StatusSerializationError("schema_version must be a positive integer")
     if value != STATUS_SCHEMA_VERSION:
-        raise StatusSerializationError(f"unsupported schema_version '{value}', expected {STATUS_SCHEMA_VERSION}")
+        raise StatusSerializationError(
+            f"unsupported schema_version '{value}', expected {STATUS_SCHEMA_VERSION}"
+        )
     return value
 
 
@@ -73,7 +75,9 @@ def _validate_timestamp(value: object, *, field: str) -> str:
     try:
         parse_timestamp(value)
     except ValueError as exc:
-        raise StatusSerializationError(f"{field} must be a valid loom timestamp: {exc}") from exc
+        raise StatusSerializationError(
+            f"{field} must be a valid loom timestamp: {exc}"
+        ) from exc
     return value
 
 
@@ -85,7 +89,9 @@ def _validate_timestamp_or_none(value: object, *, field: str) -> str | None:
     try:
         parse_timestamp(value)
     except ValueError as exc:
-        raise StatusSerializationError(f"{field} must be a valid loom timestamp: {exc}") from exc
+        raise StatusSerializationError(
+            f"{field} must be a valid loom timestamp: {exc}"
+        ) from exc
     return value
 
 
@@ -111,7 +117,9 @@ def _validate_plain_mapping(value: object, *, field: str) -> dict[str, PlainData
     try:
         normalized = ensure_plain_data(value, path=field)
     except PlainDataError as exc:
-        raise StatusSerializationError(f"{field} must be plain-data-compatible: {exc}") from exc
+        raise StatusSerializationError(
+            f"{field} must be plain-data-compatible: {exc}"
+        ) from exc
     if not isinstance(normalized, dict):
         raise StatusSerializationError(f"{field} must be a mapping")
     return normalized
@@ -119,7 +127,7 @@ def _validate_plain_mapping(value: object, *, field: str) -> dict[str, PlainData
 
 @dataclass(frozen=True, slots=True)
 class RunStatusRecord:
-    run_id: RunID
+    run_uri: RunURI
     status: RunStatus
     created_at: str
     updated_at: str
@@ -130,20 +138,28 @@ class RunStatusRecord:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_id, str) or not self.run_id:
-            raise StatusSerializationError("run_id must be a non-empty string")
-        object.__setattr__(self, "status", parse_run_status(self.status.value if isinstance(self.status, RunStatus) else self.status))
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise StatusSerializationError("run_uri must be a non-empty string")
+        object.__setattr__(
+            self,
+            "status",
+            parse_run_status(
+                self.status.value if isinstance(self.status, RunStatus) else self.status
+            ),
+        )
         _validate_timestamp(self.created_at, field="created_at")
         _validate_timestamp(self.updated_at, field="updated_at")
         _validate_timestamp_or_none(self.started_at, field="started_at")
         _validate_timestamp_or_none(self.finished_at, field="finished_at")
         _validate_status_message(self.message, field="message")
         _validate_status_schema_version(self.schema_version)
-        object.__setattr__(self, "metadata", _validate_plain_mapping(self.metadata, field="metadata"))
+        object.__setattr__(
+            self, "metadata", _validate_plain_mapping(self.metadata, field="metadata")
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "run_id": self.run_id,
+            "run_uri": self.run_uri,
             "status": self.status.value,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -160,28 +176,34 @@ class RunStatusRecord:
             data = load_versioned_document(
                 data,
                 current_version=STATUS_SCHEMA_VERSION,
-                required={"run_id", "status", "created_at", "updated_at"},
+                required={"run_uri", "status", "created_at", "updated_at"},
                 optional={"started_at", "finished_at", "message", "metadata"},
             )
         except SchemaVersionError as exc:
             raise StatusSerializationError(f"RunStatusRecord.from_dict: {exc}") from exc
 
         return cls(
-            run_id=cast(str, data["run_id"]),
+            run_uri=cast(str, data["run_uri"]),
             status=parse_run_status(data["status"]),
             created_at=_validate_timestamp(data["created_at"], field="created_at"),
             updated_at=_validate_timestamp(data["updated_at"], field="updated_at"),
             schema_version=_validate_status_schema_version(data["schema_version"]),
-            started_at=_validate_timestamp_or_none(data.get("started_at"), field="started_at"),
-            finished_at=_validate_timestamp_or_none(data.get("finished_at"), field="finished_at"),
+            started_at=_validate_timestamp_or_none(
+                data.get("started_at"), field="started_at"
+            ),
+            finished_at=_validate_timestamp_or_none(
+                data.get("finished_at"), field="finished_at"
+            ),
             message=_validate_status_message(data.get("message"), field="message"),
-            metadata=_validate_plain_mapping(data.get("metadata", {}), field="metadata"),
+            metadata=_validate_plain_mapping(
+                data.get("metadata", {}), field="metadata"
+            ),
         )
 
 
 @dataclass(frozen=True, slots=True)
 class StageStatusRecord:
-    run_id: RunID
+    run_uri: RunURI
     stage_name: StageID
     status: StageStatus
     attempt: int
@@ -194,23 +216,35 @@ class StageStatusRecord:
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_id, str) or not self.run_id:
-            raise StatusSerializationError("run_id must be a non-empty string")
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise StatusSerializationError("run_uri must be a non-empty string")
         if not isinstance(self.stage_name, str) or not self.stage_name:
             raise StatusSerializationError("stage_name must be a non-empty string")
-        object.__setattr__(self, "status", parse_stage_status(self.status.value if isinstance(self.status, StageStatus) else self.status))
+        object.__setattr__(
+            self,
+            "status",
+            parse_stage_status(
+                self.status.value
+                if isinstance(self.status, StageStatus)
+                else self.status
+            ),
+        )
         object.__setattr__(self, "attempt", _validate_attempt(self.attempt))
         _validate_timestamp(self.updated_at, field="updated_at")
         _validate_timestamp_or_none(self.started_at, field="started_at")
         _validate_timestamp_or_none(self.finished_at, field="finished_at")
         _validate_status_message(self.message, field="message")
         _validate_status_schema_version(self.schema_version)
-        object.__setattr__(self, "owner", _validate_plain_mapping(self.owner, field="owner"))
-        object.__setattr__(self, "metadata", _validate_plain_mapping(self.metadata, field="metadata"))
+        object.__setattr__(
+            self, "owner", _validate_plain_mapping(self.owner, field="owner")
+        )
+        object.__setattr__(
+            self, "metadata", _validate_plain_mapping(self.metadata, field="metadata")
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
-            "run_id": self.run_id,
+            "run_uri": self.run_uri,
             "stage_name": self.stage_name,
             "status": self.status.value,
             "updated_at": self.updated_at,
@@ -229,24 +263,32 @@ class StageStatusRecord:
             data = load_versioned_document(
                 data,
                 current_version=STATUS_SCHEMA_VERSION,
-                required={"run_id", "stage_name", "status", "attempt", "updated_at"},
+                required={"run_uri", "stage_name", "status", "attempt", "updated_at"},
                 optional={"started_at", "finished_at", "message", "owner", "metadata"},
             )
         except SchemaVersionError as exc:
-            raise StatusSerializationError(f"StageStatusRecord.from_dict: {exc}") from exc
+            raise StatusSerializationError(
+                f"StageStatusRecord.from_dict: {exc}"
+            ) from exc
 
         return cls(
-            run_id=cast(str, data["run_id"]),
+            run_uri=cast(str, data["run_uri"]),
             stage_name=cast(str, data["stage_name"]),
             status=parse_stage_status(data["status"]),
             attempt=_validate_attempt(data["attempt"]),
             updated_at=_validate_timestamp(data["updated_at"], field="updated_at"),
             schema_version=_validate_status_schema_version(data["schema_version"]),
-            started_at=_validate_timestamp_or_none(data.get("started_at"), field="started_at"),
-            finished_at=_validate_timestamp_or_none(data.get("finished_at"), field="finished_at"),
+            started_at=_validate_timestamp_or_none(
+                data.get("started_at"), field="started_at"
+            ),
+            finished_at=_validate_timestamp_or_none(
+                data.get("finished_at"), field="finished_at"
+            ),
             message=_validate_status_message(data.get("message"), field="message"),
             owner=_validate_plain_mapping(data.get("owner", {}), field="owner"),
-            metadata=_validate_plain_mapping(data.get("metadata", {}), field="metadata"),
+            metadata=_validate_plain_mapping(
+                data.get("metadata", {}), field="metadata"
+            ),
         )
 
 

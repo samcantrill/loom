@@ -29,7 +29,9 @@ def test_import_does_not_import_deferred_modules() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -47,7 +49,9 @@ def test_import_serialization_does_not_import_io() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -66,7 +70,9 @@ def test_import_io_does_not_import_config_or_pipeline() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -85,12 +91,16 @@ def test_import_config_does_not_import_pipeline_or_execution() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
 
-def test_config_symbol_access_without_optional_dependencies_mentions_config_extra() -> None:
+def test_config_symbol_access_without_optional_dependencies_mentions_config_extra() -> (
+    None
+):
     script = dedent(
         """
         import importlib
@@ -126,7 +136,9 @@ def test_config_symbol_access_without_optional_dependencies_mentions_config_extr
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -145,7 +157,9 @@ def test_import_pipeline_does_not_import_forbidden_runtime_layers() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -164,7 +178,9 @@ def test_import_stores_does_not_import_config_or_cli_layers() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -183,7 +199,9 @@ def test_import_execution_does_not_import_config_stores_cli() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -201,7 +219,9 @@ def test_import_stage_factory_does_not_import_forbidden_modules() -> None:
         print("ok")
         """
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -222,7 +242,9 @@ def test_import_runtime_resource_modules_do_not_import_forbidden_layers() -> Non
         print("ok")
         """
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -241,7 +263,9 @@ def test_import_executors_does_not_import_project_layers() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -260,7 +284,9 @@ def test_import_cli_remains_import_safe() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -288,7 +314,9 @@ def test_import_config_artifacts_does_not_import_forbidden_layers() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -326,7 +354,9 @@ def test_pipeline_constructs_from_plain_data_without_config_import() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -351,7 +381,7 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
 
         from loom.pipeline import PipelineRunner, PipelineSpec, RunRequest
         from loom.pipeline.status import RunStatus
-        from loom.pipeline.stores import LocalRunStore
+        from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 
         assert_forbidden_absent("before direct pipeline run")
 
@@ -372,12 +402,13 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
         )
         with TemporaryDirectory() as tmpdir:
             run_store = LocalRunStore(tmpdir)
+            run_uri = path_to_run_uri(f"{tmpdir}/run1")
             result = PipelineRunner(run_store=run_store).run(
-                RunRequest(pipeline=spec, run_id="run1")
+                RunRequest(pipeline=spec, run_uri=run_uri)
             )
             if result.status is not RunStatus.SUCCEEDED:
                 raise SystemExit(f"run failed with status {result.status!r}")
-            if set(run_store.read_artifact_index("run1")) != {"build.data"}:
+            if set(run_store.read_artifact_index(run_uri)) != {"build.data"}:
                 raise SystemExit("direct run did not write expected artifact index")
 
         assert_forbidden_absent("during direct pipeline run")
@@ -385,6 +416,8 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"

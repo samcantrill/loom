@@ -7,7 +7,15 @@ from typing import Any, Mapping, cast
 
 from loom.errors import ArtifactError, FingerprintError, ValidationError
 from loom.fingerprints import validate_digest
-from loom.ids import ArtifactID, ArtifactType, Checksum, CodecKey, Fingerprint, RunID, StageID
+from loom.ids import (
+    ArtifactID,
+    ArtifactType,
+    Checksum,
+    CodecKey,
+    Fingerprint,
+    RunURI,
+    StageID,
+)
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.timestamps import parse_timestamp
 
@@ -20,23 +28,23 @@ class ArtifactValidationError(ArtifactError, ValidationError):
 class ArtifactAddress:
     """Address of a stored artifact."""
 
-    run_id: RunID
+    run_uri: RunURI
     artifact_id: ArtifactID
 
     def __post_init__(self) -> None:
-        if not isinstance(self.run_id, str) or not self.run_id:
-            raise ArtifactValidationError("run_id must be a non-empty string")
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise ArtifactValidationError("run_uri must be a non-empty string")
         if not isinstance(self.artifact_id, str) or not self.artifact_id:
             raise ArtifactValidationError("artifact_id must be a non-empty string")
 
     def to_dict(self) -> dict[str, str]:
-        return {"run_id": self.run_id, "artifact_id": self.artifact_id}
+        return {"run_uri": self.run_uri, "artifact_id": self.artifact_id}
 
     @classmethod
     def from_dict(cls, data: object) -> "ArtifactAddress":
         if not isinstance(data, dict):
             raise ArtifactValidationError("ArtifactAddress.from_dict expects mapping")
-        required = {"run_id", "artifact_id"}
+        required = {"run_uri", "artifact_id"}
         unknown = set(data) - required
         if unknown:
             raise ArtifactValidationError(
@@ -47,7 +55,10 @@ class ArtifactAddress:
             raise ArtifactValidationError(
                 f"ArtifactAddress.from_dict missing required field(s): {', '.join(sorted(missing))}"
             )
-        return cls(run_id=_require_str(data.get("run_id"), "run_id"), artifact_id=_require_str(data.get("artifact_id"), "artifact_id"))
+        return cls(
+            run_uri=_require_str(data.get("run_uri"), "run_uri"),
+            artifact_id=_require_str(data.get("artifact_id"), "artifact_id"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,19 +83,33 @@ class ArtifactRef:
             raise ArtifactValidationError("uri must be a non-empty string")
         if not isinstance(self.artifact_type, str) or not self.artifact_type:
             raise ArtifactValidationError("artifact_type must be a non-empty string")
-        if self.codec_key is not None and (not isinstance(self.codec_key, str) or not self.codec_key):
-            raise ArtifactValidationError("codec_key must be None or a non-empty string")
+        if self.codec_key is not None and (
+            not isinstance(self.codec_key, str) or not self.codec_key
+        ):
+            raise ArtifactValidationError(
+                "codec_key must be None or a non-empty string"
+            )
         if not isinstance(self.schema_version, int) or self.schema_version <= 0:
             raise ArtifactValidationError("schema_version must be a positive integer")
         if self.checksum is not None:
-            object.__setattr__(self, "checksum", _ensure_digest(self.checksum, "checksum"))
+            object.__setattr__(
+                self, "checksum", _ensure_digest(self.checksum, "checksum")
+            )
         if self.fingerprint is not None:
-            object.__setattr__(self, "fingerprint", _ensure_digest(self.fingerprint, "fingerprint"))
-        if self.producer_stage is not None and (not isinstance(self.producer_stage, str) or not self.producer_stage):
-            raise ArtifactValidationError("producer_stage must be None or a non-empty string")
+            object.__setattr__(
+                self, "fingerprint", _ensure_digest(self.fingerprint, "fingerprint")
+            )
+        if self.producer_stage is not None and (
+            not isinstance(self.producer_stage, str) or not self.producer_stage
+        ):
+            raise ArtifactValidationError(
+                "producer_stage must be None or a non-empty string"
+            )
         if self.created_at is not None:
             _validate_timestamp(self.created_at, "created_at")
-        object.__setattr__(self, "metadata", freeze_plain_data(self.metadata, path="metadata"))
+        object.__setattr__(
+            self, "metadata", freeze_plain_data(self.metadata, path="metadata")
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -116,10 +141,14 @@ class ArtifactRef:
         }
         unknown = set(data) - allowed
         if unknown:
-            raise ArtifactValidationError(f"ArtifactRef.from_dict received unknown fields: {', '.join(sorted(unknown))}")
+            raise ArtifactValidationError(
+                f"ArtifactRef.from_dict received unknown fields: {', '.join(sorted(unknown))}"
+            )
         missing = required - set(data)
         if missing:
-            raise ArtifactValidationError(f"ArtifactRef.from_dict missing required field(s): {', '.join(sorted(missing))}")
+            raise ArtifactValidationError(
+                f"ArtifactRef.from_dict missing required field(s): {', '.join(sorted(missing))}"
+            )
 
         return cls(
             artifact_id=_require_str(data.get("artifact_id"), "artifact_id"),
@@ -130,7 +159,9 @@ class ArtifactRef:
             checksum=_ensure_digest(data.get("checksum"), "checksum"),
             fingerprint=_ensure_digest(data.get("fingerprint"), "fingerprint"),
             producer_stage=_ensure_stage_id(data.get("producer_stage")),
-            created_at=_ensure_str_or_none(data.get("created_at"), "created_at", parse=True),
+            created_at=_ensure_str_or_none(
+                data.get("created_at"), "created_at", parse=True
+            ),
             metadata=cast(Mapping[str, PlainData], data.get("metadata", {})),
         )
 
@@ -163,7 +194,9 @@ def _ensure_stage_id(value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value:
-        raise ArtifactValidationError("producer_stage must be None or a non-empty string")
+        raise ArtifactValidationError(
+            "producer_stage must be None or a non-empty string"
+        )
     return value
 
 
@@ -186,7 +219,9 @@ def _validate_timestamp(value: str, field: str) -> None:
     try:
         parse_timestamp(value)
     except ValueError as exc:
-        raise ArtifactValidationError(f"{field} must be a valid UTC timestamp: {exc}") from exc
+        raise ArtifactValidationError(
+            f"{field} must be a valid UTC timestamp: {exc}"
+        ) from exc
 
 
 __all__ = ["ArtifactAddress", "ArtifactRef", "ArtifactValidationError"]

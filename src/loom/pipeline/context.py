@@ -7,7 +7,7 @@ from dataclasses import InitVar, dataclass, field
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
-from loom.ids import RunID, StageID
+from loom.ids import RunURI, StageID
 from loom.pipeline.errors import PipelineValidationError
 from loom.pipeline.specs import OutputSpec
 from loom.pipeline.stores._paths import validate_output_name
@@ -19,7 +19,7 @@ from loom.serialization.errors import PlainDataError
 
 @dataclass(frozen=True, slots=True)
 class StageContext:
-    run_id: RunID
+    run_uri: RunURI
     stage_name: StageID
     resolved_config: Mapping[str, PlainData]
     stage_config: Mapping[str, PlainData]
@@ -50,8 +50,8 @@ class StageContext:
         local_output_dir: str | Path | None,
         local_workspace_dir: str | Path | None,
     ) -> None:
-        if not isinstance(self.run_id, str) or not self.run_id:
-            raise PipelineValidationError("run_id must be a non-empty string")
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise PipelineValidationError("run_uri must be a non-empty string")
         if not isinstance(self.stage_name, str) or not self.stage_name:
             raise PipelineValidationError("stage_name must be a non-empty string")
         try:
@@ -94,9 +94,7 @@ class StageContext:
             raise PipelineValidationError(
                 "run_store must satisfy RunStore when supplied"
             )
-        if artifact_store is not None and not isinstance(
-            artifact_store, ArtifactStore
-        ):
+        if artifact_store is not None and not isinstance(artifact_store, ArtifactStore):
             raise PipelineValidationError(
                 "artifact_store must satisfy ArtifactStore when supplied"
             )
@@ -157,7 +155,9 @@ class StageContext:
     ) -> object:
         artifact_store = self._artifact_store
         if artifact_store is None:
-            raise PipelineValidationError("StageContext.load_artifact requires artifact_store")
+            raise PipelineValidationError(
+                "StageContext.load_artifact requires artifact_store"
+            )
         return artifact_store.load(
             ref,
             expected_type=expected_type,

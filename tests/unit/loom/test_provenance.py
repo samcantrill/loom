@@ -21,10 +21,16 @@ from loom.provenance import (
 from loom.provenance.errors import ProvenanceCaptureError
 
 
-def test_git_capture_degrades_when_git_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_git_capture_degrades_when_git_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import loom.provenance.git as git_module
 
-    monkeypatch.setattr(git_module.subprocess, "run", lambda *_, **__: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(
+        git_module.subprocess,
+        "run",
+        lambda *_, **__: (_ for _ in ()).throw(FileNotFoundError()),
+    )
     provenance = capture_git_provenance(".", strict=False)
     assert provenance.capture_error is not None
     assert isinstance(provenance, GitProvenance)
@@ -47,9 +53,13 @@ def test_git_capture_strict_error(monkeypatch: pytest.MonkeyPatch) -> None:
         capture_git_provenance(".", strict=True)
 
 
-def test_environment_provenance_collects_selected_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_environment_provenance_collects_selected_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("SAMPLE_TOKEN", "secret")
-    captured = capture_environment_provenance(("SAMPLE_TOKEN", "NONE"), include_user=False)
+    captured = capture_environment_provenance(
+        ("SAMPLE_TOKEN", "NONE"), include_user=False
+    )
     assert captured.selected_env["SAMPLE_TOKEN"] == "redacted"
     assert "NONE" not in captured.selected_env
 
@@ -92,7 +102,7 @@ def test_capture_run_provenance_aggregates_helpers() -> None:
     )
     run = capture_run_provenance("run-1", options=options, config={"x": 1})
     assert isinstance(run, RunProvenance)
-    assert run.run_id == "run-1"
+    assert run.run_uri == "run-1"
     assert run.command is None
     assert run.config["x"] == 1
     assert run.code is None
