@@ -5,6 +5,8 @@
 - Status: refined phase execution plan
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 1: Contract And Documentation Cleanup`
+- PR URL: `https://github.com/samcantrill/loom/pull/44`
+- PR state: `OPEN`
 - Branch: `codex/v1-post-contract-docs`
 - Worktree: `/home/samcantrill/work/loom-worktrees/v1-post-contract-docs`
 - Phase execution plan path: `docs/phases/v1-post-contract-docs.md`
@@ -219,9 +221,13 @@ make test-summary
 - PR preparation handoff: completion notes and budget status are updated; final `make validate-pr` and `make test-summary` have been run for the draft pass; the refine/open pass should re-check only if it changes the PR body or branch state in a way that invalidates this evidence.
 - PR preparation draft validation: initial `UV_CACHE_DIR=/tmp/loom-uv-cache make validate-pr` passed Ruff but failed during Pyright environment setup because sandboxed DNS could not fetch `pyyaml==6.0.3`; rerunning the same command with approved network access succeeded. Final `make validate-pr` evidence: Ruff passed; Pyright passed with 0 errors, 0 warnings, and 0 informations; default suite passed 435 tests with 11 skipped; config-extra suite passed 314 tests with 441 deselected; `uv build` produced the source distribution and wheel. Final `make test-summary` evidence: `build/test-summary.md` written with package 38 passed/1 skipped, unit 357 passed/1 skipped, contract 31 passed/2 skipped, integration 9 passed/5 skipped, e2e 6 passed, config-extra 314 passed/441 deselected, overall 755 passed/9 skipped in 24.01s.
 - PR preparation draft scope gate: passed. The diff matches Phase 1 by limiting runtime code changes to the pipeline/config type-import boundary, adding package/unit regression coverage, and updating docs/roadmap metadata. No future-phase implementation was found for strict YAML duplicate-key rejection, JSON-quoted scalar override parsing, artifact-safe provenance/fingerprint ordering, default resolved snapshot persistence changes, run-store composition manifests, structured-error expansion, or recipe/resolver hardening.
-- PR facts for refine/open pass: title `V1 Post Configuration - Phase 1: Contract And Documentation Cleanup`; body path `docs/phases/v1-post-contract-docs-pr-body.md`; head `codex/v1-post-contract-docs`; target `develop`; stack predecessor none; merge eligibility root PR is merge-eligible after review/checks because target is `develop`; GitHub checks pending until PR creation.
+- PR facts for refine/open pass: title `V1 Post Configuration - Phase 1: Contract And Documentation Cleanup`; body path `docs/phases/v1-post-contract-docs-pr-body.md`; PR URL `https://github.com/samcantrill/loom/pull/44`; head `codex/v1-post-contract-docs`; target `develop`; stack predecessor none; merge eligibility root PR is merge-eligible after review/checks because target is `develop`; GitHub checks pending after PR creation.
 - PR body draft: completed using `.codex/templates/phase-pr-body.md`; body mentions `@samcantrill` near the top; public body keeps workflow internals in this phase plan and uses compact validation/suite tables.
 - PR body refine: completed on 2026-05-06 using `.codex/prompts/pr-body-refine.md`; verified the dedicated worktree, branch, target branch, implementation diff, acceptance criteria, suite evidence, scope boundaries, assumptions, and risks against the draft PR body. The only public-body refine change updated the GitHub checks row from draft-pass deferral to post-PR pending status. No implementation or test files were changed.
-- PR preparation: draft completed; refine completed; PR opening pending.
-- Stack maintenance: pending.
+- PR opening: completed on 2026-05-06 with explicit `gh pr create --base develop --head codex/v1-post-contract-docs --title "V1 Post Configuration - Phase 1: Contract And Documentation Cleanup" --body-file docs/phases/v1-post-contract-docs-pr-body.md`.
+- PR verification: `gh pr view 44 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/v1-post-contract-docs`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/44`; verified target/head match the phase plan.
+- GitHub checks: `gh pr checks 44 --watch=false` reported the workflow check pending at `https://github.com/samcantrill/loom/actions/runs/25410865051/job/74532104991`.
+- PR preparation: draft completed; refine completed; PR opened and verified.
+- Stack state: root phase PR with no predecessor; target is `develop`; merge-eligible only after review and checks pass; later v1-post phases may stack on `codex/v1-post-contract-docs` after the manager records this phase as `pr_open`.
+- Stack maintenance: pending; no retarget or rebase performed by PR preparation.
 - Remaining blockers: none after implementation and refinement validation.
