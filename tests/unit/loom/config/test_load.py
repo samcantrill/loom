@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+import yaml
 
 from loom.fingerprints import hash_bytes
 from loom.config.errors import ConfigLoadError
@@ -98,6 +99,35 @@ def test_load_rejects_nested_duplicate_yaml_keys_with_config_path(tmp_path: Path
     assert context.code == "duplicate_key"
     assert context.config_path == "$.model.layer"
     assert context.details == {"key": "layer"}
+
+
+def test_load_rejects_duplicate_yaml_keys_inside_sequences_with_config_path(tmp_path: Path) -> None:
+    source_path = tmp_path / "sequence.yaml"
+    source_path.write_text(
+        "items:\n"
+        "  - name: first\n"
+        "    name: second\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigLoadError) as exc:
+        load_config(source_path, kind="base", order=0)
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "duplicate_key"
+    assert context.config_path == "$.items[0].name"
+    assert context.details == {"key": "name"}
+
+
+def test_duplicate_key_rejection_does_not_mutate_pyyaml_safe_loader(tmp_path: Path) -> None:
+    source_path = tmp_path / "duplicate.yaml"
+    source_path.write_text("name: first\nname: second\n", encoding="utf-8")
+
+    with pytest.raises(ConfigLoadError):
+        load_config(source_path, kind="base", order=0)
+
+    assert yaml.safe_load("name: first\nname: second\n") == {"name": "second"}
 
 
 def test_load_rejects_recursive_yaml_aliases_with_structured_context(tmp_path: Path) -> None:
