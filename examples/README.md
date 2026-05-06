@@ -5,27 +5,21 @@ projects. Project code owns concrete stages and recipes; `loom` owns
 configuration, artifact records, local execution, provenance snapshots, and
 same-run resume decisions.
 
-Examples are organized by user-facing capability. Each example has its own
-`README.md`, copyable project code, and an `example.yaml` manifest used by tests.
+Examples are organized by user-facing capability. Each group has its own
+README with the runnable examples and what each one demonstrates.
 
-## Catalog
+## Example Groups
 
-| Example | Capability | Validation | Summary |
-| --- | --- | --- | --- |
-| `config.recipes` | config | smoke | Compose YAML with overlays, overrides, interpolation, and trusted recipe expansion. |
-| `config.target-instantiation` | config | smoke | Recursively construct trusted `_target_` object graphs. |
-| `pipelines.local-run` | pipelines | smoke | Run a local two-stage pipeline and reuse unchanged stages from the same run directory. |
+| Group | Demonstrates |
+| --- | --- |
+| [Config](config/README.md) | Trusted YAML composition, overlays, includes, recipes, artifact-safe records, structured errors, and explicit `_target_` instantiation. |
+| [Pipelines](pipelines/README.md) | Local pipeline execution, artifact storage, provenance snapshots, and same-run resume behavior. |
 
-Run each smoke example from the repository root:
+Run smoke examples from the repository root with the commands listed in each
+group README.
 
-```sh
-uv run python examples/config/recipes/compose_config.py
-uv run python examples/config/target-instantiation/instantiate_targets.py
-uv run python examples/pipelines/local-run/run_pipeline.py
-```
-
-Set `LOOM_EXAMPLE_OUTPUT_ROOT=/tmp/loom-examples` to redirect generated example
-outputs. Pipeline examples also accept `LOOM_EXAMPLE_RUN_ROOT` for run
+Set `LOOM_EXAMPLE_OUTPUT_ROOT=/tmp/loom-examples` to redirect generated
+example outputs. Pipeline examples also accept `LOOM_EXAMPLE_RUN_ROOT` for run
 directories.
 
 ## Validation Tiers
