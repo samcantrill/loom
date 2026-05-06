@@ -219,8 +219,17 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase execution plan`.
 - Final phase execution plan: completed expanded-path refine pass in this commit.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: implemented artifact-before-runtime-resolver composition ordering, schema-version-2 `ConfigProvenance` writes with top-level `artifact_fingerprint`, legacy schema-version-1 `resolved_fingerprint` read normalization to `metadata.legacy_resolved_fingerprint`, artifact-safe fingerprint metadata in provenance/manifest records, and docs/tests for plaintext secret override warnings and environment-independent artifact digests.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed with 22 tests.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_compose.py` passed with 17 tests.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_provenance.py tests/integration/config/test_compose_fingerprints.py tests/integration/config/test_compose_resolvers.py` passed with 21 tests after a test-only manifest metadata comparison fix.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_fingerprints.py` passed with 18 tests.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py tests/integration/docs/test_v0_python_examples.py` passed with 15 tests.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e/test_config_composition_public_api.py` passed with 1 test.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config tests/unit/loom/config/test_compose.py tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py tests/integration/config/test_compose_provenance.py tests/integration/docs/test_v0_python_examples.py tests/e2e/test_config_composition_public_api.py` passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pyright src/loom/config tests/unit/loom/config/test_compose.py tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py tests/integration/config/test_compose_provenance.py tests/integration/docs/test_v0_python_examples.py tests/e2e/test_config_composition_public_api.py` passed.
+  - `make validate-pr` passed: Ruff, Pyright, default harness `439 passed, 11 skipped`, config-extra harness `358 passed, 445 deselected`, and `uv build`.
 - Refinement summary: pinned the schema-version-2 `ConfigProvenance` write contract, legacy schema-version-1 read compatibility through `metadata.legacy_resolved_fingerprint`, artifact-before-runtime-resolver-execution boundary, Phase 5 exclusions, and explicit package/unit/contract/integration/e2e/opt-in suite obligations.
 - PR preparation: pending.
 - Stack maintenance: pending.
