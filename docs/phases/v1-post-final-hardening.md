@@ -18,8 +18,8 @@
 - Successor dependency notes: this is the final v1-post phase. No successor phase may be started from this branch unless a later implementation plan explicitly adds one.
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v1-post.md`; no blocking plan-review findings remain.
 - Plan quality gate loop budget: initial review used, automated refinement used, confirmation review used.
-- Draft pass: completed by `loom_phase_planner` in this commit.
-- Refine pass: completed by `loom_phase_planner` in this commit; expanded planning was selected because the phase spans documentation, evidence, and consistency checks across config, provenance, fingerprints, resume, pipeline, and implementation-plan contracts.
+- Draft pass: completed by `loom_phase_planner` in draft commit `78c7118`.
+- Refine pass: completed by `loom_phase_planner` in the follow-up refine commit; expanded planning was selected because the phase spans documentation, evidence, and consistency checks across config, provenance, fingerprints, resume, pipeline, and implementation-plan contracts.
 - Setup limitations: `git worktree add` needed approved Git metadata access after the sandbox could not create the nested `refs/heads/codex/...` directory. No product-code setup blocker remains.
 - Blockers: none for implementation.
 
@@ -49,11 +49,15 @@ This phase must not reopen the accepted v1 decisions or broaden v1 into deferred
 
 ## Current Source And Harness Findings
 
-- `docs/features/config.md` already states several accepted decisions, but still contains historical/future examples and ordering prose that mention `config/resolved.yaml`, `config/resolved.redacted.yaml`, legacy phase labels, or provenance after final resolution. The executor should make those examples unambiguously future/legacy or update them to the current v1-post artifact-safe order.
-- `docs/features/pipeline.md` and `docs/loom.md` still show v0-style run-layout snippets with only `config/resolved.yaml` or with `resolved.redacted.yaml`. These should not describe current composed-config default persistence after Phase 5.
-- `docs/features/provenance.md` contains a run config snippet with `redacted_config: config/resolved.redacted.yaml` and many future CLI references. Future CLI sections can remain if they are clearly labeled as future/non-v1, but current v1-post provenance and run-store examples must use composition manifest/provenance language that avoids resolved snapshots.
-- `docs/features/fingerprints.md` and `docs/features/resume.md` already distinguish pipeline-owned resolved views from v1 artifact-safe config fingerprints in key sections. The audit should still check for any wording that implies v1 config fingerprints are runtime-replay digests or that resume requires `loom.config` artifacts.
-- Existing e2e coverage includes public composed-config runner coverage in `tests/e2e/test_local_pipeline_run.py`, including a case that persists `config/composition_manifest.json` and omits `config/resolved.yaml` and `config/resolved.redacted.yaml`. Existing config public API e2e coverage in `tests/e2e/test_config_composition_public_api.py` checks resolver-expression preservation and opt-in raw source snapshots. Phase 7 should extend or consolidate these if they do not together prove the repaired artifact-safe path from compose through runner persistence and resume-facing records.
+- `docs/features/config.md` already states several accepted decisions, but exact audit target `6.2 Make Resolved Config Explicit` still lists `config/raw.yaml`, `config/overlays.yaml`, `config/cli_overrides.yaml`, `config/resolved.yaml`, `config/resolved.redacted.yaml`, and `config/source_snapshots/` under future runner/run-store policy. The executor should either keep that list clearly future-only and add the current v1-post composed-config default artifacts nearby, or replace the current-behavior portion with `config/composition_manifest.json`, `config/recipe_manifest.json`, artifact-safe provenance/redaction/fingerprint data, and no default resolved snapshots.
+- `docs/features/config.md` exact audit targets also include `5.10 Copy`, `5.11 Composition Manifest`, `17 Future CLI Integration`, and the testing/roadmap bullets near the end of the file. Verify they consistently say `_copy_` is rejected in v1, raw source snapshots are explicit Python API opt-in, v1 has no functional CLI, and `loom.config` returns artifacts without writing run-store paths.
+- `docs/features/provenance.md` exact audit target `20.3 Config Provenance Summary` still shows a future run provenance summary with `redacted_config: config/resolved.redacted.yaml`. Future examples can remain only if unmistakably future/non-v1; any current v1-post provenance or run-store summary must point to the composition manifest, recipe manifest, provenance/fingerprint metadata, and avoid default resolved/redacted snapshot paths for composed configs.
+- `docs/loom.md` exact audit target `9. Run Directory` still shows a v0-style `config/` tree containing `cli_overrides.yaml`, `resolved.yaml`, and `resolved.redacted.yaml`. Keep it explicitly v0/historical or update it so readers do not mistake it for the current v1-post composed-config run layout.
+- `docs/features/pipeline.md` exact audit targets are the architecture/data-flow references to CLI overrides and `21. CLI Integration`. These may remain post-v0/future pipeline guidance, but must not imply Phase 7 should add CLI parsing, console scripts, or v1 config persistence behavior.
+- `docs/features/fingerprints.md` exact audit targets are `21.1 Resolved Config`, `21.2 Selected Config Subtrees`, and `26.7 Phase 7: Future CLI Explanation`. These already distinguish pipeline-owned stage fingerprint policy from v1 config artifact fingerprints in key prose; preserve that distinction and fix only wording that implies config fingerprints are exact runtime replay digests.
+- `docs/features/resume.md` exact audit targets are the sections around pipeline-owned resume records and `17 Future CLI Integration`. Preserve future CLI explanation language only when it remains clearly future/non-v1 and ensure resume does not require `loom.config` artifacts.
+- Implementation-plan docs exact audit targets are `docs/implementation-plans/implementation-plan-v1-post.md` Phase 7, Technical Debt Ledger, Assumptions And Defaults, and final metadata, plus `docs/implementation-plans/implementation-plan-v1.md` and `docs/implementation-plans/roadmap-v1-planning-notes.md` only for stale current-behavior contradictions or superseded `_copy_`/CLI/raw-resolved persistence language.
+- Existing e2e coverage includes public composed-config runner coverage in `tests/e2e/test_local_pipeline_run.py::test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_snapshots`, which currently persists `config/composition_manifest.json` and `config/recipe_manifest.json` and omits `config/resolved.yaml` and `config/resolved.redacted.yaml`. Existing config public API e2e coverage in `tests/e2e/test_config_composition_public_api.py::test_public_python_config_composition_e2e` checks resolver-expression preservation, no default raw source snapshots, secret filtering from artifact payloads, stable artifact fingerprints across resolver output changes, and explicit raw source snapshot opt-in. Phase 7 should extend one of these two tests only if, together, they still fail to prove the representative public-Python path below.
 - Package coverage already guards Python-API-only packaging through `tests/package/test_import.py`; final package obligations should rerun and extend only if the docs audit exposes a metadata gap.
 
 ## In-Scope Work
@@ -72,6 +76,7 @@ This phase must not reopen the accepted v1 decisions or broaden v1 into deferred
 - Add or update representative public-Python e2e coverage for the repaired artifact-safe path. Prefer extending existing public e2e tests over adding duplicate fixtures.
 - Add a narrow behavior test only when the documentation audit discovers a real behavior/documentation mismatch that is not already covered by package, unit, contract, integration, or e2e suites.
 - Run final validation gates: `make validate-pr` and `make test-summary`.
+- Prepare PR evidence from the final `make test-summary` table, not from targeted development command tails. The PR body should name the representative e2e test path and summarize suite-level package, unit, contract, integration, e2e, and config-extra outcomes.
 
 ## Out-of-Scope Work
 
@@ -80,6 +85,7 @@ This phase must not reopen the accepted v1 decisions or broaden v1 into deferred
 - Plugin resolvers, remote resolvers, global include search, sweeps, remote stores, bundles, or catalogs.
 - New product semantics beyond final documentation/evidence hardening unless a doc-discovered behavior gap requires a narrow regression test or narrow fix.
 - Default raw source persistence, default resolver-output persistence, default full resolved-config snapshot persistence for composed configs, or exact resolved-runtime replay guarantees.
+- New config persistence helper APIs, new run-store config artifact schemas, or helper classes intended to let `loom.config` write pipeline/run-store artifacts.
 - Public API redesigns, schema migrations, new heavyweight dependencies, or source-tree boundary changes.
 
 ## Accepted Decisions To Preserve
@@ -100,7 +106,7 @@ This phase must not reopen the accepted v1 decisions or broaden v1 into deferred
 - Current composed-config runner persistence from Phase 5 is the accepted behavior. If docs imply otherwise, fix docs unless tests show implementation drift.
 - Current recipe residual-risk debt from Phase 6 is accepted. Do not attempt to certify arbitrary recipe internals.
 - Future CLI sections may remain in feature docs as roadmap notes if they cannot be mistaken for current v1 behavior.
-- The final implementation-plan status update should be completed by the executor or PR-preparation workflow after implementation evidence exists, not by this planning-only commit.
+- The final implementation-plan status update should be completed by the executor or PR-preparation workflow after implementation evidence exists, not by this planning-only commit. Phase 7 must not mark itself complete, `pr_open`, or final-validated in `docs/implementation-plans/implementation-plan-v1-post.md` until `make validate-pr` and `make test-summary` have produced evidence for the PR.
 
 ## Scope Contract
 
@@ -116,6 +122,13 @@ persists plain composition manifest and recipe manifest through run-store APIs
 does not persist default resolved config snapshots for composed configs
 keeps resolver outputs and raw source bytes out of default persisted artifacts
 ```
+
+Representative e2e acceptance criteria:
+
+- One public Python workflow may be split across the existing public config-composition e2e and local pipeline-run e2e tests; do not expand the matrix across every resolver, recipe, include, and resume combination.
+- The config-composition half must use public APIs such as `compose_config(...)`, `compose_config_with_catalog(...)`, or `inspect_config_composition(...).to_composed_config()` with at least one resolver expression and prove default artifacts preserve authored expressions, omit resolver outputs/secrets, omit raw source payloads unless explicitly opted in, and keep artifact-safe fingerprints stable across resolver output changes.
+- The runner half must pass a composed config object, not only `composed.resolved`, through `PipelineRunner.run(RunRequest(...))` and prove local run persistence writes and reads `config/composition_manifest.json` plus `config/recipe_manifest.json`, does not write `config/resolved.yaml` or `config/resolved.redacted.yaml` for composed configs, and treats the persisted composition manifest as plain data.
+- Resume-facing acceptance is limited to proving the persisted artifacts and stage fingerprints/status files remain usable by the existing runner/resume path. Do not add a broad resume e2e matrix unless the audit finds a concrete regression.
 
 The phase must preserve the source-tree boundary: config code owns composition artifact objects; pipeline and stores own persistence as plain data; docs should describe that boundary in the same terms.
 
@@ -158,15 +171,15 @@ The phase must preserve the source-tree boundary: config code owns composition a
 - Expected PR size and shape: mostly docs and tests, with implementation-plan metadata updates and final evidence. Product-code changes should be absent or narrowly tied to a test-discovered mismatch.
 - Files and areas to inspect: `docs/features/config.md`, `docs/features/provenance.md`, `docs/features/fingerprints.md`, `docs/features/resume.md`, `docs/features/pipeline.md`, `docs/loom.md`, `docs/implementation-plans/implementation-plan-v1-post.md`, `docs/implementation-plans/implementation-plan-v1.md`, `docs/implementation-plans/roadmap-v1-planning-notes.md`, `tests/e2e/test_local_pipeline_run.py`, `tests/e2e/test_config_composition_public_api.py`, `tests/package/test_import.py`, and targeted config/pipeline integration tests only as needed.
 - Scope-control checks: no functional CLI, no console script entry point, no `_copy_`, no resolver allow-list expansion, no raw-source or resolver-output default persistence, no remote stores, no sweeps, no pipeline import of config classes, no config persistence helpers, and no broad product refactor.
-- PR body expectations: summarize docs audited, e2e/coverage changes, final validation tables from `make test-summary`, accepted debt, assumptions, and any intentionally deferred suite areas.
+- PR body expectations: summarize docs audited, exact representative e2e test path(s), coverage changes, final validation tables from `make test-summary`, final `make validate-pr` result, accepted debt, assumptions, and any intentionally deferred suite areas. Do not paste long command tails or workflow-internal budget accounting into the public PR body.
 
 ## Implementation Steps
 
-1. Audit the named docs and implementation-plan docs for stale current-behavior claims around resolved persistence, `_copy_`, CLI, manifests, provenance, resume, fingerprints, and security defaults.
+1. Audit the exact doc targets listed in "Current Source And Harness Findings" for stale current-behavior claims around resolved persistence, `_copy_`, CLI, manifests, provenance, resume, fingerprints, and security defaults.
 2. Update stale current-behavior wording so it matches the accepted v1-post contract while keeping future roadmap sections clearly labeled as future.
 3. Add or update representative public-Python e2e coverage for the artifact-safe compose-to-runner path, including absence of default resolved snapshots and preservation of artifact-safe manifest/provenance/fingerprint facts.
 4. Add narrow targeted tests only for any concrete behavior gap found during the doc audit.
-5. Update `docs/implementation-plans/implementation-plan-v1-post.md` with Phase 7 completion metadata, final validation evidence, accepted debt ledger adjustments if needed, and v2 handoff notes after tests pass.
+5. Update `docs/implementation-plans/implementation-plan-v1-post.md` with Phase 7 completion metadata, final validation evidence, accepted debt ledger adjustments if needed, and v2 handoff notes only after final validation evidence exists.
 6. Run targeted docs/e2e/package checks during implementation, then run `make validate-pr` and `make test-summary` for PR evidence.
 
 ## Test Plan
@@ -199,7 +212,7 @@ The phase must preserve the source-tree boundary: config code owns composition a
 
 - Status: required.
 - Expected paths: `tests/e2e/test_local_pipeline_run.py` and/or `tests/e2e/test_config_composition_public_api.py`.
-- Required assertions or deferral reason: at least one public Python v1-post workflow must compose a config with artifact-safe records, run it through `PipelineRunner`, persist `config/composition_manifest.json` and `config/recipe_manifest.json`, omit default `config/resolved.yaml` and `config/resolved.redacted.yaml`, and avoid persisting resolver outputs/raw source bytes by default. If existing e2e tests already satisfy part of this, extend them rather than duplicating setup, and document exactly which e2e test is the representative path.
+- Required assertions or deferral reason: at least one representative public Python v1-post workflow, possibly split across the two existing e2e files, must compose a config with artifact-safe records, run a composed config object through `PipelineRunner`, persist `config/composition_manifest.json` and `config/recipe_manifest.json`, omit default `config/resolved.yaml` and `config/resolved.redacted.yaml`, and avoid persisting resolver outputs/raw source bytes by default. If existing e2e tests already satisfy part of this, extend them rather than duplicating setup, and document exactly which e2e test path(s) are the representative evidence.
 
 ### Opt-In Suites
 
@@ -212,15 +225,18 @@ The phase must preserve the source-tree boundary: config code owns composition a
 - Docs may accidentally describe future CLI or remote-store behavior as current v1 functionality. Keep future sections explicitly labeled and avoid command examples that look runnable today.
 - Updating run-layout snippets can obscure the difference between composed-config defaults and plain mapping caller-provided snapshots. Preserve that distinction.
 - E2E coverage can become too broad and slow if it duplicates integration matrices. Keep one representative public path and leave exhaustive combinations to focused suites.
-- Implementation-plan metadata could be updated before final checks exist. Record final status and evidence only after validation commands have run.
+- Implementation-plan metadata could be updated before final checks exist. Record final Phase 7 completion, validation, and v2 handoff status only after `make validate-pr` and `make test-summary` have run and their evidence is available.
 - A doc audit could uncover a real behavior gap that is larger than a narrow regression. Stop for the manager rather than implementing new product semantics.
 
 ## Stop Conditions
 
-- Satisfying the docs or e2e acceptance criteria appears to require adding functional CLI behavior, console scripts, `_copy_`, plugin/remote resolvers, sweeps, remote stores, or new persistence contracts.
-- A fix would require `loom.pipeline` or store modules to import `loom.config` classes or manifests.
-- A fix would make `loom.config` write run-store artifacts or otherwise become persistence-aware.
-- A fix would persist resolver outputs, raw source bytes, or full resolved composed-config snapshots by default.
+- Satisfying the docs or e2e acceptance criteria appears to require adding functional CLI behavior, console scripts, CLI parser behavior, or current-v1 command examples that should be future roadmap material.
+- Satisfying stale `_copy_` docs appears to require implementing `_copy_`, accepting `_copy_` as current syntax, or broadening unsupported-directive behavior.
+- Satisfying stale remote-store docs appears to require remote stores, plugin/remote include resolvers, global include search, sweeps, bundles, catalogs, or new run-store backends.
+- A fix would require `loom.pipeline` or store modules to import `loom.config` classes, composition manifests, provenance classes, or config artifact helpers.
+- A fix would make `loom.config` write run-store artifacts, expose config persistence helper APIs, or otherwise become persistence-aware.
+- A fix would persist resolver outputs, raw source bytes, full resolved composed-config snapshots, or default resolved/redacted composed-config snapshots.
+- A fix would change plain mapping snapshot behavior, default raw/resolved persistence, config persistence helper boundaries, pipeline importing of config classes, or other product semantics beyond docs/evidence hardening.
 - A final validation gate cannot run, config extras are unavailable, or tests fail for reasons outside a narrow Phase 7 docs/evidence fix.
 - The implementation-plan quality gate status is found to be invalid or earlier phase metadata contradicts merged history in a way that cannot be corrected locally.
 
@@ -244,15 +260,15 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: docs audit and wording cleanup first; e2e/public coverage second; narrow behavior-gap tests or fixes only if discovered; implementation-plan completion metadata after validation evidence exists.
+- Safe implementation slices: docs audit and wording cleanup first; representative e2e/public coverage second; narrow behavior-gap tests or fixes only if discovered; implementation-plan completion metadata after validation evidence exists.
 - Decisions the executor must not revisit: no config persistence helpers, no pipeline import of config classes, no default resolved or resolved-redacted snapshot for composed configs, no raw source or resolver output default persistence, no CLI, no console script, no `_copy_`, no plugin/remote resolver, no remote stores, no sweeps, and no automatic runtime-object fingerprinting.
 - Conditions that require stopping for the manager: any stop condition above, or any implementation that needs a new public contract instead of docs/evidence hardening.
-- Expanded-path refinement notes: complete. The refined boundary pins the final sweep to documentation consistency, representative public-Python evidence, implementation-plan metadata, and final validation gates.
+- Expanded-path refinement notes: complete. The refined boundary pins the final sweep to exact documentation audit targets, representative public-Python evidence, implementation-plan metadata after validation evidence exists, strict no-new-semantics stop conditions, and final validation gates.
 
 ## Refinement And Review Budget Status
 
-- Plan draft: completed by `loom_phase_planner` in this commit.
-- Plan refinement: completed by `loom_phase_planner` in this commit because expanded planning is active.
+- Plan draft: completed by `loom_phase_planner` in draft commit `78c7118`.
+- Plan refinement: completed by `loom_phase_planner` in the follow-up refine commit because expanded planning is active.
 - Phase implementation refinement: unused; reserved for the later implementation workflow because expanded path is active or if validation/coverage obligations are missed.
 - PR review: unused.
 - PR body draft/refine: unused; reserved for `loom_pr_preparer`.
