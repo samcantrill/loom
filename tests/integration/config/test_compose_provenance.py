@@ -254,6 +254,110 @@ def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monk
     assert ordinary_overrides[0]["value"] == REDACTION_MARKER
 
 
+def test_public_compose_records_explicit_relative_include_escape_and_local_customizations(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "configs"
+    shared_dir = tmp_path / "shared"
+    config_dir.mkdir()
+    shared_dir.mkdir()
+    base = config_dir / "base.yaml"
+    shared = shared_dir / "foo.yaml"
+    shared.write_text(
+        "from_shared: true\n"
+        "local: from-shared\n",
+        encoding="utf-8",
+    )
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ../shared/foo.yaml\n"
+        "    local: from-base\n"
+        "    safe_label: local-safe\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base)
+
+    pipeline = cast(dict[str, Any], composed.resolved["pipeline"])
+    model = cast(dict[str, Any], pipeline["model"])
+    assert model == {
+        "from_shared": True,
+        "local": "from-base",
+        "safe_label": "local-safe",
+    }
+
+    provenance_source_facts = cast(dict[str, Any], composed.provenance.metadata["source_fact_records"])
+    manifest_source_facts = cast(
+        dict[str, Any],
+        cast(dict[str, Any], composed.manifest.to_dict()["metadata"])["source_fact_records"],
+    )
+    provenance_include_sites = cast(list[dict[str, Any]], provenance_source_facts["include_sites"])
+    manifest_include_sites = cast(list[dict[str, Any]], manifest_source_facts["include_sites"])
+    expected_include_site = {
+        "include_site_path": ["pipeline", "model", "_include_"],
+        "authored_target": "../shared/foo.yaml",
+        "source_path": str(base.resolve()),
+        "source_kind": "base",
+        "source_order": 0,
+        "source_include_site_path": ["pipeline", "model", "_include_"],
+        "resolved_path": str(shared.resolve()),
+        "target_kind": "explicit_relative",
+        "explicit_escape": True,
+        "has_replace_marker": False,
+    }
+    for source in (provenance_include_sites[0], manifest_include_sites[0]):
+        for key, value in expected_include_site.items():
+            assert source[key] == value
+
+    provenance_customizations = cast(
+        list[dict[str, Any]],
+        provenance_source_facts["local_customizations"],
+    )
+    manifest_customizations = cast(
+        list[dict[str, Any]],
+        manifest_source_facts["local_customizations"],
+    )
+    expected_customizations = [
+        {
+            "include_site_path": ["pipeline", "model", "_include_"],
+            "sibling_path": ["pipeline", "model", "local"],
+            "source_path": str(base.resolve()),
+            "source_kind": "base",
+            "source_order": 0,
+            "kind": "override",
+            "value": "from-base",
+            "redacted": False,
+        },
+        {
+            "include_site_path": ["pipeline", "model", "_include_"],
+            "sibling_path": ["pipeline", "model", "safe_label"],
+            "source_path": str(base.resolve()),
+            "source_kind": "base",
+            "source_order": 0,
+            "kind": "add",
+            "value": "local-safe",
+            "redacted": False,
+        },
+    ]
+    assert provenance_customizations == expected_customizations
+    assert manifest_customizations == expected_customizations
+
+    source_artifact_references = cast(
+        list[dict[str, Any]],
+        composed.manifest.metadata["source_artifact_references"],
+    )
+    include_reference = next(
+        reference for reference in source_artifact_references if reference["kind"] == "include"
+    )
+    assert include_reference["path"] == str(shared.resolve())
+    include_artifact = next(artifact for artifact in composed.source_artifacts if artifact.kind == "include")
+    assert include_artifact.metadata["authored_target"] == "../shared/foo.yaml"
+    assert include_artifact.metadata["target_kind"] == "explicit_relative"
+    assert include_artifact.metadata["explicit_escape"] is True
+
+
 def test_public_compose_builds_artifacts_before_runtime_interpolation_and_keeps_digests_env_free(
     tmp_path: Path,
     monkeypatch,

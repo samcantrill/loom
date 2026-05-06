@@ -1,6 +1,8 @@
 """Package-level import smoke tests."""
 
+import tomllib
 from importlib.resources import files
+from pathlib import Path
 
 import pytest
 
@@ -35,3 +37,12 @@ def test_import_lom_io_package() -> None:
 
 def test_package_includes_typing_marker() -> None:
     assert files("loom").joinpath("py.typed").is_file()
+
+
+def test_project_metadata_exposes_no_console_script_entry_points() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    project = pyproject["project"]
+
+    assert "scripts" not in project
+    assert "gui-scripts" not in project
+    assert pyproject.get("project.scripts") is None

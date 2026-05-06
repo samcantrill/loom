@@ -87,6 +87,19 @@ def test_compose_recipe_resolver_arguments_keep_default_artifacts_env_free(
     assert first.recipe_manifest == second.recipe_manifest
     manifest = cast(dict[str, Any], first.recipe_manifest[0])
     assert manifest["arguments"]["value"] == "${oc.env:PHASE4_RECIPE_VALUE}"
+    assert first.manifest.to_dict()["recipe_manifest"] == [manifest]
+    manifest_metadata = cast(dict[str, Any], first.manifest.to_dict()["metadata"])
+    provenance_metadata = cast(dict[str, Any], first.provenance.metadata)
+    fingerprint_metadata = cast(dict[str, Any], first.fingerprint_records[0].metadata)
+    assert cast(list[dict[str, Any]], manifest_metadata["recipe_manifest"])[0]["arguments"][
+        "value"
+    ] == "${oc.env:PHASE4_RECIPE_VALUE}"
+    assert cast(list[dict[str, Any]], provenance_metadata["recipe_manifest"])[0]["arguments"][
+        "value"
+    ] == "${oc.env:PHASE4_RECIPE_VALUE}"
+    assert cast(list[dict[str, Any]], fingerprint_metadata["recipe_manifest"])[0]["arguments"][
+        "value"
+    ] == "${oc.env:PHASE4_RECIPE_VALUE}"
     assert first.fingerprint == second.fingerprint
     assert first.provenance.artifact_fingerprint == second.provenance.artifact_fingerprint
     assert first.provenance.metadata["fingerprint"] == second.provenance.metadata["fingerprint"]
