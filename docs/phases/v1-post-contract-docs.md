@@ -202,7 +202,7 @@ make test-summary
 
 - Phase implementation refinement: used
 - PR body draft pass: completed
-- PR body refine pass: pending because this phase is on the expanded path
+- PR body refine pass: completed
 - PR review: unused
 
 ## Completion Notes
@@ -221,7 +221,7 @@ make test-summary
 - PR preparation draft scope gate: passed. The diff matches Phase 1 by limiting runtime code changes to the pipeline/config type-import boundary, adding package/unit regression coverage, and updating docs/roadmap metadata. No future-phase implementation was found for strict YAML duplicate-key rejection, JSON-quoted scalar override parsing, artifact-safe provenance/fingerprint ordering, default resolved snapshot persistence changes, run-store composition manifests, structured-error expansion, or recipe/resolver hardening.
 - PR facts for refine/open pass: title `V1 Post Configuration - Phase 1: Contract And Documentation Cleanup`; body path `docs/phases/v1-post-contract-docs-pr-body.md`; head `codex/v1-post-contract-docs`; target `develop`; stack predecessor none; merge eligibility root PR is merge-eligible after review/checks because target is `develop`; GitHub checks pending until PR creation.
 - PR body draft: completed using `.codex/templates/phase-pr-body.md`; body mentions `@samcantrill` near the top; public body keeps workflow internals in this phase plan and uses compact validation/suite tables.
-- PR body refine: pending because the expanded path is active; PR opening is intentionally deferred to `.codex/prompts/pr-body-refine.md`.
-- PR preparation: draft completed; refine pending.
+- PR body refine: completed on 2026-05-06 using `.codex/prompts/pr-body-refine.md`; verified the dedicated worktree, branch, target branch, implementation diff, acceptance criteria, suite evidence, scope boundaries, assumptions, and risks against the draft PR body. The only public-body refine change updated the GitHub checks row from draft-pass deferral to post-PR pending status. No implementation or test files were changed.
+- PR preparation: draft completed; refine completed; PR opening pending.
 - Stack maintenance: pending.
 - Remaining blockers: none after implementation and refinement validation.

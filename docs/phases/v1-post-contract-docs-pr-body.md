@@ -32,7 +32,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors, 0 warnings, 0 informations; default suite passed 435 tests with 11 skipped; config-extra suite passed 314 tests with 441 deselected; build succeeded. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; all suites passed with 755 total passing tests and 9 skipped. |
-| GitHub checks | Not run | PR is intentionally not opened in this expanded-path draft pass; GitHub checks are deferred to the refine/open pass. |
+| GitHub checks | Pending | GitHub checks run after the expanded-path refine/open pass creates the PR. |
 
 ### Test Suite Summary
 
