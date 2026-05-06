@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; implementation refinement used; awaiting PR preparation/review
+- Status: `pr_open`; implementation refinement used; PR preparation complete; awaiting review
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 7: Final Hardening Documentation And Evidence`
 - Branch: `codex/v1-post-final-hardening`
@@ -274,7 +274,9 @@ make test-summary
   pass found no product-code or docs/test behavior gaps beyond stale
   phase-artifact budget/commit metadata.
 - PR review: unused.
-- PR body draft/refine: unused; reserved for `loom_pr_preparer`.
+- PR body draft/refine: completed by `loom_pr_preparer` in this PR-preparation
+  pass. The body was read back and refined locally before PR creation; no
+  separate PR-body refine pass remains pending.
 
 ## Implementation Completion Notes
 
@@ -371,8 +373,45 @@ command: make test-summary
 result: passed; package 39 passed and 1 skipped, unit 364 passed and 1 skipped, contract 36 passed and 2 skipped, integration 9 passed and 5 skipped, e2e 7 passed, config-extra 363 passed and 455 deselected
 ```
 
+### PR Preparation Notes
+
+- PR body artifact: `docs/phases/v1-post-final-hardening-pr-body.md`.
+- PR URL: https://github.com/samcantrill/loom/pull/57
+- PR title: `V1 Post Configuration - Phase 7: Final Hardening Documentation And Evidence`
+- PR target verification: `gh pr view 57 --json baseRefName,headRefName,state,url,title`
+  returned `baseRefName=develop`, `headRefName=codex/v1-post-final-hardening`,
+  `state=OPEN`, and URL `https://github.com/samcantrill/loom/pull/57`.
+- PR body mention: `@samcantrill` is included near the top of the body. No
+  GitHub reviewer was requested.
+- Branch push: `codex/v1-post-final-hardening` pushed to `origin` and set to
+  track `origin/codex/v1-post-final-hardening`.
+- Scope verification: final diff remains limited to documentation,
+  implementation-plan metadata, this phase artifact, PR body artifact, and the
+  representative e2e test. No product code, packaging metadata, functional CLI,
+  console script, `_copy_`, plugin/remote resolver, remote store, sweep,
+  config persistence helper, pipeline import of config classes, default raw or
+  resolver-output persistence, or default resolved composed-config snapshot
+  behavior was added.
+- PR-prep commit: `5276d88` (`docs: add phase 7 pr body`) added the public PR
+  body artifact before PR creation.
+
+### PR-Preparation Validation Rerun
+
+```text
+command: make validate-pr
+result: passed; Ruff passed, Pyright passed with 0 errors, default harness
+448 passed and 11 skipped, config-extra harness 363 passed and 455 deselected,
+uv build succeeded
+
+command: make test-summary
+result: passed; wrote build/test-summary.md; package 39 passed and 1 skipped,
+unit 364 passed and 1 skipped, contract 36 passed and 2 skipped, integration
+9 passed and 5 skipped, e2e 7 passed, config-extra 363 passed and 455
+deselected; overall 818 passed, 0 failed, 0 errors, 9 skipped, 455 deselected
+```
+
 ### Known Issues Or Blockers
 
 - No blockers.
-- PR preparation/review remains unused and should be handled by the managing
-  workflow; this fallback executor did not open a PR.
+- GitHub CI was triggered by PR creation and may still be pending after the
+  final metadata push.
