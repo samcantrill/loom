@@ -451,11 +451,34 @@ make test-summary
   selected-group behavior, missing `RUN_URI` skip behavior, import-light
   expectations, test obligations, and lower-layer facade scope were tightened
   without changing stack target/base or expanding beyond Phase 1.
-- PR preparation: pending.
+- PR preparation: in progress on 2026-05-07 by `loom_pr_preparer`; public PR
+  body drafted at `docs/phases/add-diagnostics-preflight-core-pr-body.md`.
+- PR body draft pass: complete on 2026-05-07.
+- PR body refine pass: not needed; using the fast PR-body path because the
+  draft is concise, scope-complete, and evidence-backed.
+- PR title confirmed: `Local Diagnostics - Phase 1: Diagnostics Foundation and
+  Preflight Core`.
+- PR target confirmed: `develop`.
+- PR head confirmed: `codex/add-diagnostics-preflight-core`.
+- PR feature focus confirmed: `Local Diagnostics`.
+- PR GitHub state: pending push and PR creation.
 - Stack maintenance: root phase; no predecessor maintenance pending. Branch was
   replayed onto `origin/develop` after validation to remove unrelated unpublished
   `.codex` workflow changes from the PR-facing diff while retaining the v3 plan
   quality-gate refinement.
+- Stack predecessor confirmed: none.
+- Merge eligibility confirmed: root phase PR is merge-eligible only when opened
+  against `develop` and validation, review, and CI gates pass.
+- PR scope confirmation: PR-facing diff includes the v3 implementation-plan
+  quality-gate refinement, Phase 1 execution/PR artifacts, diagnostics package,
+  `docs/structure.md`, and phase-scoped diagnostics tests. It does not include
+  CLI commands, `loom run` behavior changes, persisted preflight reports,
+  status/log/artifact inspection facades, or `.codex` workflow prompt/template
+  changes.
+- PR-preparation validation evidence: reused final same-branch validation
+  results from `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`; both passed as recorded below
+  and `build/test-summary.md` is present for suite-level evidence.
 - Remaining blockers: none.
 
 ### Implementation Handoff
