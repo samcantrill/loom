@@ -86,18 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    from loom.cli import plan as plan_command
     from loom.cli import validate as validate_command
 
     validate_command.register_subparser(subparsers)
-
-    plan_parser = subparsers.add_parser("plan", help="plan a pipeline run")
-    _add_config_options(plan_parser)
-    _add_selector_options(plan_parser)
-    plan_parser.add_argument("--run-uri", metavar="URI", help="explicit run URI")
-    plan_parser.add_argument("--resume", action="store_true", help="resume an existing run")
-    plan_parser.add_argument("--explain", dest="explain_stage", metavar="STAGE", help="explain a planned stage")
-    _add_common_command_options(plan_parser)
-    plan_parser.set_defaults(handler=_unsupported_command)
+    plan_command.register_subparser(subparsers)
 
     run_parser = subparsers.add_parser("run", help="run a pipeline")
     _add_config_options(run_parser)

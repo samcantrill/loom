@@ -83,18 +83,26 @@ class PlanCliResult:
     """CLI-facing plan result placeholder."""
 
     config_path: Path
+    pipeline_name: str | None = None
     run_uri: str | None = None
     resume: bool = False
+    selectors: Mapping[str, object] = field(default_factory=dict)
+    summary: Mapping[str, object] = field(default_factory=dict)
     stage_actions: tuple[Mapping[str, object], ...] = ()
+    explanation: Mapping[str, object] | None = None
 
     def to_dict(self) -> dict[str, PlainCliData]:
         """Return the result as plain data."""
 
         return {
             "config_path": str(self.config_path),
+            "pipeline_name": self.pipeline_name,
             "run_uri": self.run_uri,
             "resume": self.resume,
+            "selectors": to_plain_cli_data(dict(self.selectors)),
+            "summary": to_plain_cli_data(dict(self.summary)),
             "stage_actions": to_plain_cli_data(self.stage_actions),
+            "explanation": to_plain_cli_data(self.explanation),
         }
 
 
