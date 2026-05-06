@@ -335,6 +335,11 @@ src/loom/
       runner.py
       errors.py
 
+  diagnostics/
+    __init__.py
+    models.py
+    preflight.py
+
   plugins/
     __init__.py
     entrypoints.py
@@ -404,6 +409,9 @@ io / config / pipeline stores
 pipeline planning / pipeline execution / sweeps / plugins
         |
         v
+diagnostics
+        |
+        v
 cli
 ```
 
@@ -414,6 +422,7 @@ serialization = Python objects <-> plain structured data
 io            = bytes, files, URIs, source backends, codecs
 stores        = run/artifact directory policy, atomic writes, indexes
 pipeline      = DAG validation, planning, stage orchestration, resume
+diagnostics   = reusable local readiness and inspection result models
 config        = compose_config convenience API + explicit catalog composition
 cli           = presentation over Python APIs
 ```
@@ -429,6 +438,7 @@ config -> pipeline execution internals
 pipeline -> config composition or recursive target-instantiation internals
 executors -> config composition internals
 stores -> concrete project code
+config / pipeline / stores / executors -> diagnostics
 loom -> downstream project packages
 ```
 
@@ -454,6 +464,7 @@ from loom.config import (
     register_recipe,
 )
 from loom.pipeline import PipelineSpec, StageFactorySpec, StageSpec, StageContext, PipelineRunner
+from loom.diagnostics import PreflightRequest, run_preflight
 ```
 
 `loom.__init__` should remain cheap. It may re-export stable, foundational types
@@ -732,7 +743,39 @@ Resume uses stage fingerprints and persisted artifacts to decide whether to run,
 reuse, skip, or fail a stage. V0 resume should be conservative and limited to the
 same run directory.
 
-### 6.9 Sweeps
+### 6.9 Diagnostics
+
+Detailed specifications: [preflight.md](features/preflight.md),
+[cli.md](features/cli.md), [run-store.md](features/run-store.md),
+[artifacts.md](features/artifacts.md)
+
+`loom.diagnostics` owns reusable diagnostics result models and local readiness
+checks that sit above config, pipeline, planning, stores, codecs, artifacts, and
+executors, and below CLI presentation. It is a middle layer: diagnostics may
+depend on public lower-layer APIs, but lower layers must not import
+`loom.diagnostics`.
+
+Current diagnostics modules:
+
+```text
+__init__.py    import-light public exports for preflight models and runner entrypoint
+models.py      preflight statuses, severities, groups, request/result models, and plain-data serialization
+preflight.py   local non-persistent preflight runner and check groups
+```
+
+The diagnostics package root must stay lightweight. `import loom.diagnostics`
+may expose stable value models and a callable preflight entrypoint, but it must
+not import `loom.cli`, config-only optional dependencies, local stores,
+executors, project stage modules, or command registration. Check implementations
+that need heavier public APIs should import them inside runner code rather than
+through the package root.
+
+Preflight is best-effort and non-persistent by default. It can report stable
+check IDs, statuses, severities, messages, and plain-data details suitable for
+later CLI JSON envelopes, but it must not allocate run URIs, create run
+directories, write run-store documents, or replace execution-time validation.
+
+### 6.10 Sweeps
 
 Detailed specification: [sweeps.md](features/sweeps.md)
 
@@ -743,7 +786,7 @@ the same config, planning, execution, and store APIs as normal runs.
 Sweeps should remain generic when implemented. They should not become a
 hyperparameter optimizer, experiment database, or scheduler replacement.
 
-### 6.10 Plugins
+### 6.11 Plugins
 
 Detailed specification: [plugins.md](features/plugins.md)
 
@@ -757,7 +800,7 @@ sinks, or CLI extensions through documented APIs. Runtime event semantics belong
 to the reliability and execution layers; plugin discovery only loads and
 registers event sink implementations.
 
-### 6.11 CLI
+### 6.12 CLI
 
 Detailed specifications: [cli.md](features/cli.md),
 [preflight.md](features/preflight.md), [run-catalog.md](features/run-catalog.md)

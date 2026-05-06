@@ -185,6 +185,60 @@ def test_import_stores_does_not_import_config_or_cli_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_diagnostics_root_is_lightweight() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.diagnostics
+
+        for forbidden in (
+            "loom.cli",
+            "loom.config",
+            "loom.pipeline.stores",
+            "loom.pipeline.executors",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.diagnostics")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_lower_layers_do_not_import_diagnostics() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.config
+        import loom.pipeline
+        import loom.pipeline.stores
+        import loom.pipeline.executors
+        import loom.io.codecs
+
+        if "loom.diagnostics" in sys.modules:
+            raise SystemExit("lower layers imported loom.diagnostics")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_execution_does_not_import_config_stores_cli() -> None:
     script = dedent(
         """

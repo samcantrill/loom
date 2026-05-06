@@ -35,6 +35,22 @@ def test_import_lom_io_package() -> None:
     assert loom.io.__all__
 
 
+def test_import_loom_diagnostics_public_api() -> None:
+    import loom.diagnostics
+
+    assert loom.diagnostics.__all__ == [
+        "PreflightStatus",
+        "PreflightCheckStatus",
+        "PreflightSeverity",
+        "PreflightGroup",
+        "PreflightCheckResult",
+        "PreflightResult",
+        "PreflightRequest",
+        "PreflightError",
+        "run_preflight",
+    ]
+
+
 def test_package_includes_typing_marker() -> None:
     assert files("loom").joinpath("py.typed").is_file()
 
