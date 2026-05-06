@@ -200,6 +200,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used
+- PR body draft: completed
+- PR body refine: pending
 - PR review: unused
 
 ## Completion Notes
@@ -213,6 +215,9 @@ make test-summary
 - Implementation refinement validation rerun: passed with 80 passed: `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config pytest -m optional_dependency tests/unit/loom/config/test_overrides.py tests/unit/loom/config/test_load.py tests/integration/config/test_compose_invalid_yaml_public.py tests/integration/config/test_compose_overrides.py tests/integration/config/test_compose_includes.py tests/integration/config/test_compose_config.py`. Targeted Ruff for the touched test file passed: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/unit/loom/config/test_load.py`.
 - Implementation refinement PR handoff: completion notes updated, phase implementation refinement budget marked `used`, final PR-preparation validation should still run `make validate-pr` and `make test-summary`, and suite evidence still needed is the standard PR-preparation summary table.
 - Refinement summary: tightened override-string and duplicate-key contracts, clarified loader-local PyYAML handling and public error-shape stop conditions, split public compose regression slices, and made package/unit/contract/integration/e2e/opt-in suite obligations explicit.
-- PR preparation: pending.
+- PR preparation draft: completed by `loom_pr_preparer` on 2026-05-06 using `.codex/prompts/pr-body-draft.md`. Confirmed the worktree is `/home/samcantrill/work/loom-worktrees/v1-post-strict-authoring`, the branch is `codex/v1-post-strict-authoring`, the stack predecessor is none, the target branch is `develop`, and the PR title is `V1 Post Configuration - Phase 2: Strict Authoring And Override Semantics`. Confirmed `origin/develop` is an ancestor of `HEAD` and `git diff --check origin/develop...HEAD` passed. The branch remains a root phase PR candidate targeting `develop`; merge eligibility remains review/check gated. No PR was opened because this expanded-path draft pass leaves PR creation and GitHub verification for `.codex/prompts/pr-body-refine.md`.
+- PR body artifact: drafted at `docs/phases/v1-post-strict-authoring-pr-body.md` from `.codex/templates/phase-pr-body.md`, with `@samcantrill` near the top.
+- PR preparation validation: passed with `/tmp` uv cache. `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed, Pyright reported 0 errors, default harness passed with 435 passed and 11 skipped, config-extra passed with 338 passed and 441 deselected, and `uv build` produced sdist and wheel artifacts. `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`; overall suite summary was 779 passed, 0 failed, 0 errors, 9 skipped, and 441 deselected.
+- Pre-submit blocker gate: passed for the draft pass. The final diff matches Phase 2 strict authoring and override semantics, relevant unit and config-extra public compose coverage exists, validation evidence is recorded, the PR body is concise and evidence-backed, and no future-phase `_copy_` implementation, literal-dot path grammar, list patching, schema registry, provenance/fingerprint, pipeline persistence, recipe hardening, CLI behavior, or broad structured-error expansion was found.
 - Stack maintenance: pending.
-- Remaining blockers: none after refinement.
+- Remaining blockers: none after PR-body draft preparation.
