@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implementation complete; PR preparation in progress
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 6: Hardening and E2E`
 - Branch: `codex/harden-cli-core`
@@ -208,9 +208,9 @@ make test-summary
 
 - Draft plan: completed in this commit.
 - Final phase execution plan: completed in this commit; fast-path refine pass not needed.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
-- PR preparation: pending.
+- Implementation summary: added `tests/e2e/test_cli_core.py` covering validate, `--check-targets`, plan JSON, run JSON/text, failed run JSON, dry-run JSON, resume reuse, explicit/default run URIs, unsupported executor errors, and strict run URI rejection through `main(argv)`. Updated `README.md` and `docs/features/cli.md` to describe the supported v2 validate/plan/run surface, strict local `file://` run URI forms, the `--check-targets` consent boundary, JSON envelope behavior, and deferred command families.
+- Implementation validation: targeted `uv run --extra config pytest tests/e2e/test_cli_core.py -q` passed with 7 tests; targeted default `uv run pytest tests/e2e/test_cli_core.py tests/package/test_import_boundaries.py -q` passed with 26 tests; targeted config integration `uv run --extra config pytest tests/integration/config/test_cli_validate.py tests/integration/config/test_cli_plan.py tests/integration/config/test_cli_run.py -q` passed with 15 tests; `uv run ruff check .` passed; `uv run --extra config pyright` passed with 0 errors. Final `make validate-pr` passed Ruff, Pyright, default 505 passed/12 skipped, config-extra 380 passed/519 deselected, and build. Final `make test-summary` passed package 43 passed/1 skipped, unit 417 passed/1 skipped, contract 36 passed/2 skipped, integration 9 passed/5 skipped, e2e 14 passed, and config-extra 380 passed/519 deselected.
+- Refinement summary: no implementation refiner pass used; targeted validation and final gates passed after local assertion alignment in the e2e test.
+- PR preparation: in progress.
 - Stack maintenance: not needed yet.
 - Remaining blockers: none known.
