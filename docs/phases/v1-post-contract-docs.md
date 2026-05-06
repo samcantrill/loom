@@ -226,7 +226,7 @@ make test-summary
 - PR body refine: completed on 2026-05-06 using `.codex/prompts/pr-body-refine.md`; verified the dedicated worktree, branch, target branch, implementation diff, acceptance criteria, suite evidence, scope boundaries, assumptions, and risks against the draft PR body. The only public-body refine change updated the GitHub checks row from draft-pass deferral to post-PR pending status. No implementation or test files were changed.
 - PR opening: completed on 2026-05-06 with explicit `gh pr create --base develop --head codex/v1-post-contract-docs --title "V1 Post Configuration - Phase 1: Contract And Documentation Cleanup" --body-file docs/phases/v1-post-contract-docs-pr-body.md`.
 - PR verification: `gh pr view 44 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/v1-post-contract-docs`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/44`; verified target/head match the phase plan.
-- GitHub checks: final `gh pr checks 44 --watch=false` after pushing PR facts reported the workflow check pending at `https://github.com/samcantrill/loom/actions/runs/25410903359/job/74532223978`.
+- GitHub checks: `gh pr checks 44 --watch=false` reported the workflow check pending after PR creation and phase-note pushes. Note-only pushes may replace the pending Actions job; the PR is not merge-ready until GitHub checks pass.
 - PR preparation: draft completed; refine completed; PR opened and verified.
 - Stack state: root phase PR with no predecessor; target is `develop`; merge-eligible only after review and checks pass; later v1-post phases may stack on `codex/v1-post-contract-docs` after the manager records this phase as `pr_open`.
 - Stack maintenance: pending; no retarget or rebase performed by PR preparation.
