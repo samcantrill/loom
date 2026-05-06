@@ -3,14 +3,71 @@
 `loom` is a lightweight, generic runtime for composing, configuring, running, and
 resuming small Python pipelines.
 
-The v0 implementation is deliberately local-only:
+The current v2 implementation is deliberately local-only:
 
+- functional `loom validate`, `loom plan`, and `loom run` commands
 - trusted config composition, recipe expansion, and `_target_` construction
 - local artifact + run stores on disk
 - deterministic planning with conservative same-run resume
 - local in-process execution
 - error messages with path-oriented context
-- import-safe boundaries between config, pipeline, execution, and CLI stub modules
+- import-safe boundaries between config, pipeline, execution, and CLI modules
+
+Later roadmap work will add diagnostics, stage workers, remote stores,
+subprocess/SLURM/container executors, sweeps, catalogs, bundles, plugins, and
+cleanup/reliability commands.
+
+## Quickstart (CLI)
+
+Validate the config shape and pipeline DAG without importing or constructing
+project targets:
+
+```sh
+loom validate pipeline.yaml
+```
+
+Opt in to target readiness checks when the config is trusted project code:
+
+```sh
+loom validate pipeline.yaml --check-targets
+```
+
+`--check-targets` imports and constructs every `_target_` block after static
+validation succeeds, then discards the constructed objects. The command emits a
+warning when that consent boundary is crossed.
+
+Preview stage actions without executing or allocating run state:
+
+```sh
+loom plan pipeline.yaml --format json
+loom plan pipeline.yaml --run-uri file://./runs/example --explain build
+```
+
+Run locally through the runtime:
+
+```sh
+loom run pipeline.yaml
+loom run pipeline.yaml --run-uri file://./runs/example
+loom run pipeline.yaml --run-uri file://./runs/example --resume
+loom run pipeline.yaml --dry-run --format json
+```
+
+If `loom run` is called without `--run-uri`, the local run store allocates a
+timestamped run URI under its default root. `loom plan` is read-only and never
+allocates a default run URI. `loom run --dry-run` emits the same plan schema as
+`loom plan` because no run happened.
+
+V2 accepts only explicit local run URI forms:
+
+```text
+file:///absolute/run
+file://./relative/run
+file://../relative/run
+```
+
+Relative run URIs resolve against the current working directory and are displayed
+and persisted as absolute `file:///...` URIs. Plain paths, `file://localhost`,
+queries, fragments, and non-local schemes are rejected.
 
 ## Quickstart (Python API)
 
@@ -55,7 +112,7 @@ run_uri = path_to_run_uri(run_root / "run1")
 
 composed = compose_config(config_path)
 result = runner.run(
-    RunRequest(config=composed.resolved, run_uri=run_uri)
+    RunRequest(config=composed, run_uri=run_uri)
 )
 assert result.stage_results["build"].status.name == "SUCCEEDED"
 ```
@@ -64,7 +121,7 @@ assert result.stage_results["build"].status.name == "SUCCEEDED"
 
 ```python
 resume = runner.run(
-    RunRequest(config=composed.resolved, run_uri=run_uri, open_existing=True)
+    RunRequest(config=composed, run_uri=run_uri, open_existing=True)
 )
 assert resume.stage_results["build"].action == "REUSE"
 assert resume.stage_results["report"].action == "REUSE"
@@ -121,8 +178,10 @@ requirements.
 ## Relevant docs
 
 - [docs/loom.md](docs/loom.md)
+- [docs/features/cli.md](docs/features/cli.md)
 - [docs/features/config.md](docs/features/config.md)
 - [docs/structure.md](docs/structure.md)
+- [implementation-plan-v2.md](docs/implementation-plans/implementation-plan-v2.md)
 - [implementation-plan-v0.md](docs/implementation-plans/implementation-plan-v0.md)
 - [v0 public API migration notes](docs/briefs/v0_public_api_migration_notes.md)
 

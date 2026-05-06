@@ -4,22 +4,27 @@
 
 `loom.cli` is the command-line interface for `loom`.
 
-For v0, `loom.cli` is limited to import-safe modules and unsupported stubs.
-Functional CLI commands are post-v0. The command descriptions below document
-the intended later CLI shape, not v0 acceptance criteria, unless a section says
-otherwise.
+For v2, `loom.cli` exposes a functional local command surface:
+`loom validate`, `loom plan`, and `loom run`. The v2 commands are thin
+`argparse` wrappers over config, pipeline, planning, store, and execution APIs.
+They do not introduce a separate runtime model.
 
-It exists so users can eventually validate configs, inspect plans, run
-pipelines, execute stage workers, inspect run state, read logs, inspect
-artifacts, and submit or monitor executor-backed work without writing Python for
-every operation.
+Roadmap commands for stage workers, run status, logs, artifacts, sweeps,
+catalogs, bundles, plugins, remote stores, containers, cleanup, and non-local
+executors are intentionally deferred. The later-command sections in this
+document describe future shape, not current v2 support.
 
-The CLI should answer:
+The v2 CLI should answer:
 
 ```text
 How do I validate this config?
 What would this run do?
 How do I run this pipeline?
+```
+
+Future CLI phases should answer:
+
+```text
 How do subprocess, container, or SLURM workers run one stage?
 What is the current status of a run?
 Where are the logs for a failed stage?
@@ -212,19 +217,9 @@ build dependency graphs directly
 
 ---
 
-## 4. Initial Scope
+## 4. Current Scope
 
-### 4.1 Must Support in v0
-
-```text
-import-safe `loom.cli` modules
-unsupported command stubs that fail clearly if called
-no import of config composition, pipeline runners, plugin discovery, or
-optional/heavy paths from `import loom`
-documentation that functional CLI commands are deferred
-```
-
-### 4.2 Should Support Soon
+### 4.1 Must Support in v2
 
 ```text
 loom --help
@@ -232,25 +227,16 @@ loom --version
 loom validate CONFIG
 loom plan CONFIG
 loom run CONFIG
-loom status RUN_URI
 basic top-level exception formatting
 non-zero exit codes for failures
 config overlays and CLI overrides
 resume selector flags shared by plan and run
-local executor selection
-machine-readable JSON output for plan/status where practical
-loom logs RUN_URI STAGE
-loom artifacts list RUN_URI
-loom artifacts show RUN_URI ARTIFACT_ID
+local executor execution
+machine-readable JSON output for validate, plan, run, and structured errors
 loom plan CONFIG --resume --explain STAGE
-loom status RUN_URI --jobs
-loom cancel RUN_URI
-loom slurm status RUN_URI
-loom slurm cancel RUN_URI
-shell completion, if parser supports it cheaply
 ```
 
-### 4.3 Should Not Support in v0
+### 4.2 Must Not Support in v2
 
 ```text
 interactive TUI
@@ -262,10 +248,34 @@ automatic config wizard
 domain-specific commands
 rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
-subprocess executor selection in the v0 CLI
+subprocess, SLURM, Docker, or Apptainer execution
+remote run URI schemes
+status, logs, artifacts, stage-worker, sweep, catalog, bundle, plugin, cleanup,
+or reliability commands
+--run-dir, --run-id, or --strict options
 ```
 
 Domain packages can expose their own CLIs that call `loom` Python APIs.
+
+### 4.3 Deferred Command Families
+
+```text
+loom status RUN_URI
+loom logs RUN_URI STAGE
+loom artifacts list RUN_URI
+loom artifacts show RUN_URI ARTIFACT_ID
+loom stage run ...
+loom sweep plan ...
+loom sweep run ...
+loom slurm status RUN_URI
+loom slurm cancel RUN_URI
+loom cancel RUN_URI
+shell completion
+```
+
+These command families require later diagnostics, worker, executor, catalog,
+or remote-store APIs. V2 should fail clearly rather than partially implement
+them.
 
 ---
 
@@ -273,8 +283,7 @@ Domain packages can expose their own CLIs that call `loom` Python APIs.
 
 ### 5.1 Recommended Default
 
-Use `argparse` from the standard library when functional CLI behavior is added
-after v0.
+Use `argparse` from the standard library for the v2 command surface.
 
 Reasons:
 
@@ -482,25 +491,28 @@ run
 Recommended:
 
 ```text
---executor local|subprocess|slurm-single-job|slurm-afterok
+--executor NAME
 --executor-config PATH, optional later
 ```
 
-Executor-specific options should be minimal at the top level. Complex settings
-belong in config.
+V2 accepts the option shape but supports only `local`. The run handler rejects
+unsupported executor names with the executor exit code instead of relying on an
+argparse usage error. Executor-specific options should be minimal at the top
+level. Complex settings belong in config.
 
 ### 7.5 Output Format Options
 
 Shared by inspection commands:
 
 ```text
---format table|json
+--format text|json
 --verbose
 --quiet
 --no-color
 ```
 
-V0 can default to table/text and support JSON for commands used by automation.
+V2 defaults to text and supports JSON for validate, plan, run, and structured
+errors. `--verbose`, `--quiet`, and `--no-color` are deferred.
 
 ### 7.6 Logging Options
 
@@ -543,22 +555,33 @@ stack traces unless requested
 
 ### 8.2 Machine Output
 
-Commands that inspect or plan should support JSON eventually:
+V2 supports JSON for automation-facing commands:
 
 ```bash
 loom plan experiment.yaml --format json
-loom status file:///abs/project/runs/example --format json
-loom artifacts list file:///abs/project/runs/example --format json
+loom validate experiment.yaml --format json
+loom run experiment.yaml --format json
 ```
 
 Machine output should come from structured API results, not by parsing human
 tables.
 
+V2 JSON output is always a versioned envelope with top-level `warnings`:
+
+```json
+{"schema_version":"loom.cli.plan.v2","ok":true,"warnings":[],"result":{}}
+```
+
+Dry-run output from `loom run --dry-run --format json` uses the plan schema
+because no run occurred. When a command parses successfully and JSON format is
+known, structured errors are written to stdout in the error envelope. Argparse
+usage errors remain text on stderr.
+
 ### 8.3 Color
 
 Color is optional.
 
-V0 can omit color entirely. If added:
+V2 omits color entirely. If added later:
 
 ```text
 auto-detect terminal
@@ -679,7 +702,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 Avoid importing heavy subcommands before they are needed if possible.
 
-V0 can keep this simple, but the parser should not import project packages during
+V2 can keep this simple, but the parser should not import project packages during
 `loom --help`.
 
 ---
@@ -781,7 +804,7 @@ Recommended:
 --force-stage STAGE, repeatable
 --skip-stage STAGE, repeatable
 --explain STAGE
---format table|json
+--format text|json
 ```
 
 ### 12.3 Behavior
@@ -860,7 +883,7 @@ Recommended:
 --overlay PATH, repeatable
 --set KEY=VALUE, repeatable
 --run-uri RUN_URI
---executor local|subprocess|slurm-single-job|slurm-afterok
+--executor NAME
 --resume
 --dry-run
 --from-stage STAGE
@@ -911,7 +934,7 @@ loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor l
 loom run experiment.yaml --run-uri file:///abs/project/runs/example --resume
 ```
 
-### 13.6 SLURM Example
+### 13.6 Deferred Executor Example
 
 ```bash
 loom run experiment.yaml \
@@ -919,7 +942,8 @@ loom run experiment.yaml \
   --executor slurm-afterok
 ```
 
-Output should include:
+In v2, this fails clearly because only `--executor local` is supported. A later
+executor phase can make this command submit work and include:
 
 ```text
 run directory
@@ -1033,7 +1057,7 @@ loom status RUN_URI
 Recommended:
 
 ```text
---format table|json
+--format text|json
 --jobs
 --verbose
 ```
@@ -1121,7 +1145,8 @@ hard-code log path strings when store APIs exist
 contact scheduler unless a future executor-specific mode requires it
 ```
 
-V0 can start with `--paths` and simple file printing. `--follow` can be deferred.
+The first logs phase can start with `--paths` and simple file printing.
+`--follow` can be deferred.
 
 ---
 
@@ -1194,9 +1219,9 @@ loom slurm status RUN_URI
 loom slurm cancel RUN_URI
 ```
 
-### 18.2 Post-v0 Starting Point
+### 18.2 Starting Point
 
-When functional CLI behavior exists, start with:
+When diagnostic CLI behavior exists, start with:
 
 ```text
 loom status RUN_URI
@@ -1246,7 +1271,7 @@ loom sweep run SWEEP_CONFIG
 loom sweep status SWEEP_RUN_URI
 ```
 
-V0 can defer sweep commands until the sweep planning API exists.
+Defer sweep commands until the sweep planning API exists.
 
 ---
 
@@ -1325,7 +1350,8 @@ For `--format json`, errors should be structured where practical:
 }
 ```
 
-V0 can start with text errors and add JSON errors after result models stabilize.
+V2 supports JSON error envelopes once the command and requested format parse
+successfully. Future commands should reuse the same envelope shape.
 
 ---
 
@@ -1376,7 +1402,7 @@ Keep formatting helpers independent from business logic.
 
 ### 23.1 CLI Environment Variables
 
-V0 can avoid CLI-specific environment variables.
+V2 avoids CLI-specific environment variables.
 
 Possible later variables:
 
@@ -1474,18 +1500,16 @@ Avoid brittle snapshots for timestamps or full paths unless normalized.
 
 ### 24.5 Integration Tests
 
-These are post-v0 functional CLI tests. In v0, tests should only cover
-import-safe CLI modules and clear unsupported-stub failures. Later, test through
-the console entry point or `main(argv)`:
+For v2, test through the console entry point or `main(argv)`:
 
 ```text
 loom validate example config
 loom plan example config
 loom run with local executor
-loom stage run worker path
-loom status after success
-loom status after failure
-loom logs returns paths or content
+loom validate --check-targets warning and construction
+loom run --dry-run
+loom run --resume
+JSON output and JSON error envelopes
 ```
 
 ### 24.6 Import Boundary Tests
@@ -1495,18 +1519,19 @@ Test:
 ```text
 import loom does not import loom.cli
 loom --help does not import project packages
-loom status does not import project stage code
+loom --help does not import project stage code
 loom.cli modules do not get imported by pipeline/config/stores
 ```
 
 ---
 
-## 25. Post-v0 Implementation Plan
+## 25. Implementation Roadmap
 
-V0 only requires import-safe `loom.cli` modules and unsupported command stubs.
-The command implementation phases below are post-v0 guidance.
+V2 implements the entry point, validate, plan, and run phases. Later command
+families remain roadmap guidance and should be implemented only after their
+owning APIs are stable.
 
-### 25.1 Phase 1: Entry Point and Parser, Post-v0
+### 25.1 Phase 1: Entry Point and Parser
 
 Create:
 
@@ -1526,7 +1551,7 @@ top-level --traceback
 exit code constants
 ```
 
-### 25.2 Phase 2: Validate and Plan, Post-v0
+### 25.2 Phase 2: Validate and Plan
 
 Create:
 
@@ -1546,7 +1571,7 @@ selector option parsing
 plan table formatting
 ```
 
-### 25.3 Phase 3: Run, Post-v0
+### 25.3 Phase 3: Run
 
 Create:
 
@@ -1564,7 +1589,7 @@ PipelineRunner integration
 run summary formatting
 ```
 
-### 25.4 Phase 4: Stage Worker, Post-v0
+### 25.4 Later Phase: Stage Worker
 
 Create:
 
@@ -1581,7 +1606,7 @@ stage worker API integration
 worker result exit codes
 ```
 
-### 25.5 Phase 5: Status and Logs, Post-v0
+### 25.5 Later Phase: Status and Logs
 
 Create:
 
@@ -1599,7 +1624,7 @@ JSON status output
 loom logs, at least path display or simple content display
 ```
 
-### 25.6 Phase 6: Artifacts, Post-v0
+### 25.6 Later Phase: Artifacts
 
 Create:
 
