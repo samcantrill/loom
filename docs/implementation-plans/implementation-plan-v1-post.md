@@ -404,7 +404,7 @@ Phase metadata:
 
 ### Phase 4. Artifact-Safe Ordering And Provenance
 
-Status: pending
+Status: merged
 
 Goal:
 
@@ -446,6 +446,39 @@ Required evidence:
   before resolver execution and preserve resolver expressions.
 - E2E: deferred unless runner behavior is touched.
 - Opt-in/config-extra: docs tests or example checks for secret warning wording.
+
+Phase metadata:
+
+- Branch: `codex/v1-post-artifact-provenance`
+- Worktree:
+  `/home/samcantrill/work/loom-worktrees/v1-post-artifact-provenance`
+- Stack predecessor: none
+- PR target: `develop`
+- PR: https://github.com/samcantrill/loom/pull/51
+- Merge: squash-merged into `develop` on 2026-05-06 after expanded-path
+  implementation refinement, PR review, a user-authorized blocker-resolution
+  pass, passing local validation, and passing GitHub CI `checks`.
+- Implementation summary: reordered config composition so artifact-safe source
+  artifacts, unresolved/redacted config, resolver expression/path records,
+  fingerprint records, provenance metadata, and composition manifests are built
+  before runtime resolver execution; moved new `ConfigProvenance` writes to
+  schema version 2 with top-level `artifact_fingerprint`; retained legacy
+  schema-version-1 reads for top-level `resolved_fingerprint` as
+  `metadata.legacy_resolved_fingerprint`; preserved artifact-safe
+  `ComposedConfig.fingerprint`; and added plaintext secret override guidance.
+- Review/blocker notes: PR review found that legacy schema-version-1 read
+  objects could serialize into an unreadable schema-version-1 shape. The
+  blocker-resolution pass changed `ConfigProvenance.to_dict()` to write schema
+  version 2 only and raise structured `ConfigProvenanceError` for legacy read
+  objects that cannot produce valid schema-version-2 writes.
+- Validation: `make validate-pr` passed with Ruff, Pyright, default harness
+  `440 passed, 11 skipped`, config-extra harness `360 passed, 446 deselected`,
+  and `uv build`; `make test-summary` passed with overall `806 passed,
+  9 skipped, 446 deselected`; GitHub CI `checks` passed on PR #51.
+- Follow-up notes: Phase 5 still owns pipeline/run-store composition manifest
+  persistence, `PipelineRunner` default resolved-config persistence removal,
+  and explicit pipeline/runtime object fingerprint policy. Phase 6 still owns
+  recipe residual-risk coverage.
 
 ### Phase 5. Pipeline Persistence And Runtime Fingerprints
 
