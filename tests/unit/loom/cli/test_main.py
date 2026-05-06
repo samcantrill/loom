@@ -8,6 +8,7 @@ import json
 import pytest
 
 from loom.cli import main as cli_main
+from loom.cli.errors import CliError
 from loom.cli.main import build_parser, main
 
 
@@ -55,16 +56,24 @@ def test_no_command_prints_help_and_returns_zero() -> None:
     assert stderr.getvalue() == ""
 
 
-def test_placeholder_command_errors_are_text_by_default() -> None:
+def test_command_errors_are_text_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(_namespace: object) -> int:
+        raise CliError("command failed", code="cli.test_failure")
+
+    monkeypatch.setattr(cli_main, "_dispatch", fail)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
     assert main(["run", "pipeline.yaml"], stdout=stdout, stderr=stderr) == 1
     assert stdout.getvalue() == ""
-    assert "`loom run` is not implemented" in stderr.getvalue()
+    assert "command failed" in stderr.getvalue()
 
 
-def test_placeholder_command_errors_are_json_when_command_format_is_known() -> None:
+def test_command_errors_are_json_when_command_format_is_known(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(_namespace: object) -> int:
+        raise CliError("command failed", code="cli.test_failure")
+
+    monkeypatch.setattr(cli_main, "_dispatch", fail)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -74,11 +83,15 @@ def test_placeholder_command_errors_are_json_when_command_format_is_known() -> N
     assert payload["schema_version"] == "loom.cli.error.v2"
     assert payload["ok"] is False
     assert payload["warnings"] == []
-    assert payload["error"]["type"] == "UnsupportedCommandError"
-    assert payload["error"]["code"] == "cli.unsupported_command"
+    assert payload["error"]["type"] == "CliError"
+    assert payload["error"]["code"] == "cli.test_failure"
 
 
-def test_traceback_is_accepted_before_or_after_command() -> None:
+def test_traceback_is_accepted_before_or_after_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(_namespace: object) -> int:
+        raise CliError("command failed", code="cli.test_failure")
+
+    monkeypatch.setattr(cli_main, "_dispatch", fail)
     before_stdout = io.StringIO()
     before_stderr = io.StringIO()
     after_stdout = io.StringIO()
@@ -101,8 +114,8 @@ def test_traceback_is_accepted_before_or_after_command() -> None:
         == 1
     )
 
-    assert "UnsupportedCommandError" in before_stderr.getvalue()
-    assert "UnsupportedCommandError" in after_stderr.getvalue()
+    assert "CliError" in before_stderr.getvalue()
+    assert "CliError" in after_stderr.getvalue()
     assert "traceback" in json.loads(before_stdout.getvalue())["error"]["details"]
     assert "traceback" in json.loads(after_stdout.getvalue())["error"]["details"]
 

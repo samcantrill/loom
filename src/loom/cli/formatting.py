@@ -108,7 +108,18 @@ def format_plan_text(result: PlanCliResult) -> str:
 def format_run_text(result: RunCliResult) -> str:
     """Format a concise run result."""
 
-    return f"OK run {result.run_uri}: {result.status}"
+    prefix = "OK" if result.status == "SUCCEEDED" else "FAILED"
+    lines = [f"{prefix} run {result.run_uri}: {result.status}"]
+    for stage in result.stage_summaries:
+        stage_name = str(stage.get("stage", "<unknown>"))
+        action = str(stage.get("action", "<unknown>"))
+        status = str(stage.get("status", "<none>"))
+        lines.append(f"{stage_name}: {action} -> {status}")
+    if result.failure_summary is not None:
+        stage_name = result.failure_summary.get("stage", "<unknown>")
+        message = result.failure_summary.get("message", "")
+        lines.append(f"failure {stage_name}: {message}")
+    return "\n".join(lines)
 
 
 __all__ = [
