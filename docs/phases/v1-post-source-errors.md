@@ -335,6 +335,48 @@ make test-summary
 - Remaining blockers: none.
 - Refinement summary: tightened existing-source findings, authorship metadata shape, redaction acceptance criteria, suite obligations, executor stop conditions, and Phase 4/5 scope boundaries without changing branch or stack metadata.
 - PR preparation:
+- Draft pass completed by `loom_pr_preparer` on 2026-05-06.
+- PR body artifact written to `docs/phases/v1-post-source-errors-pr-body.md`
+  using `.codex/templates/phase-pr-body.md`.
+- PR body refine pass: pending because the phase is on the expanded path.
+- PR title confirmed:
+  `V1 Post Configuration - Phase 3: Source Authorship And Structured Error Completion`.
+- Branch confirmed: `codex/v1-post-source-errors`.
+- Worktree confirmed:
+  `/home/samcantrill/work/loom-worktrees/v1-post-source-errors`.
+- Target branch confirmed: `develop`.
+- Stack predecessor confirmed: none; this is a root phase PR after Phase 1,
+  Phase 2, and their metadata PRs merged into `develop`.
+- Merge eligibility: target is `develop`; PR may be opened in the refine pass
+  and becomes merge-eligible after review/checks.
+- PR opening: intentionally deferred to `.codex/prompts/pr-body-refine.md`;
+  no GitHub PR was created in this draft pass.
+- Final PR-prep validation:
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed, Pyright
+  reported 0 errors, the default suite passed with 436 passed and 11 skipped,
+  the config-extra suite passed with 346 passed and 442 deselected, and
+  `uv build` produced the source distribution and wheel.
+- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+  `build/test-summary.md` at 2026-05-06T02:43:20+00:00: package 38 passed/1
+  skipped; unit 357 passed/1 skipped; contract 32 passed/2 skipped;
+  integration 9 passed/5 skipped; e2e 6 passed; config-extra 346 passed/442
+  deselected; overall 788 passed/9 skipped/442 deselected.
+- Scope confirmation: final diff is confined to `loom.config`, config-focused
+  tests, the Phase 3 execution plan, and the PR body artifact; no
+  `loom.pipeline` or store implementation files are touched.
+- Future-phase confirmation: no Phase 4 provenance schema-version-2,
+  resolved-fingerprint removal, artifact-ordering changes, Phase 5
+  pipeline/store persistence changes, CLI work, `_copy_`, resolver allow-list
+  expansion, plugin/remote resolver work, or public error hierarchy expansion
+  was found in the final diff.
+- Secret/redaction gate: draft review found the Phase 3 redaction changes and
+  regression tests cover ordinary/include override metadata, parent
+  secret-like override paths, recipe arguments, resolver error tokens,
+  provenance, manifest, fingerprint metadata, and serialized error surfaces.
+- Pre-submit blocker gate: passed for phase scope, validation, PR body draft,
+  suite evidence, redaction risks, and known review risks; no blocker found.
 - Stack maintenance:
+- None required in this draft pass; target remains `develop` and there is no
+  stack predecessor to retarget or rebase.
 - Remaining blockers:
 - None.
