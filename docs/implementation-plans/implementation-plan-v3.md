@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft implementation plan
+- Status: refined implementation plan
 - Related planning notes: `docs/implementation-plans/roadmap-v3-planning-notes.md`
 - Related brief: none
 - Related specifications:
@@ -14,9 +14,10 @@
   - `docs/features/errors.md`
   - `docs/features/testing.md`
 - Draft pass: complete
-- Refine pass: pending
-- Plan quality gate: pending `loom_plan_reviewer` review before Phase 1
-  implementation starts
+- Refine pass: complete; plan quality gate refinement pass applied on
+  2026-05-07
+- Plan quality gate: passed on 2026-05-07 by `loom_plan_reviewer`
+  confirmation review
 - Blockers: none known
 
 ## Goal
@@ -134,6 +135,11 @@ After v3 is complete:
   APIs and `loom.cli`. It may import public config, pipeline, planning,
   execution, store, artifact, codec, executor, and URI APIs. Those lower layers
   should not import `loom.diagnostics`.
+- Keep `import loom.diagnostics` cheap. The package `__init__` should expose
+  lightweight result models and request types without loading project stage
+  modules, command registration, config composition, local store construction, or
+  executor implementations. Checks that need heavier public APIs should import
+  those APIs inside the specific check implementation.
 - Keep CLI modules thin: parse arguments, call diagnostics APIs, format
   results, and return exit codes.
 - Use `RUN_URI` for all v3 diagnostics command arguments. Plain local paths and
@@ -151,10 +157,16 @@ After v3 is complete:
 - `loom run` reuses a minimal diagnostics subset for config load, graph
   validation, `run_uri`/resolved path safety, and executor resolution. This
   reuse should call shared diagnostics logic, not duplicate checks in
-  `loom.cli.run`.
+  `loom.cli.run`. When `loom run` omits `--run-uri`, Phase 2 must allocate the
+  implicit local `RUN_URI` once before preflight and pass the same URI to
+  execution.
 - `loom status RUN_URI` reads persisted local run state only: run status, stage
   table, failure summaries, log path hints, artifact counts, and available
   provenance summaries.
+- Status/log diagnostics must use a store-owned stage-discovery and run-state
+  inspection facade when the caller does not already know every stage name. The
+  facade belongs in `loom.pipeline.stores`, not in `loom.cli` or path-walking
+  diagnostics code.
 - `loom logs RUN_URI STAGE` uses `--stream stdout|stderr|both`, `--tail N`,
   `--paths`, and `--format text|json`. The default is bounded content display
   with resolved paths; `--paths` suppresses content. `--follow` and unbounded
@@ -198,6 +210,8 @@ pass-through package. Phase plans should add diagnostics facades only when they
 remove CLI-local business logic or provide a reusable Python result model.
 Lower-level public facades should be added in the owning package if diagnostics
 would otherwise need private file layout or internal planning details.
+Phase 1 must also update `docs/structure.md` so the new diagnostics package is
+part of the canonical source-tree boundary rather than an undocumented exception.
 
 ## Extensibility Assessment
 
@@ -229,10 +243,14 @@ small enough to evolve additively.
 
 ## Plan Quality Gate
 
-- Status: pending review
+- Status: passed on 2026-05-07 by `loom_plan_reviewer` confirmation review
 - Required reviewer: `loom_plan_reviewer`
 - Required before: creating any v3 phase execution plan or starting Phase 1
   implementation
+- Loop budget:
+  - Initial review: used on 2026-05-07.
+  - Refinement pass: used on 2026-05-07.
+  - Confirmation review: used on 2026-05-07.
 - Review focus:
   - maintainability of the `loom.diagnostics` package boundary;
   - extensibility of preflight check groups and result models;
@@ -241,7 +259,30 @@ small enough to evolve additively.
   - sufficiency of per-phase package, unit, contract, integration, e2e, and
     opt-in test expectations;
   - reviewability of each phase as one PR.
-- Current gate result: draft only; not approved for phase implementation
+- Initial review findings addressed:
+  - Phase 1 now requires updating `docs/structure.md` with the canonical
+    diagnostics package boundary, import direction, responsibility, and
+    import-light expectations.
+  - Phase 3 now requires a narrow store-owned stage-discovery/run-state
+    inspection facade before diagnostics aggregation.
+  - Phase 2 now pins default `loom run` URI preflight behavior to a single
+    allocation before preflight and execution, with focused tests.
+- Confirmation review result: no blocking findings remain; Phase 1 execution
+  planning may start.
+- Current gate result: passed and approved for phase implementation.
+
+### Plan Refinement Summary
+
+| Original finding | Change made | Location |
+| --- | --- | --- |
+| `loom.diagnostics` was not tied back to canonical source-tree documentation. | Added import-light package expectations and made Phase 1 update `docs/structure.md` as an explicit scope item, acceptance criterion, and package-suite obligation. | Key Design Choices; Maintainability Assessment; Phase 1 Scope, Acceptance Criteria, Test expectations, Design impact |
+| Phase 3 could require status tables without any public way to discover stages. | Added a store-owned stage-discovery/run-state inspection facade to Phase 3 scope, acceptance criteria, contract tests, and integration tests. | Key Design Choices; Phase 3 Scope, Acceptance Criteria, Test expectations, Design impact |
+| Default `loom run` preflight could check a different path than execution. | Pinned the planned behavior to allocate the implicit `RUN_URI` once before preflight and pass that same URI into execution, with tests for the default-run case. | Key Design Choices; Phase 2 Scope, Acceptance Criteria, Test expectations |
+
+Accepted risks remain the v3-local debts recorded in the technical debt ledger:
+best-effort non-persistent preflight, minimal run preflight, bounded log display,
+metadata-only artifact inspection, and CLI JSON schemas as output contracts
+rather than persisted records.
 
 ## Phased Implementation
 
@@ -259,6 +300,8 @@ Goal:
 Scope:
 
 - Add `src/loom/diagnostics/` package boundaries and public exports.
+- Update `docs/structure.md` with the canonical `loom.diagnostics` target tree,
+  import direction, module responsibility, and import-light expectations.
 - Add preflight statuses, severities, check result models, overall result
   model, stable check IDs, group selection, and non-persistent preflight request
   APIs.
@@ -290,10 +333,16 @@ Acceptance criteria:
 - Overall status aggregation is deterministic and documented in tests.
 - No preflight result is written to the run store by default.
 - Lower-level packages do not import `loom.diagnostics`.
+- `docs/structure.md` documents the new diagnostics package boundary and states
+  that root diagnostics imports remain lightweight.
+- Import-boundary tests prove `import loom.diagnostics` does not import
+  `loom.cli` or eagerly construct local stores, executors, or project stage
+  modules.
 
 Test expectations:
 
-- Package: public import and import-boundary tests for `loom.diagnostics`.
+- Package: public import, import-light, and import-boundary tests for
+  `loom.diagnostics`, including lower layers not importing diagnostics.
 - Unit: result model validation, group selection, status aggregation, check ID
   stability, strict warning helpers if implemented in core.
 - Contract: plain-data serialization and stable check-result schema contracts.
@@ -307,6 +356,9 @@ Design impact:
 - Adds a new middle-layer package that depends on public config, pipeline,
   planning, store, artifact, codec, executor, and URI APIs while remaining
   independent of `loom.cli`.
+- Updates the canonical source-tree map so diagnostics ownership is reviewable
+  as part of the package boundary instead of living only in implementation-plan
+  prose.
 
 Future compatibility:
 
@@ -361,6 +413,10 @@ Scope:
 - Reuse a minimal non-persistent preflight subset in `loom run` for config
   load, graph validation, `RUN_URI`/resolved path safety, and executor
   resolution.
+- For `loom run` without `--run-uri`, allocate the implicit local `RUN_URI`
+  once before the minimal preflight subset and pass that same URI into
+  `RunRequest`; this keeps preflight path checks and execution aligned without
+  writing run-store records before execution.
 - Map preflight failures and strict warnings to existing CLI exit-code policy.
 - Add help text that makes preflight best-effort and non-persistent.
 
@@ -383,13 +439,17 @@ Acceptance criteria:
 - JSON output uses v2 envelope conventions and a stable diagnostics payload.
 - `loom run` reuses the minimal subset without duplicating preflight logic in
   CLI code.
+- `loom run` default URI behavior is deterministic: the URI checked by minimal
+  preflight is the URI passed into execution, and a focused test covers the
+  omitted-`--run-uri` case.
 - Preflight warnings or failures do not create run-store records.
 
 Test expectations:
 
 - Package: CLI import-light checks remain passing.
 - Unit: parser/options, text formatting, JSON payload shape, strict exit-code
-  mapping, selected-group behavior, and run command preflight hook behavior.
+  mapping, selected-group behavior, run command preflight hook behavior, and
+  default `loom run` URI allocation before preflight.
 - Contract: CLI result envelope compatibility with v2 conventions.
 - Integration: preflight command against synthetic valid, warning, and invalid
   configs; run command minimal preflight failure cases.
@@ -412,6 +472,8 @@ Alternatives rejected:
 - Adding a separate `--json` flag for preflight.
 - Recomputing preflight checks directly inside `loom.cli.run`.
 - Making explicit preflight require a `RUN_URI`.
+- Letting default `loom run` preflight skip path safety while the runner later
+  allocates an unchecked URI.
 
 Debt introduced:
 
@@ -446,6 +508,9 @@ Goal:
 
 Scope:
 
+- Add a narrow store-owned inspection facade for stage discovery and run-state
+  aggregation before diagnostics uses it, such as `list_stages` plus a
+  stage-state bundle or `scan_run_state` in `loom.pipeline.stores`.
 - Add diagnostics result models/facades for persisted run status, stage status
   tables, failure summaries, artifact counts, log path hints, and available
   provenance summaries.
@@ -478,6 +543,10 @@ Acceptance criteria:
 - Failed stage summaries include useful failure and log path hints.
 - Logs display resolved stdout/stderr paths and bounded content through public
   store APIs.
+- Diagnostics and CLI code discover stages through the store-owned inspection
+  facade rather than globbing private `stages/*` layout paths.
+- Corrupt, missing, or partially written stage documents produce clear
+  diagnostics behavior through the inspection facade.
 - Missing logs and missing stages fail clearly.
 - JSON output uses stable CLI envelopes and plain-data diagnostics payloads.
 
@@ -487,10 +556,11 @@ Test expectations:
   diagnostics incorrectly.
 - Unit: status/log summary models, formatting, stream selection, bounded content
   handling, and error mapping.
-- Contract: diagnostics facades read through store protocols rather than
-  private paths where public methods exist.
-- Integration: local run-store fixtures for success, failure, missing stage,
-  missing log, and corrupt-document cases.
+- Contract: store protocol tests cover the new stage-discovery/run-state
+  inspection facade, and diagnostics facades read through that facade rather
+  than private paths.
+- Integration: local run-store fixtures for success, failure, stage discovery,
+  missing stage, missing log, and corrupt-document cases.
 - E2E: `loom status` and `loom logs` over synthetic successful and failed local
   runs.
 - Opt-in: none.
@@ -499,6 +569,8 @@ Design impact:
 
 - Adds reusable run inspection APIs that CLI and future tools can call without
   shelling out or importing project code.
+- Extends `loom.pipeline.stores` with narrow read-only recovery helpers before
+  diagnostics aggregation, preserving store ownership of local run layout.
 
 Future compatibility:
 
@@ -511,6 +583,8 @@ Future compatibility:
 Alternatives rejected:
 
 - Direct CLI traversal of local run-store file paths.
+- Direct diagnostics traversal of local run-store file paths when the store does
+  not already expose stage discovery.
 - Scheduler/job queries in the general status command.
 - Implementing `--follow` before subprocess or scheduler execution exists.
 
