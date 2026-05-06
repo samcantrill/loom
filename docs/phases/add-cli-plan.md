@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implementation complete; PR preparation pending
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 4: Plan Command`
 - Branch: `codex/add-cli-plan`
@@ -227,9 +227,9 @@ make test-summary
 
 - Draft plan: completed in this commit.
 - Final phase execution plan: completed in this commit; fast-path refine pass not needed.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary: completed in `5fd9d00` (`feat: implement plan command`). The phase adds `loom plan`, CLI-specific plan result output, read-only fresh planning, explicit run URI validation/existence checks through the local store, strict resume planning, selector forwarding, explanation payloads, and import-boundary coverage. `LocalRunStore` now owns its default root and exposes `run_uri_exists()` for non-resume read-only existence checks.
+- Implementation validation: targeted `uv run pytest tests/unit/loom/cli tests/package/test_import_boundaries.py -q` passed with 48 tests; targeted `uv run --extra config pytest tests/integration/config/test_cli_plan.py -q` passed with 5 tests; `uv run ruff check .` passed; `uv run --extra config pyright` passed with 0 errors; `make validate-pr` passed with default 497 passed / 11 skipped and config-extra 373 passed / 504 deselected plus build success; `make test-summary` passed with package 42 passed / 1 skipped, unit 410 passed / 1 skipped, contract 36 passed / 2 skipped, integration 9 passed / 5 skipped, e2e 7 passed, and config-extra 373 passed / 504 deselected.
+- Refinement summary: not needed; targeted and full validation passed without a phase-refiner pass.
 - PR preparation: pending.
 - Stack maintenance: not needed yet.
 - Remaining blockers: none known.
