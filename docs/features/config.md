@@ -624,10 +624,11 @@ recursive merge overlays and override mapping into base config, honoring _replac
 recursively expand includes
 resolve enough interpolation for recipe args
 expand recipes
-resolve interpolation again
-validate
+scan resolver expressions without executing runtime resolvers
 redact
 compute artifact-safe manifest, provenance, source records, and fingerprint
+resolve interpolation again for the in-memory result
+validate
 ```
 
 For ordinary values, override strings remain the highest-precedence authoring
@@ -1047,11 +1048,17 @@ redacted:
 
 Do not print unredacted secrets in error messages.
 
-Composition accepts plaintext secret-like overrides to preserve legacy behavior, but it records a warning in provenance metadata:
+Composition accepts plaintext secret-like overrides to preserve legacy behavior,
+but they are easy to leak through shells, process listings, and history. Avoid
+passing secrets directly in override strings such as
+`+auth.token=plaintext-secret` or `storage.api_key=plaintext-secret`.
 
 - `plaintext_secret_override_warnings`: a warning list keyed by override path and operation when override keys match secret patterns.
 
-Prefer env-backed values or `oc.env` in authored config for runtime secrets; keep plaintext secrets for transition only and use the warning data to guide follow-up.
+Prefer environment-backed values in authored config, for example
+`${oc.env:AUTH_TOKEN}` or `${oc.env:LOOM_STORAGE_TOKEN}`. Keep plaintext
+secret overrides for transition only and use the warning data to guide
+follow-up.
 
 ---
 

@@ -140,6 +140,13 @@ def test_public_compose_redaction_preserves_resolver_expressions_in_artifacts(tm
     assert artifact_safety["resolved_runtime_values_included"] is False
     assert [record.label for record in composed.fingerprint_records] == [ARTIFACT_SAFE_FINGERPRINT_LABEL]
     assert composed.fingerprint_records[0].metadata["fingerprint_policy"] == ARTIFACT_SAFE_FINGERPRINT_POLICY
+    assert composed.provenance.schema_version == 2
+    assert composed.provenance.artifact_fingerprint == composed.fingerprint
+    provenance_payload = composed.provenance.to_dict()
+    assert provenance_payload["artifact_fingerprint"] == composed.fingerprint
+    assert "resolved_fingerprint" not in provenance_payload
+    provenance_fingerprint = cast(dict[str, Any], composed.provenance.metadata["fingerprint"])
+    assert provenance_fingerprint["artifact_fingerprint"] == composed.fingerprint
 
     artifact_payload = {
         "manifest": composed.manifest.to_dict(),
@@ -152,6 +159,7 @@ def test_public_compose_redaction_preserves_resolver_expressions_in_artifacts(tm
     assert "/tmp/phase13-root" not in serialized_artifacts
     assert "top-secret" not in serialized_artifacts
     assert "sauce" not in serialized_artifacts
+    assert "resolved_fingerprint" not in serialized_artifacts
 
 
 def test_public_compose_redacts_nested_secret_override_artifact_provenance(tmp_path: Path) -> None:
@@ -221,6 +229,16 @@ def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monk
     )
     assert resolver_records
     assert resolver_records[0]["resolver"] == "oc.env"
+    assert resolver_records[0]["config_path"] == "$.paths.root"
+    assert resolver_records[0]["token"] == "${oc.env:PHASE13_PATH}"
+    assert resolver_records[0]["expression"] == "oc.env:PHASE13_PATH"
+    manifest_metadata = cast(dict[str, Any], composed.manifest.to_dict()["metadata"])
+    assert manifest_metadata["resolver_records"] == resolver_records
+    fingerprint_resolver_facts = cast(
+        list[dict[str, Any]],
+        composed.fingerprint_records[0].metadata["resolver_facts"],
+    )
+    assert fingerprint_resolver_facts[0]["config_path"] == "$.paths.root"
 
     metadata_records = cast(
         dict[str, Any],
@@ -234,6 +252,53 @@ def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monk
     ordinary_overrides = cast(list[dict[str, Any]], composed.provenance.metadata["ordinary_overrides"])
     assert ordinary_overrides[0]["raw"] == REDACTION_MARKER
     assert ordinary_overrides[0]["value"] == REDACTION_MARKER
+
+
+def test_public_compose_builds_artifacts_before_runtime_interpolation_and_keeps_digests_env_free(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: base\n"
+        "paths:\n"
+        "  root: ${oc.env:PHASE4_RUNTIME_ROOT}\n"
+        "pipeline:\n"
+        "  value: ${paths.root}/value\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PHASE4_RUNTIME_ROOT", "/runtime/one")
+    first = inspect_config_composition(base)
+    monkeypatch.setenv("PHASE4_RUNTIME_ROOT", "/runtime/two")
+    second = inspect_config_composition(base)
+
+    stage_names = [stage.name for stage in first.stages]
+    assert stage_names.index("artifact_placeholders") < stage_names.index("runtime_interpolation")
+    assert stage_names.index("provenance") < stage_names.index("runtime_interpolation")
+    assert stage_names.index("fingerprint") < stage_names.index("runtime_interpolation")
+    first_paths = cast(dict[str, Any], first.resolved["paths"])
+    second_paths = cast(dict[str, Any], second.resolved["paths"])
+    assert first_paths["root"] == "/runtime/one"
+    assert second_paths["root"] == "/runtime/two"
+    assert first.fingerprint == second.fingerprint
+    assert first.provenance.artifact_fingerprint == second.provenance.artifact_fingerprint
+    assert first.provenance.metadata["fingerprint"] == second.provenance.metadata["fingerprint"]
+    assert first.manifest.to_dict() == second.manifest.to_dict()
+    assert [record.to_dict() for record in first.fingerprint_records] == [
+        record.to_dict() for record in second.fingerprint_records
+    ]
+
+    serialized = json.dumps(
+        {
+            "provenance": first.provenance.to_dict(),
+            "manifest": first.manifest.to_dict(),
+            "fingerprint_records": [record.to_dict() for record in first.fingerprint_records],
+        },
+        sort_keys=True,
+    )
+    assert "/runtime/one" not in serialized
+    assert "/runtime/two" not in serialized
 
 
 def test_public_compose_records_final_value_authorship_without_values(tmp_path: Path) -> None:

@@ -57,7 +57,8 @@ def test_compose_base_overlay_override_flow(tmp_path: Path) -> None:
     assert paths["child"] == "child"
     assert pipeline["extra"] == 1
     assert result.recipe_manifest == ()
-    assert result.provenance.schema_version == 1
+    assert result.provenance.schema_version == 2
+    assert result.provenance.artifact_fingerprint == result.fingerprint
     assert result.provenance.config_path == str(base.resolve())
     assert [source.kind for source in result.provenance.sources] == ["base", "overlay", "overlay"]
 
@@ -293,12 +294,12 @@ def test_compose_config_staged_path_matches_inspection(tmp_path: Path) -> None:
         "recipe_expansion",
         "ordinary_overrides",
         "resolver_scan",
-        "runtime_interpolation",
-        "validation",
         "redaction",
         "provenance",
         "fingerprint",
         "artifact_placeholders",
+        "runtime_interpolation",
+        "validation",
         "composed_config",
     )
 
@@ -332,6 +333,38 @@ def test_compose_config_staged_path_matches_inspection(tmp_path: Path) -> None:
         ).status
         == "match"
     )
+
+
+def test_compose_artifact_fingerprints_and_provenance_ignore_runtime_env_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "base.yaml"
+    path.write_text(
+        "name: demo\n"
+        "paths:\n"
+        "  root: ${oc.env:PHASE4_UNIT_ROOT}\n"
+        "pipeline:\n"
+        "  value: ${paths.root}/value\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PHASE4_UNIT_ROOT", "/runtime/unit-one")
+    first = compose_config(path)
+    monkeypatch.setenv("PHASE4_UNIT_ROOT", "/runtime/unit-two")
+    second = compose_config(path)
+
+    first_paths = cast(dict[str, Any], first.resolved["paths"])
+    second_paths = cast(dict[str, Any], second.resolved["paths"])
+    assert first_paths["root"] == "/runtime/unit-one"
+    assert second_paths["root"] == "/runtime/unit-two"
+    assert first.fingerprint == second.fingerprint
+    assert first.provenance.artifact_fingerprint == second.provenance.artifact_fingerprint
+    assert first.provenance.metadata["fingerprint"] == second.provenance.metadata["fingerprint"]
+    assert first.manifest.to_dict() == second.manifest.to_dict()
+    assert [record.to_dict() for record in first.fingerprint_records] == [
+        record.to_dict() for record in second.fingerprint_records
+    ]
 
 
 def test_internal_compose_helper_returns_composed_config(tmp_path: Path) -> None:

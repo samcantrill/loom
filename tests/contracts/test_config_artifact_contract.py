@@ -207,12 +207,91 @@ def test_config_provenance_contract_is_still_round_trippable() -> None:
         overrides=(
             ParsedOverride(raw="a=1", path="a", operation="update", value=1, order=0),
         ),
-        resolved_fingerprint="sha256:abcd",
         recipe_manifest_count=0,
-        metadata={},
+        metadata={"fingerprint": {"resolved_runtime_fingerprint_included": False}},
+        artifact_fingerprint="sha256:artifact",
     )
     payload = provenance.to_dict()
+    assert payload["schema_version"] == 2
+    assert payload["artifact_fingerprint"] == "sha256:artifact"
+    assert "resolved_fingerprint" not in payload
     assert ConfigProvenance.from_dict(payload) == provenance
+
+
+def test_config_provenance_contract_reads_legacy_v1_resolved_fingerprint() -> None:
+    payload = {
+        "schema_version": 1,
+        "config_path": "/tmp/base.yaml",
+        "sources": (
+            {
+                "kind": "base",
+                "path": "/tmp/base.yaml",
+                "order": 0,
+                "content_digest": "sha256:abcd",
+                "size_bytes": 12,
+            },
+        ),
+        "overrides": (),
+        "resolved_fingerprint": "sha256:legacy",
+        "recipe_manifest_count": 0,
+        "metadata": {},
+    }
+
+    provenance = ConfigProvenance.from_dict(payload)
+
+    assert provenance.schema_version == 1
+    assert provenance.artifact_fingerprint is None
+    assert provenance.metadata["legacy_resolved_fingerprint"] == "sha256:legacy"
+    with pytest.raises(ConfigProvenanceError) as exc:
+        provenance.to_dict()
+    serialized = exc.value.to_dict()
+    context = cast(dict[str, object], serialized["context"])
+    details = cast(dict[str, object], context["details"])
+    assert context["code"] == "invalid_config_provenance_schema_version"
+    assert context["config_path"] == "ConfigProvenance.schema_version"
+    assert context["expected"] == SCHEMA_VERSION
+    assert context["actual"] == "int"
+    assert details["stage"] == "provenance_serialization"
+
+
+def test_config_provenance_contract_rejects_unreadable_v1_serialization_shape() -> None:
+    payload = {
+        "schema_version": 1,
+        "config_path": "/tmp/base.yaml",
+        "sources": (),
+        "overrides": (),
+        "recipe_manifest_count": 0,
+        "metadata": {"legacy_resolved_fingerprint": "sha256:legacy"},
+    }
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ConfigProvenance.from_dict(payload)
+
+    serialized = exc.value.to_dict()
+    context = cast(dict[str, object], serialized["context"])
+    assert context["code"] == "invalid_config_provenance_resolved_fingerprint"
+    assert context["config_path"] == "ConfigProvenance.resolved_fingerprint"
+
+
+def test_config_provenance_contract_v2_rejects_resolved_fingerprint() -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "config_path": "/tmp/base.yaml",
+        "sources": (),
+        "overrides": (),
+        "artifact_fingerprint": "sha256:artifact",
+        "resolved_fingerprint": "sha256:legacy",
+        "recipe_manifest_count": 0,
+        "metadata": {},
+    }
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ConfigProvenance.from_dict(payload)
+
+    serialized = exc.value.to_dict()
+    context = cast(dict[str, object], serialized["context"])
+    assert context["code"] == "config_provenance_unknown_fields"
+    assert context["config_path"] == "ConfigProvenance"
 
 
 def test_config_provenance_error_context_contract_for_from_dict_failures() -> None:
@@ -221,7 +300,7 @@ def test_config_provenance_error_context_contract_for_from_dict_failures() -> No
         "config_path": "/tmp/base.yaml",
         "sources": (),
         "overrides": (),
-        "resolved_fingerprint": "sha256:abcd",
+        "artifact_fingerprint": "sha256:artifact",
         "recipe_manifest_count": 0,
         "metadata": [],
     }

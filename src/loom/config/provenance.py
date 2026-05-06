@@ -17,7 +17,8 @@ from .redaction import (
     redact_secret_like_value,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+_SUPPORTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,20 +222,40 @@ class ConfigProvenance:
     config_path: str
     sources: tuple[ConfigSource, ...]
     overrides: tuple[ParsedOverride, ...]
-    resolved_fingerprint: Fingerprint
     recipe_manifest_count: int
     metadata: dict[str, PlainData]
+    artifact_fingerprint: Fingerprint | None = None
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {
+        if self.schema_version != SCHEMA_VERSION:
+            raise _provenance_error(
+                "ConfigProvenance writes require schema version 2",
+                code="invalid_config_provenance_schema_version",
+                path="ConfigProvenance.schema_version",
+                stage="provenance_serialization",
+                expected=SCHEMA_VERSION,
+                actual=self.schema_version,
+            )
+        if not self.artifact_fingerprint:
+            raise _provenance_error(
+                "schema-version-2 ConfigProvenance writes require artifact_fingerprint",
+                code="invalid_config_provenance_artifact_fingerprint",
+                path="ConfigProvenance.artifact_fingerprint",
+                stage="provenance_serialization",
+                expected="non-empty string",
+                actual=self.artifact_fingerprint,
+            )
+        payload: dict[str, PlainData] = {
             "schema_version": self.schema_version,
             "config_path": self.config_path,
             "sources": [source.to_dict() for source in self.sources],
             "overrides": [_override_to_artifact_dict(override) for override in self.overrides],
-            "resolved_fingerprint": self.resolved_fingerprint,
             "recipe_manifest_count": self.recipe_manifest_count,
             "metadata": self.metadata,
         }
+        if self.artifact_fingerprint is not None:
+            payload["artifact_fingerprint"] = self.artifact_fingerprint
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ConfigProvenance":
@@ -261,13 +282,6 @@ class ConfigProvenance:
             )
 
         schema_version = plain.get("schema_version")
-        config_path = plain.get("config_path")
-        sources_payload = plain.get("sources")
-        overrides_payload = plain.get("overrides")
-        resolved_fingerprint = plain.get("resolved_fingerprint")
-        recipe_manifest_count = plain.get("recipe_manifest_count")
-        metadata = plain.get("metadata")
-
         if not isinstance(schema_version, int) or schema_version < 1:
             raise _provenance_error(
                 f"Invalid schema_version: {schema_version!r}",
@@ -277,6 +291,47 @@ class ConfigProvenance:
                 expected="positive integer",
                 actual=schema_version,
             )
+        if schema_version not in _SUPPORTED_SCHEMA_VERSIONS:
+            raise _provenance_error(
+                f"Unsupported schema_version: {schema_version!r}",
+                code="unsupported_config_provenance_schema_version",
+                path="ConfigProvenance.schema_version",
+                stage="provenance_from_dict",
+                expected=sorted(_SUPPORTED_SCHEMA_VERSIONS),
+                actual=schema_version,
+            )
+
+        allowed_keys = {
+            "schema_version",
+            "config_path",
+            "sources",
+            "overrides",
+            "recipe_manifest_count",
+            "metadata",
+        }
+        if schema_version == 1:
+            allowed_keys.add("resolved_fingerprint")
+        else:
+            allowed_keys.add("artifact_fingerprint")
+        unknown = set(plain) - allowed_keys
+        if unknown:
+            raise _provenance_error(
+                "ConfigProvenance.from_dict received unknown fields",
+                code="config_provenance_unknown_fields",
+                path="ConfigProvenance",
+                stage="provenance_from_dict",
+                expected=sorted(allowed_keys),
+                actual=sorted(unknown),
+            )
+
+        config_path = plain.get("config_path")
+        sources_payload = plain.get("sources")
+        overrides_payload = plain.get("overrides")
+        artifact_fingerprint = plain.get("artifact_fingerprint")
+        resolved_fingerprint = plain.get("resolved_fingerprint")
+        recipe_manifest_count = plain.get("recipe_manifest_count")
+        metadata = plain.get("metadata")
+
         if not isinstance(config_path, str) or not config_path:
             raise _provenance_error(
                 f"Invalid config_path: {config_path!r}",
@@ -286,7 +341,20 @@ class ConfigProvenance:
                 expected="non-empty string",
                 actual=config_path,
             )
-        if not isinstance(resolved_fingerprint, str) or not resolved_fingerprint:
+        if schema_version == 2 and (
+            not isinstance(artifact_fingerprint, str) or not artifact_fingerprint
+        ):
+            raise _provenance_error(
+                "Invalid artifact_fingerprint",
+                code="invalid_config_provenance_artifact_fingerprint",
+                path="ConfigProvenance.artifact_fingerprint",
+                stage="provenance_from_dict",
+                expected="non-empty string",
+                actual=artifact_fingerprint,
+            )
+        if schema_version == 1 and (
+            not isinstance(resolved_fingerprint, str) or not resolved_fingerprint
+        ):
             raise _provenance_error(
                 "Invalid resolved_fingerprint",
                 code="invalid_config_provenance_resolved_fingerprint",
@@ -340,15 +408,20 @@ class ConfigProvenance:
                 expected="plain-data mapping",
                 actual=plain_metadata,
             )
+        if schema_version == 1:
+            plain_metadata = {
+                **plain_metadata,
+                "legacy_resolved_fingerprint": resolved_fingerprint,
+            }
 
         return cls(
             schema_version=schema_version,
             config_path=config_path,
             sources=sources,
             overrides=overrides,
-            resolved_fingerprint=resolved_fingerprint,
             recipe_manifest_count=recipe_manifest_count,
             metadata=plain_metadata,
+            artifact_fingerprint=cast(Fingerprint | None, artifact_fingerprint),
         )
 
 

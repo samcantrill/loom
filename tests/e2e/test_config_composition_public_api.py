@@ -155,7 +155,8 @@ def test_public_python_config_composition_e2e(
     assert inspection.stage("recipe_expansion") is not None
     assert inspection.stage("provenance") is not None
     assert composed.manifest.schema_version == 1
-    assert composed.provenance.schema_version == 1
+    assert composed.provenance.schema_version == 2
+    assert composed.provenance.artifact_fingerprint == composed.fingerprint
     assert [record.kind for record in composed.source_artifacts] == [
         "base",
         "overlay",

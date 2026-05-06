@@ -9,7 +9,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import cast
 
-from loom.fingerprints import Fingerprint
 from loom.serialization import PlainData, to_plain_data
 
 from .api import ComposedConfig, ConfigCompositionInspection, ConfigCompositionStageRecord
@@ -29,6 +28,7 @@ from .merge import merge_configs
 from .artifacts import (
     SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
     CompositionManifest,
+    ConfigFingerprintRecord,
     RawSourceSnapshotBundle,
     RawSourceSnapshotPayload,
     RawSourceSnapshotReference,
@@ -261,37 +261,8 @@ def inspect_config_composition(
             },
         )
 
-    _append_stage(
-        stages,
-        "runtime_interpolation",
-        {
-            "status": "completed",
-            "input_key_count": _config_key_count(expanded_artifact_safe),
-        },
-    )
     unresolved = expanded_artifact_safe
     redacted = redact_secrets(unresolved)
-    resolved = resolve_interpolation(
-        expanded_artifact_safe,
-        path="$",
-        source_kind=base_source.kind,
-        source_order=base_source.order,
-        source_path=str(base_source.path),
-        value_authorship={
-            format_config_path(path): authorship for path, authorship in value_authorship.items()
-        },
-    )
-    validated = validate_top_level_fields(resolved)
-
-    _append_stage(
-        stages,
-        "validation",
-        {
-            "status": "completed",
-            "resolved_keys": _config_key_count(validated),
-            "has_schema_version": "schema_version" in validated,
-        },
-    )
     _append_stage(stages, "redaction", {"redacted_keys": _config_key_count(redacted), "marker": REDACTION_MARKER})
 
     source_artifacts = _build_source_artifacts(
@@ -316,7 +287,7 @@ def inspect_config_composition(
         redaction_policy=redaction_policy(),
     )
     fingerprint_records = (artifact_safe_config_fingerprint_record,)
-    resolved_fingerprint = build_resolved_fingerprint(validated)
+    fingerprint = artifact_safe_config_fingerprint_record.digest
     provenance_metadata = _build_provenance_metadata(
         include_records=effective_include_sites,
         recomposition_contexts=expanded_with_includes.recomposition_contexts,
@@ -332,6 +303,8 @@ def inspect_config_composition(
         raw_source_snapshot_references=[
             reference.to_dict() for reference in raw_source_snapshot_bundle.references
         ],
+        artifact_fingerprint=fingerprint,
+        fingerprint_records=fingerprint_records,
     )
     manifest_metadata = dict(provenance_metadata)
     manifest_metadata["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
@@ -349,7 +322,7 @@ def inspect_config_composition(
         config_path=str(base_source.path),
         sources=tuple(sources),
         overrides=parsed_overrides,
-        resolved_fingerprint=resolved_fingerprint,
+        artifact_fingerprint=fingerprint,
         recipe_manifest_count=len(recipe_manifest_payload),
         metadata=provenance_metadata,
     )
@@ -367,7 +340,6 @@ def inspect_config_composition(
             "raw_source_snapshot_enabled": raw_source_snapshot_bundle.enabled,
         },
     )
-    fingerprint = artifact_safe_config_fingerprint_record.digest
     _append_stage(
         stages,
         "fingerprint",
@@ -402,6 +374,36 @@ def inspect_config_composition(
             ),
             "raw_source_snapshot_payload_count": len(raw_source_snapshot_bundle.payloads),
             "raw_source_snapshot_enabled": raw_source_snapshot_bundle.enabled,
+        },
+    )
+
+    _append_stage(
+        stages,
+        "runtime_interpolation",
+        {
+            "status": "completed",
+            "input_key_count": _config_key_count(expanded_artifact_safe),
+        },
+    )
+    resolved = resolve_interpolation(
+        expanded_artifact_safe,
+        path="$",
+        source_kind=base_source.kind,
+        source_order=base_source.order,
+        source_path=str(base_source.path),
+        value_authorship={
+            format_config_path(path): authorship for path, authorship in value_authorship.items()
+        },
+    )
+    validated = validate_top_level_fields(resolved)
+
+    _append_stage(
+        stages,
+        "validation",
+        {
+            "status": "completed",
+            "resolved_keys": _config_key_count(validated),
+            "has_schema_version": "schema_version" in validated,
         },
     )
 
@@ -1099,7 +1101,7 @@ def _build_provenance(
     config_path: str,
     sources: tuple[ConfigSource, ...],
     overrides: tuple[ParsedOverride, ...],
-    resolved_fingerprint: Fingerprint,
+    artifact_fingerprint: str,
     recipe_manifest_count: int,
     metadata: dict[str, PlainData],
 ) -> ConfigProvenance:
@@ -1108,9 +1110,9 @@ def _build_provenance(
         config_path=config_path,
         sources=tuple(sources),
         overrides=overrides,
-        resolved_fingerprint=resolved_fingerprint,
         recipe_manifest_count=recipe_manifest_count,
         metadata=metadata,
+        artifact_fingerprint=artifact_fingerprint,
     )
 
 
@@ -1470,6 +1472,8 @@ def _build_provenance_metadata(
     redaction_policy: dict[str, PlainData],
     warnings: tuple[dict[str, PlainData], ...],
     raw_source_snapshot_references: Sequence[dict[str, PlainData]],
+    artifact_fingerprint: str,
+    fingerprint_records: Sequence[ConfigFingerprintRecord],
 ) -> dict[str, PlainData]:
     redacted_include_overrides = [
         _override_to_dict(override, record_values=True) for override in include_overrides
@@ -1507,6 +1511,14 @@ def _build_provenance_metadata(
             _to_source_artifact_reference(record) for record in source_artifacts
         ],
         "raw_source_snapshot_references": list(raw_source_snapshot_references),
+        "fingerprint": {
+            "artifact_fingerprint": artifact_fingerprint,
+            "default_fingerprint_label": (
+                fingerprint_records[0].label if fingerprint_records else ""
+            ),
+            "fingerprint_record_count": len(fingerprint_records),
+            "resolved_runtime_fingerprint_included": False,
+        },
         "redaction_policy": redaction_policy,
         "security_facts": {
             "artifact_safety": {
@@ -1585,9 +1597,3 @@ def _ensure_mappingproxy_plain(value: object) -> object:
 
 def _config_key_count(config: Mapping[str, PlainData]) -> int:
     return len(config)
-
-
-def build_resolved_fingerprint(validated: dict[str, PlainData]) -> str:
-    from loom.fingerprints import hash_mapping
-
-    return hash_mapping(validated)

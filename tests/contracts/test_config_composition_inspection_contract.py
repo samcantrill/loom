@@ -31,12 +31,12 @@ def test_inspection_shape_and_stage_contract(tmp_path: Path) -> None:
         "recipe_expansion",
         "ordinary_overrides",
         "resolver_scan",
-        "runtime_interpolation",
-        "validation",
         "redaction",
         "provenance",
         "fingerprint",
         "artifact_placeholders",
+        "runtime_interpolation",
+        "validation",
         "composed_config",
     )
 

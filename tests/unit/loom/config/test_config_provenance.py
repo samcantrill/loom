@@ -72,11 +72,73 @@ def test_config_provenance_round_trip() -> None:
         config_path="/tmp/base.yaml",
         sources=(ConfigSource(kind="base", path="/tmp/base.yaml", order=0, content_digest="sha256:abcd", size_bytes=1),),
         overrides=(ParsedOverride(raw="a=1", path="a", operation="update", value=1, order=0),),
-        resolved_fingerprint="sha256:abcd",
+        recipe_manifest_count=0,
+        metadata={},
+        artifact_fingerprint="sha256:artifact",
+    )
+    payload = provenance.to_dict()
+    assert payload["artifact_fingerprint"] == "sha256:artifact"
+    assert "resolved_fingerprint" not in payload
+    assert ConfigProvenance.from_dict(payload) == provenance
+
+
+def test_config_provenance_v2_write_requires_artifact_fingerprint() -> None:
+    provenance = ConfigProvenance(
+        schema_version=SCHEMA_VERSION,
+        config_path="/tmp/base.yaml",
+        sources=(ConfigSource(kind="base", path="/tmp/base.yaml", order=0, content_digest="sha256:abcd", size_bytes=1),),
+        overrides=(),
         recipe_manifest_count=0,
         metadata={},
     )
-    assert ConfigProvenance.from_dict(provenance.to_dict()) == provenance
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        provenance.to_dict()
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_config_provenance_artifact_fingerprint"
+    assert context.config_path == "ConfigProvenance.artifact_fingerprint"
+    assert context.details is not None
+    assert context.details["stage"] == "provenance_serialization"
+
+
+def test_config_provenance_reads_legacy_v1_resolved_fingerprint_only_as_metadata() -> None:
+    provenance = ConfigProvenance.from_dict(
+        {
+            "schema_version": 1,
+            "config_path": "/tmp/base.yaml",
+            "sources": (
+                {
+                    "kind": "base",
+                    "path": "/tmp/base.yaml",
+                    "order": 0,
+                    "content_digest": "sha256:abcd",
+                    "size_bytes": 1,
+                },
+            ),
+            "overrides": (),
+            "resolved_fingerprint": "sha256:legacy",
+            "recipe_manifest_count": 0,
+            "metadata": {"source": "legacy"},
+        }
+    )
+
+    assert provenance.schema_version == 1
+    assert provenance.artifact_fingerprint is None
+    assert provenance.metadata["legacy_resolved_fingerprint"] == "sha256:legacy"
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        provenance.to_dict()
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_config_provenance_schema_version"
+    assert context.config_path == "ConfigProvenance.schema_version"
+    assert context.expected == SCHEMA_VERSION
+    assert context.actual == "int"
+    assert context.details is not None
+    assert context.details["stage"] == "provenance_serialization"
 
 
 def test_config_provenance_from_dict_failure_has_context() -> None:
@@ -87,7 +149,7 @@ def test_config_provenance_from_dict_failure_has_context() -> None:
                 "config_path": "/tmp/base.yaml",
                 "sources": (),
                 "overrides": (),
-                "resolved_fingerprint": "sha256:abcd",
+                "artifact_fingerprint": "sha256:artifact",
                 "recipe_manifest_count": 0,
                 "metadata": [],
             }
@@ -99,6 +161,27 @@ def test_config_provenance_from_dict_failure_has_context() -> None:
     assert context.config_path == "ConfigProvenance.metadata"
     assert context.details is not None
     assert context.details["stage"] == "provenance_from_dict"
+
+
+def test_config_provenance_v2_rejects_legacy_resolved_fingerprint_field() -> None:
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ConfigProvenance.from_dict(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "config_path": "/tmp/base.yaml",
+                "sources": (),
+                "overrides": (),
+                "artifact_fingerprint": "sha256:artifact",
+                "resolved_fingerprint": "sha256:legacy",
+                "recipe_manifest_count": 0,
+                "metadata": {},
+            }
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "config_provenance_unknown_fields"
+    assert context.config_path == "ConfigProvenance"
 
 
 def test_fingerprint_reflects_override_content() -> None:
