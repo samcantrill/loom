@@ -10,6 +10,7 @@ from loom.fingerprints import hash_mapping
 from loom.serialization import PlainData, ensure_plain_data
 
 from .base import RecipeImplementation
+from ..redaction import redact_secret_like_value
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +28,7 @@ class RecipeManifestRecord:
             "path": self.path,
             "name": self.name,
             "target": self.target,
-            "arguments": self.arguments,
+            "arguments": _redact_arguments(self.arguments),
             "expanded_hash": self.expanded_hash,
             "expanded_path": self.expanded_path,
             "loom_version": self.loom_version,
@@ -60,6 +61,10 @@ def _normalize_arguments(arguments: Mapping[str, object]) -> dict[str, PlainData
     if not isinstance(plain, dict):
         raise TypeError("recipe arguments must normalize to a mapping")
     return plain
+
+
+def _redact_arguments(arguments: Mapping[str, PlainData]) -> dict[str, PlainData]:
+    return {key: redact_secret_like_value(key, value) for key, value in arguments.items()}
 
 
 def _recipe_target(recipe: RecipeImplementation) -> str:

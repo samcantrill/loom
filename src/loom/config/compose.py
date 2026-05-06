@@ -37,7 +37,13 @@ from .artifacts import (
 from .fingerprints import (
     build_artifact_safe_config_fingerprint_record,
 )
-from .source_maps import ConfigPath, build_base_source_map, compose_config_with_sources, format_config_path
+from .source_maps import (
+    ConfigPath,
+    ValueAuthorship,
+    build_base_source_map,
+    compose_config_with_sources,
+    format_config_path,
+)
 from .overrides import (
     ParsedOverride,
     apply_overrides,
@@ -52,6 +58,7 @@ from .provenance import (
 from .redaction import (
     REDACTION_MARKER,
     contains_secret_like_value,
+    is_secret_key,
     redaction_policy,
     redact_secret_like_value,
     redact_secrets,
@@ -225,6 +232,14 @@ def inspect_config_composition(
         {"ordinary_override_count": len(ordinary_overrides)},
     )
     merged = apply_overrides(expanded, ordinary_overrides)
+    value_authorship = _build_final_value_authorship(
+        config=merged,
+        merged_source_map=merged_with_sources.source_map,
+        include_records=effective_include_sites,
+        local_customizations=expanded_with_includes.local_customizations,
+        ordinary_overrides=ordinary_overrides,
+        recipe_manifest=recipe_manifest_payload,
+    )
 
     _append_stage(stages, "resolver_scan", {"resolver_expression_count": 0})
     expanded_artifact_safe, _resolver_records = scan_resolver_expressions(merged, path="$")
@@ -262,6 +277,9 @@ def inspect_config_composition(
         source_kind=base_source.kind,
         source_order=base_source.order,
         source_path=str(base_source.path),
+        value_authorship={
+            format_config_path(path): authorship for path, authorship in value_authorship.items()
+        },
     )
     validated = validate_top_level_fields(resolved)
 
@@ -308,6 +326,7 @@ def inspect_config_composition(
         recipe_manifest=recipe_manifest_payload,
         resolver_records=_resolver_records,
         source_artifacts=source_artifacts,
+        value_authorship=value_authorship,
         redaction_policy=redaction_policy(),
         warnings=_plaintext_secret_warnings(tuple(include_overrides) + tuple(ordinary_overrides)),
         raw_source_snapshot_references=[
@@ -873,7 +892,7 @@ def _as_include_target(
             override=override,
             details={
                 "reason": "non_string_include_target",
-                "value": str(value),
+                "value_type": type(value).__name__,
             },
         )
     return value
@@ -921,9 +940,10 @@ def _user_composition_error(
 
     if override is not None:
         payload["override_order"] = override.order
-        payload["override_raw"] = override.raw
+        payload["override_raw"] = _safe_override_raw(override)
         payload["override_path"] = override.path
         payload["override_operation"] = override.operation
+        payload["override_redacted"] = _override_is_redacted(override)
 
     return ConfigIncludeExpansionError(
         message,
@@ -934,8 +954,31 @@ def _user_composition_error(
             source_path=source.path,
             config_path=format_config_path(include_site_path),
             directive="_include_",
+            remediation=_remediation_for_user_composition(code),
             details=cast(dict[str, PlainData], to_plain_data(payload)),
         ),
+    )
+
+
+def _remediation_for_user_composition(code: str) -> str | None:
+    return {
+        "missing_include_site": "Use an add override with a new explicit include target, or update an existing _include_ site.",
+        "existing_include_site": "Use update syntax for an existing _include_ site replacement.",
+        "new_include_requires_explicit_target": "Use an explicit relative, absolute, or file:// include target for new include sites.",
+        "invalid_include_value": "Set _include_ override values to a string target.",
+        "missing_include_parent": "Add the parent mapping first or target an existing include site.",
+        "invalid_include_parent_type": "Choose a mapping parent path for include composition overrides.",
+    }.get(code)
+
+
+def _safe_override_raw(override: ParsedOverride) -> str:
+    return REDACTION_MARKER if _override_is_redacted(override) else override.raw
+
+
+def _override_is_redacted(override: ParsedOverride) -> bool:
+    final_key = override.path.rsplit(".", 1)[-1]
+    return contains_secret_like_value(final_key, override.value) or any(
+        is_secret_key(segment) for segment in override.path.split(".")
     )
 
 
@@ -1102,6 +1145,226 @@ def _build_source_artifacts(
     return tuple(artifacts)
 
 
+def _build_final_value_authorship(
+    *,
+    config: Mapping[str, PlainData],
+    merged_source_map: Mapping[ConfigPath, ConfigSource],
+    include_records: Sequence[IncludeSiteRecord],
+    local_customizations: Sequence[IncludeLocalCustomization],
+    ordinary_overrides: Sequence[ParsedOverride],
+    recipe_manifest: Sequence[Mapping[str, PlainData]],
+) -> dict[ConfigPath, ValueAuthorship]:
+    records: dict[ConfigPath, ValueAuthorship] = {}
+    for path in _iter_value_paths(config):
+        authorship = _authorship_from_source_map(path=path, source_map=merged_source_map)
+        include_authorship = _authorship_from_include_records(path=path, include_records=include_records)
+        if include_authorship is not None:
+            authorship = include_authorship
+        customization_authorship = _authorship_from_local_customizations(
+            path=path,
+            local_customizations=local_customizations,
+        )
+        if customization_authorship is not None:
+            authorship = customization_authorship
+        recipe_authorship = _authorship_from_recipe_manifest(path=path, recipe_manifest=recipe_manifest)
+        if recipe_authorship is not None:
+            authorship = recipe_authorship
+        override_authorship = _authorship_from_ordinary_overrides(path=path, ordinary_overrides=ordinary_overrides)
+        if override_authorship is not None:
+            authorship = override_authorship
+        if authorship is not None:
+            records[path] = authorship
+    return records
+
+
+def _iter_value_paths(value: object, path: ConfigPath = ()) -> tuple[ConfigPath, ...]:
+    paths = [path]
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            paths.extend(_iter_value_paths(child, path + (str(key),)))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            paths.extend(_iter_value_paths(child, path + (index,)))
+    return tuple(paths)
+
+
+def _authorship_from_source_map(
+    *,
+    path: ConfigPath,
+    source_map: Mapping[ConfigPath, ConfigSource],
+) -> ValueAuthorship | None:
+    source = source_map.get(path)
+    if source is None:
+        source = _nearest_source(path=path, source_map=source_map)
+    if source is None:
+        return None
+    return ValueAuthorship(
+        path=path,
+        source_kind=source.kind,
+        source_path=source.path,
+        source_order=source.order,
+        source_content_digest=source.content_digest,
+        source_size_bytes=source.size_bytes,
+        composition_stage="source_load",
+    )
+
+
+def _nearest_source(
+    *,
+    path: ConfigPath,
+    source_map: Mapping[ConfigPath, ConfigSource],
+) -> ConfigSource | None:
+    for length in range(len(path), -1, -1):
+        source = source_map.get(path[:length])
+        if source is not None:
+            return source
+    return None
+
+
+def _authorship_from_include_records(
+    *,
+    path: ConfigPath,
+    include_records: Sequence[IncludeSiteRecord],
+) -> ValueAuthorship | None:
+    best: IncludeSiteRecord | None = None
+    best_container: ConfigPath = ()
+    for record in include_records:
+        container = record.include_site_path[:-1]
+        if path[: len(container)] != container:
+            continue
+        if best is None or len(container) > len(best_container):
+            best = record
+            best_container = container
+    if best is None:
+        return None
+    return ValueAuthorship(
+        path=path,
+        source_kind="include",
+        source_path=best.resolved_path,
+        source_order=best.source_order,
+        source_content_digest=best.included_content_digest,
+        source_size_bytes=best.included_size_bytes,
+        composition_stage="file_include_expansion",
+        details={
+            "include_site_path": list(best.include_site_path),
+            "source_path": best.source_path,
+            "source_kind": best.source_kind,
+            "source_order": best.source_order,
+            "source_include_site_path": list(best.source_include_site_path),
+            "target_kind": best.target_kind,
+            "explicit_escape": best.explicit_escape,
+            "has_replace_marker": best.has_replace_marker,
+        },
+    )
+
+
+def _authorship_from_local_customizations(
+    *,
+    path: ConfigPath,
+    local_customizations: Sequence[IncludeLocalCustomization],
+) -> ValueAuthorship | None:
+    best: IncludeLocalCustomization | None = None
+    for record in local_customizations:
+        if path[: len(record.sibling_path)] != record.sibling_path:
+            continue
+        if best is None or len(record.sibling_path) > len(best.sibling_path):
+            best = record
+    if best is None:
+        return None
+    return ValueAuthorship(
+        path=path,
+        source_kind=best.source_kind,
+        source_path=best.source_path,
+        source_order=best.source_order,
+        composition_stage="file_include_local_customization",
+        details={
+            "include_site_path": list(best.include_site_path),
+            "sibling_path": list(best.sibling_path),
+            "customization_kind": best.kind,
+        },
+    )
+
+
+def _authorship_from_recipe_manifest(
+    *,
+    path: ConfigPath,
+    recipe_manifest: Sequence[Mapping[str, PlainData]],
+) -> ValueAuthorship | None:
+    best_record: Mapping[str, PlainData] | None = None
+    best_path: ConfigPath = ()
+    for record in recipe_manifest:
+        record_path = record.get("path")
+        if not isinstance(record_path, str):
+            continue
+        parsed_path = _path_from_config_string(record_path)
+        if path[: len(parsed_path)] != parsed_path:
+            continue
+        if best_record is None or len(parsed_path) > len(best_path):
+            best_record = record
+            best_path = parsed_path
+    if best_record is None:
+        return None
+    expanded_hash = best_record.get("expanded_hash")
+    name = best_record.get("name")
+    target = best_record.get("target")
+    return ValueAuthorship(
+        path=path,
+        source_kind="recipe",
+        source_path=str(best_record.get("expanded_path") or best_record.get("path") or "recipe"),
+        source_order=0,
+        source_content_digest=expanded_hash if isinstance(expanded_hash, str) else None,
+        source_size_bytes=len(expanded_hash) if isinstance(expanded_hash, str) else None,
+        composition_stage="recipe_expansion",
+        details={
+            "recipe_path": list(best_path),
+            "recipe_name": name if isinstance(name, str) else "",
+            "recipe_target": target if isinstance(target, str) else "",
+        },
+    )
+
+
+def _authorship_from_ordinary_overrides(
+    *,
+    path: ConfigPath,
+    ordinary_overrides: Sequence[ParsedOverride],
+) -> ValueAuthorship | None:
+    best: ParsedOverride | None = None
+    best_path: ConfigPath = ()
+    for override in ordinary_overrides:
+        override_path = _path_from_override(override.path)
+        if path[: len(override_path)] != override_path:
+            continue
+        if best is None or (len(override_path), override.order) >= (len(best_path), best.order):
+            best = override
+            best_path = override_path
+    if best is None:
+        return None
+    return ValueAuthorship(
+        path=path,
+        source_kind="ordinary_override",
+        source_path="<override>",
+        source_order=best.order,
+        composition_stage="ordinary_overrides",
+        details={
+            "override_path": best.path,
+            "override_order": best.order,
+            "override_operation": best.operation,
+            "override_redacted": _override_is_redacted(best),
+        },
+    )
+
+
+def _path_from_override(path: str) -> ConfigPath:
+    return tuple(path.split("."))
+
+
+def _path_from_config_string(path: str) -> ConfigPath:
+    trimmed = path[2:] if path.startswith("$.") else path
+    if trimmed == "$" or not trimmed:
+        return ()
+    return tuple(segment for segment in trimmed.split(".") if segment)
+
+
 def _build_include_source_artifacts(
     *,
     include_sites: Sequence[IncludeSiteRecord],
@@ -1205,6 +1468,7 @@ def _build_provenance_metadata(
     recipe_manifest: Sequence[Mapping[str, PlainData]],
     resolver_records: Sequence[ResolverExpressionRecord],
     source_artifacts: Sequence[SourceArtifactRecord],
+    value_authorship: Mapping[ConfigPath, ValueAuthorship],
     redaction_policy: dict[str, PlainData],
     warnings: tuple[dict[str, PlainData], ...],
     raw_source_snapshot_references: Sequence[dict[str, PlainData]],
@@ -1223,6 +1487,9 @@ def _build_provenance_metadata(
             "include_sites": [record.to_dict() for record in include_records],
             "include_recomposition_contexts": [context.to_dict() for context in recomposition_contexts],
             "local_customizations": [record.to_dict() for record in local_customizations],
+            "final_value_authorship": [
+                value_authorship[path].to_dict() for path in sorted(value_authorship, key=format_config_path)
+            ],
         },
         "include_overrides": redacted_include_overrides,
         "ordinary_overrides": redacted_ordinary_overrides,
