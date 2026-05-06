@@ -11,7 +11,8 @@
 - Full plan: `docs/implementation-plans/implementation-plan-v3.md`
 - Source phase: Phase 1 - Diagnostics Foundation And Preflight Core
 - Stack predecessor: none
-- Base branch: local `develop`
+- Base branch: `origin/develop` plus the v3 plan-quality-gate refinement commit
+  carried in this branch
 - Target branch: `develop`
 - Merge eligibility: root phase PR, merge-eligible only when it targets
   `develop` and validation/review/CI gates pass
@@ -26,12 +27,14 @@
 - Refine pass: complete on 2026-05-07; public model names, aggregate semantics,
   selected-group behavior, missing `RUN_URI` skips, import-light obligations, and
   lower-layer facade scope were checked for implementation handoff
-- Setup limitations: The local `develop` base is ahead of `origin/develop` by
-  `699f6bc docs: refine roadmap planning workflow` and
+- Setup limitations: The draft started from local `develop`, which was ahead of
+  `origin/develop` by `699f6bc docs: refine roadmap planning workflow` and
   `d5b51a5 plan: refine v3 implementation plan`. Direct publication of local
   `develop` was not approved because it would publish the pre-existing workflow
-  refinement commit, so this phase starts from local `develop` and no push or
-  PR creation occurs in this planning pass.
+  refinement commit. After implementation validation, the phase branch was
+  replayed onto `origin/develop` while retaining the v3 plan-quality-gate
+  refinement and excluding the unrelated `.codex` workflow-refinement commit
+  from the PR-facing diff.
 - Blockers: none known; ready for Phase 1 implementation.
 
 ## Objective
@@ -58,8 +61,10 @@ end-to-end diagnostic flows.
 - Root or stacked phase: root phase
 - Current predecessor branch or PR: none
 - Why this base branch is correct: all earlier roadmap phases are merged into
-  the local `develop` base assigned by the manager, and the v3 plan quality gate
-  is recorded as passed there.
+  `origin/develop`; this branch carries the v3 plan-quality-gate refinement
+  commit before Phase 1 work so the refined implementation plan and passed gate
+  remain visible in the PR without including unrelated workflow-refinement
+  files.
 - Retarget/rebase plan after predecessor merge: none for this root phase; PR
   target remains `develop`.
 - Branch cleanup constraints: branch can be deleted after squash merge only if
@@ -447,7 +452,10 @@ make test-summary
   expectations, test obligations, and lower-layer facade scope were tightened
   without changing stack target/base or expanding beyond Phase 1.
 - PR preparation: pending.
-- Stack maintenance: root phase; no predecessor maintenance pending.
+- Stack maintenance: root phase; no predecessor maintenance pending. Branch was
+  replayed onto `origin/develop` after validation to remove unrelated unpublished
+  `.codex` workflow changes from the PR-facing diff while retaining the v3 plan
+  quality-gate refinement.
 - Remaining blockers: none.
 
 ### Implementation Handoff
