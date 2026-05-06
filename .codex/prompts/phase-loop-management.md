@@ -6,6 +6,7 @@ Read:
 - The selected implementation plan
 - Completed roadmap-version planning notes, if present
 - Existing phase execution plans in `docs/phases/`
+- `.codex/workflows/README.md`
 - `.codex/templates/README.md`
 - Open PRs and CI/test results if available
 
@@ -61,13 +62,14 @@ then move implementation to code. Do not spend extra passes or tokens producing
 line-by-line implementation recipes unless a public contract or migration risk
 requires it.
 
-Use `.codex/templates/` for durable handoff artifacts. Custom agents define
-role authority, sandbox, and model; prompts define behavior; templates define
-the artifact shape to complete and pass to the next stage.
+Use `.codex/workflows/` as the user-facing workflow entrypoint layer and
+`.codex/templates/` for durable handoff artifacts. Custom agents define role
+authority, sandbox, and model; prompts define behavior; templates define the
+artifact shape to complete and pass to the next stage.
 
 Workflow stages are artifact-centered. Each first-class artifact has a
 high-level draft pass and a lower-level refine pass only when the artifact is a
-feature brief, specification, implementation plan, or an expanded-path phase
+roadmap-version planning notes, implementation plan, or an expanded-path phase
 artifact. Routine phase execution plans and PR bodies use a single concise
 fast-path pass by default. Multiple prompts or agents may work on the same
 artifact; do not create a separate durable artifact merely because a separate
@@ -246,36 +248,39 @@ Serial human-merge-gate mode:
   direct push is blocked, record the blocker and ask for guidance instead of
   opening a fallback PR.
 
-For new or ambiguous work before an implementation plan exists:
+For roadmap-version work before an implementation plan exists:
 
 1. If the user assigns a roadmap version and wants interactive design
    discussion, facilitate roadmap-version planning notes with
    `.codex/prompts/roadmap-version-planning-notes-facilitate.md` before
    drafting downstream artifacts.
-2. Draft a feature brief with `.codex/prompts/feature-brief-draft.md`, using
-   completed roadmap-version planning notes as source input when present.
-3. After the brief artifact exists and context has been compacted or reset when
-   practical, refine it with `.codex/prompts/feature-brief-refine.md`.
-4. Draft or update the relevant specification in `docs/features/` with
-   `.codex/prompts/specification-draft.md`.
-5. After the specification artifact exists and context has been compacted or
-   reset when practical, refine it with `.codex/prompts/specification-refine.md`.
-6. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`.
-7. Review and refine the implementation plan using the plan quality gate below.
-8. Do not start phase execution planning until any planning notes, the brief,
-   specification, and implementation plan have no unresolved blockers, unless
-   the user explicitly assigns a smaller workflow stage.
+2. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`,
+   using completed roadmap-version planning notes as source input when present.
+3. Review and refine the implementation plan using the plan quality gate below.
+4. Do not start phase execution planning until any planning notes and the
+   implementation plan have no unresolved blockers, unless the user explicitly
+   assigns a smaller workflow stage.
 
-Before implementation begins:
+Before phase selection or implementation begins, perform the selected
+implementation plan's quality gate as mandatory startup preflight. Do this
+before selecting the next phase, creating phase execution plans, assigning phase
+agents, or modifying product code. Treat missing, incomplete, stale, or
+ambiguous gate evidence as not passed.
 
 1. Confirm the selected implementation plan has a Plan quality gate section.
-2. Review the plan once with the `loom_plan_reviewer` custom agent using `.codex/prompts/implementation-plan-review.md`.
-3. If review finds blocking maintainability, extensibility, technical debt, conflicting-design, or reviewability issues, perform one refinement pass using `.codex/prompts/implementation-plan-refinement.md`.
-4. Run one confirmation review with `loom_plan_reviewer`.
-5. If blocking findings remain after that confirmation review, mark the plan
+2. If that section records a current passed result for the selected plan, verify
+   the evidence and continue.
+3. If the section is missing, incomplete, stale, ambiguous, or not passed, review
+   the plan once with the `loom_plan_reviewer` custom agent using
+   `.codex/prompts/implementation-plan-review.md`.
+4. If review finds blocking maintainability, extensibility, technical debt,
+   conflicting-design, or reviewability issues, perform one refinement pass
+   using `.codex/prompts/implementation-plan-refinement.md`.
+5. Run one confirmation review with `loom_plan_reviewer`.
+6. If blocking findings remain after that confirmation review, mark the plan
    or next phase `blocked` where appropriate, report the exact blocker to the
    user, and stop. Do not continue re-reviewing.
-6. Do not assign implementation work until blocking plan findings are resolved
+7. Do not assign implementation work until blocking plan findings are resolved
    or explicitly documented as accepted risk with a revisit trigger.
 
 For each phase:

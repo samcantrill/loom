@@ -53,52 +53,52 @@ Project-scoped custom agents live in `.codex/agents/`:
 - `loom_architecture_explorer`: uses `gpt-5.4-mini` with `medium` reasoning for
   read-only architecture and boundary exploration.
 
-Use `.codex/prompts/` for repeatable workflow prompts. Do not add extra
-agent-directory content outside the current custom-agent structure.
+Use `.codex/workflows/` for short user-facing entrypoints that explain how to
+start common workflows. Use `.codex/prompts/` for repeatable role/action
+prompts. Do not add extra agent-directory content outside the current
+custom-agent structure.
 Name prompt files with the artifact and action first using
-`<artifact>-<action>.md`, for example `feature-brief-draft.md`,
+`<artifact>-<action>.md`, for example `implementation-plan-draft.md`,
 `phase-execution-plan-refine.md`, and `pr-body-draft.md`.
 Use `.codex/templates/` for reusable handoff artifact templates that agents
 complete during the stacked workflow. Custom agents define role authority,
-sandbox, and model. Prompts define behavior for a draft, refine, review,
-implementation, or preparation pass. Templates define durable Markdown
-artifacts passed between stages.
+sandbox, and model. Workflow entrypoints define how users start a workflow.
+Prompts define behavior for a draft, refine, review, implementation, or
+preparation pass. Templates define durable Markdown artifacts passed between
+stages.
 
 ### Artifact-Centered Workflow
 
 The workflow is organized around durable stage artifacts, not one file per
 agent invocation. Multiple prompts or agents may work on the same artifact.
-Feature briefs, specifications, and implementation plans should have a
-high-level draft pass and a lower-level refine pass before the next stage
-depends on them. Phase execution plans and PR bodies use the fast path by
-default: one concise, scope-complete pass is enough unless the expanded-path
-triggers below apply.
+Implementation plans should have a high-level draft pass and a lower-level
+refine pass before phase execution depends on them. Phase execution plans and
+PR bodies use the fast path by default: one concise, scope-complete pass is
+enough unless the expanded-path triggers below apply.
 
 First-class artifacts:
 
 - Roadmap-version planning notes, usually in
   `docs/implementation-plans/roadmap-v<N>-planning-notes.md`, when a roadmap
-  version needs interactive human discussion before feature or implementation
-  planning.
-- Feature brief, usually in `docs/briefs/`.
-- Specification, usually in `docs/features/`.
+  version needs interactive human discussion before implementation planning.
 - Implementation plan, in `docs/implementation-plans/`.
 - Phase execution plan, in `docs/phases/`.
 - PR body, usually in `docs/phases/<summary>-pr-body.md`.
 - Merge notes, recorded in implementation-plan completion metadata.
 
-Testing plans are embedded by default in specifications, implementation plans,
-phase execution plans, and PR evidence. Create a standalone testing plan only
-when the assigned work is too large or cross-cutting for embedded suite
-obligations to remain reviewable.
+Testing plans are embedded by default in implementation plans, phase execution
+plans, and PR evidence. Create a standalone testing plan only when the assigned
+work is too large or cross-cutting for embedded suite obligations to remain
+reviewable.
 
 For roadmap-version work that needs human discussion, facilitate and complete
 roadmap-version planning notes before drafting or changing downstream artifacts.
-For new work, draft and refine the feature brief before drafting or changing a
-specification. Draft and refine the specification before drafting an
-implementation plan. Draft and refine the implementation plan, including its
-plan quality gate, before creating phase execution plans. For phase execution
-and PR preparation, prefer the fast path unless the phase has broad design or
+When the planning discussion is complete and the user explicitly confirms they
+are happy with the notes, the roadmap-version planning workflow may continue
+directly into `implementation-plan-draft.md` using the confirmed notes as the
+primary source. Draft and refine the implementation plan, including its plan
+quality gate, before creating phase execution plans. For phase execution and PR
+preparation, prefer the fast path unless the phase has broad design or
 long-term compatibility risk.
 
 ### Branches And Worktrees
@@ -426,8 +426,13 @@ gh pr merge <PR> --squash --delete-branch --admin
 
 ### Plan Quality Gate
 
-Before any phase implementation begins, the selected implementation plan must be
-reviewed for
+Before any phase selection or implementation begins, the managing agent must
+perform the selected implementation plan's quality gate. If the gate already
+records a current passed result for the selected plan, verify that evidence;
+otherwise run the review/refinement/confirmation sequence and stop on blocking
+findings.
+
+The selected implementation plan must be reviewed for
 maintainability, extensibility, future compatibility, conflicting design
 choices, technical debt, test strategy, and reviewability.
 

@@ -3,8 +3,10 @@ You are facilitating an interactive Loom roadmap-version planning process.
 This prompt turns one roadmap version, such as `v3`, into durable planning
 notes through tight discussion with the user. The notes are not the final
 implementation plan. They are the decision log and source material that later
-feed the feature brief, specification, implementation-plan draft, plan review,
-and plan refinement workflow.
+feed the implementation-plan draft, plan review, and plan refinement workflow.
+When the discussion is complete and the user explicitly confirms they are happy
+with the roadmap-version notes, continue into the implementation-plan draft
+workflow using `.codex/prompts/implementation-plan-draft.md`.
 
 Input:
 
@@ -37,6 +39,12 @@ Task:
    enough detail to resolve the open questions.
 6. When all stages are confirmed, mark the planning notes ready for
    implementation-plan drafting and summarize the handoff inputs.
+7. Ask for explicit confirmation before drafting the implementation plan. If
+   the user confirms, create or update
+   `docs/implementation-plans/implementation-plan-<VERSION>.md` by following
+   `.codex/prompts/implementation-plan-draft.md` and using the completed
+   planning notes as the primary source. If the user does not confirm, stop
+   after the planning-notes handoff summary.
 
 Discussion stages:
 
@@ -71,7 +79,8 @@ Discussion stages:
 6. Handoff
    - Record the final source notes for the implementation-plan draft.
    - Identify unresolved assumptions, blockers, and plan-quality-gate risks.
-   - Gate: planning notes are ready for the implementation-plan draft prompt.
+   - Gate: planning notes are ready for the implementation-plan draft prompt,
+     and the user has confirmed whether to draft the implementation plan now.
 
 Question rules:
 
@@ -94,7 +103,8 @@ Rules:
 - Do not implement product code.
 - Do not create phase branches, worktrees, PR bodies, or PRs.
 - Do not draft the final implementation plan until the planning notes are ready
-  and the user asks to enter the implementation-plan drafting workflow.
+  and the user explicitly confirms they are happy for this workflow to enter the
+  implementation-plan drafting prompt.
 - Do not invent requirements not grounded in the roadmap, feature docs, current
   repository state, or confirmed user decisions.
 - Keep `loom` domain-neutral.

@@ -4,8 +4,7 @@
 
 - Status: draft implementation plan
 - Related planning notes:
-- Related brief:
-- Related specifications:
+- Related source docs:
 - Draft pass:
 - Refine pass:
 - Plan quality gate:
