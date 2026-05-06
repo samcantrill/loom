@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 2: Strict Authoring And Override Semantics`
 - Branch: `codex/v1-post-strict-authoring`
@@ -15,11 +15,11 @@
 - Target branch: `develop`
 - Merge eligibility: root phase PR is merge-eligible after review/checks because target is `develop`
 - Workflow path: expanded path
-- Successor dependency notes: later v1-post phases should start from this phase branch only after its PR is opened or prepared, validated, and recorded as `pr_open`; no current successor depends on this draft plan.
+- Successor dependency notes: later v1-post phases should start from this phase branch only after its PR is opened or prepared, validated, and recorded as `pr_open`; no current successor depends on this refined plan.
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v1-post.md`; no blockers remain.
 - Plan quality gate loop budget: initial `loom_plan_reviewer` review used, automated plan refinement pass used, confirmation review used.
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: pending; expanded path selected because this phase changes public config authoring, loader, and override behavior.
+- Refine pass: completed by `loom_phase_planner`; expanded path selected because this phase changes public config authoring, loader, and override behavior.
 - Setup limitations: local `develop` in the control checkout is intentionally obsolete and was not used; `origin/develop` was verified at `5341d2e`. `gh auth status` initially reported an invalid token in the sandbox, then succeeded with approved network access; `gh auth setup-git` and `git fetch origin` required approved access because the sandbox could not write git credential or fetch metadata.
 - Blockers: none
 
@@ -48,15 +48,15 @@ Phase 1 has merged and cleaned the source boundary and documentation baseline. T
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/config/load.py` uses `yaml.safe_load_all(...)`, validates root/plain data, rejects recursive aliases, and rejects unsupported `_copy_` and `_schema_` directives with structured `ConfigLoadError` context. `src/loom/config/overrides.py` parses override values with hand-rolled booleans, `null`, finite numbers, and JSON arrays/objects; JSON scalar strings are currently not decoded because only `[` and `{` enter `json.loads(...)`.
-- Existing tests or harness behavior: loader unit coverage lives in `tests/unit/loom/config/test_load.py`; override parsing and application coverage lives in `tests/unit/loom/config/test_overrides.py`; public compose coverage lives in `tests/unit/loom/config/test_compose.py` and integration files under `tests/integration/config/`, especially `test_compose_config.py`, `test_compose_includes.py`, `test_compose_overrides.py`, and `test_compose_invalid_yaml_public.py`.
+- Existing files or modules that constrain this phase: `src/loom/config/load.py` uses `yaml.safe_load_all(...)`, validates root/plain data, rejects recursive aliases, and rejects unsupported `_copy_` and `_schema_` directives with structured `ConfigLoadError` context. Duplicate-key handling should be loader-local, for example through a local safe-loader subclass or equivalent parser hook, and must not mutate global PyYAML loader behavior. `src/loom/config/overrides.py` parses override values with hand-rolled booleans, `null`, finite numbers, and JSON arrays/objects; JSON scalar strings are currently not decoded because only `[` and `{` enter `json.loads(...)`.
+- Existing tests or harness behavior: loader unit coverage lives in `tests/unit/loom/config/test_load.py`; override parsing and application coverage lives in `tests/unit/loom/config/test_overrides.py`; public compose coverage lives in `tests/unit/loom/config/test_compose.py` and integration files under `tests/integration/config/`, especially `test_compose_config.py`, `test_compose_includes.py`, `test_compose_overrides.py`, and `test_compose_invalid_yaml_public.py`. Integration config files are marked with `optional_dependency` where the config extra is required.
 - Import-boundary or dependency constraints: config loader tests require the optional config dependency set, including PyYAML. The config test conftests mark or select these rows through `optional_dependency`; phase evidence must include config-extra rows, not only default no-extra rows.
 
 ## In-Scope Work
 
-- Parse JSON-quoted scalar override values into literal strings without quote characters, including quoted boolean-like, null-like, integer-like, and float-like text.
+- Parse valid JSON double-quoted scalar override values into literal strings without quote characters, including quoted boolean-like, null-like, integer-like, float-like, empty, and escaped-text values.
 - Preserve current override parsing for unquoted `true`, `false`, `null`, finite integers, finite floats, arrays, and objects.
-- Preserve rejection of invalid JSON array/object values and non-finite JSON numeric values.
+- Preserve rejection of invalid JSON array/object values and non-finite JSON numeric values; malformed double-quoted JSON string values should also raise `OverrideParseError` instead of falling back to raw text.
 - Reject duplicate YAML mapping keys globally during loading for base, overlay, and included config files, not only duplicate `_include_`.
 - Add public compose tests showing there is no literal-dot escape syntax and mapping keys containing literal dots cannot be addressed by v1 override strings.
 - Add public compose tests proving `_copy_` is rejected when authored in overlays and in included files, not only base configs.
@@ -74,22 +74,22 @@ Phase 1 has merged and cleaned the source boundary and documentation baseline. T
 
 - Duplicate YAML key rejection is acceptable as a strict authoring change even if PyYAML previously allowed last-key-wins behavior.
 - Duplicate-key detection should run before plain-data conversion and unsupported directive scanning so ambiguous YAML is rejected before composition semantics inspect it.
-- YAML keys remain required to be string keys after parsing; this phase does not define special duplicate semantics for non-string keys beyond rejecting duplicate authored keys and keeping existing plain-data validation.
-- Existing `ConfigLoadError` and `ConfigErrorContext` are sufficient for duplicate-key failures; Phase 3 owns broader structured error completion.
+- YAML keys remain required to be string keys after parsing. Duplicate detection may report duplicate non-string authored keys when PyYAML can compare them, but this phase does not replace existing `non_plain_data` validation for single non-string keys.
+- Existing `ConfigLoadError` and `ConfigErrorContext` are sufficient for duplicate-key failures; Phase 3 owns broader structured error completion. Duplicate-key context should use a stable code such as `duplicate_key`, include the duplicated key in `details`, and include source kind/order/path plus best-effort config path when available.
 - Public compose tests may live under integration rather than e2e because `compose_config(...)` is the public API surface changed by this phase.
 
 ## Scope Contract
 
-The public override contract changes only for JSON-quoted scalar values: a value text that is valid JSON string syntax must decode to the contained string and must not be reinterpreted as a boolean, `null`, or number after decoding. Existing unquoted scalar parsing stays unchanged. Override path parsing remains a simple split on literal dots with explicit `+` add semantics; backslash, quoted path segments, bracket notation, and other escape syntaxes are unsupported and must not be added.
+The public override contract changes only for JSON-quoted scalar values: a value text whose stripped form is valid JSON string syntax must decode to the contained string and must not be reinterpreted as a boolean, `null`, or number after decoding. Malformed double-quoted JSON values should fail like malformed array/object JSON. Existing unquoted scalar parsing stays unchanged, including single-quoted or otherwise plain text values that do not begin a JSON string. Override path parsing remains a simple split on literal dots with explicit `+` add semantics; backslash, quoted path segments, bracket notation, and other escape syntaxes are unsupported and must not be added.
 
-The loader contract changes from PyYAML's permissive duplicate-key behavior to strict duplicate-key rejection for every YAML mapping in base, overlay, and included files. Duplicate YAML keys are authoring errors because composition cannot reliably distinguish user intent after YAML parsing has collapsed or overwritten them.
+The loader contract changes from PyYAML's permissive duplicate-key behavior to strict duplicate-key rejection for every YAML mapping in base, overlay, and included files. Duplicate YAML keys are authoring errors because composition cannot reliably distinguish user intent after YAML parsing has collapsed or overwritten them. Included files should use the source metadata currently available through the loader; this phase should not invent a new included-file source kind.
 
 ## Design Impact
 
 - Maintainability: centralizes strict YAML authoring behavior in the loader rather than trying to detect ambiguity after merge or include expansion.
 - Extensibility: leaves room for future explicit override path syntax because this phase records unsupported literal-dot addressing instead of reserving an ad hoc escape.
 - Domain neutrality: all examples and tests should remain synthetic config data, not domain-specific research pipeline schemas.
-- Source-tree boundaries: changes stay inside `loom.config` loader/override/compose behavior and tests; no pipeline, store, CLI, or packaging surfaces should change.
+- Source-tree boundaries: changes stay inside `loom.config` loader/override/compose behavior and tests; no pipeline, store, CLI, docs-wide, or packaging surfaces should change.
 
 ## Future Compatibility
 
@@ -114,17 +114,17 @@ Strict duplicate-key rejection makes future composition and provenance work safe
 ## Reviewability
 
 - Expected PR size and shape: small loader and override parser changes plus focused unit/integration regression tests; no broad docs or artifact changes.
-- Files and areas to inspect: `src/loom/config/load.py`, `src/loom/config/overrides.py`, `tests/unit/loom/config/test_load.py`, `tests/unit/loom/config/test_overrides.py`, `tests/unit/loom/config/test_compose.py`, and targeted files under `tests/integration/config/` for public compose behavior.
+- Files and areas to inspect: `src/loom/config/load.py`, `src/loom/config/overrides.py`, `tests/unit/loom/config/test_load.py`, `tests/unit/loom/config/test_overrides.py`, `tests/unit/loom/config/test_compose.py`, and targeted files under `tests/integration/config/` for public compose behavior. The review should confirm that no PyYAML global constructor state is modified.
 - Scope-control checks: diff must not add `_copy_` implementation, literal-dot escape support, list override semantics, schema registry behavior, pipeline/store/CLI changes, provenance schema changes, or future-phase structured error expansion.
 
 ## Implementation Steps
 
 1. Add focused failing unit tests for JSON-quoted scalar override values and duplicate YAML keys, covering base and overlay loader context.
-2. Update override parsing so valid JSON string scalars decode to strings while the existing unquoted scalar, array, object, invalid JSON, and non-finite number behavior remains intact.
-3. Add strict duplicate-key detection to YAML loading before root validation and unsupported directive scanning, with `ConfigLoadError` context that identifies duplicate key, source kind/order/path, and best-effort config path.
-4. Add public compose regressions for duplicate keys flowing through `compose_config(...)`, literal-dot/no-escape override behavior, and mapping keys containing literal dots remaining unaddressable.
-5. Add public compose regressions for `_copy_` in overlays and included files, preserving existing unsupported directive error code and source-path context.
-6. Run targeted config-extra tests, then leave final repository validation to PR preparation.
+2. Update override parsing so valid JSON string scalars decode to strings while existing unquoted scalar, array, object, invalid JSON, and non-finite number behavior remains intact.
+3. Add strict duplicate-key detection to YAML loading before root validation and unsupported directive scanning, with `ConfigLoadError` context that identifies duplicate key, source kind/order/path, and best-effort config path without changing public error serialization contracts.
+4. Add public compose regressions for duplicate keys flowing through `compose_config(...)` in base, overlay, and included sources.
+5. Add public compose regressions for literal-dot/no-escape override behavior and for mapping keys containing literal dots remaining unaddressable through v1 override strings.
+6. Add public compose regressions for `_copy_` in overlays and included files, preserving existing unsupported directive error code and source-path context.
 
 ## Test Plan
 
@@ -138,7 +138,7 @@ Strict duplicate-key rejection makes future composition and provenance work safe
 
 - Status: required.
 - Expected paths: `tests/unit/loom/config/test_overrides.py`, `tests/unit/loom/config/test_load.py`, and possibly `tests/unit/loom/config/test_compose.py` if the smallest public compose checks are already housed there.
-- Required assertions or deferral reason: override parser returns literal strings for JSON-quoted `"true"`, `"false"`, `"null"`, integer-looking, float-looking, and ordinary string values; unquoted booleans, `null`, finite numbers, arrays, and objects keep existing typed values; invalid arrays/objects and non-finite JSON numeric values remain rejected. Loader tests must reject duplicate keys at the root and nested mapping levels, for base and overlay kinds, and assert structured context including `duplicate_key` details or equivalent machine-readable facts.
+- Required assertions or deferral reason: override parser returns literal strings for JSON-quoted `"true"`, `"false"`, `"null"`, integer-looking, float-looking, empty, escaped, and ordinary string values; unquoted booleans, `null`, finite numbers, arrays, and objects keep existing typed values; invalid arrays/objects, malformed double-quoted JSON strings, and non-finite JSON numeric values remain rejected. Loader tests must reject duplicate keys at the root and nested mapping levels, for base and overlay kinds, and assert structured context including `duplicate_key` details or equivalent machine-readable facts. Existing loader tests for invalid YAML, recursive aliases, multiple documents, unsupported tags, non-string keys, and unsupported directives should keep passing.
 
 ### Contract Suite
 
@@ -150,7 +150,7 @@ Strict duplicate-key rejection makes future composition and provenance work safe
 
 - Status: required.
 - Expected paths: `tests/integration/config/test_compose_invalid_yaml_public.py`, `tests/integration/config/test_compose_overrides.py`, `tests/integration/config/test_compose_includes.py`, and/or `tests/integration/config/test_compose_config.py`.
-- Required assertions or deferral reason: `compose_config(...)` rejects duplicate keys in base, overlay, and included YAML sources; attempted literal-dot escaping does not address literal-dot keys; override strings cannot update or add through a mapping key that contains a literal dot unless the nested mapping path already exists by separate segment keys; `_copy_` in overlays and included files raises the existing unsupported directive error with the correct source kind/order/path.
+- Required assertions or deferral reason: `compose_config(...)` rejects duplicate keys in base, overlay, and included YAML sources with source-aware context; attempted literal-dot escaping does not address literal-dot keys; override strings cannot update or add through a mapping key that contains a literal dot unless the nested mapping path already exists by separate segment keys; `_copy_` in overlays and included files raises the existing unsupported directive error with the correct currently available source kind/order/path.
 
 ### E2E Suite
 
@@ -162,7 +162,7 @@ Strict duplicate-key rejection makes future composition and provenance work safe
 
 - Status: required.
 - Markers affected: `optional_dependency` and config-extra summary rows for unit-config and integration-config.
-- Required assertions or deferral reason: because config composition depends on optional config dependencies, targeted and summary evidence must include config-extra rows containing the new loader, override, and public compose cases. PR preparation must report `make test-summary` config-extra evidence or explain why the optional dependency environment was unavailable.
+- Required assertions or deferral reason: because config composition depends on optional config dependencies, targeted and summary evidence must include config-extra rows containing the new loader, override, and public compose cases. During implementation, run targeted `uv run --locked --group dev --extra config pytest -m optional_dependency ...` commands for changed config tests. PR preparation must report `make test-summary` config-extra evidence or explain why the optional dependency environment was unavailable.
 
 ## Risks
 
@@ -170,6 +170,7 @@ Strict duplicate-key rejection makes future composition and provenance work safe
 - Duplicate-key error paths may be best effort because YAML constructors expose authored nodes rather than the final plain-data path; context should still identify the duplicate key and source file clearly.
 - JSON string parsing can accidentally broaden accepted values, for example quoted arrays or malformed quotes; only valid JSON strings should use the scalar string path, while existing arrays/objects keep their current JSON path.
 - Literal-dot tests can become misleading if they accidentally create nested mappings that make the override succeed for ordinary reasons; fixtures should distinguish `{"model.name": ...}` from `{"model": {"name": ...}}`.
+- Public error-shape risk is limited to adding duplicate-key context through existing fields. If duplicate-key implementation requires changing `ConfigErrorContext` fields or `to_dict()` behavior, stop instead of absorbing Phase 3 scope.
 
 ## Validation Commands
 
@@ -190,11 +191,11 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: tests for override parser and duplicate loader behavior first, parser update second, loader duplicate-key rejection third, public compose regressions fourth.
-- Tests to run with each slice: run the relevant targeted config-extra pytest command after each source change; run `make test-config-extra` once the public compose coverage is in place.
+- Safe implementation slices: override parser tests and parser change first; loader duplicate-key tests and loader-local detection second; public compose duplicate-key regressions third; literal-dot/no-escape and `_copy_` public compose regressions fourth.
+- Tests to run with each slice: after parser work, run the targeted `test_overrides.py` config-extra command; after loader work, run targeted `test_load.py`; after compose regressions, run the targeted integration config files and then `make test-config-extra`.
 - Decisions the executor must not revisit: no literal-dot escape syntax, no `_copy_` implementation, no list patching, no schema registry, no pipeline/store/CLI changes, no artifact/provenance ordering changes, and no broad error hierarchy expansion.
 - Conditions that require stopping for the manager: strict duplicate-key rejection requires changing public error serialization contracts; PyYAML cannot provide enough duplicate-key context without replacing the loader dependency; JSON-quoted scalar parsing conflicts with existing accepted array/object behavior; or literal-dot regression coverage cannot be written without deciding a new path grammar.
-- Expanded-path refinement notes: pending. The refinement pass should confirm the duplicate-key context expectation is precise enough, the literal-dot tests do not accidentally define future syntax, and suite obligations remain complete without adding future-phase behavior.
+- Expanded-path refinement notes: completed. The refined handoff keeps duplicate-key errors on existing `ConfigLoadError`/`ConfigErrorContext`, constrains JSON string parsing to valid double-quoted JSON strings, confirms literal-dot regressions must document unsupported behavior without defining escape syntax, and keeps all package/unit/contract/integration/e2e/opt-in suite obligations explicit.
 
 ## Refinement And Review Budget Status
 
@@ -204,10 +205,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` on `codex/v1-post-strict-authoring`.
-- Final phase execution plan: pending expanded-path refinement.
+- Final phase execution plan: completed by expanded-path refinement in this commit.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: tightened override-string and duplicate-key contracts, clarified loader-local PyYAML handling and public error-shape stop conditions, split public compose regression slices, and made package/unit/contract/integration/e2e/opt-in suite obligations explicit.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none at draft time.
+- Remaining blockers: none after refinement.
