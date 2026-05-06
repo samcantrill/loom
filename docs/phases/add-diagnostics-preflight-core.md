@@ -431,7 +431,10 @@ make test-summary
 - Implementation validation: targeted package, unit, contract, integration,
   Ruff, and Pyright checks passed as recorded below. The integration test command
   was run with `--extra config` because config composition requires optional
-  config dependencies in this repository.
+  config dependencies in this repository. A later manager `make validate-pr`
+  attempt exposed duplicate pytest module basenames in the new diagnostics tests;
+  the tests were renamed to unique basenames and targeted diagnostics unit plus
+  integration tests passed afterward.
 - Implementation refinement: completed on 2026-05-07 by `loom_phase_refiner`;
   verified Phase 1 scope, public names, deterministic aggregation,
   selected-group ordering, unknown and empty group errors, missing-`RUN_URI`
@@ -526,6 +529,15 @@ result: passed during implementation refinement
 
 command: UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright src/loom/diagnostics tests/unit/loom/diagnostics tests/contracts/test_diagnostics_preflight_contract.py tests/integration/diagnostics
 result: passed, 0 errors during implementation refinement
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: failed during default pytest collection because
+tests/unit/loom/diagnostics/test_models.py collided with an existing
+tests/unit/loom/pipeline/planning/test_models.py module name; fixed by renaming
+the new diagnostics test files to unique basenames before rerunning validation.
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/diagnostics tests/integration/diagnostics
+result: passed, 16 tests after diagnostics test file renames
 ```
 
 #### Known Issues Or Blockers
