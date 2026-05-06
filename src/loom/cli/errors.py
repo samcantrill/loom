@@ -192,11 +192,12 @@ def format_error(
     *,
     traceback_enabled: bool,
     output_format: OutputFormat,
+    warnings: tuple[CliWarning | Mapping[str, object], ...] = (),
 ) -> str:
     """Format an error for the requested output format."""
 
     if output_format is OutputFormat.JSON:
-        return format_json_error(error, traceback_enabled=traceback_enabled)
+        return format_json_error(error, traceback_enabled=traceback_enabled, warnings=warnings)
     return format_text_error(error, traceback_enabled=traceback_enabled)
 
 

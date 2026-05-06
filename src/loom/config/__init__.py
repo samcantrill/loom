@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         register_recipe,
     )
     from .recipes import Recipe, RecipeCatalog
+    from .target_checks import TargetCheckResult, check_config_targets
 
 
 _RESOLVED_SYMBOLS: dict[str, object] = {
@@ -56,6 +57,8 @@ _OPTIONAL_SYMBOLS: Final = frozenset(
         "Recipe",
         "RecipeCatalog",
         "instantiate",
+        "check_config_targets",
+        "TargetCheckResult",
     }
 )
 
@@ -65,6 +68,10 @@ def _resolve_optional_symbol(name: str) -> object:
             from .instantiate.recursive import instantiate as _instantiate
 
             return _instantiate
+        case "check_config_targets" | "TargetCheckResult":
+            from . import target_checks
+
+            return getattr(target_checks, name)
         case (
             "ComposedConfig"
             | "ConfigCompositionInspection"
@@ -144,5 +151,7 @@ __all__ = [
     "RecipeCatalog",
     "compose_config",
     "instantiate",
+    "check_config_targets",
+    "TargetCheckResult",
     "register_recipe",
 ]

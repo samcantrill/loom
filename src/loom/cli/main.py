@@ -38,7 +38,7 @@ def _add_config_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--overlay",
         action="append",
-        default=(),
+        default=None,
         metavar="PATH",
         help="additional config overlay path",
     )
@@ -46,7 +46,7 @@ def _add_config_options(parser: argparse.ArgumentParser) -> None:
         "--set",
         dest="override",
         action="append",
-        default=(),
+        default=None,
         metavar="KEY=VALUE",
         help="config override expression",
     )
@@ -57,21 +57,21 @@ def _add_selector_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--only-stage",
         action="append",
-        default=(),
+        default=None,
         metavar="STAGE",
         help="include only a selected stage",
     )
     parser.add_argument(
         "--force-stage",
         action="append",
-        default=(),
+        default=None,
         metavar="STAGE",
         help="force a selected stage",
     )
     parser.add_argument(
         "--skip-stage",
         action="append",
-        default=(),
+        default=None,
         metavar="STAGE",
         help="skip a selected stage",
     )
@@ -86,15 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    validate_parser = subparsers.add_parser("validate", help="validate a pipeline config")
-    _add_config_options(validate_parser)
-    validate_parser.add_argument(
-        "--check-targets",
-        action="store_true",
-        help="instantiate configured targets for an opt-in readiness check",
-    )
-    _add_common_command_options(validate_parser)
-    validate_parser.set_defaults(handler=_unsupported_command)
+    from loom.cli import validate as validate_command
+
+    validate_command.register_subparser(subparsers)
 
     plan_parser = subparsers.add_parser("plan", help="plan a pipeline run")
     _add_config_options(plan_parser)
@@ -144,7 +138,13 @@ def _run(argv: Sequence[str] | None) -> int:
     except Exception as exc:
         output_format = output_format_from_namespace(namespace)
         traceback_enabled = bool(getattr(namespace, "traceback", False))
-        formatted = format_error(exc, traceback_enabled=traceback_enabled, output_format=output_format)
+        warnings = tuple(getattr(exc, "cli_warnings", ()) or ())
+        formatted = format_error(
+            exc,
+            traceback_enabled=traceback_enabled,
+            output_format=output_format,
+            warnings=warnings,
+        )
         if output_format is OutputFormat.JSON:
             sys.stdout.write(formatted)
             if traceback_enabled:
