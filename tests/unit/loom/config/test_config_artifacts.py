@@ -13,7 +13,7 @@ from loom.config.artifacts import (
     ConfigFingerprintRecord,
     SourceArtifactRecord,
 )
-from loom.config.errors import ConfigProvenanceError
+from loom.config.errors import ConfigErrorContext, ConfigProvenanceError
 
 
 def test_source_artifact_round_trip() -> None:
@@ -65,8 +65,15 @@ def test_source_artifact_rejects_unknown_kind() -> None:
         "content_digest": "sha256:beef",
         "size_bytes": 4,
     }
-    with pytest.raises(ConfigProvenanceError, match="kind"):
+    with pytest.raises(ConfigProvenanceError, match="kind") as exc:
         SourceArtifactRecord.from_dict(payload)
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_source_artifact_kind"
+    assert context.config_path == "SourceArtifactRecord.kind"
+    assert context.details is not None
+    assert context.details["stage"] == "artifact_from_dict"
+    assert ConfigErrorContext.from_dict(context.to_dict()) == context
 
 
 def test_config_fingerprint_record_round_trip() -> None:
@@ -77,6 +84,21 @@ def test_config_fingerprint_record_round_trip() -> None:
         metadata={"k": "v"},
     )
     assert ConfigFingerprintRecord.from_dict(record.to_dict()) == record
+
+
+def test_config_fingerprint_from_dict_failure_has_context() -> None:
+    payload = ConfigFingerprintRecord(schema_version=SCHEMA_VERSION, digest="sha256:aaaa").to_dict()
+    payload["metadata"] = ["not", "mapping"]
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ConfigFingerprintRecord.from_dict(payload)
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "config_fingerprint_metadata_not_mapping"
+    assert context.config_path == "ConfigFingerprintRecord.metadata"
+    assert context.details is not None
+    assert context.details["stage"] == "artifact_from_dict"
 
 
 def test_composition_manifest_round_trip_minimal() -> None:
@@ -114,30 +136,48 @@ def test_composition_manifest_round_trip_minimal() -> None:
 
 
 def test_composition_manifest_rejects_non_plain_recipe_manifest_at_construction() -> None:
-    with pytest.raises(ConfigProvenanceError, match="recipe_manifest"):
+    with pytest.raises(ConfigProvenanceError, match="recipe_manifest") as exc:
         CompositionManifest(
             schema_version=SCHEMA_VERSION,
             recipe_manifest=(cast(dict[str, PlainData], {"bad": {1, 2}}),),
         )
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "recipe_manifest_record_not_plain_data"
+    assert context.config_path == "CompositionManifest.recipe_manifest[0]"
+    assert context.details is not None
+    assert context.details["stage"] == "manifest_serialization"
 
 
 def test_composition_manifest_rejects_unknown_fields() -> None:
-    with pytest.raises(ConfigProvenanceError, match="unknown"):
+    with pytest.raises(ConfigProvenanceError, match="unknown") as exc:
         CompositionManifest.from_dict(
             {
                 "schema_version": SCHEMA_VERSION,
                 "extra": 1,
             }
         )
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "composition_manifest_unknown_fields"
+    assert context.config_path == "CompositionManifest"
+    assert context.details is not None
+    assert context.details["stage"] == "manifest_from_dict"
 
 
 def test_config_artifact_metadata_must_be_plain_data() -> None:
-    with pytest.raises(ConfigProvenanceError):
+    with pytest.raises(ConfigProvenanceError) as exc:
         invalid_metadata = cast(dict[str, PlainData], {"value": {1: "x"}})
         CompositionManifest(
             schema_version=SCHEMA_VERSION,
             metadata=invalid_metadata,
         )
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "composition_manifest_fields_not_plain_data"
+    assert context.config_path == "CompositionManifest"
+    assert context.details is not None
+    assert context.details["stage"] == "manifest_construction"
 
 
 def test_raw_source_snapshot_payload_round_trip() -> None:

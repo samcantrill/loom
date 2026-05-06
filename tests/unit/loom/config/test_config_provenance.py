@@ -1,5 +1,8 @@
 """Unit tests for config provenance models."""
 
+import pytest
+
+from loom.config.errors import ConfigErrorContext, ConfigProvenanceError
 from loom.config.provenance import (
     SCHEMA_VERSION,
     ConfigProvenance,
@@ -15,9 +18,52 @@ def test_config_source_round_trip() -> None:
     assert source == round_trip
 
 
+def test_config_source_from_dict_failure_has_context() -> None:
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ConfigSource.from_dict(
+            {
+                "kind": "runtime",
+                "path": "/tmp/config.yaml",
+                "order": 0,
+                "content_digest": "sha256:abcd",
+                "size_bytes": 3,
+            }
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_config_source_kind"
+    assert context.config_path == "ConfigSource.kind"
+    assert context.details is not None
+    assert context.details["stage"] == "provenance_from_dict"
+    assert ConfigErrorContext.from_dict(context.to_dict()) == context
+
+
 def test_parsed_override_round_trip() -> None:
     override = ParsedOverride(raw="x=1", path="x", operation="update", value=1, order=0)
     assert ParsedOverride.from_dict(override.to_dict()) == override
+
+
+def test_parsed_override_failure_context_omits_raw_secret_like_override() -> None:
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ParsedOverride.from_dict(
+            {
+                "raw": 123,
+                "path": "auth.token",
+                "operation": "update",
+                "value": "secret-value",
+                "order": 0,
+            }
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_override_raw"
+    assert context.config_path == "ParsedOverride.raw"
+    assert context.actual == "int"
+    assert context.details is not None
+    assert context.details["stage"] == "provenance_from_dict"
+    assert "secret-value" not in repr(context.to_dict())
 
 
 def test_config_provenance_round_trip() -> None:
@@ -31,6 +77,28 @@ def test_config_provenance_round_trip() -> None:
         metadata={},
     )
     assert ConfigProvenance.from_dict(provenance.to_dict()) == provenance
+
+
+def test_config_provenance_from_dict_failure_has_context() -> None:
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ConfigProvenance.from_dict(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "config_path": "/tmp/base.yaml",
+                "sources": (),
+                "overrides": (),
+                "resolved_fingerprint": "sha256:abcd",
+                "recipe_manifest_count": 0,
+                "metadata": [],
+            }
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_config_provenance_metadata"
+    assert context.config_path == "ConfigProvenance.metadata"
+    assert context.details is not None
+    assert context.details["stage"] == "provenance_from_dict"
 
 
 def test_fingerprint_reflects_override_content() -> None:

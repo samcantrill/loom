@@ -215,8 +215,39 @@ def test_config_provenance_contract_is_still_round_trippable() -> None:
     assert ConfigProvenance.from_dict(payload) == provenance
 
 
+def test_config_provenance_error_context_contract_for_from_dict_failures() -> None:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "config_path": "/tmp/base.yaml",
+        "sources": (),
+        "overrides": (),
+        "resolved_fingerprint": "sha256:abcd",
+        "recipe_manifest_count": 0,
+        "metadata": [],
+    }
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        ConfigProvenance.from_dict(payload)
+
+    serialized = exc.value.to_dict()
+    context = cast(dict[str, object], serialized["context"])
+    details = cast(dict[str, object], context["details"])
+    assert context["code"] == "invalid_config_provenance_metadata"
+    assert context["source_kind"] == "provenance"
+    assert context["config_path"] == "ConfigProvenance.metadata"
+    assert context["actual"] == "sequence"
+    assert details["stage"] == "provenance_from_dict"
+
+
 def test_config_fingerprint_record_rejects_non_mapping_metadata() -> None:
     payload = _example_fingerprint().to_dict()
     payload["metadata"] = [1, 2, 3]
-    with pytest.raises(ConfigProvenanceError):
+    with pytest.raises(ConfigProvenanceError) as exc:
         ConfigFingerprintRecord.from_dict(payload)
+    serialized = exc.value.to_dict()
+    context = cast(dict[str, object], serialized["context"])
+    details = cast(dict[str, object], context["details"])
+    assert context["code"] == "config_fingerprint_metadata_not_mapping"
+    assert context["source_kind"] == "artifact"
+    assert context["config_path"] == "ConfigFingerprintRecord.metadata"
+    assert details["stage"] == "artifact_from_dict"

@@ -5,6 +5,8 @@ from typing import Any, cast
 import pytest
 
 from loom.config.errors import (
+    ConfigErrorContext,
+    ConfigInterpolationError,
     InvalidRecipeOutputError,
     RecipeExpansionError,
     ReservedConfigKeyError,
@@ -13,6 +15,7 @@ from loom.config.errors import (
 from loom.config.recipes import RecipeCatalog
 from loom.config.recipes.expansion import expand_recipes, resolve_recipe_argument_interpolation
 from loom.config.interpolation import resolve_interpolation
+from loom.config.redaction import REDACTION_MARKER
 from loom.serialization import PlainData
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, nested_argument_recipe, composed_output_recipe
 
@@ -97,6 +100,53 @@ def test_pre_resolution_rejects_nested_recipe_inside_arguments_before_interpolat
                 },
             }
         )
+
+
+def test_recipe_argument_interpolation_unresolved_token_has_context() -> None:
+    with pytest.raises(ConfigInterpolationError) as exc:
+        resolve_recipe_argument_interpolation(
+            {"x": {"_recipe_": "argument", "value": "${missing.value}"}},
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "recipe_argument_interpolation_unresolved"
+    assert context.config_path == "x.value"
+    assert context.details is not None
+    assert context.details["stage"] == "recipe_argument_interpolation"
+    assert context.details["token"] == "missing.value"
+    assert context.details["token_segment"] == "missing"
+    assert ConfigErrorContext.from_dict(context.to_dict()) == context
+
+
+def test_recipe_argument_interpolation_invalid_token_has_context() -> None:
+    with pytest.raises(ConfigInterpolationError) as exc:
+        resolve_recipe_argument_interpolation(
+            {"x": {"_recipe_": "argument", "value": "${invalid-name}"}},
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "recipe_argument_interpolation_invalid_segment"
+    assert context.config_path == "x.value"
+    assert context.details is not None
+    assert context.details["stage"] == "recipe_argument_interpolation"
+    assert context.details["token"] == "invalid-name"
+    assert context.details["token_segment"] == "invalid-name"
+
+
+def test_recipe_argument_interpolation_secret_like_token_details_are_redacted() -> None:
+    with pytest.raises(ConfigInterpolationError) as exc:
+        resolve_recipe_argument_interpolation(
+            {"x": {"_recipe_": "argument", "value": "${auth.token}"}},
+        )
+
+    context = exc.value.context
+    assert context is not None
+    assert context.details is not None
+    assert context.details["token"] == REDACTION_MARKER
+    assert context.details["token_redacted"] is True
+    assert context.details["token_segment"] == "auth"
 
 
 def test_expand_rejects_resolver_expression_in_output_key() -> None:

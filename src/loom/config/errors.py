@@ -154,6 +154,17 @@ class ConfigRedactionError(_ConfigError):
 class ConfigProvenanceError(_ConfigError):
     """Error while constructing config provenance metadata."""
 
+    def __init__(self, message: str, *, context: ConfigErrorContext | None = None) -> None:
+        if context is None:
+            context = ConfigErrorContext(
+                code="config_provenance_error",
+                source_kind="provenance",
+                source_order=0,
+                source_path="<config-provenance>",
+                details={"stage": "config_provenance"},
+            )
+        super().__init__(message, context=context)
+
 
 class ConfigIncludeResolutionError(_ConfigError):
     """Error while resolving include targets to concrete local files."""
