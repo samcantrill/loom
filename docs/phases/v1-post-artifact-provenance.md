@@ -241,6 +241,7 @@ make test-summary
 - Final PR validation:
   - `make validate-pr` passed: Ruff, Pyright, default harness `439 passed, 11 skipped`, config-extra harness `360 passed, 445 deselected`, and `uv build`.
   - `make test-summary` passed and wrote `build/test-summary.md` with suite evidence: package `38 passed, 1 skipped`; unit `357 passed, 1 skipped`; contract `35 passed, 2 skipped`; integration `9 passed, 5 skipped`; e2e `6 passed`; config-extra `360 passed, 445 deselected`; overall `805 passed, 9 skipped, 445 deselected`.
-- PR preparation: PR body artifact written at `docs/phases/v1-post-artifact-provenance-pr-body.md`; expanded-path PR body draft/refine requirements completed in this preparation pass; GitHub PR creation pending.
+- PR preparation: PR body artifact written at `docs/phases/v1-post-artifact-provenance-pr-body.md`; expanded-path PR body draft/refine requirements completed in this preparation pass; branch pushed to `origin/codex/v1-post-artifact-provenance`; PR opened at https://github.com/samcantrill/loom/pull/51.
+- PR verification: `gh pr view 51 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/v1-post-artifact-provenance`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/51`; this is a root PR and is merge-eligible after review and checks.
 - Stack maintenance: root PR targets `develop`; no predecessor branch and no stack retargeting required.
 - Remaining blockers: none after the expanded-path implementation refinement pass.
