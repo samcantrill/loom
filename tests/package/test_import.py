@@ -39,10 +39,9 @@ def test_package_includes_typing_marker() -> None:
     assert files("loom").joinpath("py.typed").is_file()
 
 
-def test_project_metadata_exposes_no_console_script_entry_points() -> None:
+def test_project_metadata_exposes_loom_console_script_entry_point() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert "scripts" not in project
+    assert project["scripts"] == {"loom": "loom.cli.main:main"}
     assert "gui-scripts" not in project
-    assert pyproject.get("project.scripts") is None
