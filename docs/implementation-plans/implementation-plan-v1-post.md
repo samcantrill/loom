@@ -269,7 +269,7 @@ Phase metadata:
 
 ### Phase 2. Strict Authoring And Override Semantics
 
-Status: pending
+Status: merged
 
 Goal:
 
@@ -308,6 +308,27 @@ Required evidence:
 - E2E: deferred; compose public API coverage is sufficient.
 - Opt-in/config-extra: config-marked suite rows must include the new loader and
   compose cases.
+
+Phase metadata:
+
+- Branch: `codex/v1-post-strict-authoring`
+- Worktree: `/home/samcantrill/work/loom-worktrees/v1-post-strict-authoring`
+- Stack predecessor: none
+- PR target: `develop`
+- PR: https://github.com/samcantrill/loom/pull/46
+- Merge: squash-merged into `develop` on 2026-05-06 after phase review and
+  passing GitHub CI `checks`.
+- Implementation summary: added JSON double-quoted scalar override parsing,
+  loader-local duplicate YAML key rejection, and public compose regressions for
+  duplicate keys, literal-dot/no-escape override behavior, and `_copy_`
+  rejection in overlays and includes.
+- Test results summary: `make validate-pr` passed; `make test-summary` passed
+  with 779 passed and 9 skipped across package, unit, contract, integration,
+  e2e, and config-extra rows. GitHub CI `checks` passed before merge.
+- Follow-up notes: duplicate-key config paths remain best effort from YAML
+  nodes as accepted in the phase plan; Phase 3 still owns broader structured
+  error/source-authorship completion. No successor branch depended on the Phase
+  2 branch at merge time.
 
 ### Phase 3. Source Authorship And Structured Error Completion
 
