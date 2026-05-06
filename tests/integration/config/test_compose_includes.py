@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from loom.config import compose_config
-from loom.config.errors import ConfigIncludeExpansionError, ConfigLoadError
+from loom.config.errors import ConfigIncludeExpansionError, ConfigIncludeResolutionError, ConfigLoadError
 from loom.serialization import PlainData
 
 
@@ -93,6 +93,37 @@ def test_public_compose_includes_nested_include_relative_to_including_file(tmp_p
         "base_key": "root",
         "local": "local",
     }
+
+
+def test_public_compose_nested_include_resolution_error_records_active_stack(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+    (include_dir / "root.yaml").write_text(
+        "outer:\n"
+        "  _include_: ./missing.yaml\n",
+        encoding="utf-8",
+    )
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./include/root.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigIncludeResolutionError) as exc:
+        compose_config(base)
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "target_not_found"
+    assert context.remediation is not None
+    assert context.details is not None
+    stack = cast(list[dict[str, object]], context.details["active_include_stack"])
+    assert isinstance(stack, list)
+    assert len(stack) == 1
+    assert stack[0]["include_site_path"] == ["pipeline", "model", "_include_"]
 
 
 def test_public_compose_includes_requires_same_site_replace_for_mapping_swap(tmp_path: Path) -> None:

@@ -17,7 +17,8 @@ from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization import to_plain_data
 
 from .errors import ConfigErrorContext, ConfigInterpolationError, ConfigUnsupportedResolverError
-from .source_maps import ConfigPath, format_config_path
+from .redaction import REDACTION_MARKER, is_secret_path
+from .source_maps import ConfigPath, ValueAuthorship, format_config_path
 
 _ALLOWED_RUNTIME_RESOLVERS = frozenset({"oc.env"})
 _ENV_DEFAULT_MISSING = object()
@@ -39,6 +40,7 @@ def resolve_interpolation(
     source_kind: str = "runtime",
     source_order: int = 0,
     source_path: str = "$",
+    value_authorship: Mapping[str, ValueAuthorship] | None = None,
 ) -> dict[str, PlainData]:
     plain_config, resolver_records = scan_resolver_expressions(mapping, path=path)
     _reject_unsupported_resolvers(
@@ -46,6 +48,7 @@ def resolve_interpolation(
         source_kind=source_kind,
         source_order=source_order,
         source_path=source_path,
+        value_authorship=value_authorship or {},
     )
     try:
         runtime_config = _resolve_allowed_runtime_resolvers(
@@ -60,7 +63,18 @@ def resolve_interpolation(
     try:
         resolved = OmegaConf.to_container(config, resolve=True)
     except OmegaConfBaseException as exc:
-        raise ConfigInterpolationError(f"Failed to resolve interpolation at {path}") from exc
+        raise ConfigInterpolationError(
+            f"Failed to resolve interpolation at {path}",
+            context=_interpolation_context(
+                code="interpolation_resolution_failed",
+                config_path=path,
+                source_kind=source_kind,
+                source_order=source_order,
+                source_path=source_path,
+                value_authorship=value_authorship or {},
+                details={"reason": type(exc).__name__},
+            ),
+        ) from exc
 
     try:
         plain = ensure_plain_data(resolved, path=path)
@@ -90,6 +104,7 @@ def _reject_unsupported_resolvers(
     source_kind: str,
     source_order: int,
     source_path: str,
+    value_authorship: Mapping[str, ValueAuthorship],
 ) -> None:
     unsupported = [record for record in records if record.resolver not in _ALLOWED_RUNTIME_RESOLVERS]
     if not unsupported:
@@ -97,30 +112,100 @@ def _reject_unsupported_resolvers(
 
     first = unsupported[0]
     raise ConfigUnsupportedResolverError(
-        f"Unsupported resolver {first.resolver!r} at {first.config_path} in Phase 8; only 'oc.env' is allowed.",
+        f"Unsupported resolver {first.resolver!r} at {first.config_path}; only 'oc.env' is allowed.",
         context=ConfigErrorContext(
             code="unsupported_resolver",
-            source_kind=source_kind,
-            source_order=source_order,
-            source_path=source_path,
+            source_kind=_authored_source_kind(first.config_path, source_kind, value_authorship),
+            source_order=_authored_source_order(first.config_path, source_order, value_authorship),
+            source_path=_authored_source_path(first.config_path, source_path, value_authorship),
             config_path=first.config_path,
             directive="interpolation",
             expected="oc.env",
             actual=first.resolver,
             remediation=(
-                "Phase 8 only allows oc.env resolver execution during runtime resolution. "
-                "Register and execute custom resolvers are intentionally rejected."
+                "Use oc.env for runtime environment values, or replace this resolver expression with a plain "
+                "authored value before composition."
             ),
-            details=cast(dict[str, PlainData], {
-                "authored_expression": first.expression,
-                "interpolation_token": first.token,
-                "unsupported_resolver": first.resolver,
-                "supported_resolvers": sorted(_ALLOWED_RUNTIME_RESOLVERS),
-                "resolver_expression_count": len(records),
-                "unsupported_resolver_count": len(unsupported),
-            }),
+            details=cast(
+                dict[str, PlainData],
+                {
+                    "authored_expression": _safe_authored_expression(first.config_path, first.expression),
+                    "interpolation_token": _safe_authored_expression(first.config_path, first.token),
+                    "unsupported_resolver": first.resolver,
+                    "supported_resolvers": sorted(_ALLOWED_RUNTIME_RESOLVERS),
+                    "resolver_expression_count": len(records),
+                    "unsupported_resolver_count": len(unsupported),
+                    **_authorship_details(first.config_path, value_authorship),
+                },
+            ),
         ),
     )
+
+
+def _safe_authored_expression(config_path: str, expression: str) -> str:
+    return REDACTION_MARKER if is_secret_path(config_path) else expression
+
+
+def _interpolation_context(
+    *,
+    code: str,
+    config_path: str,
+    source_kind: str,
+    source_order: int,
+    source_path: str,
+    value_authorship: Mapping[str, ValueAuthorship],
+    details: dict[str, PlainData],
+) -> ConfigErrorContext:
+    return ConfigErrorContext(
+        code=code,
+        source_kind=_authored_source_kind(config_path, source_kind, value_authorship),
+        source_order=_authored_source_order(config_path, source_order, value_authorship),
+        source_path=_authored_source_path(config_path, source_path, value_authorship),
+        config_path=config_path,
+        directive="interpolation",
+        remediation="Check that the referenced config path exists after include, recipe, and override composition.",
+        details=cast(dict[str, PlainData], {**details, **_authorship_details(config_path, value_authorship)}),
+    )
+
+
+def _authored_source_kind(
+    config_path: str,
+    fallback: str,
+    value_authorship: Mapping[str, ValueAuthorship],
+) -> str:
+    record = value_authorship.get(config_path)
+    return record.source_kind if record is not None else fallback
+
+
+def _authored_source_order(
+    config_path: str,
+    fallback: int,
+    value_authorship: Mapping[str, ValueAuthorship],
+) -> int:
+    record = value_authorship.get(config_path)
+    return record.source_order if record is not None else fallback
+
+
+def _authored_source_path(
+    config_path: str,
+    fallback: str,
+    value_authorship: Mapping[str, ValueAuthorship],
+) -> str:
+    record = value_authorship.get(config_path)
+    return record.source_path if record is not None else fallback
+
+
+def _authorship_details(
+    config_path: str,
+    value_authorship: Mapping[str, ValueAuthorship],
+) -> dict[str, PlainData]:
+    record = value_authorship.get(config_path)
+    if record is None:
+        return {"authorship_missing": True}
+    return {
+        "authorship_missing": False,
+        "authorship": record.to_dict(),
+    }
 
 
 def _resolve_allowed_runtime_resolvers(

@@ -10,7 +10,8 @@ from collections.abc import Mapping, Sequence
 from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 
-from .errors import OverrideApplyError, OverrideParseError
+from .errors import ConfigErrorContext, OverrideApplyError, OverrideParseError
+from .redaction import REDACTION_MARKER, contains_secret_like_value, is_secret_path
 from .provenance import ParsedOverride
 
 _FLOAT_RE = re.compile(r"^[+-]?(?:\d*\.\d+|\d+\.\d*|\d+)(?:[eE][+-]?\d+)?$")
@@ -129,7 +130,16 @@ def apply_overrides(
 
     output = ensure_plain_data(config, path="$")
     if not isinstance(output, dict):
-        raise OverrideApplyError("Cannot apply overrides to a non-mapping root")
+        raise OverrideApplyError(
+            "Cannot apply overrides to a non-mapping root",
+            context=_override_context(
+                code="non_mapping_root",
+                path="$",
+                operation="apply",
+                order=-1,
+                actual=type(output).__name__,
+            ),
+        )
 
     for override in overrides:
         if override.operation == "update":
@@ -144,7 +154,12 @@ def _apply_update(config: dict[str, PlainData], override: ParsedOverride) -> Non
     parent = _walk_parent(config, override.path, create=False, override=override)
     key = _final_key(override.path)
     if key not in parent:
-        raise OverrideApplyError(f"Missing override target {override.path} (order={override.order})")
+        raise _override_apply_error(
+            f"Missing override target {override.path} (order={override.order})",
+            code="missing_override_target",
+            override=override,
+            details={"missing_key": key},
+        )
     parent[key] = override.value
 
 
@@ -152,7 +167,12 @@ def _apply_add(config: dict[str, PlainData], override: ParsedOverride) -> None:
     parent = _walk_parent(config, override.path, create=True, override=override)
     key = _final_key(override.path)
     if key in parent:
-        raise OverrideApplyError(f"Cannot add existing override target {override.path} (order={override.order})")
+        raise _override_apply_error(
+            f"Cannot add existing override target {override.path} (order={override.order})",
+            code="existing_override_target",
+            override=override,
+            details={"existing_key": key},
+        )
     parent[key] = override.value
 
 
@@ -169,7 +189,12 @@ def _walk_parent(
     for segment in segments[:-1]:
         if segment not in parent:
             if not create:
-                raise OverrideApplyError(f"Missing override path {path} (order={override.order})")
+                raise _override_apply_error(
+                    f"Missing override path {path} (order={override.order})",
+                    code="missing_override_parent",
+                    override=override,
+                    details={"missing_segment": segment},
+                )
             new_child: dict[str, PlainData] = {}
             parent[segment] = new_child
             parent = new_child
@@ -178,11 +203,17 @@ def _walk_parent(
         current = parent[segment]
         if not isinstance(current, dict):
             if create:
-                raise OverrideApplyError(
-                    f"Cannot create parent for override {path}; {segment} is non-mapping at order={override.order}"
+                raise _override_apply_error(
+                    f"Cannot create parent for override {path}; {segment} is non-mapping at order={override.order}",
+                    code="non_mapping_override_parent",
+                    override=override,
+                    details={"segment": segment, "parent_operation": "create", "actual": type(current).__name__},
                 )
-            raise OverrideApplyError(
-                f"Cannot traverse override target {path}; {segment} is non-mapping at order={override.order}"
+            raise _override_apply_error(
+                f"Cannot traverse override target {path}; {segment} is non-mapping at order={override.order}",
+                code="non_mapping_override_parent",
+                override=override,
+                details={"segment": segment, "parent_operation": "traverse", "actual": type(current).__name__},
             )
 
         parent = current
@@ -192,3 +223,72 @@ def _walk_parent(
 
 def _final_key(path: str) -> str:
     return path.rsplit(".", 1)[-1]
+
+
+def _override_apply_error(
+    message: str,
+    *,
+    code: str,
+    override: ParsedOverride,
+    details: dict[str, PlainData],
+) -> OverrideApplyError:
+    return OverrideApplyError(
+        message,
+        context=_override_context(
+            code=code,
+            path=override.path,
+            operation=override.operation,
+            order=override.order,
+            details={
+                **details,
+                "override_path": override.path,
+                "override_operation": override.operation,
+                "override_order": override.order,
+                "override_raw": _safe_override_raw(override),
+                "override_redacted": _override_is_redacted(override),
+            },
+        ),
+    )
+
+
+def _override_context(
+    *,
+    code: str,
+    path: str,
+    operation: str,
+    order: int,
+    actual: PlainData | None = None,
+    details: dict[str, PlainData] | None = None,
+) -> ConfigErrorContext:
+    return ConfigErrorContext(
+        code=code,
+        source_kind="ordinary_override",
+        source_order=order,
+        source_path="<override>",
+        config_path=f"$.{path}" if path != "$" else "$",
+        actual=actual,
+        directive="override",
+        remediation=_override_remediation(code, operation),
+        details=details,
+    )
+
+
+def _override_remediation(code: str, operation: str) -> str | None:
+    if code == "missing_override_target":
+        return "Use add override syntax for new keys, or update an existing path."
+    if code == "existing_override_target":
+        return "Use update override syntax for existing keys."
+    if code == "missing_override_parent":
+        return "Create the parent mapping first with add override syntax."
+    if code == "non_mapping_override_parent":
+        return f"Choose a mapping parent path before applying the {operation} override."
+    return None
+
+
+def _safe_override_raw(override: ParsedOverride) -> str:
+    return REDACTION_MARKER if _override_is_redacted(override) else override.raw
+
+
+def _override_is_redacted(override: ParsedOverride) -> bool:
+    final_key = override.path.rsplit(".", 1)[-1]
+    return contains_secret_like_value(final_key, override.value) or is_secret_path(override.path)

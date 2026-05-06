@@ -19,6 +19,12 @@ from .errors import (
 )
 from .load import load_config, load_config_with_source_text
 from .provenance import ConfigSource
+from .redaction import (
+    REDACTION_MARKER,
+    contains_secret_like_value,
+    is_secret_path,
+    redact_secret_like_value,
+)
 from .source_maps import ConfigPath, build_base_source_map, format_config_path
 from .merge import merge_configs
 
@@ -57,6 +63,9 @@ class IncludeLocalCustomization:
     value: PlainData
 
     def to_dict(self) -> dict[str, object]:
+        final_key = self.sibling_path[-1] if self.sibling_path and isinstance(self.sibling_path[-1], str) else ""
+        path_redacted = is_secret_path(self.sibling_path)
+        redacted = path_redacted or contains_secret_like_value(final_key, self.value)
         return {
             "include_site_path": _format_path(self.include_site_path),
             "sibling_path": _format_path(self.sibling_path),
@@ -64,7 +73,10 @@ class IncludeLocalCustomization:
             "source_kind": self.source_kind,
             "source_order": self.source_order,
             "kind": self.kind,
-            "value": self.value,
+            "value": (
+                REDACTION_MARKER if path_redacted else redact_secret_like_value(final_key, self.value)
+            ),
+            "redacted": redacted,
         }
 
 
@@ -324,11 +336,14 @@ def _expand_including_mapping(
             },
         )
 
-    resolution = resolve_include_target(
-        authored_target,
-        source=include_source,
-        include_site_path=source_include_site_path,
-    )
+    try:
+        resolution = resolve_include_target(
+            authored_target,
+            source=include_source,
+            include_site_path=source_include_site_path,
+        )
+    except ConfigIncludeResolutionError as exc:
+        raise _augment_include_error_with_stack(exc, include_stack=include_stack) from exc
 
     _validate_include_cycle(
         resolution=resolution,
@@ -453,6 +468,8 @@ def _expand_including_mapping(
                     "resolved_kind": str(type(shifted_included_map)),
                 },
             )
+    except (ConfigIncludeExpansionError, ConfigIncludeResolutionError) as exc:
+        raise _augment_include_error_with_stack(exc, include_stack=include_stack) from exc
     finally:
         include_stack.pop()
 
@@ -632,7 +649,7 @@ def _lookup_include_source(
 def _display_value(value: object) -> str:
     if isinstance(value, str):
         return value
-    return repr(value)
+    return f"<{type(value).__name__}>"
 
 
 def _raise_include_source_error(
@@ -685,9 +702,52 @@ def _include_expansion_error(
             expected=_optional_plain_data(expected),
             actual=_optional_plain_data(actual),
             directive=directive,
+            remediation=_include_remediation(code),
             details=cast(dict[str, PlainData], plain_details),
         ),
     )
+
+
+def _augment_include_error_with_stack(
+    error: ConfigIncludeExpansionError | ConfigIncludeResolutionError,
+    *,
+    include_stack: Sequence[IncludeStackFrame],
+) -> ConfigIncludeExpansionError | ConfigIncludeResolutionError:
+    if error.context is None:
+        return error
+    details = dict(error.context.details or {})
+    details.setdefault(
+        "active_include_stack",
+        cast(PlainData, [_format_stack_frame(frame) for frame in include_stack]),
+    )
+    augmented_context = ConfigErrorContext(
+        code=error.context.code,
+        source_kind=error.context.source_kind,
+        source_order=error.context.source_order,
+        source_path=error.context.source_path,
+        config_path=error.context.config_path,
+        expected=error.context.expected,
+        actual=error.context.actual,
+        directive=error.context.directive,
+        remediation=error.context.remediation or _include_remediation(error.context.code),
+        details=cast(dict[str, PlainData], to_plain_data(details)),
+    )
+    return type(error)(str(error), context=augmented_context)
+
+
+def _include_remediation(code: str) -> str | None:
+    return {
+        "target_not_found": "Check the include target path relative to the authoring file, or use an explicit relative target.",
+        "target_not_file": "Point the include target at a regular YAML file.",
+        "unsupported_target_form": "Use a bare-name token or an explicit relative, absolute, or file:// include target.",
+        "resolver_dependent": "Use oc.env in ordinary values, not in include targets.",
+        "missing_required_replace_for_include": "Add _replace_: true beside _include_ when replacing an existing mapping.",
+        "invalid_include_value": "Set _include_ to a string target.",
+        "included_root_not_mapping": "Change the included file so its root is a mapping.",
+        "invalid_include_replace_marker": "Remove the local _replace_ marker or place it at the same include replacement site.",
+        "invalid_included_replace_marker": "Remove _replace_ from the included file root or consume it at an authored replacement site.",
+        "include_cycle": "Break the include cycle by removing one include edge or changing the target.",
+    }.get(code)
 
 
 def resolve_include_target(
@@ -1354,6 +1414,7 @@ def _include_error(
             config_path=format_config_path(include_site_path),
             expected=_optional_plain_data(expected),
             actual=_optional_plain_data(actual),
+            remediation=_include_remediation(code),
             details=cast(dict[str, PlainData], plain_details),
         ),
     )

@@ -16,7 +16,12 @@ from .artifacts import (
     SourceArtifactRecord,
 )
 from .provenance import ParsedOverride
-from .redaction import REDACTION_MARKER, contains_secret_like_value, redact_secret_like_value
+from .redaction import (
+    REDACTION_MARKER,
+    contains_secret_like_value,
+    is_secret_path,
+    redact_secret_like_value,
+)
 
 if TYPE_CHECKING:
     from .includes import IncludeSiteRecord
@@ -407,8 +412,11 @@ def _resolver_expression_record_facts(record: ResolverExpressionRecord) -> dict[
 
 def _override_fact(override: ParsedOverride) -> dict[str, PlainData]:
     final_key = override.path.rsplit(".", 1)[-1]
-    redacted = contains_secret_like_value(final_key, override.value)
-    value: PlainData = redact_secret_like_value(final_key, override.value)
+    path_redacted = is_secret_path(override.path)
+    redacted = path_redacted or contains_secret_like_value(final_key, override.value)
+    value: PlainData = (
+        REDACTION_MARKER if path_redacted else redact_secret_like_value(final_key, override.value)
+    )
     if isinstance(value, (dict, list)) and redacted is False:
         value = cast(PlainData, to_plain_data(value, path=f"override:{override.path}"))
     return {

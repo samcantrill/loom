@@ -123,19 +123,19 @@ class ConfigLoadError(_ConfigError):
     """Error while loading YAML config sources."""
 
 
-class ConfigMergeError(ConfigError):
+class ConfigMergeError(_ConfigError):
     """Error while merging multiple config sources."""
 
 
-class OverrideParseError(ConfigError):
+class OverrideParseError(_ConfigError):
     """Error while parsing CLI overrides."""
 
 
-class OverrideApplyError(ConfigError):
+class OverrideApplyError(_ConfigError):
     """Error while applying overrides to a config mapping."""
 
 
-class ConfigInterpolationError(ConfigError):
+class ConfigInterpolationError(_ConfigError):
     """Error while resolving config-node interpolation."""
 
 
@@ -147,11 +147,11 @@ class ConfigValidationError(_ConfigError):
     """Error while validating config ownership and required fields."""
 
 
-class ConfigRedactionError(ConfigError):
+class ConfigRedactionError(_ConfigError):
     """Error while redacting resolved config values."""
 
 
-class ConfigProvenanceError(ConfigError):
+class ConfigProvenanceError(_ConfigError):
     """Error while constructing config provenance metadata."""
 
 
@@ -163,11 +163,11 @@ class ConfigIncludeExpansionError(_ConfigError):
     """Error while expanding file-authored include directives."""
 
 
-class UnsupportedRecipeError(ConfigError):
+class UnsupportedRecipeError(_ConfigError):
     """Error for recipe-related behavior that is not supported by this phase."""
 
 
-class RecipeRegistrationError(ConfigError):
+class RecipeRegistrationError(_ConfigError):
     """Error registering a recipe implementation."""
 
 
@@ -175,11 +175,11 @@ class DuplicateRecipeError(RecipeRegistrationError):
     """Error when a recipe name is already registered."""
 
 
-class UnknownRecipeError(ConfigError):
+class UnknownRecipeError(_ConfigError):
     """Error when a recipe name is not registered."""
 
 
-class RecipeExpansionError(ConfigError):
+class RecipeExpansionError(_ConfigError):
     """Error while expanding a configured recipe block."""
 
 
@@ -191,11 +191,11 @@ class ReservedConfigKeyError(ConfigValidationError):
     """Error for invalid use of reserved config directive keys."""
 
 
-class TargetImportError(ConfigError):
+class TargetImportError(_ConfigError):
     """Error while resolving `_target_` import paths."""
 
 
-class TargetInstantiationError(ConfigError):
+class TargetInstantiationError(_ConfigError):
     """Error while constructing objects from `_target_` config nodes."""
 
 
@@ -203,7 +203,7 @@ class RuntimeInjectionError(TargetInstantiationError):
     """Error resolving runtime injection references for `_inject_`."""
 
 
-class MissingConfigDependencyError(ConfigError):
+class MissingConfigDependencyError(_ConfigError):
     """Error raised when optional config dependencies are missing."""
 
 

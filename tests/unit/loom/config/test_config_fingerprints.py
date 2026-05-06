@@ -133,10 +133,10 @@ def test_artifact_safe_record_includes_redacted_overrides_and_resolver_facts() -
         ),
         ordinary_overrides=(
             ParsedOverride(
-                raw="pipeline.value=abc",
-                path="pipeline.value",
+                raw="pipeline.token_parent.value=sauce",
+                path="pipeline.token_parent.value",
                 operation="update",
-                value="abc",
+                value="sauce",
                 order=0,
             ),
         ),
@@ -152,7 +152,9 @@ def test_artifact_safe_record_includes_redacted_overrides_and_resolver_facts() -
     ordinary_overrides = cast(list[dict[str, Any]], record.metadata["ordinary_overrides"])
     assert include_overrides[0]["redacted"] is True
     assert include_overrides[0]["raw"] == "***REDACTED***"
-    assert ordinary_overrides[0]["value"] == "abc"
+    assert ordinary_overrides[0]["redacted"] is True
+    assert ordinary_overrides[0]["raw"] == "***REDACTED***"
+    assert ordinary_overrides[0]["value"] == "***REDACTED***"
     resolver_facts = cast(list[dict[str, Any]], record.metadata["resolver_facts"])
     assert len(resolver_facts) == 1
 

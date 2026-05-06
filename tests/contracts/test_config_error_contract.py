@@ -9,6 +9,10 @@ from loom.config.errors import (
     ConfigIncludeExpansionError,
     ConfigIncludeResolutionError,
     ConfigLoadError,
+    ConfigMergeError,
+    OverrideApplyError,
+    RecipeExpansionError,
+    TargetImportError,
 )
 from loom.serialization import PlainDataError
 
@@ -205,3 +209,26 @@ def test_config_validation_error_can_carry_structured_context() -> None:
     assert payload["context"]["directive"] == "_schema_"
     assert payload["context"]["details"]["boundary"] == "compose"
     assert ConfigErrorContext.from_dict(payload["context"]) == error.context
+
+
+def test_existing_config_error_names_accept_structured_context() -> None:
+    context = ConfigErrorContext(
+        code="structured_context",
+        source_kind="base",
+        source_order=0,
+        source_path="/tmp/base.yaml",
+        config_path="$.pipeline.value",
+        details={"stage": "contract"},
+    )
+    errors = (
+        ConfigMergeError("structured failure", context=context),
+        OverrideApplyError("structured failure", context=context),
+        RecipeExpansionError("structured failure", context=context),
+        TargetImportError("structured failure", context=context),
+    )
+
+    for error in errors:
+        payload = error.to_dict()
+        assert payload["message"] == "structured failure"
+        assert payload["context"]["code"] == "structured_context"
+        assert ConfigErrorContext.from_dict(payload["context"]) == context

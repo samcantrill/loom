@@ -46,6 +46,19 @@ def test_import_target_rejects_invalid_target_syntax() -> None:
             import_target(target)
 
 
+def test_import_target_failure_has_structured_context() -> None:
+    with pytest.raises(TargetImportError) as exc:
+        import_target("tests.support.config_samples:missing", path="$.pipeline._target_")
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "target_object_not_found"
+    assert context.config_path == "$.pipeline._target_"
+    assert context.directive == "_target_"
+    assert context.details is not None
+    assert context.details["stage"] == "target_import"
+
+
 def test_import_target_rejects_fallback_and_nested_lookup_for_dotted_path() -> None:
     # If fallback import splitting were implemented, this would resolve
     # Parent.Inner via `tests.support.config_samples` attribute lookups.

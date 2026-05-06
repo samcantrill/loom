@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import compose_config
+from loom.config import RecipeCatalog, compose_config
 from loom.config.redaction import REDACTION_MARKER
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -24,6 +24,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         "NESTED-CREDENTIAL-SECRET-VALUE",
         "LIST-TOKEN-SECRET-VALUE",
         "OVERRIDE-PRIVATE-SECRET-VALUE",
+        "OVERRIDE-PARENT-TOKEN-SECRET-VALUE",
     }
     safe_values = {
         "keep-top-note",
@@ -52,6 +53,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         base,
         overrides=(
             "+pipeline.PRIVATE-KEY=OVERRIDE-PRIVATE-SECRET-VALUE",
+            "+pipeline.token_parent.value=OVERRIDE-PARENT-TOKEN-SECRET-VALUE",
             "+pipeline.safe_label=keep-override-label",
         ),
     )
@@ -63,6 +65,8 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
     assert resolved_pipeline["SECRET_token"] == "BASE-TOKEN-SECRET-VALUE"
     assert resolved_pipeline["Pa.s_s-Wo.rd"] == "BASE-PASSWORD-SECRET-VALUE"
     assert resolved_pipeline["PRIVATE-KEY"] == "OVERRIDE-PRIVATE-SECRET-VALUE"
+    resolved_token_parent = cast(dict[str, Any], resolved_pipeline["token_parent"])
+    assert resolved_token_parent["value"] == "OVERRIDE-PARENT-TOKEN-SECRET-VALUE"
     assert resolved_pipeline["public_note"] == "keep-top-note"
     assert resolved_nested["mode"] == "keep-nested-mode"
     assert resolved_items[1]["note"] == "keep-list-note"
@@ -75,6 +79,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
     assert redacted_pipeline["SECRET_token"] == REDACTION_MARKER
     assert redacted_pipeline["Pa.s_s-Wo.rd"] == REDACTION_MARKER
     assert redacted_pipeline["PRIVATE-KEY"] == REDACTION_MARKER
+    assert redacted_pipeline["token_parent"] == REDACTION_MARKER
     assert redacted_nested["Private-Key"] == REDACTION_MARKER
     assert redacted_nested["credential.id"] == REDACTION_MARKER
     assert redacted_items[0]["TOKEN"] == REDACTION_MARKER
@@ -89,10 +94,14 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         for override in cast(list[dict[str, Any]], provenance_payload["overrides"])
     }
     secret_override = provenance_overrides["pipeline.PRIVATE-KEY"]
+    parent_secret_override = provenance_overrides["pipeline.token_parent.value"]
     safe_override = provenance_overrides["pipeline.safe_label"]
     assert secret_override["raw"] == REDACTION_MARKER
     assert secret_override["value"] == REDACTION_MARKER
     assert secret_override["redacted"] is True
+    assert parent_secret_override["raw"] == REDACTION_MARKER
+    assert parent_secret_override["value"] == REDACTION_MARKER
+    assert parent_secret_override["redacted"] is True
     assert safe_override["raw"] == "+pipeline.safe_label=keep-override-label"
     assert safe_override["value"] == "keep-override-label"
     assert safe_override["redacted"] is False
@@ -102,6 +111,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         for override in cast(list[dict[str, Any]], composed.provenance.metadata["ordinary_overrides"])
     }
     assert ordinary_overrides["pipeline.PRIVATE-KEY"]["value"] == REDACTION_MARKER
+    assert ordinary_overrides["pipeline.token_parent.value"]["value"] == REDACTION_MARKER
     assert ordinary_overrides["pipeline.safe_label"]["value"] == "keep-override-label"
 
     artifact_payload = {
@@ -117,3 +127,63 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         assert plaintext_secret not in serialized_artifacts
     for safe_value in safe_values:
         assert safe_value in serialized_artifacts
+
+
+def test_public_compose_redacts_secret_like_include_local_customization_metadata(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+    included.write_text("public: included\n", encoding="utf-8")
+    base.write_text(
+        "name: redaction-include-local\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./included.yaml\n"
+        "    api_key: LOCAL-INCLUDE-SECRET\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base)
+
+    source_facts = cast(dict[str, Any], composed.provenance.metadata["source_fact_records"])
+    local_customizations = cast(list[dict[str, Any]], source_facts["local_customizations"])
+    assert local_customizations[0]["value"] == REDACTION_MARKER
+    assert local_customizations[0]["redacted"] is True
+
+    serialized_artifacts = json.dumps(
+        {
+            "manifest": composed.manifest.to_dict(),
+            "provenance": composed.provenance.to_dict(),
+            "source_artifacts": [record.to_dict() for record in composed.source_artifacts],
+        },
+        sort_keys=True,
+    )
+    assert "LOCAL-INCLUDE-SECRET" not in serialized_artifacts
+
+
+def test_public_compose_redacts_secret_like_recipe_arguments_in_metadata(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: redaction-recipe\n"
+        "pipeline:\n"
+        "  _recipe_: secret-arg\n"
+        "  token: RECIPE-ARG-SECRET\n",
+        encoding="utf-8",
+    )
+    catalog = RecipeCatalog()
+    catalog.register("secret-arg", lambda token: {"public": "ok"})
+
+    composed = compose_config(base, recipe_catalog=catalog)
+
+    recipe_manifest = cast(list[dict[str, Any]], composed.provenance.metadata["recipe_manifest"])
+    arguments = cast(dict[str, Any], recipe_manifest[0]["arguments"])
+    assert arguments["token"] == REDACTION_MARKER
+
+    serialized_artifacts = json.dumps(
+        {
+            "manifest": composed.manifest.to_dict(),
+            "provenance": composed.provenance.to_dict(),
+            "fingerprint_records": [record.to_dict() for record in composed.fingerprint_records],
+        },
+        sort_keys=True,
+    )
+    assert "RECIPE-ARG-SECRET" not in serialized_artifacts

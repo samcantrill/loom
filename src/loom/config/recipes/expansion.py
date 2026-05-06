@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from loom.serialization import PlainData, to_plain_data
 from loom.serialization.errors import PlainDataError
-from loom.config.errors import ConfigInterpolationError, InvalidRecipeOutputError, RecipeExpansionError, ReservedConfigKeyError
+from loom.config.errors import (
+    ConfigErrorContext,
+    ConfigInterpolationError,
+    InvalidRecipeOutputError,
+    RecipeExpansionError,
+    ReservedConfigKeyError,
+)
 
 from .base import ConfigRecipe, Recipe, RecipeImplementation
 from .catalog import RecipeCatalog
@@ -30,10 +36,28 @@ def resolve_recipe_argument_interpolation(
 
     root = to_plain_data(config, path=path)
     if not isinstance(root, dict):
-        raise ConfigInterpolationError(f"Recipe argument resolution root must be a mapping at {path}")
+        raise ConfigInterpolationError(
+            f"Recipe argument resolution root must be a mapping at {path}",
+            context=_recipe_context(
+                code="recipe_argument_root_not_mapping",
+                path=path,
+                stage="recipe_argument_interpolation",
+                expected="mapping",
+                actual=type(root).__name__,
+            ),
+        )
     resolved, _ = _resolve_recipe_arguments(root, root=root, path=path)
     if not isinstance(resolved, dict):
-        raise ConfigInterpolationError(f"Recipe argument resolution root must be a mapping at {path}")
+        raise ConfigInterpolationError(
+            f"Recipe argument resolution root must be a mapping at {path}",
+            context=_recipe_context(
+                code="recipe_argument_root_not_mapping",
+                path=path,
+                stage="recipe_argument_interpolation",
+                expected="mapping",
+                actual=type(resolved).__name__,
+            ),
+        )
     return resolved
 
 
@@ -48,7 +72,16 @@ def expand_recipes(
     plain = to_plain_data(config, path=path)
     expanded, manifest = _expand_node(plain, catalog=catalog, path=path)
     if not isinstance(expanded, dict):
-        raise InvalidRecipeOutputError(f"Recipe expansion root must remain a mapping at {path}")
+        raise InvalidRecipeOutputError(
+            f"Recipe expansion root must remain a mapping at {path}",
+            context=_recipe_context(
+                code="recipe_root_not_mapping",
+                path=path,
+                stage="recipe_expansion",
+                expected="mapping",
+                actual=type(expanded).__name__,
+            ),
+        )
     return expanded, tuple(item.to_dict() for item in manifest)
 
 
@@ -215,11 +248,31 @@ def _expand_recipe_node(
     path: str,
 ) -> tuple[dict[str, PlainData], tuple[RecipeManifestRecord, ...]]:
     if not isinstance(node.get("_recipe_"), str):
-        raise RecipeExpansionError(f"Recipe name must be a string at {path}")
+        raise RecipeExpansionError(
+            f"Recipe name must be a string at {path}",
+            context=_recipe_context(
+                code="invalid_recipe_name",
+                path=path,
+                stage="recipe_expansion",
+                expected="non-empty string",
+                actual=type(node.get("_recipe_")).__name__,
+                directive="_recipe_",
+            ),
+        )
 
     name = str(node["_recipe_"])
     if not name:
-        raise RecipeExpansionError(f"Recipe name must be a non-empty string at {path}")
+        raise RecipeExpansionError(
+            f"Recipe name must be a non-empty string at {path}",
+            context=_recipe_context(
+                code="invalid_recipe_name",
+                path=path,
+                stage="recipe_expansion",
+                expected="non-empty string",
+                actual="empty string",
+                directive="_recipe_",
+            ),
+        )
 
     _validate_recipe_reserved_keys(node, path=path)
     _reject_nested_recipe(node, path=path)
@@ -233,14 +286,44 @@ def _expand_recipe_node(
     try:
         expanded_plain = to_plain_data(expanded, path=path)
     except PlainDataError as exc:
-        raise InvalidRecipeOutputError(f"Recipe {name!r} at {path} returned non-plain output") from exc
+        raise InvalidRecipeOutputError(
+            f"Recipe {name!r} at {path} returned non-plain output",
+            context=_recipe_context(
+                code="recipe_output_non_plain",
+                path=path,
+                stage="recipe_expansion",
+                expected="plain-data mapping",
+                actual=type(expanded).__name__,
+                details={"recipe_name": name},
+            ),
+        ) from exc
     if not isinstance(expanded_plain, dict):
-        raise InvalidRecipeOutputError(f"Recipe {name!r} at {path} must return a mapping")
+        raise InvalidRecipeOutputError(
+            f"Recipe {name!r} at {path} must return a mapping",
+            context=_recipe_context(
+                code="recipe_output_not_mapping",
+                path=path,
+                stage="recipe_expansion",
+                expected="mapping",
+                actual=type(expanded_plain).__name__,
+                details={"recipe_name": name},
+            ),
+        )
 
     expanded_output, nested_manifest = _expand_node(expanded_plain, catalog=catalog, path=path)
     _reject_resolver_shape_dependency(expanded_output, path=path, recipe=name)
     if not isinstance(expanded_output, dict):
-        raise InvalidRecipeOutputError(f"Expanded recipe output for {name!r} at {path} must remain mapping")
+        raise InvalidRecipeOutputError(
+            f"Expanded recipe output for {name!r} at {path} must remain mapping",
+            context=_recipe_context(
+                code="recipe_expanded_output_not_mapping",
+                path=path,
+                stage="recipe_expansion",
+                expected="mapping",
+                actual=type(expanded_output).__name__,
+                details={"recipe_name": name},
+            ),
+        )
 
     manifest = RecipeManifestRecord.for_expansion(
         path=path,
@@ -256,7 +339,16 @@ def _reject_resolver_shape_dependency(value: Any, *, path: str, recipe: str) -> 
     if isinstance(value, dict):
         for key, child in value.items():
             if isinstance(key, str) and _RESOLVER_IN_KEY_RE.search(key):
-                raise InvalidRecipeOutputError(f"Recipe {recipe!r} at {path} returned resolver-shaped output key {key!r}")
+                raise InvalidRecipeOutputError(
+                    f"Recipe {recipe!r} at {path} returned resolver-shaped output key {key!r}",
+                    context=_recipe_context(
+                        code="recipe_output_resolver_shaped_key",
+                        path=path,
+                        stage="recipe_expansion",
+                        directive="_recipe_",
+                        details={"recipe_name": recipe, "output_key": key},
+                    ),
+                )
             _reject_resolver_shape_dependency(child, path=_child_path(path, key), recipe=recipe)
         return
 
@@ -280,7 +372,15 @@ def _run_recipe(
     try:
         result = implementation(**arguments)
     except Exception as exc:  # noqa: BLE001
-        raise RecipeExpansionError(f"Failed to expand recipe {name!r} at {path}") from exc
+        raise RecipeExpansionError(
+            f"Failed to expand recipe {name!r} at {path}",
+            context=_recipe_context(
+                code="recipe_execution_failed",
+                path=path,
+                stage="recipe_expansion",
+                details={"recipe_name": name, "exception_type": type(exc).__name__},
+            ),
+        ) from exc
 
     if isinstance(result, Mapping):
         return dict(result)
@@ -293,18 +393,56 @@ def _run_recipe(
         try:
             output = expand()
         except Exception as exc:  # noqa: BLE001
-            raise RecipeExpansionError(f"Failed to expand recipe {name!r} at {path}") from exc
+            raise RecipeExpansionError(
+                f"Failed to expand recipe {name!r} at {path}",
+                context=_recipe_context(
+                    code="recipe_object_expand_failed",
+                    path=path,
+                    stage="recipe_expansion",
+                    details={"recipe_name": name, "exception_type": type(exc).__name__},
+                ),
+            ) from exc
         if not isinstance(output, Mapping):
-            raise InvalidRecipeOutputError(f"Recipe {name!r} at {path} expand() must return a mapping")
+            raise InvalidRecipeOutputError(
+                f"Recipe {name!r} at {path} expand() must return a mapping",
+                context=_recipe_context(
+                    code="recipe_expand_output_not_mapping",
+                    path=path,
+                    stage="recipe_expansion",
+                    expected="mapping",
+                    actual=type(output).__name__,
+                    details={"recipe_name": name},
+                ),
+            )
         return dict(output)
 
-    raise InvalidRecipeOutputError(f"Recipe implementation {name!r} at {path} returned invalid expansion type {type(result)!r}")
+    raise InvalidRecipeOutputError(
+        f"Recipe implementation {name!r} at {path} returned invalid expansion type {type(result)!r}",
+        context=_recipe_context(
+            code="invalid_recipe_expansion_type",
+            path=path,
+            stage="recipe_expansion",
+            expected="mapping or expandable recipe object",
+            actual=type(result).__name__,
+            details={"recipe_name": name},
+        ),
+    )
 
 
 def _expand_recipe_object(recipe: Recipe | ConfigRecipe, *, name: str, path: str) -> Mapping[str, Any]:
     output = recipe.expand()
     if not isinstance(output, Mapping):
-        raise InvalidRecipeOutputError(f"Recipe {name!r} at {path} expand() must return a mapping")
+        raise InvalidRecipeOutputError(
+            f"Recipe {name!r} at {path} expand() must return a mapping",
+            context=_recipe_context(
+                code="recipe_expand_output_not_mapping",
+                path=path,
+                stage="recipe_expansion",
+                expected="mapping",
+                actual=type(output).__name__,
+                details={"recipe_name": name},
+            ),
+        )
     return dict(output)
 
 
@@ -313,7 +451,16 @@ def _validate_recipe_reserved_keys(block: Mapping[str, Any], *, path: str) -> No
         if key == "_recipe_":
             continue
         if key in _RESERVED_KEYS:
-            raise ReservedConfigKeyError(f"Reserved key {key!r} is not allowed in recipe blocks at {path}")
+            raise ReservedConfigKeyError(
+                f"Reserved key {key!r} is not allowed in recipe blocks at {path}",
+                context=_recipe_context(
+                    code="reserved_recipe_key",
+                    path=path,
+                    stage="recipe_expansion",
+                    directive=key,
+                    details={"reserved_key": key},
+                ),
+            )
 
 
 def _reject_nested_recipe(value: Mapping[str, Any], *, path: str) -> None:
@@ -326,7 +473,15 @@ def _reject_nested_recipe(value: Mapping[str, Any], *, path: str) -> None:
 def _reject_nested_recipe_value(value: Any, *, path: str) -> None:
     if isinstance(value, Mapping):
         if "_recipe_" in value:
-            raise RecipeExpansionError(f"Nested _recipe_ blocks are only allowed in recipe output at {path}")
+            raise RecipeExpansionError(
+                f"Nested _recipe_ blocks are only allowed in recipe output at {path}",
+                context=_recipe_context(
+                    code="nested_recipe_block",
+                    path=path,
+                    stage="recipe_expansion",
+                    directive="_recipe_",
+                ),
+            )
         for key, child in value.items():
             _reject_nested_recipe_value(child, path=_child_path(path, key))
         return
@@ -348,3 +503,39 @@ def _child_path(path: str, key: str | int) -> str:
     if path == "$":
         return f"[{key!r}]"
     return f"{path}[{key!r}]"
+
+
+def _recipe_context(
+    *,
+    code: str,
+    path: str,
+    stage: str,
+    expected: object | None = None,
+    actual: object | None = None,
+    directive: str | None = None,
+    details: dict[str, object] | None = None,
+) -> ConfigErrorContext:
+    return ConfigErrorContext(
+        code=code,
+        source_kind="recipe",
+        source_order=0,
+        source_path="<recipe>",
+        config_path=path,
+        expected=to_plain_data(expected) if expected is not None else None,
+        actual=to_plain_data(actual) if actual is not None else None,
+        directive=directive,
+        remediation=_recipe_remediation(code),
+        details=cast(dict[str, PlainData], to_plain_data({"stage": stage, **(details or {})})),
+    )
+
+
+def _recipe_remediation(code: str) -> str | None:
+    if code == "reserved_recipe_key":
+        return "Remove target/instantiation directives from recipe argument blocks."
+    if code == "nested_recipe_block":
+        return "Return nested recipes from the trusted recipe implementation instead of authoring them as arguments."
+    if code.endswith("not_mapping") or code in {"recipe_output_not_mapping", "recipe_expand_output_not_mapping"}:
+        return "Return a mapping from recipe expansion."
+    if code == "recipe_output_resolver_shaped_key":
+        return "Use stable literal output keys; resolver expressions may remain in values only."
+    return None

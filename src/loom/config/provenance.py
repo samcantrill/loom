@@ -10,7 +10,12 @@ from loom.fingerprints import Digest, Fingerprint, FingerprintError, hash_mappin
 from loom.serialization import PlainData, ensure_plain_data, to_plain_data
 
 from .errors import ConfigProvenanceError
-from .redaction import REDACTION_MARKER, contains_secret_like_value, redact_secret_like_value
+from .redaction import (
+    REDACTION_MARKER,
+    contains_secret_like_value,
+    is_secret_path,
+    redact_secret_like_value,
+)
 
 SCHEMA_VERSION = 1
 
@@ -213,12 +218,15 @@ def build_config_fingerprint(
 
 def _override_to_artifact_dict(override: ParsedOverride) -> dict[str, PlainData]:
     final_key = override.path.rsplit(".", 1)[-1]
-    redacted = contains_secret_like_value(final_key, override.value)
+    path_redacted = is_secret_path(override.path)
+    redacted = path_redacted or contains_secret_like_value(final_key, override.value)
     return {
         "raw": REDACTION_MARKER if redacted else override.raw,
         "path": override.path,
         "operation": override.operation,
-        "value": redact_secret_like_value(final_key, override.value),
+        "value": (
+            REDACTION_MARKER if path_redacted else redact_secret_like_value(final_key, override.value)
+        ),
         "order": override.order,
         "redacted": redacted,
     }
