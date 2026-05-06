@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 4: Artifact-Safe Ordering And Provenance`
 - Branch: `codex/v1-post-artifact-provenance`
@@ -19,13 +19,13 @@
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v1-post.md`; no blocking findings remain.
 - Plan quality gate loop budget: initial review used, automated refinement used, confirmation review used.
 - Draft pass: completed by `loom_phase_planner` in this commit.
-- Refine pass: pending; expanded path was selected because this phase changes schema, provenance, artifact/fingerprint contracts, and execution ordering.
+- Refine pass: completed by `loom_phase_planner` in this commit; expanded path was selected because this phase changes schema, provenance, artifact/fingerprint contracts, and execution ordering.
 - Setup limitations: none blocking. `gh auth status` required approved network access after sandboxed status reported an invalid token; approved check succeeded, `gh auth setup-git` succeeded, and `git fetch origin` succeeded.
-- Blockers: none for the draft plan.
+- Blockers: none after the expanded-path refinement pass.
 
 ## Objective
 
-Make default config artifacts, provenance, manifests, and fingerprints artifact-safe by construction and by execution order: artifact-safe records must be built before runtime interpolation, new provenance writes must use schema version 2 without a top-level resolved-runtime digest, and legacy schema-version-1 provenance reads must remain supported.
+Make default config artifacts, provenance, manifests, and fingerprints artifact-safe by construction and by execution order: artifact-safe records must be built before runtime resolver execution, new provenance writes must use schema version 2 without a top-level resolved-runtime digest, and legacy schema-version-1 provenance reads must remain supported.
 
 ## Full-Plan Context
 
@@ -42,22 +42,22 @@ V1-post closes contract gaps found after the v1 Phase 16 merge. Phases 1-3 have 
 ## Source Phase Summary
 
 - Goal: make default config artifacts, provenance, manifests, and fingerprints artifact-safe by construction and by execution order.
-- Required scope: build artifact-safe source artifacts, unresolved/redacted config, fingerprint records, provenance metadata, and composition manifest before runtime interpolation; preserve resolver expressions and resolver paths; write schema-version-2 provenance with `artifact_fingerprint`; keep schema-version-1 legacy read compatibility; keep `ComposedConfig.fingerprint` artifact-safe; add plaintext secret override docs warning.
+- Required scope: build artifact-safe source artifacts, unresolved/redacted config, fingerprint records, provenance metadata, and composition manifest before runtime resolver execution; preserve resolver expressions and resolver paths; write schema-version-2 provenance with `artifact_fingerprint`; keep schema-version-1 legacy read compatibility; keep `ComposedConfig.fingerprint` artifact-safe; add plaintext secret override docs warning.
 - Required checkpoints: no new default resolved-runtime digest, no emitted top-level `resolved_fingerprint` on new provenance writes, environment value changes do not affect default fingerprints or provenance-emitted digests, and resolver expressions remain present in artifact-safe records.
 - Acceptance criteria: contract and integration tests prove schema-version-2 writes, legacy schema-version-1 reads, artifact-before-resolver ordering, resolver-expression preservation, and env-value independence; docs include a concrete plaintext override warning such as `+auth.token=...` and recommend `oc.env`.
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/config/compose.py` owns compose ordering, stage records, provenance/manifest/fingerprint construction, and currently computes `build_resolved_fingerprint(validated)` after runtime interpolation. `src/loom/config/provenance.py` owns `ConfigProvenance`, currently with `SCHEMA_VERSION = 1` and required `resolved_fingerprint`. `src/loom/config/fingerprints.py` already builds the artifact-safe fingerprint record and stores its payload in record metadata. `src/loom/config/artifacts.py` owns strict `CompositionManifest` and `ConfigFingerprintRecord` serialization. `src/loom/config/api.py` owns the public `ComposedConfig.fingerprint` surface.
+- Existing files or modules that constrain this phase: `src/loom/config/compose.py` owns compose ordering, stage records, provenance/manifest/fingerprint construction, and currently builds source artifacts, fingerprint records, provenance, and manifest after `resolve_interpolation(...)` and `validate_top_level_fields(...)`; it also computes `build_resolved_fingerprint(validated)`. `src/loom/config/provenance.py` owns `ConfigProvenance`, currently with `SCHEMA_VERSION = 1` and a required top-level `resolved_fingerprint`. `src/loom/config/fingerprints.py` already builds the artifact-safe fingerprint record and stores its payload in record metadata. `src/loom/config/artifacts.py` owns strict `CompositionManifest` and `ConfigFingerprintRecord` serialization. `src/loom/config/api.py` owns the public `ComposedConfig.fingerprint` surface.
 - Existing tests or harness behavior: package API coverage is in `tests/package/test_config_api.py`; provenance/manifest contracts are in `tests/contracts/test_config_artifact_contract.py`; public provenance/fingerprint integration coverage is in `tests/integration/config/test_compose_provenance.py` and `tests/integration/config/test_compose_fingerprints.py`; resolver behavior is in `tests/integration/config/test_compose_resolvers.py`; docs/example checks live under `tests/integration/docs/`.
 - Import-boundary or dependency constraints: keep `loom.config` domain-neutral and persistence-free; do not add `loom.pipeline` imports or run-store writes; do not broaden optional dependencies beyond existing config extras.
 
 ## In-Scope Work
 
-- Reorder composition so source artifacts, unresolved/redacted artifact config, artifact-safe fingerprint records, provenance metadata, and the composition manifest are created before final runtime interpolation.
+- Reorder composition so source artifacts, unresolved/redacted artifact config, artifact-safe fingerprint records, provenance metadata, and the composition manifest are created before runtime resolver execution. Resolver scanning that preserves expression text may still run before artifact construction; resolver execution must not.
 - Preserve resolver expressions and resolver paths in artifact-safe records, including provenance metadata, manifest metadata, and fingerprint metadata.
 - Change new `ConfigProvenance` writes to `schema_version: 2`, add top-level `artifact_fingerprint`, and omit top-level `resolved_fingerprint`.
-- Keep legacy `schema_version: 1` provenance reads for payloads with top-level `resolved_fingerprint`; carry that legacy value only through an explicitly named compatibility location such as metadata, without re-emitting it from new writes.
+- Keep legacy `schema_version: 1` provenance reads for payloads with top-level `resolved_fingerprint`; normalize the legacy value only to `metadata.legacy_resolved_fingerprint`, without re-emitting it from new writes.
 - Store artifact-safe fingerprint facts in `metadata.fingerprint` or manifest/fingerprint records instead of a resolved-runtime digest.
 - Preserve public `ComposedConfig.fingerprint` as the artifact-safe digest from the default artifact-safe fingerprint record.
 - Add docs warning against plaintext secret overrides with an example such as `+auth.token=...`; recommend environment resolvers such as `${oc.env:AUTH_TOKEN}` for secrets.
@@ -67,27 +67,31 @@ V1-post closes contract gaps found after the v1 Phase 16 merge. Phases 1-3 have 
 - Secret-aware opt-in runtime fingerprints.
 - Default resolved config persistence.
 - Broadening the runtime resolver allow-list beyond the current supported resolver surface.
-- Phase 5 pipeline/run-store persistence changes, including `config/composition_manifest.json` and default `resolved.yaml` removal.
+- Phase 5 pipeline/run-store persistence changes, including `PipelineRunner`, `config/composition_manifest.json`, and default `resolved.yaml` removal.
 - Phase 6 recipe residual-risk coverage.
 - CLI behavior, `_copy_`, plugin or remote resolvers, sweeps, resolved-runtime replay, and any v2 workflow.
 
 ## Assumptions
 
 - Schema-version-2 provenance may add fields needed for artifact safety but should keep existing source, override, recipe-count, and metadata facts where possible.
-- Schema-version-1 compatibility is read-only: old payloads deserialize, but new `to_dict()` output uses schema version 2 and does not contain top-level `resolved_fingerprint`.
+- Schema-version-1 compatibility is read-only: old payloads deserialize, but normal new `to_dict()` output uses schema version 2 and does not contain top-level `resolved_fingerprint`.
 - If a public constructor signature must change, the executor may add compatibility defaults or a clearly named optional legacy field, but must not require callers to provide resolved-runtime fingerprints for new provenance.
-- Artifact-safe record construction may use unresolved/redacted data and resolver scan results before runtime interpolation; runtime validation still returns the in-memory `resolved` config to callers.
+- Artifact-safe record construction may use unresolved/redacted data and resolver scan results before runtime resolver execution; runtime validation still returns the in-memory `resolved` config to callers.
 
 ## Scope Contract
 
-New public compose results must expose the same high-level surfaces: `resolved`, `unresolved`, `redacted`, `provenance`, `manifest`, `fingerprint_records`, and `fingerprint`. The public `fingerprint` remains the artifact-safe digest. New provenance documents use:
+New public compose results must expose the same high-level surfaces: `resolved`, `unresolved`, `redacted`, `provenance`, `manifest`, `fingerprint_records`, and `fingerprint`. The public `fingerprint` remains the artifact-safe digest. Artifact-safe records are records built from authored composition data, redacted/unresolved config, resolver expression records, source artifacts, recipe manifest payloads, and override facts before runtime resolver execution. Runtime-resolved values remain available only through the in-memory `resolved` result.
+
+New `ConfigProvenance` documents must use this schema-version-2 top-level contract:
 
 - `schema_version: 2`
 - top-level `artifact_fingerprint`
 - no top-level `resolved_fingerprint`
 - artifact-safe fingerprint facts in `metadata.fingerprint` or existing manifest/fingerprint records
 
-Legacy `schema_version: 1` provenance documents containing `resolved_fingerprint` must still read successfully. Schema-version-2 readers should remain strict about unknown top-level fields. Default artifacts must not include resolved environment values or any digest derived from the full runtime-resolved config. Stop if implementation appears to require changing pipeline persistence, expanding resolver support, or adding a public resolved-runtime fingerprint policy.
+The `artifact_fingerprint` value must equal the default artifact-safe `ConfigFingerprintRecord.digest` and `ComposedConfig.fingerprint`. Legacy `schema_version: 1` provenance documents containing top-level `resolved_fingerprint` must still read successfully. The legacy resolved digest may be exposed only as `metadata.legacy_resolved_fingerprint` for compatibility inspection; schema-version-2 writes must not emit it at top level or under a renamed default runtime-fingerprint field. Schema-version-2 readers should remain strict about unknown top-level fields, including rejecting `resolved_fingerprint` if it appears in a schema-version-2 payload.
+
+Default artifacts must not include resolved environment values or any digest derived from the full runtime-resolved config. Resolver expressions, resolver paths, and authored resolver tokens must remain present in provenance metadata, manifest metadata, and fingerprint record metadata where those records already expose resolver facts. Stop if implementation appears to require changing pipeline persistence, expanding resolver support, or adding a public resolved-runtime fingerprint policy.
 
 ## Design Impact
 
@@ -126,9 +130,9 @@ Legacy `schema_version: 1` provenance documents containing `resolved_fingerprint
 
 ## Implementation Steps
 
-1. Introduce the provenance schema-version-2 contract while preserving schema-version-1 read compatibility for top-level `resolved_fingerprint`.
-2. Reshape compose ordering so artifact-safe source artifacts, unresolved/redacted config, resolver records, fingerprint records, provenance metadata, and manifest are built before runtime interpolation and validation.
-3. Wire new provenance writes to use `artifact_fingerprint` from the artifact-safe fingerprint record and remove default resolved-runtime digest construction/emission.
+1. Introduce the provenance schema-version-2 contract while preserving schema-version-1 read compatibility for top-level `resolved_fingerprint` through `metadata.legacy_resolved_fingerprint`.
+2. Reshape compose ordering so artifact-safe source artifacts, unresolved/redacted config, resolver records, fingerprint records, provenance metadata, and manifest are built before runtime resolver execution; keep runtime validation for the returned `resolved` config after that boundary.
+3. Wire new provenance writes to use `artifact_fingerprint` from the artifact-safe fingerprint record and remove default resolved-runtime digest construction/emission from config provenance.
 4. Ensure provenance/manifest/fingerprint metadata expose artifact-safe fingerprint facts and resolver expression records without resolved resolver outputs.
 5. Add the plaintext override warning docs and focused tests for schema transition, ordering, env-value independence, and resolver-expression preservation.
 
@@ -136,39 +140,39 @@ Legacy `schema_version: 1` provenance documents containing `resolved_fingerprint
 
 ### Package Suite
 
-- Status: required if public exports, constructor signatures, or package-level import behavior change; otherwise deferred with an explicit no-public-export-change note in PR evidence.
+- Status: required.
 - Expected paths: `tests/package/test_config_api.py` and, if needed, import-boundary checks in `tests/package/test_import_boundaries.py`.
-- Required assertions or deferral reason: if `ConfigProvenance` construction or exports change in a public-observable way, assert compatibility/defaults and stable `loom.config` optional import behavior. If changes stay internal to `loom.config.provenance`, record that package coverage is unchanged.
+- Required assertions or deferral reason: confirm public `loom.config` imports, `ComposedConfig.fingerprint`, and package-level optional import behavior remain stable. If `ConfigProvenance` construction or exports change in a public-observable way, add explicit coverage for compatibility defaults and the schema-version-2 constructor/write path.
 
 ### Unit Suite
 
 - Status: required.
-- Expected paths: `tests/unit/loom/config/test_compose.py`, `tests/unit/loom/config/test_config_artifacts.py`, `tests/unit/loom/config/test_config_fingerprints.py`, or a focused provenance unit file if the existing split suggests it.
-- Required assertions or deferral reason: environment value changes do not affect default `ComposedConfig.fingerprint`, any provenance-emitted digest, or default fingerprint record metadata; schema-version-2 `ConfigProvenance.to_dict()` omits top-level `resolved_fingerprint`; legacy read compatibility stores legacy resolved fingerprints only in the chosen compatibility location; no resolved environment value appears in default provenance/manifest/fingerprint records.
+- Expected paths: `tests/unit/loom/config/test_compose.py`, `tests/unit/loom/config/test_config_artifacts.py`, `tests/unit/loom/config/test_config_fingerprints.py`, and `tests/unit/loom/config/test_config_provenance.py`.
+- Required assertions or deferral reason: environment value changes do not affect default `ComposedConfig.fingerprint`, `ConfigProvenance.artifact_fingerprint`, provenance `metadata.fingerprint`, manifest metadata, or default fingerprint record metadata; schema-version-2 `ConfigProvenance.to_dict()` includes top-level `artifact_fingerprint` and omits top-level `resolved_fingerprint`; legacy read compatibility stores old top-level `resolved_fingerprint` only in `metadata.legacy_resolved_fingerprint`; no resolved environment value appears in default provenance/manifest/fingerprint records.
 
 ### Contract Suite
 
 - Status: required.
 - Expected paths: `tests/contracts/test_config_artifact_contract.py`.
-- Required assertions or deferral reason: schema-version-2 provenance writes round-trip with top-level `artifact_fingerprint`; top-level `resolved_fingerprint` is absent from new writes; schema-version-1 payloads containing `resolved_fingerprint` read successfully; schema-version-2 unknown top-level fields remain rejected; composition manifests carry artifact-safe fingerprint records and metadata without runtime-resolved digests.
+- Required assertions or deferral reason: schema-version-2 provenance writes round-trip with top-level `artifact_fingerprint`; top-level `resolved_fingerprint` is absent from new writes; schema-version-1 payloads containing `resolved_fingerprint` read successfully and expose it only through `metadata.legacy_resolved_fingerprint`; schema-version-2 unknown top-level fields remain rejected, including top-level `resolved_fingerprint`; composition manifests carry artifact-safe fingerprint records and metadata without runtime-resolved digests.
 
 ### Integration Suite
 
 - Status: required.
 - Expected paths: `tests/integration/config/test_compose_provenance.py`, `tests/integration/config/test_compose_fingerprints.py`, and targeted resolver coverage in `tests/integration/config/test_compose_resolvers.py` if needed.
-- Required assertions or deferral reason: public `compose_config(...)` and `inspect_config_composition(...)` produce artifact-safe records before resolver execution, preserve resolver expressions and paths in provenance/manifest/fingerprint metadata, resolve runtime values only for in-memory `resolved`, and keep artifact/provenance/fingerprint payloads stable when environment variable values change.
+- Required assertions or deferral reason: public `compose_config(...)` and `inspect_config_composition(...)` produce artifact-safe records before resolver execution, preserve resolver expressions and paths in provenance/manifest/fingerprint metadata, resolve runtime values only for in-memory `resolved`, and keep artifact/provenance/manifest/fingerprint payloads stable when environment variable values change. Include a sentinel environment-value-change case that proves the emitted artifact fingerprint and all provenance-emitted digests are unchanged while `resolved` changes.
 
 ### E2E Suite
 
-- Status: deferred unless the implementation touches runner behavior or public end-to-end workflow wiring.
+- Status: deferred.
 - Expected paths: `tests/e2e/test_config_composition_public_api.py` only if compose API behavior needs end-to-end confirmation.
-- Required assertions or deferral reason: this phase is config composition/provenance only and explicitly excludes pipeline/run-store persistence. If runner behavior is touched unexpectedly, stop for the manager before adding e2e scope.
+- Required assertions or deferral reason: this phase is config composition/provenance only and explicitly excludes pipeline/run-store persistence, `PipelineRunner`, and default resolved-config persistence removal. If runner behavior or end-to-end workflow wiring appears necessary, stop for the manager instead of expanding e2e scope.
 
 ### Opt-In Suites
 
 - Status: required for config-extra and docs/example checks that cover changed wording or examples.
 - Markers affected: config optional dependency markers and docs integration markers used by existing config documentation tests.
-- Required assertions or deferral reason: docs or example checks should cover the warning not to pass plaintext secrets through overrides, including a concrete `+auth.token=...`-style example, and recommend environment resolvers for secrets. Raw source snapshot opt-in behavior is not the target unless existing config-extra suite coupling requires it.
+- Required assertions or deferral reason: docs or example checks should cover the warning not to pass plaintext secrets through overrides, including a concrete `+auth.token=...`-style example, and recommend `oc.env` environment resolvers for secrets. Raw source snapshot opt-in behavior and runtime fingerprint opt-ins are not the target unless existing config-extra suite coupling requires them.
 
 ## Risks
 
@@ -185,8 +189,10 @@ Targeted development commands:
 ```sh
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/contracts/test_config_artifact_contract.py
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_compose.py tests/unit/loom/config/test_config_artifacts.py tests/unit/loom/config/test_config_fingerprints.py
+UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_provenance.py
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_provenance.py tests/integration/config/test_compose_fingerprints.py tests/integration/config/test_compose_resolvers.py
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/package/test_config_api.py
+UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py
 ```
 
 Final PR-preparation commands:
@@ -199,10 +205,10 @@ make test-summary
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices: provenance schema transition first, compose ordering second, metadata/fingerprint cleanup third, docs/tests last.
-- Tests to run with each slice: contract tests after provenance changes; focused unit tests after ordering/fingerprint changes; integration resolver/provenance/fingerprint tests after compose wiring; package tests only if public signatures or exports move.
-- Decisions the executor must not revisit: no default resolved-runtime fingerprint, no top-level `resolved_fingerprint` on new writes, no expanded resolver allow-list, no pipeline/run-store persistence changes, and no future-phase recipe or CLI scope.
-- Conditions that require stopping for the manager: implementation needs to touch `loom.pipeline` or run-store modules, preserve new writes with top-level `resolved_fingerprint`, invent an opt-in runtime fingerprint policy, broaden resolver support, or break legacy schema-version-1 provenance reads.
-- Expanded-path refinement notes: refinement should verify that the final plan still identifies the exact schema-version-2 field contract, artifact-before-runtime-interpolation acceptance tests, and all suite obligations before executor work begins.
+- Tests to run with each slice: contract and provenance unit tests after provenance changes; focused compose/fingerprint unit tests after ordering/fingerprint changes; integration resolver/provenance/fingerprint tests after compose wiring; package tests after any public signature/export change and again before handoff.
+- Decisions the executor must not revisit: no default resolved-runtime fingerprint, no top-level `resolved_fingerprint` on new writes, legacy resolved fingerprints normalize only to `metadata.legacy_resolved_fingerprint`, no expanded resolver allow-list, no runtime fingerprint opt-ins, no `PipelineRunner` default resolved-config persistence removal, no pipeline/run-store persistence changes, and no future-phase recipe or CLI scope.
+- Conditions that require stopping for the manager: implementation needs to touch `loom.pipeline`, run-store modules, or `PipelineRunner`; preserve new writes with top-level `resolved_fingerprint`; invent an opt-in runtime fingerprint policy; broaden resolver support; make environment values affect default artifact/provenance digests; or break legacy schema-version-1 provenance reads.
+- Expanded-path refinement notes: completed. The final plan pins the schema-version-2 field contract, artifact-before-runtime-resolver-execution acceptance tests, and all suite obligations before executor work begins.
 
 ## Refinement And Review Budget Status
 
@@ -212,10 +218,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase execution plan`.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: completed expanded-path refine pass in this commit.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: pinned the schema-version-2 `ConfigProvenance` write contract, legacy schema-version-1 read compatibility through `metadata.legacy_resolved_fingerprint`, artifact-before-runtime-resolver-execution boundary, Phase 5 exclusions, and explicit package/unit/contract/integration/e2e/opt-in suite obligations.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none known at draft time.
+- Remaining blockers: none after the expanded-path refinement pass.
