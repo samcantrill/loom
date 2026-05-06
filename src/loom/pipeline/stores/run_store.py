@@ -15,7 +15,9 @@ from loom.serialization import PlainData
 
 @runtime_checkable
 class RunLifecycleStore(Protocol):
-    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None) -> None: ...
+    def create_run(
+        self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None
+    ) -> None: ...
 
     def open_run(self, run_id: str) -> None: ...
 
@@ -26,7 +28,9 @@ class RunDocumentStore(Protocol):
 
     def read_run_user_metadata(self, run_id: str) -> dict[str, PlainData]: ...
 
-    def write_run_user_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None: ...
+    def write_run_user_metadata(
+        self, run_id: str, metadata: Mapping[str, PlainData]
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -47,7 +51,9 @@ class RunPlanStore(Protocol):
 class RunArtifactIndexStore(Protocol):
     def read_artifact_index(self, run_id: str) -> dict[str, ArtifactRef]: ...
 
-    def write_artifact_index(self, run_id: str, index: Mapping[str, ArtifactRef]) -> None: ...
+    def write_artifact_index(
+        self, run_id: str, index: Mapping[str, ArtifactRef]
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -56,21 +62,37 @@ class RunConfigStore(Protocol):
 
     def write_config_snapshot(self, run_id: str, name: str, content: str) -> None: ...
 
-    def read_recipe_manifest(self, run_id: str) -> tuple[dict[str, PlainData], ...] | None: ...
+    def read_composition_manifest(self, run_id: str) -> dict[str, PlainData] | None: ...
 
-    def write_recipe_manifest(self, run_id: str, records: Sequence[Mapping[str, PlainData]]) -> None: ...
+    def write_composition_manifest(
+        self, run_id: str, manifest: Mapping[str, PlainData]
+    ) -> None: ...
+
+    def read_recipe_manifest(
+        self, run_id: str
+    ) -> tuple[dict[str, PlainData], ...] | None: ...
+
+    def write_recipe_manifest(
+        self, run_id: str, records: Sequence[Mapping[str, PlainData]]
+    ) -> None: ...
 
 
 @runtime_checkable
 class RunProvenanceStore(Protocol):
-    def read_provenance_document(self, run_id: str, name: str) -> dict[str, PlainData] | None: ...
+    def read_provenance_document(
+        self, run_id: str, name: str
+    ) -> dict[str, PlainData] | None: ...
 
-    def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None: ...
+    def write_provenance_document(
+        self, run_id: str, name: str, document: Mapping[str, PlainData]
+    ) -> None: ...
 
 
 @runtime_checkable
 class RunEventStore(Protocol):
-    def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord: ...
+    def append_event(
+        self, run_id: str, event: PipelineEvent
+    ) -> PipelineEventRecord: ...
 
     def read_events(self, run_id: str) -> tuple[PipelineEventRecord, ...]: ...
 
@@ -91,11 +113,17 @@ class RunLockStore(Protocol):
 
 @runtime_checkable
 class StageStateStore(Protocol):
-    def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None: ...
+    def read_stage_status(
+        self, run_id: str, stage_name: str
+    ) -> StageStatusRecord | None: ...
 
-    def write_stage_status(self, run_id: str, stage_name: str, status: StageStatusRecord) -> None: ...
+    def write_stage_status(
+        self, run_id: str, stage_name: str, status: StageStatusRecord
+    ) -> None: ...
 
-    def read_stage_inputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None: ...
+    def read_stage_inputs(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, ArtifactRef] | None: ...
 
     def write_stage_inputs(
         self,
@@ -106,7 +134,9 @@ class StageStateStore(Protocol):
         attempt: int,
     ) -> None: ...
 
-    def read_stage_outputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None: ...
+    def read_stage_outputs(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, ArtifactRef] | None: ...
 
     def write_stage_outputs(
         self,
@@ -117,7 +147,9 @@ class StageStateStore(Protocol):
         attempt: int,
     ) -> None: ...
 
-    def read_stage_fingerprint(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def read_stage_fingerprint(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, PlainData] | None: ...
 
     def write_stage_fingerprint(
         self,
@@ -128,7 +160,9 @@ class StageStateStore(Protocol):
         attempt: int,
     ) -> None: ...
 
-    def read_stage_failure(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def read_stage_failure(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, PlainData] | None: ...
 
     def write_stage_failure(
         self,
@@ -139,7 +173,9 @@ class StageStateStore(Protocol):
         attempt: int,
     ) -> None: ...
 
-    def read_stage_provenance(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None: ...
+    def read_stage_provenance(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, PlainData] | None: ...
 
     def write_stage_provenance(
         self,
@@ -153,9 +189,13 @@ class StageStateStore(Protocol):
 
 @runtime_checkable
 class StageLogStore(Protocol):
-    def read_stage_log(self, run_id: str, stage_name: str, stream: str) -> str | None: ...
+    def read_stage_log(
+        self, run_id: str, stage_name: str, stream: str
+    ) -> str | None: ...
 
-    def write_stage_log(self, run_id: str, stage_name: str, stream: str, content: str) -> None: ...
+    def write_stage_log(
+        self, run_id: str, stage_name: str, stream: str, content: str
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -177,7 +217,9 @@ class LocalRunStorePaths(Protocol):
 
     def local_provenance_path(self, run_id: str, name: str) -> Path: ...
 
-    def local_stage_log_path(self, run_id: str, stage_name: str, stream: str) -> Path: ...
+    def local_stage_log_path(
+        self, run_id: str, stage_name: str, stream: str
+    ) -> Path: ...
 
     def local_stage_workspace_dir(self, run_id: str, stage_name: str) -> Path: ...
 
@@ -197,5 +239,4 @@ class RunStore(
     StageLogStore,
     StageWorkspaceStore,
     Protocol,
-):
-    ...
+): ...

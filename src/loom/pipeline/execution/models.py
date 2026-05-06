@@ -53,6 +53,9 @@ class _ComposedConfigLike(Protocol):
     def redacted(self) -> Mapping[str, PlainData]: ...
 
     @property
+    def manifest(self) -> object: ...
+
+    @property
     def provenance(self) -> object: ...
 
     @property
@@ -581,7 +584,13 @@ def _coerce_failure_policy(value: object) -> FailurePolicy:
 def _is_composed_config(value: object) -> bool:
     return all(
         hasattr(value, name)
-        for name in ("resolved", "redacted", "provenance", "recipe_manifest")
+        for name in (
+            "resolved",
+            "redacted",
+            "manifest",
+            "provenance",
+            "recipe_manifest",
+        )
     )
 
 

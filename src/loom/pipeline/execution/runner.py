@@ -332,10 +332,12 @@ class PipelineRunner:
             run_status = RunStatus.FAILED
             for stage_plan in plan.ordered_stage_plans:
                 if stage_plan.stage_name not in stage_results:
-                    stage_results[stage_plan.stage_name] = self._block_stage_after_failure(
-                        run_id=run_id,
-                        stage_plan=stage_plan,
-                        blocked_by=failed_stage or failure.stage_name,
+                    stage_results[stage_plan.stage_name] = (
+                        self._block_stage_after_failure(
+                            run_id=run_id,
+                            stage_plan=stage_plan,
+                            blocked_by=failed_stage or failure.stage_name,
+                        )
                     )
         artifact_index = self.run_store.read_artifact_index(run_id)
         return RunResult(
@@ -593,17 +595,12 @@ class PipelineRunner:
         config_mapping: Mapping[str, PlainData],
     ) -> None:
         if _is_composed_config(request.config):
-            resolved = cast(
-                Mapping[str, PlainData], getattr(request.config, "resolved")
-            )
-            redacted = cast(
-                Mapping[str, PlainData], getattr(request.config, "redacted")
-            )
-            self.run_store.write_config_snapshot(
-                run_id, "resolved", json_dumps_pretty(resolved)
-            )
-            self.run_store.write_config_snapshot(
-                run_id, "resolved_redacted", json_dumps_pretty(redacted)
+            self.run_store.write_composition_manifest(
+                run_id,
+                _plain_mapping_from_maybe_to_dict(
+                    getattr(request.config, "manifest"),
+                    path="composition_manifest",
+                ),
             )
             self.run_store.write_recipe_manifest(
                 run_id,
@@ -616,9 +613,10 @@ class PipelineRunner:
                 run_id,
                 {
                     **request.metadata,
-                    "config_provenance": getattr(
-                        request.config, "provenance"
-                    ).to_dict(),
+                    "config_provenance": _plain_mapping_from_maybe_to_dict(
+                        getattr(request.config, "provenance"),
+                        path="config_provenance",
+                    ),
                 },
             )
         elif config_mapping:
@@ -1249,7 +1247,13 @@ def _failure_type_for_exception(exc: Exception) -> str:
 def _is_composed_config(value: object) -> bool:
     return all(
         hasattr(value, name)
-        for name in ("resolved", "redacted", "provenance", "recipe_manifest")
+        for name in (
+            "resolved",
+            "redacted",
+            "manifest",
+            "provenance",
+            "recipe_manifest",
+        )
     )
 
 
@@ -1257,6 +1261,18 @@ def _plain(value: object) -> dict[str, PlainData]:
     normalized = ensure_plain_data(value, path="provenance")
     if not isinstance(normalized, dict):
         raise PipelineExecutionError("expected mapping plain data")
+    return cast(dict[str, PlainData], normalized)
+
+
+def _plain_mapping_from_maybe_to_dict(
+    value: object, *, path: str
+) -> dict[str, PlainData]:
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+    normalized = ensure_plain_data(value, path=path)
+    if not isinstance(normalized, dict):
+        raise PipelineExecutionError(f"{path} must be mapping plain data")
     return cast(dict[str, PlainData], normalized)
 
 
