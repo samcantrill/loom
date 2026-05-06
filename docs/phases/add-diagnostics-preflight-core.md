@@ -412,7 +412,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07 by `loom_phase_refiner`;
+  no implementation or test changes were needed.
 - PR review: unused
 
 ## Completion Notes
@@ -431,6 +432,12 @@ make test-summary
   Ruff, and Pyright checks passed as recorded below. The integration test command
   was run with `--extra config` because config composition requires optional
   config dependencies in this repository.
+- Implementation refinement: completed on 2026-05-07 by `loom_phase_refiner`;
+  verified Phase 1 scope, public names, deterministic aggregation,
+  selected-group ordering, unknown and empty group errors, missing-`RUN_URI`
+  skip behavior, import-light diagnostics root expectations, and future-phase
+  exclusions. No code or test defects were found, so this pass only records the
+  consumed expanded-path refinement budget and refreshed targeted validation.
 - Refinement summary: public model/export names, aggregation semantics,
   selected-group behavior, missing `RUN_URI` skip behavior, import-light
   expectations, test obligations, and lower-layer facade scope were tightened
@@ -501,6 +508,24 @@ result: passed
 
 command: UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright src/loom/diagnostics tests/unit/loom/diagnostics tests/contracts/test_diagnostics_preflight_contract.py tests/integration/diagnostics
 result: passed, 0 errors
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py -m package
+result: passed, 27 tests during implementation refinement
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/diagnostics
+result: passed, 12 tests during implementation refinement
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_diagnostics_preflight_contract.py
+result: passed, 3 tests during implementation refinement
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/diagnostics
+result: passed, 4 tests during implementation refinement
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/diagnostics tests/unit/loom/diagnostics tests/contracts/test_diagnostics_preflight_contract.py tests/integration/diagnostics tests/package/test_import.py tests/package/test_import_boundaries.py
+result: passed during implementation refinement
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright src/loom/diagnostics tests/unit/loom/diagnostics tests/contracts/test_diagnostics_preflight_contract.py tests/integration/diagnostics
+result: passed, 0 errors during implementation refinement
 ```
 
 #### Known Issues Or Blockers
