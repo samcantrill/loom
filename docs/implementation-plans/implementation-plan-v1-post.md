@@ -207,7 +207,7 @@ validation set is the maximum available evidence.
 
 ### Phase 1. Contract And Documentation Cleanup
 
-Status: pending
+Status: merged
 
 Goal:
 
@@ -246,6 +246,26 @@ Required evidence:
   `loom.config` import.
 - E2E: deferred; no user workflow behavior changes beyond documentation.
 - Opt-in/config-extra: docs/example checks when touched.
+
+Phase metadata:
+
+- Branch: `codex/v1-post-contract-docs`
+- Worktree: `/home/samcantrill/work/loom-worktrees/v1-post-contract-docs`
+- Stack predecessor: none
+- PR target: `develop`
+- PR: https://github.com/samcantrill/loom/pull/44
+- Merge: squash-merged into `develop` on 2026-05-06 after review approval and
+  passing GitHub CI `checks`.
+- Implementation summary: removed the source-level pipeline-to-config type
+  import, added direct `PipelineRunner.run(...)` import-boundary regression
+  coverage, and updated Phase 1 docs/roadmap metadata.
+- Test results summary: `make validate-pr` passed; `make test-summary` passed
+  with 755 passed and 9 skipped across package, unit, contract, integration,
+  e2e, and config-extra rows. GitHub CI `checks` passed before merge.
+- Follow-up notes: later phases still own strict authoring semantics,
+  artifact-safe provenance/fingerprint ordering, run-store manifest
+  persistence, structured errors, and recipe/resolver hardening. No successor
+  branch depended on the Phase 1 branch at merge time.
 
 ### Phase 2. Strict Authoring And Override Semantics
 
