@@ -272,3 +272,86 @@ make test-summary
 - Phase implementation refinement: unused; reserved for the later implementation workflow because expanded path is active or if validation/coverage obligations are missed.
 - PR review: unused.
 - PR body draft/refine: unused; reserved for `loom_pr_preparer`.
+
+## Implementation Completion Notes
+
+### Implementation Summary
+
+- Audited and updated current-behavior wording in `docs/features/config.md`,
+  `docs/features/provenance.md`, `docs/features/fingerprints.md`,
+  `docs/features/pipeline.md`, and `docs/loom.md`.
+- Kept future CLI, remote-store, sweep, and `_copy_` examples explicitly future
+  scoped; no functional CLI, console script, `_copy_`, remote store, resolver,
+  sweep, or persistence helper behavior was added.
+- Clarified that `loom.config` returns in-memory resolved config plus
+  artifact-safe records but remains persistence-free.
+- Clarified that composed-config runner defaults persist
+  `config/composition_manifest.json`, `config/recipe_manifest.json`, and
+  artifact-safe run metadata provenance, without default
+  `config/resolved.yaml` or `config/resolved.redacted.yaml`.
+- Tightened representative public-Python e2e coverage in
+  `tests/e2e/test_local_pipeline_run.py` so the composed config object path
+  proves the persisted composition manifest wrapper is plain data, preserves
+  authored resolver expressions, omits resolver outputs/raw source payloads by
+  default, writes the recipe manifest, and omits default resolved snapshots.
+- Updated `docs/implementation-plans/implementation-plan-v1-post.md` with
+  Phase 7 completion metadata, validation evidence, accepted debt adjustments,
+  and v2 handoff notes after final validation passed.
+
+### Commits
+
+| Commit | Summary |
+| --- | --- |
+| `5c5f2c1` | Docs and e2e hardening for v1-post artifact-safe composed-config evidence. |
+
+### Scope Control
+
+- Implements only the assigned Phase 7 docs/evidence/metadata scope: yes.
+- Future-phase work avoided: functional CLI, console scripts, remote stores,
+  sweeps, `_copy_`, plugin/remote resolvers, default raw source persistence,
+  default resolved composed-config snapshots, config persistence helpers, and
+  new product semantics were avoided.
+- Unrelated refactors avoided: yes.
+- Public contract decisions changed: no.
+
+### Tests Added Or Updated
+
+- Package: no new tests; targeted package/import/store API sweep passed.
+- Unit: no new tests; no doc-discovered unit behavior gap required a new unit
+  test.
+- Contract: no new tests; final contract rows passed.
+- Integration: no new tests; targeted config and pipeline integration sweeps
+  passed.
+- E2E: updated `tests/e2e/test_local_pipeline_run.py` for representative
+  composed-config runner artifact-safety assertions. Existing
+  `tests/e2e/test_config_composition_public_api.py` remains the public config
+  artifact-safety half of the representative path.
+- Opt-in: config-extra final evidence passed.
+
+### Validation Run
+
+```text
+command: UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py tests/package/test_pipeline_store_api.py
+result: passed, 23 passed
+
+command: UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/e2e/test_local_pipeline_run.py tests/e2e/test_config_composition_public_api.py
+result: passed, 7 passed
+
+command: UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/integration/config/test_compose_provenance.py tests/integration/config/test_compose_fingerprints.py tests/integration/config/test_compose_source_snapshots.py
+result: passed, 21 passed
+
+command: UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_stores.py
+result: passed, 5 passed
+
+command: make validate-pr
+result: passed; Ruff passed, Pyright passed, default harness 448 passed and 11 skipped, config-extra harness 363 passed and 455 deselected, uv build passed
+
+command: make test-summary
+result: passed; package 39 passed and 1 skipped, unit 364 passed and 1 skipped, contract 36 passed and 2 skipped, integration 9 passed and 5 skipped, e2e 7 passed, config-extra 363 passed and 455 deselected
+```
+
+### Known Issues Or Blockers
+
+- No blockers.
+- PR preparation/review remains unused and should be handled by the managing
+  workflow; this fallback executor did not open a PR.
