@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation pending
+- Status: PR open
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 1: Run URI Runtime Addressing`
 - Branch: `codex/add-run-uri-addressing`
@@ -238,6 +238,6 @@ make test-summary
 - Implementation summary: completed in `952ad5f` (`feat: migrate run identity to run uri`). The runtime, planning, execution, store, status/event/lock, provenance, artifact address, docs example, and feature-doc surfaces now use `run_uri`; local run URIs are strict local `file://` values resolved to absolute URI strings; store-owned default allocation uses timestamped local run URIs under `LocalRunStore.root`; `ArtifactRef` remains run-agnostic; and old `run_id` persisted fields are rejected by exact-wrapper validation.
 - Implementation validation: `make validate-pr` passed with Ruff, Pyright, default harness, config-extra harness, and `uv build`; `make test-summary` wrote `build/test-summary.md` with package 39 passed / 1 skipped, unit 377 passed / 1 skipped, contract 36 passed / 2 skipped, integration 9 passed / 5 skipped, e2e 7 passed, and config-extra 363 passed / 468 deselected.
 - Refinement summary: not needed; implementation validation passed without a phase-refiner pass.
-- PR preparation: pending.
+- PR preparation: PR opened against `develop`: https://github.com/samcantrill/loom/pull/59
 - Stack maintenance: none; root phase targets `develop`.
 - Remaining blockers: none known.
