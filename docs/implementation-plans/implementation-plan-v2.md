@@ -878,7 +878,7 @@ Completion summary:
 
 ### Phase 2 - CLI Foundation And Shared Infrastructure
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-cli-foundation`
 PR: https://github.com/samcantrill/loom/pull/60
 
@@ -961,10 +961,11 @@ Notes:
 
 Completion summary:
 
-- PR opened against `develop`: https://github.com/samcantrill/loom/pull/60
+- PR opened and merged into `develop`: https://github.com/samcantrill/loom/pull/60
+- Merge commit: `c83fac91736dcc918c0b8da107793530f4f08882`.
 - Implementation adds the import-light CLI foundation and shared output/error
   helpers without implementing command behavior early.
-- Local validation passed with `make validate-pr` and `make test-summary`.
+- Validation passed with `make validate-pr`, `make test-summary`, and GitHub CI.
 
 ### Phase 3 - Validate Command
 

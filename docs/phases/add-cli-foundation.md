@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: CLI Core
 - PR title: `CLI Core - Phase 2: Foundation and Shared Output`
 - Branch: `codex/add-cli-foundation`
@@ -112,5 +112,5 @@ make test-summary
   - `make validate-pr`: passed; Ruff, Pyright, default no-extra suite, config-extra suite, and build passed.
   - `make test-summary`: passed; overall 850 passed, 9 skipped, 487 deselected.
 - PR preparation: PR opened against `develop`: https://github.com/samcantrill/loom/pull/60
-- Merge notes:
+- Merge notes: PR #60 merged into `develop` at `c83fac91736dcc918c0b8da107793530f4f08882` after `make validate-pr`, `make test-summary`, managing-agent review, and GitHub CI passed.
 - Remaining blockers: none known.
