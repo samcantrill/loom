@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 1: Contract And Documentation Cleanup`
 - Branch: `codex/v1-post-contract-docs`
@@ -19,7 +19,7 @@
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v1-post.md`; no blockers remain.
 - Plan quality gate loop budget: initial `loom_plan_reviewer` review used, automated plan refinement pass used, confirmation review used.
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: pending after draft because the manager selected the expanded path
+- Refine pass: completed by `loom_phase_planner`; this is the single expanded-path refinement pass
 - Setup limitations: `gh auth status` initially reported an invalid token inside the sandbox, then succeeded with approved network access; `gh auth setup-git` and `git fetch origin` succeeded with approved access before branch creation.
 - Blockers: none
 
@@ -49,13 +49,13 @@ This is the root v1-post remediation phase. It cleans contract wording and one s
 ## Current Source And Harness Findings
 
 - Existing files or modules that constrain this phase: `src/loom/pipeline/execution/models.py` uses a `TYPE_CHECKING` import of `loom.config.api.ComposedConfig`, while runtime composed-config handling is already duck-typed through required attributes. `src/loom/pipeline/execution/runner.py` also uses duck-typed composed-config checks and should not gain a real config dependency.
-- Existing tests or harness behavior: package import-boundary tests live in `tests/package/test_import_boundaries.py`, including existing parse-only pipeline coverage. Full runner integration coverage lives in `tests/integration/pipeline/test_local_execution.py` and uses optional config dependencies today.
+- Existing tests or harness behavior: package import-boundary tests live in `tests/package/test_import_boundaries.py`, including existing import-only pipeline coverage. Execution model unit coverage lives in `tests/unit/loom/pipeline/execution/test_execution_models.py`. Full runner integration coverage lives in `tests/integration/pipeline/test_local_execution.py`, but that module currently imports optional config dependencies at module import time and should not be the only home for the no-config direct-run regression.
 - Import-boundary or dependency constraints: `loom.pipeline` must remain usable without `loom.config`, YAML, OmegaConf, Pydantic, CLI, or project config composition imports. The new full-run regression should execute in a fresh Python process so `sys.modules` assertions are meaningful.
 
 ## In-Scope Work
 
 - Remove the source-level `TYPE_CHECKING` reference from `loom.pipeline` to `loom.config` while preserving accepted `RunRequest.config` validation and duck-typed composed-config support.
-- Add a package or integration-level subprocess regression that constructs a direct `PipelineSpec`, runs it through `PipelineRunner.run(...)`, and fails if `loom.config` is imported before or during the direct pipeline run.
+- Add a package-level subprocess regression and, if clearer for suite accounting, a non-optional focused integration test that constructs a direct `PipelineSpec`, runs it through `PipelineRunner.run(...)`, and fails if `loom.config` is imported before or during the direct pipeline run.
 - Document authored configs as trusted project code and explicitly state untrusted configs are unsupported.
 - Add public config feature docs for `inspect_config_composition`, including that it is for inspection, debugging, and tests, not pipeline construction.
 - Document dot-path override no-escape behavior and strict `_target_` dotted or colon import syntax.
@@ -73,13 +73,13 @@ This is the root v1-post remediation phase. It cleans contract wording and one s
 ## Assumptions
 
 - The source plan's plan quality gate status is authoritative: review, refinement, and confirmation review budgets are already consumed with no blocking findings remaining.
-- Direct `PipelineSpec` execution can be tested without importing config extras by using existing pipeline support test stages and local run stores from a fresh subprocess.
+- Direct `PipelineSpec` execution can be tested without importing config extras by building the `PipelineSpec` from plain Python data, using existing pipeline support stages, and using `LocalRunStore` from a fresh subprocess.
 - Roadmap metadata cleanup should be narrow and factual; older planning notes may be marked superseded instead of rewritten extensively when they are historical records.
 - Documentation updates should stay domain-neutral and describe the Python API surface only.
 
 ## Scope Contract
 
-No new public runtime contract is introduced. The existing public contract is clarified: `loom.pipeline` can construct and run direct Python `PipelineSpec` inputs without importing `loom.config`; `loom.config` composition and inspection APIs are optional Python APIs; authored configs are trusted project code, not an untrusted parsing sandbox; `inspect_config_composition` is an inspection/debugging/testing API and not a construction path for pipeline execution; dot-path overrides do not provide an escape syntax for literal dots in key names; `_target_` values must be strict dotted or colon import paths.
+No new public runtime contract is introduced. The existing public contract is clarified: `loom.pipeline` can construct and run direct Python `PipelineSpec` inputs without importing `loom.config`; `loom.config` composition and inspection APIs are optional Python APIs; authored configs are trusted project code, not an untrusted parsing sandbox; `inspect_config_composition` is an inspection/debugging/testing API and not a construction path for pipeline execution; dot-path overrides split on literal dots and do not provide an escape syntax for literal dots in key names; `_target_` values must be strict dotted or colon import paths.
 
 The executor must not redesign config parsing, `_target_` import resolution, override value parsing, or pipeline/config persistence behavior in this phase.
 
@@ -112,16 +112,17 @@ This phase should make later v1-post changes easier to review by removing stale 
 ## Reviewability
 
 - Expected PR size and shape: small source import-boundary cleanup, one focused full-run regression test, and targeted documentation/metadata edits.
-- Files and areas to inspect: `src/loom/pipeline/execution/models.py`, `tests/package/test_import_boundaries.py` or a narrowly chosen pipeline integration test file, `docs/features/config.md`, `docs/implementation-plans/implementation-roadmap.md`, and `docs/implementation-plans/roadmap-v1-planning-notes.md`.
+- Files and areas to inspect: `src/loom/pipeline/execution/models.py`, `tests/package/test_import_boundaries.py`, `tests/unit/loom/pipeline/execution/test_execution_models.py`, a narrowly chosen non-optional pipeline integration test file if needed, `docs/features/config.md`, `docs/implementation-plans/implementation-roadmap.md`, and `docs/implementation-plans/roadmap-v1-planning-notes.md`.
 - Scope-control checks: diff must not add config imports to pipeline runtime modules, change composed-config artifact behavior, add CLI/persistence paths, implement `_copy_`, broaden resolver support, or alter strict override semantics beyond documentation.
 
 ## Implementation Steps
 
 1. Remove the type-only config import boundary leak while preserving current runtime duck-typing and validation messages.
 2. Add the full direct `PipelineSpec` runner regression in a fresh subprocess and assert `loom.config` plus config-only dependencies are not imported before or after `PipelineRunner.run(...)`.
-3. Update public config docs for trusted project code, `inspect_config_composition` usage boundaries, dot-path no-escape behavior, and strict `_target_` syntax.
-4. Apply the narrow roadmap cleanup for stale `_copy_` v1 wording and resolved `change-needed` metadata, preferring superseded notes where broad rewrites would obscure historical context.
-5. Run targeted package/docs/config-extra checks, then let PR preparation run the final repository gates.
+3. Add or update focused execution model unit coverage for `RunRequest` direct-pipeline and plain-mapping config acceptance without a concrete config class dependency.
+4. Update public config docs for trusted project code, `inspect_config_composition` usage boundaries, dot-path no-escape behavior, and strict `_target_` syntax.
+5. Apply the narrow roadmap cleanup for stale `_copy_` v1 wording and resolved `change-needed` metadata, preferring superseded notes where broad rewrites would obscure historical context.
+6. Run targeted package/docs/config-extra checks, then let PR preparation run the final repository gates.
 
 ## Test Plan
 
@@ -129,13 +130,13 @@ This phase should make later v1-post changes easier to review by removing stale 
 
 - Status: required.
 - Expected paths: `tests/package/test_import_boundaries.py` and any existing package API test touched by import cleanup.
-- Required assertions or deferral reason: fresh subprocess imports direct pipeline APIs, constructs a direct `PipelineSpec`, runs `PipelineRunner.run(...)` through a local run store, and confirms `loom.config`, YAML, OmegaConf, Pydantic, CLI, and project config composition modules are not imported by the direct pipeline path.
+- Required assertions or deferral reason: fresh subprocess imports only direct pipeline APIs and local store/runtime helpers needed for execution, constructs a direct `PipelineSpec` from plain Python data, runs `PipelineRunner.run(...)` through a local run store, verifies the run succeeds and writes expected artifacts, and confirms `loom.config`, YAML, OmegaConf, Pydantic, CLI, and project config composition modules are not imported before or after the direct pipeline path.
 
 ### Unit Suite
 
-- Status: required if practical.
-- Expected paths: `tests/unit/loom/pipeline/execution/test_runner.py` or `tests/unit/loom/pipeline` if the import cleanup needs model-level validation.
-- Required assertions or deferral reason: focused assertion that `RunRequest` still accepts direct `PipelineSpec` inputs and mapping/composed-like config inputs without a concrete `ComposedConfig` import. If package subprocess coverage fully exercises the removed import and no unit hook adds value, record the unit deferral in the PR body.
+- Status: required.
+- Expected paths: `tests/unit/loom/pipeline/execution/test_execution_models.py`.
+- Required assertions or deferral reason: focused assertions that `RunRequest` accepts direct `PipelineSpec` inputs and plain mapping config inputs without importing or requiring a concrete `ComposedConfig` class. If annotations are changed through a local protocol or alias, unit coverage must also assert current validation messages remain stable for invalid `config` and `pipeline` inputs.
 
 ### Contract Suite
 
@@ -146,8 +147,8 @@ This phase should make later v1-post changes easier to review by removing stale 
 ### Integration Suite
 
 - Status: required.
-- Expected paths: package subprocess coverage may satisfy this by running the full local runner; otherwise add a focused row under `tests/integration/pipeline/`.
-- Required assertions or deferral reason: `PipelineRunner.run(...)` succeeds with direct `PipelineSpec` and does not import `loom.config` during the full run.
+- Expected paths: prefer a new focused non-optional integration test under `tests/integration/pipeline/` if the package subprocess test would become too large; avoid depending on `tests/integration/pipeline/test_local_execution.py` unless its module-level optional config imports are isolated first.
+- Required assertions or deferral reason: `PipelineRunner.run(...)` succeeds with direct `PipelineSpec`, persists normal local-run state and artifacts, and does not import `loom.config` during the full run. The same subprocess test may satisfy package and integration intent only if the PR evidence explicitly records that it executes the full local runner path without config extras.
 
 ### E2E Suite
 
@@ -157,7 +158,7 @@ This phase should make later v1-post changes easier to review by removing stale 
 
 ### Opt-In Suites
 
-- Status: required for touched docs/examples, otherwise deferred.
+- Status: deferred unless executable docs/examples or optional config-extra snippets are changed.
 - Markers affected: `optional_dependency`, config-extra/docs-example markers if existing example-check tests cover edited snippets.
 - Required assertions or deferral reason: run relevant docs/example or config-extra checks if edited docs include executable snippets; if edits are prose-only, record that no opt-in runtime behavior was touched and rely on `make test-summary` during PR preparation for suite evidence.
 
@@ -174,9 +175,13 @@ Targeted development commands:
 
 ```sh
 uv run pytest tests/package/test_import_boundaries.py
-uv run pytest tests/unit/loom/pipeline/execution/test_runner.py
-uv run pytest tests/integration/pipeline/test_local_execution.py
+uv run pytest tests/unit/loom/pipeline/execution/test_execution_models.py
+uv run pytest tests/integration/pipeline/test_direct_execution_import_boundary.py
 ```
+
+Run the focused integration command only if the executor adds that separate
+non-optional integration file; otherwise record in PR evidence that the package
+subprocess test executed the full local runner path.
 
 Final PR-preparation commands:
 
@@ -187,11 +192,11 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: source boundary cleanup first, full-run subprocess regression second, public config docs third, roadmap metadata cleanup fourth.
-- Tests to run with each slice: run `uv run pytest tests/package/test_import_boundaries.py` after import/test changes; run the narrow unit or integration target if a separate test file is touched; run docs/example checks only if executable snippets are edited.
+- Safe implementation slices: source boundary cleanup first, direct-run subprocess and unit regressions second, public config docs third, roadmap metadata cleanup fourth.
+- Tests to run with each slice: run `uv run pytest tests/package/test_import_boundaries.py` and `uv run pytest tests/unit/loom/pipeline/execution/test_execution_models.py` after import/test changes; run the narrow non-optional integration target if a separate test file is added or touched; run docs/example checks only if executable snippets are edited.
 - Decisions the executor must not revisit: no new runtime config behavior, no CLI, no `_copy_`, no plugin/remote resolvers, no persistence changes, no provenance/fingerprint schema changes, no strict YAML or override behavior changes beyond docs, and no pipeline dependency on config classes.
 - Conditions that require stopping for the manager: direct full runner coverage cannot be added without importing `loom.config`; Pyright requires a concrete config import in pipeline source; roadmap cleanup conflicts with historical artifact policy; or docs correction requires deciding future-phase semantics not already accepted in the source plan.
-- Expanded-path refinement notes: the refine pass should verify this plan names the exact test home, documentation anchors, and roadmap metadata rows after draft review, but should not add product-code recipes or broaden Phase 1.
+- Expanded-path refinement notes: completed. This refinement names the exact required package and unit test homes, constrains any integration addition to a non-optional direct-run test, keeps executable docs checks conditional on snippet edits, and does not add product-code recipes or broaden Phase 1.
 
 ## Refinement And Review Budget Status
 
@@ -201,10 +206,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` on `codex/v1-post-contract-docs`.
-- Final phase execution plan: pending expanded-path refinement.
+- Final phase execution plan: completed by expanded-path refinement.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: made suite obligations explicit, named required test homes and stop conditions, confirmed root stack metadata, and preserved implementation/PR review budgets as unused.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none at draft time.
+- Remaining blockers: none after expanded-path refinement.
