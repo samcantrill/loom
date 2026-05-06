@@ -375,9 +375,11 @@ After merging, the managing agent must:
   `merged`.
 - Record the PR link or branch, implementation summary, checks, and follow-up
   notes, including any stack rebase or retargeting work.
-- Commit the metadata update with a `docs:` commit message and push it when
-  permissions allow. If direct pushes to `develop` are disallowed, prepare a
-  small metadata PR without blocking already-open successor phase work.
+- Commit the metadata update on `develop` with a `docs:` commit message and
+  push it directly to `develop` when permissions allow. Do not open a separate
+  "Post Phase <N> Merge" or other metadata-only PR for this bookkeeping update.
+  If direct pushes to `develop` are disallowed or fail, record the exact blocker
+  and ask the user how to proceed instead of creating a fallback PR.
 - Remove the phase worktree from `/home/samcantrill/work/loom-worktrees/` and
   prune stale worktree metadata only after successor branches no longer depend
   on that worktree or branch.

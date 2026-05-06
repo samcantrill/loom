@@ -236,9 +236,11 @@ Serial human-merge-gate mode:
   resolved within the assigned phase scope, the user interrupts, or the session
   can no longer keep polling.
 - After the PR is merged, fetch updated `develop`, verify the merged PR facts,
-  update the implementation-plan metadata to `merged`, commit/push that
-  metadata when permissions allow, clean up the completed phase worktree and
-  branch when safe, then start the next pending phase from updated `develop`.
+  update the implementation-plan metadata to `merged`, commit it on `develop`,
+  and push directly to `develop` when permissions allow. Do not create a
+  separate "Post Phase <N> Merge" metadata PR for this bookkeeping update. If a
+  direct push is blocked, record the blocker and ask for guidance instead of
+  opening a fallback PR.
 
 For new or ambiguous work before an implementation plan exists:
 
@@ -411,9 +413,12 @@ For each phase:
    - Follow-up notes for later phases.
    - Stack rebase or retargeting results for successor phases, including
      deferred maintenance when applicable.
-24. Commit the metadata update with a `docs:` commit message and push it when
-   permissions allow. If direct pushes to `develop` are disallowed, prepare a
-   small metadata PR without blocking already-open successor phase work.
+24. Commit the metadata update on `develop` with a `docs:` commit message and
+   push it directly to `develop` when permissions allow. Do not open a separate
+   "Post Phase <N> Merge" or other metadata-only PR for this bookkeeping
+   update. If the direct push to `develop` is disallowed or fails, record the
+   exact blocker in the phase notes and ask the user how to proceed instead of
+   creating a fallback PR.
 25. Remove the phase worktree from `/home/samcantrill/work/loom-worktrees`,
    run `git worktree prune`, and delete the phase branch only after successor
    branches no longer depend on it. Prefer `gh api --method DELETE
