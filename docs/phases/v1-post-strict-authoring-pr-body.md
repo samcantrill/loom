@@ -35,7 +35,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 435 passed and 11 skipped; config-extra passed with 338 passed and 441 deselected; `uv build` produced sdist and wheel artifacts. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; overall summary passed with 779 passed, 9 skipped, and 441 deselected. |
-| GitHub checks | Not run in this pass | Expanded-path PR-body draft only; PR opening and GitHub check verification are left for `.codex/prompts/pr-body-refine.md`. |
+| GitHub checks | Pending at PR creation | CI will run after the PR is submitted; local PR validation passed before opening. |
 
 ### Test Suite Summary
 
