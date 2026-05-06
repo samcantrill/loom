@@ -221,8 +221,62 @@ make test-summary
 - Draft plan: completed by `loom_phase_planner` on `codex/v1-post-source-errors`.
 - Final phase execution plan: expanded-path refinement completed; ready for `loom_phase_executor`.
 - Implementation summary:
+- Implemented metadata-only final-value authorship records under
+  `source_fact_records.final_value_authorship`, covering base/overlay source
+  maps, include expansion, local include customizations, recipe outputs, and
+  ordinary overrides without storing authored values.
+- Threaded final-value authorship into runtime interpolation diagnostics so
+  unsupported resolver errors use overlay and ordinary-override authorship when
+  available, with structured missing-authorship fallback details.
+- Converted existing merge, ordinary override, recipe, target import, and target
+  instantiation failures to context-bearing payloads while preserving existing
+  public exception names.
+- Added include remediation text and active include-stack details for nested
+  include resolution/expansion failures.
+- Redacted secret-like ordinary/include override raw strings, include local
+  customization metadata, and recipe argument manifests in provenance, manifest,
+  fingerprint, and serialized error surfaces.
 - Implementation validation:
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config pytest
+  tests/unit/loom/config/test_config_errors.py
+  tests/unit/loom/config/test_source_maps.py
+  tests/unit/loom/config/test_merge.py
+  tests/unit/loom/config/test_overrides.py
+  tests/unit/loom/config/test_interpolation.py
+  tests/unit/loom/config/test_config_provenance.py
+  tests/unit/loom/config/test_config_artifacts.py
+  tests/unit/loom/config/recipes/test_expansion.py
+  tests/unit/loom/config/recipes/test_manifest.py
+  tests/unit/loom/config/instantiate/test_targets.py
+  tests/unit/loom/config/instantiate/test_recursive.py
+  tests/contracts/test_config_error_contract.py
+  tests/contracts/test_config_artifact_contract.py
+  tests/contracts/test_config_composition_inspection_contract.py
+  tests/integration/config/test_compose_config.py
+  tests/integration/config/test_compose_overrides.py
+  tests/integration/config/test_compose_includes.py
+  tests/integration/config/test_compose_resolvers.py
+  tests/integration/config/test_compose_recipes.py
+  tests/integration/config/test_compose_target_handoff.py
+  tests/integration/config/test_compose_provenance.py
+  tests/integration/config/test_compose_redaction_public_matrix.py` passed:
+  210 passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config ruff
+  check src/loom/config tests/unit/loom/config tests/integration/config
+  tests/contracts/test_config_error_contract.py` passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pyright src/loom/config tests/unit/loom/config tests/integration/config
+  tests/contracts/test_config_error_contract.py` passed: 0 errors.
+- `UV_CACHE_DIR=/tmp/uv-cache make test-config-extra` passed: 346 passed, 442
+  deselected.
+- `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff, Pyright, default
+  suite, config-extra suite, and build completed successfully.
+- `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+  `build/test-summary.md`: package 38 passed/1 skipped; unit 357 passed/1
+  skipped; contract 32 passed/2 skipped; integration 9 passed/5 skipped; e2e 6
+  passed; config-extra 346 passed/442 deselected.
 - Refinement summary: tightened existing-source findings, authorship metadata shape, redaction acceptance criteria, suite obligations, executor stop conditions, and Phase 4/5 scope boundaries without changing branch or stack metadata.
 - PR preparation:
 - Stack maintenance:
 - Remaining blockers:
+- None.
