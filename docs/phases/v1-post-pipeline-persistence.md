@@ -295,4 +295,25 @@ make test-summary
 - Refinement validation:
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py`: passed, 20 passed.
   - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check tests/unit/loom/pipeline/stores/test_local_runs.py docs/phases/v1-post-pipeline-persistence.md`: passed.
-- PR preparation: pending.
+- PR preparation: in progress by `loom_pr_preparer`.
+- PR body artifact: `docs/phases/v1-post-pipeline-persistence-pr-body.md`.
+- PR body draft/refine status: completed in this PR-preparation pass for the expanded path; body checked against the phase execution plan, final diff, validation evidence, and `.github/PULL_REQUEST_TEMPLATE.md`.
+- PR preparation scope inspection:
+  - Branch/worktree confirmed: `codex/v1-post-pipeline-persistence` in `/home/samcantrill/work/loom-worktrees/v1-post-pipeline-persistence`.
+  - Target branch confirmed from phase metadata: `develop`; stack predecessor: none; merge eligibility: root phase PR is merge-eligible after review and checks.
+  - Final diff is limited to the Phase 5 phase artifact, run-store protocol/local-store composition manifest persistence, runner composed-config persistence, package/contract/unit/integration/e2e/config-extra tests, and the PR body artifact.
+  - `rg` inspection found no `loom.config` imports, `CompositionManifest`, `ConfigProvenance`, or concrete config-class imports in `src/loom/pipeline` or `src/loom/pipeline/stores`.
+  - Composed-config persistence no longer writes default `resolved` or `resolved_redacted` snapshots; the only remaining `resolved_redacted` write in `PipelineRunner` is the pre-existing plain-mapping config path for caller-provided runtime mappings.
+  - No new config snapshot names or full redacted config artifact paths were added; `src/loom/pipeline/stores/_paths.py` remains unchanged for snapshot names.
+  - No Phase 6/CLI/`_copy_`/remote-store/runtime-replay/automatic runtime-object fingerprinting scope was added.
+- PR preparation validation:
+  - `git diff --check develop...HEAD`: passed.
+  - `make validate-pr`: passed with Ruff, Pyright, default harness `447 passed, 11 skipped`, config-extra harness `362 passed, 454 deselected`, and `uv build`.
+  - `make test-summary`: passed; suite summary written to `build/test-summary.md` with package `38 passed, 1 skipped`, unit `364 passed, 1 skipped`, contract `36 passed, 2 skipped`, integration `9 passed, 5 skipped`, e2e `7 passed`, config-extra `362 passed, 454 deselected`, and overall `816 passed, 9 skipped, 454 deselected`.
+- PR facts:
+  - Title: `V1 Post Configuration - Phase 5: Pipeline Persistence And Runtime Fingerprints`
+  - Base: `develop`
+  - Head: `codex/v1-post-pipeline-persistence`
+  - URL: pending GitHub PR creation.
+  - Verification: pending `gh pr view <PR> --json baseRefName,headRefName,state,url`.
+- PR blockers: none at local validation/body preparation stage.
