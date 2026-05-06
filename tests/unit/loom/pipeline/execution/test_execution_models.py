@@ -1,5 +1,8 @@
 """Unit tests for execution models."""
 
+from collections.abc import Mapping, Sequence
+from typing import cast
+
 import pytest
 
 from loom.pipeline import PipelineSpec
@@ -10,11 +13,85 @@ from loom.pipeline.execution import (
     RunRequest,
     RunRequestError,
 )
+from loom.serialization import PlainData
+
+
+def _minimal_pipeline_spec() -> PipelineSpec:
+    return PipelineSpec.from_config(
+        {
+            "stages": [
+                {
+                    "name": "build",
+                    "factory": {
+                        "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                    },
+                    "outputs": {"data": {"artifact_type": "json"}},
+                }
+            ]
+        }
+    )
 
 
 def test_run_request_requires_config_or_pipeline() -> None:
     with pytest.raises(RunRequestError):
         RunRequest()
+
+
+def test_run_request_accepts_direct_pipeline_spec() -> None:
+    spec = _minimal_pipeline_spec()
+
+    request = RunRequest(pipeline=spec, run_id="run1")
+
+    assert request.pipeline is spec
+    assert request.config is None
+
+
+def test_run_request_accepts_plain_mapping_config() -> None:
+    config = cast(
+        Mapping[str, PlainData],
+        {
+            "pipeline": {
+                "stages": [
+                    {
+                        "name": "build",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                        },
+                        "outputs": {"data": {"artifact_type": "json"}},
+                    },
+                ]
+            }
+        },
+    )
+
+    request = RunRequest(config=config, run_id="run1")
+
+    assert request.config == config
+
+
+def test_run_request_accepts_duck_typed_composed_config() -> None:
+    class FakeComposedConfig:
+        @property
+        def resolved(self) -> Mapping[str, PlainData]:
+            return {"pipeline": {"stages": []}}
+
+        @property
+        def redacted(self) -> Mapping[str, PlainData]:
+            return {"pipeline": {"stages": []}}
+
+        @property
+        def provenance(self) -> object:
+            return object()
+
+        @property
+        def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]:
+            return ()
+
+    config = FakeComposedConfig()
+
+    request = RunRequest(config=config, run_id="run1")
+
+    assert request.config is config
 
 
 def test_run_request_rejects_continue_on_failure() -> None:

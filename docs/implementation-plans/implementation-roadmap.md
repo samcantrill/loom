@@ -80,7 +80,7 @@ written.
 | Version | Theme | Primary outcome |
 | --- | --- | --- |
 | v0 | Local runtime kernel | Local Python API for composing, running, tracing, and resuming static artifact DAGs in one run directory. |
-| v1 | Rebuildable config composition | Explicit `_include_`, `_replace_`, and `_copy_` composition for nested config files, component swaps, reusable stage configs, provenance, and source snapshots. |
+| v1 | Rebuildable config composition | Explicit `_include_` and `_replace_` composition for nested config files, component swaps, provenance, and artifact-safe source records; `_copy_` remains deferred. |
 | v2 | CLI core | Thin `loom` CLI for validate, plan, and run over the v0 local runtime. |
 | v3 | Local diagnostics and preflight | Preflight checks plus status, logs, and artifact inspection for local runs. |
 | v4 | Runtime options and resources | Typed invocation, resume, execution, profile, and resource models shared by later executors. |
@@ -157,18 +157,15 @@ Goal:
 
 - Add explicit recursive config composition so large project configs can be
   factored into nested files, whole components can be swapped for rapid
-  experimentation, repeated stage configs can reuse templates, and runs can
-  preserve enough authored inputs to rebuild composition without adopting Hydra
-  defaults, launchers, sweepers, custom resolvers, or an arbitrary YAML
-  expression language.
+  experimentation, and runs can preserve enough authored inputs to rebuild
+  composition without adopting Hydra defaults, launchers, sweepers, custom
+  resolvers, `_copy_`, or an arbitrary YAML expression language.
 
 Implement:
 
 - `_include_` blocks inside mappings.
 - `_replace_` blocks inside mappings for whole-section replacement during
   overlay, CLI, and sweep-generated override merges.
-- `_copy_` blocks inside mappings for deep-copying another composed config
-  subtree before local sibling overrides are applied.
 - Strict override semantics where `path=value` updates an existing path and
   `+path=value` explicitly adds a new variable or structured branch.
 - Relative include resolution based on the including file and the mapping key
@@ -177,32 +174,32 @@ Implement:
 - Explicit URI include resolution limited to local paths and `file://` URIs in
   v1.
 - Authoring-level merge of base config, overlays, and CLI override mappings
-  before include/copy expansion, while preserving source-location metadata for
+  before include expansion, while preserving source-location metadata for
   path-aware include resolution.
 - Deterministic merge semantics where the included mapping loads first and
   sibling keys in the including mapping override it.
 - Path-aware errors when an `_include_` swaps over existing mapping content
   without `_replace_: true`.
-- Include and copy stack tracking, cycle detection, composition provenance,
-  source hashes, replacement records, and path-aware errors.
-- Composition manifests and source snapshots for base configs, overlays, and
-  included files so run directories can preserve rebuildable config inputs.
+- Include stack tracking, cycle detection, composition provenance, source
+  hashes, replacement records, and path-aware errors.
+- Composition manifests and artifact-safe source records for base configs,
+  overlays, and included files so run directories can preserve rebuildable
+  config inputs.
 - Tests for relative includes, nested includes, URI includes, sibling
-  overrides, `_replace_`, `_copy_`, strict update overrides, `+` add overrides,
-  overlays containing includes, CLI component replacement, cycle errors,
-  missing includes/copies, source snapshots, and provenance.
+  overrides, `_replace_`, strict update overrides, `+` add overrides, overlays
+  containing includes, CLI component replacement, cycle errors, missing
+  includes, source records, and provenance.
 
 Exit criteria:
 
-- Users can split a config into nested component files, swap components, and
-  reuse stage config templates without hidden global search behavior.
+- Users can split a config into nested component files and swap components
+  without hidden global search behavior.
 - Component swaps cannot accidentally merge stale lower-precedence keys because
   `_include_` over existing mapping content requires `_replace_: true`.
 - Override strings catch typos by default and require `+` for intentional
   additions.
-- Resolved config snapshots are complete, deterministic, and contain enough
-  provenance to identify every included file or URI, copy source, replacement,
-  and source snapshot.
+- Artifact-safe config records are deterministic and contain enough provenance
+  to identify every included file or URI, replacement, and source record.
 - Composition directives compose cleanly with v0 overlays, dot-path overrides,
   interpolation, recipe expansion, redaction, and fingerprints.
 

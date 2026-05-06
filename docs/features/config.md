@@ -62,7 +62,10 @@ Typed configuration models should be used as internal correctness contracts at
 stable `loom` boundaries. They should not become a new YAML authoring language.
 Project-specific YAML remains ordinary trusted project config unless it crosses
 a `loom` contract such as a pipeline spec, stage spec, artifact reference, or
-recipe input.
+recipe input. Authored config files, recipes, and `_target_` import paths are
+trusted project code. `loom.config` does not provide an untrusted-config
+sandbox, import allow-list mode, or safe execution boundary for configs supplied
+by an untrusted party.
 
 ---
 
@@ -271,6 +274,12 @@ package.module.Class
 package.module:function
 package.module:Class
 ```
+
+The syntax is intentionally strict. Dotted targets import the final name from a
+module path; colon targets import the name after the colon from the module path
+before it. Nested object lookup after the final dotted segment or after the
+colon target is not supported, so nested classes or attributes should be exposed
+through a top-level module object or factory function.
 
 ### 5.8 Include
 
@@ -731,6 +740,11 @@ Overrides should be recorded exactly as provided and after parsing.
 The add marker belongs to override syntax and should not appear in the resolved
 config path.
 
+Override paths split on literal dots. V1 does not define an escape syntax for a
+literal dot inside a mapping key, so a key such as `model.v1` is not addressable
+through an override path segment. Use authored YAML structure, includes, or
+recipe outputs when literal-dot keys are required.
+
 ---
 
 ## 10. Interpolation
@@ -893,7 +907,7 @@ Rules:
 
 ```text
 _target_:
-  required import path
+  required strict dotted or colon import path
 
 _partial_:
   if true, return functools.partial instead of constructing immediately
@@ -925,6 +939,17 @@ stage = instantiate(cfg["stage"], runtime={"logger": logger})
 ```
 
 Instantiation should fail loudly when a target cannot be imported or constructor arguments do not match.
+Targets must use one of the supported strict forms:
+
+```text
+package.module.Class
+package.module:function
+package.module:Class
+```
+
+Nested lookup forms such as `package.module.Outer.Inner` and
+`package.module:Outer.Inner` are rejected. Put the intended class or factory at
+module scope and reference that object directly.
 
 ---
 
@@ -1039,6 +1064,7 @@ from loom.config import (
     RecipeCatalog,
     compose_config,
     compose_config_with_catalog,
+    inspect_config_composition,
     instantiate,
     register_recipe,
     Recipe,
@@ -1055,6 +1081,24 @@ cfg = compose_config(
     overrides=["run.seed=123"],
 )
 ```
+
+`inspect_config_composition`:
+
+```python
+inspection = inspect_config_composition(
+    config_path="experiment.yaml",
+    overlays=["overlays/local.yaml"],
+    overrides=["run.seed=123"],
+)
+```
+
+`inspect_config_composition` is for inspection, debugging, review tooling, and
+tests. It exposes stable plain-data stage records for composition decisions; it
+is not a pipeline construction API and callers should not build
+`PipelineSpec`/`StageSpec` objects from inspection internals. Use
+`compose_config` for normal composition, `instantiate` for trusted object
+graphs, and direct `PipelineSpec` inputs when running a pipeline without
+`loom.config`.
 
 `compose_config_with_catalog`:
 

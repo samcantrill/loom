@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.context import StageContext
@@ -30,7 +30,6 @@ from loom.timestamps import safe_timestamp_for_path
 from .errors import RunRequestError
 
 if TYPE_CHECKING:
-    from loom.config.api import ComposedConfig
     from loom.provenance.models import CommandProvenance, ProvenanceCaptureOptions
 
 EXECUTION_FAILURE_SCHEMA_VERSION = 1
@@ -44,6 +43,20 @@ _VALID_FAILURE_TYPES = {
     "store_commit",
     "executor_infrastructure",
 }
+
+
+class _ComposedConfigLike(Protocol):
+    @property
+    def resolved(self) -> Mapping[str, PlainData]: ...
+
+    @property
+    def redacted(self) -> Mapping[str, PlainData]: ...
+
+    @property
+    def provenance(self) -> object: ...
+
+    @property
+    def recipe_manifest(self) -> Sequence[Mapping[str, PlainData]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +87,7 @@ class FailurePolicy:
 
 @dataclass(frozen=True, slots=True)
 class RunRequest:
-    config: ComposedConfig | Mapping[str, PlainData] | None = None
+    config: _ComposedConfigLike | Mapping[str, PlainData] | None = None
     pipeline: PipelineSpec | None = None
     run_id: str | None = None
     open_existing: bool = False
