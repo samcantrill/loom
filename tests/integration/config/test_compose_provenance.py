@@ -236,6 +236,44 @@ def test_public_compose_records_resolver_and_override_facts(tmp_path: Path, monk
     assert ordinary_overrides[0]["value"] == REDACTION_MARKER
 
 
+def test_public_compose_records_final_value_authorship_without_values(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    overlay = tmp_path / "overlay.yaml"
+    included = tmp_path / "included.yaml"
+    included.write_text("from_include: included-value\n", encoding="utf-8")
+    base.write_text(
+        "name: base\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./included.yaml\n"
+        "  token: base-secret\n",
+        encoding="utf-8",
+    )
+    overlay.write_text("pipeline:\n  overlay_value: overlay-authored\n", encoding="utf-8")
+
+    composed = compose_config(
+        base,
+        overlays=(overlay,),
+        overrides=("pipeline.token=override-secret", "+pipeline.added=safe-value"),
+    )
+
+    source_facts = cast(dict[str, Any], composed.provenance.metadata["source_fact_records"])
+    authorship = cast(list[dict[str, Any]], source_facts["final_value_authorship"])
+    by_path = {record["config_path"]: record for record in authorship}
+
+    assert by_path["$.pipeline.overlay_value"]["source_kind"] == "overlay"
+    assert by_path["$.pipeline.model.from_include"]["source_kind"] == "include"
+    assert by_path["$.pipeline.token"]["source_kind"] == "ordinary_override"
+    assert by_path["$.pipeline.token"]["details"]["override_redacted"] is True
+    assert by_path["$.pipeline.added"]["source_kind"] == "ordinary_override"
+
+    serialized = json.dumps({"authorship": authorship}, sort_keys=True)
+    assert "override-secret" not in serialized
+    assert "base-secret" not in serialized
+    assert "pipeline.token=override-secret" not in serialized
+    assert "safe-value" not in serialized
+
+
 def test_public_compose_records_recipe_source_artifacts_when_safe(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
     catalog = RecipeCatalog()

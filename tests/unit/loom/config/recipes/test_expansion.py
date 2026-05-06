@@ -106,8 +106,14 @@ def test_expand_rejects_resolver_expression_in_output_key() -> None:
         return {f"${{{prefix}}}": "value"}
 
     catalog.register("resolver-key", output_with_resolver_key)
-    with pytest.raises(InvalidRecipeOutputError):
+    with pytest.raises(InvalidRecipeOutputError) as exc:
         expand_recipes({"x": {"_recipe_": "resolver-key", "prefix": "value"}}, catalog=catalog)
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "recipe_output_resolver_shaped_key"
+    assert context.config_path == "x"
+    assert context.details is not None
+    assert context.details["stage"] == "recipe_expansion"
 
 
 def test_expand_rejects_resolver_argument_used_as_output_key() -> None:

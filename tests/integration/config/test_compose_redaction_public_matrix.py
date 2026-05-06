@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from loom.config import compose_config
+from loom.config import RecipeCatalog, compose_config
 from loom.config.redaction import REDACTION_MARKER
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -117,3 +117,63 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         assert plaintext_secret not in serialized_artifacts
     for safe_value in safe_values:
         assert safe_value in serialized_artifacts
+
+
+def test_public_compose_redacts_secret_like_include_local_customization_metadata(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    included = tmp_path / "included.yaml"
+    included.write_text("public: included\n", encoding="utf-8")
+    base.write_text(
+        "name: redaction-include-local\n"
+        "pipeline:\n"
+        "  model:\n"
+        "    _include_: ./included.yaml\n"
+        "    api_key: LOCAL-INCLUDE-SECRET\n",
+        encoding="utf-8",
+    )
+
+    composed = compose_config(base)
+
+    source_facts = cast(dict[str, Any], composed.provenance.metadata["source_fact_records"])
+    local_customizations = cast(list[dict[str, Any]], source_facts["local_customizations"])
+    assert local_customizations[0]["value"] == REDACTION_MARKER
+    assert local_customizations[0]["redacted"] is True
+
+    serialized_artifacts = json.dumps(
+        {
+            "manifest": composed.manifest.to_dict(),
+            "provenance": composed.provenance.to_dict(),
+            "source_artifacts": [record.to_dict() for record in composed.source_artifacts],
+        },
+        sort_keys=True,
+    )
+    assert "LOCAL-INCLUDE-SECRET" not in serialized_artifacts
+
+
+def test_public_compose_redacts_secret_like_recipe_arguments_in_metadata(tmp_path: Path) -> None:
+    base = tmp_path / "base.yaml"
+    base.write_text(
+        "name: redaction-recipe\n"
+        "pipeline:\n"
+        "  _recipe_: secret-arg\n"
+        "  token: RECIPE-ARG-SECRET\n",
+        encoding="utf-8",
+    )
+    catalog = RecipeCatalog()
+    catalog.register("secret-arg", lambda token: {"public": "ok"})
+
+    composed = compose_config(base, recipe_catalog=catalog)
+
+    recipe_manifest = cast(list[dict[str, Any]], composed.provenance.metadata["recipe_manifest"])
+    arguments = cast(dict[str, Any], recipe_manifest[0]["arguments"])
+    assert arguments["token"] == REDACTION_MARKER
+
+    serialized_artifacts = json.dumps(
+        {
+            "manifest": composed.manifest.to_dict(),
+            "provenance": composed.provenance.to_dict(),
+            "fingerprint_records": [record.to_dict() for record in composed.fingerprint_records],
+        },
+        sort_keys=True,
+    )
+    assert "RECIPE-ARG-SECRET" not in serialized_artifacts

@@ -82,6 +82,11 @@ def test_instantiate_constructor_failure_wraps() -> None:
     with pytest.raises(TargetInstantiationError) as exc:
         instantiate({"_target_": "tests.support.config_samples:Concat", "_args_": ["left", "middle", "right"]})
     assert exc.value.__cause__ is not None
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "target_instantiation_failed"
+    assert context.config_path == "$"
+    assert context.directive == "_target_"
 
 
 def test_instantiate_preserves_bottom_up_order_in_kwargs() -> None:

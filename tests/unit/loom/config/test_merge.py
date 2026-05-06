@@ -93,8 +93,14 @@ def test_merge_replace_marker_fails_when_lower_value_missing() -> None:
 def test_merge_replace_marker_fails_when_lower_value_not_mapping() -> None:
     base = plain_config({"section": 1})
     overlay = plain_config({"section": {"_replace_": True, "a": 1}})
-    with pytest.raises(ConfigMergeError):
+    with pytest.raises(ConfigMergeError) as exc:
         merge_configs(base, overlay)
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "replace_target_not_mapping"
+    assert context.config_path == "$['section']"
+    assert context.directive == "_replace_"
+    assert context.remediation is not None
 
 
 def test_merge_replace_marker_fails_with_no_sibling_replacement_keys() -> None:

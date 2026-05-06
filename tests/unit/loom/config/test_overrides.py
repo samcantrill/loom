@@ -142,6 +142,22 @@ def test_apply_override_update_fails_for_missing_path() -> None:
         apply_overrides(plain_config({"a": {"b": 1}}), parsed)
 
 
+def test_apply_override_failure_has_structured_redacted_context() -> None:
+    parsed = parse_overrides(("auth.token=super-secret",))
+    with pytest.raises(OverrideApplyError) as exc:
+        apply_overrides(plain_config({"auth": {}}), parsed)
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "missing_override_target"
+    assert context.source_kind == "ordinary_override"
+    assert context.config_path == "$.auth.token"
+    assert context.details is not None
+    assert context.details["override_raw"] == "***REDACTED***"
+    assert context.details["override_path"] == "auth.token"
+    assert context.details["override_redacted"] is True
+
+
 def test_apply_override_rejects_list_parent() -> None:
     parsed = parse_overrides(("a.0=2",))
     with pytest.raises(OverrideApplyError):
