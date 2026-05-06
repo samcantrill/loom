@@ -19,7 +19,12 @@ pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
-from loom.config import RecipeCatalog, compose_config_with_catalog, register_recipe
+from loom.config import (
+    RecipeCatalog,
+    compose_config,
+    compose_config_with_catalog,
+    register_recipe,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -166,6 +171,40 @@ def test_local_pipeline_run_and_resume_from_config(tmp_path: Path) -> None:
         assert (run_dir / relative).is_file(), relative
 
 
+def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_snapshots(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "name: composed-e2e\n"
+        "pipeline:\n"
+        "  name: demo\n"
+        "  stages:\n"
+        "    - name: build\n"
+        "      factory:\n"
+        "        _target_: tests.support.pipeline_execution_stages.JsonProducerStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n"
+        "          codec_key: json.v1\n",
+        encoding="utf-8",
+    )
+    composed = compose_config(config_path)
+    run_store = LocalRunStore(tmp_path / "runs")
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=composed, run_id="run1")
+    )
+
+    run_dir = tmp_path / "runs" / "run1"
+    assert result.status == RunStatus.SUCCEEDED
+    assert run_store.read_composition_manifest("run1") == composed.manifest.to_dict()
+    assert (run_dir / "config" / "composition_manifest.json").is_file()
+    assert (run_dir / "config" / "recipe_manifest.json").is_file()
+    assert not (run_dir / "config" / "resolved.yaml").exists()
+    assert not (run_dir / "config" / "resolved.redacted.yaml").exists()
+
+
 def test_local_pipeline_run_fails_with_blocked_outcomes(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     result = PipelineRunner(run_store=run_store).run(
@@ -188,12 +227,12 @@ def test_local_pipeline_run_fails_with_blocked_outcomes(tmp_path: Path) -> None:
     assert run_store.read_events("run1")[-1].event_type == "run.failed"
 
 
-def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(tmp_path: Path) -> None:
+def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
-        "name: catalog-demo\n"
-        "pipeline:\n"
-        "  _recipe_: explicit_catalog_pipeline\n",
+        "name: catalog-demo\npipeline:\n  _recipe_: explicit_catalog_pipeline\n",
         encoding="utf-8",
     )
     register_recipe("explicit_catalog_pipeline", _legacy_catalog_recipe)
@@ -210,7 +249,9 @@ def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(tmp_pat
     assert set(result.stage_results) == {"build", "report"}
 
 
-def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(tmp_path: Path) -> None:
+def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(
+    tmp_path: Path,
+) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     config = {
         "pipeline": {

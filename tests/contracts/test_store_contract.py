@@ -60,7 +60,13 @@ class DummyArtifactStore:
     ) -> ArtifactRef:
         return ArtifactRef(artifact_id="s/o", uri="file:///tmp/x", artifact_type="json")
 
-    def load(self, ref: ArtifactRef, *, expected_type: str | None = None, codec_key: str | None = None) -> object:
+    def load(
+        self,
+        ref: ArtifactRef,
+        *,
+        expected_type: str | None = None,
+        codec_key: str | None = None,
+    ) -> object:
         return {}
 
     def exists(self, ref: ArtifactRef) -> bool:
@@ -74,7 +80,9 @@ class DummyArtifactStore:
 
 
 class DummyRunStore:
-    def create_run(self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None) -> None:
+    def create_run(
+        self, run_id: str, *, metadata: Mapping[str, PlainData] | None = None
+    ) -> None:
         return None
 
     def open_run(self, run_id: str) -> None:
@@ -86,7 +94,9 @@ class DummyRunStore:
     def read_run_user_metadata(self, run_id: str) -> dict[str, PlainData]:
         return {}
 
-    def write_run_user_metadata(self, run_id: str, metadata: Mapping[str, PlainData]) -> None:
+    def write_run_user_metadata(
+        self, run_id: str, metadata: Mapping[str, PlainData]
+    ) -> None:
         return None
 
     def read_run_status(self, run_id: str) -> RunStatusRecord | None:
@@ -104,7 +114,9 @@ class DummyRunStore:
     def read_artifact_index(self, run_id: str) -> dict[str, ArtifactRef]:
         return {}
 
-    def write_artifact_index(self, run_id: str, index: Mapping[str, ArtifactRef]) -> None:
+    def write_artifact_index(
+        self, run_id: str, index: Mapping[str, ArtifactRef]
+    ) -> None:
         return None
 
     def read_config_snapshot(self, run_id: str, name: str) -> str | None:
@@ -113,16 +125,32 @@ class DummyRunStore:
     def write_config_snapshot(self, run_id: str, name: str, content: str) -> None:
         return None
 
-    def read_recipe_manifest(self, run_id: str) -> tuple[dict[str, PlainData], ...] | None:
+    def read_composition_manifest(self, run_id: str) -> dict[str, PlainData] | None:
+        return {"schema_version": 1}
+
+    def write_composition_manifest(
+        self, run_id: str, manifest: Mapping[str, PlainData]
+    ) -> None:
         return None
 
-    def write_recipe_manifest(self, run_id: str, records: Sequence[Mapping[str, PlainData]]) -> None:
+    def read_recipe_manifest(
+        self, run_id: str
+    ) -> tuple[dict[str, PlainData], ...] | None:
         return None
 
-    def read_provenance_document(self, run_id: str, name: str) -> dict[str, PlainData] | None:
+    def write_recipe_manifest(
+        self, run_id: str, records: Sequence[Mapping[str, PlainData]]
+    ) -> None:
+        return None
+
+    def read_provenance_document(
+        self, run_id: str, name: str
+    ) -> dict[str, PlainData] | None:
         return {}
 
-    def write_provenance_document(self, run_id: str, name: str, document: Mapping[str, PlainData]) -> None:
+    def write_provenance_document(
+        self, run_id: str, name: str, document: Mapping[str, PlainData]
+    ) -> None:
         return None
 
     def append_event(self, run_id: str, event: PipelineEvent) -> PipelineEventRecord:
@@ -157,13 +185,19 @@ class DummyRunStore:
     def release_run_lock(self, run_id: str, token: str) -> None:
         return None
 
-    def read_stage_status(self, run_id: str, stage_name: str) -> StageStatusRecord | None:
+    def read_stage_status(
+        self, run_id: str, stage_name: str
+    ) -> StageStatusRecord | None:
         return None
 
-    def write_stage_status(self, run_id: str, stage_name: str, status: StageStatusRecord) -> None:
+    def write_stage_status(
+        self, run_id: str, stage_name: str, status: StageStatusRecord
+    ) -> None:
         return None
 
-    def read_stage_inputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None:
+    def read_stage_inputs(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, ArtifactRef] | None:
         return None
 
     def write_stage_inputs(
@@ -176,7 +210,9 @@ class DummyRunStore:
     ) -> None:
         return None
 
-    def read_stage_outputs(self, run_id: str, stage_name: str) -> dict[str, ArtifactRef] | None:
+    def read_stage_outputs(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, ArtifactRef] | None:
         return None
 
     def write_stage_outputs(
@@ -189,7 +225,9 @@ class DummyRunStore:
     ) -> None:
         return None
 
-    def read_stage_fingerprint(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None:
+    def read_stage_fingerprint(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, PlainData] | None:
         return None
 
     def write_stage_fingerprint(
@@ -202,7 +240,9 @@ class DummyRunStore:
     ) -> None:
         return None
 
-    def read_stage_failure(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None:
+    def read_stage_failure(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, PlainData] | None:
         return None
 
     def write_stage_failure(
@@ -215,7 +255,9 @@ class DummyRunStore:
     ) -> None:
         return None
 
-    def read_stage_provenance(self, run_id: str, stage_name: str) -> dict[str, PlainData] | None:
+    def read_stage_provenance(
+        self, run_id: str, stage_name: str
+    ) -> dict[str, PlainData] | None:
         return None
 
     def write_stage_provenance(
@@ -231,7 +273,9 @@ class DummyRunStore:
     def read_stage_log(self, run_id: str, stage_name: str, stream: str) -> str | None:
         return None
 
-    def write_stage_log(self, run_id: str, stage_name: str, stream: str, content: str) -> None:
+    def write_stage_log(
+        self, run_id: str, stage_name: str, stream: str, content: str
+    ) -> None:
         return None
 
     def prepare_stage_workspace(self, run_id: str, stage_name: str) -> None:
@@ -300,6 +344,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)
     assert isinstance(DummyRunStore(), RunStore)
+    assert DummyRunStore().read_composition_manifest("run1") == {"schema_version": 1}
 
 
 def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
