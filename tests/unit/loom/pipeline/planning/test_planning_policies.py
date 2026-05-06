@@ -230,7 +230,10 @@ def test_evaluate_input_invalidation_marks_unavailable_upstream_input() -> None:
         bindings=bindings["report"],
         prior_plans={"build": _blocked_source_plan(base_action=PlanAction.STALE)},
     )
-    assert result.pending_inputs[0].reason.code == PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT
+    assert (
+        result.pending_inputs[0].reason.code
+        == PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT
+    )
     reason_codes = {reason.code for reason in result.invalidated_by}
     assert PlanReasonCode.UNAVAILABLE_UPSTREAM_INPUT in reason_codes
 
@@ -244,14 +247,15 @@ def test_evaluate_input_invalidation_marks_dependency_stale() -> None:
         prior_plans={"build": _stale_source_plan()},
     )
     assert any(
-        reason.code == PlanReasonCode.UPSTREAM_STALE
-        for reason in result.invalidated_by
+        reason.code == PlanReasonCode.UPSTREAM_STALE for reason in result.invalidated_by
     )
     assert result.bound_inputs == {}
     assert result.pending_inputs == ()
 
 
-def test_unique_reasons_deduplicates_identical_reason_records_preserving_order() -> None:
+def test_unique_reasons_deduplicates_identical_reason_records_preserving_order() -> (
+    None
+):
     reason = _reason(PlanReasonCode.UPSTREAM_SKIPPED)
     duplicate = PlanReason(
         code=PlanReasonCode.UPSTREAM_SKIPPED,
@@ -350,7 +354,7 @@ def test_decide_stage_action_keeps_reuse_base_action_when_forced() -> None:
 def test_explain_plan_derives_plain_data_and_round_trips() -> None:
     plan = ExecutionPlan(
         schema_version=1,
-        run_id="run1",
+        run_uri="run1",
         pipeline_name="policy-demo",
         selectors=PlanSelectors(),
         resume=ResumeOptions(),
@@ -415,7 +419,7 @@ def test_explain_plan_derives_plain_data_and_round_trips() -> None:
 def test_plan_explanation_parser_rejects_wrong_kind_and_non_string_names() -> None:
     plan = ExecutionPlan(
         schema_version=1,
-        run_id="run1",
+        run_uri="run1",
         pipeline_name="policy-demo",
         selectors=PlanSelectors(),
         resume=ResumeOptions(),
@@ -476,7 +480,6 @@ def _is_plain_data(value: object) -> bool:
         return all(_is_plain_data(item) for item in value)
     if isinstance(value, Mapping):
         return all(
-            isinstance(key, str) and _is_plain_data(val)
-            for key, val in value.items()
+            isinstance(key, str) and _is_plain_data(val) for key, val in value.items()
         )
     return False

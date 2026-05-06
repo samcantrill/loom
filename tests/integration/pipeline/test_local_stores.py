@@ -10,16 +10,16 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
 def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     root = tmp_path / "runs"
     run_store = LocalRunStore(root=root)
-    run_store.create_run("run-1", metadata={"owner": "integration"})
+    run_uri = path_to_run_uri(root / "run-1")
+    run_store.create_run(run_uri, metadata={"owner": "integration"})
 
-    run_id = "run-1"
-    artifact_root = run_store.local_artifact_root(run_id)
+    artifact_root = run_store.local_artifact_root(run_uri)
     artifact_store = LocalArtifactStore(root=artifact_root)
 
     json_ref = artifact_store.save(
@@ -52,81 +52,81 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
     assert artifact_store.exists(json_ref)
 
     run_store.write_artifact_index(
-        run_id,
+        run_uri,
         {
             "stage.data": json_ref,
             "stage.report": text_ref,
             "stage.pre": registered,
         },
     )
-    read_index = run_store.read_artifact_index(run_id)
+    read_index = run_store.read_artifact_index(run_uri)
     assert isinstance(read_index["stage.data"], ArtifactRef)
 
     run_store.write_run_status(
-        run_id,
+        run_uri,
         RunStatusRecord(
-            run_id=run_id,
+            run_uri=run_uri,
             status=RunStatus.SUCCEEDED,
             created_at="2020-01-01T00:00:00Z",
             updated_at="2020-01-01T00:00:00Z",
         ),
     )
-    assert run_store.read_run_status(run_id)
+    assert run_store.read_run_status(run_uri)
 
-    run_store.write_plan(run_id, {"stage": ["a", "b"]})
-    assert run_store.read_plan(run_id) == {"stage": ["a", "b"]}
+    run_store.write_plan(run_uri, {"stage": ["a", "b"]})
+    assert run_store.read_plan(run_uri) == {"stage": ["a", "b"]}
 
     first_event = run_store.append_event(
-        run_id,
+        run_uri,
         PipelineEvent(scope=EventScope.run(), event_type="run.created"),
     )
     second_event = run_store.append_event(
-        run_id,
+        run_uri,
         PipelineEvent(scope=EventScope.stage("stage"), event_type="stage.started"),
     )
     assert (first_event.sequence, second_event.sequence) == (1, 2)
-    assert [record.event_type for record in run_store.read_events(run_id)] == [
+    assert [record.event_type for record in run_store.read_events(run_uri)] == [
         "run.created",
         "stage.started",
     ]
 
-    lock_record = run_store.acquire_run_lock(run_id, owner={"workflow": "integration"})
-    assert run_store.read_run_lock(run_id) == lock_record
-    assert (run_store.local_run_dir(run_id) / "lock.json").exists()
-    run_store.release_run_lock(run_id, lock_record.token)
-    assert run_store.read_run_lock(run_id) is None
+    lock_record = run_store.acquire_run_lock(run_uri, owner={"workflow": "integration"})
+    assert run_store.read_run_lock(run_uri) == lock_record
+    assert (run_store.local_run_dir(run_uri) / "lock.json").exists()
+    run_store.release_run_lock(run_uri, lock_record.token)
+    assert run_store.read_run_lock(run_uri) is None
 
-    run_store.write_config_snapshot(run_id, "resolved", "alpha: 1\n")
-    assert run_store.read_config_snapshot(run_id, "resolved") == "alpha: 1\n"
-    run_store.write_config_snapshot(run_id, "raw", "a: b\n")
-    assert run_store.read_config_snapshot(run_id, "raw") == "a: b\n"
+    run_store.write_config_snapshot(run_uri, "resolved", "alpha: 1\n")
+    assert run_store.read_config_snapshot(run_uri, "resolved") == "alpha: 1\n"
+    run_store.write_config_snapshot(run_uri, "raw", "a: b\n")
+    assert run_store.read_config_snapshot(run_uri, "raw") == "a: b\n"
 
     run_store.write_composition_manifest(
-        run_id,
+        run_uri,
         {"source_artifacts": [{"kind": "config", "path": "base.yaml"}]},
     )
-    assert run_store.read_composition_manifest(run_id) == {
+    assert run_store.read_composition_manifest(run_uri) == {
         "source_artifacts": [{"kind": "config", "path": "base.yaml"}]
     }
-    run_store.write_recipe_manifest(run_id, ({"name": "demo"},))
-    assert run_store.read_recipe_manifest(run_id) == ({"name": "demo"},)
+    run_store.write_recipe_manifest(run_uri, ({"name": "demo"},))
+    assert run_store.read_recipe_manifest(run_uri) == ({"name": "demo"},)
 
-    run_store.write_provenance_document(run_id, "git", {"commit": "abc"})
-    assert run_store.read_provenance_document(run_id, "git") == {"commit": "abc"}
+    run_store.write_provenance_document(run_uri, "git", {"commit": "abc"})
+    assert run_store.read_provenance_document(run_uri, "git") == {"commit": "abc"}
 
-    run_store.write_stage_inputs(run_id, "stage", {"in": json_ref}, attempt=1)
-    read_inputs = run_store.read_stage_inputs(run_id, "stage")
+    run_store.write_stage_inputs(run_uri, "stage", {"in": json_ref}, attempt=1)
+    read_inputs = run_store.read_stage_inputs(run_uri, "stage")
     assert read_inputs and set(read_inputs) == {"in"}
 
-    run_store.write_stage_outputs(run_id, "stage", {"out": json_ref}, attempt=1)
-    assert run_store.read_stage_outputs(run_id, "stage")
+    run_store.write_stage_outputs(run_uri, "stage", {"out": json_ref}, attempt=1)
+    assert run_store.read_stage_outputs(run_uri, "stage")
 
-    run_store.write_stage_fingerprint(run_id, "stage", {"version": "1"}, attempt=1)
-    run_store.write_stage_failure(run_id, "stage", {"message": "none"}, attempt=1)
-    run_store.write_stage_provenance(run_id, "stage", {"tool": "loom"}, attempt=1)
-    run_store.write_stage_log(run_id, "stage", "stderr", "oops\n")
+    run_store.write_stage_fingerprint(run_uri, "stage", {"version": "1"}, attempt=1)
+    run_store.write_stage_failure(run_uri, "stage", {"message": "none"}, attempt=1)
+    run_store.write_stage_provenance(run_uri, "stage", {"tool": "loom"}, attempt=1)
+    run_store.write_stage_log(run_uri, "stage", "stderr", "oops\n")
     blocked_status = StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name="blocked",
         status=StageStatus.BLOCKED,
         attempt=1,
@@ -134,29 +134,29 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
         message="upstream failed",
         metadata={"blocked_by": ["stage"], "reason_code": "upstream_failed"},
     )
-    run_store.write_stage_status(run_id, "blocked", blocked_status)
-    assert run_store.read_stage_status(run_id, "blocked") == blocked_status
-    blocked_dir = run_store.local_stage_dir(run_id, "blocked")
+    run_store.write_stage_status(run_uri, "blocked", blocked_status)
+    assert run_store.read_stage_status(run_uri, "blocked") == blocked_status
+    blocked_dir = run_store.local_stage_dir(run_uri, "blocked")
     assert sorted(path.name for path in blocked_dir.iterdir()) == ["status.json"]
 
     required_files = [
-        run_store.local_run_dir(run_id) / "run.json",
-        run_store.local_run_dir(run_id) / "config" / "raw.yaml",
-        run_store.local_run_dir(run_id) / "config" / "composition_manifest.json",
-        run_store.local_run_dir(run_id) / "config" / "recipe_manifest.json",
-        run_store.local_run_dir(run_id) / "provenance" / "git.json",
-        run_store.local_run_dir(run_id) / "stages" / "stage" / "inputs.json",
-        run_store.local_run_dir(run_id) / "stages" / "stage" / "outputs.json",
-        run_store.local_run_dir(run_id) / "stages" / "stage" / "fingerprint.json",
-        run_store.local_run_dir(run_id) / "stages" / "stage" / "failure.json",
-        run_store.local_run_dir(run_id) / "stages" / "stage" / "provenance.json",
-        run_store.local_run_dir(run_id) / "stages" / "stage" / "logs" / "stderr.log",
-        run_store.local_run_dir(run_id) / "stages" / "blocked" / "status.json",
-        run_store.local_run_dir(run_id) / "plan.json",
-        run_store.local_run_dir(run_id) / "events.jsonl",
-        run_store.local_run_dir(run_id) / "artifacts.json",
+        run_store.local_run_dir(run_uri) / "run.json",
+        run_store.local_run_dir(run_uri) / "config" / "raw.yaml",
+        run_store.local_run_dir(run_uri) / "config" / "composition_manifest.json",
+        run_store.local_run_dir(run_uri) / "config" / "recipe_manifest.json",
+        run_store.local_run_dir(run_uri) / "provenance" / "git.json",
+        run_store.local_run_dir(run_uri) / "stages" / "stage" / "inputs.json",
+        run_store.local_run_dir(run_uri) / "stages" / "stage" / "outputs.json",
+        run_store.local_run_dir(run_uri) / "stages" / "stage" / "fingerprint.json",
+        run_store.local_run_dir(run_uri) / "stages" / "stage" / "failure.json",
+        run_store.local_run_dir(run_uri) / "stages" / "stage" / "provenance.json",
+        run_store.local_run_dir(run_uri) / "stages" / "stage" / "logs" / "stderr.log",
+        run_store.local_run_dir(run_uri) / "stages" / "blocked" / "status.json",
+        run_store.local_run_dir(run_uri) / "plan.json",
+        run_store.local_run_dir(run_uri) / "events.jsonl",
+        run_store.local_run_dir(run_uri) / "artifacts.json",
         artifact_root / "stage",
-        run_store.local_config_path(run_id, "raw"),
+        run_store.local_config_path(run_uri, "raw"),
     ]
 
     for path in required_files:

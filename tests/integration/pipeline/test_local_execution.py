@@ -9,7 +9,7 @@ import pytest
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.planning import PlanAction, PlanSelectors
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from tests.support.pipeline_execution_configs import local_execution_config
 
 pytest.importorskip("pydantic")
@@ -30,10 +30,15 @@ def _sequence_clock() -> Callable[[], str]:
     return clock
 
 
+def _run_uri(tmp_path: Path, name: str = "run1") -> str:
+    return path_to_run_uri(tmp_path / "runs" / name)
+
+
 def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
-        RunRequest(config=local_execution_config(), run_id="run1")
+        RunRequest(config=local_execution_config(), run_uri=run_uri)
     )
 
     assert result.status == RunStatus.SUCCEEDED
@@ -46,9 +51,9 @@ def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None
     assert (
         tmp_path / "runs" / "run1" / "stages" / "report" / "fingerprint.json"
     ).is_file()
-    assert set(run_store.read_artifact_index("run1")) == {"build.data", "report.text"}
-    assert run_store.read_run_lock("run1") is None
-    events = run_store.read_events("run1")
+    assert set(run_store.read_artifact_index(run_uri)) == {"build.data", "report.text"}
+    assert run_store.read_run_lock(run_uri) is None
+    events = run_store.read_events(run_uri)
     assert [event.event_type for event in events] == [
         "run.created",
         "run.planned",
@@ -92,16 +97,17 @@ def test_local_runner_persists_composed_config_manifest_without_resolved_snapsho
     )
     composed = compose_config(config_path)
     run_store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
 
     result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
-        RunRequest(config=composed, run_id="run1")
+        RunRequest(config=composed, run_uri=run_uri)
     )
 
-    run_dir = run_store.local_run_dir("run1")
-    metadata = run_store.read_run_user_metadata("run1")
+    run_dir = run_store.local_run_dir(run_uri)
+    metadata = run_store.read_run_user_metadata(run_uri)
     assert result.status == RunStatus.SUCCEEDED
-    assert run_store.read_composition_manifest("run1") == composed.manifest.to_dict()
-    assert run_store.read_recipe_manifest("run1") == ()
+    assert run_store.read_composition_manifest(run_uri) == composed.manifest.to_dict()
+    assert run_store.read_recipe_manifest(run_uri) == ()
     assert metadata["config_provenance"] == composed.provenance.to_dict()
     assert (run_dir / "config" / "composition_manifest.json").is_file()
     assert (run_dir / "config" / "recipe_manifest.json").is_file()
@@ -111,22 +117,23 @@ def test_local_runner_persists_composed_config_manifest_without_resolved_snapsho
 
 def test_local_runner_applies_selector_skip(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
             config=local_execution_config(),
-            run_id="run1",
+            run_uri=run_uri,
             selectors=PlanSelectors(skip_stages=("report",)),
         )
     )
 
     assert result.status == RunStatus.SUCCEEDED
     assert result.stage_results["report"].action == PlanAction.SKIP
-    status = run_store.read_stage_status("run1", "report")
+    status = run_store.read_stage_status(run_uri, "report")
     assert status is not None
     assert status.status == StageStatus.SKIPPED
     assert any(
         event.event_type == "stage.skipped" and event.scope.stage_name == "report"
-        for event in run_store.read_events("run1")
+        for event in run_store.read_events(run_uri)
     )
 
 
@@ -153,10 +160,11 @@ def test_local_runner_keeps_factory_init_separate_from_stage_config(
         }
     }
 
+    run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
-        RunRequest(config=config, run_id="run1")
+        RunRequest(config=config, run_uri=run_uri)
     )
-    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root(run_uri))
     payload = artifact_store.load(result.stage_results["build"].outputs["data"])
 
     assert result.status == RunStatus.SUCCEEDED

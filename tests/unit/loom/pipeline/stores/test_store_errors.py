@@ -8,12 +8,15 @@ def test_store_error_inheritance() -> None:
     assert issubclass(stores.ArtifactStoreError, stores.StoreError)
     assert issubclass(stores.RunStoreError, stores.StoreError)
     assert issubclass(stores.UnsafeStorePathError, stores.StoreError)
+    assert issubclass(stores.InvalidRunURIError, stores.RunStoreError)
     assert issubclass(stores.UnsupportedArtifactURIError, stores.ArtifactStoreError)
     assert issubclass(stores.ArtifactNotFoundError, stores.ArtifactStoreError)
     assert issubclass(stores.MissingArtifactCodecError, stores.ArtifactStoreError)
     assert issubclass(stores.ArtifactTypeMismatchError, stores.ArtifactStoreError)
     assert issubclass(stores.ArtifactChecksumMismatchError, stores.ArtifactStoreError)
-    assert issubclass(stores.ArtifactChecksumUnsupportedError, stores.ArtifactStoreError)
+    assert issubclass(
+        stores.ArtifactChecksumUnsupportedError, stores.ArtifactStoreError
+    )
     assert issubclass(stores.AtomicWriteError, stores.StoreError)
     assert issubclass(stores.RunAlreadyExistsError, stores.RunStoreError)
     assert issubclass(stores.RunLockError, stores.RunStoreError)
@@ -51,6 +54,7 @@ def test_store_error_exports() -> None:
         "RunLockConflictError",
         "RunLockReleaseError",
         "UnsafeStorePathError",
+        "InvalidRunURIError",
         "UnsupportedArtifactURIError",
         "ArtifactNotFoundError",
         "MissingArtifactCodecError",
@@ -74,4 +78,10 @@ def test_store_error_exports() -> None:
         "artifact_index_to_dict",
         "artifact_index_from_dict",
         "merge_artifact_index",
+        "LocalRunURI",
+        "resolve_local_run_uri",
+        "validate_run_uri",
+        "run_uri_to_path",
+        "path_to_run_uri",
+        "allocate_local_run_uri",
     ]

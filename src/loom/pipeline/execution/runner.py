@@ -92,29 +92,29 @@ class PipelineRunner:
             raise RunRequestError("PipelineRunner.run requires RunRequest")
 
         started_at = self.clock()
-        run_id = cast(str, request.run_id)
         local_run_store = self._require_local_run_store()
-        self._create_or_open_run(request)
-        run_dir = local_run_store.local_run_dir(run_id)
+        run_uri = self._resolve_request_run_uri(request, local_run_store)
+        self._create_or_open_run(run_uri, request)
+        run_dir = local_run_store.local_run_dir(run_uri)
         lock = acquire_run_lock(
             self.run_store,
-            run_id,
+            run_uri,
             owner=build_lock_owner(
                 component="PipelineRunner",
-                run_id=run_id,
+                run_uri=run_uri,
                 executor=str(getattr(self.executor, "name", "unknown")),
             ),
         )
         try:
             self._emit_run_event(
-                run_id,
+                run_uri,
                 "run.opened" if request.open_existing else "run.created",
                 timestamp=self.clock(),
                 payload={"open_existing": request.open_existing},
             )
             return self._run_locked(
                 request=request,
-                run_id=run_id,
+                run_uri=run_uri,
                 run_dir=run_dir,
                 local_run_store=local_run_store,
                 started_at=started_at,
@@ -126,15 +126,15 @@ class PipelineRunner:
         self,
         *,
         request: RunRequest,
-        run_id: str,
+        run_uri: str,
         run_dir: Path,
         local_run_store: LocalRunStorePaths,
         started_at: str,
     ) -> RunResult:
-        created_at = self._created_at(run_id, started_at)
+        created_at = self._created_at(run_uri, started_at)
         write_run_status(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             status=RunStatus.CREATED,
             created_at=created_at,
             updated_at=started_at,
@@ -142,14 +142,14 @@ class PipelineRunner:
             metadata=request.metadata,
         )
         config_mapping, spec = self._resolve_config_and_spec(request)
-        self._write_config_and_provenance(run_id, request, config_mapping)
+        self._write_config_and_provenance(run_uri, request, config_mapping)
         artifact_store = self.artifact_store_factory(
-            local_run_store.local_artifact_root(run_id)
+            local_run_store.local_artifact_root(run_uri)
         )
 
         plan = plan_pipeline(
             spec,
-            run_id=run_id,
+            run_uri=run_uri,
             run_store=self.run_store,
             artifact_store=artifact_store,
             selectors=request.selectors,
@@ -159,7 +159,7 @@ class PipelineRunner:
         )
         write_run_status(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             status=RunStatus.PLANNED,
             created_at=created_at,
             updated_at=self.clock(),
@@ -167,14 +167,14 @@ class PipelineRunner:
             metadata={"plan_summary": dict(plan.summary)},
         )
         self._emit_run_event(
-            run_id,
+            run_uri,
             "run.planned",
             timestamp=self.clock(),
             payload={"summary": dict(plan.summary)},
         )
         for stage_plan in plan.ordered_stage_plans:
             self._emit_stage_event(
-                run_id,
+                run_uri,
                 stage_plan.stage_name,
                 "stage.planned",
                 timestamp=self.clock(),
@@ -185,14 +185,14 @@ class PipelineRunner:
             )
         write_run_status(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             status=RunStatus.RUNNING,
             created_at=created_at,
             updated_at=self.clock(),
             started_at=started_at,
         )
         self._emit_run_event(
-            run_id,
+            run_uri,
             "run.started",
             timestamp=self.clock(),
             payload={"stage_count": len(plan.ordered_stage_plans)},
@@ -206,14 +206,14 @@ class PipelineRunner:
             stage = spec.get_stage(stage_plan.stage_name)
             if failed_stage is not None:
                 stage_results[stage.name] = self._block_stage_after_failure(
-                    run_id=run_id,
+                    run_uri=run_uri,
                     stage_plan=stage_plan,
                     blocked_by=failed_stage,
                 )
                 continue
             if stage_plan.action == PlanAction.REUSE:
                 result = self._reuse_stage(
-                    run_id, stage_plan, created_at=created_at, started_at=started_at
+                    run_uri, stage_plan, created_at=created_at, started_at=started_at
                 )
                 stage_results[stage.name] = result
                 if result.failure is not None:
@@ -224,7 +224,7 @@ class PipelineRunner:
                 continue
             if stage_plan.action == PlanAction.SKIP:
                 result = self._skip_stage(
-                    run_id,
+                    run_uri,
                     stage_plan,
                     created_at=created_at,
                     started_at=started_at,
@@ -237,23 +237,23 @@ class PipelineRunner:
             if stage_plan.action == PlanAction.BLOCKED:
                 failed_stage = stage.name
                 failure = self._plan_failure(
-                    run_id, stage, stage_plan.action, stage_plan.reasons
+                    run_uri, stage, stage_plan.action, stage_plan.reasons
                 )
                 stage_results[stage.name] = self._block_plan_stage(
-                    run_id=run_id,
+                    run_uri=run_uri,
                     stage_plan=stage_plan,
                     failure=failure,
                 )
-                self._write_failed_run(run_id, created_at, started_at, failure)
+                self._write_failed_run(run_uri, created_at, started_at, failure)
                 continue
             if stage_plan.action == PlanAction.STALE:
                 failed_stage = stage.name
                 failure = self._plan_failure(
-                    run_id, stage, stage_plan.action, stage_plan.reasons
+                    run_uri, stage, stage_plan.action, stage_plan.reasons
                 )
-                attempt = next_stage_attempt(self.run_store, run_id, stage.name)
+                attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
                 failure = self._record_stage_failure_and_failed_run(
-                    run_id=run_id,
+                    run_uri=run_uri,
                     stage_name=stage.name,
                     attempt=attempt,
                     started_at=None,
@@ -274,13 +274,13 @@ class PipelineRunner:
                 continue
             result = self._run_stage(
                 request=request,
-                run_id=run_id,
+                run_uri=run_uri,
                 run_dir=run_dir,
                 local_output_dir=local_run_store.local_stage_artifact_dir(
-                    run_id, stage.name
+                    run_uri, stage.name
                 ),
                 local_workspace_dir=local_run_store.local_stage_workspace_dir(
-                    run_id, stage.name
+                    run_uri, stage.name
                 ),
                 config_mapping=config_mapping,
                 spec=spec,
@@ -303,7 +303,7 @@ class PipelineRunner:
         if failure is None:
             write_run_status(
                 self.run_store,
-                run_id=run_id,
+                run_uri=run_uri,
                 status=RunStatus.SUCCEEDED,
                 created_at=created_at,
                 updated_at=finished_at,
@@ -311,16 +311,16 @@ class PipelineRunner:
                 finished_at=finished_at,
             )
             self._emit_run_event(
-                run_id,
+                run_uri,
                 "run.completed",
                 timestamp=finished_at,
                 payload={"status": RunStatus.SUCCEEDED.value},
             )
             run_status = RunStatus.SUCCEEDED
         else:
-            self._write_failed_run(run_id, created_at, started_at, failure)
+            self._write_failed_run(run_uri, created_at, started_at, failure)
             self._emit_run_event(
-                run_id,
+                run_uri,
                 "run.failed",
                 timestamp=self.clock(),
                 payload={
@@ -334,15 +334,14 @@ class PipelineRunner:
                 if stage_plan.stage_name not in stage_results:
                     stage_results[stage_plan.stage_name] = (
                         self._block_stage_after_failure(
-                            run_id=run_id,
+                            run_uri=run_uri,
                             stage_plan=stage_plan,
                             blocked_by=failed_stage or failure.stage_name,
                         )
                     )
-        artifact_index = self.run_store.read_artifact_index(run_id)
+        artifact_index = self.run_store.read_artifact_index(run_uri)
         return RunResult(
-            run_id=run_id,
-            run_dir=run_dir,
+            run_uri=run_uri,
             status=run_status,
             started_at=started_at,
             finished_at=finished_at,
@@ -358,7 +357,7 @@ class PipelineRunner:
         self,
         *,
         request: RunRequest,
-        run_id: str,
+        run_uri: str,
         run_dir: Path,
         config_mapping: Mapping[str, PlainData],
         spec: PipelineSpec,
@@ -372,7 +371,7 @@ class PipelineRunner:
         created_at: str,
         run_started_at: str,
     ) -> StageRunResult:
-        attempt = next_stage_attempt(self.run_store, run_id, stage.name)
+        attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
         stage_started_at: str | None = None
         local_run_store = self._require_local_run_store()
         try:
@@ -383,22 +382,22 @@ class PipelineRunner:
                 fingerprint_context=request.fingerprint_context,
             )
             self.run_store.write_stage_inputs(
-                run_id, stage.name, inputs, attempt=attempt
+                run_uri, stage.name, inputs, attempt=attempt
             )
             self.run_store.write_stage_fingerprint(
-                run_id, stage.name, fingerprint.to_dict(), attempt=attempt
+                run_uri, stage.name, fingerprint.to_dict(), attempt=attempt
             )
-            self.run_store.prepare_stage_workspace(run_id, stage.name)
+            self.run_store.prepare_stage_workspace(run_uri, stage.name)
             running_at = self.clock()
             write_stage_running(
                 self.run_store,
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage.name,
                 attempt=attempt,
                 started_at=running_at,
             )
             self._emit_stage_event(
-                run_id,
+                run_uri,
                 stage.name,
                 "stage.started",
                 timestamp=running_at,
@@ -407,7 +406,7 @@ class PipelineRunner:
             stage_started_at = running_at
             stage_object = self._construct_stage(spec, stage)
             context = StageContext(
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage.name,
                 resolved_config=config_mapping,
                 stage_config=stage.stage_config,
@@ -420,7 +419,7 @@ class PipelineRunner:
                 output_specs=stage.outputs,
             )
             exec_request = StageExecutionRequest(
-                run_id=run_id,
+                run_uri=run_uri,
                 stage=stage,
                 stage_plan=stage_plan,
                 stage_object=stage_object,
@@ -429,20 +428,20 @@ class PipelineRunner:
                 fingerprint=fingerprint,
                 attempt=attempt,
                 stdout_path=local_run_store.local_stage_log_path(
-                    run_id, stage.name, "stdout"
+                    run_uri, stage.name, "stdout"
                 ),
                 stderr_path=local_run_store.local_stage_log_path(
-                    run_id, stage.name, "stderr"
+                    run_uri, stage.name, "stderr"
                 ),
                 traceback_path=traceback_log_path(
-                    run_store=local_run_store, run_id=run_id, stage_name=stage.name
+                    run_store=local_run_store, run_uri=run_uri, stage_name=stage.name
                 ),
             )
             execution_result = self.executor.execute(exec_request)
             stage_started_at = execution_result.started_at
             if execution_result.status == StageStatus.FAILED:
                 failure = execution_result.failure or self._failure(
-                    run_id=run_id,
+                    run_uri=run_uri,
                     stage_name=stage.name,
                     attempt=attempt,
                     failure_type="executor_infrastructure",
@@ -450,7 +449,7 @@ class PipelineRunner:
                     executor=str(getattr(self.executor, "name", "unknown")),
                 )
                 failure = self._record_stage_failure_and_failed_run(
-                    run_id=run_id,
+                    run_uri=run_uri,
                     stage_name=stage.name,
                     attempt=attempt,
                     started_at=execution_result.started_at,
@@ -476,11 +475,11 @@ class PipelineRunner:
                 artifact_store=artifact_store,
             )
             self.run_store.write_stage_outputs(
-                run_id, stage.name, outputs, attempt=attempt
+                run_uri, stage.name, outputs, attempt=attempt
             )
-            self._write_artifact_index_for_stage(run_id, stage, outputs, replace=True)
+            self._write_artifact_index_for_stage(run_uri, stage, outputs, replace=True)
             self._write_stage_provenance(
-                run_id,
+                run_uri,
                 stage,
                 status=StageStatus.SUCCEEDED,
                 attempt=attempt,
@@ -493,7 +492,7 @@ class PipelineRunner:
             )
             write_stage_succeeded(
                 self.run_store,
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage.name,
                 attempt=attempt,
                 started_at=execution_result.started_at,
@@ -501,7 +500,7 @@ class PipelineRunner:
                 metadata={"action": PlanAction.RUN.value},
             )
             self._emit_stage_event(
-                run_id,
+                run_uri,
                 stage.name,
                 "stage.completed",
                 timestamp=self.clock(),
@@ -527,7 +526,7 @@ class PipelineRunner:
                 exc
                 if isinstance(exc, ExecutionFailure)
                 else self._failure_from_exception(
-                    run_id=run_id,
+                    run_uri=run_uri,
                     stage_name=stage.name,
                     attempt=attempt,
                     failure_type=_failure_type_for_exception(exc),
@@ -535,7 +534,7 @@ class PipelineRunner:
                 )
             )
             failure = self._record_stage_failure_and_failed_run(
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage.name,
                 attempt=attempt,
                 started_at=stage_started_at,
@@ -562,12 +561,20 @@ class PipelineRunner:
             )
         return self.run_store
 
-    def _create_or_open_run(self, request: RunRequest) -> None:
-        run_id = cast(str, request.run_id)
+    def _resolve_request_run_uri(
+        self, request: RunRequest, local_run_store: LocalRunStorePaths
+    ) -> str:
+        if request.run_uri is None:
+            if request.open_existing:
+                raise RunRequestError("RunRequest.open_existing requires run_uri")
+            return local_run_store.allocate_run_uri()
+        return local_run_store.resolve_run_uri(request.run_uri)
+
+    def _create_or_open_run(self, run_uri: str, request: RunRequest) -> None:
         if request.open_existing:
-            self.run_store.open_run(run_id)
+            self.run_store.open_run(run_uri)
         else:
-            self.run_store.create_run(run_id, metadata=request.metadata)
+            self.run_store.create_run(run_uri, metadata=request.metadata)
 
     def _resolve_config_and_spec(
         self, request: RunRequest
@@ -590,27 +597,27 @@ class PipelineRunner:
 
     def _write_config_and_provenance(
         self,
-        run_id: str,
+        run_uri: str,
         request: RunRequest,
         config_mapping: Mapping[str, PlainData],
     ) -> None:
         if _is_composed_config(request.config):
             self.run_store.write_composition_manifest(
-                run_id,
+                run_uri,
                 _plain_mapping_from_maybe_to_dict(
                     getattr(request.config, "manifest"),
                     path="composition_manifest",
                 ),
             )
             self.run_store.write_recipe_manifest(
-                run_id,
+                run_uri,
                 cast(
                     Sequence[Mapping[str, PlainData]],
                     getattr(request.config, "recipe_manifest"),
                 ),
             )
             self.run_store.write_run_user_metadata(
-                run_id,
+                run_uri,
                 {
                     **request.metadata,
                     "config_provenance": _plain_mapping_from_maybe_to_dict(
@@ -621,28 +628,28 @@ class PipelineRunner:
             )
         elif config_mapping:
             self.run_store.write_config_snapshot(
-                run_id, "resolved", json_dumps_pretty(config_mapping)
+                run_uri, "resolved", json_dumps_pretty(config_mapping)
             )
             self.run_store.write_config_snapshot(
-                run_id, "resolved_redacted", json_dumps_pretty(config_mapping)
+                run_uri, "resolved_redacted", json_dumps_pretty(config_mapping)
             )
-            self.run_store.write_recipe_manifest(run_id, ())
+            self.run_store.write_recipe_manifest(run_uri, ())
         snapshots = request.config_snapshots
         for name in ("raw", "overlays", "cli_overrides"):
             value = getattr(snapshots, name)
             if value is not None:
-                self.run_store.write_config_snapshot(run_id, name, value)
+                self.run_store.write_config_snapshot(run_uri, name, value)
         options = request.provenance_options
         try:
             from loom.provenance import capture_command_provenance
 
             command = request.command or capture_command_provenance()
             self.run_store.write_provenance_document(
-                run_id, "command", _plain(command.to_dict())
+                run_uri, "command", _plain(command.to_dict())
             )
         except Exception as exc:  # noqa: BLE001
             self.run_store.write_provenance_document(
-                run_id, "command", {"capture_error": str(exc)}
+                run_uri, "command", {"capture_error": str(exc)}
             )
         if options.capture_environment:
             try:
@@ -652,11 +659,11 @@ class PipelineRunner:
                     env_keys=options.env_keys, include_user=options.include_user
                 )
                 self.run_store.write_provenance_document(
-                    run_id, "environment", _plain(env.to_dict())
+                    run_uri, "environment", _plain(env.to_dict())
                 )
             except Exception as exc:  # noqa: BLE001
                 self.run_store.write_provenance_document(
-                    run_id, "environment", {"capture_error": str(exc)}
+                    run_uri, "environment", {"capture_error": str(exc)}
                 )
         if options.capture_dependencies:
             try:
@@ -666,11 +673,11 @@ class PipelineRunner:
                     packages=options.packages, strict=options.strict
                 )
                 self.run_store.write_provenance_document(
-                    run_id, "dependencies", _plain(deps.to_dict())
+                    run_uri, "dependencies", _plain(deps.to_dict())
                 )
             except Exception as exc:  # noqa: BLE001
                 self.run_store.write_provenance_document(
-                    run_id, "dependencies", {"capture_error": str(exc)}
+                    run_uri, "dependencies", {"capture_error": str(exc)}
                 )
         git_root = (
             str(request.project_root)
@@ -687,11 +694,11 @@ class PipelineRunner:
                     strict=options.strict,
                 )
                 self.run_store.write_provenance_document(
-                    run_id, "git", _plain(git.to_dict())
+                    run_uri, "git", _plain(git.to_dict())
                 )
             except Exception as exc:  # noqa: BLE001
                 self.run_store.write_provenance_document(
-                    run_id, "git", {"capture_error": str(exc)}
+                    run_uri, "git", {"capture_error": str(exc)}
                 )
 
     def _bind_inputs(
@@ -738,7 +745,7 @@ class PipelineRunner:
 
     def _emit_run_event(
         self,
-        run_id: str,
+        run_uri: str,
         event_type: str,
         *,
         timestamp: str,
@@ -746,7 +753,7 @@ class PipelineRunner:
     ) -> None:
         emit_run_event(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             event_type=event_type,
             timestamp=timestamp,
             payload=payload,
@@ -754,7 +761,7 @@ class PipelineRunner:
 
     def _emit_stage_event(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         event_type: str,
         *,
@@ -763,7 +770,7 @@ class PipelineRunner:
     ) -> None:
         emit_stage_event(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage_name,
             event_type=event_type,
             timestamp=timestamp,
@@ -773,15 +780,15 @@ class PipelineRunner:
     def _block_plan_stage(
         self,
         *,
-        run_id: str,
+        run_uri: str,
         stage_plan,
         failure: ExecutionFailure,
     ) -> StageRunResult:
-        attempt = next_stage_attempt(self.run_store, run_id, stage_plan.stage_name)
+        attempt = next_stage_attempt(self.run_store, run_uri, stage_plan.stage_name)
         blocked_at = failure.failed_at
         write_stage_blocked(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage_plan.stage_name,
             attempt=attempt,
             blocked_at=blocked_at,
@@ -791,7 +798,7 @@ class PipelineRunner:
             metadata={"reasons": [reason.to_dict() for reason in stage_plan.reasons]},
         )
         self._emit_stage_event(
-            run_id,
+            run_uri,
             stage_plan.stage_name,
             "stage.blocked",
             timestamp=blocked_at,
@@ -815,16 +822,16 @@ class PipelineRunner:
     def _block_stage_after_failure(
         self,
         *,
-        run_id: str,
+        run_uri: str,
         stage_plan,
         blocked_by: str,
     ) -> StageRunResult:
-        attempt = next_stage_attempt(self.run_store, run_id, stage_plan.stage_name)
+        attempt = next_stage_attempt(self.run_store, run_uri, stage_plan.stage_name)
         blocked_at = self.clock()
         blocked_by_list: list[PlainData] = [blocked_by]
         write_stage_blocked(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage_plan.stage_name,
             attempt=attempt,
             blocked_at=blocked_at,
@@ -834,7 +841,7 @@ class PipelineRunner:
             metadata={"reasons": [reason.to_dict() for reason in stage_plan.reasons]},
         )
         self._emit_stage_event(
-            run_id,
+            run_uri,
             stage_plan.stage_name,
             "stage.blocked",
             timestamp=blocked_at,
@@ -856,7 +863,7 @@ class PipelineRunner:
 
     def _reuse_stage(
         self,
-        run_id: str,
+        run_uri: str,
         stage_plan,
         *,
         created_at: str,
@@ -865,18 +872,18 @@ class PipelineRunner:
         outputs = dict(stage_plan.reusable_outputs)
         if not outputs:
             prior_outputs = self.run_store.read_stage_outputs(
-                run_id, stage_plan.stage_name
+                run_uri, stage_plan.stage_name
             )
             if prior_outputs is None:
                 failure = self._failure(
-                    run_id=run_id,
+                    run_uri=run_uri,
                     stage_name=stage_plan.stage_name,
                     attempt=1,
                     failure_type="plan_execution",
                     message=f"REUSE stage {stage_plan.stage_name!r} has no reusable outputs",
                     executor=str(getattr(self.executor, "name", "unknown")),
                 )
-                self._write_failed_run(run_id, created_at, started_at, failure)
+                self._write_failed_run(run_uri, created_at, started_at, failure)
                 return StageRunResult(
                     stage_name=stage_plan.stage_name,
                     action=PlanAction.BLOCKED,
@@ -890,17 +897,17 @@ class PipelineRunner:
             outputs = prior_outputs
         try:
             self._write_artifact_index_refs(
-                run_id, stage_plan.stage_name, outputs, replace=False
+                run_uri, stage_plan.stage_name, outputs, replace=False
             )
         except Exception as exc:
             failure = self._failure_from_exception(
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage_plan.stage_name,
                 attempt=1,
                 failure_type="store_commit",
                 exc=exc,
             )
-            self._write_failed_run(run_id, created_at, started_at, failure)
+            self._write_failed_run(run_uri, created_at, started_at, failure)
             return StageRunResult(
                 stage_name=stage_plan.stage_name,
                 action=PlanAction.BLOCKED,
@@ -911,9 +918,9 @@ class PipelineRunner:
                 reasons=stage_plan.reasons,
                 finished_at=failure.failed_at,
             )
-        prior_status = self.run_store.read_stage_status(run_id, stage_plan.stage_name)
+        prior_status = self.run_store.read_stage_status(run_uri, stage_plan.stage_name)
         self._emit_stage_event(
-            run_id,
+            run_uri,
             stage_plan.stage_name,
             "stage.reused",
             timestamp=self.clock(),
@@ -934,18 +941,18 @@ class PipelineRunner:
 
     def _skip_stage(
         self,
-        run_id: str,
+        run_uri: str,
         stage_plan,
         *,
         created_at: str,
         started_at: str,
     ) -> StageRunResult:
-        attempt = next_stage_attempt(self.run_store, run_id, stage_plan.stage_name)
+        attempt = next_stage_attempt(self.run_store, run_uri, stage_plan.stage_name)
         finished_at = self.clock()
         try:
             write_stage_skipped(
                 self.run_store,
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage_plan.stage_name,
                 attempt=attempt,
                 finished_at=finished_at,
@@ -955,7 +962,7 @@ class PipelineRunner:
                 },
             )
             self._emit_stage_event(
-                run_id,
+                run_uri,
                 stage_plan.stage_name,
                 "stage.skipped",
                 timestamp=finished_at,
@@ -967,13 +974,13 @@ class PipelineRunner:
             )
         except Exception as exc:
             failure = self._failure_from_exception(
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage_plan.stage_name,
                 attempt=attempt,
                 failure_type="store_commit",
                 exc=exc,
             )
-            self._write_failed_run(run_id, created_at, started_at, failure)
+            self._write_failed_run(run_uri, created_at, started_at, failure)
             return StageRunResult(
                 stage_name=stage_plan.stage_name,
                 action=PlanAction.BLOCKED,
@@ -996,7 +1003,7 @@ class PipelineRunner:
 
     def _write_artifact_index_for_stage(
         self,
-        run_id: str,
+        run_uri: str,
         stage: StageSpec,
         outputs: Mapping[str, ArtifactRef],
         *,
@@ -1006,14 +1013,14 @@ class PipelineRunner:
             format_artifact_key(stage.name, output_name): ref
             for output_name, ref in outputs.items()
         }
-        existing = self.run_store.read_artifact_index(run_id)
+        existing = self.run_store.read_artifact_index(run_uri)
         self.run_store.write_artifact_index(
-            run_id, merge_artifact_index(existing, updates, replace=replace)
+            run_uri, merge_artifact_index(existing, updates, replace=replace)
         )
 
     def _write_artifact_index_refs(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         outputs: Mapping[str, ArtifactRef],
         *,
@@ -1023,14 +1030,14 @@ class PipelineRunner:
             format_artifact_key(stage_name, output_name): ref
             for output_name, ref in outputs.items()
         }
-        existing = self.run_store.read_artifact_index(run_id)
+        existing = self.run_store.read_artifact_index(run_uri)
         self.run_store.write_artifact_index(
-            run_id, merge_artifact_index(existing, updates, replace=replace)
+            run_uri, merge_artifact_index(existing, updates, replace=replace)
         )
 
     def _write_stage_provenance(
         self,
-        run_id: str,
+        run_uri: str,
         stage: StageSpec,
         *,
         status: StageStatus,
@@ -1045,7 +1052,7 @@ class PipelineRunner:
         from loom.provenance.models import StageProvenance
 
         provenance = StageProvenance(
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage.name,
             status=status.value,
             attempt=attempt,
@@ -1062,23 +1069,23 @@ class PipelineRunner:
             executor_metadata=executor_metadata,
         )
         self.run_store.write_stage_provenance(
-            run_id, stage.name, _plain(provenance.to_dict()), attempt=attempt
+            run_uri, stage.name, _plain(provenance.to_dict()), attempt=attempt
         )
 
     def _persist_stage_failure(
         self,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         attempt: int,
         started_at: str | None,
         failure: ExecutionFailure,
     ) -> None:
         self.run_store.write_stage_failure(
-            run_id, stage_name, failure.to_dict(), attempt=attempt
+            run_uri, stage_name, failure.to_dict(), attempt=attempt
         )
         write_stage_failed(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage_name,
             attempt=attempt,
             started_at=started_at,
@@ -1087,7 +1094,7 @@ class PipelineRunner:
             metadata={"failure_type": failure.failure_type},
         )
         self._emit_stage_event(
-            run_id,
+            run_uri,
             stage_name,
             "stage.failed",
             timestamp=self.clock(),
@@ -1097,7 +1104,7 @@ class PipelineRunner:
     def _record_stage_failure_and_failed_run(
         self,
         *,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         attempt: int,
         started_at: str | None,
@@ -1107,29 +1114,29 @@ class PipelineRunner:
     ) -> ExecutionFailure:
         try:
             self._persist_stage_failure(
-                run_id, stage_name, attempt, started_at, failure
+                run_uri, stage_name, attempt, started_at, failure
             )
         except Exception as exc:
             failure = self._failure_from_exception(
-                run_id=run_id,
+                run_uri=run_uri,
                 stage_name=stage_name,
                 attempt=attempt,
                 failure_type="store_commit",
                 exc=exc,
             )
-        self._write_failed_run(run_id, created_at, run_started_at, failure)
+        self._write_failed_run(run_uri, created_at, run_started_at, failure)
         return failure
 
     def _write_failed_run(
         self,
-        run_id: str,
+        run_uri: str,
         created_at: str,
         started_at: str,
         failure: ExecutionFailure,
     ) -> None:
         write_run_status(
             self.run_store,
-            run_id=run_id,
+            run_uri=run_uri,
             status=RunStatus.FAILED,
             created_at=created_at,
             updated_at=failure.failed_at,
@@ -1142,23 +1149,23 @@ class PipelineRunner:
             },
         )
 
-    def _created_at(self, run_id: str, fallback: str) -> str:
-        status = self.run_store.read_run_status(run_id)
+    def _created_at(self, run_uri: str, fallback: str) -> str:
+        status = self.run_store.read_run_status(run_uri)
         if status is not None:
             return status.created_at
-        metadata = self.run_store.read_run_document(run_id)
+        metadata = self.run_store.read_run_document(run_uri)
         created = metadata.get("created_at")
         return created if isinstance(created, str) else fallback
 
     def _plan_failure(
         self,
-        run_id: str,
+        run_uri: str,
         stage: StageSpec,
         action: PlanAction,
         reasons: tuple[PlanReason, ...],
     ) -> ExecutionFailure:
         return self._failure(
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage.name,
             attempt=1,
             failure_type="plan_execution",
@@ -1170,14 +1177,14 @@ class PipelineRunner:
     def _failure_from_exception(
         self,
         *,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         attempt: int,
         failure_type: str,
         exc: Exception,
     ) -> ExecutionFailure:
         return self._failure(
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage_name,
             attempt=attempt,
             failure_type=failure_type,
@@ -1189,7 +1196,7 @@ class PipelineRunner:
     def _failure(
         self,
         *,
-        run_id: str,
+        run_uri: str,
         stage_name: str,
         attempt: int,
         failure_type: str,
@@ -1200,7 +1207,7 @@ class PipelineRunner:
     ) -> ExecutionFailure:
         return ExecutionFailure(
             schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
-            run_id=run_id,
+            run_uri=run_uri,
             stage_name=stage_name,
             attempt=attempt,
             failed_at=self.clock(),

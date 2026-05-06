@@ -949,11 +949,17 @@ Do not silently ignore corrupt state in v0.
 
 ---
 
-## 14. Strictness Modes
+## 14. Strictness Policy
 
-### 14.1 Normal Mode
+V0 discusses normal and strict checks as separate policies. For v2 CLI-core,
+resume behavior should be strict by default and there should be no `--strict`
+CLI flag. Corrupt, ambiguous, unsupported, or unsafe prior state should fail
+loudly; missing or stale reusable stage state may produce rerun decisions only
+when the planner can do so safely.
 
-Normal resume mode should check:
+### 14.1 Required Checks
+
+Resume mode should check:
 
 ```text
 status
@@ -961,31 +967,19 @@ fingerprint
 declared outputs
 artifact ref shape
 local artifact existence when checkable
-```
-
-### 14.2 Strict Mode
-
-Strict mode should additionally check:
-
-```text
 checksums for artifacts that have checksums
 artifact index consistency
 possibly selected environment/code provenance
 ```
 
-Command shape:
+Command shape for v2:
 
 ```bash
-loom plan experiment.yaml --resume --strict
+loom plan experiment.yaml --run-uri file:///abs/project/runs/example --resume
+loom run experiment.yaml --run-uri file:///abs/project/runs/example --resume
 ```
 
-or:
-
-```bash
-loom run experiment.yaml --resume --strict
-```
-
-### 14.3 Future Lenient Mode
+### 14.2 Future Lenient Mode
 
 A future lenient mode could allow:
 

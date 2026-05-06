@@ -13,14 +13,14 @@ from loom.serialization import PlainData, thaw_plain_data
 def emit_run_event(
     run_store: RunEventStore,
     *,
-    run_id: str,
+    run_uri: str,
     event_type: str,
     timestamp: str,
     payload: Mapping[str, PlainData] | None = None,
 ) -> PipelineEventRecord:
     return _emit_event(
         run_store,
-        run_id=run_id,
+        run_uri=run_uri,
         scope=EventScope.run(),
         event_type=event_type,
         timestamp=timestamp,
@@ -31,7 +31,7 @@ def emit_run_event(
 def emit_stage_event(
     run_store: RunEventStore,
     *,
-    run_id: str,
+    run_uri: str,
     stage_name: str,
     event_type: str,
     timestamp: str,
@@ -39,7 +39,7 @@ def emit_stage_event(
 ) -> PipelineEventRecord:
     return _emit_event(
         run_store,
-        run_id=run_id,
+        run_uri=run_uri,
         scope=EventScope.stage(stage_name),
         event_type=event_type,
         timestamp=timestamp,
@@ -50,7 +50,7 @@ def emit_stage_event(
 def _emit_event(
     run_store: RunEventStore,
     *,
-    run_id: str,
+    run_uri: str,
     scope: EventScope,
     event_type: str,
     timestamp: str,
@@ -60,7 +60,7 @@ def _emit_event(
     if not isinstance(normalized_payload, dict):
         raise ValueError("event payload must be a mapping")
     return run_store.append_event(
-        run_id,
+        run_uri,
         PipelineEvent(
             scope=scope,
             event_type=event_type,

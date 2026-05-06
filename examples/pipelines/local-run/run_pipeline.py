@@ -7,7 +7,7 @@ from pathlib import Path
 
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 from loom.timestamps import safe_timestamp_for_path
 
 
@@ -17,17 +17,19 @@ HERE = Path(__file__).resolve().parent
 def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    run_id = f"local-example-{safe_timestamp_for_path(timespec='seconds')}"
+    run_uri = path_to_run_uri(
+        run_root / f"local-example-{safe_timestamp_for_path(timespec='seconds')}"
+    )
 
     composed = compose_config(HERE / "pipeline.yaml")
     runner = PipelineRunner(run_store=LocalRunStore(run_root))
 
-    first = runner.run(RunRequest(config=composed, run_id=run_id))
+    first = runner.run(RunRequest(config=composed, run_uri=run_uri))
     second = runner.run(
-        RunRequest(config=composed, run_id=run_id, open_existing=True)
+        RunRequest(config=composed, run_uri=run_uri, open_existing=True)
     )
 
-    print(f"run_dir: {first.run_dir}")
+    print(f"run_uri: {first.run_uri}")
     print(f"first_status: {first.status.name}")
     print("first_stage_actions:")
     for stage_name, result in first.stage_results.items():

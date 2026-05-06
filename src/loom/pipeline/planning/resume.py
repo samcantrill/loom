@@ -45,7 +45,7 @@ class DirectResumeResult:
 def check_stage_resume(
     stage: StageSpec,
     *,
-    run_id: str,
+    run_uri: str,
     run_store: RunStore,
     artifact_store: ArtifactStore,
     current_fingerprint: StageFingerprintRecord | None,
@@ -72,7 +72,7 @@ def check_stage_resume(
             ],
         )
 
-    status = _read_prior(run_store.read_stage_status, run_id, stage.name)
+    status = _read_prior(run_store.read_stage_status, run_uri, stage.name)
     if status is None:
         return _result(
             stage.name,
@@ -113,7 +113,7 @@ def check_stage_resume(
             reasons=[_reason(code, stage.name, f"prior status is {status_value}")],
         )
 
-    prior_inputs = _read_prior(run_store.read_stage_inputs, run_id, stage.name)
+    prior_inputs = _read_prior(run_store.read_stage_inputs, run_uri, stage.name)
     if prior_inputs is None:
         return _stale_result(
             stage.name,
@@ -132,7 +132,7 @@ def check_stage_resume(
         )
 
     prior_fingerprint_data = _read_prior(
-        run_store.read_stage_fingerprint, run_id, stage.name
+        run_store.read_stage_fingerprint, run_uri, stage.name
     )
     if prior_fingerprint_data is None:
         return _stale_result(
@@ -152,7 +152,7 @@ def check_stage_resume(
         )
     prior_fingerprint = _parse_prior_fingerprint(stage.name, prior_fingerprint_data)
 
-    prior_outputs = _read_prior(run_store.read_stage_outputs, run_id, stage.name)
+    prior_outputs = _read_prior(run_store.read_stage_outputs, run_uri, stage.name)
     if prior_outputs is None:
         return _stale_result(
             stage.name,
@@ -233,7 +233,7 @@ def check_stage_resume(
             output_reason,
         )
 
-    _validate_artifact_index(run_store, run_id, stage.name, prior_outputs)
+    _validate_artifact_index(run_store, run_uri, stage.name, prior_outputs)
 
     reasons = [
         _reason(
@@ -339,9 +339,9 @@ def _stale_result(
     )
 
 
-def _read_prior(method: Callable[[str, str], _T], run_id: str, stage_name: str) -> _T:
+def _read_prior(method: Callable[[str, str], _T], run_uri: str, stage_name: str) -> _T:
     try:
-        return method(run_id, stage_name)  # type: ignore[misc]
+        return method(run_uri, stage_name)  # type: ignore[misc]
     except CorruptStoreDocumentError as exc:
         raise ResumeStateError(f"corrupt prior state for {stage_name}: {exc}") from exc
     except StoreError as exc:
@@ -417,19 +417,19 @@ def _output_spec_reason(
 
 def _validate_artifact_index(
     run_store: RunStore,
-    run_id: str,
+    run_uri: str,
     stage_name: str,
     outputs: dict[str, ArtifactRef],
 ) -> None:
     try:
-        index = run_store.read_artifact_index(run_id)
+        index = run_store.read_artifact_index(run_uri)
     except CorruptStoreDocumentError as exc:
         raise ResumeStateError(
-            f"corrupt artifact index for run {run_id!r}: {exc}"
+            f"corrupt artifact index for run {run_uri!r}: {exc}"
         ) from exc
     except StoreError as exc:
         raise ResumeStateError(
-            f"could not read artifact index for run {run_id!r}: {exc}"
+            f"could not read artifact index for run {run_uri!r}: {exc}"
         ) from exc
     for output_name, ref in outputs.items():
         key = format_artifact_key(stage_name, output_name)

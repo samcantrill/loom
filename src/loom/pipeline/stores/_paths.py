@@ -28,12 +28,6 @@ VALID_PROVENANCE_NAMES = {
 VALID_LOG_STREAMS = frozenset({"stdout", "stderr"})
 
 
-def validate_run_id(value: object, *, field: str = "run_id") -> str:
-    """Validate a run identifier used for filesystem isolation."""
-
-    return _validate_identifier(value, field=field, allow_dot=True)
-
-
 def validate_stage_name(value: object, *, field: str = "stage_name") -> str:
     """Validate a stage name for storage paths and artifact keys."""
 
@@ -110,7 +104,9 @@ def _validate_identifier(value: object, *, field: str, allow_dot: bool) -> str:
     if not value:
         raise UnsafeStorePathError(f"{field} must be a non-empty string")
     if value.strip() != value:
-        raise UnsafeStorePathError(f"{field} must not contain leading or trailing whitespace: {value!r}")
+        raise UnsafeStorePathError(
+            f"{field} must not contain leading or trailing whitespace: {value!r}"
+        )
     if value in _RUN_RESERVED_NAMES:
         raise UnsafeStorePathError(f"{field} cannot be '.' or '..': {value!r}")
     if "/" in value or "\\" in value:
@@ -118,7 +114,9 @@ def _validate_identifier(value: object, *, field: str, allow_dot: bool) -> str:
     if "\x00" in value:
         raise UnsafeStorePathError(f"{field} cannot contain NUL characters: {value!r}")
     if any(ch.isspace() or ord(ch) < 32 for ch in value):
-        raise UnsafeStorePathError(f"{field} cannot contain whitespace or control characters: {value!r}")
+        raise UnsafeStorePathError(
+            f"{field} cannot contain whitespace or control characters: {value!r}"
+        )
     if (not allow_dot) and "." in value:
         raise UnsafeStorePathError(f"{field} cannot contain '.': {value!r}")
     return value

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 
 run_root = Path("tmp/runs")
 config_path = Path("tmp/demo_pipeline.yaml")
@@ -51,10 +51,11 @@ pipeline:
 )
 run_store = LocalRunStore(run_root)
 runner = PipelineRunner(run_store=run_store)
+run_uri = path_to_run_uri(run_root / "run1")
 
 composed = compose_config(config_path)
 result = runner.run(
-    RunRequest(config=composed.resolved, run_id="run1")
+    RunRequest(config=composed.resolved, run_uri=run_uri)
 )
 assert result.stage_results["build"].status.name == "SUCCEEDED"
 ```
@@ -63,7 +64,7 @@ assert result.stage_results["build"].status.name == "SUCCEEDED"
 
 ```python
 resume = runner.run(
-    RunRequest(config=composed.resolved, run_id="run1", open_existing=True)
+    RunRequest(config=composed.resolved, run_uri=run_uri, open_existing=True)
 )
 assert resume.stage_results["build"].action == "REUSE"
 assert resume.stage_results["report"].action == "REUSE"
@@ -78,7 +79,7 @@ not reused.
 Successful runs are materialized as:
 
 ```text
-runs/RUN_ID/
+runs/RUN_NAME/
   run.json
   status.json
   plan.json

@@ -16,7 +16,10 @@ from loom.timestamps import utc_timestamp
 from .errors import LocalExecutorError
 
 if TYPE_CHECKING:
-    from loom.pipeline.execution.models import StageExecutionRequest, StageExecutionResult
+    from loom.pipeline.execution.models import (
+        StageExecutionRequest,
+        StageExecutionResult,
+    )
 
 
 class LocalExecutor:
@@ -68,7 +71,7 @@ class LocalExecutor:
                 write_text_file(request.stderr_path, stderr_buffer.getvalue())
             failure = ExecutionFailure(
                 schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
-                run_id=request.run_id,
+                run_uri=request.run_uri,
                 stage_name=request.stage.name,
                 attempt=request.attempt,
                 failed_at=finished_at,
@@ -101,7 +104,7 @@ class LocalExecutor:
         if not isinstance(raw_outputs, Mapping):
             failure = ExecutionFailure(
                 schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
-                run_id=request.run_id,
+                run_uri=request.run_uri,
                 stage_name=request.stage.name,
                 attempt=request.attempt,
                 failed_at=finished_at,

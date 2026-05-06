@@ -94,7 +94,7 @@ ResourceKey
 CodecKey
 ArtifactID
 ArtifactType
-RunID
+RunURI
 StageID
 Fingerprint
 Checksum
@@ -280,7 +280,7 @@ Examples:
 record_id
 resource key
 artifact_id
-run_id
+run_uri
 stage_id
 ```
 
@@ -569,7 +569,7 @@ ResourceType = str
 CodecKey = str
 ArtifactID = str
 ArtifactType = str
-RunID = str
+RunURI = str
 StageID = str
 Fingerprint = str
 Checksum = str

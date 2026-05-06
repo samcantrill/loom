@@ -1,7 +1,14 @@
 """Pipeline store protocols, implementations, and filesystem helpers."""
 
 from .artifact_store import ArtifactStore
-from .atomic import atomic_write_bytes, atomic_write_json, atomic_write_text, ensure_dir, replace_file, unique_temp_path
+from .atomic import (
+    atomic_write_bytes,
+    atomic_write_json,
+    atomic_write_text,
+    ensure_dir,
+    replace_file,
+    unique_temp_path,
+)
 from .errors import (
     ArtifactStoreError,
     ArtifactChecksumMismatchError,
@@ -10,6 +17,7 @@ from .errors import (
     ArtifactTypeMismatchError,
     AtomicWriteError,
     CorruptStoreDocumentError,
+    InvalidRunURIError,
     MissingArtifactCodecError,
     MissingStoreDocumentError,
     RunAlreadyExistsError,
@@ -23,9 +31,23 @@ from .errors import (
     UnsupportedArtifactURIError,
     UnsafeStorePathError,
 )
-from .indexes import artifact_index_from_dict, artifact_index_to_dict, format_artifact_key, merge_artifact_index, parse_artifact_key
+from .indexes import (
+    artifact_index_from_dict,
+    artifact_index_to_dict,
+    format_artifact_key,
+    merge_artifact_index,
+    parse_artifact_key,
+)
 from .local_artifacts import LocalArtifactStore
 from .local_runs import LocalRunStore
+from .run_uri import (
+    LocalRunURI,
+    allocate_local_run_uri,
+    path_to_run_uri,
+    resolve_local_run_uri,
+    run_uri_to_path,
+    validate_run_uri,
+)
 from .run_store import (
     LocalRunStorePaths,
     RunArtifactIndexStore,
@@ -68,6 +90,7 @@ __all__ = [
     "RunLockConflictError",
     "RunLockReleaseError",
     "UnsafeStorePathError",
+    "InvalidRunURIError",
     "UnsupportedArtifactURIError",
     "ArtifactNotFoundError",
     "MissingArtifactCodecError",
@@ -91,4 +114,10 @@ __all__ = [
     "artifact_index_to_dict",
     "artifact_index_from_dict",
     "merge_artifact_index",
+    "LocalRunURI",
+    "resolve_local_run_uri",
+    "validate_run_uri",
+    "run_uri_to_path",
+    "path_to_run_uri",
+    "allocate_local_run_uri",
 ]

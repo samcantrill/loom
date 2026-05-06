@@ -16,7 +16,7 @@ import yaml
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.planning import PlanAction
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -74,10 +74,9 @@ def test_readme_python_api_example_runs_and_reuses_same_run(tmp_path: Path) -> N
     run_store = LocalRunStore(tmp_path / "runs")
     runner = PipelineRunner(run_store=run_store)
     config = compose_config(_config_path(tmp_path)).resolved
-    first = runner.run(RunRequest(config=config, run_id="run-1"))
-    second = runner.run(
-        RunRequest(config=config, run_id="run-1", open_existing=True)
-    )
+    run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
+    first = runner.run(RunRequest(config=config, run_uri=run_uri))
+    second = runner.run(RunRequest(config=config, run_uri=run_uri, open_existing=True))
 
     assert first.status.name == "SUCCEEDED"
     assert second.stage_results["build"].action == PlanAction.REUSE

@@ -62,7 +62,9 @@ def test_pipeline_event_validates_payload_and_optional_timestamp() -> None:
         cast(Any, event.payload)["labels"] = ["changed"]
 
 
-@pytest.mark.parametrize("event_type", ["", ".bad", "bad.", "bad..name", "Stage.Started"])
+@pytest.mark.parametrize(
+    "event_type", ["", ".bad", "bad.", "bad..name", "Stage.Started"]
+)
 def test_pipeline_event_rejects_invalid_event_types(event_type: str) -> None:
     with pytest.raises(PipelineEventError):
         PipelineEvent(scope=EventScope.run(), event_type=event_type)
@@ -71,7 +73,7 @@ def test_pipeline_event_rejects_invalid_event_types(event_type: str) -> None:
 def test_pipeline_event_record_round_trips() -> None:
     timestamp = utc_timestamp()
     record = PipelineEventRecord(
-        run_id="run1",
+        run_uri="run1",
         sequence=1,
         timestamp=timestamp,
         scope=EventScope.stage("build"),
@@ -81,7 +83,7 @@ def test_pipeline_event_record_round_trips() -> None:
 
     assert record.to_dict() == {
         "schema_version": 1,
-        "run_id": "run1",
+        "run_uri": "run1",
         "sequence": 1,
         "timestamp": timestamp,
         "scope": {"kind": "STAGE", "stage_name": "build"},
@@ -97,7 +99,7 @@ def test_pipeline_event_record_round_trips() -> None:
         {"schema_version": 2},
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "sequence": 0,
             "timestamp": utc_timestamp(),
             "scope": {"kind": "RUN", "stage_name": None},
@@ -106,7 +108,7 @@ def test_pipeline_event_record_round_trips() -> None:
         },
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "sequence": 1,
             "timestamp": "not-a-timestamp",
             "scope": {"kind": "RUN", "stage_name": None},
@@ -115,7 +117,7 @@ def test_pipeline_event_record_round_trips() -> None:
         },
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "sequence": 1,
             "timestamp": utc_timestamp(),
             "scope": {"kind": "RUN", "stage_name": None},
@@ -124,7 +126,7 @@ def test_pipeline_event_record_round_trips() -> None:
         },
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "sequence": 1,
             "timestamp": utc_timestamp(),
             "scope": {"kind": "RUN", "stage_name": None},

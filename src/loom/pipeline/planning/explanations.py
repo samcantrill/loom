@@ -127,7 +127,9 @@ class StageExplanation:
                     mapping["reusable_outputs"], "reusable_outputs"
                 ).items()
             },
-            upstream_stages=_string_tuple(mapping["upstream_stages"], "upstream_stages"),
+            upstream_stages=_string_tuple(
+                mapping["upstream_stages"], "upstream_stages"
+            ),
             downstream_stages=_string_tuple(
                 mapping["downstream_stages"],
                 "downstream_stages",
@@ -145,7 +147,7 @@ class StageExplanation:
 class PlanExplanation:
     schema_version: int
     kind: str
-    run_id: str
+    run_uri: str
     pipeline_name: str | None
     selectors: PlanSelectors
     resume: ResumeOptions
@@ -157,12 +159,14 @@ class PlanExplanation:
         return {
             "schema_version": self.schema_version,
             "kind": self.kind,
-            "run_id": self.run_id,
+            "run_uri": self.run_uri,
             "pipeline_name": self.pipeline_name,
             "selectors": self.selectors.to_dict(),
             "resume": self.resume.to_dict(),
             "stage_order": list(self.stage_order),
-            "stages": [explanation.to_dict() for explanation in self.stage_explanations],
+            "stages": [
+                explanation.to_dict() for explanation in self.stage_explanations
+            ],
             "summary": dict(self.summary),
         }
 
@@ -172,7 +176,7 @@ class PlanExplanation:
         allowed = {
             "schema_version",
             "kind",
-            "run_id",
+            "run_uri",
             "pipeline_name",
             "selectors",
             "resume",
@@ -185,7 +189,7 @@ class PlanExplanation:
         return cls(
             schema_version=_schema_version(mapping["schema_version"]),
             kind=_kind(mapping["kind"]),
-            run_id=require_str(mapping["run_id"], "run_id"),
+            run_uri=require_str(mapping["run_uri"], "run_uri"),
             pipeline_name=_optional_string(mapping["pipeline_name"], "pipeline_name"),
             selectors=PlanSelectors.from_dict(mapping["selectors"]),
             resume=ResumeOptions.from_dict(mapping["resume"]),
@@ -205,7 +209,7 @@ def explain_plan(plan: ExecutionPlan) -> PlanExplanation:
     return PlanExplanation(
         schema_version=PLAN_EXPLANATION_SCHEMA_VERSION,
         kind=PLAN_EXPLANATION_KIND,
-        run_id=plan.run_id,
+        run_uri=plan.run_uri,
         pipeline_name=plan.pipeline_name,
         selectors=plan.selectors,
         resume=plan.resume,
@@ -247,7 +251,9 @@ def _explain_stage(*, stage: StagePlan) -> StageExplanation:
 
 def _schema_version(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise PlanSerializationError("PlanExplanation.schema_version must be an integer")
+        raise PlanSerializationError(
+            "PlanExplanation.schema_version must be an integer"
+        )
     if value != PLAN_EXPLANATION_SCHEMA_VERSION:
         raise PlanSerializationError(
             "PlanExplanation.schema_version must be "

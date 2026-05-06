@@ -8,13 +8,13 @@ import pytest
 from loom.pipeline.context import StageContext
 from loom.pipeline.errors import PipelineValidationError
 from loom.pipeline.specs import OutputSpec
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.serialization import PlainData
 
 
 def test_context_normalizes_paths_and_mappings() -> None:
     context = StageContext(
-        run_id="run-1",
+        run_uri="run-1",
         stage_name="build",
         resolved_config={"pipeline": {"name": "x"}},
         stage_config={"v": 1},
@@ -28,7 +28,7 @@ def test_context_normalizes_paths_and_mappings() -> None:
 def test_context_rejects_non_plain_data_config() -> None:
     with pytest.raises(PipelineValidationError):
         StageContext(
-            run_id="run-1",
+            run_uri="run-1",
             stage_name="build",
             resolved_config=cast(dict[str, PlainData], {0: "bad-key"}),
             stage_config={},
@@ -38,7 +38,7 @@ def test_context_rejects_non_plain_data_config() -> None:
 def test_context_requires_identity_strings() -> None:
     with pytest.raises(PipelineValidationError):
         StageContext(
-            run_id="",
+            run_uri="",
             stage_name="build",
             resolved_config={},
             stage_config={},
@@ -47,15 +47,16 @@ def test_context_requires_identity_strings() -> None:
 
 def test_context_helpers_save_and_register_declared_outputs(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
-    run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
+    run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
+    run_store.create_run(run_uri)
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root(run_uri))
     context = StageContext(
-        run_id="run1",
+        run_uri=run_uri,
         stage_name="build",
         resolved_config={},
         stage_config={},
-        local_output_dir=run_store.local_stage_artifact_dir("run1", "build"),
-        local_workspace_dir=run_store.local_stage_workspace_dir("run1", "build"),
+        local_output_dir=run_store.local_stage_artifact_dir(run_uri, "build"),
+        local_workspace_dir=run_store.local_stage_workspace_dir(run_uri, "build"),
         run_store=run_store,
         artifact_store=artifact_store,
         output_specs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
@@ -77,7 +78,7 @@ def test_context_helpers_save_and_register_declared_outputs(tmp_path: Path) -> N
 
 def test_context_helpers_reject_missing_runtime_services(tmp_path: Path) -> None:
     context = StageContext(
-        run_id="run1",
+        run_uri="run1",
         stage_name="build",
         resolved_config={},
         stage_config={},
@@ -105,7 +106,7 @@ def test_context_helpers_reject_missing_runtime_services(tmp_path: Path) -> None
         context.save_artifact("other", {}, artifact_type="json", codec_key="json.v1")
     with pytest.raises(PipelineValidationError):
         StageContext(
-            run_id="run-1",
+            run_uri="run-1",
             stage_name="",
             resolved_config={},
             stage_config={},
@@ -122,7 +123,7 @@ def test_context_load_input(tmp_path: Path) -> None:
         codec_key="json.v1",
     )
     context = StageContext(
-        run_id="run1",
+        run_uri="run1",
         stage_name="build",
         resolved_config={},
         stage_config={},

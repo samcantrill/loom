@@ -109,7 +109,7 @@ def test_execution_plan_round_trips_through_plain_data() -> None:
     )
     plan = ExecutionPlan(
         schema_version=1,
-        run_id="run1",
+        run_uri="run1",
         pipeline_name="demo",
         selectors=PlanSelectors(),
         resume=ResumeOptions(),

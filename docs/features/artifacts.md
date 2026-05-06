@@ -269,7 +269,10 @@ fingerprints, and record in provenance.
 ```python
 from loom.artifacts import ArtifactAddress
 
-_ = ArtifactAddress(run_id="run-2026-05-04", artifact_id="train/metrics")
+_ = ArtifactAddress(
+    run_uri="file:///abs/project/runs/run-2026-05-04",
+    artifact_id="train/metrics",
+)
 ```
 
 ### 5.3 Artifact URI
@@ -299,7 +302,7 @@ STAGE_NAME/OUTPUT_NAME/ATTEMPT
 Cross-run ownership is explicit via `ArtifactAddress`:
 
 ```text
-ArtifactAddress(run_id, artifact_id)
+ArtifactAddress(run_uri, artifact_id)
 ```
 
 ### 5.6 ArtifactAddress
@@ -310,7 +313,7 @@ lineage, deduplication, or cataloging spans multiple runs.
 ```python
 @dataclass(frozen=True, slots=True)
 class ArtifactAddress:
-    run_id: str
+    run_uri: str
     artifact_id: str
 ```
 
@@ -642,8 +645,8 @@ STAGE_NAME/OUTPUT_NAME/attempt-0002
 V0 may overwrite latest attempt outputs or write to stable paths. Attempt history
 can be added later if needed.
 
-`artifact_id` stays run-local. Use `ArtifactAddress` for cross-run artifact
-identity in external catalogs and result tables.
+`artifact_id` stays run-local. Use `ArtifactAddress(run_uri, artifact_id)` for
+cross-run artifact identity in external catalogs and result tables.
 
 ### 8.3 Output Names
 
@@ -1277,7 +1280,7 @@ from loom.pipeline.stores import ArtifactStore, LocalArtifactStore
 Example:
 
 ```python
-store = LocalArtifactStore(root=run_dir / "artifacts")
+store = LocalArtifactStore(root=run_path / "artifacts")
 
 ref = store.save(
     {"loss": 0.1},
@@ -1303,7 +1306,7 @@ context.register_local_artifact(...)
 
 The artifact layer should support CLI inspection without owning CLI formatting.
 
-### 19.1 `loom artifacts list RUN_DIR`
+### 19.1 `loom artifacts list RUN_URI`
 
 Should read the run-store artifact index and show:
 
@@ -1315,11 +1318,11 @@ checksum presence
 producer stage
 ```
 
-### 19.2 `loom artifacts show RUN_DIR NAME`
+### 19.2 `loom artifacts show RUN_URI NAME`
 
 Should show the serialized `ArtifactRef` for a logical artifact name.
 
-### 19.3 `loom artifacts path RUN_DIR NAME`
+### 19.3 `loom artifacts path RUN_URI NAME`
 
 Should print a local path only when:
 
@@ -1331,7 +1334,7 @@ path can be resolved safely
 For remote URIs, print the URI instead or fail with a clear message depending on
 the command contract.
 
-### 19.4 `loom artifacts verify RUN_DIR`
+### 19.4 `loom artifacts verify RUN_URI`
 
 Can be added later to:
 

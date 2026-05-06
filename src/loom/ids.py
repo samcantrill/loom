@@ -10,7 +10,7 @@ ArtifactID: TypeAlias = str
 ArtifactType: TypeAlias = str
 Checksum: TypeAlias = str
 Fingerprint: TypeAlias = str
-RunID: TypeAlias = str
+RunURI: TypeAlias = str
 StageID: TypeAlias = str
 
 __all__ = [
@@ -22,6 +22,6 @@ __all__ = [
     "ArtifactType",
     "Checksum",
     "Fingerprint",
-    "RunID",
+    "RunURI",
     "StageID",
 ]

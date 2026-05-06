@@ -380,10 +380,10 @@ exist.
 Runtime execution may expose:
 
 ```text
-run_id
+run_uri
 stage_name
-run directory
-stage directory
+local output directory when available
+local workspace directory when available
 artifact store
 run store helpers
 output path allocation
@@ -788,8 +788,7 @@ The runner should return a structured result rather than only raising or exiting
 Recommended fields:
 
 ```text
-run_id
-run_dir
+run_uri
 status
 started_at
 finished_at
@@ -813,14 +812,13 @@ Recommended shape:
 ```python
 @dataclass(frozen=True)
 class RunRequest:
-    pipeline: PipelineSpec
-    run_dir: Path
-    run_id: str | None = None
-    resolved_config: Mapping[str, Any] | None = None
-    resume: ResumePolicy | None = None
-    selectors: StageSelector | None = None
-    executor: Executor | None = None
-    failure_policy: FailurePolicy | None = None
+    config: ComposedConfig | Mapping[str, PlainData] | None = None
+    pipeline: PipelineSpec | None = None
+    run_uri: str | None = None
+    open_existing: bool = False
+    selectors: PlanSelectors = field(default_factory=PlanSelectors)
+    resume: ResumeOptions = field(default_factory=ResumeOptions)
+    failure_policy: FailurePolicy = field(default_factory=FailurePolicy)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -833,12 +831,10 @@ Convenience function:
 
 ```python
 def run_pipeline(
-    pipeline: PipelineSpec,
+    request: RunRequest,
     *,
-    run_dir: Path,
+    run_store: RunStore,
     executor: Executor | None = None,
-    resume: ResumePolicy | None = None,
-    selectors: StageSelector | None = None,
 ) -> RunResult:
     ...
 ```
@@ -953,26 +949,25 @@ the run directory inspectable.
 
 ## 9. StageExecutionRequest
 
-### 9.1 V0 Fields
+### 9.1 Current Fields
 
 Recommended dataclass:
 
 ```python
 @dataclass(frozen=True)
 class StageExecutionRequest:
-    run_id: str
-    run_dir: Path
-    stage_name: str
-    stage_spec: StageSpec
-    stage_context: StageContext
+    run_uri: str
+    stage: StageSpec
+    stage_plan: StagePlan
+    stage_object: Stage
+    context: StageContext
     inputs: Mapping[str, ArtifactRef]
-    expected_outputs: Mapping[str, OutputSpec]
-    fingerprint: str
-    resources: ResourceSpec | None
+    fingerprint: StageFingerprintRecord
+    attempt: int
     stdout_path: Path
     stderr_path: Path
     traceback_path: Path
-    executor_metadata_path: Path
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
 ```
 
 The exact field names may change, but the request should be explicit rather
@@ -991,15 +986,16 @@ Recommended approach:
 StageExecutionRequest.stage:
   optional constructed object for in-process execution
 
-StageExecutionRequest.stage_spec:
+StageExecutionRequest.stage:
   always present
 
-StageExecutionRequest.run_dir:
+StageExecutionRequest.run_uri:
   always present
 ```
 
-For future subprocess execution, the command should load the run directory and
-stage spec rather than trying to pickle Python objects.
+For future subprocess execution, the command should receive a run URI and stage
+name, then let the appropriate store resolve durable state rather than trying to
+pickle Python objects.
 
 ### 9.3 Serialization Boundary
 
@@ -1009,8 +1005,7 @@ local execution.
 However, the persistent subset should be clear:
 
 ```text
-run_id
-run_dir
+run_uri
 stage_name
 attempt
 input artifact refs
@@ -1021,7 +1016,7 @@ log paths
 ```
 
 Subprocess and future remote executors should pass only stable identifiers on
-the command line and read durable state from the run directory.
+the command line and read durable state through the run store.
 
 ### 9.4 Environment Hints
 
@@ -1300,10 +1295,10 @@ transitions, or run-store state.
 Phase 9 runtime context construction may include:
 
 ```text
-run_id
-run_dir
+run_uri
 stage_name
-stage_dir
+local output directory
+local workspace directory
 artifact_store
 run_store
 output path helpers
@@ -1728,7 +1723,7 @@ Recommended fields:
 
 ```text
 schema_version
-run_id
+run_uri
 stage_name
 attempt
 failed_at
@@ -2053,12 +2048,14 @@ they require optional behavior.
 Recommended convenience:
 
 ```python
-from loom.pipeline.execution import run_pipeline
+from loom.pipeline.execution import RunRequest, run_pipeline
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 
+run_store = LocalRunStore("runs")
+run_uri = path_to_run_uri("runs/example")
 result = run_pipeline(
-    pipeline,
-    run_dir=Path("runs/example"),
-    executor=LocalExecutor(),
+    RunRequest(pipeline=pipeline, run_uri=run_uri),
+    run_store=run_store,
 )
 ```
 

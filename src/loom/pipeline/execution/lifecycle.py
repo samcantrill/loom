@@ -14,8 +14,8 @@ from loom.pipeline.stores import RunStore
 from loom.serialization import PlainData, ensure_plain_data
 
 
-def next_stage_attempt(run_store: RunStore, run_id: str, stage_name: str) -> int:
-    status = run_store.read_stage_status(run_id, stage_name)
+def next_stage_attempt(run_store: RunStore, run_uri: str, stage_name: str) -> int:
+    status = run_store.read_stage_status(run_uri, stage_name)
     if status is None:
         return 1
     return status.attempt + 1
@@ -24,7 +24,7 @@ def next_stage_attempt(run_store: RunStore, run_id: str, stage_name: str) -> int
 def write_run_status(
     run_store: RunStore,
     *,
-    run_id: str,
+    run_uri: str,
     status: RunStatus,
     created_at: str,
     updated_at: str,
@@ -37,7 +37,7 @@ def write_run_status(
     if not isinstance(normalized_metadata, dict):
         raise ValueError("metadata must be a mapping")
     record = RunStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         status=status,
         created_at=created_at,
         updated_at=updated_at,
@@ -46,14 +46,14 @@ def write_run_status(
         message=message,
         metadata=normalized_metadata,
     )
-    run_store.write_run_status(run_id, record)
+    run_store.write_run_status(run_uri, record)
     return record
 
 
 def write_stage_running(
     run_store: RunStore,
     *,
-    run_id: str,
+    run_uri: str,
     stage_name: str,
     attempt: int,
     started_at: str,
@@ -67,7 +67,7 @@ def write_stage_running(
     ):
         raise ValueError("owner and metadata must be mappings")
     record = StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name=stage_name,
         status=StageStatus.RUNNING,
         attempt=attempt,
@@ -76,14 +76,14 @@ def write_stage_running(
         owner=normalized_owner,
         metadata=normalized_metadata,
     )
-    run_store.write_stage_status(run_id, stage_name, record)
+    run_store.write_stage_status(run_uri, stage_name, record)
     return record
 
 
 def write_stage_succeeded(
     run_store: RunStore,
     *,
-    run_id: str,
+    run_uri: str,
     stage_name: str,
     attempt: int,
     started_at: str,
@@ -99,7 +99,7 @@ def write_stage_succeeded(
     ):
         raise ValueError("owner and metadata must be mappings")
     record = StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name=stage_name,
         status=StageStatus.SUCCEEDED,
         attempt=attempt,
@@ -110,14 +110,14 @@ def write_stage_succeeded(
         owner=normalized_owner,
         metadata=normalized_metadata,
     )
-    run_store.write_stage_status(run_id, stage_name, record)
+    run_store.write_stage_status(run_uri, stage_name, record)
     return record
 
 
 def write_stage_failed(
     run_store: RunStore,
     *,
-    run_id: str,
+    run_uri: str,
     stage_name: str,
     attempt: int,
     started_at: str | None,
@@ -135,7 +135,7 @@ def write_stage_failed(
     ):
         raise ValueError("owner and metadata must be mappings")
     record = StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name=stage_name,
         status=StageStatus.FAILED,
         attempt=attempt,
@@ -146,14 +146,14 @@ def write_stage_failed(
         owner=normalized_owner,
         metadata=normalized_metadata,
     )
-    run_store.write_stage_status(run_id, stage_name, record)
+    run_store.write_stage_status(run_uri, stage_name, record)
     return record
 
 
 def write_stage_skipped(
     run_store: RunStore,
     *,
-    run_id: str,
+    run_uri: str,
     stage_name: str,
     attempt: int,
     finished_at: str,
@@ -164,7 +164,7 @@ def write_stage_skipped(
     if not isinstance(normalized_metadata, dict):
         raise ValueError("metadata must be a mapping")
     record = StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name=stage_name,
         status=StageStatus.SKIPPED,
         attempt=attempt,
@@ -173,14 +173,14 @@ def write_stage_skipped(
         message=message,
         metadata=normalized_metadata,
     )
-    run_store.write_stage_status(run_id, stage_name, record)
+    run_store.write_stage_status(run_uri, stage_name, record)
     return record
 
 
 def write_stage_blocked(
     run_store: RunStore,
     *,
-    run_id: str,
+    run_uri: str,
     stage_name: str,
     attempt: int,
     blocked_at: str,
@@ -195,13 +195,15 @@ def write_stage_blocked(
     if not isinstance(normalized_metadata, dict):
         raise ValueError("metadata must be a mapping")
     if blocked_by is not None:
-        normalized_metadata["blocked_by"] = ensure_plain_data(blocked_by, path="blocked_by")
+        normalized_metadata["blocked_by"] = ensure_plain_data(
+            blocked_by, path="blocked_by"
+        )
     if reason_code is not None:
         if not isinstance(reason_code, str) or not reason_code:
             raise ValueError("reason_code must be a non-empty string")
         normalized_metadata["reason_code"] = reason_code
     record = StageStatusRecord(
-        run_id=run_id,
+        run_uri=run_uri,
         stage_name=stage_name,
         status=StageStatus.BLOCKED,
         attempt=attempt,
@@ -209,7 +211,7 @@ def write_stage_blocked(
         message=message,
         metadata=normalized_metadata,
     )
-    run_store.write_stage_status(run_id, stage_name, record)
+    run_store.write_stage_status(run_uri, stage_name, record)
     return record
 
 

@@ -879,7 +879,7 @@ class StagePlan:
 @dataclass(frozen=True, slots=True)
 class ExecutionPlan:
     schema_version: int
-    run_id: str
+    run_uri: str
     pipeline_name: str | None
     selectors: PlanSelectors
     resume: ResumeOptions
@@ -893,7 +893,7 @@ class ExecutionPlan:
         object.__setattr__(
             self, "schema_version", positive_int(self.schema_version, "schema_version")
         )
-        object.__setattr__(self, "run_id", require_str(self.run_id, "run_id"))
+        object.__setattr__(self, "run_uri", require_str(self.run_uri, "run_uri"))
         object.__setattr__(
             self, "pipeline_name", optional_str(self.pipeline_name, "pipeline_name")
         )
@@ -932,7 +932,7 @@ class ExecutionPlan:
         return {
             "schema_version": self.schema_version,
             "kind": "loom.execution_plan",
-            "run_id": self.run_id,
+            "run_uri": self.run_uri,
             "pipeline_name": self.pipeline_name,
             "selectors": self.selectors.to_dict(),
             "resume": self.resume.to_dict(),
@@ -949,7 +949,7 @@ class ExecutionPlan:
         allowed = {
             "schema_version",
             "kind",
-            "run_id",
+            "run_uri",
             "pipeline_name",
             "selectors",
             "resume",
@@ -967,7 +967,7 @@ class ExecutionPlan:
             )
         return cls(
             schema_version=positive_int(mapping["schema_version"], "schema_version"),
-            run_id=require_str(mapping["run_id"], "run_id"),
+            run_uri=require_str(mapping["run_uri"], "run_uri"),
             pipeline_name=optional_str(mapping.get("pipeline_name"), "pipeline_name"),
             selectors=plan_selectors(mapping["selectors"], "selectors"),
             resume=resume_options(mapping["resume"], "resume"),

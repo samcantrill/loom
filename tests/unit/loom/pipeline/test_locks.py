@@ -5,14 +5,18 @@ from typing import Any, cast
 
 import pytest
 
-from loom.pipeline.locks import LOCK_SCHEMA_VERSION, RunLockRecord, RunLockValidationError
+from loom.pipeline.locks import (
+    LOCK_SCHEMA_VERSION,
+    RunLockRecord,
+    RunLockValidationError,
+)
 
 
 def test_run_lock_record_round_trips_plain_data() -> None:
     owner = {"worker": "local", "nested": {"attempt": 1}}
 
     record = RunLockRecord(
-        run_id="run1",
+        run_uri="run1",
         token="abc123",
         acquired_at="2020-01-01T00:00:00Z",
         owner=owner,
@@ -22,7 +26,7 @@ def test_run_lock_record_round_trips_plain_data() -> None:
     assert isinstance(record.owner, MappingProxyType)
     assert record.to_dict() == {
         "schema_version": 1,
-        "run_id": "run1",
+        "run_uri": "run1",
         "token": "abc123",
         "acquired_at": "2020-01-01T00:00:00Z",
         "owner": owner,
@@ -36,42 +40,42 @@ def test_run_lock_record_round_trips_plain_data() -> None:
         {},
         {
             "schema_version": 2,
-            "run_id": "run1",
+            "run_uri": "run1",
             "token": "abc123",
             "acquired_at": "2020-01-01T00:00:00Z",
             "owner": {},
         },
         {
             "schema_version": 1,
-            "run_id": "",
+            "run_uri": "",
             "token": "abc123",
             "acquired_at": "2020-01-01T00:00:00Z",
             "owner": {},
         },
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "token": "",
             "acquired_at": "2020-01-01T00:00:00Z",
             "owner": {},
         },
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "token": "abc123",
             "acquired_at": "not-a-timestamp",
             "owner": {},
         },
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "token": "abc123",
             "acquired_at": "2020-01-01T00:00:00Z",
             "owner": [],
         },
         {
             "schema_version": 1,
-            "run_id": "run1",
+            "run_uri": "run1",
             "token": "abc123",
             "acquired_at": "2020-01-01T00:00:00Z",
             "owner": {},
@@ -87,7 +91,7 @@ def test_run_lock_record_rejects_malformed_payloads(payload: object) -> None:
 def test_run_lock_record_rejects_non_plain_owner() -> None:
     with pytest.raises(RunLockValidationError, match="owner"):
         RunLockRecord(
-            run_id="run1",
+            run_uri="run1",
             token="abc123",
             acquired_at="2020-01-01T00:00:00Z",
             owner=cast(Any, {"bad": object()}),

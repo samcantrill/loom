@@ -1061,7 +1061,7 @@ Representative structure:
 @dataclass(frozen=True, slots=True)
 class StageProvenance:
     schema_version: int = 1
-    run_id: str
+    run_uri: str
     stage_name: str
     status: str
     attempt: int
@@ -1160,9 +1160,8 @@ Representative structure:
 @dataclass(frozen=True, slots=True)
 class RunProvenance:
     schema_version: int = 1
-    run_id: str
+    run_uri: str
     created_at: str
-    run_dir: str | None = None
     command: CommandProvenance | None = None
     code: CodeProvenance | None = None
     environment: EnvironmentProvenance | None = None
@@ -1360,8 +1359,7 @@ Representative signature:
 ```python
 def capture_run_provenance(
     *,
-    run_id: str,
-    run_dir: str | Path | None = None,
+    run_uri: str,
     options: ProvenanceCaptureOptions | None = None,
     command: CommandProvenance | None = None,
     config: Mapping[str, PlainData] | None = None,
@@ -1444,7 +1442,7 @@ Example:
 {
   "schema_version": 1,
   "kind": "loom.run_provenance",
-  "run_id": "example",
+  "run_uri": "file:///abs/project/runs/example",
   "created_at": "2026-05-02T00:00:00Z",
   "command": {
     "argv": ["loom", "run", "experiment.yaml"],
@@ -1478,7 +1476,7 @@ Example:
 {
   "schema_version": 1,
   "kind": "loom.stage_provenance",
-  "run_id": "example",
+  "run_uri": "file:///abs/project/runs/example",
   "stage_name": "build_manifest",
   "status": "SUCCEEDED",
   "attempt": 1,
@@ -1876,8 +1874,7 @@ from loom.provenance import (
 )
 
 provenance = capture_run_provenance(
-    run_id="example",
-    run_dir="runs/example",
+    run_uri="file:///abs/project/runs/example",
     options=ProvenanceCaptureOptions(
         git_root=".",
         packages=("loom", "project-package"),
@@ -1894,7 +1891,7 @@ The returned object is plain-data serializable and can be written by `RunStore`.
 from loom.provenance import StageProvenance
 
 stage_provenance = StageProvenance(
-    run_id="example",
+    run_uri="file:///abs/project/runs/example",
     stage_name="build_manifest",
     status="SUCCEEDED",
     attempt=1,

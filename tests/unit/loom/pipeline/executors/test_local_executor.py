@@ -18,14 +18,15 @@ from loom.pipeline.planning import (
     plan_pipeline,
 )
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from tests.support.pipeline_execution_stages import FailingStage, JsonProducerStage
 
 
 def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
     run_store = LocalRunStore(tmp_path / "runs")
-    run_store.create_run("run1")
-    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
+    run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
+    run_store.create_run(run_uri)
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root(run_uri))
     stage = StageSpec(
         name="build",
         factory=StageFactorySpec(
@@ -35,7 +36,7 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
     )
     plan = plan_pipeline(
         PipelineSpec(stages=(stage,)),
-        run_id="run1",
+        run_uri=run_uri,
         run_store=run_store,
         artifact_store=artifact_store,
         persist=True,
@@ -44,17 +45,17 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
         stage, bound_inputs={}, fingerprint_context=FingerprintContext()
     )
     return StageExecutionRequest(
-        run_id="run1",
+        run_uri=run_uri,
         stage=stage,
         stage_plan=plan.ordered_stage_plans[0],
         stage_object=stage_object,  # type: ignore[arg-type]
         context=StageContext(
-            run_id="run1",
+            run_uri=run_uri,
             stage_name="build",
             resolved_config={},
             stage_config={},
-            local_output_dir=run_store.local_stage_artifact_dir("run1", "build"),
-            local_workspace_dir=run_store.local_stage_workspace_dir("run1", "build"),
+            local_output_dir=run_store.local_stage_artifact_dir(run_uri, "build"),
+            local_workspace_dir=run_store.local_stage_workspace_dir(run_uri, "build"),
             run_store=run_store,
             artifact_store=artifact_store,
             output_specs=stage.outputs,
@@ -62,9 +63,9 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
         inputs={},
         fingerprint=fingerprint,
         attempt=1,
-        stdout_path=run_store.local_stage_log_path("run1", "build", "stdout"),
-        stderr_path=run_store.local_stage_log_path("run1", "build", "stderr"),
-        traceback_path=run_store.local_stage_dir("run1", "build")
+        stdout_path=run_store.local_stage_log_path(run_uri, "build", "stdout"),
+        stderr_path=run_store.local_stage_log_path(run_uri, "build", "stderr"),
+        traceback_path=run_store.local_stage_dir(run_uri, "build")
         / "logs"
         / "traceback.txt",
     )

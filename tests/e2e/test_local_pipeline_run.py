@@ -11,7 +11,7 @@ from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.planning import PlanAction
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.serialization import PlainData
 from tests.support.pipeline_execution_configs import local_execution_config
 
@@ -119,32 +119,37 @@ class _TrackingLocalRunStore(LocalRunStore):
 
     def acquire_run_lock(
         self,
-        run_id: str,
+        run_uri: str,
         *,
         owner: Mapping[str, Any] | None = None,
     ) -> RunLockRecord:
         self.lock_events.append("acquire")
-        return super().acquire_run_lock(run_id, owner=owner)
+        return super().acquire_run_lock(run_uri, owner=owner)
 
-    def release_run_lock(self, run_id: str, token: str) -> None:
+    def release_run_lock(self, run_uri: str, token: str) -> None:
         self.lock_events.append("release")
-        super().release_run_lock(run_id, token)
+        super().release_run_lock(run_uri, token)
+
+
+def _run_uri(tmp_path: Path, name: str = "run1") -> str:
+    return path_to_run_uri(tmp_path / "runs" / name)
 
 
 def test_local_pipeline_run_and_resume_from_config(tmp_path: Path) -> None:
     counter_path = tmp_path / "counter.txt"
     run_store = LocalRunStore(tmp_path / "runs")
     runner = PipelineRunner(run_store=run_store)
+    run_uri = _run_uri(tmp_path)
 
     result = runner.run(
         RunRequest(
-            config=local_execution_config(counter_path=counter_path), run_id="run1"
+            config=local_execution_config(counter_path=counter_path), run_uri=run_uri
         )
     )
     resumed = runner.run(
         RunRequest(
             config=local_execution_config(counter_path=counter_path),
-            run_id="run1",
+            run_uri=run_uri,
             open_existing=True,
         )
     )
@@ -196,28 +201,31 @@ def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_
     monkeypatch.setenv("LOOM_E2E_RUNNER_ROOT", "/runtime/from-env")
     composed = compose_config(config_path)
     run_store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
 
     result = PipelineRunner(run_store=run_store).run(
-        RunRequest(config=composed, run_id="run1")
+        RunRequest(config=composed, run_uri=run_uri)
     )
 
     run_dir = tmp_path / "runs" / "run1"
     composition_manifest_path = run_dir / "config" / "composition_manifest.json"
     recipe_manifest_path = run_dir / "config" / "recipe_manifest.json"
-    persisted_wrapper = json.loads(composition_manifest_path.read_text(encoding="utf-8"))
+    persisted_wrapper = json.loads(
+        composition_manifest_path.read_text(encoding="utf-8")
+    )
     serialized_wrapper = json.dumps(persisted_wrapper, sort_keys=True)
 
     assert result.status == RunStatus.SUCCEEDED
     assert composed.resolved["metadata"] == {"runtime_root": "/runtime/from-env"}
-    assert run_store.read_composition_manifest("run1") == composed.manifest.to_dict()
-    assert run_store.read_recipe_manifest("run1") == composed.recipe_manifest
+    assert run_store.read_composition_manifest(run_uri) == composed.manifest.to_dict()
+    assert run_store.read_recipe_manifest(run_uri) == composed.recipe_manifest
     assert composition_manifest_path.is_file()
     assert recipe_manifest_path.is_file()
     assert persisted_wrapper["schema_version"] == 1
-    assert persisted_wrapper["run_id"] == "run1"
+    assert persisted_wrapper["run_uri"] == run_uri
     assert set(persisted_wrapper) == {
         "schema_version",
-        "run_id",
+        "run_uri",
         "created_at",
         "composition_manifest",
     }
@@ -231,15 +239,16 @@ def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_
 
 def test_local_pipeline_run_fails_with_blocked_outcomes(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
             config=_failure_config(
                 "tests.support.pipeline_execution_stages.FailingStage"
             ),
-            run_id="run1",
+            run_uri=run_uri,
         )
     )
-    blocked = run_store.read_stage_status("run1", "report")
+    blocked = run_store.read_stage_status(run_uri, "report")
 
     assert result.status == RunStatus.FAILED
     assert result.stage_results["build"].status == StageStatus.FAILED
@@ -248,7 +257,7 @@ def test_local_pipeline_run_fails_with_blocked_outcomes(tmp_path: Path) -> None:
     assert blocked.status == StageStatus.BLOCKED
     assert blocked.metadata["blocked_by"] == ["build"]
     assert blocked.metadata["reason_code"] == "upstream_failed"
-    assert run_store.read_events("run1")[-1].event_type == "run.failed"
+    assert run_store.read_events(run_uri)[-1].event_type == "run.failed"
 
 
 def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(
@@ -264,9 +273,10 @@ def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(
     catalog.register("explicit_catalog_pipeline", _explicit_catalog_recipe)
     composed = compose_config_with_catalog(config_path, recipe_catalog=catalog)
     run_store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
 
     result = PipelineRunner(run_store=run_store).run(
-        RunRequest(config=composed.resolved, run_id="run1")
+        RunRequest(config=composed.resolved, run_uri=run_uri)
     )
 
     assert result.status == RunStatus.SUCCEEDED
@@ -277,6 +287,7 @@ def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(
     tmp_path: Path,
 ) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
     config = {
         "pipeline": {
             "name": "factory-init-demo",
@@ -297,9 +308,9 @@ def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(
     }
 
     result = PipelineRunner(run_store=run_store).run(
-        RunRequest(config=config, run_id="run1")
+        RunRequest(config=config, run_uri=run_uri)
     )
-    artifact_store = LocalArtifactStore(run_store.local_artifact_root("run1"))
+    artifact_store = LocalArtifactStore(run_store.local_artifact_root(run_uri))
     payload = artifact_store.load(result.stage_results["build"].outputs["data"])
 
     assert result.status == RunStatus.SUCCEEDED
@@ -312,14 +323,15 @@ def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(
 
 def test_local_pipeline_run_records_events_and_lock_lifecycle(tmp_path: Path) -> None:
     run_store = _TrackingLocalRunStore(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
-        RunRequest(config=local_execution_config(), run_id="run1")
+        RunRequest(config=local_execution_config(), run_uri=run_uri)
     )
-    events = run_store.read_events("run1")
+    events = run_store.read_events(run_uri)
     event_types = [event.event_type for event in events]
 
     assert result.status == RunStatus.SUCCEEDED
     assert event_types[:2] == ["run.created", "run.planned"]
     assert event_types[-1] == "run.completed"
     assert run_store.lock_events == ["acquire", "release"]
-    assert run_store.read_run_lock("run1") is None
+    assert run_store.read_run_lock(run_uri) is None

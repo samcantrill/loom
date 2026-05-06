@@ -40,7 +40,7 @@ def test_run_request_requires_config_or_pipeline() -> None:
 def test_run_request_accepts_direct_pipeline_spec() -> None:
     spec = _minimal_pipeline_spec()
 
-    request = RunRequest(pipeline=spec, run_id="run1")
+    request = RunRequest(pipeline=spec, run_uri="run1")
 
     assert request.pipeline is spec
     assert request.config is None
@@ -64,7 +64,7 @@ def test_run_request_accepts_plain_mapping_config() -> None:
         },
     )
 
-    request = RunRequest(config=config, run_id="run1")
+    request = RunRequest(config=config, run_uri="run1")
 
     assert request.config == config
 
@@ -93,7 +93,7 @@ def test_run_request_accepts_duck_typed_composed_config() -> None:
 
     config = FakeComposedConfig()
 
-    request = RunRequest(config=config, run_id="run1")
+    request = RunRequest(config=config, run_uri="run1")
 
     assert request.config is config
 
@@ -117,7 +117,7 @@ def test_run_request_requires_manifest_for_composed_config_duck_type() -> None:
             return ()
 
     with pytest.raises(RunRequestError, match="ComposedConfig or mapping"):
-        RunRequest(config=cast(Any, AlmostComposedConfig()), run_id="run1")
+        RunRequest(config=cast(Any, AlmostComposedConfig()), run_uri="run1")
 
 
 def test_config_snapshot_inputs_remain_explicit_user_provided_fields() -> None:
@@ -175,7 +175,7 @@ def test_run_request_rejects_non_bool_failure_policy_mapping() -> None:
 def test_execution_failure_round_trips_plain_data() -> None:
     failure = ExecutionFailure(
         schema_version=1,
-        run_id="run1",
+        run_uri="run1",
         stage_name="build",
         attempt=1,
         failed_at="2020-01-01T00:00:00Z",
@@ -193,7 +193,7 @@ def test_execution_failure_from_dict_rejects_unsupported_schema_version() -> Non
         ExecutionFailure.from_dict(
             {
                 "schema_version": 999,
-                "run_id": "run1",
+                "run_uri": "run1",
                 "stage_name": "build",
                 "attempt": 1,
                 "failed_at": "2020-01-01T00:00:00Z",
@@ -209,7 +209,7 @@ def test_execution_failure_from_dict_rejects_unknown_fields() -> None:
         ExecutionFailure.from_dict(
             {
                 "schema_version": 1,
-                "run_id": "run1",
+                "run_uri": "run1",
                 "stage_name": "build",
                 "attempt": 1,
                 "failed_at": "2020-01-01T00:00:00Z",
