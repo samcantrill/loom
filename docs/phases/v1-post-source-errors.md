@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; ready for implementation handoff
+- Status: pr_open; expanded-path PR body refine/open pass complete
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 3: Source Authorship And Structured Error Completion`
 - Branch: `codex/v1-post-source-errors`
@@ -338,7 +338,12 @@ make test-summary
 - Draft pass completed by `loom_pr_preparer` on 2026-05-06.
 - PR body artifact written to `docs/phases/v1-post-source-errors-pr-body.md`
   using `.codex/templates/phase-pr-body.md`.
-- PR body refine pass: pending because the phase is on the expanded path.
+- PR body refine pass: completed by `loom_pr_preparer` on 2026-05-06 using
+  `.codex/prompts/pr-body-refine.md`.
+- PR body refine verification: body matches the phase execution plan, final
+  diff, acceptance criteria, suite evidence, scope boundaries, assumptions, and
+  risks; no future-phase work or unrelated refactors are described as phase
+  work.
 - PR title confirmed:
   `V1 Post Configuration - Phase 3: Source Authorship And Structured Error Completion`.
 - Branch confirmed: `codex/v1-post-source-errors`.
@@ -349,8 +354,15 @@ make test-summary
   Phase 2, and their metadata PRs merged into `develop`.
 - Merge eligibility: target is `develop`; PR may be opened in the refine pass
   and becomes merge-eligible after review/checks.
-- PR opening: intentionally deferred to `.codex/prompts/pr-body-refine.md`;
-  no GitHub PR was created in this draft pass.
+- PR opening: completed in the expanded-path refine/open pass.
+- PR: https://github.com/samcantrill/loom/pull/48
+- PR verification: `gh pr view 48 --json baseRefName,headRefName,state,url`
+  returned `baseRefName=develop`, `headRefName=codex/v1-post-source-errors`,
+  `state=OPEN`, and
+  `url=https://github.com/samcantrill/loom/pull/48`.
+- Merge eligibility: root PR targets `develop`, so it is merge-eligible after
+  human/code review and required checks pass; PR preparation did not approve or
+  merge.
 - Final PR-prep validation:
 - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed, Pyright
   reported 0 errors, the default suite passed with 436 passed and 11 skipped,
@@ -376,7 +388,7 @@ make test-summary
 - Pre-submit blocker gate: passed for phase scope, validation, PR body draft,
   suite evidence, redaction risks, and known review risks; no blocker found.
 - Stack maintenance:
-- None required in this draft pass; target remains `develop` and there is no
-  stack predecessor to retarget or rebase.
+- None required in this refine/open pass; target remains `develop` and there is
+  no stack predecessor to retarget or rebase.
 - Remaining blockers:
 - None.
