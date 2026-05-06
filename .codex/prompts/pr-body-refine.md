@@ -38,10 +38,9 @@ Task:
    the recorded target branch. Document whether the PR is already
    merge-eligible (`develop` target) or stacked for review only (predecessor
    branch target) in phase notes.
-8. Ensure the PR body mentions `@samcantrill` near the top. Do not request
-   `samcantrill` as a GitHub reviewer. If the body cannot be edited after PR
-   creation, add an immediate PR comment mentioning `@samcantrill` and record
-   the comment link in phase notes.
+8. Do not request GitHub reviewers or add human-review gating language. The
+   managing agent owns automated review, CI polling, and merge after PR
+   preparation.
 9. Keep workflow internals such as PR verification JSON, notification fallback,
    commit lists, and budget accounting out of the public PR body.
 
@@ -49,6 +48,7 @@ Rules:
 
 - Do not merge.
 - Do not approve the PR.
+- Do not request GitHub reviewers or block the PR on human approval.
 - Do not run this pass for routine fast-path phases.
 - Do not perform implementation refinements.
 - Do not create new test coverage.

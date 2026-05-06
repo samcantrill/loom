@@ -1,7 +1,5 @@
 ## Summary
 
-@samcantrill
-
 Describe what this PR implements in one or two human-readable paragraphs. Keep
 workflow metadata, commit lists, budget accounting, and long command output in
 the phase execution plan or completion notes instead of the public PR body.

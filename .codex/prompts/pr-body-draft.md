@@ -3,9 +3,9 @@ This prompt is intended for the `loom_pr_preparer` custom agent.
 
 This is the default fast-path PR preparation pass. Concisely summarize the
 diff, scope, acceptance criteria, implementation notes, validation evidence,
-risks, and reviewer-facing context in the durable PR body artifact. On the fast
-path, also verify and open or prepare the PR in this pass. Only leave a later
-refine prompt pending when the manager selected the expanded path.
+risks, and review context in the durable PR body artifact. On the fast path,
+also verify and open or prepare the PR in this pass. Only leave a later refine
+prompt pending when the manager selected the expanded path.
 
 Read:
 
@@ -56,14 +56,14 @@ Task:
     --json baseRefName,headRefName,state,url` and confirm `baseRefName`
     matches the recorded target branch. Record verification details in phase
     notes.
-15. Ensure the PR body mentions `@samcantrill` near the top. Do not request
-    `samcantrill` as a GitHub reviewer. If the body cannot be edited after PR
-    creation, add an immediate PR comment mentioning `@samcantrill` and record
-    the comment link in phase notes.
+15. Do not request GitHub reviewers or add human-review gating language. The
+    managing agent owns automated review, CI polling, and merge after PR
+    preparation.
 
 Rules:
 
 - Do not merge.
+- Do not request GitHub reviewers or block the PR on human approval.
 - Do not perform implementation refinements; report any blocker to the manager.
 - Do not create new test coverage at PR preparation time. If suite coverage is
   missing, report it as a blocker for the manager.

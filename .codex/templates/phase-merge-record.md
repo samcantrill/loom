@@ -13,9 +13,9 @@
 - Manager:
 - Merge date:
 
-## Approval Evidence
+## Automated Merge Evidence
 
-- PR review:
+- Automated PR review:
 - Validation or CI:
 - PR target confirmed:
 - Successor stack state checked:

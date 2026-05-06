@@ -119,16 +119,17 @@ long-term compatibility risk.
 
 ### Stacked Phase PRs
 
-Phase work may continue before human review or merge of earlier phase PRs. Use
-stacked PRs to preserve small phase diffs while letting later phases build on
-unmerged work.
+Phase work may continue before earlier phase PRs merge when a GitHub-side
+blocker prevents immediate merge. Human GitHub review is not a workflow gate.
+Use stacked PRs to preserve small phase diffs while letting later phases build
+on unmerged work.
 
 - A root phase PR targets `develop`.
 - A phase that depends on an unmerged predecessor branches from that predecessor
   branch and opens its PR against that predecessor branch.
 - The next phase may start once the current phase PR is open or prepared,
-  validated, and recorded as `pr_open`; human review and merge are not required
-  to start the next phase.
+  validated, and recorded as `pr_open`; human review is not required to start
+  the next phase.
 - A stacked PR may be reviewed while it targets a predecessor branch, but it is
   merge-eligible only after it is retargeted to `develop`.
 - When a predecessor PR lands, rebase or otherwise replay each immediate
@@ -142,34 +143,26 @@ unmerged work.
   a dedicated workflow PR. Do not include workflow prompt, template, or
   `AGENTS.md` refinements in product phase PR diffs unless explicitly assigned.
 
-### Serial Human Merge Gate
+### No Human Merge Gate
 
-When the user selects a clean merge gate or human-owned merge workflow, use a
-serial phase flow instead of stacked phase PRs.
+Implementation phase progress must not be gated on human GitHub review or human
+merge. The managing agent owns the automated review and merge decision.
 
-- Start each phase only after every earlier phase has been merged into
-  `develop`.
-- Branch each phase from updated `develop`, and open each phase PR against
-  `develop`.
-- Do not start successor phase implementation while the current phase is only
-  `pr_open` or `approved`.
-- Do not approve or merge phase PRs. Human review and merge are the external
-  gate.
-- The PR body must mention `@samcantrill` near the top. Do not request
-  `samcantrill` as a GitHub reviewer; if the PR body cannot be edited after
-  creation, add an immediate PR comment mentioning `@samcantrill` and record
-  the comment link in phase notes.
-- Poll GitHub for the merge gate instead of asking the user to return to Codex
-  manually. Continue only after `gh pr view <PR> --json
-  state,baseRefName,headRefName,url,mergedAt` reports `state` as `MERGED` and
-  `baseRefName` as `develop`.
-- Stop if the PR is closed without merging, targets a branch other than
-  `develop`, required GitHub access is unavailable, validation or CI is clearly
-  failing, the user interrupts, or the session can no longer keep polling.
-- After the PR merges, fetch updated `develop`, record the phase as `merged`,
-  commit and push metadata when permissions allow, clean up the completed phase
-  worktree and branch when safe, then begin the next pending phase from updated
-  `develop`.
+- Do not select or invent a serial human-owned merge workflow for phase
+  implementation.
+- Open phase PRs for reviewability and CI, but treat `loom_phase_reviewer` or
+  equivalent manager review plus validation/CI as the approval gate.
+- If GitHub branch protection blocks solely because a human review approval is
+  required, use available merge authority, including `gh pr merge --admin`,
+  after automated review, validation, CI, target-branch, and scope gates pass.
+- Do not use admin bypass for failing CI, wrong target branch, unresolved merge
+  conflicts, or known implementation/review blockers.
+- If admin merge authority is unavailable for a review-only protection blocker,
+  record the exact blocker and continue with stacked phase flow instead of
+  waiting for human approval.
+- If a later user asks for human visibility, mention or comment only for
+  awareness. Do not request GitHub reviewers and do not wait for human approval
+  unless the user explicitly asks Codex to stop automated implementation.
 
 ### GitHub CLI And Remote Operations
 
@@ -238,9 +231,9 @@ gh pr view <PR> --json baseRefName,headRefName,state,url
   expanded-path triggers below apply.
 - Record the PR feature focus and intended PR title in the phase execution plan
   before implementation begins so PR preparation does not invent title scope.
-- Follow the stacked phase handoff, or the serial human merge gate when that
-  mode is selected. Do not collapse role ownership into one agent unless
-  explicitly instructed, but skip optional second passes on the fast path.
+- Follow the stacked phase handoff and automatic merge policy. Do not collapse
+  role ownership into one agent unless explicitly instructed, but skip optional
+  second passes on the fast path.
 - Make frequent commits at coherent checkpoints.
 - Do not ask the user for feedback during the phase.
 - If something is ambiguous, make the smallest reasonable assumption, document
@@ -343,13 +336,9 @@ Model policy:
 
 ### Automatic Merge Policy
 
-Automatic merging is the default for phase PRs. The managing agent owns the
-review and merge decision and must not wait for human GitHub approval unless the
-user explicitly selects serial human-merge-gate mode.
-
-If serial human merge gate mode is active, this section is disabled: the
-managing agent must not approve or merge, and must wait for the human-merged PR
-to reach `MERGED` on `develop`.
+Automatic merging is mandatory for phase PRs whenever GitHub permissions and
+checks allow it. The managing agent owns the review and merge decision and must
+not wait for human GitHub approval.
 
 Before merging, the managing agent must confirm:
 
@@ -359,8 +348,7 @@ Before merging, the managing agent must confirm:
   after the merge.
 - The phase PR has passed `loom_phase_reviewer` review, or the managing agent
   has performed the same review locally. This automated review satisfies the
-  phase approval gate; GitHub review approval is not required unless branch
-  protection enforces it.
+  phase approval gate; GitHub review approval is not required.
 - Required validation commands or CI checks pass, or any unavailable checks are
   clearly justified.
 - The PR implements only the assigned phase and does not include future phase
@@ -369,11 +357,13 @@ Before merging, the managing agent must confirm:
   evidence, assumptions, and risks. The phase execution plan records workflow
   metadata such as branch and worktree path.
 - If GitHub blocks merge only because repository branch protection requires a
-  human approval, the managing agent may use its available merge authority,
+  human approval, the managing agent must use available merge authority,
   including `gh pr merge --admin`, after recording the blocker and confirming
-  all automated review and validation gates above. Do not use admin bypass for
-  failing CI, wrong target branch, unresolved merge conflicts, or known
-  implementation/review blockers.
+  all automated review and validation gates above. If that authority is
+  unavailable, record the blocker and continue with stacked phase flow rather
+  than waiting for human approval. Do not use admin bypass for failing CI, wrong
+  target branch, unresolved merge conflicts, or known implementation/review
+  blockers.
 
 After merging, the managing agent must:
 
@@ -475,9 +465,9 @@ The managing agent updates a phase from `pending` or `in_progress` to `pr_open`
 in the control checkout after the PR is opened or prepared. In stacked
 workflows, `pr_open` means the PR is submitted or ready against its recorded
 target branch and the phase branch is valid as a continuation base. The
-managing agent may update a phase to `approved` after review, even if the PR is
-still stacked on a predecessor branch, but may update it to `merged` only after
-the approved PR is retargeted to and merged into `develop`.
+managing agent may update a phase to `approved` after automated review, even if
+the PR is still stacked on a predecessor branch, but may update it to `merged`
+only after the approved PR is retargeted to and merged into `develop`.
 
 ### Phase Checks
 

@@ -49,7 +49,8 @@ User request shape:
 ```text
 Use .codex/workflows/roadmap-version-implementation.md.
 Begin or continue implementation of docs/implementation-plans/<plan>.md.
-Use Codex-managed CI-gated merges unless I say otherwise.
+Use Codex-managed automatic merges. Do not gate implementation on human PR
+review.
 ```
 
 Manager responsibilities:
@@ -62,6 +63,8 @@ Manager responsibilities:
 - Use fast path unless expanded-path triggers apply.
 - Run or record `make validate-pr` and `make test-summary`.
 - Open phase PRs with explicit base/head/title.
-- Poll CI and merge eligible phase PRs into `develop`.
+- Poll CI and merge eligible phase PRs into `develop` without waiting for human
+  approval; use admin merge authority for review-only branch protection when
+  available after automated gates pass.
 - Record merge metadata in the implementation plan and clean up phase branches
   and worktrees when safe.

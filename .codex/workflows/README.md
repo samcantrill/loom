@@ -47,7 +47,7 @@ Routine phase execution usually follows the fast path:
 phase execution plan
 implementation and phase-scoped tests
 PR body and suite evidence
-review or manager review
-CI-gated merge to develop
+automated review or manager review
+automatic CI-gated merge to develop
 metadata update and cleanup
 ```

@@ -12,7 +12,7 @@ the final diff, validation results, and `.github/PULL_REQUEST_TEMPLATE.md`.
 Confirm the branch, recorded target branch, stack predecessor, feature focus,
 PR title, scope, tests, and checks. Run or document `make validate-pr` and
 `make test-summary`, record PR facts and stack state in the phase artifacts,
-write a concise reviewer-facing PR body with suite-level evidence, and open the
+write a concise review-facing PR body with suite-level evidence, and open the
 PR if GitHub tooling/authentication are available. Use one PR-preparation pass
 on the fast path; reserve PR-body refine for expanded-path phases or inaccurate
 fast-path drafts.
@@ -21,9 +21,9 @@ Keep the PR body concise and evidence-backed. Summarize the implemented scope,
 technical implementation notes, new or changed tests, validation, and risks.
 Use compact Markdown validation and suite tables. Keep workflow internals such
 as commit lists, budget accounting, GitHub JSON, notification fallback, and
-stack cleanup details in phase notes rather than the public PR body. Mention
-`@samcantrill` near the top of the PR body, and do not request `samcantrill` as
-a GitHub reviewer.
+stack cleanup details in phase notes rather than the public PR body. Do not
+request GitHub reviewers or add human-review gating language; the managing
+agent owns automated review, CI polling, and merge.
 
 Do not merge, approve, perform implementation refinements, or start another
 phase. Do not create new test coverage during PR preparation. If PR creation is
