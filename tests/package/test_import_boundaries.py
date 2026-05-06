@@ -329,3 +329,62 @@ def test_pipeline_constructs_from_plain_data_without_config_import() -> None:
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
+    script = dedent(
+        """
+        import sys
+        from tempfile import TemporaryDirectory
+
+        def assert_forbidden_absent(phase):
+            for forbidden in (
+                "loom.config",
+                "loom.cli",
+                "project",
+                "yaml",
+                "omegaconf",
+                "pydantic",
+            ):
+                if forbidden in sys.modules:
+                    raise SystemExit(f"{forbidden} was imported {phase}")
+
+        from loom.pipeline import PipelineRunner, PipelineSpec, RunRequest
+        from loom.pipeline.status import RunStatus
+        from loom.pipeline.stores import LocalRunStore
+
+        assert_forbidden_absent("before direct pipeline run")
+
+        spec = PipelineSpec.from_config(
+            {
+                "name": "direct-boundary",
+                "stages": [
+                    {
+                        "name": "build",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage",
+                        },
+                        "config": {"value": 42},
+                        "outputs": {"data": {"artifact_type": "json"}},
+                    }
+                ],
+            }
+        )
+        with TemporaryDirectory() as tmpdir:
+            run_store = LocalRunStore(tmpdir)
+            result = PipelineRunner(run_store=run_store).run(
+                RunRequest(pipeline=spec, run_id="run1")
+            )
+            if result.status is not RunStatus.SUCCEEDED:
+                raise SystemExit(f"run failed with status {result.status!r}")
+            if set(run_store.read_artifact_index("run1")) != {"build.data"}:
+                raise SystemExit("direct run did not write expected artifact index")
+
+        assert_forbidden_absent("during direct pipeline run")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
