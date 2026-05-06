@@ -768,7 +768,7 @@ points for v3 inspection, v8 catalogs, v9 bundles, and v12/v13 remote stores.
 
 ### Phase 1 - Run URI Runtime Addressing
 
-Status: pr_open
+Status: merged
 Branch: `codex/add-run-uri-addressing`
 PR: https://github.com/samcantrill/loom/pull/59
 
@@ -869,11 +869,12 @@ Notes:
 
 Completion summary:
 
-- PR opened against `develop`: https://github.com/samcantrill/loom/pull/59
+- PR opened and merged into `develop`: https://github.com/samcantrill/loom/pull/59
+- Merge commit: `4b775510835a0725c59065cd2ced6916ca220981`.
 - Implementation commits migrate public/protocol/persisted run identity to
   `run_uri`, add strict local `file://` run URI helpers, preserve run-agnostic
   `ArtifactRef`, and update the owning docs/tests.
-- Validation passed with `make validate-pr` and `make test-summary`.
+- Validation passed with `make validate-pr`, `make test-summary`, and GitHub CI.
 
 ### Phase 2 - CLI Foundation And Shared Infrastructure
 
