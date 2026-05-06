@@ -244,4 +244,9 @@ make test-summary
 - PR preparation: PR body artifact written at `docs/phases/v1-post-artifact-provenance-pr-body.md`; expanded-path PR body draft/refine requirements completed in this preparation pass; branch pushed to `origin/codex/v1-post-artifact-provenance`; PR opened at https://github.com/samcantrill/loom/pull/51.
 - PR verification: `gh pr view 51 --json baseRefName,headRefName,state,url` returned base `develop`, head `codex/v1-post-artifact-provenance`, state `OPEN`, URL `https://github.com/samcantrill/loom/pull/51`; this is a root PR and is merge-eligible after review and checks.
 - Stack maintenance: root PR targets `develop`; no predecessor branch and no stack retargeting required.
-- Remaining blockers: none after the expanded-path implementation refinement pass.
+- User-authorized blocker-resolution pass: addressed PR #51 review blocker where legacy schema-version-1 `ConfigProvenance.from_dict()` objects could be serialized into an unreadable schema-version-1 payload without top-level `resolved_fingerprint`. `ConfigProvenance.to_dict()` now writes schema version 2 only and raises structured `ConfigProvenanceError` for legacy read objects; contract/unit tests no longer assert invalid v1 serialization and cover the rejected unreadable v1 shape. This pass does not reset the original implementation refinement or PR review budgets.
+- Blocker-resolution validation:
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed with 24 tests.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed.
+  - `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pyright src/loom/config/provenance.py tests/unit/loom/config/test_config_provenance.py tests/contracts/test_config_artifact_contract.py` passed with 0 errors.
+- Remaining blockers: none after the user-authorized blocker-resolution pass.

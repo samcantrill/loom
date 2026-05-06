@@ -1,7 +1,5 @@
 """Unit tests for config provenance models."""
 
-from typing import Any, cast
-
 import pytest
 
 from loom.config.errors import ConfigErrorContext, ConfigProvenanceError
@@ -129,10 +127,18 @@ def test_config_provenance_reads_legacy_v1_resolved_fingerprint_only_as_metadata
     assert provenance.schema_version == 1
     assert provenance.artifact_fingerprint is None
     assert provenance.metadata["legacy_resolved_fingerprint"] == "sha256:legacy"
-    serialized = provenance.to_dict()
-    serialized_metadata = cast(dict[str, Any], serialized["metadata"])
-    assert "resolved_fingerprint" not in serialized
-    assert serialized_metadata["legacy_resolved_fingerprint"] == "sha256:legacy"
+
+    with pytest.raises(ConfigProvenanceError) as exc:
+        provenance.to_dict()
+
+    context = exc.value.context
+    assert context is not None
+    assert context.code == "invalid_config_provenance_schema_version"
+    assert context.config_path == "ConfigProvenance.schema_version"
+    assert context.expected == SCHEMA_VERSION
+    assert context.actual == "int"
+    assert context.details is not None
+    assert context.details["stage"] == "provenance_serialization"
 
 
 def test_config_provenance_from_dict_failure_has_context() -> None:
