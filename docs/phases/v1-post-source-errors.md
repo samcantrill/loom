@@ -213,7 +213,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -275,6 +275,64 @@ make test-summary
   `build/test-summary.md`: package 38 passed/1 skipped; unit 357 passed/1
   skipped; contract 32 passed/2 skipped; integration 9 passed/5 skipped; e2e 6
   passed; config-extra 346 passed/442 deselected.
+- Implementation refinement:
+- Metadata: Phase 3, branch `codex/v1-post-source-errors`, worktree
+  `/home/samcantrill/work/loom-worktrees/v1-post-source-errors`; refinement
+  date 2026-05-06; phase implementation refinement budget marked `used`.
+- Validation output reviewed: executor-recorded targeted config tests, Ruff,
+  Pyright, `make test-config-extra`, `make validate-pr`, and
+  `make test-summary` all passed with `UV_CACHE_DIR=/tmp/uv-cache`.
+- Blocking issues caused by this phase: path-sensitive secret redaction was
+  incomplete for overrides and resolver-error token fields when a parent path
+  segment, rather than the final key, was secret-like.
+- Fixes made: added shared secret-path detection and used it for
+  ordinary/include override metadata, public provenance override payloads,
+  artifact-safe fingerprint metadata, include local customization metadata,
+  and unsupported-resolver serialized error details.
+- Regression coverage added: parent secret-like override paths are now checked
+  in public redaction artifact payloads and artifact-safe fingerprint metadata;
+  override-authored unsupported resolver errors now assert both resolver
+  expression fields are redacted for secret-like paths.
+- Validation re-run:
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pytest -m optional_dependency
+  tests/integration/config/test_compose_redaction_public_matrix.py
+  tests/integration/config/test_compose_resolvers.py
+  tests/unit/loom/config/test_config_fingerprints.py` passed: 15 passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config ruff
+  check src/loom/config/redaction.py src/loom/config/compose.py
+  src/loom/config/provenance.py src/loom/config/fingerprints.py
+  src/loom/config/includes.py src/loom/config/interpolation.py
+  src/loom/config/overrides.py
+  tests/integration/config/test_compose_redaction_public_matrix.py
+  tests/integration/config/test_compose_resolvers.py
+  tests/unit/loom/config/test_config_fingerprints.py` passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pytest -m optional_dependency tests/contracts/test_config_error_contract.py
+  tests/contracts/test_config_artifact_contract.py
+  tests/contracts/test_config_composition_inspection_contract.py` passed for
+  the optional contract subset: 2 passed, 18 deselected.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pytest tests/contracts/test_config_error_contract.py
+  tests/contracts/test_config_artifact_contract.py
+  tests/contracts/test_config_composition_inspection_contract.py` passed:
+  20 passed.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run --locked --group dev --extra config
+  pyright src/loom/config
+  tests/integration/config/test_compose_redaction_public_matrix.py
+  tests/integration/config/test_compose_resolvers.py
+  tests/unit/loom/config/test_config_fingerprints.py
+  tests/contracts/test_config_error_contract.py
+  tests/contracts/test_config_artifact_contract.py
+  tests/contracts/test_config_composition_inspection_contract.py` passed:
+  0 errors.
+- `UV_CACHE_DIR=/tmp/uv-cache make test-config-extra` passed: 346 passed, 442
+  deselected.
+- Issues confirmed out of scope: no Phase 4 provenance schema-version-2,
+  resolved-fingerprint, or artifact ordering changes; no Phase 5 pipeline or
+  store changes; no resolver allow-list, `_copy_`, CLI, or public error
+  hierarchy expansion.
+- Remaining blockers: none.
 - Refinement summary: tightened existing-source findings, authorship metadata shape, redaction acceptance criteria, suite obligations, executor stop conditions, and Phase 4/5 scope boundaries without changing branch or stack metadata.
 - PR preparation:
 - Stack maintenance:

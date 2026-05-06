@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from loom.serialization import PlainData
@@ -59,6 +59,13 @@ def is_secret_key(key: str) -> bool:
     """Return whether key should be treated as sensitive by default redaction."""
     normalized = "".join(char.lower() for char in key if char.isalnum())
     return any(pattern in normalized for pattern in _SECRET_PATTERNS)
+
+
+def is_secret_path(path: str | Sequence[object]) -> bool:
+    """Return whether any config path segment should be treated as sensitive."""
+    if isinstance(path, str):
+        return is_secret_key(path)
+    return any(is_secret_key(str(segment)) for segment in path)
 
 
 def _is_secret_key(key: str) -> bool:

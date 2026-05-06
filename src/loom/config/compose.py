@@ -58,7 +58,7 @@ from .provenance import (
 from .redaction import (
     REDACTION_MARKER,
     contains_secret_like_value,
-    is_secret_key,
+    is_secret_path,
     redaction_policy,
     redact_secret_like_value,
     redact_secrets,
@@ -977,9 +977,7 @@ def _safe_override_raw(override: ParsedOverride) -> str:
 
 def _override_is_redacted(override: ParsedOverride) -> bool:
     final_key = override.path.rsplit(".", 1)[-1]
-    return contains_secret_like_value(final_key, override.value) or any(
-        is_secret_key(segment) for segment in override.path.split(".")
-    )
+    return contains_secret_like_value(final_key, override.value) or is_secret_path(override.path)
 
 
 def _build_raw_source_snapshot_bundle(
@@ -1527,8 +1525,7 @@ def _build_provenance_metadata(
 def _plaintext_secret_warnings(overrides: Sequence[ParsedOverride]) -> tuple[dict[str, PlainData], ...]:
     warnings: list[dict[str, PlainData]] = []
     for override in overrides:
-        final_key = override.path.rsplit(".", 1)[-1]
-        if not contains_secret_like_value(final_key, override.value):
+        if not _override_is_redacted(override):
             continue
 
         warnings.append(
@@ -1548,8 +1545,10 @@ def _plaintext_secret_warnings(overrides: Sequence[ParsedOverride]) -> tuple[dic
 def _override_to_dict(override: ParsedOverride, *, record_values: bool = False) -> dict[str, PlainData]:
     value: PlainData = cast(PlainData, override.value)
     final_key = override.path.rsplit(".", 1)[-1]
-    redacted = contains_secret_like_value(final_key, override.value)
-    if redacted or record_values:
+    redacted = _override_is_redacted(override)
+    if is_secret_path(override.path):
+        value = REDACTION_MARKER
+    elif redacted or record_values:
         value = redact_secret_like_value(final_key, value)
 
     return {

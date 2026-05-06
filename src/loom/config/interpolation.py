@@ -17,6 +17,7 @@ from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization import to_plain_data
 
 from .errors import ConfigErrorContext, ConfigInterpolationError, ConfigUnsupportedResolverError
+from .redaction import REDACTION_MARKER, is_secret_path
 from .source_maps import ConfigPath, ValueAuthorship, format_config_path
 
 _ALLOWED_RUNTIME_RESOLVERS = frozenset({"oc.env"})
@@ -125,17 +126,24 @@ def _reject_unsupported_resolvers(
                 "Use oc.env for runtime environment values, or replace this resolver expression with a plain "
                 "authored value before composition."
             ),
-            details=cast(dict[str, PlainData], {
-                "authored_expression": first.expression,
-                "interpolation_token": first.token,
-                "unsupported_resolver": first.resolver,
-                "supported_resolvers": sorted(_ALLOWED_RUNTIME_RESOLVERS),
-                "resolver_expression_count": len(records),
-                "unsupported_resolver_count": len(unsupported),
-                **_authorship_details(first.config_path, value_authorship),
-            }),
+            details=cast(
+                dict[str, PlainData],
+                {
+                    "authored_expression": _safe_authored_expression(first.config_path, first.expression),
+                    "interpolation_token": _safe_authored_expression(first.config_path, first.token),
+                    "unsupported_resolver": first.resolver,
+                    "supported_resolvers": sorted(_ALLOWED_RUNTIME_RESOLVERS),
+                    "resolver_expression_count": len(records),
+                    "unsupported_resolver_count": len(unsupported),
+                    **_authorship_details(first.config_path, value_authorship),
+                },
+            ),
         ),
     )
+
+
+def _safe_authored_expression(config_path: str, expression: str) -> str:
+    return REDACTION_MARKER if is_secret_path(config_path) else expression
 
 
 def _interpolation_context(

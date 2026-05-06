@@ -19,7 +19,12 @@ from .errors import (
 )
 from .load import load_config, load_config_with_source_text
 from .provenance import ConfigSource
-from .redaction import contains_secret_like_value, redact_secret_like_value
+from .redaction import (
+    REDACTION_MARKER,
+    contains_secret_like_value,
+    is_secret_path,
+    redact_secret_like_value,
+)
 from .source_maps import ConfigPath, build_base_source_map, format_config_path
 from .merge import merge_configs
 
@@ -59,7 +64,8 @@ class IncludeLocalCustomization:
 
     def to_dict(self) -> dict[str, object]:
         final_key = self.sibling_path[-1] if self.sibling_path and isinstance(self.sibling_path[-1], str) else ""
-        redacted = contains_secret_like_value(final_key, self.value)
+        path_redacted = is_secret_path(self.sibling_path)
+        redacted = path_redacted or contains_secret_like_value(final_key, self.value)
         return {
             "include_site_path": _format_path(self.include_site_path),
             "sibling_path": _format_path(self.sibling_path),
@@ -67,7 +73,9 @@ class IncludeLocalCustomization:
             "source_kind": self.source_kind,
             "source_order": self.source_order,
             "kind": self.kind,
-            "value": redact_secret_like_value(final_key, self.value),
+            "value": (
+                REDACTION_MARKER if path_redacted else redact_secret_like_value(final_key, self.value)
+            ),
             "redacted": redacted,
         }
 

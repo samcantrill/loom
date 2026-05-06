@@ -11,7 +11,7 @@ from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 
 from .errors import ConfigErrorContext, OverrideApplyError, OverrideParseError
-from .redaction import REDACTION_MARKER, contains_secret_like_value, is_secret_key
+from .redaction import REDACTION_MARKER, contains_secret_like_value, is_secret_path
 from .provenance import ParsedOverride
 
 _FLOAT_RE = re.compile(r"^[+-]?(?:\d*\.\d+|\d+\.\d*|\d+)(?:[eE][+-]?\d+)?$")
@@ -291,6 +291,4 @@ def _safe_override_raw(override: ParsedOverride) -> str:
 
 def _override_is_redacted(override: ParsedOverride) -> bool:
     final_key = override.path.rsplit(".", 1)[-1]
-    return contains_secret_like_value(final_key, override.value) or any(
-        is_secret_key(segment) for segment in override.path.split(".")
-    )
+    return contains_secret_like_value(final_key, override.value) or is_secret_path(override.path)

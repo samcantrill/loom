@@ -8,6 +8,7 @@ from omegaconf.resolvers import oc as omegaconf_oc
 
 from loom.config import compose_config
 from loom.config.errors import ConfigIncludeResolutionError, ConfigUnsupportedResolverError
+from loom.config.redaction import REDACTION_MARKER
 
 
 def test_public_compose_resolves_oc_env_in_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,7 +122,8 @@ def test_public_compose_attributes_override_authored_resolver_error_without_raw_
     assert context.config_path == "$.pipeline.token"
     assert context.details is not None
     serialized = str(context.to_dict())
-    assert "SECRET_VALUE" in serialized
+    assert context.details["authored_expression"] == REDACTION_MARKER
+    assert "SECRET_VALUE" not in serialized
     assert "pipeline.token=${custom:SECRET_VALUE}" not in serialized
 
 

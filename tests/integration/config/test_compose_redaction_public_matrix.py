@@ -24,6 +24,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         "NESTED-CREDENTIAL-SECRET-VALUE",
         "LIST-TOKEN-SECRET-VALUE",
         "OVERRIDE-PRIVATE-SECRET-VALUE",
+        "OVERRIDE-PARENT-TOKEN-SECRET-VALUE",
     }
     safe_values = {
         "keep-top-note",
@@ -52,6 +53,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         base,
         overrides=(
             "+pipeline.PRIVATE-KEY=OVERRIDE-PRIVATE-SECRET-VALUE",
+            "+pipeline.token_parent.value=OVERRIDE-PARENT-TOKEN-SECRET-VALUE",
             "+pipeline.safe_label=keep-override-label",
         ),
     )
@@ -63,6 +65,8 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
     assert resolved_pipeline["SECRET_token"] == "BASE-TOKEN-SECRET-VALUE"
     assert resolved_pipeline["Pa.s_s-Wo.rd"] == "BASE-PASSWORD-SECRET-VALUE"
     assert resolved_pipeline["PRIVATE-KEY"] == "OVERRIDE-PRIVATE-SECRET-VALUE"
+    resolved_token_parent = cast(dict[str, Any], resolved_pipeline["token_parent"])
+    assert resolved_token_parent["value"] == "OVERRIDE-PARENT-TOKEN-SECRET-VALUE"
     assert resolved_pipeline["public_note"] == "keep-top-note"
     assert resolved_nested["mode"] == "keep-nested-mode"
     assert resolved_items[1]["note"] == "keep-list-note"
@@ -75,6 +79,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
     assert redacted_pipeline["SECRET_token"] == REDACTION_MARKER
     assert redacted_pipeline["Pa.s_s-Wo.rd"] == REDACTION_MARKER
     assert redacted_pipeline["PRIVATE-KEY"] == REDACTION_MARKER
+    assert redacted_pipeline["token_parent"] == REDACTION_MARKER
     assert redacted_nested["Private-Key"] == REDACTION_MARKER
     assert redacted_nested["credential.id"] == REDACTION_MARKER
     assert redacted_items[0]["TOKEN"] == REDACTION_MARKER
@@ -89,10 +94,14 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         for override in cast(list[dict[str, Any]], provenance_payload["overrides"])
     }
     secret_override = provenance_overrides["pipeline.PRIVATE-KEY"]
+    parent_secret_override = provenance_overrides["pipeline.token_parent.value"]
     safe_override = provenance_overrides["pipeline.safe_label"]
     assert secret_override["raw"] == REDACTION_MARKER
     assert secret_override["value"] == REDACTION_MARKER
     assert secret_override["redacted"] is True
+    assert parent_secret_override["raw"] == REDACTION_MARKER
+    assert parent_secret_override["value"] == REDACTION_MARKER
+    assert parent_secret_override["redacted"] is True
     assert safe_override["raw"] == "+pipeline.safe_label=keep-override-label"
     assert safe_override["value"] == "keep-override-label"
     assert safe_override["redacted"] is False
@@ -102,6 +111,7 @@ def test_public_compose_redacts_secret_like_key_matrix_in_artifact_payloads(tmp_
         for override in cast(list[dict[str, Any]], composed.provenance.metadata["ordinary_overrides"])
     }
     assert ordinary_overrides["pipeline.PRIVATE-KEY"]["value"] == REDACTION_MARKER
+    assert ordinary_overrides["pipeline.token_parent.value"]["value"] == REDACTION_MARKER
     assert ordinary_overrides["pipeline.safe_label"]["value"] == "keep-override-label"
 
     artifact_payload = {
