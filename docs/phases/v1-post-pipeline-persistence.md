@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 5: Pipeline Persistence And Runtime Fingerprints`
 - Branch: `codex/v1-post-pipeline-persistence`
@@ -18,10 +18,10 @@
 - Successor dependency notes: Phase 6 may start from this branch only after this phase PR is opened or prepared, validated, and recorded as `pr_open`; Phase 6 still owns recipe residual-risk coverage and must not be pulled into this phase.
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v1-post.md`; no blocking plan-review findings remain.
 - Plan quality gate loop budget: initial review used, automated refinement used, confirmation review used.
-- Draft pass: completed by `loom_phase_planner` in this commit.
-- Refine pass: pending; expanded path is selected because this phase changes run-store protocol/persistence, `PipelineRunner` behavior, and runtime fingerprint policy.
+- Draft pass: completed by `loom_phase_planner` in draft commit `9122e75`.
+- Refine pass: completed by `loom_phase_planner`; expanded path was selected because this phase changes run-store protocol/persistence, `PipelineRunner` behavior, and runtime fingerprint policy.
 - Setup limitations: `git worktree add` needed approved Git metadata access after the sandbox could not create the nested `refs/heads/codex/...` directory. No product-code setup blocker remains.
-- Blockers: none for the draft plan.
+- Blockers: none for implementation.
 
 ## Objective
 
@@ -44,18 +44,19 @@ Phase 6 still owns recipe residual-risk coverage. Phase 7 still owns final docs/
 ## Source Phase Summary
 
 - Goal: align pipeline/run-store persistence with v1 artifact-safe config boundaries without making `loom.pipeline` depend on `loom.config`.
-- Required scope: stop `PipelineRunner` from writing full resolved config snapshots by default for composed configs; persist artifact-safe/redacted config records and the full composition manifest through plain-data run-store APIs; add `read_composition_manifest(run_id)` and `write_composition_manifest(run_id, manifest)`; add local-store `config/composition_manifest.json` wrapper; keep plain mapping config snapshot behavior conservative; keep pipeline usable without importing `loom.config`; define explicit runtime object fingerprinting outside `loom.config`; prove explicit runtime fingerprint inputs can change stage fingerprints while config fingerprints remain runtime-free.
+- Required scope: stop `PipelineRunner` from writing full resolved config snapshots by default for composed configs; persist artifact-safe config provenance/manifest records and the full composition manifest through plain-data run-store APIs; add `read_composition_manifest(run_id)` and `write_composition_manifest(run_id, manifest)`; add local-store `config/composition_manifest.json` wrapper; keep plain mapping config snapshot behavior conservative; keep pipeline usable without importing `loom.config`; define explicit runtime object fingerprinting outside `loom.config`; prove explicit runtime fingerprint inputs can change stage fingerprints while config fingerprints remain runtime-free.
 - Required checkpoints: no default `config/resolved.yaml` or `config/resolved.redacted.yaml` for composed config runs; composition manifest persists under `config/composition_manifest.json`; store and pipeline code handle the manifest as plain data; runtime object fingerprints appear only when a caller explicitly supplies them through stage or fingerprint context inputs.
 
 ## Current Source And Harness Findings
 
-- `src/loom/pipeline/execution/runner.py` currently treats composed configs through duck typing but writes `resolved` and `resolved_redacted` snapshots by default from `request.config.resolved` and `request.config.redacted`.
-- `src/loom/pipeline/execution/models.py` has `_ComposedConfigLike` with `resolved`, `redacted`, `provenance`, and `recipe_manifest`; it does not expose the Phase 4 `manifest` plain-data boundary yet.
-- `src/loom/pipeline/stores/run_store.py` defines `RunConfigStore` with string config snapshots and plain-data recipe manifests, but no composition manifest protocol methods.
-- `src/loom/pipeline/stores/local_runs.py` already wraps `recipe_manifest.json` and other run documents with schema/run/timestamp fields. The new composition manifest wrapper should follow that local-store pattern and validate exact wrapper fields.
+- `src/loom/pipeline/execution/runner.py` currently uses `_is_composed_config(...)` duck typing for `resolved`, `redacted`, `provenance`, and `recipe_manifest`, and `_write_config_and_provenance(...)` writes `write_config_snapshot(run_id, "resolved", json_dumps_pretty(request.config.resolved))` plus `write_config_snapshot(run_id, "resolved_redacted", json_dumps_pretty(request.config.redacted))` for composed configs. Phase 5 must remove those composed-config default writes.
+- `src/loom/pipeline/execution/runner.py` may continue using `request.config.resolved` in `_resolve_config_and_spec(...)` as the in-memory source for `parse_pipeline_config(...)`; the boundary to change is persistence, not runtime config parsing.
+- `src/loom/pipeline/execution/models.py` has `_ComposedConfigLike` with `resolved`, `redacted`, `provenance`, and `recipe_manifest`; it does not expose the Phase 4 `manifest` plain-data boundary yet. `src/loom/config/api.py` exposes `ComposedConfig.manifest`, and `src/loom/config/artifacts.py` exposes `CompositionManifest.to_dict()`.
+- `src/loom/pipeline/stores/run_store.py` defines `RunConfigStore` with `read_config_snapshot`, `write_config_snapshot`, `read_recipe_manifest`, and `write_recipe_manifest`, but no composition manifest protocol methods.
+- `src/loom/pipeline/stores/local_runs.py` already wraps `recipe_manifest.json` and other run documents with exact schema/run/timestamp fields. The new composition manifest wrapper should follow that local-store pattern and validate exact wrapper fields.
 - `src/loom/pipeline/stores/_paths.py` restricts snapshot names to `raw`, `overlays`, `cli_overrides`, `resolved`, and `resolved_redacted`; changes must not accidentally keep describing composed-config artifacts as resolved replay.
 - `src/loom/pipeline/planning/fingerprints.py` already includes `StageSpec.fingerprint_fields` and `FingerprintContext.extra` in the stage fingerprint payload. `loom.protocols.Fingerprintable` provides an explicit object contract outside `loom.config`.
-- Existing tests to extend include `tests/contracts/test_store_contract.py`, `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, `tests/unit/loom/pipeline/execution/test_execution_models.py`, `tests/unit/loom/pipeline/planning/test_models.py`, `tests/unit/loom/pipeline/executors/test_local_executor.py`, `tests/integration/pipeline/`, and `tests/e2e/test_local_pipeline_run.py`.
+- Existing tests to extend include `tests/contracts/test_store_contract.py`, `tests/package/test_pipeline_store_api.py`, `tests/package/test_import_boundaries.py`, `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, `tests/unit/loom/pipeline/execution/test_execution_models.py`, `tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`, `tests/integration/pipeline/test_local_stores.py`, `tests/integration/pipeline/test_local_execution.py`, `tests/integration/pipeline/test_planning_resume.py`, and `tests/e2e/test_local_pipeline_run.py`.
 
 ## In-Scope Work
 
@@ -64,11 +65,12 @@ Phase 6 still owns recipe residual-risk coverage. Phase 7 still owns final docs/
   - `write_composition_manifest(run_id, manifest: Mapping[str, PlainData]) -> None`
 - Implement local-store persistence at `config/composition_manifest.json` with exactly these wrapper fields for schema version 1: `schema_version`, `run_id`, `created_at`, and `composition_manifest`.
 - Validate the wrapper using the existing local-store document validation style: exact fields, schema version, matching run id, timestamp, and plain mapping manifest payload. Return a thawed dict copy, not a config artifact object.
-- Update `PipelineRunner` composed-config handling so default runs persist the artifact-safe/redacted config record and composition manifest without writing full resolved config snapshots. The runner may continue to use `resolved` in memory to parse/build the `PipelineSpec`; the persistence boundary must not write that resolved mapping by default.
-- Keep composed-config handling duck-typed/plain-data: `loom.pipeline` may look for plain attributes such as `redacted`, `manifest`, `provenance`, and `recipe_manifest`, and may call `to_dict()` on those objects when present, but it must not import `loom.config` or config manifest classes.
+- Update `PipelineRunner` composed-config handling so default runs persist `config/composition_manifest.json`, existing `config/recipe_manifest.json`, and plain `config_provenance` run metadata, without writing full resolved config snapshots. The runner may continue to use `resolved` in memory to parse/build the `PipelineSpec`; the persistence boundary must not write that resolved mapping by default.
+- Pin the redacted/artifact-safe config persistence choice for this phase: do not add a new full redacted config file, do not add new config snapshot names such as `redacted`, `artifact_safe`, or `unresolved`, and do not use `resolved_redacted` as a composed-config default. The artifact-safe persisted config facts for composed configs are the plain `ComposedConfig.manifest.to_dict()` payload, existing `recipe_manifest` records, and `ComposedConfig.provenance.to_dict()` in run user metadata.
+- Keep composed-config handling duck-typed/plain-data: `loom.pipeline` may look for plain attributes such as `resolved`, `redacted`, `manifest`, `provenance`, and `recipe_manifest`, and may call `to_dict()` on `manifest` or `provenance` when present, but it must not import `loom.config` or config manifest/provenance classes.
 - Keep `loom.config` persistence-free. Do not add run-store imports, persistence helpers, CLI helpers, or pipeline-specific APIs to `loom.config`.
 - Preserve conservative plain mapping behavior. If a caller passes a plain mapping config, current snapshot behavior may remain because it is caller-provided runtime data, but tests/docs must not label that path as v1 resolved-config replay or composition replay.
-- Preserve explicit user-provided snapshot behavior through `ConfigSnapshotInputs`; if users opt in to `raw`, `overlays`, or `cli_overrides`, keep writing those snapshot strings.
+- Preserve explicit user-provided snapshot behavior through `ConfigSnapshotInputs`; it currently exposes only `raw`, `overlays`, and `cli_overrides`, and those remain explicit/user-provided legacy snapshots. Do not add `resolved` or `resolved_redacted` to `ConfigSnapshotInputs` in this phase.
 - Define runtime object fingerprint policy outside `loom.config`: output-affecting runtime objects must be represented explicitly through `StageSpec.fingerprint_fields`, `FingerprintContext.extra`, or a caller-supplied `Fingerprintable.fingerprint()` value converted to plain data before fingerprint construction.
 - Add tests proving that changing an injected/output-affecting runtime object fingerprint changes the stage fingerprint when explicitly accounted for, and that config artifact fingerprints remain unchanged because runtime object identity never enters `loom.config`.
 
@@ -97,14 +99,21 @@ Phase 6 still owns recipe residual-risk coverage. Phase 7 still owns final docs/
 ## Assumptions
 
 - `ComposedConfig.manifest.to_dict()` is the intended plain serialized composition manifest payload; runner/store code should treat the returned mapping as opaque plain data.
-- `ComposedConfig.redacted` is artifact-safe after Phase 4, but the executor should verify no default write persists `resolved` for composed configs.
+- `ComposedConfig.redacted` is artifact-safe after Phase 4 and remains available for in-memory use, but Phase 5 does not persist it as a default full config snapshot because no accepted non-`resolved_redacted` path/name exists in the v1-post plan. If implementation appears to require a new full redacted config artifact path, stop for the manager instead of inventing one.
 - It is acceptable for run user metadata to continue storing config provenance as plain data if it remains artifact-safe and does not force a config import.
 - Store protocol changes are local and public enough to require contract/package coverage, but no remote store compatibility layer exists in v1.
 - Runtime object fingerprints should be digest strings or other plain-data facts supplied by callers; the runner should not inspect arbitrary injected object internals.
 
 ## Scope Contract
 
-For composed config inputs, `PipelineRunner` must use resolved config only as in-memory input to build or validate the runtime `PipelineSpec`. Default persistence must not write `config/resolved.yaml` or `config/resolved.redacted.yaml` from composed config inputs. It must persist artifact-safe config data and the full composition manifest through plain-data boundaries, including `config/composition_manifest.json`.
+For composed config inputs, `PipelineRunner` must use resolved config only as in-memory input to build or validate the runtime `PipelineSpec`. Default persistence must not write `config/resolved.yaml` or `config/resolved.redacted.yaml` from composed config inputs, and must not write equivalent full resolved/redacted mappings by another route. Default composed-config persistence in this phase is exactly:
+
+- `LocalRunStore.write_composition_manifest(run_id, manifest_payload)` to `config/composition_manifest.json`, where `manifest_payload` is a plain mapping from `request.config.manifest.to_dict()` or an already-plain mapping supplied by a duck-typed test double.
+- Existing `LocalRunStore.write_recipe_manifest(run_id, request.config.recipe_manifest)` to `config/recipe_manifest.json`.
+- Existing `LocalRunStore.write_run_user_metadata(...)` with `config_provenance` from `request.config.provenance.to_dict()` merged with caller metadata, after plain-data normalization.
+- Explicit `ConfigSnapshotInputs.raw`, `ConfigSnapshotInputs.overlays`, and `ConfigSnapshotInputs.cli_overrides` writes only when the caller supplied those strings.
+
+No new default full redacted config artifact path is introduced in this phase. The executor must not add new entries to `VALID_CONFIG_SNAPSHOTS` for composed-config defaults or for the composition manifest; use direct `config/composition_manifest.json` path handling in `LocalRunStore`.
 
 The run-store composition manifest document contract is:
 
@@ -140,7 +149,8 @@ Stage runtime fingerprints are pipeline planning facts, not config facts. The ac
 
 | Alternative | Reason rejected |
 | --- | --- |
-| Keep writing `resolved.yaml` for composed configs and document it as unsafe | Conflicts with the accepted artifact-safe default and continues to imply resolved-runtime replay by default. |
+| Keep writing `resolved.yaml` or `resolved.redacted.yaml` for composed configs and document it as unsafe | Conflicts with the accepted artifact-safe default and continues to imply resolved-runtime replay by default. |
+| Invent a new full redacted config snapshot path in Phase 5 | The v1-post plan only selects the composition manifest store API/path; adding a new redacted config file name would be a public persistence contract decision outside this phase. |
 | Import `CompositionManifest` in the pipeline/store layer to validate manifests | Violates the source boundary; the store only needs a plain-data wrapper contract. |
 | Store only config provenance and omit the full composition manifest | D32 explicitly requires full composition manifest persistence through the run store. |
 | Automatically fingerprint arbitrary runtime objects passed to stages | Unsafe and under-specified; callers must explicitly decide which runtime object facts affect outputs. |
@@ -158,18 +168,18 @@ Stage runtime fingerprints are pipeline planning facts, not config facts. The ac
 ## Reviewability
 
 - Expected PR size and shape: moderate pipeline/store PR with protocol additions, local-store wrapper read/write, runner persistence changes, focused tests, and small docs/test wording for runtime fingerprint policy.
-- Files and areas to inspect: `src/loom/pipeline/stores/run_store.py`, `src/loom/pipeline/stores/local_runs.py`, `src/loom/pipeline/stores/_paths.py` only if snapshot names change, `src/loom/pipeline/execution/models.py`, `src/loom/pipeline/execution/runner.py`, `src/loom/pipeline/planning/fingerprints.py` only if explicit policy helpers are needed, and package exports if store protocols change.
+- Files and areas to inspect: `src/loom/pipeline/stores/run_store.py`, `src/loom/pipeline/stores/local_runs.py`, `src/loom/pipeline/execution/models.py`, `src/loom/pipeline/execution/runner.py`, `src/loom/pipeline/planning/fingerprints.py` only if explicit policy helpers are needed, `src/loom/pipeline/planning/models.py` if fingerprint serialization tests need fixtures, and package exports if store protocols change. `src/loom/pipeline/stores/_paths.py` should not need new snapshot names for composed-config persistence.
 - Test areas to inspect: `tests/contracts/test_store_contract.py`, `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, `tests/unit/loom/pipeline/execution/test_execution_models.py`, `tests/unit/loom/pipeline/planning/`, `tests/integration/pipeline/`, `tests/e2e/test_local_pipeline_run.py`, and config-extra tests that combine composed config with runner persistence.
-- Scope-control checks: no config imports from pipeline/store modules, no changes under `src/loom/config` except tests proving runtime-free fingerprints if absolutely necessary, no CLI, no `_copy_`, no remote-store/bundle/catalog work, no resolver expansion, no automatic runtime-object fingerprinting.
+- Scope-control checks: no config imports from pipeline/store modules, no changes under `src/loom/config` except tests proving runtime-free fingerprints if absolutely necessary, no new config snapshot names for composed-config defaults, no CLI, no `_copy_`, no remote-store/bundle/catalog work, no resolver expansion, no automatic runtime-object fingerprinting.
 
 ## Implementation Steps
 
 1. Add the plain-data composition manifest methods to `RunConfigStore` and any dummy stores or test fixtures that structurally implement the protocol.
-2. Implement `LocalRunStore.read_composition_manifest` and `write_composition_manifest` with the schema-version-1 wrapper at `config/composition_manifest.json`, following existing wrapper validation and atomic-write patterns.
-3. Extend the composed-config duck type in execution models to include manifest access without importing config classes; normalize manifest payloads by calling `to_dict()` when present or accepting a mapping when supplied by a test double.
-4. Update `PipelineRunner` composed-config persistence so it writes artifact-safe/redacted config data and the composition manifest, and stops writing default `resolved`/`resolved_redacted` snapshots for composed configs.
+2. Implement `LocalRunStore.read_composition_manifest` and `write_composition_manifest` with the schema-version-1 wrapper at `config/composition_manifest.json`, following existing wrapper validation and atomic-write patterns rather than routing through `write_config_snapshot`.
+3. Extend the composed-config duck type in execution models and `_is_composed_config(...)` in `runner.py` to include `manifest` access without importing config classes; normalize manifest payloads by calling `to_dict()` when present or accepting a mapping when supplied by a test double.
+4. Update `PipelineRunner._write_config_and_provenance(...)` so composed configs write the composition manifest, existing recipe manifest, and config provenance metadata, and stop writing `write_config_snapshot(..., "resolved", ...)` or `write_config_snapshot(..., "resolved_redacted", ...)` for composed configs.
 5. Preserve plain mapping config behavior as caller-provided snapshot behavior and ensure tests make that distinction explicit.
-6. Add explicit runtime fingerprint tests using `StageSpec.fingerprint_fields`, `FingerprintContext.extra`, and/or a `Fingerprintable` object whose fingerprint is converted to plain data by the caller. Prove stage fingerprints change only when the explicit runtime fingerprint input changes, while config fingerprints remain stable.
+6. Add explicit runtime fingerprint tests using `StageSpec.fingerprint_fields`, `FingerprintContext.extra`, and/or a `Fingerprintable` object whose `fingerprint()` result is converted to plain data by the caller before constructing the `StageSpec` or `FingerprintContext`. Prove stage fingerprints change only when the explicit runtime fingerprint input changes, while config fingerprints remain stable.
 7. Add import-boundary and package/contract coverage for the new protocol surface, then run targeted validation before PR preparation.
 
 ## Test Plan
@@ -177,14 +187,14 @@ Stage runtime fingerprints are pipeline planning facts, not config facts. The ac
 ### Package Suite
 
 - Status: required.
-- Expected paths: `tests/package/test_pipeline_stores_api.py`, `tests/package/test_pipeline_planning_api.py`, and import-boundary tests if present or newly focused.
+- Expected paths: `tests/package/test_pipeline_store_api.py`, `tests/package/test_pipeline_planning_api.py`, and `tests/package/test_import_boundaries.py` or another focused import-boundary package test.
 - Required assertions or deferral reason: public store protocol exports remain importable; `RunConfigStore` includes the new methods; pipeline/store imports do not import `loom.config`; stage fingerprint public APIs remain available. If no existing import-boundary package test fits, add a focused package test rather than broadening unrelated package checks.
 
 ### Unit Suite
 
 - Status: required.
-- Expected paths: `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/execution/test_execution_models.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, `tests/unit/loom/pipeline/planning/test_models.py`, and `tests/unit/loom/pipeline/executors/test_local_executor.py` or a focused planning fingerprint unit file.
-- Required assertions or deferral reason: local store writes and reads `config/composition_manifest.json` wrapper with exact fields; wrapper rejects wrong run id, schema version, missing fields, unknown fields, and non-mapping manifest payload; composed-config duck typing accepts plain manifest payloads without config class imports; runner does not call `write_config_snapshot(..., "resolved", ...)` or `write_config_snapshot(..., "resolved_redacted", ...)` for composed configs; explicit `fingerprint_fields` or `FingerprintContext.extra` changes alter stage fingerprints.
+- Expected paths: `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/execution/test_execution_models.py`, `tests/unit/loom/pipeline/execution/test_runner.py`, and `tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`.
+- Required assertions or deferral reason: local store writes and reads `config/composition_manifest.json` wrapper with exact fields; wrapper rejects wrong run id, schema version, missing fields, unknown fields, and non-mapping manifest payload; composed-config duck typing accepts plain manifest payloads without config class imports; runner does not call `write_config_snapshot(..., "resolved", ...)` or `write_config_snapshot(..., "resolved_redacted", ...)` for composed configs; runner does call `write_composition_manifest(...)` with the plain `manifest.to_dict()` payload; `ConfigSnapshotInputs` remains explicit/user-provided for `raw`, `overlays`, and `cli_overrides` only; explicit `fingerprint_fields` or `FingerprintContext.extra` changes alter stage fingerprints.
 
 ### Contract Suite
 
@@ -196,7 +206,7 @@ Stage runtime fingerprints are pipeline planning facts, not config facts. The ac
 
 - Status: required.
 - Expected paths: `tests/integration/pipeline/test_local_stores.py`, `tests/integration/pipeline/test_local_execution.py`, `tests/integration/pipeline/test_planning_resume.py`, and config-marked integration coverage where a real `ComposedConfig` is passed to `PipelineRunner`.
-- Required assertions or deferral reason: a public Python composed-config run persists `config/composition_manifest.json` and artifact-safe/redacted records, does not persist default resolved snapshots, still builds/executes the pipeline from in-memory resolved config, and plain mapping config runs retain conservative caller-provided snapshot behavior. Runtime fingerprint integration should prove resume/planning sees a changed stage fingerprint only when the explicit runtime fingerprint input changes.
+- Required assertions or deferral reason: a public Python composed-config run persists `config/composition_manifest.json`, existing `config/recipe_manifest.json`, and config provenance metadata, does not persist default resolved snapshots or invent a new full redacted snapshot, still builds/executes the pipeline from in-memory resolved config, and plain mapping config runs retain conservative caller-provided snapshot behavior. Runtime fingerprint integration should prove resume/planning sees a changed stage fingerprint only when the explicit runtime fingerprint input changes.
 
 ### E2E Suite
 
@@ -213,6 +223,7 @@ Stage runtime fingerprints are pipeline planning facts, not config facts. The ac
 ## Risks
 
 - Runner code can accidentally keep writing resolved snapshots through legacy snapshot names while also adding the manifest. Tests must assert missing files/calls, not just presence of the new file.
+- Runner code can accidentally introduce a new redacted snapshot path to replace `resolved_redacted`; this is out of scope unless the implementation plan is reopened.
 - Adding `manifest` to composed-config duck typing can drift into a config import if implementation reaches for concrete classes. Import-boundary tests must catch this.
 - Local-store wrapper validation could be too permissive and silently accept malformed manifest documents; exact-field tests are required.
 - Plain mapping behavior can be misrepresented as v1 resolved replay. Tests and docs should call it caller-provided data only.
@@ -225,9 +236,10 @@ Targeted development commands:
 
 ```sh
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/contracts/test_store_contract.py
+UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/execution/test_execution_models.py tests/unit/loom/pipeline/execution/test_runner.py
-UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/planning/test_models.py tests/unit/loom/pipeline/executors/test_local_executor.py
+UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/planning/test_planning_fingerprints.py
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/integration/pipeline/test_local_stores.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_planning_resume.py
 UV_CACHE_DIR=/tmp/loom_uv_cache uv run --extra config pytest -m optional_dependency tests/integration/config tests/e2e/test_local_pipeline_run.py
 ```
@@ -243,9 +255,9 @@ make test-summary
 
 - Safe implementation slices: store protocol and dummy fixtures first; local-store wrapper second; composed-config duck type and runner persistence third; runtime fingerprint policy tests fourth; integration/e2e coverage last.
 - Tests to run with each slice: run store contract/local-store unit tests after API and wrapper changes; runner unit tests after persistence changes; planning fingerprint tests after explicit runtime fingerprint coverage; integration/e2e composed-config runner tests before handoff.
-- Decisions the executor must not revisit: no `loom.config` persistence helpers, no pipeline import of config classes, no default resolved snapshot for composed configs, no automatic runtime object fingerprinting, no resolver output/raw source default persistence, no CLI, no `_copy_`, no remote stores, and no Phase 6 recipe residual-risk work.
-- Conditions that require stopping for the manager: satisfying manifest persistence appears to require importing `loom.config` in pipeline/store code; tests can pass only by continuing to write composed-config `resolved.yaml`; local store needs a migration for existing run directories; runtime object fingerprints require a new injection API or arbitrary object introspection; or any implementation needs CLI/remote-store/bundle behavior.
-- Expanded-path refinement notes: pending. The refine pass should confirm the exact artifact-safe/redacted config persistence file/name choice after implementation context is checked, without broadening into future persistence policy.
+- Decisions the executor must not revisit: no `loom.config` persistence helpers, no pipeline import of config classes, no default `resolved` or `resolved_redacted` snapshot for composed configs, no invented replacement redacted snapshot path, no automatic runtime object fingerprinting, no resolver output/raw source default persistence, no CLI, no `_copy_`, no remote stores, and no Phase 6 recipe residual-risk work.
+- Conditions that require stopping for the manager: satisfying manifest persistence appears to require importing `loom.config` in pipeline/store code; tests can pass only by continuing to write composed-config `resolved.yaml` or `resolved.redacted.yaml`; satisfying artifact-safe/redacted persistence appears to require a new full config artifact path; local store needs a migration for existing run directories; runtime object fingerprints require a new injection API or arbitrary object introspection; or any implementation needs CLI/remote-store/bundle behavior.
+- Expanded-path refinement notes: complete. The refined boundary pins composed-config default persistence to composition manifest, recipe manifest, and provenance metadata; redacted full-config snapshot persistence is not added in Phase 5.
 
 ## Refinement And Review Budget Status
 
@@ -254,8 +266,8 @@ make test-summary
 
 ## Completion Notes
 
-- Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase execution plan`.
-- Final phase execution plan: pending expanded-path refinement.
+- Draft plan: completed by `loom_phase_planner`; committed with `plan: add phase execution plan` at `9122e75`.
+- Final phase execution plan: completed by expanded-path refinement.
 - Implementation summary: pending.
 - Implementation validation: pending.
 - PR preparation: pending.
