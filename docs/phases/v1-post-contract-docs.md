@@ -201,6 +201,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used
+- PR body draft pass: completed
+- PR body refine pass: pending because this phase is on the expanded path
 - PR review: unused
 
 ## Completion Notes
@@ -214,7 +216,12 @@ make test-summary
 - Refinement scope: validation output reviewed was `uv --cache-dir /tmp/loom-uv-cache run pytest tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` and `uv --cache-dir /tmp/loom-uv-cache run pyright src/loom/pipeline/execution/models.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py`; blocking issues caused by this phase were none; out-of-scope issues remained CLI, `_copy_`, persistence/provenance/schema changes, strict YAML or override runtime semantics, and Phase 2+ behavior.
 - Refinement fixes made: none beyond this completion-note update because the implementation, tests, and docs already satisfied the Phase 1 scope and suite obligations.
 - Refinement validation re-run: `uv --cache-dir /tmp/loom-uv-cache run pytest tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 25 tests; `uv --cache-dir /tmp/loom-uv-cache run pyright src/loom/pipeline/execution/models.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 0 errors, 0 warnings, and 0 informations.
-- PR preparation handoff: completion notes and budget status are updated; final `make validate-pr` and `make test-summary` remain for PR preparation; suite evidence still needed is only the normal final PR gate evidence.
-- PR preparation: pending.
+- PR preparation handoff: completion notes and budget status are updated; final `make validate-pr` and `make test-summary` have been run for the draft pass; the refine/open pass should re-check only if it changes the PR body or branch state in a way that invalidates this evidence.
+- PR preparation draft validation: initial `UV_CACHE_DIR=/tmp/loom-uv-cache make validate-pr` passed Ruff but failed during Pyright environment setup because sandboxed DNS could not fetch `pyyaml==6.0.3`; rerunning the same command with approved network access succeeded. Final `make validate-pr` evidence: Ruff passed; Pyright passed with 0 errors, 0 warnings, and 0 informations; default suite passed 435 tests with 11 skipped; config-extra suite passed 314 tests with 441 deselected; `uv build` produced the source distribution and wheel. Final `make test-summary` evidence: `build/test-summary.md` written with package 38 passed/1 skipped, unit 357 passed/1 skipped, contract 31 passed/2 skipped, integration 9 passed/5 skipped, e2e 6 passed, config-extra 314 passed/441 deselected, overall 755 passed/9 skipped in 24.01s.
+- PR preparation draft scope gate: passed. The diff matches Phase 1 by limiting runtime code changes to the pipeline/config type-import boundary, adding package/unit regression coverage, and updating docs/roadmap metadata. No future-phase implementation was found for strict YAML duplicate-key rejection, JSON-quoted scalar override parsing, artifact-safe provenance/fingerprint ordering, default resolved snapshot persistence changes, run-store composition manifests, structured-error expansion, or recipe/resolver hardening.
+- PR facts for refine/open pass: title `V1 Post Configuration - Phase 1: Contract And Documentation Cleanup`; body path `docs/phases/v1-post-contract-docs-pr-body.md`; head `codex/v1-post-contract-docs`; target `develop`; stack predecessor none; merge eligibility root PR is merge-eligible after review/checks because target is `develop`; GitHub checks pending until PR creation.
+- PR body draft: completed using `.codex/templates/phase-pr-body.md`; body mentions `@samcantrill` near the top; public body keeps workflow internals in this phase plan and uses compact validation/suite tables.
+- PR body refine: pending because the expanded path is active; PR opening is intentionally deferred to `.codex/prompts/pr-body-refine.md`.
+- PR preparation: draft completed; refine pending.
 - Stack maintenance: pending.
 - Remaining blockers: none after implementation and refinement validation.
