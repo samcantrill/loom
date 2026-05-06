@@ -1,0 +1,267 @@
+"""Preflight diagnostics result models."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+from typing import cast
+
+from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization.errors import PlainDataError
+
+
+class PreflightError(ValueError):
+    """Raised when a preflight request is invalid."""
+
+
+class PreflightCheckStatus(StrEnum):
+    PASS = "PASS"
+    WARN = "WARN"
+    FAIL = "FAIL"
+    SKIP = "SKIP"
+
+
+class PreflightStatus(StrEnum):
+    PASS = "PASS"
+    WARN = "WARN"
+    FAIL = "FAIL"
+    SKIP = "SKIP"
+
+
+class PreflightSeverity(StrEnum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+
+class PreflightGroup(StrEnum):
+    CONFIG = "config"
+    PIPELINE = "pipeline"
+    SELECTORS = "selectors"
+    RUN = "run"
+    ARTIFACTS = "artifacts"
+    CODECS = "codecs"
+    EXECUTOR = "executor"
+    FILESYSTEM = "filesystem"
+
+
+DEFAULT_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
+    PreflightGroup.CONFIG,
+    PreflightGroup.PIPELINE,
+    PreflightGroup.SELECTORS,
+    PreflightGroup.RUN,
+    PreflightGroup.ARTIFACTS,
+    PreflightGroup.CODECS,
+    PreflightGroup.EXECUTOR,
+    PreflightGroup.FILESYSTEM,
+)
+
+STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
+    PreflightGroup.CONFIG: ("config.load",),
+    PreflightGroup.PIPELINE: ("pipeline.graph",),
+    PreflightGroup.SELECTORS: ("selectors.validate",),
+    PreflightGroup.RUN: ("run_uri.resolve",),
+    PreflightGroup.ARTIFACTS: ("artifact_store.available",),
+    PreflightGroup.CODECS: ("codec_registry.available",),
+    PreflightGroup.EXECUTOR: ("executor.local",),
+    PreflightGroup.FILESYSTEM: ("filesystem.input_exists",),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PreflightCheckResult:
+    check_id: str
+    group: PreflightGroup
+    status: PreflightCheckStatus
+    severity: PreflightSeverity
+    message: str
+    details: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        check_id = _non_empty_str(self.check_id, field="check_id")
+        message = _non_empty_str(self.message, field="message")
+        group = _coerce_group(self.group)
+        status = _coerce_check_status(self.status)
+        severity = _coerce_severity(self.severity)
+        details = _plain_mapping(self.details, field="details")
+        object.__setattr__(self, "check_id", check_id)
+        object.__setattr__(self, "group", group)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "severity", severity)
+        object.__setattr__(self, "message", message)
+        object.__setattr__(self, "details", details)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "check_id": self.check_id,
+            "group": self.group.value,
+            "status": self.status.value,
+            "severity": self.severity.value,
+            "message": self.message,
+            "details": dict(self.details),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PreflightResult:
+    checks: tuple[PreflightCheckResult, ...]
+    groups: tuple[PreflightGroup, ...]
+    status: PreflightStatus = field(init=False)
+
+    def __post_init__(self) -> None:
+        checks = tuple(self.checks)
+        groups = tuple(_coerce_group(group) for group in self.groups)
+        for index, check in enumerate(checks):
+            if not isinstance(check, PreflightCheckResult):
+                raise PreflightError(
+                    f"checks[{index}] must be a PreflightCheckResult"
+                )
+        object.__setattr__(self, "checks", checks)
+        object.__setattr__(self, "groups", groups)
+        object.__setattr__(self, "status", aggregate_status(checks))
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "status": self.status.value,
+            "groups": [group.value for group in self.groups],
+            "checks": [check.to_dict() for check in self.checks],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PreflightRequest:
+    config_path: str | Path
+    groups: Iterable[str | PreflightGroup] | None = None
+    run_uri: str | None = None
+    cwd: str | Path | None = None
+    overlays: tuple[str | Path, ...] = ()
+    overrides: tuple[str, ...] = ()
+    selectors: object | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "config_path", _path_like(self.config_path, "config_path"))
+        object.__setattr__(self, "cwd", None if self.cwd is None else _path_like(self.cwd, "cwd"))
+        object.__setattr__(self, "overlays", _path_tuple(self.overlays, "overlays"))
+        object.__setattr__(self, "overrides", _str_tuple(self.overrides, "overrides"))
+        if self.run_uri is not None:
+            object.__setattr__(self, "run_uri", _non_empty_str(self.run_uri, field="run_uri"))
+        if self.groups is not None:
+            object.__setattr__(self, "groups", tuple(self.groups))
+
+
+def normalize_groups(
+    groups: Iterable[str | PreflightGroup] | None,
+) -> tuple[PreflightGroup, ...]:
+    if groups is None:
+        return DEFAULT_PREFLIGHT_GROUPS
+    selected = tuple(groups)
+    if not selected:
+        raise PreflightError("preflight groups may not be empty")
+
+    normalized: set[PreflightGroup] = set()
+    unknown: list[str] = []
+    for raw in selected:
+        try:
+            normalized.add(_coerce_group(raw))
+        except PreflightError:
+            unknown.append(str(raw))
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        allowed = ", ".join(group.value for group in DEFAULT_PREFLIGHT_GROUPS)
+        raise PreflightError(f"unknown preflight group(s): {names}; expected one of: {allowed}")
+
+    return tuple(group for group in DEFAULT_PREFLIGHT_GROUPS if group in normalized)
+
+
+def aggregate_status(checks: Iterable[PreflightCheckResult]) -> PreflightStatus:
+    statuses = tuple(check.status for check in checks)
+    if any(status is PreflightCheckStatus.FAIL for status in statuses):
+        return PreflightStatus.FAIL
+    if any(status is PreflightCheckStatus.WARN for status in statuses):
+        return PreflightStatus.WARN
+    if any(status is PreflightCheckStatus.PASS for status in statuses):
+        return PreflightStatus.PASS
+    return PreflightStatus.SKIP
+
+
+def _coerce_group(value: str | PreflightGroup) -> PreflightGroup:
+    if isinstance(value, PreflightGroup):
+        return value
+    if isinstance(value, str):
+        try:
+            return PreflightGroup(value)
+        except ValueError as exc:
+            raise PreflightError(f"unknown preflight group: {value!r}") from exc
+    raise PreflightError(f"preflight group must be a string or PreflightGroup, got {type(value)!r}")
+
+
+def _coerce_check_status(value: str | PreflightCheckStatus) -> PreflightCheckStatus:
+    if isinstance(value, PreflightCheckStatus):
+        return value
+    try:
+        return PreflightCheckStatus(value)
+    except ValueError as exc:
+        raise PreflightError(f"unknown preflight check status: {value!r}") from exc
+
+
+def _coerce_severity(value: str | PreflightSeverity) -> PreflightSeverity:
+    if isinstance(value, PreflightSeverity):
+        return value
+    try:
+        return PreflightSeverity(value)
+    except ValueError as exc:
+        raise PreflightError(f"unknown preflight severity: {value!r}") from exc
+
+
+def _non_empty_str(value: object, *, field: str) -> str:
+    if not isinstance(value, str) or value == "":
+        raise PreflightError(f"{field} must be a non-empty string")
+    return value
+
+
+def _plain_mapping(value: Mapping[str, PlainData], *, field: str) -> Mapping[str, PlainData]:
+    try:
+        normalized = ensure_plain_data(dict(value), path=field)
+    except PlainDataError as exc:
+        raise PreflightError(f"{field} must be a plain-data mapping: {exc}") from exc
+    if not isinstance(normalized, dict):
+        raise PreflightError(f"{field} must be a plain-data mapping")
+    return cast(Mapping[str, PlainData], normalized)
+
+
+def _path_like(value: object, field: str) -> str | Path:
+    if not isinstance(value, (str, Path)):
+        raise PreflightError(f"{field} must be a string or Path")
+    if isinstance(value, str) and value == "":
+        raise PreflightError(f"{field} must be non-empty")
+    return value
+
+
+def _path_tuple(values: tuple[str | Path, ...], field: str) -> tuple[str | Path, ...]:
+    if values is None:
+        raise PreflightError(f"{field} may not be None")
+    return tuple(_path_like(value, f"{field}[{index}]") for index, value in enumerate(values))
+
+
+def _str_tuple(values: tuple[str, ...], field: str) -> tuple[str, ...]:
+    if values is None:
+        raise PreflightError(f"{field} may not be None")
+    return tuple(_non_empty_str(value, field=f"{field}[{index}]") for index, value in enumerate(values))
+
+
+__all__ = [
+    "DEFAULT_PREFLIGHT_GROUPS",
+    "STABLE_CHECK_IDS",
+    "PreflightCheckResult",
+    "PreflightCheckStatus",
+    "PreflightError",
+    "PreflightGroup",
+    "PreflightRequest",
+    "PreflightResult",
+    "PreflightSeverity",
+    "PreflightStatus",
+    "aggregate_status",
+    "normalize_groups",
+]
