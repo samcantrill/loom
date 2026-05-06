@@ -67,7 +67,7 @@ _PROVENANCE_WRAPPER_FIELDS = frozenset(
 class LocalRunStore:
     """Filesystem-backed local run layout writer and reader."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path = "runs") -> None:
         self.root = Path(root)
 
     def resolve_run_uri(self, run_uri: str) -> str:
@@ -107,6 +107,10 @@ class LocalRunStore:
                 f"Missing required run metadata at {run_json}"
             )
         self._read_run_wrapper(run_uri_text)
+
+    def run_uri_exists(self, run_uri: str) -> bool:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        return self.local_run_dir(run_uri_text).exists()
 
     def local_run_dir(self, run_uri: str) -> Path:
         return run_uri_to_path(run_uri)

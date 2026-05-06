@@ -59,16 +59,16 @@ def test_placeholder_command_errors_are_text_by_default() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["plan", "pipeline.yaml"], stdout=stdout, stderr=stderr) == 1
+    assert main(["run", "pipeline.yaml"], stdout=stdout, stderr=stderr) == 1
     assert stdout.getvalue() == ""
-    assert "`loom plan` is not implemented" in stderr.getvalue()
+    assert "`loom run` is not implemented" in stderr.getvalue()
 
 
 def test_placeholder_command_errors_are_json_when_command_format_is_known() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["plan", "pipeline.yaml", "--format", "json"], stdout=stdout, stderr=stderr) == 1
+    assert main(["run", "pipeline.yaml", "--format", "json"], stdout=stdout, stderr=stderr) == 1
     assert stderr.getvalue() == ""
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == "loom.cli.error.v2"
@@ -86,7 +86,7 @@ def test_traceback_is_accepted_before_or_after_command() -> None:
 
     assert (
         main(
-            ["--traceback", "plan", "pipeline.yaml", "--format", "json"],
+            ["--traceback", "run", "pipeline.yaml", "--format", "json"],
             stdout=before_stdout,
             stderr=before_stderr,
         )
@@ -94,7 +94,7 @@ def test_traceback_is_accepted_before_or_after_command() -> None:
     )
     assert (
         main(
-            ["plan", "pipeline.yaml", "--format", "json", "--traceback"],
+            ["run", "pipeline.yaml", "--format", "json", "--traceback"],
             stdout=after_stdout,
             stderr=after_stderr,
         )

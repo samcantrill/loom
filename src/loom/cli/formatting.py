@@ -73,9 +73,36 @@ def format_plan_text(result: PlanCliResult) -> str:
 
     action_count = len(result.stage_actions)
     suffix = "1 stage action" if action_count == 1 else f"{action_count} stage actions"
+    lines: list[str]
     if result.run_uri is None:
-        return f"OK plan {result.config_path}: {suffix}"
-    return f"OK plan {result.config_path}: {suffix}, run_uri={result.run_uri}"
+        lines = [f"OK plan {result.config_path}: {suffix}"]
+    else:
+        lines = [f"OK plan {result.config_path}: {suffix}, run_uri={result.run_uri}"]
+
+    for stage_action in result.stage_actions:
+        stage_name = str(stage_action.get("stage", "<unknown>"))
+        action = str(stage_action.get("action", "<unknown>"))
+        reason_codes = stage_action.get("reason_codes", ())
+        if isinstance(reason_codes, Sequence) and not isinstance(reason_codes, str):
+            reasons = ", ".join(str(code) for code in reason_codes) or "NO_REASONS"
+        else:
+            reasons = str(reason_codes) if reason_codes else "NO_REASONS"
+        lines.append(f"{stage_name}: {action} [{reasons}]")
+
+    if result.explanation is not None:
+        stage_name = str(result.explanation.get("stage", "<unknown>"))
+        lines.append(f"explain {stage_name}:")
+        explanation_reasons = result.explanation.get("reasons", ())
+        if not isinstance(explanation_reasons, Sequence) or isinstance(explanation_reasons, str):
+            explanation_reasons = ()
+        for reason in explanation_reasons:
+            if not isinstance(reason, Mapping):
+                continue
+            code = str(reason.get("code", "reason"))
+            message = str(reason.get("message", ""))
+            lines.append(f"  {code}: {message}")
+
+    return "\n".join(lines)
 
 
 def format_run_text(result: RunCliResult) -> str:
