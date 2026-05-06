@@ -424,7 +424,8 @@ Stages can opt into stricter or looser checks through declared policies, but def
 
 ## 11. Provenance
 
-`loom` should record:
+Long-term provenance work should be able to record the following facts when the
+corresponding feature exists:
 
 ```text
 raw config
@@ -443,6 +444,12 @@ stage fingerprints
 input artifact references
 output artifact references
 ```
+
+Current v1-post composed-config defaults are narrower: runner persistence writes
+`config/composition_manifest.json`, `config/recipe_manifest.json`, and
+artifact-safe config provenance in run metadata. It does not write default raw
+config, resolved config, redacted resolved config, or CLI override snapshot
+files for composed configs.
 
 Provenance structures should remain generic. User code can add application-specific metadata to records, resources, artifacts, and stage provenance.
 

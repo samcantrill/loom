@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 7 implementation complete; awaiting PR preparation/review
+- Status: Phase 7 PR #57 open against `develop`; awaiting review/merge
 - Related implementation plan:
   `docs/implementation-plans/implementation-plan-v1.md`
 - Related planning notes:
@@ -646,7 +646,7 @@ Phase metadata:
 
 ### Phase 7. Final Hardening, Documentation, And Evidence
 
-Status: in_progress
+Status: pr_open
 
 Goal:
 
@@ -698,7 +698,8 @@ Phase metadata:
   `/home/samcantrill/work/loom-worktrees/v1-post-final-hardening`
 - Stack predecessor: none
 - PR target: `develop`
-- PR: not opened by the Phase 7 fallback executor.
+- PR: https://github.com/samcantrill/loom/pull/57, open against `develop`
+  from `codex/v1-post-final-hardening`.
 - Implementation summary: audited and updated the v1-post feature docs and
   `docs/loom.md` so current composed-config behavior is Python-API-only,
   persistence-free in `loom.config`, and artifact-safe in runner/run-store
@@ -717,11 +718,17 @@ Phase metadata:
   package `39 passed, 1 skipped`, unit `364 passed, 1 skipped`, contract
   `36 passed, 2 skipped`, integration `9 passed, 5 skipped`, e2e `7 passed`,
   and config-extra `363 passed, 455 deselected`.
+- GitHub checks: PR #57 GitHub Actions `checks` completed successfully after
+  PR preparation.
 - Targeted evidence: package/import and store API targeted tests passed
   (`23 passed`); config provenance/fingerprint/source snapshot integration
   targeted tests passed (`21 passed`); pipeline local execution/store targeted
   tests passed (`5 passed`); representative config/pipeline e2e targeted tests
   passed (`7 passed`).
+- Review/blocker notes: a user-authorized blocker-resolution pass corrected
+  stale Phase 7 PR metadata, clarified current versus future config provenance
+  wording in `docs/loom.md`, and updated PR-body check evidence. This pass was
+  docs/metadata-only and did not mark Phase 7 merged.
 - Follow-up notes for v2: CLI, remote stores, sweeps, `_copy_`, plugin/remote
   resolvers, default raw source persistence, default resolved composed-config
   snapshots, and exact runtime resolver replay remain deferred. V2 planning

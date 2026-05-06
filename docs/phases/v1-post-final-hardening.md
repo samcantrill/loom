@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: `pr_open`; implementation refinement used; PR preparation complete; awaiting review
+- Status: `pr_open`; implementation refinement used; user-authorized blocker-resolution pass used; PR preparation complete; awaiting review
 - Feature focus: V1 Post Configuration
 - PR title: `V1 Post Configuration - Phase 7: Final Hardening Documentation And Evidence`
 - Branch: `codex/v1-post-final-hardening`
@@ -21,7 +21,11 @@
 - Draft pass: completed by `loom_phase_planner` in draft commit `78c7118`.
 - Refine pass: completed by `loom_phase_planner` in the follow-up refine commit; expanded planning was selected because the phase spans documentation, evidence, and consistency checks across config, provenance, fingerprints, resume, pipeline, and implementation-plan contracts.
 - Setup limitations: `git worktree add` needed approved Git metadata access after the sandbox could not create the nested `refs/heads/codex/...` directory. No product-code setup blocker remains.
-- Blockers: none for implementation.
+- Blockers: none for implementation. User-authorized blocker-resolution pass on
+  2026-05-06 corrected stale Phase 7 PR metadata, clarified the current
+  composed-config provenance caveat in `docs/loom.md`, and updated PR-body
+  GitHub check evidence. This pass was docs/metadata-only and does not reset
+  the original refinement or review budgets.
 
 ## Objective
 

@@ -31,7 +31,7 @@ New or changed tests:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 448 passed and 11 skipped; config-extra harness passed with 363 passed and 455 deselected; `uv build` succeeded. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; overall 818 passed, 0 failed, 0 errors, 9 skipped, 455 deselected in 28.67s. |
-| GitHub checks | Pending | `gh pr checks 57` reports GitHub Actions `checks` pending after the latest push; no failing GitHub checks were reported. |
+| GitHub checks | Passed | GitHub Actions `checks` completed successfully on PR #57 after PR preparation. |
 
 ### Test Suite Summary
 
