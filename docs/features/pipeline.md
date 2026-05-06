@@ -1632,7 +1632,8 @@ generate scripts and dependencies.
 Pipeline execution depends on store interfaces, but the detailed run-store design
 should live in a separate document.
 
-The pipeline layer should assume a local v0 layout compatible with:
+The pipeline layer should assume a local v0 layout compatible with
+caller-provided runtime config snapshots:
 
 ```text
 runs/RUN_ID/
@@ -1653,6 +1654,23 @@ runs/RUN_ID/
   plan.json
   run.json
 ```
+
+Current v1 composed-config runs add artifact-safe config persistence without
+making `loom.pipeline` import `loom.config` classes:
+
+```text
+runs/RUN_ID/
+  config/
+    composition_manifest.json
+    recipe_manifest.json
+  run.json metadata.config_provenance
+```
+
+For composed configs, those files are plain-data records. They preserve authored
+composition, recipe, provenance, and fingerprint facts, and they do not write
+default `config/resolved.yaml` or `config/resolved.redacted.yaml` snapshots,
+resolver outputs, or raw source bytes. Plain mapping config snapshots remain
+caller-provided runtime data, not v1 composed-config artifacts.
 
 Required pipeline interactions:
 
@@ -1859,11 +1877,12 @@ plan
 
 ## 21. CLI Integration
 
-Functional CLI integration is post-v0. V0 may provide import-safe unsupported
-stubs only. When implemented, the pipeline package should support CLI commands
-without becoming CLI-specific.
+Functional CLI integration is future roadmap work. V1-post is Python-API-only:
+it provides public Python pipeline/config APIs and no functional `loom` CLI
+commands or console script entry points. When implemented, the pipeline package
+should support CLI commands without becoming CLI-specific.
 
-Post-v0 CLI commands can call Python APIs:
+Future CLI commands can call Python APIs:
 
 ```text
 loom validate experiment.yaml

@@ -1504,17 +1504,24 @@ Future run provenance may include a summary owned by the runner/run store:
 ```json
 {
   "config": {
-    "raw_config": "config/raw.yaml",
     "manifest": "config/composition_manifest.json",
-    "redacted_config": "config/resolved.redacted.yaml",
-    "overlays": ["config/overlays.yaml"],
-    "overrides": "config/overrides.yaml",
-    "recipe_manifest": "config/recipe_manifest.json"
+    "recipe_manifest": "config/recipe_manifest.json",
+    "provenance": "run.json metadata.config_provenance",
+    "default_resolved_config": null,
+    "default_raw_source_snapshots": null,
+    "overlays": null,
+    "overrides": null
   }
 }
 ```
 
-V1 `loom.config` returns these artifact records to the caller and does not write
+For current v1 composed configs, `PipelineRunner` persists the composition
+manifest, recipe manifest, and artifact-safe config provenance metadata as plain
+data. It does not persist `config/resolved.yaml`,
+`config/resolved.redacted.yaml`, resolver outputs, or raw source bytes by
+default.
+
+V1 `loom.config` returns artifact-safe records to the caller and does not write
 the files above.
 
 `loom.config` owns detailed contents.

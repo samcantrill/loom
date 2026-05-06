@@ -442,25 +442,27 @@ If a user regularly edits deeper than this, introduce a recipe.
 
 The in-memory resolved config should be complete enough for the Python caller to
 run the workflow without guessing which recipe, overlay, or override string was
-used. V1 does not persist the resolved config by default.
+used. `loom.config` returns that resolved view to the caller, but it remains
+persistence-free and does not choose run-store paths.
 
-Future runner/run-store policy may save:
+For a v1 composed config passed through `PipelineRunner`, the current default
+run-store config artifacts are:
 
 ```text
-config/raw.yaml
-config/overlays.yaml
-config/cli_overrides.yaml
 config/recipe_manifest.json
 config/composition_manifest.json
-config/resolved.yaml
-config/resolved.redacted.yaml
-config/source_snapshots/
+run.json metadata.config_provenance
 ```
 
-In v1, `loom.config` returns artifact-safe unresolved/redacted config data,
-composition manifests, source metadata/hashes, fingerprints, and optional raw
-source snapshot payloads to the caller. It does not choose run-store paths or
-write `resolved.yaml`.
+Those artifacts are plain, artifact-safe data. They preserve authored resolver
+expressions, source metadata/hashes, recipe records, and fingerprint/provenance
+facts without writing resolver outputs, raw source bytes, or default
+`config/resolved.yaml` / `config/resolved.redacted.yaml` snapshots for composed
+configs. Explicit raw source snapshot payloads remain a Python API opt-in owned
+by the caller.
+
+Future runner/run-store policies may add opt-in raw, overlay, CLI override, or
+resolved snapshot files, but those are not v1 composed-config defaults.
 
 ### 6.3 Prefer Recipes Over Intermediate Aliases in v0
 

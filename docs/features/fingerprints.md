@@ -1719,7 +1719,9 @@ invocation
 This is pipeline planning guidance, not a v1 `loom.config` persistence rule.
 V1 config fingerprints are artifact-safe authored-composition fingerprints:
 they preserve resolver expressions and source hashes and intentionally do not
-persist resolved resolver outputs by default.
+persist resolved resolver outputs by default. The in-memory resolved config is
+available to Python callers, but `loom.config` does not persist it, and config
+artifact fingerprints are not exact runtime replay digests.
 
 ### 21.2 Selected Config Subtrees
 
