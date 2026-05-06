@@ -200,7 +200,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 
 ## Completion Notes
@@ -210,7 +210,11 @@ make test-summary
 - Implementation summary: removed the `loom.pipeline.execution.models` type-only import from `loom.config` by replacing the concrete `ComposedConfig` annotation with a private duck-typed protocol; preserved runtime mapping and composed-config validation behavior; added package subprocess coverage that constructs a direct `PipelineSpec`, runs it through `PipelineRunner.run(...)` with `LocalRunStore`, verifies the expected artifact index, and asserts `loom.config`, `loom.cli`, `project`, `yaml`, `omegaconf`, and `pydantic` stay unloaded before and after the run; added unit coverage for direct `PipelineSpec`, plain mapping config, and duck-typed composed config acceptance; updated config docs for trusted project-code policy, `inspect_config_composition` inspection-only boundaries, dot-path override no-escape behavior, and strict dotted/colon `_target_` syntax; cleaned stale `_copy_` implementation-scope wording from the active roadmap and corrected D01, D03, and D23 planning-note statuses to `confirmed`.
 - Implementation validation: `uv --cache-dir /tmp/loom-uv-cache run pytest tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 25 tests; `uv --cache-dir /tmp/loom-uv-cache run pyright src/loom/pipeline/execution/models.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 0 errors, 0 warnings, and 0 informations. Initial unqualified `uv run pytest ...` attempts could not write to `~/.cache/uv` in the sandbox; rerun used a writable `/tmp` uv cache, with approved network access to fetch missing dev dependencies.
 - Integration evidence: no separate integration file was added because the package subprocess regression executes the full local runner path with a direct `PipelineSpec` and local run store while proving the config import boundary.
-- Refinement summary: made suite obligations explicit, named required test homes and stop conditions, confirmed root stack metadata, and preserved implementation/PR review budgets as unused.
+- Refinement summary: expanded-path implementation/test refinement pass completed on 2026-05-06 by `loom_phase_refiner`; reviewed the dedicated worktree, current diff against `develop`, implementation plan, phase execution plan, refinement template, and executor validation notes; found no phase-caused blocking test, type, lint, build, runtime, suite-coverage, or docs-scope issues requiring code/test/doc fixes; kept the existing implementation unchanged and consumed the phase implementation refinement budget.
+- Refinement scope: validation output reviewed was `uv --cache-dir /tmp/loom-uv-cache run pytest tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` and `uv --cache-dir /tmp/loom-uv-cache run pyright src/loom/pipeline/execution/models.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py`; blocking issues caused by this phase were none; out-of-scope issues remained CLI, `_copy_`, persistence/provenance/schema changes, strict YAML or override runtime semantics, and Phase 2+ behavior.
+- Refinement fixes made: none beyond this completion-note update because the implementation, tests, and docs already satisfied the Phase 1 scope and suite obligations.
+- Refinement validation re-run: `uv --cache-dir /tmp/loom-uv-cache run pytest tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 25 tests; `uv --cache-dir /tmp/loom-uv-cache run pyright src/loom/pipeline/execution/models.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_execution_models.py` passed with 0 errors, 0 warnings, and 0 informations.
+- PR preparation handoff: completion notes and budget status are updated; final `make validate-pr` and `make test-summary` remain for PR preparation; suite evidence still needed is only the normal final PR gate evidence.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none after implementation and initial validation.
+- Remaining blockers: none after implementation and refinement validation.
