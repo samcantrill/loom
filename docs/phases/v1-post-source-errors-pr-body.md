@@ -38,7 +38,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default suite passed with 436 passed/11 skipped; config-extra passed with 346 passed/442 deselected; `uv build` produced sdist and wheel. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md` on 2026-05-06T02:43:20+00:00; overall 788 passed, 9 skipped, 442 deselected. |
-| GitHub checks | Not run | PR was not opened in this expanded-path draft pass; checks are expected after the refine/open pass. |
+| GitHub checks | Pending | Expected to run after this refine/open pass creates the PR. |
 
 ### Test Suite Summary
 
