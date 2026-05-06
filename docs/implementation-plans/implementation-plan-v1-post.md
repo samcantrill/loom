@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 7 PR #57 open against `develop`; awaiting review/merge
+- Status: completed; Phases 1-7 merged into `develop`
 - Related implementation plan:
   `docs/implementation-plans/implementation-plan-v1.md`
 - Related planning notes:
@@ -646,7 +646,7 @@ Phase metadata:
 
 ### Phase 7. Final Hardening, Documentation, And Evidence
 
-Status: pr_open
+Status: merged
 
 Goal:
 
@@ -698,8 +698,12 @@ Phase metadata:
   `/home/samcantrill/work/loom-worktrees/v1-post-final-hardening`
 - Stack predecessor: none
 - PR target: `develop`
-- PR: https://github.com/samcantrill/loom/pull/57, open against `develop`
-  from `codex/v1-post-final-hardening`.
+- PR: https://github.com/samcantrill/loom/pull/57, squash-merged into
+  `develop` from `codex/v1-post-final-hardening`.
+- Merge: squash-merged into `develop` on 2026-05-06 after expanded-path
+  planning, implementation refinement, PR review, user-authorized
+  docs/metadata blocker resolution, passing local validation, and passing
+  GitHub CI `checks`.
 - Implementation summary: audited and updated the v1-post feature docs and
   `docs/loom.md` so current composed-config behavior is Python-API-only,
   persistence-free in `loom.config`, and artifact-safe in runner/run-store
@@ -719,7 +723,7 @@ Phase metadata:
   `36 passed, 2 skipped`, integration `9 passed, 5 skipped`, e2e `7 passed`,
   and config-extra `363 passed, 455 deselected`.
 - GitHub checks: PR #57 GitHub Actions `checks` completed successfully after
-  PR preparation.
+  the final evidence commit.
 - Targeted evidence: package/import and store API targeted tests passed
   (`23 passed`); config provenance/fingerprint/source snapshot integration
   targeted tests passed (`21 passed`); pipeline local execution/store targeted
@@ -727,8 +731,8 @@ Phase metadata:
   passed (`7 passed`).
 - Review/blocker notes: a user-authorized blocker-resolution pass corrected
   stale Phase 7 PR metadata, clarified current versus future config provenance
-  wording in `docs/loom.md`, and updated PR-body check evidence. This pass was
-  docs/metadata-only and did not mark Phase 7 merged.
+  wording in `docs/loom.md`, and updated PR-body check evidence. The final
+  metadata update records the subsequent PR merge.
 - Follow-up notes for v2: CLI, remote stores, sweeps, `_copy_`, plugin/remote
   resolvers, default raw source persistence, default resolved composed-config
   snapshots, and exact runtime resolver replay remain deferred. V2 planning
