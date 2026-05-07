@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Stage Worker
 - PR title: `Stage Worker - Phase 3: Subprocess Executor and Serial Run Integration`
 - Branch: `codex/subprocess-executor`
@@ -239,6 +239,8 @@ make test-summary
     400 passed/730 deselected.
 - Refinement summary: not needed after focused fixes; full validation passed.
 - Blocker-resolution summary: none used
-- PR preparation: TBD
+- PR preparation: PR opened on 2026-05-07:
+  https://github.com/samcantrill/loom/pull/79. Verified base `develop`, head
+  `codex/subprocess-executor`, state `OPEN`.
 - Stack maintenance: none required; all earlier phases are merged into `develop`
 - Remaining blockers: none known
