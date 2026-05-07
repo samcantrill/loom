@@ -18,7 +18,9 @@ CLI_ERROR_SCHEMA_VERSION = "loom.cli.error.v2"
 CLI_RESULT_SCHEMA_VERSION = "loom.cli.result.v2"
 
 
-def _warning_to_dict(warning: Mapping[str, object] | CliWarning) -> dict[str, PlainCliData]:
+def _warning_to_dict(
+    warning: Mapping[str, object] | CliWarning,
+) -> dict[str, PlainCliData]:
     if isinstance(warning, CliWarning):
         return warning.to_dict()
 
@@ -93,7 +95,9 @@ def format_plan_text(result: PlanCliResult) -> str:
         stage_name = str(result.explanation.get("stage", "<unknown>"))
         lines.append(f"explain {stage_name}:")
         explanation_reasons = result.explanation.get("reasons", ())
-        if not isinstance(explanation_reasons, Sequence) or isinstance(explanation_reasons, str):
+        if not isinstance(explanation_reasons, Sequence) or isinstance(
+            explanation_reasons, str
+        ):
             explanation_reasons = ()
         for reason in explanation_reasons:
             if not isinstance(reason, Mapping):
@@ -153,7 +157,9 @@ def format_status_text(result: object) -> str:
         stage_status = getattr(stage, "status")
         stage_status_text = "<missing>" if stage_status is None else str(stage_status)
         output_count = int(getattr(stage, "output_count"))
-        suffix = f"{output_count} output" if output_count == 1 else f"{output_count} outputs"
+        suffix = (
+            f"{output_count} output" if output_count == 1 else f"{output_count} outputs"
+        )
         lines.append(f"{stage_name}: {stage_status_text} ({suffix})")
         failure = getattr(stage, "failure")
         if isinstance(failure, Mapping):
@@ -183,6 +189,53 @@ def format_logs_text(result: object) -> str:
     return "\n".join(lines)
 
 
+def format_artifacts_list_text(result: object) -> str:
+    """Format artifact metadata summaries."""
+
+    run_uri = str(getattr(result, "run_uri"))
+    artifact_count = int(getattr(result, "artifact_count"))
+    suffix = "1 artifact" if artifact_count == 1 else f"{artifact_count} artifacts"
+    lines = [f"artifacts {run_uri}: {suffix}"]
+    for artifact in getattr(result, "artifacts", ()):
+        key = str(getattr(artifact, "key"))
+        artifact_id = str(getattr(artifact, "artifact_id"))
+        artifact_type = str(getattr(artifact, "artifact_type"))
+        uri = str(getattr(artifact, "uri"))
+        lines.append(f"{key}: {artifact_id} ({artifact_type}) {uri}")
+    return "\n".join(lines)
+
+
+def format_artifact_show_text(result: object) -> str:
+    """Format one artifact metadata summary."""
+
+    artifact = getattr(result, "artifact")
+    key = str(getattr(artifact, "key"))
+    artifact_id = str(getattr(artifact, "artifact_id"))
+    lines = [f"artifact {artifact_id} ({key})"]
+    lines.append(f"uri: {getattr(artifact, 'uri')}")
+    lines.append(f"type: {getattr(artifact, 'artifact_type')}")
+    codec_key = getattr(artifact, "codec_key")
+    if codec_key is not None:
+        lines.append(f"codec: {codec_key}")
+    checksum = getattr(artifact, "checksum")
+    if checksum is not None:
+        lines.append(f"checksum: {checksum}")
+    producer_stage = getattr(artifact, "producer_stage")
+    if producer_stage is not None:
+        lines.append(f"producer: {producer_stage}")
+    metadata = getattr(artifact, "metadata")
+    if isinstance(metadata, Mapping) and metadata:
+        keys = ", ".join(sorted(str(key) for key in metadata))
+        lines.append(f"metadata: {keys}")
+    provenance = getattr(result, "stage_provenance")
+    if isinstance(provenance, Mapping) and provenance:
+        keys = ", ".join(sorted(str(key) for key in provenance))
+        lines.append(f"stage_provenance: {keys}")
+    elif provenance is None:
+        lines.append("stage_provenance: <missing>")
+    return "\n".join(lines)
+
+
 def _enum_value(value: object) -> str:
     enum_value = getattr(value, "value", value)
     return str(enum_value)
@@ -191,6 +244,8 @@ def _enum_value(value: object) -> str:
 __all__ = [
     "CLI_ERROR_SCHEMA_VERSION",
     "CLI_RESULT_SCHEMA_VERSION",
+    "format_artifact_show_text",
+    "format_artifacts_list_text",
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
