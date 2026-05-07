@@ -403,5 +403,6 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   https://github.com/samcantrill/loom/pull/69 and verified with
   `baseRefName=develop`, `headRefName=codex/add-artifact-diagnostics`, and
   `state=OPEN`.
-- Stack maintenance:
-- Remaining blockers:
+- Stack maintenance: root phase; PR #69 merged into `develop` on 2026-05-07
+  with no successor branch dependencies.
+- Remaining blockers: none.

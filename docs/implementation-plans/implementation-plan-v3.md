@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined implementation plan
+- Status: completed; Phases 1-4 merged into `develop`
 - Related planning notes: `docs/implementation-plans/roadmap-v3-planning-notes.md`
 - Related brief: none
 - Related specifications:
@@ -661,9 +661,9 @@ Completion summary:
 
 ### Phase 4 - Artifact Inspection And End-To-End Diagnostics
 
-Status: pending
+Status: merged
 Branch: `codex/add-artifact-diagnostics`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/69 (merged)
 
 Goal:
 
@@ -744,9 +744,26 @@ Notes:
 
 - PR feature focus: `Local Diagnostics`
 - Intended PR title: `Local Diagnostics - Phase 4: Artifact Inspection and End-to-End Diagnostics`
-- Phase implementation refinement budget: unused
-- Phase PR review budget: unused
+- Phase implementation refinement budget: used on 2026-05-07 by managing
+  agent; validation exposed a Pyright tuple-narrowing issue and a pytest module
+  basename collision, both fixed before final validation passed.
+- Phase PR review budget: used on 2026-05-07 by managing agent; PR #69
+  targeting `develop` had no blocking findings and GitHub CI passed.
 
 Completion summary:
 
-- Pending.
+- Merged Phase 4 by PR #69 into `develop` on 2026-05-07 with merge commit
+  `339d7b689840c84d6384ba2c7608b6714fb5eb3b`.
+- Added metadata-only artifact diagnostics over public run-store artifact index
+  and stage provenance readers. `loom artifacts list RUN_URI` summarizes
+  recorded artifact references, and `loom artifacts show RUN_URI ARTIFACT_ID`
+  shows one artifact's metadata plus generic stage provenance when available.
+- Preserved v3 scope boundaries: no artifact payload loading, codec invocation,
+  checksum verification, catalog behavior, or private run-layout traversal in
+  CLI modules.
+- Added package, unit, contract, integration, and e2e coverage for artifact
+  diagnostics imports, sorted summaries, missing and duplicate artifact IDs,
+  CLI text/JSON behavior, public-store reader usage, and full successful/failed
+  diagnostics workflows.
+- Final validation passed: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`,
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`, and GitHub CI for PR #69.

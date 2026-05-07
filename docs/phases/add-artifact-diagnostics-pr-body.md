@@ -51,7 +51,7 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | Ruff clean; Pyright 0 errors; default isolated suite 550 passed/13 skipped/12 deselected; config-extra 396 passed/565 deselected; build succeeded. |
 | `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | Wrote `build/test-summary.md`; all suites passed. |
-| GitHub checks | Pending | To be recorded after PR creation. |
+| GitHub checks | Passed | PR #69 CI `checks` workflow passed. |
 
 ### Test Suite Summary
 
