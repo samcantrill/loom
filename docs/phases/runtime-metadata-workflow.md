@@ -26,8 +26,9 @@
   confirmation review used
 - Draft pass: completed by managing agent on 2026-05-07
 - Refine pass: completed by managing agent on 2026-05-07; used to pin
-  CLI composition/run-URI ordering, request compatibility enforcement, and
-  dry-run handling boundaries
+  CLI composition/run-URI ordering, request compatibility enforcement, dry-run
+  handling boundaries, and the separation between planning resume policy and
+  run-store open-existing lifecycle behavior
 - Setup limitations: branch/worktree created from local `develop`; no
   validation has run for this planning-only pass
 - Blockers: none known
@@ -137,10 +138,10 @@ add stable contracts and metadata, not backend-specific behavior.
 - Mirror normalized values back onto legacy attributes during construction so
   existing read-only callers still observe the effective run URI, selectors,
   and resume options.
-- Treat `RunRequest.open_existing` and `RunOptions.resume.enabled` as the same
-  resume/open-existing workflow policy for this phase. `RunRequest`
-  construction should normalize the effective policy, while runner/CLI workflow
-  code continues to enforce that resume/open-existing requires a run URI.
+- Keep `RunRequest.open_existing` as run-store lifecycle policy and
+  `RunOptions.resume.enabled` as planning reuse policy. The CLI `--resume`
+  workflow may set both, but config-authored `runtime.resume` must not
+  implicitly open an existing run.
 - Use `request.options.run_uri`, `request.options.to_plan_selectors()`, and
   `request.options.to_resume_options()` in `PipelineRunner` and `run_pipeline`
   instead of legacy request fields.
@@ -185,8 +186,9 @@ add stable contracts and metadata, not backend-specific behavior.
 - Run-level and stage-level environment requests must remain separate in the
   resolved stage handoff until the runtime model can preserve sparse authored
   environment intent or a future executor defines exact merge semantics.
-- `open_existing=True` continues to be supported as a compatibility entrypoint
-  but normalizes to resume/open-existing behavior in `RunOptions`.
+- `open_existing=True` continues to be supported as a store lifecycle
+  compatibility entrypoint. It should not be inferred from
+  `RunOptions.resume.enabled`, because runtime resume is planning reuse policy.
 - Existing `RunRequest` callers with only legacy selectors/resume/run URI
   should continue to work when values do not conflict with `options`.
 - Config-authored `runtime.run_uri` may satisfy plan/run resume run-URI
@@ -272,7 +274,7 @@ fingerprints.
 1. Add runtime metadata/resolution models and tests for safe summaries,
    per-stage resolution, environment separation, and schema round trips.
 2. Extend `RunRequest` with normalized `options`, compatibility conflict
-   checks, resume/open-existing normalization, and tests.
+   checks, legacy selector/resume normalization into options, and tests.
 3. Add `StageExecutionRequest.resolved_runtime` and runner handoff wiring.
 4. Add run-store protocol/local-store `runtime.json` read/write APIs and
    contract/unit tests.
@@ -351,6 +353,10 @@ fingerprints.
 - `RunRequest` compatibility normalization can silently choose the wrong source
   if conflict checks are too loose; tests must cover mismatched run URI,
   selectors, and resume values.
+- The CLI term `--resume` currently combines opening an existing run with
+  planning resume. Runtime `resume` is only planning policy, so runner and CLI
+  tests must prevent config-authored `runtime.resume` from implying
+  `open_existing=True`.
 - Environment merge semantics are easy to overstate. The resolved handoff must
   carry normalized run/stage requests separately until a later phase defines
   sparse intent or executor application.
