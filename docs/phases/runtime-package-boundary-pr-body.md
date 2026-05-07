@@ -27,22 +27,22 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `git diff --check develop...HEAD` | Passed | Reran during PR-body draft; no whitespace errors. |
-| `make validate-pr` | Passed | Recorded phase evidence: Ruff, Pyright, default harness, config-extra harness, and `uv build` passed. |
+| `git diff --check develop...HEAD` | Passed | Reran during PR-body refine; no whitespace errors. |
+| `make validate-pr` | Passed | Reran during PR-body refine: Ruff, Pyright, default harness, config-extra harness, and `uv build` passed. |
 | `make test-summary` | Passed | Generated `build/test-summary.md` on 2026-05-07 with all suites passing. |
-| GitHub checks | Pending | PR creation is deferred to the expanded-path PR-body refine pass. |
+| GitHub checks | Pending | GitHub CI will report after PR creation. |
 
 ### Test Suite Summary
 
 | Suite | Status | Evidence |
 | --- | --- | --- |
-| package | Passed | 49 passed, 1 skipped in 4.98s. |
-| unit | Passed | 453 passed, 1 skipped in 5.14s. |
-| contract | Passed | 41 passed, 2 skipped in 1.56s. |
-| integration | Passed | 9 passed, 6 skipped, 12 deselected in 1.90s. |
-| e2e | Passed | 15 passed in 6.12s. |
-| config-extra | Passed | 396 passed, 567 deselected in 15.26s. |
-| Overall | Passed | 963 passed, 10 skipped, 579 deselected in 34.96s. |
+| package | Passed | 49 passed, 1 skipped in 4.89s. |
+| unit | Passed | 453 passed, 1 skipped in 5.25s. |
+| contract | Passed | 41 passed, 2 skipped in 1.70s. |
+| integration | Passed | 9 passed, 6 skipped, 12 deselected in 2.01s. |
+| e2e | Passed | 15 passed in 5.97s. |
+| config-extra | Passed | 396 passed, 567 deselected in 15.38s. |
+| Overall | Passed | 963 passed, 10 skipped, 579 deselected in 35.19s. |
 
 ## Risks / Follow-Ups
 

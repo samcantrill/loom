@@ -286,9 +286,25 @@ make test-summary
   integration, e2e, and config-extra suites. `make validate-pr` was not rerun
   in this draft pass; existing phase evidence records it passed with Ruff,
   Pyright, default harness, config-extra harness, and `uv build`.
-- PR body refine: pending for `.codex/prompts/pr-body-refine.md` because the
-  expanded path is active. PR creation, GitHub check recording, and opened-PR
-  verification are intentionally deferred to that refine/open pass.
+- PR body refine/open pass: completed on 2026-05-07 using
+  `.codex/prompts/pr-body-refine.md`. Confirmed dedicated worktree
+  `/home/samcantrill/work/loom-worktrees/runtime-package-boundary`, branch
+  `codex/runtime-package-boundary`, feature focus `Runtime Options`, title
+  `Runtime Options - Phase 1: Runtime Package Boundary`, target branch
+  `develop`, and stack predecessor none. Reviewed the source implementation
+  plan, phase execution plan, draft PR body, PR template, phase PR body
+  template, final diff, and test-summary evidence. The PR body matches the
+  diff, phase scope, acceptance criteria, validation, assumptions, and risks.
+  No future-phase behavior was introduced early; the diff remains limited to
+  the runtime package boundary, structure docs, tests, and phase artifacts.
+  Corrected the PR body GitHub-checks row to avoid referring to the draft pass.
+  Reran `git diff --check develop...HEAD`, `make validate-pr`, and
+  `make test-summary`; all passed. `make validate-pr` passed Ruff, Pyright,
+  default harness (552 passed, 13 skipped, 12 deselected), config-extra harness
+  (396 passed, 567 deselected), and `uv build`. `make test-summary` wrote
+  `build/test-summary.md` at 2026-05-07T05:44:37+00:00 with overall status
+  passed: 963 passed, 0 failed, 0 errors, 10 skipped, and 579 deselected.
+  PR creation and opened-PR verification are the remaining steps in this pass.
 - PR review budget: unused. Blocker resolution: 0/3 used.
 - Stack maintenance: pending; no predecessor branch exists and no PR has been
   opened in this draft pass.
