@@ -141,6 +141,48 @@ def format_run_text(result: RunCliResult) -> str:
     return "\n".join(lines)
 
 
+def format_status_text(result: object) -> str:
+    """Format a concise run status summary."""
+
+    run_uri = str(getattr(result, "run_uri"))
+    status = getattr(result, "status")
+    status_text = "<unknown>" if status is None else str(status)
+    lines = [f"status {run_uri}: {status_text}"]
+    for stage in getattr(result, "stages", ()):
+        stage_name = str(getattr(stage, "stage_name"))
+        stage_status = getattr(stage, "status")
+        stage_status_text = "<missing>" if stage_status is None else str(stage_status)
+        output_count = int(getattr(stage, "output_count"))
+        suffix = f"{output_count} output" if output_count == 1 else f"{output_count} outputs"
+        lines.append(f"{stage_name}: {stage_status_text} ({suffix})")
+        failure = getattr(stage, "failure")
+        if isinstance(failure, Mapping):
+            message = failure.get("message")
+            if message:
+                lines.append(f"  failure: {message}")
+    lines.append(f"artifacts: {getattr(result, 'artifact_count')}")
+    return "\n".join(lines)
+
+
+def format_logs_text(result: object) -> str:
+    """Format bounded stage log content."""
+
+    run_uri = str(getattr(result, "run_uri"))
+    stage_name = str(getattr(result, "stage_name"))
+    lines = [f"logs {run_uri} {stage_name}:"]
+    for stream in getattr(result, "streams", ()):
+        stream_name = str(getattr(stream, "stream"))
+        path = str(getattr(stream, "path"))
+        available = bool(getattr(stream, "available"))
+        lines.append(f"{stream_name}: {path}")
+        content = getattr(stream, "content", None)
+        if content is not None:
+            lines.append(str(content).rstrip("\n"))
+        elif not available:
+            lines.append("  <missing>")
+    return "\n".join(lines)
+
+
 def _enum_value(value: object) -> str:
     enum_value = getattr(value, "value", value)
     return str(enum_value)
@@ -152,6 +194,8 @@ __all__ = [
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
+    "format_logs_text",
     "format_run_text",
+    "format_status_text",
     "format_validation_text",
 ]
