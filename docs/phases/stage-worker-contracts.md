@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR preparation pending
+- Status: pr_open
 - Feature focus: Stage Worker
 - PR title: `Stage Worker - Phase 1: Contracts and Persistence`
 - Branch: `codex/stage-worker-contracts`
@@ -234,6 +234,8 @@ make test-summary
   refinement cleaned up `prepare_stage_attempt` error typing without changing
   behavior.
 - Blocker-resolution summary: none used.
-- PR preparation: pending.
+- PR preparation: PR opened on 2026-05-07:
+  https://github.com/samcantrill/loom/pull/77. Verified base `develop`, head
+  `codex/stage-worker-contracts`, state `OPEN`.
 - Stack maintenance: not needed yet.
 - Remaining blockers: none known.
