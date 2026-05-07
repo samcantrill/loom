@@ -111,10 +111,13 @@ def test_registry_lookup_serialization_and_composition_are_deterministic() -> No
         ExecutorDescriptorRegistry({"local": local, " local ": ExecutorDescriptor(name="local")})
 
 
-def test_default_registry_contains_only_metadata_local_descriptor() -> None:
+def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     descriptor = resolve_executor_descriptor(registry=DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY)
 
-    assert tuple(DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.descriptors) == ("local",)
+    assert tuple(DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.descriptors) == (
+        "local",
+        "subprocess",
+    )
     assert descriptor.name == "local"
     assert descriptor.adapter_namespaces == ()
     assert set(descriptor.resource_capabilities) == {"cpu", "memory", "gpu"}
@@ -123,6 +126,9 @@ def test_default_registry_contains_only_metadata_local_descriptor() -> None:
         kind: capability.to_dict()["support_level"]
         for kind, capability in capabilities.items()
     } == {"cpu": "ignored", "memory": "ignored", "gpu": "ignored"}
+    subprocess_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("subprocess")
+    assert subprocess_descriptor.details["process_isolating"] is True
+    assert subprocess_descriptor.details["serial"] is True
 
 
 def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() -> None:
