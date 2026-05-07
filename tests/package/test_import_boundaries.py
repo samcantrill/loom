@@ -351,11 +351,20 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
         assert PipelineRuntimeRequest is RuntimeRequest
         assert pipeline_parse_runtime_request is parse_runtime_request
         assert set(runtime.__all__) == {
+            "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
             "RUN_OPTIONS_SCHEMA_VERSION",
             "RUNTIME_SCHEMA_VERSION",
+            "CapabilityDiagnostic",
+            "CapabilitySeverity",
+            "CapabilityValidationResult",
             "ExecutionOptions",
+            "ExecutorDescriptor",
+            "ExecutorDescriptorRegistry",
             "RunEnvironmentRequest",
             "RunOptions",
+            "ResourceCapability",
+            "ResourceEnforcementExpectation",
+            "ResourceSupportLevel",
             "RuntimeProfile",
             "RuntimeProfileCollection",
             "RuntimeKind",
@@ -367,7 +376,9 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "parse_runtime_profile",
             "parse_runtime_profiles",
             "parse_runtime_request",
+            "resolve_executor_descriptor",
             "select_runtime_profile",
+            "validate_executor_capabilities",
             "validate_stage_runtime_options",
         }
 
