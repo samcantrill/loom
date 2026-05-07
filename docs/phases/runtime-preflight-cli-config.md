@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: refinement complete; validation passed; PR preparation pending
+- Status: pr_open
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 6: Runtime Preflight and CLI/Config Mapping`
 - Branch: `codex/runtime-preflight-cli-config`
 - Worktree: `/home/samcantrill/work/loom-worktrees/runtime-preflight-cli-config`
 - Phase execution plan path: `docs/phases/runtime-preflight-cli-config.md`
 - PR body draft path: `docs/phases/runtime-preflight-cli-config-pr-body.md`
+- PR: https://github.com/samcantrill/loom/pull/75
 - Full plan: `docs/implementation-plans/implementation-plan-v4.md`
 - Source phase: Phase 6 - Runtime Preflight And CLI/Config Mapping
 - Stack predecessor: none; Phases 1-5 are merged into `develop`
@@ -17,7 +18,7 @@
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`,
   automated review passes, and validation/CI pass
 - Workflow path: expanded path, draft and refine passes complete
-- PR preparation path: expanded path
+- PR preparation path: expanded path; draft/open pass complete
 - Successor dependency notes: Phase 7 should consume the normalized
   `RunOptions` and preflight diagnostics from this phase without redefining
   CLI/config parsing.
@@ -391,6 +392,9 @@ make test-summary
   preflight groups still skip without forcing config composition. Focused
   runtime/preflight tests, Ruff, and Pyright passed after the refinement.
 - Blocker-resolution summary: pending.
-- PR preparation: pending.
+- PR preparation: draft PR body committed on 2026-05-07; PR opened as
+  https://github.com/samcantrill/loom/pull/75 with verified base `develop`,
+  head `codex/runtime-preflight-cli-config`, and state `OPEN`; GitHub CI
+  started and was initially pending.
 - Stack maintenance: not needed yet.
 - Remaining blockers: none known.
