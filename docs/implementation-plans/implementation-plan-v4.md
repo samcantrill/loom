@@ -797,9 +797,9 @@ Completion summary:
 
 ### Phase 5 - Executor Descriptors And Capability Validation
 
-Status: pending
+Status: merged
 Branch: `codex/executor-capabilities`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/74
 
 Goal:
 
@@ -883,7 +883,30 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged on 2026-05-07 via PR #74.
+- Added import-light executor descriptor and capability validation contracts,
+  including `ExecutorDescriptor`, `ResourceCapability`,
+  `CapabilityValidationResult`, deterministic descriptor registry behavior,
+  and public `loom.pipeline.runtime`/`loom.pipeline` exports.
+- Added the metadata-only default `local` descriptor. Unknown and
+  whitespace-only explicit executor names now produce deterministic
+  `executor.unknown` error diagnostics, while local `cpu`, `memory`, and `gpu`
+  requests warn as ignored/not enforced without failing capability validation.
+- Added adapter namespace ownership warnings without inspecting adapter
+  payloads, plus unsupported-resource fallback diagnostics for registered
+  resource kinds omitted by a descriptor.
+- Preserved the intended boundary: no preflight check IDs or groups, plugin
+  discovery, CLI/config mapping, `runtime.json` persistence, runner wiring,
+  concrete executor behavior changes, resource schema changes, or adapter
+  payload schema validation were introduced.
+- Automated review found no blocking findings. The stale PR-body GitHub-check
+  row was corrected before merge.
+- Validation evidence: `make validate-pr` passed; GitHub CI `checks` passed on
+  PR #74; `make test-summary` reported 1068 passed, 10 skipped, and 684
+  deselected.
+- Follow-up for Phase 6: map capability diagnostics into runtime preflight
+  groups/check IDs and the explicit-load config/CLI behavior without moving
+  descriptor logic into preflight.
 
 ### Phase 6 - Runtime Preflight And CLI/Config Mapping
 
