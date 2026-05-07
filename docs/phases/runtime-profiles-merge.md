@@ -7,6 +7,8 @@
 - PR title: `Runtime Options - Phase 4: Runtime Profiles and Merge Semantics`
 - PR URL: pending
 - PR state: pending
+- PR body path: `docs/phases/runtime-profiles-merge-pr-body.md`
+- PR preparation: draft body completed on 2026-05-07; open/refine pass pending
 - PR base/head: `develop` <- `codex/runtime-profiles-merge`
 - Branch: `codex/runtime-profiles-merge`
 - Worktree: `/home/samcantrill/work/loom-worktrees/runtime-profiles-merge`
@@ -580,6 +582,26 @@ make test-summary
   - `git diff --check` passed.
 - Blockers: none.
 
+## PR Preparation Notes
+
+- PR body draft pass: completed on 2026-05-07.
+- Draft PR body path: `docs/phases/runtime-profiles-merge-pr-body.md`.
+- Draft PR title: `Runtime Options - Phase 4: Runtime Profiles and Merge Semantics`.
+- Branch/target confirmed: `codex/runtime-profiles-merge` targeting `develop`.
+- Stack state confirmed: root phase; no stack predecessor because Phases 1-3
+  are merged into `develop`.
+- PR creation status: not opened in this draft-only pass.
+- Validation evidence for the draft body:
+  - `make validate-pr` passed during implementation, covering Ruff, Pyright,
+    default harness tests, config-extra harness tests, and `uv build`.
+  - `make test-summary` passed and wrote `build/test-summary.md` with package
+    (50 passed, 1 skipped), unit (526 passed, 1 skipped), contract (48 passed,
+    2 skipped), integration (12 passed, 6 skipped, 12 deselected), e2e
+    (15 passed), config-extra (396 passed, 651 deselected), and overall
+    1047 passed, 10 skipped, 663 deselected.
+- Manager review status carried into PR preparation: no blockers found so far.
+- Blockers: none.
+
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices: profile model and exports first, selection
@@ -609,7 +631,7 @@ make test-summary
 - Phase implementation refinement: used on 2026-05-07 for the expanded-path
   refinement pass; documentation example alignment was fixed and no code/test
   defects were found.
-- PR body draft: unused; reserved for PR preparation.
+- PR body draft: used on 2026-05-07 for draft-only PR body preparation.
 - PR body refine/open pass: unused; reserved for PR preparation.
 - PR review: unused; reserved for automated PR review.
 - Blocker-resolution budget: unused, 0 of 3 scoped passes consumed.
