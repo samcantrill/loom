@@ -100,6 +100,25 @@ class PlanCliOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class PreflightCliOptions:
+    """Preflight-command options."""
+
+    run_uri: str | None = None
+    check_groups: tuple[str, ...] = ()
+    strict: bool = False
+
+    @classmethod
+    def from_namespace(cls, namespace: Any) -> "PreflightCliOptions":
+        """Build preflight options from an argparse namespace."""
+
+        return cls(
+            run_uri=getattr(namespace, "run_uri", None),
+            check_groups=tuple(getattr(namespace, "check_group", ()) or ()),
+            strict=bool(getattr(namespace, "strict", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RunCliOptions:
     """Run-command options."""
 
@@ -130,6 +149,7 @@ __all__ = [
     "ConfigCliOptions",
     "OutputFormat",
     "PlanCliOptions",
+    "PreflightCliOptions",
     "RunCliOptions",
     "SelectorCliOptions",
     "ValidateCliOptions",

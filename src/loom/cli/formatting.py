@@ -105,6 +105,25 @@ def format_plan_text(result: PlanCliResult) -> str:
     return "\n".join(lines)
 
 
+def format_preflight_text(result: object, *, config_path: object) -> str:
+    """Format a concise preflight result."""
+
+    status = _enum_value(getattr(result, "status"))
+    prefix = {
+        "PASS": "OK",
+        "WARN": "WARN",
+        "FAIL": "FAILED",
+        "SKIP": "SKIP",
+    }.get(status, status)
+    lines = [f"{prefix} preflight {config_path}: {status}"]
+    for check in getattr(result, "checks", ()):
+        check_status = _enum_value(getattr(check, "status"))
+        check_id = str(getattr(check, "check_id"))
+        message = str(getattr(check, "message"))
+        lines.append(f"{check_status} {check_id}: {message}")
+    return "\n".join(lines)
+
+
 def format_run_text(result: RunCliResult) -> str:
     """Format a concise run result."""
 
@@ -122,11 +141,17 @@ def format_run_text(result: RunCliResult) -> str:
     return "\n".join(lines)
 
 
+def _enum_value(value: object) -> str:
+    enum_value = getattr(value, "value", value)
+    return str(enum_value)
+
+
 __all__ = [
     "CLI_ERROR_SCHEMA_VERSION",
     "CLI_RESULT_SCHEMA_VERSION",
     "format_json_envelope",
     "format_plan_text",
+    "format_preflight_text",
     "format_run_text",
     "format_validation_text",
 ]

@@ -87,10 +87,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     from loom.cli import plan as plan_command
+    from loom.cli import preflight as preflight_command
     from loom.cli import run as run_command
     from loom.cli import validate as validate_command
 
     validate_command.register_subparser(subparsers)
+    preflight_command.register_subparser(subparsers)
     plan_command.register_subparser(subparsers)
     run_command.register_subparser(subparsers)
 
