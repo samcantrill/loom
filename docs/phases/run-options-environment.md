@@ -9,12 +9,15 @@
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-options-environment`
 - Phase execution plan path: `docs/phases/run-options-environment.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v4.md`
+- PR body draft path: `docs/phases/run-options-environment-pr-body.md`
 - Source phase: Phase 3 - Run Options And Environment Models
 - Stack predecessor: none; Phase 1 and Phase 2 are merged
 - Base branch: `develop`
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`, automated review passes, and validation/CI pass
 - Workflow path: expanded path
+- PR preparation status: draft PR body pass completed on 2026-05-07; PR open
+  pass remains pending
 - Successor dependency notes: Phase 4 should branch from `develop` if this phase merges first; otherwise it may stack on `codex/run-options-environment` after this phase reaches `pr_open`.
 - Plan quality gate: passed on 2026-05-07 after initial review, refinement, and confirmation review
 - Plan quality gate loop budget: initial review used, gate refinement used, confirmation review used
@@ -245,6 +248,9 @@ make test-summary
 
 - Phase implementation refinement: used on 2026-05-07 for the expanded-path
   implementation/test refinement pass
+- PR body draft: used on 2026-05-07 for the expanded-path draft-only PR body
+  pass
+- PR body refine/open pass: pending
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -312,6 +318,19 @@ make test-summary
   deferral, privacy guarantees, stage validation boundaries, explicit
   later-phase exclusions, and the completed implementation refinement pass.
 - Blocker-resolution summary: none used.
-- PR preparation: pending.
+- PR preparation draft: completed on 2026-05-07. Read `AGENTS.md`, the v4
+  implementation plan, this phase execution plan, `.github/PULL_REQUEST_TEMPLATE.md`,
+  the current `develop...HEAD` diff, runtime model/test changes, and the
+  generated `build/test-summary.md` evidence. Created
+  `docs/phases/run-options-environment-pr-body.md` for
+  `Runtime Options - Phase 3: Run Options and Environment Models`. This was a
+  draft-only pass; no PR was opened, no GitHub checks were run, and no merge or
+  implementation refinement was attempted.
+- PR preparation validation: `UV_CACHE_DIR=/tmp/loom-uv-cache make
+  test-summary` passed on 2026-05-07 and wrote `build/test-summary.md` with
+  package 50 passed / 1 skipped, unit 513 passed / 1 skipped, contract 44
+  passed / 2 skipped, integration 10 passed / 6 skipped / 12 deselected, e2e
+  15 passed, config-extra 396 passed / 632 deselected, and overall 1028 passed
+  / 10 skipped / 644 deselected.
 - Stack maintenance: none required yet.
 - Remaining blockers: none known.
