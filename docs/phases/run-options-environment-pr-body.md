@@ -38,7 +38,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Recorded during Phase 3 implementation refinement: Ruff, Pyright, default tests with 617 passed / 13 skipped / 12 deselected, config-extra with 396 passed / 632 deselected, and `uv build` passed. |
 | `make test-summary` | Passed | `UV_CACHE_DIR=/tmp/loom-uv-cache make test-summary` wrote `build/test-summary.md`; overall 1028 passed, 10 skipped, 644 deselected. |
-| GitHub checks | Not run | Draft-only PR body pass; PR has not been opened yet. |
+| GitHub checks | Pending | PR opening triggers GitHub CI; this preparation pass does not claim GitHub-side check evidence. |
 
 ### Test Suite Summary
 

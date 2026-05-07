@@ -5,6 +5,9 @@
 - Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 3: Run Options and Environment Models`
+- PR URL: https://github.com/samcantrill/loom/pull/72
+- PR state: `OPEN`
+- PR base/head: `develop` <- `codex/run-options-environment`
 - Branch: `codex/run-options-environment`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-options-environment`
 - Phase execution plan path: `docs/phases/run-options-environment.md`
@@ -16,8 +19,9 @@
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`, automated review passes, and validation/CI pass
 - Workflow path: expanded path
-- PR preparation status: draft PR body pass completed on 2026-05-07; PR open
-  pass remains pending
+- PR preparation status: draft PR body pass completed on 2026-05-07; PR body
+  refine/open pass completed on 2026-05-07 with PR #72 opened against
+  `develop`
 - Successor dependency notes: Phase 4 should branch from `develop` if this phase merges first; otherwise it may stack on `codex/run-options-environment` after this phase reaches `pr_open`.
 - Plan quality gate: passed on 2026-05-07 after initial review, refinement, and confirmation review
 - Plan quality gate loop budget: initial review used, gate refinement used, confirmation review used
@@ -250,7 +254,9 @@ make test-summary
   implementation/test refinement pass
 - PR body draft: used on 2026-05-07 for the expanded-path draft-only PR body
   pass
-- PR body refine/open pass: pending
+- PR body refine/open pass: used on 2026-05-07; PR #72 opened and verified
+  with `baseRefName=develop`, `headRefName=codex/run-options-environment`,
+  `state=OPEN`
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -258,6 +264,10 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-07.
 - Final phase execution plan: refined on 2026-05-07 for expanded-path implementation.
+- PR body draft: committed as `97ffa63 docs: draft phase 3 pr body`.
+- PR opened: https://github.com/samcantrill/loom/pull/72 on 2026-05-07 with
+  base `develop`, head `codex/run-options-environment`, and state `OPEN`.
+- Stack state: root phase PR targeting `develop`; no stack predecessor.
 - Implementation summary: completed on 2026-05-07. Added import-light public
   runtime option models with `RunOptions`, `ExecutionOptions`,
   `StageRuntimeOptions`, `RunEnvironmentRequest`, and
