@@ -162,6 +162,22 @@ def test_run_stage_worker_allows_exact_attempt(tmp_path: Path) -> None:
     assert result.attempt == 1
 
 
+def test_run_stage_worker_rejects_existing_worker_result(tmp_path: Path) -> None:
+    store, run_uri = _prepared_run(tmp_path)
+    run_stage_worker(
+        run_store=store,
+        request=StageWorkerRunRequest(run_uri=run_uri, stage_name="build"),
+        executor=FakeExecutor(),
+    )
+
+    with pytest.raises(StageWorkerStateError, match="already has a worker result"):
+        run_stage_worker(
+            run_store=store,
+            request=StageWorkerRunRequest(run_uri=run_uri, stage_name="build"),
+            executor=FakeExecutor(),
+        )
+
+
 def test_run_stage_worker_rejects_completed_status_for_inference(
     tmp_path: Path,
 ) -> None:

@@ -313,6 +313,15 @@ def _validate_current_attempt_state(
         raise StageWorkerStateError(
             f"worker stage {stage_name!r} attempt {attempt} is {status.status.value}, not PENDING or RUNNING"
         )
+    existing_result = run_store.read_stage_worker_result(
+        run_uri,
+        stage_name,
+        attempt=attempt,
+    )
+    if existing_result is not None:
+        raise StageWorkerStateError(
+            f"worker stage {stage_name!r} attempt {attempt} already has a worker result"
+        )
 
 
 def _read_stage_plan(
