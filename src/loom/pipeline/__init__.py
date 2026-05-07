@@ -13,7 +13,7 @@ from loom.pipeline.errors import (
     StageContractError,
     StatusSerializationError,
 )
-from loom.pipeline.resources import ResourceRequest, parse_resource_request
+from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
 from loom.pipeline.runtime import RuntimeKind, RuntimeRequest, parse_runtime_request
 from loom.pipeline.specs import (
     PipelineSpec,
@@ -79,6 +79,7 @@ __all__ = [
     "RunRequest",
     "RunResult",
     "ResourceRequest",
+    "ResourceEntry",
     "parse_resource_request",
     "RuntimeKind",
     "RuntimeRequest",

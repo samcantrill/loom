@@ -811,7 +811,7 @@ fingerprint:
   explicit stage-level semantic fingerprint fields
 
 resources:
-  opaque plain-data metadata preserved for inspection; v0 does not interpret
+  typed resource entries validated by ResourceRequest; Loom does not interpret
   scheduler fields or include resources in semantic fingerprints by default
 
 runtime:
@@ -927,28 +927,40 @@ there is a concrete use case.
 
 ### 9.5 ResourceSpec
 
-The pipeline layer should treat resources as opaque plain-data metadata in v0.
-They have no executor-specific semantics, no scheduler mapping, and no default
-impact on stage fingerprints. Future runtime/resource phases may add typed
-resource models or an explicit fingerprint-inclusion policy.
+The pipeline layer stores authored resources as frozen plain data and validates
+them through `ResourceRequest`. They have no executor-specific semantics, no
+scheduler mapping, and no default impact on stage fingerprints.
 
 Example:
 
 ```yaml
 resources:
-  cpus: 16
-  memory_mb: 65536
-  gpus: 1
-  wall_time_seconds: 28800
-  label: "large-local"
+  entries:
+    cpu:
+      kind: cpu
+      amount: 16
+      unit: count
+      attributes: {}
+    memory:
+      kind: memory
+      amount: 64
+      unit: GiB
+      attributes: {}
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: count
+      attributes: {}
 ```
 
-Validation should be light in v0:
+Validation checks:
 
 ```text
-value must be plain-data-compatible
-no executor-specific fields are interpreted
-unknown keys are preserved as metadata
+resource kind syntax
+entry mapping keys match entry kinds
+built-in amount, unit, and attribute rules
+unregistered resource kinds are rejected unless validation receives an
+explicitly composed registry
 ```
 
 ### 9.6 RuntimeSpec

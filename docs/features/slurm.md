@@ -436,13 +436,12 @@ instead of remote file staging.
 
 ### 6.5 Resource Metadata Is Generic First
 
-Pipeline specs should use generic resource fields:
+Pipeline specs should use generic resource entries:
 
 ```text
 cpu
-memory_gb
+memory
 gpu
-walltime
 ```
 
 SLURM-specific fields should live under a nested key:
@@ -678,12 +677,19 @@ pipeline:
     runtime:
       executor: slurm-afterok
       resources:
-        cpu: 4
-        memory_gb: 16
-        walltime: "02:00:00"
+        entries:
+          cpu:
+            kind: cpu
+            amount: 4
+            unit: count
+          memory:
+            kind: memory
+            amount: 16
+            unit: GiB
       slurm:
         partition: normal
         account: research
+        time: "02:00:00"
 ```
 
 Stage-level values override defaults.
@@ -698,13 +704,23 @@ stages:
     _target_: project.stages.Train
     runtime:
       resources:
-        cpu: 16
-        memory_gb: 64
-        gpu: 1
-        walltime: "08:00:00"
+        entries:
+          cpu:
+            kind: cpu
+            amount: 16
+            unit: count
+          memory:
+            kind: memory
+            amount: 64
+            unit: GiB
+          gpu:
+            kind: gpu
+            amount: 1
+            unit: count
       slurm:
         partition: gpu
         qos: long
+        time: "08:00:00"
 ```
 
 The generic execution layer carries this metadata. The SLURM executor maps it to
@@ -808,10 +824,10 @@ to sandbox script prelude or raw extra options.
 Recommended mapping:
 
 ```text
-resources.cpu        -> --cpus-per-task
-resources.memory_gb  -> --mem=<N>G
-resources.walltime   -> --time
-resources.gpu        -> --gres=gpu:<N>, unless slurm.gres is set
+resources.entries.cpu        -> --cpus-per-task
+resources.entries.memory     -> --mem=<N>
+slurm.time           -> --time
+resources.entries.gpu        -> --gres=gpu:<N>, unless slurm.gres is set
 ```
 
 If `slurm.cpus_per_task`, `slurm.mem`, `slurm.time`, or `slurm.gres` is set,
@@ -823,7 +839,11 @@ Generic:
 
 ```yaml
 resources:
-  cpu: 16
+  entries:
+    cpu:
+      kind: cpu
+      amount: 16
+      unit: count
 ```
 
 SBATCH:
@@ -840,7 +860,11 @@ Generic:
 
 ```yaml
 resources:
-  memory_gb: 64
+  entries:
+    memory:
+      kind: memory
+      amount: 64
+      unit: GiB
 ```
 
 SBATCH:
@@ -865,7 +889,11 @@ Generic:
 
 ```yaml
 resources:
-  gpu: 1
+  entries:
+    gpu:
+      kind: gpu
+      amount: 1
+      unit: count
 ```
 
 Default SBATCH:
@@ -888,8 +916,8 @@ The executor should not try to infer cluster-specific GPU names.
 Generic:
 
 ```yaml
-resources:
-  walltime: "08:00:00"
+slurm:
+  time: "08:00:00"
 ```
 
 SBATCH:
@@ -2093,10 +2121,10 @@ extra_sbatch flags
 Test:
 
 ```text
-cpu to cpus-per-task
-memory_gb to mem
+cpu entry to CPU scheduler option
+memory entry to mem
 gpu to gres
-walltime to time
+SLURM time to scheduler time option
 explicit slurm overrides
 invalid resource values
 ```

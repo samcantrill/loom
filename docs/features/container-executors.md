@@ -221,9 +221,9 @@ Resource requests may be mapped to container runtime flags when supported.
 Docker examples:
 
 ```text
-cpus -> --cpus or --cpuset-cpus policy
-memory_mb -> --memory
-gpus -> --gpus
+cpu entries -> CPU limit or CPU-set policy
+memory entries -> memory limit
+gpu entries -> GPU access policy
 ```
 
 Apptainer examples:
@@ -459,4 +459,3 @@ advanced GPU mapping
 
 Container execution should remain optional until local and SLURM execution are
 stable.
-
