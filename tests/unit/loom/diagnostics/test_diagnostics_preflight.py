@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import sys
+from types import ModuleType
+from typing import Any, cast
+
 import pytest
 
 from loom.diagnostics import PreflightCheckStatus, PreflightRequest, PreflightStatus, run_preflight
@@ -61,3 +66,106 @@ def test_filesystem_check_reports_missing_inputs(tmp_path) -> None:
         str(tmp_path / "missing.yaml"),
         str(tmp_path / "overlay.yaml"),
     ]
+
+
+def test_runtime_executor_and_resource_checks_map_capability_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("runtime", "executor", "resources"),
+            runtime_options={
+                "executor": "local",
+                "adapter_options": {"future": {"enabled": True}},
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {"cpu": {"kind": "cpu", "amount": 2}}
+                        }
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.WARN
+    assert by_id["runtime.options"].status is PreflightCheckStatus.PASS
+    assert by_id["runtime.stage_options"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.capabilities"].status is PreflightCheckStatus.WARN
+    executor_diagnostics = cast(
+        list[dict[str, Any]],
+        by_id["executor.capabilities"].details["diagnostics"],
+    )
+    assert executor_diagnostics[0]["code"] == "adapter_namespace.unclaimed"
+    assert by_id["resources.capabilities"].status is PreflightCheckStatus.WARN
+    resource_diagnostics = cast(
+        list[dict[str, Any]],
+        by_id["resources.capabilities"].details["diagnostics"],
+    )
+    assert resource_diagnostics[0]["code"] == "resource.ignored"
+
+
+def test_unknown_executor_fails_resolve_and_skips_capability_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor", "resources"),
+            runtime_options={"executor": "missing"},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.resolve"].status is PreflightCheckStatus.FAIL
+    diagnostic = cast(dict[str, Any], by_id["executor.resolve"].details["diagnostic"])
+    assert diagnostic["code"] == "executor.unknown"
+    assert by_id["executor.capabilities"].status is PreflightCheckStatus.SKIP
+    assert by_id["resources.capabilities"].status is PreflightCheckStatus.SKIP
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeComposedConfig:
+    resolved: dict[str, object]
+    source_artifacts: tuple[object, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeSpec:
+    stage_names: tuple[str, ...] = ("train",)
+
+
+@dataclass(frozen=True, slots=True)
+class _FakePipelineValidation:
+    spec: _FakeSpec = _FakeSpec()
+    graph: object = object()
+    stage_count: int = 1
+    pipeline_name: str = "demo"
+
+
+def _patch_runtime_preflight_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    import loom.pipeline
+
+    config_package = ModuleType("loom.config")
+    config_api = ModuleType("loom.config.api")
+    setattr(
+        config_api,
+        "compose_config",
+        lambda *_args, **_kwargs: _FakeComposedConfig(resolved={"pipeline": {}}),
+    )
+    setattr(config_package, "api", config_api)
+    monkeypatch.setitem(sys.modules, "loom.config", config_package)
+    monkeypatch.setitem(sys.modules, "loom.config.api", config_api)
+    monkeypatch.setattr(
+        loom.pipeline,
+        "validate_pipeline_config",
+        lambda _config: _FakePipelineValidation(),
+    )

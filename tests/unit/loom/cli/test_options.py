@@ -11,6 +11,7 @@ from loom.cli.options import (
     ConfigCliOptions,
     OutputFormat,
     PlanCliOptions,
+    PreflightCliOptions,
     RunCliOptions,
     SelectorCliOptions,
     ValidateCliOptions,
@@ -46,7 +47,11 @@ def test_option_adapters_normalize_argparse_namespaces() -> None:
         resume=True,
         explain_stage="train",
         executor="local",
+        runtime_executor="slurm",
+        runtime_profile="cluster",
         dry_run=True,
+        tag=["team=platform", "owner=cli"],
+        note=["first", "second"],
         output_format="json",
     )
 
@@ -65,12 +70,64 @@ def test_option_adapters_normalize_argparse_namespaces() -> None:
     assert PlanCliOptions.from_namespace(namespace) == PlanCliOptions(
         run_uri="file://./runs/example",
         resume=True,
+        profile="cluster",
+        executor="slurm",
+        tags=(("team", "platform"), ("owner", "cli")),
+        notes=("first", "second"),
         explain_stage="train",
+    )
+    assert PreflightCliOptions.from_namespace(namespace) == PreflightCliOptions(
+        run_uri="file://./runs/example",
+        executor="slurm",
+        profile="cluster",
+        dry_run=True,
+        resume=True,
+        tags=(("team", "platform"), ("owner", "cli")),
+        notes=("first", "second"),
     )
     assert RunCliOptions.from_namespace(namespace) == RunCliOptions(
         run_uri="file://./runs/example",
         executor="local",
         resume=True,
         dry_run=True,
+        tags=(("team", "platform"), ("owner", "cli")),
+        notes=("first", "second"),
     )
     assert output_format_from_namespace(namespace) is OutputFormat.JSON
+
+
+def test_runtime_cli_options_build_sparse_runtime_sources() -> None:
+    selectors = SelectorCliOptions(
+        from_stage="prepare",
+        only_stages=frozenset({"train"}),
+    )
+    plan_options = PlanCliOptions(
+        run_uri="file:///runs/demo",
+        profile="cluster",
+        executor="local",
+        tags=(("team", "platform"),),
+        notes=("review",),
+    )
+    run_options = RunCliOptions(dry_run=True)
+
+    assert plan_options.to_runtime_source(selectors=selectors) == {
+        "run_uri": "file:///runs/demo",
+        "executor": "local",
+        "profile": "cluster",
+        "tags": {"team": "platform"},
+        "notes": ["review"],
+        "selectors": {
+            "from_stage": "prepare",
+            "only_stages": ["train"],
+        },
+    }
+    assert run_options.to_runtime_source() == {"dry_run": True}
+
+
+def test_runtime_cli_tag_and_note_validation() -> None:
+    with pytest.raises(ValueError, match="KEY=VALUE"):
+        PreflightCliOptions.from_namespace(Namespace(tag=["bad"], note=[]))
+    with pytest.raises(ValueError, match="key must be non-empty"):
+        PreflightCliOptions.from_namespace(Namespace(tag=["=value"], note=[]))
+    with pytest.raises(ValueError, match="non-empty string"):
+        PreflightCliOptions.from_namespace(Namespace(tag=[], note=[""]))
