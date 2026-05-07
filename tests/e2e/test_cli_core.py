@@ -14,7 +14,10 @@ pytest.importorskip("yaml")
 
 from loom.cli.main import main
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
-from tests.support.config_samples import construction_event_log, reset_instantiate_probe_state
+from tests.support.config_samples import (
+    construction_event_log,
+    reset_instantiate_probe_state,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -43,16 +46,15 @@ def _write_pipeline_config(
         config_block = ""
     else:
         build_target = "tests.support.pipeline_execution_stages.JsonProducerStage"
-        counter_line = f"        counter_path: {counter_path}\n" if counter_path is not None else ""
-        config_block = (
-            "      config:\n"
-            f"        value: {value}\n"
-            f"{counter_line}"
+        counter_line = (
+            f"        counter_path: {counter_path}\n"
+            if counter_path is not None
+            else ""
         )
+        config_block = f"      config:\n        value: {value}\n{counter_line}"
 
     path.write_text(
-        service_block
-        + "pipeline:\n"
+        service_block + "pipeline:\n"
         "  name: demo\n"
         "  stages:\n"
         "    - name: build\n"
@@ -99,7 +101,14 @@ def test_cli_validate_plan_and_json_outputs(tmp_path: Path) -> None:
 
     validate_stdout = io.StringIO()
     validate_stderr = io.StringIO()
-    assert main(["validate", str(config_path)], stdout=validate_stdout, stderr=validate_stderr) == 0
+    assert (
+        main(
+            ["validate", str(config_path)],
+            stdout=validate_stdout,
+            stderr=validate_stderr,
+        )
+        == 0
+    )
     assert validate_stdout.getvalue() == f"OK validate {config_path}: 2 stages\n"
     assert validate_stderr.getvalue() == ""
 
@@ -107,7 +116,16 @@ def test_cli_validate_plan_and_json_outputs(tmp_path: Path) -> None:
     plan_stderr = io.StringIO()
     assert (
         main(
-            ["plan", str(config_path), "--run-uri", run_uri, "--explain", "build", "--format", "json"],
+            [
+                "plan",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--explain",
+                "build",
+                "--format",
+                "json",
+            ],
             stdout=plan_stdout,
             stderr=plan_stderr,
         )
@@ -163,25 +181,58 @@ def test_cli_validate_check_targets_constructs_trusted_targets(tmp_path: Path) -
     assert construction_event_log == ["service-child", "parent"]
 
 
-def test_cli_run_default_and_explicit_run_uri(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_run_default_and_explicit_run_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "pipeline.yaml"
     _write_pipeline_config(config_path)
 
+    preflight_stdout = io.StringIO()
+    preflight_stderr = io.StringIO()
+    assert (
+        main(
+            ["preflight", str(config_path), "--format", "json"],
+            stdout=preflight_stdout,
+            stderr=preflight_stderr,
+        )
+        == 0
+    )
+    assert json.loads(preflight_stdout.getvalue())["result"]["status"] == "PASS"
+    assert preflight_stderr.getvalue() == ""
+
     default_stdout = io.StringIO()
     default_stderr = io.StringIO()
-    assert main(["run", str(config_path), "--format", "json"], stdout=default_stdout, stderr=default_stderr) == 0
+    assert (
+        main(
+            ["run", str(config_path), "--format", "json"],
+            stdout=default_stdout,
+            stderr=default_stderr,
+        )
+        == 0
+    )
     default_payload = json.loads(default_stdout.getvalue())
     default_run_uri = default_payload["result"]["run_uri"]
     assert default_payload["schema_version"] == "loom.cli.run.v2"
     assert default_payload["result"]["status"] == "SUCCEEDED"
-    assert default_run_uri.startswith(path_to_run_uri(tmp_path / "runs").removesuffix("/"))
+    assert default_run_uri.startswith(
+        path_to_run_uri(tmp_path / "runs").removesuffix("/")
+    )
     assert run_uri_to_path(default_run_uri).is_dir()
-    LocalRunStore().write_stage_log(default_run_uri, "build", "stdout", "hello\nworld\n")
+    LocalRunStore().write_stage_log(
+        default_run_uri, "build", "stdout", "hello\nworld\n"
+    )
 
     status_stdout = io.StringIO()
     status_stderr = io.StringIO()
-    assert main(["status", default_run_uri, "--format", "json"], stdout=status_stdout, stderr=status_stderr) == 0
+    assert (
+        main(
+            ["status", default_run_uri, "--format", "json"],
+            stdout=status_stdout,
+            stderr=status_stderr,
+        )
+        == 0
+    )
     status_payload = json.loads(status_stdout.getvalue())
     assert status_payload["schema_version"] == "loom.cli.status.v3"
     assert status_payload["result"]["stages"][0]["stage_name"] == "build"
@@ -190,7 +241,17 @@ def test_cli_run_default_and_explicit_run_uri(tmp_path: Path, monkeypatch: pytes
     logs_stderr = io.StringIO()
     assert (
         main(
-            ["logs", default_run_uri, "build", "--stream", "stdout", "--tail", "1", "--format", "json"],
+            [
+                "logs",
+                default_run_uri,
+                "build",
+                "--stream",
+                "stdout",
+                "--tail",
+                "1",
+                "--format",
+                "json",
+            ],
             stdout=logs_stdout,
             stderr=logs_stderr,
         )
@@ -199,6 +260,43 @@ def test_cli_run_default_and_explicit_run_uri(tmp_path: Path, monkeypatch: pytes
     logs_payload = json.loads(logs_stdout.getvalue())
     assert logs_payload["schema_version"] == "loom.cli.logs.v3"
     assert logs_payload["result"]["streams"][0]["content"] == "world\n"
+
+    artifacts_stdout = io.StringIO()
+    artifacts_stderr = io.StringIO()
+    assert (
+        main(
+            ["artifacts", "list", default_run_uri, "--format", "json"],
+            stdout=artifacts_stdout,
+            stderr=artifacts_stderr,
+        )
+        == 0
+    )
+    artifacts_payload = json.loads(artifacts_stdout.getvalue())
+    assert artifacts_payload["schema_version"] == "loom.cli.artifacts.list.v3"
+    assert artifacts_payload["result"]["artifact_count"] == 2
+    assert [
+        artifact["artifact_id"] for artifact in artifacts_payload["result"]["artifacts"]
+    ] == [
+        "build/data",
+        "report/text",
+    ]
+    assert artifacts_stderr.getvalue() == ""
+
+    artifact_stdout = io.StringIO()
+    artifact_stderr = io.StringIO()
+    assert (
+        main(
+            ["artifacts", "show", default_run_uri, "build/data", "--format", "json"],
+            stdout=artifact_stdout,
+            stderr=artifact_stderr,
+        )
+        == 0
+    )
+    artifact_payload = json.loads(artifact_stdout.getvalue())
+    assert artifact_payload["schema_version"] == "loom.cli.artifacts.show.v3"
+    assert artifact_payload["result"]["artifact"]["key"] == "build.data"
+    assert artifact_payload["result"]["stage_provenance"] is not None
+    assert artifact_stderr.getvalue() == ""
 
     explicit_run_uri = path_to_run_uri(tmp_path / "runs" / "explicit")
     explicit_stdout = io.StringIO()
@@ -215,7 +313,9 @@ def test_cli_run_default_and_explicit_run_uri(tmp_path: Path, monkeypatch: pytes
     assert run_uri_to_path(explicit_run_uri).is_dir()
 
 
-def test_cli_run_dry_run_does_not_execute_or_allocate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_run_dry_run_does_not_execute_or_allocate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     counter_path = tmp_path / "counter.txt"
     config_path = tmp_path / "pipeline.yaml"
@@ -223,7 +323,14 @@ def test_cli_run_dry_run_does_not_execute_or_allocate(tmp_path: Path, monkeypatc
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["run", str(config_path), "--dry-run", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    assert (
+        main(
+            ["run", str(config_path), "--dry-run", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == "loom.cli.plan.v2"
@@ -238,14 +345,29 @@ def test_cli_run_resume_reuses_existing_state(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "resume")
     _write_pipeline_config(config_path, counter_path=counter_path)
 
-    assert main(["run", str(config_path), "--run-uri", run_uri], stdout=io.StringIO(), stderr=io.StringIO()) == 0
+    assert (
+        main(
+            ["run", str(config_path), "--run-uri", run_uri],
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
     assert counter_path.read_text(encoding="utf-8") == "1"
 
     stdout = io.StringIO()
     stderr = io.StringIO()
     assert (
         main(
-            ["run", str(config_path), "--run-uri", run_uri, "--resume", "--format", "json"],
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--resume",
+                "--format",
+                "json",
+            ],
             stdout=stdout,
             stderr=stderr,
         )
@@ -253,7 +375,10 @@ def test_cli_run_resume_reuses_existing_state(tmp_path: Path) -> None:
     )
 
     payload = json.loads(stdout.getvalue())
-    actions = {stage["stage"]: stage["action"] for stage in payload["result"]["stage_summaries"]}
+    actions = {
+        stage["stage"]: stage["action"]
+        for stage in payload["result"]["stage_summaries"]
+    }
     assert actions == {"build": "REUSE", "report": "REUSE"}
     assert counter_path.read_text(encoding="utf-8") == "1"
 
@@ -262,16 +387,87 @@ def test_cli_failed_run_reports_failure_summary(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     run_uri = path_to_run_uri(tmp_path / "runs" / "failed")
     _write_pipeline_config(config_path, failing=True)
+
+    preflight_stdout = io.StringIO()
+    preflight_stderr = io.StringIO()
+    assert (
+        main(
+            ["preflight", str(config_path), "--format", "json"],
+            stdout=preflight_stdout,
+            stderr=preflight_stderr,
+        )
+        == 0
+    )
+    assert json.loads(preflight_stdout.getvalue())["result"]["status"] == "PASS"
+    assert preflight_stderr.getvalue() == ""
+
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["run", str(config_path), "--run-uri", run_uri, "--format", "json"], stdout=stdout, stderr=stderr) == 5
+    assert (
+        main(
+            ["run", str(config_path), "--run-uri", run_uri, "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 5
+    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is False
     assert payload["result"]["status"] == "FAILED"
     assert payload["result"]["failure_summary"]["stage"] == "build"
-    assert "stage failed intentionally" in payload["result"]["failure_summary"]["message"]
+    assert (
+        "stage failed intentionally" in payload["result"]["failure_summary"]["message"]
+    )
+
+    LocalRunStore().write_stage_log(run_uri, "build", "stderr", "failed\n")
+
+    status_stdout = io.StringIO()
+    status_stderr = io.StringIO()
+    assert (
+        main(
+            ["status", run_uri, "--format", "json"],
+            stdout=status_stdout,
+            stderr=status_stderr,
+        )
+        == 0
+    )
+    status_payload = json.loads(status_stdout.getvalue())
+    assert status_payload["result"]["status"] == "FAILED"
+    assert status_payload["result"]["stages"][0]["stage_name"] == "build"
+    assert status_stderr.getvalue() == ""
+
+    logs_stdout = io.StringIO()
+    logs_stderr = io.StringIO()
+    assert (
+        main(
+            ["logs", run_uri, "build", "--stream", "stderr", "--format", "json"],
+            stdout=logs_stdout,
+            stderr=logs_stderr,
+        )
+        == 0
+    )
+    assert (
+        json.loads(logs_stdout.getvalue())["result"]["streams"][0]["content"]
+        == "failed\n"
+    )
+    assert logs_stderr.getvalue() == ""
+
+    artifacts_stdout = io.StringIO()
+    artifacts_stderr = io.StringIO()
+    assert (
+        main(
+            ["artifacts", "list", run_uri, "--format", "json"],
+            stdout=artifacts_stdout,
+            stderr=artifacts_stderr,
+        )
+        == 0
+    )
+    artifacts_payload = json.loads(artifacts_stdout.getvalue())
+    assert artifacts_payload["schema_version"] == "loom.cli.artifacts.list.v3"
+    assert artifacts_payload["result"]["artifact_count"] == 0
+    assert artifacts_stderr.getvalue() == ""
 
 
 def test_cli_rejects_deferred_executor_and_plain_run_uri(tmp_path: Path) -> None:
@@ -288,13 +484,23 @@ def test_cli_rejects_deferred_executor_and_plain_run_uri(tmp_path: Path) -> None
         )
         == 7
     )
-    assert json.loads(executor_stdout.getvalue())["error"]["code"] == "cli.run.unsupported_executor"
+    assert (
+        json.loads(executor_stdout.getvalue())["error"]["code"]
+        == "cli.run.unsupported_executor"
+    )
 
     uri_stdout = io.StringIO()
     uri_stderr = io.StringIO()
     assert (
         main(
-            ["plan", str(config_path), "--run-uri", str(tmp_path / "runs" / "plain"), "--format", "json"],
+            [
+                "plan",
+                str(config_path),
+                "--run-uri",
+                str(tmp_path / "runs" / "plain"),
+                "--format",
+                "json",
+            ],
             stdout=uri_stdout,
             stderr=uri_stderr,
         )

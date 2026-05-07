@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.diagnostics.inspection import inspect_run_artifact, inspect_run_artifacts
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
@@ -339,6 +340,34 @@ class DummyRunStorePaths:
         return Path(run_uri) / stage_name / "workspace"
 
 
+class TrackingArtifactDiagnosticsStore:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def open_run(self, run_uri: str) -> None:
+        self.calls.append(f"open_run:{run_uri}")
+
+    def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
+        self.calls.append(f"read_artifact_index:{run_uri}")
+        return {
+            "build.data": ArtifactRef(
+                artifact_id="build/data",
+                uri="file:///tmp/run/artifacts/build/data.json",
+                artifact_type="json",
+                codec_key="json.v1",
+                producer_stage="build",
+            )
+        }
+
+    def read_stage_provenance(
+        self,
+        run_uri: str,
+        stage_name: str,
+    ) -> dict[str, PlainData] | None:
+        self.calls.append(f"read_stage_provenance:{run_uri}:{stage_name}")
+        return {"tool": "loom"}
+
+
 def test_local_artifact_store_satisfies_protocol() -> None:
     import tempfile
     from pathlib import Path
@@ -388,6 +417,32 @@ def test_fake_run_store_does_not_satisfy_local_paths() -> None:
 
 def test_fake_local_run_store_paths_matches_protocol() -> None:
     assert isinstance(DummyRunStorePaths(), LocalRunStorePaths)
+
+
+def test_artifact_diagnostics_use_public_run_store_readers() -> None:
+    run_uri = "file:///tmp/run"
+    list_store = TrackingArtifactDiagnosticsStore()
+
+    summary = inspect_run_artifacts(run_uri, run_store=list_store)
+
+    assert summary.artifacts[0].key == "build.data"
+    assert summary.artifacts[0].artifact_id == "build/data"
+    assert list_store.calls == [
+        f"open_run:{run_uri}",
+        f"read_artifact_index:{run_uri}",
+        f"read_stage_provenance:{run_uri}:build",
+    ]
+
+    show_store = TrackingArtifactDiagnosticsStore()
+    detail = inspect_run_artifact(run_uri, "build/data", run_store=show_store)
+
+    assert detail.stage_provenance == {"tool": "loom"}
+    assert show_store.calls == [
+        f"open_run:{run_uri}",
+        f"read_artifact_index:{run_uri}",
+        f"read_stage_provenance:{run_uri}:build",
+        f"read_stage_provenance:{run_uri}:build",
+    ]
 
 
 def test_structural_protocol_rejects_incomplete_implementations() -> None:

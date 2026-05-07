@@ -499,13 +499,14 @@ def test_import_cli_run_remains_import_light() -> None:
     assert result.stdout.strip() == "ok"
 
 
-def test_import_cli_status_and_logs_remain_import_light() -> None:
+def test_import_cli_diagnostics_commands_remain_import_light() -> None:
     script = dedent(
         """
         import sys
 
         import loom.cli.status
         import loom.cli.logs
+        import loom.cli.artifacts
 
         for forbidden in (
             "loom.config",
@@ -519,7 +520,7 @@ def test_import_cli_status_and_logs_remain_import_light() -> None:
             "pydantic",
         ):
             if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported through status/logs CLI")
+                raise SystemExit(f"{forbidden} was imported through diagnostics CLI")
         print("ok")
         """
     )

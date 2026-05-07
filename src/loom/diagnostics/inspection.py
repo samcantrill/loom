@@ -6,7 +6,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from loom.serialization import PlainData, ensure_plain_data
+from loom.artifacts import ArtifactRef
+from loom.pipeline.stores import parse_artifact_key
+from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
 
 
 DEFAULT_LOG_TAIL_LINES = 100
@@ -101,7 +103,78 @@ class StageLogsSummary:
         }
 
 
-def inspect_run_status(run_uri: str, *, run_store: Any | None = None) -> RunStatusSummary:
+@dataclass(frozen=True, slots=True)
+class ArtifactSummary:
+    key: str
+    artifact_id: str
+    stage_name: str
+    output_name: str
+    uri: str
+    artifact_type: str
+    codec_key: str | None = None
+    schema_version: int = 1
+    checksum: str | None = None
+    fingerprint: str | None = None
+    producer_stage: str | None = None
+    created_at: str | None = None
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    provenance_available: bool = False
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "key": self.key,
+            "artifact_id": self.artifact_id,
+            "stage_name": self.stage_name,
+            "output_name": self.output_name,
+            "uri": self.uri,
+            "artifact_type": self.artifact_type,
+            "codec_key": self.codec_key,
+            "schema_version": self.schema_version,
+            "checksum": self.checksum,
+            "fingerprint": self.fingerprint,
+            "producer_stage": self.producer_stage,
+            "created_at": self.created_at,
+            "metadata": thaw_plain_data(self.metadata, path="metadata"),
+            "provenance_available": self.provenance_available,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RunArtifactsSummary:
+    run_uri: str
+    artifacts: tuple[ArtifactSummary, ...] = ()
+
+    @property
+    def artifact_count(self) -> int:
+        return len(self.artifacts)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "run_uri": self.run_uri,
+            "artifact_count": self.artifact_count,
+            "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactDetailSummary:
+    run_uri: str
+    artifact: ArtifactSummary
+    stage_provenance: Mapping[str, PlainData] | None = None
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "run_uri": self.run_uri,
+            "artifact": self.artifact.to_dict(),
+            "stage_provenance": None
+            if self.stage_provenance is None
+            else thaw_plain_data(self.stage_provenance, path="stage_provenance"),
+        }
+
+
+def inspect_run_status(
+    run_uri: str, *, run_store: Any | None = None
+) -> RunStatusSummary:
     """Inspect persisted local run status through the store-owned facade."""
 
     store = _default_run_store() if run_store is None else run_store
@@ -113,6 +186,67 @@ def inspect_run_status(run_uri: str, *, run_store: Any | None = None) -> RunStat
         message=None if run_status is None else run_status.message,
         artifact_count=state.artifact_count,
         stages=tuple(_stage_summary(stage) for stage in state.stage_inspections),
+    )
+
+
+def inspect_run_artifacts(
+    run_uri: str, *, run_store: Any | None = None
+) -> RunArtifactsSummary:
+    """Inspect persisted artifact metadata through public run-store APIs."""
+
+    store = _default_run_store() if run_store is None else run_store
+    _open_run(store, run_uri)
+    artifacts = tuple(
+        _artifact_summary(
+            store,
+            run_uri=run_uri,
+            key=key,
+            artifact_ref=artifact_ref,
+        )
+        for key, artifact_ref in sorted(store.read_artifact_index(run_uri).items())
+    )
+    return RunArtifactsSummary(run_uri=run_uri, artifacts=artifacts)
+
+
+def inspect_run_artifact(
+    run_uri: str, artifact_id: str, *, run_store: Any | None = None
+) -> ArtifactDetailSummary:
+    """Inspect one persisted artifact reference by artifact ID."""
+
+    if not artifact_id:
+        raise DiagnosticsInspectionError("artifact_id must be a non-empty string")
+    summary = inspect_run_artifacts(run_uri, run_store=run_store)
+    match: ArtifactSummary | None = None
+    duplicate_keys: list[str] = []
+    for artifact in summary.artifacts:
+        if artifact.artifact_id != artifact_id:
+            continue
+        if match is None:
+            match = artifact
+        else:
+            if not duplicate_keys:
+                duplicate_keys.append(match.key)
+            duplicate_keys.append(artifact.key)
+
+    if match is None:
+        raise DiagnosticsInspectionError(
+            f"unknown artifact {artifact_id!r} for run {run_uri}"
+        )
+    if duplicate_keys:
+        keys = ", ".join(duplicate_keys)
+        raise DiagnosticsInspectionError(
+            f"ambiguous artifact {artifact_id!r} for run {run_uri}: {keys}"
+        )
+
+    artifact = match
+    store = _default_run_store() if run_store is None else run_store
+    provenance = _plain_mapping_or_none(
+        store.read_stage_provenance(run_uri, artifact.stage_name)
+    )
+    return ArtifactDetailSummary(
+        run_uri=summary.run_uri,
+        artifact=artifact,
+        stage_provenance=provenance,
     )
 
 
@@ -133,7 +267,9 @@ def inspect_stage_logs(
     store = _default_run_store() if run_store is None else run_store
     stages = set(store.list_run_stages(run_uri))
     if stage_name not in stages:
-        raise DiagnosticsInspectionError(f"unknown stage {stage_name!r} for run {run_uri}")
+        raise DiagnosticsInspectionError(
+            f"unknown stage {stage_name!r} for run {run_uri}"
+        )
 
     summaries = tuple(
         _stream_summary(
@@ -156,6 +292,33 @@ def inspect_stage_logs(
         stage_name=stage_name,
         streams=summaries,
         paths_only=paths_only,
+    )
+
+
+def _artifact_summary(
+    store: Any,
+    *,
+    run_uri: str,
+    key: str,
+    artifact_ref: ArtifactRef,
+) -> ArtifactSummary:
+    stage_name, output_name = parse_artifact_key(key)
+    provenance = store.read_stage_provenance(run_uri, stage_name)
+    return ArtifactSummary(
+        key=key,
+        artifact_id=artifact_ref.artifact_id,
+        stage_name=stage_name,
+        output_name=output_name,
+        uri=artifact_ref.uri,
+        artifact_type=artifact_ref.artifact_type,
+        codec_key=artifact_ref.codec_key,
+        schema_version=artifact_ref.schema_version,
+        checksum=artifact_ref.checksum,
+        fingerprint=artifact_ref.fingerprint,
+        producer_stage=artifact_ref.producer_stage,
+        created_at=artifact_ref.created_at,
+        metadata=artifact_ref.metadata,
+        provenance_available=provenance is not None,
     )
 
 
@@ -232,6 +395,12 @@ def _default_run_store() -> Any:
     return LocalRunStore()
 
 
+def _open_run(store: Any, run_uri: str) -> None:
+    open_run = getattr(store, "open_run", None)
+    if callable(open_run):
+        open_run(run_uri)
+
+
 def _plain_mapping_or_none(value: object) -> Mapping[str, PlainData] | None:
     if value is None:
         return None
@@ -248,13 +417,18 @@ def _optional_str(value: object) -> str | None:
 
 
 __all__ = [
+    "ArtifactDetailSummary",
+    "ArtifactSummary",
     "DEFAULT_LOG_TAIL_LINES",
     "LOG_STREAMS",
     "DiagnosticsInspectionError",
     "LogStreamSummary",
     "RunStatusSummary",
+    "RunArtifactsSummary",
     "StageLogsSummary",
     "StageStatusSummary",
+    "inspect_run_artifact",
+    "inspect_run_artifacts",
     "inspect_run_status",
     "inspect_stage_logs",
 ]

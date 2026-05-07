@@ -8,7 +8,12 @@ from contextlib import redirect_stderr, redirect_stdout
 from typing import Sequence, TextIO
 
 from loom import __version__
-from loom.cli.errors import ExitCode, UnsupportedCommandError, exit_code_for, format_error
+from loom.cli.errors import (
+    ExitCode,
+    UnsupportedCommandError,
+    exit_code_for,
+    format_error,
+)
 from loom.cli.options import OutputFormat, output_format_from_namespace
 
 
@@ -80,12 +85,17 @@ def _add_selector_options(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI argument parser."""
 
-    parser = argparse.ArgumentParser(prog="loom", description="Compose, run, and trace research pipelines.")
+    parser = argparse.ArgumentParser(
+        prog="loom", description="Compose, run, and trace research pipelines."
+    )
     parser.add_argument("--version", action="version", version=f"loom {__version__}")
-    parser.add_argument("--traceback", action="store_true", help="show traceback details for errors")
+    parser.add_argument(
+        "--traceback", action="store_true", help="show traceback details for errors"
+    )
 
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    from loom.cli import artifacts as artifacts_command
     from loom.cli import logs as logs_command
     from loom.cli import plan as plan_command
     from loom.cli import preflight as preflight_command
@@ -99,6 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_command.register_subparser(subparsers)
     status_command.register_subparser(subparsers)
     logs_command.register_subparser(subparsers)
+    artifacts_command.register_subparser(subparsers)
 
     return parser
 
@@ -115,7 +126,11 @@ def _run(argv: Sequence[str] | None) -> int:
     try:
         namespace = parser.parse_args(argv)
     except SystemExit as exc:
-        return int(exc.code) if isinstance(exc.code, int) else int(ExitCode.OPERATION_FAILED)
+        return (
+            int(exc.code)
+            if isinstance(exc.code, int)
+            else int(ExitCode.OPERATION_FAILED)
+        )
 
     if getattr(namespace, "command", None) is None:
         parser.print_help()
@@ -139,7 +154,11 @@ def _run(argv: Sequence[str] | None) -> int:
         if output_format is OutputFormat.JSON:
             sys.stdout.write(formatted)
             if traceback_enabled:
-                sys.stderr.write(format_error(exc, traceback_enabled=True, output_format=OutputFormat.TEXT))
+                sys.stderr.write(
+                    format_error(
+                        exc, traceback_enabled=True, output_format=OutputFormat.TEXT
+                    )
+                )
         else:
             sys.stderr.write(formatted)
         return int(exit_code_for(exc))
