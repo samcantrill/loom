@@ -40,6 +40,39 @@ def test_missing_run_uri_skips_run_path_dependent_groups() -> None:
     ]
 
 
+def test_run_uri_group_uses_explicit_runtime_run_uri_without_config(
+    tmp_path,
+) -> None:
+    from loom.pipeline.stores import path_to_run_uri
+
+    run_uri = path_to_run_uri(tmp_path / "runs" / "demo")
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="missing.yaml",
+            groups=("run",),
+            runtime_options={"run_uri": run_uri},
+        )
+    )
+
+    assert result.status is PreflightStatus.PASS
+    assert result.checks[0].check_id == "run_uri.resolve"
+    assert result.checks[0].details["run_uri"] == run_uri
+
+
+def test_run_uri_group_does_not_compose_config_for_non_uri_runtime_flags() -> None:
+    result = run_preflight(
+        PreflightRequest(
+            config_path="missing.yaml",
+            groups=("run",),
+            runtime_options={"executor": "local"},
+        )
+    )
+
+    assert result.status is PreflightStatus.SKIP
+    assert result.checks[0].details["reason"] == "missing_run_uri"
+
+
 def test_empty_selected_groups_are_request_errors() -> None:
     with pytest.raises(PreflightError, match="empty"):
         run_preflight(PreflightRequest(config_path="config.yaml", groups=()))
