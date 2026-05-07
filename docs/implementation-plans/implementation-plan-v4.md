@@ -1037,9 +1037,9 @@ Completion summary:
 
 ### Phase 7 - Run Workflow And Runtime Metadata
 
-Status: pending
+Status: pr_open
 Branch: `codex/runtime-metadata-workflow`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/76
 
 Goal:
 
@@ -1156,4 +1156,17 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- PR opened on 2026-05-07 against `develop`.
+- Branch/worktree:
+  `codex/runtime-metadata-workflow` /
+  `/home/samcantrill/work/loom-worktrees/runtime-metadata-workflow`.
+- Implementation adds `RunRequest.options` as the canonical invocation-policy
+  field, typed per-stage resolved runtime handoff through
+  `StageExecutionRequest.resolved_runtime`, safe run-store `runtime.json`
+  read/write APIs, runner metadata writes, and CLI validate/plan/run
+  normalized runtime option wiring.
+- Validation before PR: `make validate-pr` passed, including Ruff, Pyright,
+  default suite, config-extra suite, and build. `make test-summary` passed
+  with package 50 passed / 1 skipped, unit 559 passed / 1 skipped, contract 53
+  passed / 2 skipped, integration 15 passed / 7 skipped / 7 deselected, e2e
+  16 passed, and config-extra 397 passed / 693 deselected.
