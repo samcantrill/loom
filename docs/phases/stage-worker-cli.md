@@ -142,7 +142,7 @@ The public worker contract is one prepared attempt addressed by `(run_uri, stage
 ### Unit Suite
 
 - Status: required
-- Expected paths: new `tests/unit/loom/pipeline/execution/test_stage_worker.py`, `tests/unit/loom/cli/test_stage.py`, and `tests/unit/loom/cli/test_main.py`.
+- Expected paths: new `tests/unit/loom/pipeline/execution/test_stage_worker.py`, `tests/unit/loom/cli/test_stage_cli.py`, and `tests/unit/loom/cli/test_main.py`.
 - Required assertions or deferral reason: attempt inference, exact attempt validation, missing/ambiguous state errors, plan/request mismatch, reconstructed execution request shape, fake executor handoff writes, CLI parsing, JSON/text output, and exit-code mapping.
 
 ### Contract Suite
@@ -181,8 +181,8 @@ The public worker contract is one prepared attempt addressed by `(run_uri, stage
 Targeted development commands:
 
 ```sh
-uv run pytest tests/package/test_pipeline_execution_api.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py
-uv run pyright src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py
+uv run pytest tests/package/test_pipeline_execution_api.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage_cli.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py
+uv run pyright src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage_cli.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py
 ```
 
 Final PR-preparation commands:
