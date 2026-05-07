@@ -303,6 +303,54 @@ def test_import_runtime_resource_modules_do_not_import_forbidden_layers() -> Non
     assert result.stdout.strip() == "ok"
 
 
+def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.runtime as runtime
+        from loom.pipeline.runtime import RuntimeKind, RuntimeRequest, parse_runtime_request
+        from loom.pipeline import RuntimeKind as PipelineRuntimeKind
+        from loom.pipeline import RuntimeRequest as PipelineRuntimeRequest
+        from loom.pipeline import parse_runtime_request as pipeline_parse_runtime_request
+
+        assert runtime.RuntimeKind is RuntimeKind
+        assert runtime.RuntimeRequest is RuntimeRequest
+        assert runtime.parse_runtime_request is parse_runtime_request
+        assert PipelineRuntimeKind is RuntimeKind
+        assert PipelineRuntimeRequest is RuntimeRequest
+        assert pipeline_parse_runtime_request is parse_runtime_request
+        assert set(runtime.__all__) == {
+            "RUNTIME_SCHEMA_VERSION",
+            "RuntimeKind",
+            "RuntimeRequest",
+            "parse_runtime_request",
+        }
+
+        for forbidden in (
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.plugins",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.pipeline.runtime")
+        print("ok")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_executors_does_not_import_project_layers() -> None:
     script = dedent(
         """

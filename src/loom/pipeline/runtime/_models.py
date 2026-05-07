@@ -16,8 +16,8 @@ from loom.serialization import (
 )
 from loom.serialization.errors import PlainDataError, SchemaVersionError
 
-from .errors import RuntimeResourceError
-from .resources import ResourceRequest
+from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.resources import ResourceRequest
 
 RUNTIME_SCHEMA_VERSION = 1
 

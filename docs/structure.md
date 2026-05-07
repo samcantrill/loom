@@ -279,8 +279,11 @@ src/loom/
     validation.py
     selectors.py
     resources.py
-    runtime.py
     errors.py
+
+    runtime/
+      __init__.py
+      _models.py
 
     graph/
       __init__.py
@@ -624,11 +627,25 @@ events.py          strict pipeline event records
 locks.py           run lock record model
 validation.py      spec and contract validation
 resources.py       generic runtime/resource hints
-runtime.py         local runtime request foundation
+runtime/           import-light runtime request and future runtime option models
 graph/             DAG construction, topology, and binding validation
 planning/          planning policy extraction, explainable diagnostics, and resume orchestration
 errors.py          pipeline-specific errors
 ```
+
+`pipeline/runtime/` is the stable public facade for invocation/runtime model
+imports. Its current implementation exposes the local `RuntimeRequest`
+foundation without importing CLI, diagnostics, execution runners, concrete
+executors, plugins, optional backends, or project packages. Future runtime
+option, profile, environment, validation, registry, descriptor, and
+serialization modules should live under this package only when a phase adds real
+behavior and tests for that surface.
+
+Future executor descriptor records belong on this import-light side of the
+boundary as scheduler-neutral metadata. Concrete executor implementations and
+plugin discovery should depend on descriptor records when they are introduced;
+descriptor modules must not import concrete executor implementations or plugin
+loading code.
 
 `planning/` currently includes:
 
