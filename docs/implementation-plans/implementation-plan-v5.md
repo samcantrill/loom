@@ -449,9 +449,9 @@ Completion summary:
 
 ### Phase 2 - Worker Execution And Direct CLI
 
-Status: pending
+Status: pr_open
 Branch: `codex/stage-worker-cli`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/78
 
 Goal:
 
@@ -542,7 +542,27 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened on 2026-05-07 against `develop`:
+  https://github.com/samcantrill/loom/pull/78.
+- Implemented execution-owned direct worker APIs for prepared-attempt
+  inference, durable reconstruction, local execution, and structured
+  `worker_result.json` handoff writes.
+- Added `loom stage run --run-uri RUN_URI --stage STAGE [--attempt N]` with
+  text/JSON output and direct-worker exit codes `0`, `1`, `2`, `3`, and `130`.
+- Preserved parent-owned finalization: the worker does not write final stage
+  outputs, failure records, provenance, artifact indexes, stage status, or run
+  status.
+- Added package, unit, contract, and integration coverage for public exports,
+  CLI parsing/output, attempt inference, state errors, handoff-only
+  persistence, successful worker execution, and stage-failure handoffs.
+- Validation before PR: targeted tests passed with 24 passed; targeted Pyright
+  passed; `make validate-pr` passed after rebasing onto current `develop`;
+  `make test-summary` passed with package 50 passed/1 skipped, unit 578
+  passed/1 skipped, contract 54 passed/2 skipped, integration 18 passed/7
+  skipped/7 deselected, e2e 16 passed, and config-extra 400 passed/716
+  deselected.
+- Stack maintenance: branch was rebased onto current `develop` after `develop`
+  advanced with `docs: add v3 v4 examples`.
 
 ### Phase 3 - Subprocess Executor And Serial Run Integration
 
