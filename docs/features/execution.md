@@ -1724,8 +1724,8 @@ module invocation
 ```
 
 The executor records redacted command and process metadata. Availability
-preflight for the Python executable and worker command is handled by the
-dedicated subprocess preflight/diagnostics phase.
+preflight for the Python executable and worker command is handled by selected
+subprocess executor checks before `loom run` invokes user stage code.
 
 ---
 

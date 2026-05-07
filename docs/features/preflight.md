@@ -129,6 +129,8 @@ codec_registry.available
 executor.local
 executor.resolve
 executor.capabilities
+executor.subprocess.python
+executor.subprocess.worker
 resources.capabilities
 filesystem.input_exists
 ```
@@ -264,6 +266,13 @@ Apptainer executor requires apptainer or singularity
 
 Preflight should report executor availability as a check result, not as an
 unstructured exception.
+
+Current subprocess checks run only when `subprocess` is the selected executor.
+They verify that the current Python executable is available and that the public
+`loom stage run` worker command can be resolved through `loom.cli.main` without
+launching user stage code. Missing Python or worker command availability is
+reported as selected-executor availability failure, distinct from an unknown
+executor name.
 
 ## SLURM Checks
 

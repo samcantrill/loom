@@ -64,6 +64,33 @@ def test_selected_groups_run_only_selected_checks(tmp_path: Path) -> None:
     ]
 
 
+def test_selected_subprocess_preflight_reports_availability_without_run_documents(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_valid_config(tmp_path)
+    run_dir = tmp_path / "runs" / "subprocess-preflight"
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            run_uri=path_to_run_uri(run_dir),
+            runtime_options={"executor": "subprocess"},
+            groups=("executor",),
+        )
+    )
+
+    assert result.status is PreflightStatus.PASS
+    assert [check.check_id for check in result.checks] == [
+        "executor.local",
+        "executor.resolve",
+        "executor.capabilities",
+        "executor.subprocess.python",
+        "executor.subprocess.worker",
+    ]
+    assert all(check.status is PreflightCheckStatus.PASS for check in result.checks)
+    assert not run_dir.exists()
+
+
 def test_omitted_run_uri_skips_only_run_path_dependent_checks(tmp_path: Path) -> None:
     config_path = _write_valid_config(tmp_path)
 

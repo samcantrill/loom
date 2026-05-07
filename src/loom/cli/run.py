@@ -454,11 +454,31 @@ def _failure_summary(failure: object | None) -> dict[str, object] | None:
         return None
     return {
         "stage": getattr(failure, "stage_name"),
+        "attempt": getattr(failure, "attempt", None),
+        "executor": getattr(failure, "executor", None),
         "failure_type": getattr(failure, "failure_type"),
         "message": getattr(failure, "message"),
         "exception_type": getattr(failure, "exception_type"),
         "exit_code": getattr(failure, "exit_code"),
+        "signal": getattr(failure, "signal", None),
+        "stdout_path": getattr(failure, "stdout_path", None),
+        "stderr_path": getattr(failure, "stderr_path", None),
+        "traceback_path": getattr(failure, "traceback_path", None),
+        "failure_path": _failure_record_path(failure),
     }
+
+
+def _failure_record_path(failure: object) -> str | None:
+    run_uri = getattr(failure, "run_uri", None)
+    stage_name = getattr(failure, "stage_name", None)
+    if not isinstance(run_uri, str) or not isinstance(stage_name, str):
+        return None
+    try:
+        from loom.pipeline.stores import LocalRunStore
+
+        return str(LocalRunStore().local_stage_dir(run_uri, stage_name) / "failure.json")
+    except Exception:  # noqa: BLE001 - failure path is a best-effort local URI hint.
+        return None
 
 
 __all__ = [

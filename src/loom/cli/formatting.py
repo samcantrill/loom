@@ -142,6 +142,19 @@ def format_run_text(result: RunCliResult) -> str:
         stage_name = result.failure_summary.get("stage", "<unknown>")
         message = result.failure_summary.get("message", "")
         lines.append(f"failure {stage_name}: {message}")
+        for label, key in (
+            ("attempt", "attempt"),
+            ("executor", "executor"),
+            ("exit_code", "exit_code"),
+            ("signal", "signal"),
+            ("failure_record", "failure_path"),
+            ("stdout", "stdout_path"),
+            ("stderr", "stderr_path"),
+            ("traceback", "traceback_path"),
+        ):
+            value = result.failure_summary.get(key)
+            if value is not None:
+                lines.append(f"  {label}: {value}")
     return "\n".join(lines)
 
 

@@ -426,9 +426,20 @@ def test_cli_run_subprocess_failure_smoke(tmp_path: Path) -> None:
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is False
     assert payload["result"]["status"] == "FAILED"
-    assert payload["result"]["failure_summary"]["stage"] == "build"
+    failure_summary = payload["result"]["failure_summary"]
+    assert failure_summary["stage"] == "build"
+    assert failure_summary["attempt"] == 1
+    assert failure_summary["executor"] == "subprocess"
+    assert failure_summary["exit_code"] == 1
+    assert failure_summary["signal"] is None
     assert (
-        "stage failed intentionally" in payload["result"]["failure_summary"]["message"]
+        "stage failed intentionally" in failure_summary["message"]
+    )
+    assert failure_summary["failure_path"].endswith("/stages/build/failure.json")
+    assert failure_summary["stdout_path"].endswith("/stages/build/logs/stdout.log")
+    assert failure_summary["stderr_path"].endswith("/stages/build/logs/stderr.log")
+    assert failure_summary["traceback_path"].endswith(
+        "/stages/build/logs/traceback.txt"
     )
     assert stderr.getvalue() == ""
     worker_result = LocalRunStore().read_stage_worker_result(
@@ -438,6 +449,36 @@ def test_cli_run_subprocess_failure_smoke(tmp_path: Path) -> None:
     )
     assert worker_result is not None
     assert worker_result["status"] == "FAILED"
+
+    text_run_uri = path_to_run_uri(tmp_path / "runs" / "subprocess-failed-text")
+    text_stdout = io.StringIO()
+    text_stderr = io.StringIO()
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                text_run_uri,
+                "--executor",
+                "subprocess",
+            ],
+            stdout=text_stdout,
+            stderr=text_stderr,
+        )
+        == 5
+    )
+    rendered = text_stdout.getvalue()
+    assert f"FAILED run {text_run_uri}: FAILED" in rendered
+    assert "failure build: stage failed intentionally" in rendered
+    assert "  attempt: 1\n" in rendered
+    assert "  executor: subprocess\n" in rendered
+    assert "  exit_code: 1\n" in rendered
+    assert "  failure_record:" in rendered
+    assert "  stdout:" in rendered
+    assert "  stderr:" in rendered
+    assert "  traceback:" in rendered
+    assert text_stderr.getvalue() == ""
 
 
 def test_cli_run_dry_run_does_not_execute_or_allocate(

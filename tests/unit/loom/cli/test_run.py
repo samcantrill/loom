@@ -71,11 +71,18 @@ class FakeStageResult:
 
 @dataclass(frozen=True, slots=True)
 class FakeFailure:
+    run_uri: str = "file:///abs/runs/generated"
     stage_name: str = "build"
+    attempt: int = 1
+    executor: str = "local"
     failure_type: str = "stage_exception"
     message: str = "boom"
     exception_type: str | None = "builtins.RuntimeError"
     exit_code: int | None = None
+    signal: int | None = None
+    stdout_path: str | None = None
+    stderr_path: str | None = None
+    traceback_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,3 +425,32 @@ def test_run_failed_result_returns_run_failed_exit_code(monkeypatch: pytest.Monk
     assert payload["ok"] is False
     assert payload["result"]["status"] == "FAILED"
     assert payload["result"]["failure_summary"]["message"] == "boom"
+
+
+def test_failure_summary_includes_subprocess_failure_facts() -> None:
+    summary = run_command._failure_summary(
+        FakeFailure(
+            attempt=2,
+            executor="subprocess",
+            exit_code=None,
+            signal=9,
+            stdout_path="/tmp/run/stages/build/logs/stdout.log",
+            stderr_path="/tmp/run/stages/build/logs/stderr.log",
+            traceback_path="/tmp/run/stages/build/logs/traceback.txt",
+        )
+    )
+
+    assert summary == {
+        "stage": "build",
+        "attempt": 2,
+        "executor": "subprocess",
+        "failure_type": "stage_exception",
+        "message": "boom",
+        "exception_type": "builtins.RuntimeError",
+        "exit_code": None,
+        "signal": 9,
+        "stdout_path": "/tmp/run/stages/build/logs/stdout.log",
+        "stderr_path": "/tmp/run/stages/build/logs/stderr.log",
+        "traceback_path": "/tmp/run/stages/build/logs/traceback.txt",
+        "failure_path": "/abs/runs/generated/stages/build/failure.json",
+    }
