@@ -340,9 +340,9 @@ remote-store, and plugin behavior until those roadmap phases own the semantics.
 
 ### Phase 1 - Runtime Package Boundary
 
-Status: pending
+Status: merged
 Branch: `codex/runtime-package-boundary`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/70
 
 Goal:
 
@@ -413,7 +413,24 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged on 2026-05-07 via PR #70 into `develop`.
+- Implementation converted `loom.pipeline.runtime` from a module into an
+  import-light package facade backed by a private `_models.py` leaf, preserving
+  `RuntimeKind`, `RuntimeRequest`, `parse_runtime_request`, and
+  `RUNTIME_SCHEMA_VERSION` imports through both `loom.pipeline.runtime` and
+  `loom.pipeline`.
+- Added package/unit coverage for runtime facade import compatibility and
+  forbidden import boundaries; existing runtime request behavior and
+  serialization remain unchanged.
+- Updated `docs/structure.md` to document the runtime package boundary and
+  future executor descriptor import direction without implementing descriptor
+  behavior.
+- Validation evidence: `make validate-pr` passed before PR opening; GitHub CI
+  `checks` passed on PR #70; `make test-summary` reported 963 passed, 10
+  skipped, and 579 deselected.
+- Follow-up for Phase 2: the runtime package boundary is available; keep the
+  resource schema hard swap scoped to `loom.pipeline.resources` and existing
+  runtime request resource integration.
 
 ### Phase 2 - Typed Resource Entries
 
