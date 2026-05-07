@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: implemented; PR preparation pending
 - Feature focus: Stage Worker
 - PR title: `Stage Worker - Phase 1: Contracts and Persistence`
 - Branch: `codex/stage-worker-contracts`
@@ -202,7 +202,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07 for a small
+  implementation error-surface cleanup after validation
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -210,9 +211,28 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-07.
 - Final phase execution plan: refined by manager on 2026-05-07 to clarify prepared-state status semantics and avoid unnecessary local-runner rewrites.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: expanded-path refinement completed; plan now keeps prepared identity in request/status metadata without adding a new stage status and treats local-runner helper extraction as optional.
+- Implementation summary: added schema-versioned `StageWorkerRequest` and
+  `StageWorkerResult` records, signal-aware `ExecutionFailure` support,
+  executor metadata redaction, latest-stage-compatible run-store APIs for
+  `worker_request.json` and `worker_result.json`, local store path helpers, and
+  the parent-side `prepare_stage_attempt` API. Updated source docs to use
+  `--run-uri`, no normal worker `--config`, parent-owned finalization, signal
+  metadata, and latest-compatible worker handoff records.
+- Implementation validation:
+  - Targeted tests passed:
+    `uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/execution/test_execution_models.py tests/unit/loom/pipeline/execution/test_stage_attempts.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/contracts/test_executor_contract.py tests/contracts/test_runtime_options_contract.py tests/contracts/test_executor_capabilities_contract.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_stores.py`
+    with 81 passed and 1 skipped.
+  - Changed-file Pyright passed:
+    `uv run pyright src/loom/pipeline/execution src/loom/pipeline/stores tests/unit/loom/pipeline/execution tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py`.
+  - `make validate-pr` passed: Ruff, Pyright with config extra, default test
+    harness, config-extra test harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 50
+    passed/1 skipped; unit 569 passed/1 skipped; contract 53 passed/2 skipped;
+    integration 15 passed/7 skipped/7 deselected; e2e 16 passed; config-extra
+    397 passed/703 deselected.
+- Refinement summary: expanded-path plan refinement completed; implementation
+  refinement cleaned up `prepare_stage_attempt` error typing without changing
+  behavior.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not needed yet.
