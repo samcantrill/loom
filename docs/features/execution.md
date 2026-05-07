@@ -18,9 +18,10 @@ Given a pipeline spec, a run directory, a plan, and an executor, how should loom
 perform the selected stages and record what happened?
 ```
 
-The v0 design is local in-process execution only. Subprocess, cluster, and
-container execution details in this document are future scaffolding and must not
-be treated as v0 acceptance criteria unless the implementation plan adds a
+The current design supports local in-process execution and serial subprocess
+execution through the durable `loom stage run` worker contract. Cluster and
+container execution details in this document remain future scaffolding and must
+not be treated as acceptance criteria unless an implementation plan adds a
 phase for them.
 
 ### 1.1 Alignment With `loom.md`
@@ -28,8 +29,9 @@ phase for them.
 This document refines stage execution goals from [loom.md](../loom.md). It keeps
 execution as a coordinator over an already validated plan: project stages do the
 work, stores persist state, executors invoke stages, and the runner records
-outcomes without interpreting domain behavior. For v0, that executor is local
-and in-process.
+outcomes without interpreting domain behavior. The local executor runs stage
+code in process; the subprocess executor launches the same stage work through a
+prepared durable worker request.
 
 ---
 
@@ -1620,6 +1622,12 @@ interpret exit code
 commit or fail the stage
 ```
 
+Current subprocess execution follows this flow for
+`loom run CONFIG --executor subprocess`. The runner prepares the durable worker
+request, marks the stage running, invokes `SubprocessExecutor`, reads the
+worker handoff through store APIs, and then uses the normal parent-owned
+success/failure finalization path.
+
 ### 15.4 Worker Responsibilities
 
 The `loom stage run` worker should:
@@ -1689,14 +1697,20 @@ Recommended subprocess exit codes:
 The parent should prefer structured result files when present. Exit code is the
 fallback when the worker dies before writing structured state.
 
+Current behavior treats nonzero process exit, signal termination, missing
+worker result, invalid worker result, identity mismatch, and
+structured-success/process-failure conflicts as stage failures. Signal facts are
+recorded separately from ordinary exit codes.
+
 ### 15.7 Environment
 
-The subprocess executor should default to:
+The subprocess executor defaults to:
 
 ```text
 current Python executable
 current environment
 current working directory or configured project root
+loom.cli.main worker invocation
 ```
 
 Future options:
@@ -1709,8 +1723,9 @@ project root
 module invocation
 ```
 
-Keep v0 simple and record the actual command and working directory in executor
-metadata.
+The executor records redacted command and process metadata. Availability
+preflight for the Python executable and worker command is handled by the
+dedicated subprocess preflight/diagnostics phase.
 
 ---
 

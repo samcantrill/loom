@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -357,6 +358,86 @@ def test_cli_run_default_and_explicit_run_uri(
     )
     assert f"OK run {explicit_run_uri}: SUCCEEDED" in explicit_stdout.getvalue()
     assert run_uri_to_path(explicit_run_uri).is_dir()
+
+
+def test_cli_run_subprocess_success_smoke(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    run_uri = path_to_run_uri(tmp_path / "runs" / "subprocess-success")
+    _write_pipeline_config(config_path, value=55)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--executor",
+                "subprocess",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["ok"] is True
+    assert payload["result"]["status"] == "SUCCEEDED"
+    assert payload["result"]["artifact_count"] == 2
+    assert stderr.getvalue() == ""
+    store = LocalRunStore()
+    assert store.read_stage_worker_result(run_uri, "build", attempt=1) is not None
+    provenance = store.read_stage_provenance(run_uri, "build")
+    assert provenance is not None
+    executor_metadata = cast(dict[str, object], provenance["executor_metadata"])
+    assert executor_metadata["executor"] == "subprocess"
+
+
+def test_cli_run_subprocess_failure_smoke(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    run_uri = path_to_run_uri(tmp_path / "runs" / "subprocess-failed")
+    _write_pipeline_config(config_path, failing=True)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--executor",
+                "subprocess",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 5
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["ok"] is False
+    assert payload["result"]["status"] == "FAILED"
+    assert payload["result"]["failure_summary"]["stage"] == "build"
+    assert (
+        "stage failed intentionally" in payload["result"]["failure_summary"]["message"]
+    )
+    assert stderr.getvalue() == ""
+    worker_result = LocalRunStore().read_stage_worker_result(
+        run_uri,
+        "build",
+        attempt=1,
+    )
+    assert worker_result is not None
+    assert worker_result["status"] == "FAILED"
 
 
 def test_cli_run_dry_run_does_not_execute_or_allocate(

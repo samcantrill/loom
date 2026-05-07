@@ -26,6 +26,7 @@ from loom.diagnostics import (
 from loom.pipeline.planning import PlanAction, PlanReason, PlanReasonCode
 from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.stores import LocalRunStore
 
 
 pytestmark = pytest.mark.unit
@@ -148,11 +149,17 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
         calls["overrides"] = overrides
         return FakeComposedConfig(resolved={"pipeline": {}})
 
-    def run_pipeline(request: object, run_store: object) -> FakeRunResult:
+    def run_pipeline(
+        request: object,
+        run_store: object,
+        *,
+        executor: object,
+    ) -> FakeRunResult:
         calls["request_run_uri"] = getattr(request, "run_uri")
         calls["open_existing"] = getattr(request, "open_existing")
         calls["request_options"] = getattr(request, "options")
         calls["run_store"] = run_store
+        calls["executor"] = executor
         return FakeRunResult()
 
     def build_run_request(
@@ -342,6 +349,16 @@ def test_run_unsupported_executor_returns_executor_exit_code(
     assert payload["error"]["code"] == "cli.run.unsupported_executor"
 
 
+def test_run_build_executor_supports_subprocess(tmp_path: Path) -> None:
+    executor = run_command._build_executor(
+        "subprocess",
+        LocalRunStore(tmp_path / "runs"),
+    )
+
+    assert getattr(executor, "name") == "subprocess"
+    assert getattr(executor, "requires_prepared_worker_request") is True
+
+
 def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     def build_plan_result(*_args: object, **_kwargs: object) -> PlanCliResult:
         return PlanCliResult(
@@ -370,7 +387,13 @@ def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) ->
 def test_run_failed_result_returns_run_failed_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_common(monkeypatch)
 
-    def failed_run(_request: object, _run_store: object) -> FakeRunResult:
+    def failed_run(
+        _request: object,
+        _run_store: object,
+        *,
+        executor: object,
+    ) -> FakeRunResult:
+        assert getattr(executor, "name") == "local"
         failure = FakeFailure()
         return FakeRunResult(
             status=RunStatus.FAILED,
