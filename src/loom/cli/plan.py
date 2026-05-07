@@ -68,7 +68,34 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="config override expression",
     )
     parser.add_argument("--run-uri", metavar="URI", help="explicit run URI")
+    parser.add_argument(
+        "--profile",
+        dest="runtime_profile",
+        metavar="NAME",
+        help="runtime profile to select",
+    )
+    parser.add_argument(
+        "--executor",
+        dest="runtime_executor",
+        default=None,
+        metavar="NAME",
+        help="executor name",
+    )
     parser.add_argument("--resume", action="store_true", help="resume an existing run")
+    parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="runtime tag; may be repeated",
+    )
+    parser.add_argument(
+        "--note",
+        action="append",
+        default=None,
+        metavar="TEXT",
+        help="runtime note; may be repeated",
+    )
     parser.add_argument("--from-stage", metavar="STAGE", help="start at a stage")
     parser.add_argument(
         "--only-stage",

@@ -228,8 +228,9 @@ class RunOptions:
 ```
 
 Runtime options stay separate from pipeline specs and are not wired into the
-local runner, config, CLI, preflight, stores, or persisted runtime metadata in
-this phase.
+local runner, stores, or persisted runtime metadata in this phase. Config and
+CLI inputs may normalize into `RunOptions` for preflight diagnostics, but the
+execution envelope remains unchanged until runner workflow wiring lands.
 
 ## Resume Options
 
@@ -416,8 +417,9 @@ adapter payload values are not inspected or schema-validated
 
 Capability diagnostics are not preflight results. They carry runtime-local
 codes such as `executor.unknown`, `resource.ignored`, `resource.unsupported`,
-and `adapter_namespace.unclaimed`; Phase 6-style preflight check IDs and
-strict-mode escalation remain outside this layer.
+and `adapter_namespace.unclaimed`. Diagnostics/preflight maps those records
+into stable check IDs and strict-mode behavior without moving descriptor logic
+into this layer.
 
 ## Configuration Boundary
 
@@ -432,9 +434,12 @@ programmatic API arguments
 ```
 
 The runtime/resources layer defines the base/profile/explicit merge contract.
-Config and CLI layers may map their inputs into sparse base and explicit
-runtime dictionaries in later phases, but they should not duplicate the merge
-rules.
+The runtime config adapter extracts optional top-level `runtime` and
+`runtime_profiles` sections from a resolved config mapping and delegates to the
+same merge helper. CLI layers build sparse explicit runtime dictionaries for
+flags such as `--profile`, `--executor`, `--run-uri`, `--dry-run`, selector
+flags, `--resume`, repeated `--tag KEY=VALUE`, and repeated `--note TEXT`.
+These adapters must not duplicate runtime field semantics.
 
 ## Fingerprint Boundary
 
@@ -585,21 +590,39 @@ defaults were applied.
 
 ## Preflight Integration
 
-Preflight should use runtime/resource objects to check:
-
-Preflight is post-v0 except for validation already required by config, graph,
-stores, planning, and local execution phases.
+Preflight uses normalized runtime/resource objects to check:
 
 ```text
+runtime option normalization
+runtime profile selection
+exact-stage runtime option targets
 selected executor exists
-required executor commands are available
-resource fields can be mapped by the selected executor
-profile-specific required fields are present
+local executor availability
+executor capability diagnostics such as unclaimed adapter namespaces
+resource capability diagnostics such as ignored or unsupported resource kinds
 run directory and artifact paths are writable
 ```
 
 Unsupported resource fields should usually be warnings unless execution would
 definitely fail.
+
+Stable runtime-related preflight IDs are grouped as follows:
+
+```text
+runtime:
+  runtime.options
+  runtime.profile
+  runtime.stage_options
+executor:
+  executor.local
+  executor.resolve
+  executor.capabilities
+resources:
+  resources.capabilities
+```
+
+`--strict` keeps the existing CLI behavior: warning results still serialize as
+`WARN`, but the command exits with the pipeline failure code.
 
 ## Testing
 

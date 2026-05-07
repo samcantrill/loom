@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -66,6 +66,20 @@ class SelectorCliOptions:
             skip_stages=frozenset(getattr(namespace, "skip_stage", ()) or ()),
         )
 
+    def to_runtime_source(self) -> dict[str, object]:
+        """Return a sparse ``RunOptions.selectors`` source."""
+
+        source: dict[str, object] = {}
+        if self.force_stages:
+            source["force_stages"] = sorted(self.force_stages)
+        if self.from_stage is not None:
+            source["from_stage"] = self.from_stage
+        if self.only_stages:
+            source["only_stages"] = sorted(self.only_stages)
+        if self.skip_stages:
+            source["skip_stages"] = sorted(self.skip_stages)
+        return source
+
 
 @dataclass(frozen=True, slots=True)
 class ValidateCliOptions:
@@ -86,6 +100,10 @@ class PlanCliOptions:
 
     run_uri: str | None = None
     resume: bool = False
+    profile: str | None = None
+    executor: str | None = None
+    tags: tuple[tuple[str, str], ...] = ()
+    notes: tuple[str, ...] = ()
     explain_stage: str | None = None
 
     @classmethod
@@ -95,7 +113,28 @@ class PlanCliOptions:
         return cls(
             run_uri=getattr(namespace, "run_uri", None),
             resume=bool(getattr(namespace, "resume", False)),
+            profile=getattr(namespace, "runtime_profile", None),
+            executor=getattr(namespace, "runtime_executor", None),
+            tags=_tag_pairs(getattr(namespace, "tag", ()) or ()),
+            notes=_notes(getattr(namespace, "note", ()) or ()),
             explain_stage=getattr(namespace, "explain_stage", None),
+        )
+
+    def to_runtime_source(
+        self,
+        *,
+        selectors: SelectorCliOptions | None = None,
+    ) -> dict[str, object]:
+        """Return a sparse explicit runtime source for plan-like commands."""
+
+        return _runtime_source(
+            run_uri=self.run_uri,
+            executor=self.executor,
+            profile=self.profile,
+            resume=self.resume,
+            tags=self.tags,
+            notes=self.notes,
+            selectors=selectors,
         )
 
 
@@ -104,6 +143,12 @@ class PreflightCliOptions:
     """Preflight-command options."""
 
     run_uri: str | None = None
+    executor: str | None = None
+    profile: str | None = None
+    dry_run: bool = False
+    resume: bool = False
+    tags: tuple[tuple[str, str], ...] = ()
+    notes: tuple[str, ...] = ()
     check_groups: tuple[str, ...] = ()
     strict: bool = False
 
@@ -113,8 +158,32 @@ class PreflightCliOptions:
 
         return cls(
             run_uri=getattr(namespace, "run_uri", None),
+            executor=getattr(namespace, "runtime_executor", None),
+            profile=getattr(namespace, "runtime_profile", None),
+            dry_run=bool(getattr(namespace, "dry_run", False)),
+            resume=bool(getattr(namespace, "resume", False)),
+            tags=_tag_pairs(getattr(namespace, "tag", ()) or ()),
+            notes=_notes(getattr(namespace, "note", ()) or ()),
             check_groups=tuple(getattr(namespace, "check_group", ()) or ()),
             strict=bool(getattr(namespace, "strict", False)),
+        )
+
+    def to_runtime_source(
+        self,
+        *,
+        selectors: SelectorCliOptions | None = None,
+    ) -> dict[str, object]:
+        """Return a sparse explicit runtime source for preflight."""
+
+        return _runtime_source(
+            run_uri=self.run_uri,
+            executor=self.executor,
+            profile=self.profile,
+            dry_run=self.dry_run,
+            resume=self.resume,
+            tags=self.tags,
+            notes=self.notes,
+            selectors=selectors,
         )
 
 
@@ -124,18 +193,47 @@ class RunCliOptions:
 
     run_uri: str | None = None
     executor: str = "local"
+    executor_explicit: bool = field(default=False, compare=False)
+    profile: str | None = None
     resume: bool = False
     dry_run: bool = False
+    tags: tuple[tuple[str, str], ...] = ()
+    notes: tuple[str, ...] = ()
 
     @classmethod
     def from_namespace(cls, namespace: Any) -> "RunCliOptions":
         """Build run options from an argparse namespace."""
 
+        executor = getattr(namespace, "executor", None)
         return cls(
             run_uri=getattr(namespace, "run_uri", None),
-            executor=getattr(namespace, "executor", "local"),
+            executor="local" if executor is None else executor,
+            executor_explicit=executor is not None,
+            profile=getattr(namespace, "profile", None),
             resume=bool(getattr(namespace, "resume", False)),
             dry_run=bool(getattr(namespace, "dry_run", False)),
+            tags=_tag_pairs(getattr(namespace, "tag", ()) or ()),
+            notes=_notes(getattr(namespace, "note", ()) or ()),
+        )
+
+    def to_runtime_source(
+        self,
+        *,
+        selectors: SelectorCliOptions | None = None,
+        include_executor_default: bool = False,
+    ) -> dict[str, object]:
+        """Return a sparse explicit runtime source for run commands."""
+
+        executor = self.executor if self.executor_explicit or include_executor_default else None
+        return _runtime_source(
+            run_uri=self.run_uri,
+            executor=executor,
+            profile=self.profile,
+            dry_run=self.dry_run,
+            resume=self.resume,
+            tags=self.tags,
+            notes=self.notes,
+            selectors=selectors,
         )
 
 
@@ -143,6 +241,60 @@ def output_format_from_namespace(namespace: Any) -> OutputFormat:
     """Return the parsed output format from an argparse namespace."""
 
     return OutputFormat.parse(getattr(namespace, "output_format", OutputFormat.TEXT))
+
+
+def _runtime_source(
+    *,
+    run_uri: str | None = None,
+    executor: str | None = None,
+    profile: str | None = None,
+    dry_run: bool = False,
+    resume: bool = False,
+    tags: tuple[tuple[str, str], ...] = (),
+    notes: tuple[str, ...] = (),
+    selectors: SelectorCliOptions | None = None,
+) -> dict[str, object]:
+    source: dict[str, object] = {}
+    if run_uri is not None:
+        source["run_uri"] = run_uri
+    if executor is not None:
+        source["executor"] = executor
+    if profile is not None:
+        source["profile"] = profile
+    if dry_run:
+        source["dry_run"] = True
+    if resume:
+        source["resume"] = {"enabled": True}
+    if tags:
+        source["tags"] = dict(tags)
+    if notes:
+        source["notes"] = list(notes)
+    if selectors is not None:
+        selector_source = selectors.to_runtime_source()
+        if selector_source:
+            source["selectors"] = selector_source
+    return source
+
+
+def _tag_pairs(values: tuple[str, ...] | list[str]) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or "=" not in value:
+            raise ValueError(f"tag[{index}] must use KEY=VALUE syntax")
+        key, item = value.split("=", 1)
+        if not key:
+            raise ValueError(f"tag[{index}] key must be non-empty")
+        pairs.append((key, item))
+    return tuple(pairs)
+
+
+def _notes(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    notes: list[str] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"note[{index}] must be a non-empty string")
+        notes.append(value)
+    return tuple(notes)
 
 
 __all__ = [
