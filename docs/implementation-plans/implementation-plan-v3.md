@@ -533,9 +533,9 @@ Completion summary:
 
 ### Phase 3 - Status And Logs Inspection
 
-Status: pending
+Status: merged
 Branch: `codex/add-status-logs-diagnostics`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/68 (merged)
 
 Goal:
 
@@ -636,12 +636,28 @@ Notes:
 
 - PR feature focus: `Local Diagnostics`
 - Intended PR title: `Local Diagnostics - Phase 3: Status and Logs Inspection`
-- Phase implementation refinement budget: unused
-- Phase PR review budget: unused
+- Phase implementation refinement budget: used on 2026-05-07 by managing
+  agent; full validation exposed public export contract expectations for the
+  new store inspection API, tests were updated, and validation passed.
+- Phase PR review budget: used on 2026-05-07 by managing agent; PR #68
+  targeting `develop` had no blocking findings and GitHub CI passed.
 
 Completion summary:
 
-- Pending.
+- Merged Phase 3 by PR #68 into `develop` on 2026-05-07 with merge commit
+  `a9b4a77ff5d74cee107f0e61cb0b7bb8f915677d`.
+- Added a store-owned read-only inspection facade for local run stage discovery
+  and run-state aggregation, plus diagnostics facades for status summaries and
+  bounded stage log inspection.
+- Added `loom status RUN_URI` and `loom logs RUN_URI STAGE` with text and JSON
+  envelopes, stream selection, positive bounded tails, path-only mode, clear
+  missing run/stage/log behavior, and no diagnostics/CLI traversal of private
+  store layout.
+- Added package, unit, contract, integration, and e2e coverage for store
+  inspection exports, status/log diagnostics, CLI behavior, bounded log output,
+  corrupt store documents, and import boundaries.
+- Final validation passed: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`,
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`, and GitHub CI for PR #68.
 
 ### Phase 4 - Artifact Inspection And End-To-End Diagnostics
 
