@@ -822,9 +822,9 @@ Completion summary:
 
 ### Phase 5 - Contract Hardening, Examples, And Documentation
 
-Status: pending
+Status: pr_open
 Branch: `codex/subprocess-contract-hardening`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/81
 
 Goal:
 
@@ -910,4 +910,5 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened against `develop` on 2026-05-07:
+  https://github.com/samcantrill/loom/pull/81
