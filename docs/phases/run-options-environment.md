@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 3: Run Options and Environment Models`
 - Branch: `codex/run-options-environment`
@@ -19,17 +19,17 @@
 - Plan quality gate: passed on 2026-05-07 after initial review, refinement, and confirmation review
 - Plan quality gate loop budget: initial review used, gate refinement used, confirmation review used
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: pending after draft because this phase introduces durable public runtime option models and planning/execution boundary contracts
+- Refine pass: completed on 2026-05-07 because this phase introduces durable public runtime option models and planning/execution boundary contracts
 - Setup limitations: `gh auth status` required approved network access because the sandbox reported the token as invalid; network-verified auth succeeded, `gh auth setup-git` and `git fetch origin` completed, and the worktree was created from local `develop` at `12a0d6b`.
 - Blockers: none known
 
 ## Objective
 
-Add the public, import-light runtime option model layer that Python callers can construct and serialize before runtime profile merge, CLI/config mapping, preflight, run workflow wiring, or persisted runtime metadata are introduced.
+Add the public, import-light runtime option model layer that Python callers can construct, validate, adapt to planning inputs, summarize safely, and serialize before runtime profile merge, CLI/config mapping, preflight, run workflow wiring, or persisted runtime metadata are introduced.
 
 ## Full-Plan Context
 
-Phase 1 created the split `loom.pipeline.runtime` facade, and Phase 2 hard-swapped resources to entry-based `ResourceRequest`. This phase uses those foundations to define `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, and environment request models as the canonical invocation-policy API. Later phases own profile selection and merge, executor descriptors and capability diagnostics, CLI/config mapping, `RunRequest.options` workflow wiring, resolved per-stage runtime handoff data, and persisted `runtime.json`; none of that should be implemented here.
+Phase 1 created the split `loom.pipeline.runtime` facade, and Phase 2 hard-swapped resources to entry-based `ResourceRequest`. This phase uses those foundations to define `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, and run/stage environment request models as the canonical invocation-policy API. Later phases own profile selection and merge, executor descriptors and capability diagnostics, CLI/config mapping, `RunRequest.options` workflow wiring, resolved per-stage runtime handoff data, and persisted `runtime.json`; none of that should be implemented here.
 
 ## Stack Context
 
@@ -42,9 +42,9 @@ Phase 1 created the split `loom.pipeline.runtime` facade, and Phase 2 hard-swapp
 ## Source Phase Summary
 
 - Goal: add core runtime invocation models before profile merge and workflow wiring.
-- Required scope: implement `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, run-level and stage-level environment request models, serialization, validation basics, safe metadata summaries, privacy defaults, and adapters from runtime options to planning-owned `PlanSelectors` and `ResumeOptions`.
-- Required checkpoints: preserve runtime package import boundaries, keep planning selector/resume semantics in planning, define but do not wire the execution-envelope boundary, and keep local execution from applying environment requests.
-- Acceptance criteria: Python callers can construct and serialize the models; `RunOptions` is tested/documented as canonical for run URI, executor, dry-run, profile, tags, notes, selector/resume adapters, execution settings, stage runtime options, environment requests, and adapter options; stage runtime options can carry resources, execution, environment, and adapter options; environment keys/values are absent from safe metadata; planning ownership is unchanged.
+- Required scope: implement `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, run-level and stage-level environment request models, serialization, validation basics, safe metadata summaries, privacy defaults, typed-resource integration through entry-based `ResourceRequest`, and adapters from runtime options to planning-owned `PlanSelectors` and `ResumeOptions`.
+- Required checkpoints: preserve runtime package import boundaries, keep planning selector/resume semantics in planning, define but do not wire the execution-envelope boundary, and keep local execution from applying or inspecting environment requests.
+- Acceptance criteria: Python callers can construct and serialize the models; `RunOptions` is tested/documented as canonical for run URI, executor, dry-run, profile, tags, notes, selector/resume adapters, execution settings, stage runtime options, environment requests, and adapter options; stage runtime options can carry entry-based resources, execution, environment, and adapter options; environment keys/values are absent from safe metadata; planning ownership is unchanged.
 
 ## Current Source And Harness Findings
 
@@ -66,24 +66,30 @@ Phase 1 created the split `loom.pipeline.runtime` facade, and Phase 2 hard-swapp
 - Add focused runtime submodules for options and environment models under `loom.pipeline.runtime`, with public facade exports.
 - Implement strict, immutable, plain-data-compatible `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, and environment request models.
 - Define `RunOptions` fields for run URI, executor, dry-run, profile name, tags, notes, selector/resume adapter inputs, run-level execution settings, exact stage runtime options, run-level environment request, and adapter options.
+- Integrate `StageRuntimeOptions.resources` with the Phase 2 entry-based `ResourceRequest` model only; old `cpus`, `memory_mb`, `gpus`, and `custom` resource aliases remain rejected by the resource layer and must not be reintroduced through runtime options.
 - Add runtime-to-planning adapter methods or functions that return existing `PlanSelectors` and `ResumeOptions` without importing or duplicating selector/resume eligibility semantics.
-- Add safe metadata summary helpers that exclude environment keys and values and avoid raw adapter payload persistence by default.
+- Add safe metadata summary helpers that exclude environment keys and values and avoid raw adapter payload persistence by default; these helpers are plain in-memory summaries only and must not create a persisted `runtime.json` contract.
 - Add docs and tests that establish `RunOptions` as canonical invocation policy while `RunRequest` remains the execution envelope until Phase 7 wires `RunRequest.options`.
 
 ## Out-of-Scope Work
 
-- Runtime profile selection, profile collection models, or merge precedence.
+- Runtime profile selection, profile collection models, merge precedence, or profile-derived stage option resolution.
 - Executor descriptors, capability checks, local ignored-resource warnings, or unclaimed adapter namespace warnings.
 - Preflight check IDs, groups, JSON output, or strict-mode behavior.
 - Persisted `runtime.json`, run-store APIs, or run metadata writes.
 - CLI flags, config `runtime` / `runtime_profiles` mapping, command formatting, or CLI dry-run behavior changes.
 - Plugin discovery, adapter schema validation, SLURM/Docker/Apptainer interpretation, retry, timeout, wall-time, subprocess, or worker process behavior.
 - Environment key/value persistence or local in-process environment application.
+- Adding `RunRequest.options`, threading `RunOptions` through `PipelineRunner`, `run_pipeline`, `StageExecutionRequest`, stores, config composition, diagnostics, or CLI entrypoints.
+- Executor descriptor/capability models, executor capability metadata, executor registry behavior, or runtime preflight checks.
 
 ## Assumptions
 
 - `executor` validation in this phase is basic string validation only; unknown-executor resolution belongs to Phase 5.
-- Stage option keys are exact stage IDs syntactically, but validation against a real pipeline stage set should be exposed as a pure helper and not tied to profile merge or execution wiring.
+- `profile` is a plain selected-profile name on `RunOptions` only; no runtime profile lookup, merge, or profile existence validation occurs in this phase.
+- `dry_run` is a normalized invocation flag only; no runner or CLI behavior changes occur in this phase.
+- Tags, notes, and adapter options are plain invocation metadata/options, must be frozen and plain-data-compatible, and must not affect semantic fingerprints or execution behavior in this phase.
+- Stage option keys are exact stage IDs syntactically, but validation against a supplied synthetic or known stage-id set should be exposed as a pure helper and not tied to profile merge or execution wiring.
 - Environment request models may serialize full in-memory requests for Python API handoff, but any safe metadata summary produced by this phase must not include environment variable names or values.
 - Existing `RuntimeRequest` remains available for compatibility; `RunOptions` is a new invocation aggregate rather than a replacement for `RuntimeRequest`.
 
@@ -91,11 +97,17 @@ Phase 1 created the split `loom.pipeline.runtime` facade, and Phase 2 hard-swapp
 
 `RunOptions` is the canonical public invocation-policy aggregate for v4. It must be strict about unknown fields and plain-data compatibility, freeze mutable inputs, provide deterministic `to_dict` / `from_dict` round trips, and keep defaults domain-neutral. The model should accept typed objects and mapping forms for nested runtime models where the existing codebase uses that pattern.
 
+The durable `RunOptions` field set for this phase must cover run URI, executor name, dry-run flag, selected profile name, tags, notes, selector adapter inputs, resume adapter input, run-level `ExecutionOptions`, exact-stage `StageRuntimeOptions`, run-level environment request, and adapter options. Validation should be basic model validation only: non-empty strings where strings are required, booleans for boolean flags, plain-data mappings/sequences for serialized fields, duplicate/invalid mapping keys rejected with path-aware errors, and deterministic normalization of sequence or mapping order where the public contract depends on it.
+
+`ExecutionOptions` is a small runtime model for invocation/execution options that can be shared at run and stage scope. It may carry only phase-owned plain-data options needed as a future handoff surface and must not define executor descriptor capabilities, retry/timeout/wall-time semantics, preflight policy, subprocess behavior, or backend-specific schemas.
+
+`StageRuntimeOptions` must carry `resources`, `execution`, `environment`, and `adapter_options`. `resources` must be a Phase 2 `ResourceRequest` or mapping parsed through the entry-based resource schema. Stage options are keyed by exact stage ID strings. This phase should include basic syntactic stage-id validation and, where useful for tests or public helpers, a pure known-stage validation function that accepts a supplied stage-id set. It must not perform profile merge behavior, glob/tag/group matching, graph reachability checks, or executor capability checks.
+
 Selector and resume fields in `RunOptions` are adapter inputs only. The phase may provide `to_plan_selectors()` and `to_resume_options()` or equivalent pure helpers, but it must not validate graph reachability, stage eligibility, resume artifact state, or any planning policy. Those semantics remain in `loom.pipeline.planning`.
 
-The execution boundary is declarative in this phase: `RunOptions` owns invocation policy, while `RunRequest` continues to own config, pipeline, provenance, stores, lifecycle inputs, fingerprint context, and current compatibility fields. Do not thread `RunOptions` through `PipelineRunner`, `run_pipeline`, `StageExecutionRequest`, run stores, CLI, or config mapping yet.
+The execution boundary is declarative in this phase: `RunOptions` owns invocation policy, while `RunRequest` continues to own config, pipeline, provenance, stores, lifecycle inputs, fingerprint context, and current compatibility fields. Document that Phase 7 will add or wire `RunRequest.options` as the execution-envelope boundary, but do not add runner request rewiring or make runner code consume `RunOptions` in this phase. Do not thread `RunOptions` through `PipelineRunner`, `run_pipeline`, `StageExecutionRequest`, run stores, CLI, diagnostics, or config mapping yet.
 
-Environment request models must default to privacy-preserving safe summaries. They may carry requested environment additions/removals for future isolated executors, but no helper that represents persisted runtime metadata may include environment keys or values. Local in-process execution must not apply or inspect these requests in this phase.
+Run-level and stage-level environment request models must default to privacy-preserving safe summaries. They may carry requested environment additions/removals for future isolated executors, but no helper that represents persisted or safe runtime metadata may include environment keys or values. Local in-process execution must not apply, inspect, or mutate process environment from these requests in this phase.
 
 `StageRuntimeOptions` must represent per-stage resources, execution settings, environment request, and adapter options using exact stage IDs supplied by the caller. It must not add glob, tag, group, or pattern matching.
 
@@ -123,6 +135,8 @@ Environment request models must default to privacy-preserving safe summaries. Th
 | Persist or summarize environment keys and values now | The v4 privacy choice is to avoid accidental secret disclosure until explicit audit/redaction policy exists. |
 | Treat stage options as glob or tag patterns | Exact IDs are the v4 deterministic contract; broader matching is deferred until a concrete later roadmap need. |
 | Validate adapter namespaces with backend schemas now | Adapter schemas and plugin discovery are explicitly out of scope; this phase preserves plain data only. |
+| Add executor descriptor fields or preflight hooks while defining `executor` | Executor descriptors, capabilities, and preflight diagnostics are Phase 5/6 scope; this phase only preserves the selected executor name as invocation policy. |
+| Add `RunRequest.options` now as a convenience field | Phase 7 owns runner request rewiring and conflict handling after profiles, descriptors, and CLI/config mapping exist. |
 
 ## Debt Introduced
 
@@ -132,6 +146,7 @@ Environment request models must default to privacy-preserving safe summaries. Th
 | No environment key/value recording | Preserve safe metadata defaults and avoid secret leakage. | Revisit only with explicit audit/provenance and redaction policy. |
 | No adapter schema validation | Keeps Phase 3 focused on canonical model shape before descriptors and plugins. | Revisit in descriptor, adapter, and plugin phases. |
 | `RunRequest` still has overlapping compatibility fields | Phase 7 owns workflow migration and conflict handling once upstream mappings exist. | Revisit when Phase 7 adds `RunRequest.options`. |
+| Stage options are exact IDs only | Avoids introducing matching policy before profile merge and graph-aware runtime handoff exist. | Revisit only when a later roadmap phase defines pattern/tag/group selection semantics. |
 
 ## Reviewability
 
@@ -145,15 +160,16 @@ Environment request models must default to privacy-preserving safe summaries. Th
   - `tests/unit/loom/pipeline/test_runtime_resources.py` or a new runtime-options unit test module
   - `tests/contracts/` runtime/planning/execution boundary tests
   - `docs/features/runtime-resources.md`, `docs/features/execution.md`, or `docs/structure.md` if public docs need the new model boundary
-- Scope-control checks: no CLI/config/preflight/store/runtime.json changes; no executor descriptor registry; no local environment application; no resource schema changes.
+- Scope-control checks: no CLI/config/preflight/store/runtime.json changes; no executor descriptor registry or capability metadata; no local environment application; no resource schema changes; no `RunRequest.options` runner rewiring.
 
 ## Implementation Steps
 
 1. Add runtime option and environment model modules with strict dataclass-style validation, deterministic serialization, frozen plain-data mappings, and facade/package exports.
-2. Add `RunOptions` adapter helpers for `PlanSelectors` and `ResumeOptions`, keeping graph/stage/resume semantics delegated to planning.
-3. Add `StageRuntimeOptions` support for `ResourceRequest`, `ExecutionOptions`, environment requests, and adapter options keyed by exact stage IDs, plus optional known-stage validation helper if needed for tests.
-4. Add safe metadata summary behavior that excludes environment keys/values and raw adapter payloads while allowing non-sensitive invocation fields such as executor, dry-run, profile presence/name, tags, notes, and resource summaries where appropriate.
-5. Add docs and boundary notes showing `RunOptions` as canonical invocation policy and `RunRequest` as the execution envelope that Phase 7 will later carry as `options`.
+2. Add `RunOptions` field coverage for run URI, executor, dry-run, profile, tags, notes, selector/resume adapter inputs, run execution options, stage options, run environment request, and adapter options.
+3. Add `RunOptions` adapter helpers for `PlanSelectors` and `ResumeOptions`, keeping graph/stage/resume semantics delegated to planning-owned models and helpers.
+4. Add `StageRuntimeOptions` support for entry-based `ResourceRequest`, `ExecutionOptions`, stage environment requests, and adapter options keyed by exact stage IDs, plus basic syntactic and supplied-known-stage validation helpers.
+5. Add safe metadata summary behavior that excludes environment keys/values and raw adapter payloads while allowing non-sensitive invocation fields such as executor, dry-run, profile presence/name, tags, notes, and resource summaries where appropriate.
+6. Add docs and boundary notes showing `RunOptions` as canonical invocation policy and `RunRequest` as the execution envelope that Phase 7 will later carry as `options`.
 
 ## Test Plan
 
@@ -167,19 +183,19 @@ Environment request models must default to privacy-preserving safe summaries. Th
 
 - Status: required
 - Expected paths: new or existing `tests/unit/loom/pipeline/test_runtime_resources.py` / `tests/unit/loom/pipeline/test_runtime_options.py`.
-- Required assertions or deferral reason: construct defaults and populated `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, and environment requests; reject unknown fields and invalid scalar types; freeze mutable tags, notes, adapter options, resources, and environment inputs; validate stage option key shape and optional known-stage failures; verify deterministic serialization; verify safe metadata summaries omit environment keys and values.
+- Required assertions or deferral reason: construct defaults and populated `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, and run/stage environment requests; reject unknown fields and invalid scalar types; freeze mutable tags, notes, adapter options, resources, and environment inputs; validate run URI, executor, dry-run, profile, adapter options, stage option key shape, and optional known-stage failures; verify deterministic serialization; verify safe metadata summaries omit environment keys and values.
 
 ### Contract Suite
 
 - Status: required
 - Expected paths: `tests/contracts/test_runtime_options_contract.py` or similarly focused contract coverage.
-- Required assertions or deferral reason: plain-data serialization contract for runtime options; adapter contract from `RunOptions` to `PlanSelectors` and `ResumeOptions`; execution-envelope boundary contract that `RunOptions` owns invocation policy while current `RunRequest` remains the execution envelope and local `StageExecutionRequest` does not consume environment requests yet.
+- Required assertions or deferral reason: plain-data serialization contract for runtime options, including entry-based `ResourceRequest` integration; adapter contract from `RunOptions` to `PlanSelectors` and `ResumeOptions`; execution-envelope boundary contract that `RunOptions` owns invocation policy while current `RunRequest` remains the execution envelope and local `StageExecutionRequest` does not consume environment requests yet.
 
 ### Integration Suite
 
 - Status: required
 - Expected paths: `tests/integration/pipeline/` or a new narrow integration test for Python API construction.
-- Required assertions or deferral reason: Python callers can construct runtime options with synthetic exact stage IDs and entry-based resources; known-stage validation succeeds/fails deterministically where the helper is used; no local run workflow is required to consume the options in this phase.
+- Required assertions or deferral reason: Python callers can construct runtime options with synthetic exact stage IDs and entry-based resources; known-stage validation succeeds/fails deterministically where the helper is used; no local run workflow, profile merge, or config/CLI mapping is required to consume the options in this phase.
 
 ### E2E Suite
 
@@ -197,7 +213,7 @@ Environment request models must default to privacy-preserving safe summaries. Th
 
 - Public model field choices are durable; the refine pass should check that the model is useful for Phase 4 merge and Phase 7 workflow wiring without importing those future behaviors.
 - Import-light runtime facade could regress if adapter helpers import broad planning or execution modules; tests must pin forbidden imports.
-- Environment request serialization and safe metadata behavior could be confused; tests must distinguish full in-memory model serialization from persisted/safe metadata summaries.
+- Environment request serialization and safe metadata behavior could be confused; tests must distinguish full in-memory model serialization from safe metadata summaries that omit keys/values and from future persisted `runtime.json` work.
 - Overlapping `RunRequest` fields may tempt early workflow migration; executor should keep that work out of scope.
 
 ## Validation Commands
@@ -222,7 +238,7 @@ make test-summary
 
 - Safe implementation slices: runtime/environment models first, planning adapters second, safe metadata summaries third, docs and tests last.
 - Tests to run with each slice: package import tests after facade changes; unit serialization/privacy tests after model changes; contract tests after adapter and boundary helpers; narrow integration tests after known-stage validation support.
-- Decisions the executor must not revisit: no profile merge, no CLI/config mapping, no preflight, no executor descriptors, no `runtime.json`, no local environment application, no glob/tag/group stage matching, and no planning semantic migration into runtime.
+- Decisions the executor must not revisit: `RunOptions` is canonical invocation policy; `RunRequest.options` is only a documented Phase 7 execution-envelope boundary for now; resources use entry-based `ResourceRequest`; no profile selection/merge, no CLI/config mapping, no preflight, no executor descriptors/capabilities, no `runtime.json`, no local environment application, no environment key/value recording, no glob/tag/group stage matching, and no planning semantic migration into runtime.
 - Conditions that require stopping for the manager: if the model field set cannot satisfy Phase 4/Phase 7 without adding profile merge or workflow wiring now; if import-boundary tests require runtime to import execution or concrete executors; if environment privacy cannot be represented without recording keys or values.
 
 ## Refinement And Review Budget Status
@@ -234,10 +250,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-07.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: refined on 2026-05-07 for expanded-path implementation.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: scope clarified for durable public runtime models, entry-based resource integration, planning adapters, execution-envelope deferral, privacy guarantees, stage validation boundaries, and explicit later-phase exclusions.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: none required yet.
