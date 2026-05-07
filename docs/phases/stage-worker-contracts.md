@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Stage Worker
 - PR title: `Stage Worker - Phase 1: Contracts and Persistence`
 - Branch: `codex/stage-worker-contracts`
@@ -19,7 +19,7 @@
 - Plan quality gate: passed on 2026-05-07 after initial review, one refinement pass, and confirmation review
 - Plan quality gate loop budget: consumed as recorded in `docs/implementation-plans/implementation-plan-v5.md`
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: pending for expanded path
+- Refine pass: completed by manager on 2026-05-07 for expanded path
 - Setup limitations: none; GitHub auth was valid outside the sandbox, `origin` was fetched, and the worktree was created from `develop`.
 - Blockers: none known
 
@@ -56,7 +56,8 @@ V5 creates process-isolated stage execution after v4's runtime options and safe 
 
 - Define schema-versioned, plain-data serializable records for prepared stage attempt requests, worker results, and worker/process failures or extend existing execution records where that preserves a clear public contract.
 - Add validation for required identity fields, status combinations, timestamps, resolved stage runtime handoff metadata, executor metadata, log paths, traceback paths, exit codes, and signal facts.
-- Define the execution-owned `prepare_stage_attempt` boundary that binds inputs, builds fingerprint metadata, allocates log/result paths, writes prepared request state, writes latest-compatible inputs/fingerprint records, marks the attempt prepared/running as appropriate for later worker consumption, and returns the attempt identity without invoking stage code.
+- Define the execution-owned `prepare_stage_attempt` boundary that binds inputs, builds fingerprint metadata, allocates log/result paths, writes prepared request state, writes latest-compatible inputs/fingerprint records, and returns the attempt identity without invoking stage code.
+- Keep prepared-state identity in the request/status metadata contract rather than inventing a new public `StageStatus` value in Phase 1. Existing local execution may still mark `RUNNING` at the same point it does today; direct worker/subprocess launch decisions in Phase 2/3 must consume the prepared request record and then own the launch/running transition.
 - Add run-store protocol and local-store APIs for prepared request and worker result handoff records addressed by run URI, stage name, and attempt.
 - Preserve existing latest-stage-compatible files under `stages/<stage>/` while recording explicit attempt identity in new or updated records.
 - Add redaction helpers for persisted executor command/process metadata so full environment values and secret-like command metadata are not persisted.
@@ -76,12 +77,12 @@ V5 creates process-isolated stage execution after v4's runtime options and safe 
 
 - The Phase 1 prepare API may be introduced as a public execution API, but it must remain backend-neutral and reusable by Phase 2 and Phase 3.
 - Prepared request/result files can live in the latest-stage-compatible stage directory for v5, provided every record carries attempt identity and store APIs abstract the path.
-- Existing local runner behavior should remain compatible; Phase 1 may share preparation helpers with `_run_stage`, but it should not change local execution semantics beyond the new durable metadata.
+- Existing local runner behavior should remain compatible. Phase 1 may share preparation helpers with `_run_stage` only when that keeps semantics stable; it is acceptable to expose the prepare API for later phases without forcing the local runner to consume every new helper in this PR.
 - `ResolvedStageRuntimeOptions.to_safe_metadata()` is the safe request handoff source unless implementation finds a missing field that requires a small explicit model extension.
 
 ## Scope Contract
 
-The public contract is one prepared attempt identified by `(run_uri, stage_name, attempt)`. Records must be versioned and validated through execution-owned models, serialized as plain data, and persisted only through store APIs. Request records must include or safely reference bound inputs, fingerprint metadata, log paths, result handoff path, executor name/metadata, and resolved per-stage runtime handoff metadata. Result records must represent either success or failure for the same identity and must reject conflicting status/output/failure combinations. Failure records must retain existing local failure fields and add signal support separate from exit code. The prepare API must not construct or run stage objects and must not finalize stage or run status after worker execution; final commit semantics stay parent-owned in later phases.
+The public contract is one prepared attempt identified by `(run_uri, stage_name, attempt)`. Records must be versioned and validated through execution-owned models, serialized as plain data, and persisted only through store APIs. Request records must include or safely reference bound inputs, fingerprint metadata, log paths, result handoff path, executor name/metadata, and resolved per-stage runtime handoff metadata. Result records must represent either success or failure for the same identity and must reject conflicting status/output/failure combinations. Failure records must retain existing local failure fields and add signal support separate from exit code. The prepare API must not construct or run stage objects and must not finalize stage or run status after worker execution; final commit semantics stay parent-owned in later phases. Phase 1 must not add a new `PREPARED` status unless implementation proves existing status metadata cannot represent prepared attempts without breaking v3 diagnostics compatibility.
 
 ## Design Impact
 
@@ -125,8 +126,8 @@ The public contract is one prepared attempt identified by `(run_uri, stage_name,
 
 1. Add or revise execution-owned record models for prepared requests, worker results, and failures, including schema validation, serialization, signal support, runtime handoff metadata, and redacted executor metadata.
 2. Add store protocol/local-store APIs for prepared request and result handoff read/write by run URI/stage/attempt while preserving latest-stage-compatible paths.
-3. Extract a parent-side prepare-stage-attempt API from the existing runner preparation flow, keeping stage construction/execution/finalization out of scope.
-4. Wire local runner internals only as needed to keep existing behavior passing and to make the prepare API produce real durable state for later phases.
+3. Add a parent-side prepare-stage-attempt API that can be exercised directly by tests and later phases, keeping stage construction/execution/finalization out of scope.
+4. Reuse or lightly extract local runner preparation internals only when it keeps existing behavior stable; avoid a broad runner rewrite in this contract PR.
 5. Align source docs with v5 command/finalization/layout decisions and add focused tests across package, unit, contract, and integration suites.
 
 ## Test Plan
@@ -208,10 +209,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-07.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: refined by manager on 2026-05-07 to clarify prepared-state status semantics and avoid unnecessary local-runner rewrites.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: expanded-path refinement completed; plan now keeps prepared identity in request/status metadata without adding a new stage status and treats local-runner helper extraction as optional.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not needed yet.
