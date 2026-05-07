@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 1: Runtime Package Boundary`
 - Branch: `codex/runtime-package-boundary`
@@ -19,9 +19,9 @@
 - Plan quality gate: passed on 2026-05-07 after initial `loom_plan_reviewer` review, one refinement pass, and confirmation review.
 - Plan quality gate loop budget: initial review used, refinement used, confirmation review used; do not reopen unless the manager reports a new blocker.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-07.
-- Refine pass: pending for the expanded path.
+- Refine pass: completed by `loom_phase_planner` on 2026-05-07; this pass refined scope boundaries, import-light test obligations, documentation obligations, and budget/status records without consuming implementation refinement or PR-review budget.
 - Setup limitations: sandboxed `gh auth status` reported an invalid token, `gh auth setup-git` could not write `/home/samcantrill/.gitconfig`, and `git fetch`/`git worktree add` could not write Git metadata. Approved escalation verified GitHub auth, ran `gh auth setup-git`, fetched `origin`, and created this worktree. Local `develop` and `origin/develop` both resolved to `f461c017f2512c9efdbfede303dd773810140657` before branching.
-- Blockers: none known for the draft pass.
+- Blockers: none known.
 
 ## Objective
 
@@ -44,20 +44,20 @@ Future-phase work remains out of scope: Phase 2 owns the hard resource schema re
 ## Source Phase Summary
 
 - Goal: establish the split runtime package/facade and source-structure boundary before adding new runtime models.
-- Required scope: convert `loom.pipeline.runtime` from a module into an import-light package with a stable public facade; preserve existing `RuntimeRequest`, `RuntimeKind`, and `parse_runtime_request` public imports; add only package scaffolding needed by later phases; update package imports and `__all__`; update `docs/structure.md` for the runtime package and executor descriptor boundary.
-- Required checkpoints: public runtime imports remain stable and cheap; existing behavior is unchanged; docs describe the runtime package boundary and import direction; forbidden layers are not imported through runtime.
+- Required scope: convert `loom.pipeline.runtime` from a module into an import-light package with a stable public facade; preserve existing `RuntimeRequest`, `RuntimeKind`, and `parse_runtime_request` public imports; preserve the current package-level re-exports from `loom.pipeline`; add only package scaffolding needed by later phases; update package imports and `__all__`; update `docs/structure.md` for the runtime package and executor descriptor boundary.
+- Required checkpoints: public runtime imports remain stable and cheap; existing behavior is unchanged; docs describe the runtime package boundary and import direction; forbidden layers are not imported through runtime; no `RunOptions`, new resource schema, executor descriptor behavior, config/CLI mapping, preflight integration, or runtime metadata behavior appears in the diff.
 - Acceptance criteria: public runtime imports remain stable and cheap after the package split; existing runtime/resource behavior and tests remain unchanged; `docs/structure.md` describes the new package boundary and import direction; runtime package imports do not import CLI, diagnostics, executor implementations, plugins, or optional backends.
 
 ## Current Source And Harness Findings
 
 - Existing files or modules that constrain this phase: `src/loom/pipeline/runtime.py` currently owns `RUNTIME_SCHEMA_VERSION`, `RuntimeKind`, `RuntimeRequest`, `parse_runtime_request`, and runtime validation helpers; `src/loom/pipeline/__init__.py` imports and re-exports the public runtime names; `src/loom/pipeline/resources.py` remains a sibling module; `src/loom/pipeline/specs.py` and tests consume existing resource/runtime behavior.
-- Existing tests or harness behavior: `tests/package/test_import_boundaries.py` already has runtime/resource import-light coverage; package pipeline exports are covered by `tests/package/test_pipeline_api.py` and public API tests; runtime/resource behavior is covered by `tests/unit/loom/pipeline/test_runtime_resources.py`; local pipeline behavior is covered by integration and e2e suites.
+- Existing tests or harness behavior: `tests/package/test_import_boundaries.py` already has runtime/resource import-light coverage that should be strengthened for the new runtime package facade; package pipeline exports are covered by `tests/package/test_pipeline_api.py` and public API tests; runtime/resource behavior is covered by `tests/unit/loom/pipeline/test_runtime_resources.py`; local pipeline behavior is covered by integration and e2e suites.
 - Import-boundary or dependency constraints: runtime models currently depend only on serialization helpers, pipeline errors, and resources. The package facade must preserve that light dependency profile and must not import `loom.cli`, `loom.diagnostics`, `loom.pipeline.execution`, `loom.pipeline.executors`, `loom.plugins`, optional config dependencies, optional executor backends, or project packages.
 
 ## In-Scope Work
 
 - Replace the single `src/loom/pipeline/runtime.py` module with a package at `src/loom/pipeline/runtime/` while preserving `import loom.pipeline.runtime` and `from loom.pipeline.runtime import RuntimeRequest, RuntimeKind, parse_runtime_request`.
-- Move the existing runtime request implementation into a focused package module such as `models.py` or an equivalent internal leaf selected during implementation.
+- Move the existing runtime request implementation into a focused private package leaf, with `models.py` preferred unless the local source pattern points to a clearer name. Tests and docs must lock the public facade, not the private leaf path.
 - Keep the runtime package facade import-light with explicit `__all__` exports for existing public names and only package scaffolding needed by later v4 phases.
 - Update `src/loom/pipeline/__init__.py` only as needed to preserve current package-level exports.
 - Add or strengthen package tests for runtime facade public exports, import-path compatibility, and forbidden import boundaries.
@@ -72,6 +72,7 @@ Future-phase work remains out of scope: Phase 2 owns the hard resource schema re
 - CLI/config runtime mapping, new CLI flags, config schema changes, or profile selection.
 - Optional backend imports, plugin discovery, subprocess/SLURM/container implementation, or adapter schema interpretation.
 - Placeholder modules that have no immediate import contract or near-term implementation use.
+- Any new public import names beyond preserving current runtime names and current `loom.pipeline` re-exports.
 
 ## Assumptions
 
@@ -94,7 +95,9 @@ from loom.pipeline import RuntimeKind, RuntimeRequest, parse_runtime_request
 
 The runtime package facade must remain a lower-layer model boundary. Importing `loom.pipeline.runtime` may import serialization helpers, pipeline errors, and resources, but must not import CLI, diagnostics, execution runners, executor implementations, plugin discovery, optional config dependencies, optional executor backends, or project code. If an implementation decision would require those imports, stop for the manager.
 
-`docs/structure.md` should describe that future runtime option, profile, environment, validation, registry, descriptor, and serialization modules live under the runtime package when phases add real behavior. It should also describe that descriptor records are import-light metadata owned below executor implementations; concrete executor implementations and plugin discovery must depend on descriptors, not the other way around.
+`docs/structure.md` should describe that future runtime option, profile, environment, validation, registry, descriptor, and serialization modules live under the runtime package when phases add real behavior. It should also describe that descriptor records are import-light metadata owned below executor implementations; concrete executor implementations and plugin discovery must depend on descriptors, not the other way around. The docs update must use future-tense or boundary language for descriptors because descriptor records, registries, and capability behavior are not implemented in Phase 1.
+
+The following future-phase names or behaviors must not be introduced in product code, tests as implemented behavior, or public exports during Phase 1: `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`, `ResourceEntry`, typed resource entry parsing, old-resource-field migration, runtime profiles, environment request models, descriptor records, descriptor registries, capability diagnostics, preflight check IDs, `runtime.json`, CLI runtime flags, or config runtime/profile schema handling.
 
 ## Design Impact
 
@@ -136,8 +139,8 @@ The runtime package facade must remain a lower-layer model boundary. Importing `
 
 1. Convert `src/loom/pipeline/runtime.py` into a package while moving the existing runtime request implementation into a focused leaf and preserving facade exports.
 2. Update `src/loom/pipeline/__init__.py` and package `__all__` definitions so existing public imports stay stable and cheap.
-3. Add or adjust package import-boundary tests that import the runtime facade in a fresh interpreter and assert forbidden layers are not loaded.
-4. Add or adjust unit/package compatibility tests for `RuntimeRequest`, `RuntimeKind`, `parse_runtime_request`, and package-level pipeline re-exports.
+3. Add or adjust package import-boundary tests that import the runtime facade in a fresh interpreter, exercise the preserved public imports, and assert forbidden layers are not loaded.
+4. Add or adjust unit/package compatibility tests for `RuntimeRequest`, `RuntimeKind`, `parse_runtime_request`, and package-level pipeline re-exports without asserting the private implementation leaf path.
 5. Update `docs/structure.md` to document the runtime package layout, import direction, and future executor descriptor boundary without claiming descriptor implementation exists.
 
 ## Test Plan
@@ -146,7 +149,7 @@ The runtime package facade must remain a lower-layer model boundary. Importing `
 
 - Status: required
 - Expected paths: `tests/package/test_import_boundaries.py`, `tests/package/test_pipeline_api.py`, and `tests/package/test_public_api.py` only if public export coverage requires adjustment.
-- Required assertions or deferral reason: `import loom.pipeline.runtime` and `from loom.pipeline.runtime import RuntimeRequest, RuntimeKind, parse_runtime_request` work after the package split; `from loom.pipeline import RuntimeRequest, RuntimeKind, parse_runtime_request` remains stable; runtime facade imports do not load `loom.cli`, `loom.diagnostics`, `loom.pipeline.execution`, `loom.pipeline.executors`, `loom.plugins`, optional config dependencies, optional backends, or project modules.
+- Required assertions or deferral reason: `import loom.pipeline.runtime` and `from loom.pipeline.runtime import RuntimeRequest, RuntimeKind, parse_runtime_request` work after the package split; `from loom.pipeline import RuntimeRequest, RuntimeKind, parse_runtime_request` remains stable; runtime facade imports do not load `loom.cli`, `loom.diagnostics`, `loom.pipeline.execution`, `loom.pipeline.executors`, `loom.plugins`, optional config dependencies such as `yaml`, `omegaconf`, or `pydantic`, optional backends, or project modules. Add the runtime-facade subprocess check directly to `tests/package/test_import_boundaries.py` so import-light behavior is tested in a fresh interpreter.
 
 ### Unit Suite
 
@@ -158,25 +161,25 @@ The runtime package facade must remain a lower-layer model boundary. Importing `
 
 - Status: deferred
 - Expected paths: none beyond package import-boundary contracts for this phase.
-- Required assertions or deferral reason: no new public data shape or persistence contract is introduced. Existing runtime serialization behavior remains covered by unit tests; descriptor and `RunOptions` contracts belong to later phases.
+- Required assertions or deferral reason: no new public data shape or persistence contract is introduced. Existing runtime serialization behavior remains covered by unit tests; descriptor, typed resource-entry, runtime metadata, and `RunOptions` contracts belong to later phases. The only contract-like assertion in this phase is the package import/public export contract covered by the package suite.
 
 ### Integration Suite
 
 - Status: required
 - Expected paths: existing integration suites that exercise runtime/resource parsing through pipeline/config flows, especially `tests/integration/pipeline/` and existing config-to-pipeline integration tests as selected during implementation.
-- Required assertions or deferral reason: existing local runtime/resource behavior remains green after the import move; no new integration behavior is expected.
+- Required assertions or deferral reason: existing local runtime/resource behavior remains green after the import move; no new integration behavior is expected. Select the smallest existing integration targets that exercise runtime/resource parsing through pipeline/config flows; do not add new integration behavior for `RunOptions`, resources v4, descriptors, preflight, or CLI/config runtime mapping.
 
 ### E2E Suite
 
 - Status: required
 - Expected paths: `tests/e2e/test_local_pipeline_run.py`.
-- Required assertions or deferral reason: the existing local pipeline e2e remains green, proving the package split did not change local run behavior.
+- Required assertions or deferral reason: the existing local pipeline e2e remains green, proving the package split did not change local run behavior. No new e2e scenario should be added for this boundary-only phase.
 
 ### Opt-In Suites
 
 - Status: deferred
 - Markers affected: none expected.
-- Required assertions or deferral reason: no optional backend, config-extra-only, scheduler, container, plugin, or opt-in runtime behavior is implemented in this phase.
+- Required assertions or deferral reason: no optional backend, config-extra-only, scheduler, container, plugin, descriptor discovery, or opt-in runtime behavior is implemented in this phase; opt-in suites are intentionally not required.
 
 ## Risks
 
@@ -208,23 +211,23 @@ make test-summary
 
 - Safe implementation slices: package conversion and facade exports first, package-level export compatibility second, import-boundary tests third, runtime behavior compatibility tests fourth, `docs/structure.md` update last.
 - Tests to run with each slice: run package import-boundary tests after package/export edits; run runtime/resource unit tests after moving implementation; run targeted integration/e2e after all source and docs changes are complete.
-- Decisions the executor must not revisit: no behavior changes; no `RunOptions`; no typed resource entries; no descriptor implementation; no CLI/config/preflight/runtime metadata wiring; runtime facade must remain import-light; descriptor boundary is documented only.
-- Conditions that require stopping for the manager: preserving `loom.pipeline.runtime` imports proves impossible without a compatibility shim, runtime import needs any forbidden layer, implementation appears to require placeholder modules beyond immediate package scaffolding, or tests require changing runtime/resource behavior instead of preserving it.
-- Expanded-path refinement notes: refine pass pending. The refinement should verify the exact package leaf name, docs wording for descriptor ownership, and whether suite obligations are specific enough for implementation without broad validation during planning.
+- Decisions the executor must not revisit: no behavior changes; no `RunOptions`; no typed resource entries; no descriptor implementation; no CLI/config/preflight/runtime metadata wiring; runtime facade must remain import-light; descriptor boundary is documented only; public tests should assert the facade and current package re-exports, not a private leaf module.
+- Conditions that require stopping for the manager: preserving `loom.pipeline.runtime` imports proves impossible, runtime import needs any forbidden layer, implementation appears to require placeholder modules beyond immediate package scaffolding, tests require changing runtime/resource behavior instead of preserving it, or the docs cannot describe descriptor direction without claiming descriptor behavior exists.
+- Expanded-path refinement notes: completed on 2026-05-07. The refined plan keeps the package leaf private, makes import-light tests and docs obligations explicit, and records that Phase 1 remains free of `RunOptions`, typed resource schema, and descriptor behavior.
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
-- PR review: unused
-- Blocker resolution: 0/3 used
+- Phase implementation refinement: unused; planning refinement did not consume this later implementation/test fixer budget.
+- PR review: unused; no PR review has been requested or performed.
+- Blocker resolution: 0/3 used; no blocker-resolution pass has been needed.
 
 ## Completion Notes
 
 - Draft plan: completed on 2026-05-07 by `loom_phase_planner`.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: completed on 2026-05-07 by expanded-path refine pass.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: scope boundaries tightened; preserved public runtime imports made explicit; `RunOptions`, resource schema, and descriptor behavior excluded; import-light package tests and `docs/structure.md` boundary updates made required; implementation refinement, PR review, and blocker-resolution budgets remain unused.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: pending.
