@@ -41,7 +41,7 @@ status/log inspection.
 | Focused tests | Passed | `uv run --extra config pytest ...` passed with 53 tests. |
 | `make validate-pr` | Passed | Ruff, Pyright with config extra, default harness, config-extra harness, and build all passed. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; all suites passed. |
-| GitHub checks | Pending | To be populated after PR creation. |
+| GitHub checks | Passed | CI `checks` completed successfully for PR #81. |
 
 ### Test Suite Summary
 
