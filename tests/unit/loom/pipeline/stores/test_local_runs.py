@@ -372,6 +372,58 @@ def test_local_run_stage_docs_and_logs(tmp_path: Path) -> None:
     assert store.read_stage_log(run_uri, "stage", "stdout") == "line1\n"
 
 
+def test_local_run_inspection_discovers_stage_state(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=RunStatus.SUCCEEDED,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    stage_status = StageStatusRecord(
+        run_uri=run_uri,
+        stage_name="build",
+        status=StageStatus.SUCCEEDED,
+        attempt=1,
+        updated_at="2020-01-01T00:00:01Z",
+    )
+    store.write_stage_status(run_uri, "build", stage_status)
+    store.write_stage_outputs(run_uri, "build", {"out": _artifact_ref()}, attempt=1)
+    store.write_stage_provenance(run_uri, "build", {"tool": "x"}, attempt=1)
+    store.write_stage_log(run_uri, "build", "stdout", "line1\nline2\n")
+    store.write_stage_status(
+        run_uri,
+        "report",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="report",
+            status=StageStatus.BLOCKED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:02Z",
+            message="blocked",
+        ),
+    )
+
+    assert store.list_run_stages(run_uri) == ("build", "report")
+    inspection = store.inspect_run_state(run_uri)
+
+    assert inspection.run_status is not None
+    assert inspection.run_status.status is RunStatus.SUCCEEDED
+    assert inspection.artifact_count == 0
+    build = inspection.stage_inspections[0]
+    assert build.stage_name == "build"
+    assert build.status == stage_status
+    assert build.output_count == 1
+    assert build.provenance_available is True
+    assert build.stdout_available is True
+    assert build.stderr_available is False
+
+
 def test_local_run_reads_and_writes_blocked_stage_status_only(tmp_path: Path) -> None:
     store = LocalRunStore(root=tmp_path / "runs")
     run_uri = _run_uri(tmp_path)

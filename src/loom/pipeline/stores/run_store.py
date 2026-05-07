@@ -10,6 +10,7 @@ from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
+from loom.pipeline.stores.inspection import RunStateInspection
 from loom.serialization import PlainData
 
 
@@ -115,6 +116,13 @@ class RunLockStore(Protocol):
     def read_run_lock(self, run_uri: str) -> RunLockRecord | None: ...
 
     def release_run_lock(self, run_uri: str, token: str) -> None: ...
+
+
+@runtime_checkable
+class RunInspectionStore(Protocol):
+    def list_run_stages(self, run_uri: str) -> tuple[str, ...]: ...
+
+    def inspect_run_state(self, run_uri: str) -> RunStateInspection: ...
 
 
 @runtime_checkable
@@ -245,6 +253,7 @@ class RunStore(
     RunProvenanceStore,
     RunEventStore,
     RunLockStore,
+    RunInspectionStore,
     StageStateStore,
     StageLogStore,
     StageWorkspaceStore,

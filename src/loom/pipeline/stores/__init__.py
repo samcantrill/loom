@@ -38,6 +38,7 @@ from .indexes import (
     merge_artifact_index,
     parse_artifact_key,
 )
+from .inspection import RunStageInspection, RunStateInspection
 from .local_artifacts import LocalArtifactStore
 from .local_runs import LocalRunStore
 from .run_uri import (
@@ -54,6 +55,7 @@ from .run_store import (
     RunConfigStore,
     RunDocumentStore,
     RunEventStore,
+    RunInspectionStore,
     RunLockStore,
     RunLifecycleStore,
     RunProvenanceStore,
@@ -72,6 +74,7 @@ __all__ = [
     "RunLifecycleStore",
     "RunDocumentStore",
     "RunEventStore",
+    "RunInspectionStore",
     "RunLockStore",
     "RunStatusStore",
     "RunPlanStore",
@@ -83,6 +86,8 @@ __all__ = [
     "StageWorkspaceStore",
     "LocalRunStorePaths",
     "LocalRunStore",
+    "RunStageInspection",
+    "RunStateInspection",
     "StoreError",
     "ArtifactStoreError",
     "RunStoreError",

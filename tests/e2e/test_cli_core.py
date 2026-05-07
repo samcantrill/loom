@@ -13,7 +13,7 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.cli.main import main
-from loom.pipeline.stores import path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
 from tests.support.config_samples import construction_event_log, reset_instantiate_probe_state
 
 pytestmark = pytest.mark.e2e
@@ -177,6 +177,28 @@ def test_cli_run_default_and_explicit_run_uri(tmp_path: Path, monkeypatch: pytes
     assert default_payload["result"]["status"] == "SUCCEEDED"
     assert default_run_uri.startswith(path_to_run_uri(tmp_path / "runs").removesuffix("/"))
     assert run_uri_to_path(default_run_uri).is_dir()
+    LocalRunStore().write_stage_log(default_run_uri, "build", "stdout", "hello\nworld\n")
+
+    status_stdout = io.StringIO()
+    status_stderr = io.StringIO()
+    assert main(["status", default_run_uri, "--format", "json"], stdout=status_stdout, stderr=status_stderr) == 0
+    status_payload = json.loads(status_stdout.getvalue())
+    assert status_payload["schema_version"] == "loom.cli.status.v3"
+    assert status_payload["result"]["stages"][0]["stage_name"] == "build"
+
+    logs_stdout = io.StringIO()
+    logs_stderr = io.StringIO()
+    assert (
+        main(
+            ["logs", default_run_uri, "build", "--stream", "stdout", "--tail", "1", "--format", "json"],
+            stdout=logs_stdout,
+            stderr=logs_stderr,
+        )
+        == 0
+    )
+    logs_payload = json.loads(logs_stdout.getvalue())
+    assert logs_payload["schema_version"] == "loom.cli.logs.v3"
+    assert logs_payload["result"]["streams"][0]["content"] == "world\n"
 
     explicit_run_uri = path_to_run_uri(tmp_path / "runs" / "explicit")
     explicit_stdout = io.StringIO()

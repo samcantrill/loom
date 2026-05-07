@@ -44,6 +44,7 @@ from .errors import (
     UnsafeStorePathError,
 )
 from .indexes import artifact_index_from_dict, artifact_index_to_dict
+from .inspection import RunStageInspection, RunStateInspection, ensure_failure_payload
 from .run_uri import allocate_local_run_uri, run_uri_to_path, validate_run_uri
 
 _SCHEMA_VERSION = 1
@@ -111,6 +112,42 @@ class LocalRunStore:
     def run_uri_exists(self, run_uri: str) -> bool:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         return self.local_run_dir(run_uri_text).exists()
+
+    def list_run_stages(self, run_uri: str) -> tuple[str, ...]:
+        """Return discovered stage names for a persisted local run."""
+
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        self.open_run(run_uri_text)
+        stages_dir = self.local_run_dir(run_uri_text) / "stages"
+        if not stages_dir.exists():
+            return ()
+        if not stages_dir.is_dir():
+            raise CorruptStoreDocumentError(f"Expected stage directory at {stages_dir}")
+
+        stage_names: list[str] = []
+        for child in sorted(stages_dir.iterdir(), key=lambda path: path.name):
+            if not child.is_dir():
+                raise CorruptStoreDocumentError(
+                    f"Expected stage directory at {child}"
+                )
+            stage_names.append(validate_stage_name(child.name, field="stage_name"))
+        return tuple(stage_names)
+
+    def inspect_run_state(self, run_uri: str) -> RunStateInspection:
+        """Return a read-only scan of persisted local run state."""
+
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        self.open_run(run_uri_text)
+        stage_inspections = tuple(
+            self._inspect_stage_state(run_uri_text, stage_name)
+            for stage_name in self.list_run_stages(run_uri_text)
+        )
+        return RunStateInspection(
+            run_uri=run_uri_text,
+            run_status=self.read_run_status(run_uri_text),
+            stage_inspections=stage_inspections,
+            artifact_count=len(self.read_artifact_index(run_uri_text)),
+        )
 
     def local_run_dir(self, run_uri: str) -> Path:
         return run_uri_to_path(run_uri)
@@ -587,6 +624,33 @@ class LocalRunStore:
                 f"Malformed stage status at {path}: {exc}",
             ) from exc
 
+    def _inspect_stage_state(self, run_uri: str, stage_name: str) -> RunStageInspection:
+        status = self.read_stage_status(run_uri, stage_name)
+        failure = ensure_failure_payload(self.read_stage_failure(run_uri, stage_name))
+        inputs = self.read_stage_inputs(run_uri, stage_name)
+        outputs = self.read_stage_outputs(run_uri, stage_name)
+        provenance = self.read_stage_provenance(run_uri, stage_name)
+        stdout_path = self.local_stage_log_path(run_uri, stage_name, "stdout")
+        stderr_path = self.local_stage_log_path(run_uri, stage_name, "stderr")
+        self._validate_optional_log_file(stdout_path)
+        self._validate_optional_log_file(stderr_path)
+        return RunStageInspection(
+            stage_name=stage_name,
+            status=status,
+            failure=failure,
+            input_count=0 if inputs is None else len(inputs),
+            output_count=0 if outputs is None else len(outputs),
+            provenance_available=provenance is not None,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            stdout_available=stdout_path.exists(),
+            stderr_available=stderr_path.exists(),
+        )
+
+    def _validate_optional_log_file(self, path: Path) -> None:
+        if path.exists() and not path.is_file():
+            raise CorruptStoreDocumentError(f"Expected stage log file at {path}")
+
     def write_stage_status(
         self, run_uri: str, stage_name: str, status: StageStatusRecord
     ) -> None:
@@ -759,6 +823,8 @@ class LocalRunStore:
         path = self.local_stage_log_path(run_uri, stage_name, validated_stream)
         if not path.exists():
             return None
+        if not path.is_file():
+            raise CorruptStoreDocumentError(f"Expected stage log file at {path}")
         return path.read_text(encoding="utf-8")
 
     def write_stage_log(
