@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Stage Worker
 - PR title: `Stage Worker - Phase 4: Preflight, Diagnostics, and CLI UX`
 - Branch: `codex/subprocess-preflight-diagnostics`
@@ -22,6 +22,7 @@
 - Refine pass: completed by manager on 2026-05-07 for expanded path
 - Setup limitations: none; Phases 1, 2, and 3 are merged on `develop`, and this worktree was created from `develop`.
 - Blockers: none known
+- PR: https://github.com/samcantrill/loom/pull/80
 
 ## Objective
 
