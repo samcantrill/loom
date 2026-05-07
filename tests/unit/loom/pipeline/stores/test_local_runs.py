@@ -269,6 +269,25 @@ def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
     store.write_plan(run_uri, plan_payload)
     assert store.read_plan(run_uri) == plan_payload
 
+    runtime_payload: dict[str, PlainData] = {
+        "schema_version": 1,
+        "executor": "local",
+        "stages": {"build": {"executor": "local"}},
+    }
+    store.write_runtime_metadata(run_uri, runtime_payload)
+    assert store.read_runtime_metadata(run_uri) == runtime_payload
+    runtime_wrapper = json.loads(
+        (store.local_run_dir(run_uri) / "runtime.json").read_text(encoding="utf-8")
+    )
+    assert set(runtime_wrapper) == {
+        "schema_version",
+        "run_uri",
+        "updated_at",
+        "runtime",
+    }
+    assert runtime_wrapper["run_uri"] == run_uri
+    assert runtime_wrapper["runtime"] == runtime_payload
+
     ref = ArtifactRef(
         artifact_id="stage/output",
         uri="file:///tmp/stage/output.json",

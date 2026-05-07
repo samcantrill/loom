@@ -23,8 +23,13 @@ class FakeComposedConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class FakeSpec:
+    stage_names: tuple[str, ...] = ("build", "test")
+
+
+@dataclass(frozen=True, slots=True)
 class FakePipelineResult:
-    spec: object = object()
+    spec: FakeSpec = FakeSpec()
     stage_count: int = 2
     pipeline_name: str | None = "demo"
     stage_factory_target_paths: tuple[str, ...] = ("$.pipeline.stages[0].factory",)

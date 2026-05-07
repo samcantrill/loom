@@ -15,7 +15,11 @@ from loom.pipeline.execution import (
     PipelineRunner,
     RunRequest,
     RunRequestError,
+    StageExecutionRequest,
+    StageExecutionResult,
 )
+from loom.pipeline.executors import LocalExecutor
+from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
 from loom.provenance.models import ProvenanceCaptureOptions
 from loom.serialization import PlainData
@@ -89,6 +93,18 @@ def _runner(tmp_path: Path) -> PipelineRunner:
 
 def _run_uri(tmp_path: Path) -> str:
     return path_to_run_uri(tmp_path / "runs" / "run1")
+
+
+class TrackingExecutor:
+    name = "local"
+
+    def __init__(self) -> None:
+        self.requests: list[StageExecutionRequest] = []
+        self._delegate = LocalExecutor()
+
+    def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
+        self.requests.append(request)
+        return self._delegate.execute(request)
 
 
 def _stage(
@@ -185,6 +201,78 @@ def test_runner_allocates_default_run_uri_under_store_root(tmp_path: Path) -> No
     assert run_path.parent == (tmp_path / "runs").resolve()
     assert (run_path / "run.json").is_file()
     assert run_store.read_run_document(result.run_uri)["run_uri"] == result.run_uri
+    runtime_metadata = run_store.read_runtime_metadata(result.run_uri)
+    assert runtime_metadata is not None
+    assert runtime_metadata["run_uri"] == result.run_uri
+    assert runtime_metadata["executor"] == "local"
+    stages = cast(Mapping[str, PlainData], runtime_metadata["stages"])
+    assert set(stages) == {"build"}
+
+
+def test_runner_passes_resolved_runtime_to_stage_execution_request(
+    tmp_path: Path,
+) -> None:
+    run_store = LocalRunStore(tmp_path / "runs")
+    executor = TrackingExecutor()
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            options={
+                "executor": "local",
+                "stage_options": {
+                    "build": {
+                        "resources": {
+                            "entries": {"cpu": {"kind": "cpu", "amount": 2}}
+                        }
+                    }
+                },
+            },
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status is not None
+    assert len(executor.requests) == 1
+    resolved = cast(ResolvedStageRuntimeOptions, executor.requests[0].resolved_runtime)
+    assert resolved.stage_id == "build"
+    assert resolved.executor == "local"
+    runtime_metadata = run_store.read_runtime_metadata(result.run_uri)
+    assert runtime_metadata is not None
+    stages = cast(Mapping[str, PlainData], runtime_metadata["stages"])
+    stage_metadata = cast(Mapping[str, PlainData], stages["build"])
+    resources = cast(Mapping[str, PlainData], stage_metadata["resources"])
+    entries = cast(Mapping[str, PlainData], resources["entries"])
+    cpu = cast(Mapping[str, PlainData], entries["cpu"])
+    assert cpu["amount"] == 2
+
+
+def test_runner_rejects_dry_run_execution_request(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs"
+    with pytest.raises(RunRequestError, match="dry-run"):
+        PipelineRunner(run_store=LocalRunStore(run_root)).run(
+            RunRequest(
+                pipeline=PipelineSpec(
+                    stages=(
+                        _stage(
+                            target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                        ),
+                    )
+                ),
+                options={"dry_run": True},
+            )
+        )
+    assert not run_root.exists()
 
 
 def test_runner_requires_run_uri_for_open_existing(tmp_path: Path) -> None:

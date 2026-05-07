@@ -54,7 +54,8 @@ def test_run_options_adapt_to_planning_owned_models() -> None:
     assert options.to_resume_options() == ResumeOptions(enabled=False)
 
 
-def test_execution_envelope_boundary_remains_unwired_in_phase_3() -> None:
-    assert "options" not in RunRequest.__dataclass_fields__
+def test_execution_envelope_exposes_runtime_options_without_environment_values() -> None:
+    assert "options" in RunRequest.__dataclass_fields__
+    assert "resolved_runtime" in StageExecutionRequest.__dataclass_fields__
     assert "runtime_options" not in StageExecutionRequest.__dataclass_fields__
     assert "environment" not in StageExecutionRequest.__dataclass_fields__

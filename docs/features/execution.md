@@ -432,12 +432,22 @@ notes, selector/resume adapter inputs, execution settings, exact stage runtime
 options, environment requests, and adapter options.
 
 The execution `RunRequest` remains the runner envelope for config, pipeline,
-provenance, stores, lifecycle inputs, and existing compatibility fields until a
-later runtime workflow phase wires normalized `RunOptions` into execution.
-Stage resources are typed resource entries preserved for inspection; the local
-executor does not interpret them. Runtime profiles and executor descriptor
-capability validation are runtime package APIs; execution runners do not consume
-them until later workflow wiring.
+provenance, stores, and lifecycle inputs. Its `options` field is the canonical
+invocation-policy source; legacy `run_uri`, `selectors`, and `resume` inputs
+normalize into that field when they do not conflict. `open_existing` remains
+run-store lifecycle policy and is not inferred from `RunOptions.resume`.
+
+The runner resolves `RunOptions` once per run into typed
+`ResolvedStageRuntimeOptions` objects and passes the matching object through
+`StageExecutionRequest.resolved_runtime`. Executors receive typed runtime data
+directly; they should not read persisted metadata to decide execution behavior.
+
+Local runs also write a schema-versioned `runtime.json` observability document.
+The document records safe summaries only: executor/profile/tags/notes,
+selector and resume summaries, resource entry summaries, execution setting
+keys, environment counts, and adapter namespace names/counts. It does not
+record environment variable names or values, raw adapter payloads, or semantic
+fingerprint inputs.
 
 Examples:
 

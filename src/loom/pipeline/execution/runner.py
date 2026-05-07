@@ -17,6 +17,13 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
     plan_pipeline,
 )
+from loom.pipeline.runtime import (
+    ResolvedStageRuntimeOptions,
+    RunOptions,
+    build_runtime_metadata,
+    parse_run_options,
+    resolve_run_runtime,
+)
 from loom.pipeline.specs import PipelineSpec, StageSpec, parse_pipeline_config
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.stage import Stage
@@ -90,6 +97,11 @@ class PipelineRunner:
     def run(self, request: RunRequest) -> RunResult:
         if not isinstance(request, RunRequest):
             raise RunRequestError("PipelineRunner.run requires RunRequest")
+        options = parse_run_options(request.options)
+        if options.dry_run:
+            raise RunRequestError(
+                "PipelineRunner.run does not execute dry-run requests; use planning APIs instead"
+            )
 
         started_at = self.clock()
         local_run_store = self._require_local_run_store()
@@ -142,6 +154,21 @@ class PipelineRunner:
             metadata=request.metadata,
         )
         config_mapping, spec = self._resolve_config_and_spec(request)
+        options = _options_with_resolved_run_uri(
+            parse_run_options(request.options),
+            run_uri,
+        )
+        resolved_runtime = resolve_run_runtime(
+            options,
+            stage_ids=spec.stage_names,
+        )
+        self.run_store.write_runtime_metadata(
+            run_uri,
+            build_runtime_metadata(
+                options,
+                stage_ids=spec.stage_names,
+            ).to_dict(),
+        )
         self._write_config_and_provenance(run_uri, request, config_mapping)
         artifact_store = self.artifact_store_factory(
             local_run_store.local_artifact_root(run_uri)
@@ -286,6 +313,7 @@ class PipelineRunner:
                 spec=spec,
                 stage=stage,
                 stage_plan=stage_plan,
+                resolved_runtime=resolved_runtime[stage.name],
                 plan=plan,
                 artifact_store=artifact_store,
                 produced_outputs=outputs_by_stage,
@@ -363,6 +391,7 @@ class PipelineRunner:
         spec: PipelineSpec,
         stage: StageSpec,
         stage_plan,
+        resolved_runtime: ResolvedStageRuntimeOptions,
         plan: ExecutionPlan,
         artifact_store: ArtifactStore,
         local_output_dir: Path,
@@ -436,6 +465,7 @@ class PipelineRunner:
                 traceback_path=traceback_log_path(
                     run_store=local_run_store, run_uri=run_uri, stage_name=stage.name
                 ),
+                resolved_runtime=resolved_runtime,
             )
             execution_result = self.executor.execute(exec_request)
             stage_started_at = execution_result.started_at
@@ -564,11 +594,12 @@ class PipelineRunner:
     def _resolve_request_run_uri(
         self, request: RunRequest, local_run_store: LocalRunStorePaths
     ) -> str:
-        if request.run_uri is None:
+        run_uri = parse_run_options(request.options).run_uri
+        if run_uri is None:
             if request.open_existing:
                 raise RunRequestError("RunRequest.open_existing requires run_uri")
             return local_run_store.allocate_run_uri()
-        return local_run_store.resolve_run_uri(request.run_uri)
+        return local_run_store.resolve_run_uri(run_uri)
 
     def _create_or_open_run(self, run_uri: str, request: RunRequest) -> None:
         if request.open_existing:
@@ -1217,6 +1248,14 @@ class PipelineRunner:
             exception_type=exception_type,
             details=details or {},
         )
+
+
+def _options_with_resolved_run_uri(options: RunOptions, run_uri: str) -> RunOptions:
+    if options.run_uri == run_uri:
+        return options
+    data = options.to_dict()
+    data["run_uri"] = run_uri
+    return RunOptions.from_dict(data)
 
 
 def run_pipeline(

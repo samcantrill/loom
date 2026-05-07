@@ -30,6 +30,13 @@ from loom.pipeline.runtime.environment import (
     RunEnvironmentRequest,
     StageEnvironmentRequest,
 )
+from loom.pipeline.runtime.metadata import (
+    RUNTIME_METADATA_SCHEMA_VERSION,
+    ResolvedStageRuntimeOptions,
+    RuntimeMetadata,
+    build_runtime_metadata,
+    resolve_run_runtime,
+)
 from loom.pipeline.runtime.options import (
     RUN_OPTIONS_SCHEMA_VERSION,
     ExecutionOptions,
@@ -50,6 +57,7 @@ from loom.pipeline.runtime.profiles import (
 __all__ = [
     "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
     "RUNTIME_CONFIG_SECTION",
+    "RUNTIME_METADATA_SCHEMA_VERSION",
     "RUNTIME_PROFILES_CONFIG_SECTION",
     "RUN_OPTIONS_SCHEMA_VERSION",
     "RUNTIME_SCHEMA_VERSION",
@@ -61,6 +69,7 @@ __all__ = [
     "ExecutorDescriptorRegistry",
     "RunEnvironmentRequest",
     "RunOptions",
+    "ResolvedStageRuntimeOptions",
     "ResourceCapability",
     "ResourceEnforcementExpectation",
     "ResourceSupportLevel",
@@ -68,9 +77,11 @@ __all__ = [
     "RuntimeProfileCollection",
     "RuntimeKind",
     "RuntimeConfigSections",
+    "RuntimeMetadata",
     "RuntimeRequest",
     "StageEnvironmentRequest",
     "StageRuntimeOptions",
+    "build_runtime_metadata",
     "merge_config_run_options",
     "merge_run_options",
     "parse_run_options",
@@ -79,6 +90,7 @@ __all__ = [
     "parse_runtime_profiles",
     "parse_runtime_request",
     "resolve_executor_descriptor",
+    "resolve_run_runtime",
     "select_runtime_profile",
     "validate_executor_capabilities",
     "validate_stage_runtime_options",

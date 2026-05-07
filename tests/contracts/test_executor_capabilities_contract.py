@@ -146,7 +146,7 @@ def test_runtime_capability_imports_do_not_load_diagnostics_or_executors() -> No
     assert result.stdout.strip() == "ok"
 
 
-def test_execution_envelope_boundary_remains_unwired_for_capability_phase() -> None:
-    assert "options" not in RunRequest.__dataclass_fields__
+def test_execution_envelope_exposes_runtime_handoff_without_adapter_lock_in() -> None:
+    assert "options" in RunRequest.__dataclass_fields__
+    assert "resolved_runtime" in StageExecutionRequest.__dataclass_fields__
     assert "runtime_options" not in StageExecutionRequest.__dataclass_fields__
-    assert "resolved_runtime" not in StageExecutionRequest.__dataclass_fields__

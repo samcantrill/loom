@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,7 +25,9 @@ if TYPE_CHECKING:
     from loom.config.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
     from loom.pipeline.planning import PlanSelectors
+    from loom.pipeline.runtime import RunOptions
     from loom.pipeline.stores import LocalRunStore
+    from loom.pipeline.validation import PipelineValidationResult
 
 
 RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v2"
@@ -128,9 +130,6 @@ def handle(namespace: argparse.Namespace) -> int:
     selector_options = SelectorCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
 
-    if run_options.executor != "local":
-        raise UnsupportedExecutorError(run_options.executor)
-
     if run_options.dry_run:
         return _handle_dry_run(
             config_options=config_options,
@@ -169,25 +168,36 @@ def build_run_result(
     """Execute a pipeline and build the CLI-specific run result."""
 
     store = _create_default_run_store()
-    run_uri = _resolve_run_uri_for_run(store, run_options)
-    _run_preflight_for_run(
-        config_options=config_options,
-        run_options=run_options,
-        selector_options=selector_options,
-        run_uri=run_uri,
-    )
-    if run_options.executor != "local":
-        raise UnsupportedExecutorError(run_options.executor)
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
+    pipeline_result = _validate_pipeline_config(composed.resolved)
+    runtime_options = _merge_runtime_options(
+        composed.resolved,
+        run_options=run_options,
+        selector_options=selector_options,
+        known_stage_ids=pipeline_result.spec.stage_names,
+    )
+    run_uri = _resolve_run_uri_for_run(
+        store,
+        runtime_options.run_uri,
+        open_existing=run_options.resume,
+    )
+    runtime_options = _with_resolved_run_uri(runtime_options, run_uri)
+    executor = runtime_options.executor or "local"
+    if executor != "local":
+        raise UnsupportedExecutorError(executor)
+    _run_preflight_for_run(
+        config_options=config_options,
+        runtime_options=runtime_options,
+        open_existing=run_options.resume,
+    )
     request = _build_run_request(
         composed,
-        run_uri=run_uri,
         open_existing=run_options.resume,
-        selectors=_build_plan_selectors(selector_options),
+        options=runtime_options,
     )
     result = _run_pipeline(request, store)
     return _run_result_from_execution_result(result)
@@ -243,25 +253,62 @@ def _compose_config(
     return compose_config(config_path, overlays=tuple(overlays), overrides=tuple(overrides))
 
 
+def _validate_pipeline_config(config: Mapping[str, object]) -> "PipelineValidationResult":
+    from loom.pipeline import validate_pipeline_config
+
+    return validate_pipeline_config(config)
+
+
+def _merge_runtime_options(
+    config: Mapping[str, object],
+    *,
+    run_options: RunCliOptions,
+    selector_options: SelectorCliOptions,
+    known_stage_ids: Sequence[str],
+) -> "RunOptions":
+    from loom.pipeline.runtime import merge_config_run_options
+
+    return merge_config_run_options(
+        config,
+        explicit=run_options.to_runtime_source(selectors=selector_options),
+        known_stage_ids=known_stage_ids,
+    )
+
+
+def _with_resolved_run_uri(options: "RunOptions", run_uri: str | None) -> "RunOptions":
+    if run_uri is None or options.run_uri == run_uri:
+        return options
+    from loom.pipeline.runtime import RunOptions
+
+    data = options.to_dict()
+    data["run_uri"] = run_uri
+    return RunOptions.from_dict(data)
+
+
 def _create_default_run_store() -> "LocalRunStore":
     from loom.pipeline.stores import LocalRunStore
 
     return LocalRunStore()
 
 
-def _resolve_run_uri_for_run(store: "LocalRunStore", options: RunCliOptions) -> str | None:
-    if options.resume and options.run_uri is None:
+def _resolve_run_uri_for_run(
+    store: "LocalRunStore",
+    run_uri: str | None,
+    *,
+    open_existing: bool,
+) -> str | None:
+    if open_existing and run_uri is None:
         raise CliError(
             "`loom run --resume` requires --run-uri.",
             code="cli.run.resume_requires_run_uri",
-            hint="Pass --run-uri file:///absolute/run for strict resume.",
+            hint="Pass --run-uri or configure runtime.run_uri for strict resume.",
             exit_code=ExitCode.PIPELINE,
         )
-    if options.run_uri is None:
+    if run_uri is None:
         return store.allocate_run_uri()
 
-    resolved = store.resolve_run_uri(options.run_uri)
-    if options.resume:
+    resolved = store.resolve_run_uri(run_uri)
+    if open_existing:
         store.open_run(resolved)
     elif store.run_uri_exists(resolved):
         from loom.pipeline.stores import RunAlreadyExistsError
@@ -275,30 +322,25 @@ def _resolve_run_uri_for_run(store: "LocalRunStore", options: RunCliOptions) -> 
 def _run_preflight_for_run(
     *,
     config_options: ConfigCliOptions,
-    run_options: RunCliOptions,
-    selector_options: SelectorCliOptions,
-    run_uri: str | None,
+    runtime_options: "RunOptions",
+    open_existing: bool,
 ) -> None:
     from loom.diagnostics import PreflightError, PreflightRequest
 
-    if run_options.resume:
+    if open_existing:
         groups = ("config", "pipeline", "selectors", "runtime", "executor", "resources")
     else:
         groups = ("config", "pipeline", "selectors", "runtime", "run", "executor", "resources")
-    runtime_source = run_options.to_runtime_source(selectors=selector_options)
-    if run_uri is not None:
-        runtime_source["run_uri"] = run_uri
     try:
         result = _run_diagnostics_preflight(
             PreflightRequest(
                 config_path=config_options.config_path,
                 groups=groups,
-                run_uri=run_uri,
+                run_uri=runtime_options.run_uri,
                 cwd=Path.cwd(),
                 overlays=config_options.overlays,
                 overrides=config_options.overrides,
-                selectors=selector_options.to_runtime_source(),
-                runtime_options=runtime_source or None,
+                runtime_options=runtime_options,
             )
         )
     except PreflightError as exc:
@@ -345,19 +387,15 @@ def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":
 def _build_run_request(
     config: "ComposedConfig",
     *,
-    run_uri: str | None,
     open_existing: bool,
-    selectors: "PlanSelectors",
+    options: "RunOptions",
 ) -> "RunRequest":
     from loom.pipeline.execution import RunRequest
-    from loom.pipeline.planning import ResumeOptions
 
     return RunRequest(
         config=config,
-        run_uri=run_uri,
         open_existing=open_existing,
-        selectors=selectors,
-        resume=ResumeOptions(enabled=open_existing),
+        options=options,
     )
 
 

@@ -43,6 +43,7 @@ def test_store_error_exports() -> None:
         "RunArtifactIndexStore",
         "RunConfigStore",
         "RunProvenanceStore",
+        "RunRuntimeMetadataStore",
         "StageStateStore",
         "StageLogStore",
         "StageWorkspaceStore",

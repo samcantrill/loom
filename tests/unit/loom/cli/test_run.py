@@ -11,7 +11,7 @@ import pytest
 
 from loom.cli.errors import CliError
 from loom.cli.main import main
-from loom.cli.options import ConfigCliOptions, RunCliOptions, SelectorCliOptions
+from loom.cli.options import ConfigCliOptions
 from loom.cli.results import PlanCliResult
 import loom.cli.plan as plan_command
 import loom.cli.run as run_command
@@ -23,7 +23,8 @@ from loom.diagnostics import (
     PreflightResult,
     PreflightSeverity,
 )
-from loom.pipeline.planning import PlanAction, PlanReason, PlanReasonCode, PlanSelectors
+from loom.pipeline.planning import PlanAction, PlanReason, PlanReasonCode
+from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
 
 
@@ -33,6 +34,16 @@ pytestmark = pytest.mark.unit
 @dataclass(frozen=True, slots=True)
 class FakeComposedConfig:
     resolved: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class FakeSpec:
+    stage_names: tuple[str, ...] = ("build",)
+
+
+@dataclass(frozen=True, slots=True)
+class FakePipelineResult:
+    spec: FakeSpec = FakeSpec()
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +97,7 @@ class FakeRunResult:
 class FakeRunRequest:
     run_uri: str | None
     open_existing: bool
-    selectors: PlanSelectors
+    options: RunOptions
 
 
 def _preflight_result(status: PreflightCheckStatus = PreflightCheckStatus.PASS) -> PreflightResult:
@@ -140,36 +151,34 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
     def run_pipeline(request: object, run_store: object) -> FakeRunResult:
         calls["request_run_uri"] = getattr(request, "run_uri")
         calls["open_existing"] = getattr(request, "open_existing")
-        calls["selectors"] = getattr(request, "selectors")
+        calls["request_options"] = getattr(request, "options")
         calls["run_store"] = run_store
         return FakeRunResult()
 
     def build_run_request(
         _config: object,
         *,
-        run_uri: str | None,
         open_existing: bool,
-        selectors: PlanSelectors,
+        options: RunOptions,
     ) -> FakeRunRequest:
         return FakeRunRequest(
-            run_uri=run_uri,
+            run_uri=options.run_uri,
             open_existing=open_existing,
-            selectors=selectors,
+            options=options,
         )
 
     def run_preflight(
         *,
         config_options: object,
-        run_options: object,
-        selector_options: object,
-        run_uri: str | None,
+        runtime_options: object,
+        open_existing: bool,
     ) -> None:
         calls["preflight_config_path"] = getattr(config_options, "config_path")
-        calls["preflight_resume"] = getattr(run_options, "resume")
-        calls["preflight_selectors"] = selector_options
-        calls["preflight_run_uri"] = run_uri
+        calls["preflight_resume"] = open_existing
+        calls["preflight_run_uri"] = getattr(runtime_options, "run_uri")
 
     monkeypatch.setattr(run_command, "_compose_config", compose)
+    monkeypatch.setattr(run_command, "_validate_pipeline_config", lambda _config: FakePipelineResult())
     monkeypatch.setattr(run_command, "_create_default_run_store", lambda: fake_store)
     monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
     monkeypatch.setattr(run_command, "_run_preflight_for_run", run_preflight)
@@ -210,18 +219,13 @@ def test_run_default_uri_is_allocated_once_before_preflight_and_execution(
     assert calls["preflight_config_path"] == Path("base.yaml")
     assert calls["preflight_run_uri"] == "file:///abs/runs/generated"
     assert calls["request_run_uri"] == "file:///abs/runs/generated"
-    selectors = calls["selectors"]
-    assert isinstance(selectors, PlanSelectors)
-    assert selectors.only_stages == ("build",)
+    options = calls["request_options"]
+    assert isinstance(options, RunOptions)
+    assert options.to_plan_selectors().only_stages == ("build",)
 
 
-def test_run_explicit_existing_uri_fails_before_composition(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_explicit_existing_uri_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_common(monkeypatch, store=FakeRunStore(exists=True))
-    monkeypatch.setattr(
-        run_command,
-        "_compose_config",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("compose should not run")),
-    )
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -240,12 +244,7 @@ def test_run_explicit_existing_uri_fails_before_composition(monkeypatch: pytest.
 
 
 def test_run_resume_requires_run_uri(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(run_command, "_create_default_run_store", lambda: FakeRunStore())
-    monkeypatch.setattr(
-        run_command,
-        "_compose_config",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("compose should not run")),
-    )
+    _patch_common(monkeypatch)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -288,9 +287,8 @@ def test_run_preflight_helper_skips_fresh_run_group_for_resume(
 
     run_command._run_preflight_for_run(
         config_options=ConfigCliOptions(config_path=Path("base.yaml")),
-        run_options=RunCliOptions(run_uri="file:///abs/runs/demo", resume=True),
-        selector_options=SelectorCliOptions(),
-        run_uri="file:///abs/runs/demo",
+        runtime_options=RunOptions(run_uri="file:///abs/runs/demo"),
+        open_existing=True,
     )
 
     assert calls["request"].groups == (
@@ -312,9 +310,8 @@ def test_run_preflight_failure_stops_before_execution(monkeypatch: pytest.Monkey
     with pytest.raises(CliError) as exc_info:
         run_command._run_preflight_for_run(
             config_options=ConfigCliOptions(config_path=Path("base.yaml")),
-            run_options=RunCliOptions(run_uri="file:///abs/runs/demo"),
-            selector_options=SelectorCliOptions(),
-            run_uri="file:///abs/runs/demo",
+            runtime_options=RunOptions(run_uri="file:///abs/runs/demo"),
+            open_existing=False,
         )
 
     assert exc_info.value.code == "cli.run.preflight_failed"
@@ -324,7 +321,10 @@ def test_run_preflight_failure_stops_before_execution(monkeypatch: pytest.Monkey
     assert preflight_details["status"] == "FAIL"
 
 
-def test_run_unsupported_executor_returns_executor_exit_code() -> None:
+def test_run_unsupported_executor_returns_executor_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_common(monkeypatch)
     stdout = io.StringIO()
     stderr = io.StringIO()
 

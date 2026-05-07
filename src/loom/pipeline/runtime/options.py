@@ -347,6 +347,8 @@ class RunOptions:
 def parse_run_options(data: object | None) -> RunOptions:
     if data is None:
         return RunOptions()
+    if isinstance(data, RunOptions):
+        return data
     return RunOptions.from_dict(data)
 
 

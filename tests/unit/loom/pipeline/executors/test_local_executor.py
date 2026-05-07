@@ -1,6 +1,7 @@
 """Unit tests for the local executor."""
 
 from pathlib import Path
+from typing import cast
 
 from loom.pipeline import (
     OutputSpec,
@@ -17,6 +18,7 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
     plan_pipeline,
 )
+from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from tests.support.pipeline_execution_stages import FailingStage, JsonProducerStage
@@ -72,7 +74,13 @@ def _request(tmp_path: Path, stage_object: object) -> StageExecutionRequest:
 
 
 def test_local_executor_invokes_stage_successfully(tmp_path: Path) -> None:
-    result = LocalExecutor().execute(_request(tmp_path, JsonProducerStage()))
+    request = _request(tmp_path, JsonProducerStage())
+
+    resolved = cast(ResolvedStageRuntimeOptions, request.resolved_runtime)
+    assert resolved.stage_id == "build"
+    assert resolved.executor == "local"
+
+    result = LocalExecutor().execute(request)
 
     assert result.status == StageStatus.SUCCEEDED
     assert result.failure is None

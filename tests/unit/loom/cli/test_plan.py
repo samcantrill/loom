@@ -24,8 +24,13 @@ class FakeComposedConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class FakeSpec:
+    stage_names: tuple[str, ...] = ("build",)
+
+
+@dataclass(frozen=True, slots=True)
 class FakePipelineResult:
-    spec: object = object()
+    spec: FakeSpec = FakeSpec()
     pipeline_name: str | None = "demo"
     stage_count: int = 1
 
@@ -102,7 +107,26 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
         calls["selectors"] = kwargs["selectors"]
         selectors = kwargs["selectors"]
         assert isinstance(selectors, PlanSelectors)
-        return FakePlan(selectors=selectors)
+        if kwargs["resume_enabled"]:
+            reasons = (
+                PlanReason(
+                    PlanReasonCode.NO_PRIOR_STATUS,
+                    "no prior stage status",
+                    stage_name="build",
+                ),
+            )
+        else:
+            reasons = (
+                PlanReason(
+                    PlanReasonCode.RESUME_DISABLED,
+                    "resume is disabled",
+                    stage_name="build",
+                ),
+            )
+        return FakePlan(
+            selectors=selectors,
+            ordered_stage_plans=(FakeStagePlan(reasons=reasons),),
+        )
 
     monkeypatch.setattr(plan_command, "_compose_config", compose)
     monkeypatch.setattr(plan_command, "_validate_pipeline_config", lambda _config: FakePipelineResult())
@@ -182,19 +206,15 @@ def test_plan_explicit_run_uri_json_uses_resolved_uri_and_selector_options(monke
     assert payload["result"]["stage_actions"][0]["reason_codes"] == ["RESUME_DISABLED"]
 
 
-def test_plan_resume_requires_run_uri_before_config_composition(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(plan_command, "_create_default_run_store", lambda: FakeRunStore())
-    monkeypatch.setattr(
-        plan_command,
-        "_compose_config",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("compose should not run")),
-    )
+def test_plan_resume_requires_run_uri_after_config_composition(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_common(monkeypatch)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
     assert main(["plan", "base.yaml", "--resume"], stdout=stdout, stderr=stderr) == 4
     assert stdout.getvalue() == ""
     assert "`loom plan --resume` requires --run-uri" in stderr.getvalue()
+    assert calls["config_path"] == Path("base.yaml")
 
 
 def test_plan_existing_non_resume_run_uri_fails(monkeypatch: pytest.MonkeyPatch) -> None:
