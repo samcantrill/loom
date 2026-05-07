@@ -32,21 +32,21 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Recorded after implementation and after refinement: Ruff, Pyright, default harness, config-extra harness, and build passed. |
-| `make test-summary` | Passed | Ran during PR-body draft on 2026-05-07; wrote `build/test-summary.md` with overall status `passed`. |
-| GitHub checks | Pending | PR not opened in this expanded-path draft pass; refine/open pass will trigger and record GitHub checks. |
+| `make validate-pr` | Passed | Reran during PR-body refine/open on 2026-05-07: Ruff, Pyright, default harness, config-extra harness, and build passed. |
+| `make test-summary` | Passed | Reran during PR-body refine/open on 2026-05-07; wrote `build/test-summary.md` with overall status `passed`. |
+| GitHub checks | Pending | GitHub checks run after the PR is opened. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 49 | 0 | 0 | 1 | 0 | 6.21s |
-| unit | passed | 495 | 0 | 0 | 1 | 0 | 6.56s |
-| contract | passed | 41 | 0 | 0 | 2 | 0 | 1.83s |
-| integration | passed | 9 | 0 | 0 | 6 | 12 | 2.17s |
-| e2e | passed | 15 | 0 | 0 | 0 | 0 | 6.67s |
-| config-extra | passed | 396 | 0 | 0 | 0 | 609 | 17.75s |
-| Overall | passed | 1005 | 0 | 0 | 10 | 621 | 41.19s |
+| package | passed | 49 | 0 | 0 | 1 | 0 | 5.02s |
+| unit | passed | 495 | 0 | 0 | 1 | 0 | 5.27s |
+| contract | passed | 41 | 0 | 0 | 2 | 0 | 1.49s |
+| integration | passed | 9 | 0 | 0 | 6 | 12 | 2.02s |
+| e2e | passed | 15 | 0 | 0 | 0 | 0 | 5.72s |
+| config-extra | passed | 396 | 0 | 0 | 0 | 609 | 15.47s |
+| Overall | passed | 1005 | 0 | 0 | 10 | 621 | 35.00s |
 
 ## Risks / Follow-Ups
 

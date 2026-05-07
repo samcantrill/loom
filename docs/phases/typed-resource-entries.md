@@ -327,23 +327,26 @@ make test-summary
   creation intentionally deferred because this phase is on the expanded path
   and `.codex/prompts/pr-body-refine.md` owns the refine/open pass.
 - PR body draft status: complete
-- PR body refine status: pending
+- PR body refine status: complete on 2026-05-07; verified the PR body against
+  the final diff, implementation plan, phase plan, acceptance criteria,
+  validation evidence, assumptions, and risks
 - PR facts for refine/open pass: target branch `develop`; head branch
   `codex/typed-resource-entries`; stack predecessor none; root phase; merge
   eligibility remains after PR targets `develop`, automated review passes, and
   validation/CI pass
-- PR preparation validation evidence: `make test-summary` passed on
+- PR preparation validation evidence: `make validate-pr` passed during the
+  PR-body refine/open pass on 2026-05-07: Ruff, Pyright, default harness,
+  config-extra harness, and build passed. `make test-summary` also passed on
   2026-05-07 and wrote `build/test-summary.md` with overall status `passed`:
   package 49 passed / 1 skipped; unit 495 passed / 1 skipped; contract 41
   passed / 2 skipped; integration 9 passed / 6 skipped / 12 deselected; e2e
   15 passed; config-extra 396 passed / 609 deselected; overall 1005 passed, 0
-  failed, 0 errors, 10 skipped, 621 deselected in 41.19s.
+  failed, 0 errors, 10 skipped, 621 deselected in 35.00s.
 - PR preparation scope check: reviewed the final diff against `develop`, the
   implementation plan, this phase plan, `.github/PULL_REQUEST_TEMPLATE.md`,
   and `.codex/templates/phase-pr-body.md`; confirmed no `RunOptions`,
   profiles, executor descriptors/capabilities, preflight wiring, CLI/config
   runtime mapping, `runtime.json`, or runner request rewiring were added.
-- PR creation: not run in this pass by instruction; expanded-path PR body
-  refine/open remains pending
+- PR creation: pending push and GitHub PR creation in this refine/open pass
 - Stack maintenance: none required yet
 - Remaining blockers: none known
