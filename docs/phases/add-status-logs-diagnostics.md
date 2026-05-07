@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: `Local Diagnostics`
 - PR title: `Local Diagnostics - Phase 3: Status and Logs Inspection`
 - Branch: `codex/add-status-logs-diagnostics`
@@ -23,7 +23,9 @@
 - Plan quality gate loop budget: initial review used, plan refinement used,
   confirmation review used
 - Draft pass: completed by managing agent on 2026-05-07
-- Refine pass: pending for expanded path
+- Refine pass: completed by managing agent on 2026-05-07; concrete store
+  facade names, log path/content behavior, missing-stage handling, and suite
+  obligations were checked before implementation
 - Setup limitations: none known
 - Blockers: none known
 
@@ -88,7 +90,10 @@ of scope and will add artifact diagnostics and end-to-end workflow evidence.
 ## In-Scope Work
 
 - Add narrow read-only store inspection models and protocols, likely under
-  `loom.pipeline.stores`, for stage discovery and run-state scanning.
+  `loom.pipeline.stores`, for stage discovery and run-state scanning. Use
+  concrete names such as `RunStageInspection`, `RunStateInspection`,
+  `list_run_stages()`, and `inspect_run_state()` unless implementation uncovers
+  a clearer local pattern.
 - Implement the local store facade on `LocalRunStore`, including deterministic
   stage ordering, run existence validation, stage document reads, artifact
   counts, failure/provenance availability, and log path hints.
@@ -129,6 +134,8 @@ of scope and will add artifact diagnostics and end-to-end workflow evidence.
   known stages even when log files are absent.
 - Missing stages and missing log content without `--paths` are operational run
   state errors.
+- A known stage is any stage returned by the store-owned stage discovery
+  facade, even if one of its optional documents is absent.
 
 ## Scope Contract
 
@@ -146,6 +153,35 @@ may inspect local directories internally because the store owns that layout.
 Diagnostics and CLI code must consume this public facade plus existing public
 readers such as `read_stage_log()` and `local_stage_log_path()`.
 
+The preferred concrete store model shape is:
+
+```text
+RunStageInspection(
+    stage_name,
+    status,
+    failure,
+    input_count,
+    output_count,
+    provenance_available,
+    stdout_path,
+    stderr_path,
+    stdout_available,
+    stderr_available,
+)
+
+RunStateInspection(
+    run_uri,
+    run_status,
+    stage_inspections,
+    artifact_count,
+)
+```
+
+Field names may vary to match local style, but the model must remain plain-data
+friendly and read-only. Corrupt required documents should raise existing store
+errors; missing optional stage documents should surface as absent fields rather
+than hiding the stage.
+
 `loom status RUN_URI` emits a result payload with run URI, run status when
 available, stage summaries in deterministic order, artifact count, failure
 summary fields, log path hints, and provenance availability. JSON uses a
@@ -157,6 +193,10 @@ selected streams, path strings, existence flags, and bounded content unless
 `--paths` is set. Text output prints paths and bounded stream content. Missing
 stage errors and missing requested log content without `--paths` use existing
 CLI error-envelope behavior and a run-state exit code.
+
+`--stream both` must preserve deterministic stdout-then-stderr ordering. `--tail
+N` applies per stream, not across combined streams. `--paths` must not read log
+file content.
 
 ## Design Impact
 
@@ -330,7 +370,10 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed on 2026-05-07 by managing agent; committed as
   `plan: add phase 3 execution plan`.
-- Final phase execution plan:
+- Final phase execution plan: refined on 2026-05-07 by managing agent; store
+  facade names, plain-data inspection shape, missing optional documents,
+  missing-stage behavior, and bounded log semantics were made
+  implementation-ready.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
