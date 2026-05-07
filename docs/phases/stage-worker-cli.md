@@ -209,10 +209,35 @@ make test-summary
 
 - Draft plan: completed by manager on 2026-05-07.
 - Final phase execution plan: refined by manager on 2026-05-07 before implementation to clarify fingerprint-payload reconstruction and handoff-only persistence.
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: added `StageWorkerRunRequest`, `StageWorkerStateError`,
+  `infer_stage_worker_attempt`, `reconstruct_stage_execution_request`, and
+  `run_stage_worker` in `loom.pipeline.execution`. The worker opens an existing
+  run, infers or validates the prepared attempt, reads the Phase 1
+  `StageWorkerRequest`, reconstructs a single `StageExecutionRequest` from the
+  persisted execution plan and fingerprint payload, executes through the local
+  executor path, writes only `worker_result.json`, and leaves parent-owned final
+  stage/run commits untouched. Added `loom stage run --run-uri RUN_URI --stage
+  STAGE [--attempt N]` with text/JSON output and direct-worker exit-code
+  mapping.
+- Implementation validation:
+  - Targeted tests passed:
+    `uv run pytest tests/package/test_pipeline_execution_api.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage_cli.py tests/unit/loom/cli/test_main.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py`
+    with 24 passed.
+  - Targeted Pyright passed:
+    `uv run pyright src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage_cli.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py tests/package/test_pipeline_execution_api.py`.
+  - `make validate-pr` passed after rebasing onto current `develop`: Ruff,
+    Pyright with config extra, default test harness, config-extra test harness,
+    and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 50
+    passed/1 skipped; unit 578 passed/1 skipped; contract 54 passed/2 skipped;
+    integration 18 passed/7 skipped/7 deselected; e2e 16 passed; config-extra
+    400 passed/716 deselected.
+- Refinement summary: not needed; targeted and full PR validation passed after
+  a scoped test-file rename fixed a pytest module-name collision.
 - Blocker-resolution summary: none used
-- PR preparation: TBD
-- Stack maintenance: not needed yet
+- PR preparation: PR body drafted in
+  `docs/phases/stage-worker-cli-pr-body.md`; PR opening pending.
+- Stack maintenance: branch rebased onto current `develop` after `develop`
+  advanced with `docs: add v3 v4 examples`; no successor branches depend on
+  this phase.
 - Remaining blockers: none known
