@@ -288,9 +288,11 @@ rather than persisted records.
 
 ### Phase 1 - Diagnostics Foundation And Preflight Core
 
-Status: pending
+Status: merged
 Branch: `codex/add-diagnostics-preflight-core`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/65 (merged);
+blocker-resolution follow-up:
+https://github.com/samcantrill/loom/pull/66 (merged)
 
 Goal:
 
@@ -384,12 +386,31 @@ Notes:
 
 - PR feature focus: `Local Diagnostics`
 - Intended PR title: `Local Diagnostics - Phase 1: Diagnostics Foundation and Preflight Core`
-- Phase implementation refinement budget: unused
-- Phase PR review budget: unused
+- Phase implementation refinement budget: used on 2026-05-07 by
+  `loom_phase_refiner`; no code changes were needed in the automated refinement
+  pass.
+- Phase PR review budget: used on 2026-05-07 by `loom_phase_reviewer`; one
+  blocking suite-marker finding was resolved in the user-authorized
+  blocker-resolution follow-up PR.
 
 Completion summary:
 
-- Pending.
+- Merged by https://github.com/samcantrill/loom/pull/65 on 2026-05-06 with
+  merge commit `be74982b3be96fe7bee77f5e1fb501148e236d21`.
+- Added import-light `loom.diagnostics` public exports, preflight
+  status/severity/group/request/result models, stable Phase 1 check IDs,
+  deterministic group selection and aggregation, local preflight checks, and
+  plain-data serialization.
+- Updated `docs/structure.md` with the diagnostics package boundary and added
+  package, unit, contract, and integration coverage for the Phase 1 public API.
+- Blocker-resolution follow-up
+  https://github.com/samcantrill/loom/pull/66 merged on 2026-05-07 with merge
+  commit `bc0b7bc4367f1e2498596f6744cd892718392ba0`; it added the
+  `optional_dependency` marker so diagnostics integration tests are collected
+  by the config-extra gate and refreshed Phase 1 evidence docs.
+- Final validation for the blocker-resolution branch passed:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`,
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`, and GitHub CI for PR #66.
 
 ### Phase 2 - Preflight CLI And Run Reuse
 
