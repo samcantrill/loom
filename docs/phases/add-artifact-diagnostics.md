@@ -398,8 +398,10 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   needed the CLI artifact test basename to avoid colliding with existing
   artifact tests; both fixes were committed and final validation passed.
 - Blocker-resolution summary:
-- PR preparation: PR body drafted at
-  `docs/phases/add-artifact-diagnostics-pr-body.md`. Pre-submit blocker gate
-  completed on 2026-05-07 with no blocking findings; PR opening is pending.
+- PR preparation: complete on 2026-05-07 by managing agent. PR body drafted at
+  `docs/phases/add-artifact-diagnostics-pr-body.md`; PR opened as
+  https://github.com/samcantrill/loom/pull/69 and verified with
+  `baseRefName=develop`, `headRefName=codex/add-artifact-diagnostics`, and
+  `state=OPEN`.
 - Stack maintenance:
 - Remaining blockers:
