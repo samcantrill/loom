@@ -225,10 +225,31 @@ make test-summary
 
 - Draft plan: completed on 2026-05-07 by `loom_phase_planner`.
 - Final phase execution plan: completed on 2026-05-07 by expanded-path refine pass.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed on 2026-05-07 by fallback executor in commit
+  `1059967 feat: split runtime package facade`. Converted
+  `loom.pipeline.runtime` from a module into an import-light package facade,
+  moved the existing runtime request implementation into a private package leaf,
+  preserved `RuntimeKind`, `RuntimeRequest`, `parse_runtime_request`, and
+  `RUNTIME_SCHEMA_VERSION` exports, strengthened runtime facade import-boundary
+  and public import-path tests, and updated `docs/structure.md` for the runtime
+  package and future descriptor import direction. No `RunOptions`, typed
+  resource entries, profiles, environment models, executor descriptor behavior,
+  registries, preflight wiring, CLI/config mapping, `runtime.json`, or runner
+  request rewiring was introduced.
+- Implementation validation: targeted package/unit command
+  `uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_runtime_resources.py`
+  passed with 42 tests. Targeted integration command
+  `uv run pytest tests/integration/pipeline/test_pipeline_config.py tests/integration/pipeline/test_local_execution.py`
+  skipped both modules in the default environment because config optional
+  dependencies were not installed. Targeted e2e command
+  `uv run pytest tests/e2e/test_local_pipeline_run.py` skipped the module in
+  the default environment for the same optional dependency reason. Full
+  `make validate-pr` passed: Ruff, Pyright, default harness
+  (552 passed, 13 skipped, 12 deselected), config-extra harness (396 passed,
+  567 deselected), and `uv build`.
 - Refinement summary: scope boundaries tightened; preserved public runtime imports made explicit; `RunOptions`, resource schema, and descriptor behavior excluded; import-light package tests and `docs/structure.md` boundary updates made required; implementation refinement, PR review, and blocker-resolution budgets remain unused.
 - Blocker-resolution summary: none used.
-- PR preparation: pending.
+- PR preparation: not performed per fallback executor handoff; pending for
+  `loom_pr_preparer`.
 - Stack maintenance: pending.
 - Remaining blockers: none known.
