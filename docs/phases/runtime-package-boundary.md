@@ -272,7 +272,24 @@ make test-summary
 - Refinement budget status after pass: phase implementation refinement used;
   PR review unused; blocker resolution 0/3 used.
 - Blocker-resolution summary: none used.
-- PR preparation: not performed per fallback executor handoff; pending for
-  `loom_pr_preparer`.
-- Stack maintenance: pending.
+- PR body draft: completed on 2026-05-07 by `loom_pr_preparer` draft pass in
+  `docs/phases/runtime-package-boundary-pr-body.md`.
+- PR facts for refine/open pass: title
+  `Runtime Options - Phase 1: Runtime Package Boundary`; head
+  `codex/runtime-package-boundary`; target `develop`; stack predecessor none;
+  root phase; merge eligibility remains pending automated review, validation/CI,
+  and target verification after PR creation.
+- PR body draft validation: reran `git diff --check develop...HEAD`, which
+  passed. Reran `make test-summary`, which wrote `build/test-summary.md` at
+  2026-05-07T05:38:56+00:00 with overall status passed: 963 passed, 0 failed,
+  0 errors, 10 skipped, and 579 deselected across package, unit, contract,
+  integration, e2e, and config-extra suites. `make validate-pr` was not rerun
+  in this draft pass; existing phase evidence records it passed with Ruff,
+  Pyright, default harness, config-extra harness, and `uv build`.
+- PR body refine: pending for `.codex/prompts/pr-body-refine.md` because the
+  expanded path is active. PR creation, GitHub check recording, and opened-PR
+  verification are intentionally deferred to that refine/open pass.
+- PR review budget: unused. Blocker resolution: 0/3 used.
+- Stack maintenance: pending; no predecessor branch exists and no PR has been
+  opened in this draft pass.
 - Remaining blockers: none known.
