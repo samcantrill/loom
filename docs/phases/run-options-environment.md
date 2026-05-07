@@ -243,7 +243,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07 for the expanded-path
+  implementation/test refinement pass
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -268,7 +269,48 @@ make test-summary
   narrow integration selection passed (`uv run pytest tests/integration/pipeline
   -k runtime_options`); `make validate-pr` passed after renaming the integration
   runtime-options test file to avoid a Pytest module basename collision.
-- Refinement summary: scope clarified for durable public runtime models, entry-based resource integration, planning adapters, execution-envelope deferral, privacy guarantees, stage validation boundaries, and explicit later-phase exclusions.
+- Implementation refinement pass: completed on 2026-05-07. Reviewed
+  `AGENTS.md`, the v4 implementation plan, this phase execution plan,
+  `.codex/prompts/implementation-test-refinement.md`, the current
+  `develop...HEAD` diff, and commits `ebe450a`, `d147dc9`, and `49599bb`.
+  Confirmed Phase 3 remains scoped to runtime option and environment models:
+  no runtime profile/profile merge, executor descriptors/capabilities,
+  preflight, CLI/config runtime mapping, persisted `runtime.json`, plugin
+  discovery, adapter schemas, local environment application, or runner request
+  wiring was introduced.
+- Refinement validation output reviewed: initial sandboxed `uv run pytest`
+  attempts could not lock the default home-directory uv cache because it is
+  read-only in this session; reruns with `UV_CACHE_DIR=/tmp/loom-uv-cache`
+  passed for package/runtime import coverage, runtime unit coverage, runtime
+  option contract coverage, and narrow runtime-options integration coverage.
+- Refinement blocking issues caused by this phase: none found. The public
+  runtime models provide deterministic plain-data serialization, freeze mutable
+  inputs, keep planning adapters on existing `PlanSelectors` and
+  `ResumeOptions`, preserve exact-stage validation only, omit environment keys
+  and values from safe summaries, avoid raw adapter payloads in safe metadata,
+  and keep `RunOptions` unwired from `RunRequest`, `PipelineRunner`, CLI,
+  config, stores, preflight, and persisted runtime metadata.
+- Refinement fixes made: no code, test, or public-doc fixes were required; this
+  artifact update records the consumed implementation refinement budget and
+  handoff evidence.
+- Refinement tests re-run: `UV_CACHE_DIR=/tmp/loom-uv-cache uv run pytest
+  tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py`
+  passed with 27 tests; `UV_CACHE_DIR=/tmp/loom-uv-cache uv run pytest
+  tests/unit/loom/pipeline/test_runtime_resources.py
+  tests/unit/loom/pipeline/test_runtime_options.py` passed with 73 tests;
+  `UV_CACHE_DIR=/tmp/loom-uv-cache uv run pytest
+  tests/contracts/test_runtime_options_contract.py
+  tests/integration/pipeline/test_runtime_options_integration.py` passed with
+  4 tests. `UV_CACHE_DIR=/tmp/loom-uv-cache make validate-pr` initially passed
+  Ruff and Pyright but failed in the sandbox when the isolated default test
+  environment needed to download `typing-extensions==4.15.0`; the same command
+  passed with approved network access, including Ruff, Pyright, the default
+  test harness with 617 passed / 13 skipped / 12 deselected, the config-extra
+  harness with 396 passed / 632 deselected, and `uv build`.
+- Refinement summary: scope clarified for durable public runtime models,
+  entry-based resource integration, planning adapters, execution-envelope
+  deferral, privacy guarantees, stage validation boundaries, explicit
+  later-phase exclusions, and the completed implementation refinement pass.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: none required yet.
