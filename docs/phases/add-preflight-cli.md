@@ -416,6 +416,11 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   obligations were checked against the phase plan; no blocking defects were
   found.
 - Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
+- PR preparation: complete on 2026-05-07 by managing agent. PR body drafted at
+  `docs/phases/add-preflight-cli-pr-body.md`; PR opened as
+  https://github.com/samcantrill/loom/pull/67 and verified with
+  `baseRefName=develop`, `headRefName=codex/add-preflight-cli`, and
+  `state=OPEN`.
+- Stack maintenance: root phase; no predecessor maintenance pending. PR #67 is
+  merge-eligible only after review and CI pass while targeting `develop`.
 - Remaining blockers: none known.
