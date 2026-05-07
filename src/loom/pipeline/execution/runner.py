@@ -19,6 +19,7 @@ from loom.pipeline.planning import (
 )
 from loom.pipeline.runtime import (
     ResolvedStageRuntimeOptions,
+    RunOptions,
     build_runtime_metadata,
     parse_run_options,
     resolve_run_runtime,
@@ -153,7 +154,10 @@ class PipelineRunner:
             metadata=request.metadata,
         )
         config_mapping, spec = self._resolve_config_and_spec(request)
-        options = parse_run_options(request.options)
+        options = _options_with_resolved_run_uri(
+            parse_run_options(request.options),
+            run_uri,
+        )
         resolved_runtime = resolve_run_runtime(
             options,
             stage_ids=spec.stage_names,
@@ -1244,6 +1248,14 @@ class PipelineRunner:
             exception_type=exception_type,
             details=details or {},
         )
+
+
+def _options_with_resolved_run_uri(options: RunOptions, run_uri: str) -> RunOptions:
+    if options.run_uri == run_uri:
+        return options
+    data = options.to_dict()
+    data["run_uri"] = run_uri
+    return RunOptions.from_dict(data)
 
 
 def run_pipeline(

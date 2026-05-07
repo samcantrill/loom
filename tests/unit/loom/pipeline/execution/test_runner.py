@@ -203,6 +203,7 @@ def test_runner_allocates_default_run_uri_under_store_root(tmp_path: Path) -> No
     assert run_store.read_run_document(result.run_uri)["run_uri"] == result.run_uri
     runtime_metadata = run_store.read_runtime_metadata(result.run_uri)
     assert runtime_metadata is not None
+    assert runtime_metadata["run_uri"] == result.run_uri
     assert runtime_metadata["executor"] == "local"
     stages = cast(Mapping[str, PlainData], runtime_metadata["stages"])
     assert set(stages) == {"build"}

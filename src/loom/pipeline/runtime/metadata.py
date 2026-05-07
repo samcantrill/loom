@@ -291,11 +291,15 @@ def _non_empty_string(value: object, field: str) -> str:
 
 
 def _schema_version(value: object) -> int:
-    if value != RUNTIME_METADATA_SCHEMA_VERSION:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value != RUNTIME_METADATA_SCHEMA_VERSION
+    ):
         raise RuntimeResourceError(
             f"RuntimeMetadata.schema_version must be {RUNTIME_METADATA_SCHEMA_VERSION}"
         )
-    return cast(int, value)
+    return value
 
 
 __all__ = [
