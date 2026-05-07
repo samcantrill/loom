@@ -60,7 +60,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness tests, config-extra harness tests, and `uv build` passed during implementation. |
 | `make test-summary` | Passed | `build/test-summary.md` generated on 2026-05-07 with overall status `passed`. |
-| GitHub checks | Not claimed | This PR body was prepared before GitHub CI results were available. |
+| GitHub checks | Passed | PR #73 `checks` workflow completed with `SUCCESS` on 2026-05-07. |
 
 ### Test Suite Summary
 
