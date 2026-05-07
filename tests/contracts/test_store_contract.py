@@ -16,11 +16,13 @@ from loom.pipeline.stores import (
     RunConfigStore,
     RunDocumentStore,
     RunEventStore,
+    RunInspectionStore,
     RunLockStore,
     RunLifecycleStore,
     RunProvenanceStore,
     RunPlanStore,
     RunStore,
+    RunStateInspection,
     RunStatusStore,
     StageLogStore,
     StageStateStore,
@@ -192,6 +194,12 @@ class DummyRunStore:
     def release_run_lock(self, run_uri: str, token: str) -> None:
         return None
 
+    def list_run_stages(self, run_uri: str) -> tuple[str, ...]:
+        return ()
+
+    def inspect_run_state(self, run_uri: str) -> RunStateInspection:
+        return RunStateInspection(run_uri=run_uri)
+
     def read_stage_status(
         self, run_uri: str, stage_name: str
     ) -> StageStatusRecord | None:
@@ -352,6 +360,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)
     assert isinstance(DummyRunStore(), RunEventStore)
+    assert isinstance(DummyRunStore(), RunInspectionStore)
     assert isinstance(DummyRunStore(), RunLockStore)
     assert isinstance(DummyRunStore(), StageStateStore)
     assert isinstance(DummyRunStore(), StageLogStore)
@@ -367,6 +376,7 @@ def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
 
     assert isinstance(store, RunEventStore)
+    assert isinstance(store, RunInspectionStore)
     assert isinstance(store, RunLockStore)
     assert isinstance(store, RunStore)
     assert store.resolve_run_uri(run_uri) == run_uri

@@ -22,6 +22,8 @@ def test_build_parser_includes_v2_commands() -> None:
     assert "preflight" in help_text
     assert "plan" in help_text
     assert "run" in help_text
+    assert "status" in help_text
+    assert "logs" in help_text
 
 
 def test_help_and_version_return_zero() -> None:
