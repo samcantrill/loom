@@ -364,7 +364,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 - Phase implementation refinement: used on 2026-05-07 by managing agent after
   full validation exposed public export contract expectations for the new store
   inspection API; the contract tests were updated and validation passed.
-- PR review: unused
+- PR review: used on 2026-05-07 by managing agent; no blocking findings.
 - Blocker resolution: not used; no Phase 3 blocker-resolution pass has been
   authorized
 
@@ -394,6 +394,11 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   needed for `RunInspectionStore`, `RunStageInspection`, and
   `RunStateInspection`; tests were updated, and final validation passed.
 - Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
+- PR preparation: complete on 2026-05-07 by managing agent. PR body drafted at
+  `docs/phases/add-status-logs-diagnostics-pr-body.md`; PR opened as
+  https://github.com/samcantrill/loom/pull/68 and verified with
+  `baseRefName=develop`, `headRefName=codex/add-status-logs-diagnostics`, and
+  `state=OPEN`.
+- Stack maintenance: root phase; no predecessor maintenance pending. PR #68 is
+  merge-eligible only after review and CI pass while targeting `develop`.
 - Remaining blockers: none known.
