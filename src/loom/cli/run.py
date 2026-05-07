@@ -21,6 +21,7 @@ from loom.cli.options import (
 from loom.cli.results import RunCliResult
 
 if TYPE_CHECKING:
+    from loom.diagnostics import PreflightRequest, PreflightResult
     from loom.config.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
     from loom.pipeline.planning import PlanSelectors
@@ -154,6 +155,11 @@ def build_run_result(
 
     store = _create_default_run_store()
     run_uri = _resolve_run_uri_for_run(store, run_options)
+    _run_preflight_for_run(
+        config_options=config_options,
+        run_options=run_options,
+        run_uri=run_uri,
+    )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -230,7 +236,7 @@ def _resolve_run_uri_for_run(store: "LocalRunStore", options: RunCliOptions) -> 
             exit_code=ExitCode.PIPELINE,
         )
     if options.run_uri is None:
-        return None
+        return store.allocate_run_uri()
 
     resolved = store.resolve_run_uri(options.run_uri)
     if options.resume:
@@ -242,6 +248,59 @@ def _resolve_run_uri_for_run(store: "LocalRunStore", options: RunCliOptions) -> 
             f"run URI already exists; use --resume to continue existing state: {resolved}"
         )
     return resolved
+
+
+def _run_preflight_for_run(
+    *,
+    config_options: ConfigCliOptions,
+    run_options: RunCliOptions,
+    run_uri: str | None,
+) -> None:
+    from loom.diagnostics import PreflightError, PreflightRequest
+
+    if run_options.resume:
+        groups = ("config", "pipeline", "executor")
+    else:
+        groups = ("config", "pipeline", "run", "executor")
+    try:
+        result = _run_diagnostics_preflight(
+            PreflightRequest(
+                config_path=config_options.config_path,
+                groups=groups,
+                run_uri=run_uri,
+                cwd=Path.cwd(),
+                overlays=config_options.overlays,
+                overrides=config_options.overrides,
+            )
+        )
+    except PreflightError as exc:
+        raise CliError(
+            f"loom run preflight request failed: {exc}",
+            code="cli.run.preflight_request_failed",
+            context={"error": str(exc)},
+            exit_code=ExitCode.PIPELINE,
+        ) from exc
+
+    if _preflight_status_value(result) == "FAIL":
+        raise CliError(
+            "loom run preflight failed",
+            code="cli.run.preflight_failed",
+            hint="Run `loom preflight` for detailed diagnostics.",
+            context={"status": _preflight_status_value(result)},
+            details={"preflight": result.to_dict()},
+            exit_code=ExitCode.PIPELINE,
+        )
+
+
+def _run_diagnostics_preflight(request: "PreflightRequest") -> "PreflightResult":
+    from loom.diagnostics import run_preflight
+
+    return run_preflight(request)
+
+
+def _preflight_status_value(result: object) -> str:
+    status = getattr(result, "status")
+    return str(getattr(status, "value", status))
 
 
 def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":

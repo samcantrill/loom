@@ -19,6 +19,7 @@ def test_build_parser_includes_v2_commands() -> None:
     help_text = build_parser().format_help()
 
     assert "validate" in help_text
+    assert "preflight" in help_text
     assert "plan" in help_text
     assert "run" in help_text
 

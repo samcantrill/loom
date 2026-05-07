@@ -9,10 +9,20 @@ from pathlib import Path
 
 import pytest
 
+from loom.cli.errors import CliError
 from loom.cli.main import main
+from loom.cli.options import ConfigCliOptions, RunCliOptions
 from loom.cli.results import PlanCliResult
 import loom.cli.plan as plan_command
 import loom.cli.run as run_command
+from loom.diagnostics import (
+    PreflightCheckResult,
+    PreflightCheckStatus,
+    PreflightGroup,
+    PreflightRequest,
+    PreflightResult,
+    PreflightSeverity,
+)
 from loom.pipeline.planning import PlanAction, PlanReason, PlanReasonCode, PlanSelectors
 from loom.pipeline.status import RunStatus, StageStatus
 
@@ -79,10 +89,27 @@ class FakeRunRequest:
     selectors: PlanSelectors
 
 
+def _preflight_result(status: PreflightCheckStatus = PreflightCheckStatus.PASS) -> PreflightResult:
+    severity = PreflightSeverity.ERROR if status is PreflightCheckStatus.FAIL else PreflightSeverity.INFO
+    return PreflightResult(
+        checks=(
+            PreflightCheckResult(
+                check_id="config.load",
+                group=PreflightGroup.CONFIG,
+                status=status,
+                severity=severity,
+                message="config composed successfully",
+            ),
+        ),
+        groups=(PreflightGroup.CONFIG,),
+    )
+
+
 class FakeRunStore:
     def __init__(self, *, exists: bool = False) -> None:
         self.exists = exists
         self.opened: list[str] = []
+        self.allocated = 0
 
     def resolve_run_uri(self, run_uri: str) -> str:
         assert run_uri == "file://./runs/demo"
@@ -96,7 +123,8 @@ class FakeRunStore:
         return self.exists
 
     def allocate_run_uri(self) -> str:
-        raise AssertionError("CLI must leave default allocation to PipelineRunner")
+        self.allocated += 1
+        return "file:///abs/runs/generated"
 
 
 def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None = None) -> dict[str, object]:
@@ -129,14 +157,27 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
             selectors=selectors,
         )
 
+    def run_preflight(
+        *,
+        config_options: object,
+        run_options: object,
+        run_uri: str | None,
+    ) -> None:
+        calls["preflight_config_path"] = getattr(config_options, "config_path")
+        calls["preflight_resume"] = getattr(run_options, "resume")
+        calls["preflight_run_uri"] = run_uri
+
     monkeypatch.setattr(run_command, "_compose_config", compose)
     monkeypatch.setattr(run_command, "_create_default_run_store", lambda: fake_store)
     monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
+    monkeypatch.setattr(run_command, "_run_preflight_for_run", run_preflight)
     monkeypatch.setattr(run_command, "_run_pipeline", run_pipeline)
     return calls
 
 
-def test_run_default_uri_is_allocated_by_runner_not_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_default_uri_is_allocated_once_before_preflight_and_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = _patch_common(monkeypatch)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -164,7 +205,9 @@ def test_run_default_uri_is_allocated_by_runner_not_cli(monkeypatch: pytest.Monk
     assert calls["config_path"] == Path("base.yaml")
     assert calls["overlays"] == (Path("team.yaml"),)
     assert calls["overrides"] == ("a=1",)
-    assert calls["request_run_uri"] is None
+    assert calls["preflight_config_path"] == Path("base.yaml")
+    assert calls["preflight_run_uri"] == "file:///abs/runs/generated"
+    assert calls["request_run_uri"] == "file:///abs/runs/generated"
     selectors = calls["selectors"]
     assert isinstance(selectors, PlanSelectors)
     assert selectors.only_stages == ("build",)
@@ -224,8 +267,50 @@ def test_run_resume_opens_existing_run(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert store.opened == ["file:///abs/runs/demo"]
+    assert calls["preflight_resume"] is True
+    assert calls["preflight_run_uri"] == "file:///abs/runs/demo"
     assert calls["request_run_uri"] == "file:///abs/runs/demo"
     assert calls["open_existing"] is True
+
+
+def test_run_preflight_helper_skips_fresh_run_group_for_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, PreflightRequest] = {}
+
+    def run_preflight(request: PreflightRequest) -> PreflightResult:
+        calls["request"] = request
+        return _preflight_result()
+
+    monkeypatch.setattr(run_command, "_run_diagnostics_preflight", run_preflight)
+
+    run_command._run_preflight_for_run(
+        config_options=ConfigCliOptions(config_path=Path("base.yaml")),
+        run_options=RunCliOptions(run_uri="file:///abs/runs/demo", resume=True),
+        run_uri="file:///abs/runs/demo",
+    )
+
+    assert calls["request"].groups == ("config", "pipeline", "executor")
+
+
+def test_run_preflight_failure_stops_before_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_preflight(_request: PreflightRequest) -> PreflightResult:
+        return _preflight_result(PreflightCheckStatus.FAIL)
+
+    monkeypatch.setattr(run_command, "_run_diagnostics_preflight", fail_preflight)
+
+    with pytest.raises(CliError) as exc_info:
+        run_command._run_preflight_for_run(
+            config_options=ConfigCliOptions(config_path=Path("base.yaml")),
+            run_options=RunCliOptions(run_uri="file:///abs/runs/demo"),
+            run_uri="file:///abs/runs/demo",
+        )
+
+    assert exc_info.value.code == "cli.run.preflight_failed"
+    assert exc_info.value.exit_code == 4
+    preflight_details = exc_info.value.details["preflight"]
+    assert isinstance(preflight_details, dict)
+    assert preflight_details["status"] == "FAIL"
 
 
 def test_run_unsupported_executor_returns_executor_exit_code() -> None:
