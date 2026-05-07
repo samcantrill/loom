@@ -716,7 +716,7 @@ Completion summary:
 
 ### Phase 4 - Preflight, Diagnostics, And CLI UX
 
-Status: pr_open
+Status: merged
 Branch: `codex/subprocess-preflight-diagnostics`
 PR: https://github.com/samcantrill/loom/pull/80
 
@@ -802,6 +802,23 @@ Completion summary:
 
 - PR opened against `develop` on 2026-05-07:
   https://github.com/samcantrill/loom/pull/80
+- Merged into `develop` on 2026-05-07 with merge commit
+  `fa4ba4b19a6e58f15a31fcf76014b77f1b4b8c3a`.
+- Implementation summary: added selected-subprocess preflight checks for the
+  current Python executable and `loom stage run` worker importability, gated so
+  local executor preflight output remains unchanged. Extended run failure
+  summaries and text output with optional attempt, executor, exit code, signal,
+  failure record, stdout, stderr, and traceback paths. Updated focused
+  preflight, CLI, and execution docs for current subprocess diagnostics UX.
+- Review and validation: manager review found no blocking issues. PR #80
+  targeted `develop`; GitHub CI `checks` passed on commit
+  `a2303f4a7da4efbe958da8ea5f2aed68520bcdea`. Local validation passed before
+  merge: `make validate-pr`; `make test-summary` with package 50 passed/1
+  skipped, unit 593 passed/1 skipped, contract 55 passed/2 skipped,
+  integration 20 passed/7 skipped/7 deselected, e2e 18 passed, config-extra
+  401 passed/736 deselected.
+- Follow-up notes: Phase 5 still owns broader examples, final contract
+  hardening, and deferred behavior documentation.
 
 ### Phase 5 - Contract Hardening, Examples, And Documentation
 
