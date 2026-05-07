@@ -571,9 +571,9 @@ Completion summary:
 
 ### Phase 3 - Run Options And Environment Models
 
-Status: pending
+Status: merged
 Branch: `codex/run-options-environment`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/72
 
 Goal:
 
@@ -664,7 +664,27 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged on 2026-05-07 via PR #72 into `develop`.
+- Implementation added import-light public runtime invocation models:
+  `RunOptions`, `ExecutionOptions`, `StageRuntimeOptions`,
+  `RunEnvironmentRequest`, and `StageEnvironmentRequest`, exported from
+  `loom.pipeline.runtime` and `loom.pipeline`.
+- Added strict plain-data serialization, immutable normalized mappings, safe
+  metadata summaries, planning-owned selector/resume adapters, exact-stage
+  validation, supplied known-stage validation, and Phase 2 entry-based
+  `ResourceRequest` integration for stage runtime resources.
+- Preserved the intended ownership boundary: no runtime profile merge, executor
+  descriptor/capability checks, CLI/config mapping, preflight checks, persisted
+  `runtime.json`, plugin discovery, local environment application, or runner
+  request wiring was introduced.
+- Automated review found no blocking findings. A stale PR-body GitHub-checks
+  evidence row was corrected before merge.
+- Validation evidence: `make validate-pr` passed during implementation
+  refinement; GitHub CI `checks` passed on PR #72; `make test-summary`
+  reported 1028 passed, 10 skipped, and 644 deselected.
+- Follow-up for Phase 4: runtime profile merge can now target the canonical
+  `RunOptions` and `StageRuntimeOptions` model shape without redefining
+  resources, environment requests, or selector/resume adapters.
 
 ### Phase 4 - Runtime Profiles And Merge Semantics
 
