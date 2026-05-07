@@ -5,11 +5,13 @@
 - Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 4: Runtime Profiles and Merge Semantics`
-- PR URL: pending
-- PR state: pending
+- PR URL: https://github.com/samcantrill/loom/pull/73
+- PR state: OPEN; verified on 2026-05-07
 - PR body path: `docs/phases/runtime-profiles-merge-pr-body.md`
-- PR preparation: draft body completed on 2026-05-07; open/refine pass pending
-- PR base/head: `develop` <- `codex/runtime-profiles-merge`
+- PR preparation: draft body completed on 2026-05-07; refine/open pass
+  completed on 2026-05-07
+- PR base/head: `develop` <- `codex/runtime-profiles-merge`; verified on
+  2026-05-07
 - Branch: `codex/runtime-profiles-merge`
 - Worktree: `/home/samcantrill/work/loom-worktrees/runtime-profiles-merge`
 - Phase execution plan path: `docs/phases/runtime-profiles-merge.md`
@@ -532,8 +534,8 @@ make test-summary
 
 ## Implementation Completion Notes
 
-- Implementation status: complete on 2026-05-07; PR preparation remains
-  pending.
+- Implementation status: complete on 2026-05-07; PR preparation completed on
+  2026-05-07.
 - Implementation commit: `7a929d3` (`feat: add runtime profile merge APIs`).
 - Summary: added `RuntimeProfile`, `RuntimeProfileCollection`, profile
   parsing/selection helpers, and `merge_run_options` under
@@ -590,7 +592,18 @@ make test-summary
 - Branch/target confirmed: `codex/runtime-profiles-merge` targeting `develop`.
 - Stack state confirmed: root phase; no stack predecessor because Phases 1-3
   are merged into `develop`.
-- PR creation status: not opened in this draft-only pass.
+- PR body refine/open pass: completed on 2026-05-07. The PR body was refined to
+  avoid claiming GitHub checks before CI evidence is available.
+- PR creation status: opened as https://github.com/samcantrill/loom/pull/73.
+- PR verification: `gh pr view 73 --json baseRefName,headRefName,state,url`
+  returned `baseRefName=develop`, `headRefName=codex/runtime-profiles-merge`,
+  `state=OPEN`, and
+  `url=https://github.com/samcantrill/loom/pull/73`.
+- Final lightweight validation for the refine/open pass: `git status --short
+  --branch` confirmed the expected branch and only the PR-body wording change
+  before opening; `git diff --stat develop...HEAD`,
+  `git diff --name-status develop...HEAD`, and `git diff --check
+  develop...HEAD` matched the phase scope and reported no whitespace errors.
 - Validation evidence for the draft body:
   - `make validate-pr` passed during implementation, covering Ruff, Pyright,
     default harness tests, config-extra harness tests, and `uv build`.
@@ -632,6 +645,8 @@ make test-summary
   refinement pass; documentation example alignment was fixed and no code/test
   defects were found.
 - PR body draft: used on 2026-05-07 for draft-only PR body preparation.
-- PR body refine/open pass: unused; reserved for PR preparation.
+- PR body refine/open pass: used on 2026-05-07 to refine the GitHub-checks
+  wording, push `codex/runtime-profiles-merge`, open PR #73 against `develop`,
+  and verify base/head/state/url.
 - PR review: unused; reserved for automated PR review.
 - Blocker-resolution budget: unused, 0 of 3 scoped passes consumed.
