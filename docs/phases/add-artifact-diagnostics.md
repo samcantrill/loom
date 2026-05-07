@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: `Local Diagnostics`
 - PR title: `Local Diagnostics - Phase 4: Artifact Inspection and End-to-End Diagnostics`
 - Branch: `codex/add-artifact-diagnostics`
@@ -23,7 +23,9 @@
 - Plan quality gate loop budget: initial review used, plan refinement used,
   confirmation review used
 - Draft pass: completed by managing agent on 2026-05-07
-- Refine pass: pending
+- Refine pass: completed by managing agent on 2026-05-07; artifact selector
+  semantics, duplicate handling, provenance scope, zero-artifact behavior, and
+  suite obligations were checked before implementation
 - Setup limitations: none known
 - Blockers: none known
 
@@ -123,10 +125,12 @@ retention workflows remain out of scope.
 ## Assumptions
 
 - `ARTIFACT_ID` for `loom artifacts show` is the `ArtifactRef.artifact_id`
-  because the roadmap names artifact IDs, while list output exposes both the
-  logical run-store key and the artifact ID for disambiguation.
+  string, typically `stage/output`, because the roadmap names artifact IDs.
+  List output exposes both the logical run-store key, typically `stage.output`,
+  and the artifact ID for disambiguation.
 - If duplicate artifact IDs are ever present in the run-level index, `show`
-  should fail clearly rather than choosing one silently.
+  should fail with a run-state error that names the ambiguity rather than
+  choosing one silently.
 - Stage provenance is generic enough to expose as plain data in `show`, but
   list output should only advertise whether provenance is available.
 - A failed run can still have zero artifacts; the full failed-flow e2e coverage
@@ -170,16 +174,23 @@ the run-store logical key and the `ArtifactRef.artifact_id`. Artifact list
 ordering must be deterministic by logical artifact key. `show` should resolve by
 `ArtifactRef.artifact_id`, report a run-state error for missing or ambiguous
 IDs, and must not load payload bytes, invoke codecs, or verify checksums.
+Artifact summaries should derive `stage_name` and `output_name` from the
+run-store logical key via `parse_artifact_key()` instead of string splitting in
+CLI code.
 
 `loom artifacts list RUN_URI` emits a command-owned schema version,
 `payload_name="result"`, run URI, artifact count, and an artifact summary list.
 Text output is compact and includes one line per artifact with stage/output,
-type, URI, and artifact ID.
+type, URI, and artifact ID. A known run with zero artifacts exits successfully
+with an empty artifact list and `artifact_count=0`.
 
 `loom artifacts show RUN_URI ARTIFACT_ID` emits the same artifact fields plus
-generic stage provenance when available. Text output is compact and suitable for
-terminal debugging; it may summarize nested provenance keys rather than printing
-large nested payloads verbatim.
+generic stage provenance when available. The detail payload should use
+`stage_provenance` with `null` when unavailable and a plain-data mapping when
+available. Text output is compact and suitable for terminal debugging; it may
+summarize nested provenance keys rather than printing large nested payloads
+verbatim. Metadata must be copied from `ArtifactRef.metadata` without domain
+interpretation.
 
 ## Design Impact
 
@@ -342,9 +353,10 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   unit tests after command handlers; integration/e2e diagnostics tests after
   command behavior works.
 - Decisions the executor must not revisit: no payload loading, no checksum
-  verification, no artifact catalog/cleanup, `show` uses `ArtifactRef.artifact_id`,
-  list output exposes both logical keys and artifact IDs, and text output stays
-  compact.
+  verification, no artifact catalog/cleanup, `show` uses
+  `ArtifactRef.artifact_id`, duplicate artifact IDs fail clearly, list output
+  exposes both logical keys and artifact IDs, zero-artifact known runs succeed,
+  and text output stays compact.
 - Conditions that require stopping for the manager: artifact show requires
   changing persisted artifact index schema, duplicate artifact IDs need a new
   public selector, or e2e workflow evidence requires future executor behavior.
@@ -357,8 +369,12 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Completion Notes
 
-- Draft plan: completed on 2026-05-07 by managing agent.
-- Final phase execution plan:
+- Draft plan: completed on 2026-05-07 by managing agent; committed as
+  `plan: add phase 4 execution plan`.
+- Final phase execution plan: refined on 2026-05-07 by managing agent;
+  artifact ID selection, duplicate handling, provenance payload shape,
+  zero-artifact behavior, and no-payload/no-verification boundaries were made
+  implementation-ready.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
