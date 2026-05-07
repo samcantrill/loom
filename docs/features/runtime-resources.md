@@ -26,8 +26,10 @@ the runtime package supports a local-only RuntimeRequest foundation for programm
 vocabulary, not authored stage runtime selection
 Python planning supports selector fields from_stage, only_stages,
 force_stages, and skip_stages
-RunOptions, ExecutionOptions, runtime profiles, preflight, and
-executor-specific resource mapping are later runtime phases
+RunOptions, ExecutionOptions, StageRuntimeOptions, and run/stage environment
+request models are public Python invocation models
+runtime profiles, preflight, CLI/config mapping, persisted runtime metadata,
+and executor-specific resource mapping are later runtime phases
 ```
 
 The sections below describe the intended stable direction for the runtime and
@@ -186,35 +188,44 @@ by the executor and included in submission metadata when relevant.
 
 `RunOptions` captures invocation-level choices for one run.
 
-Post-v0 direction:
+Current behavior:
 
 ```text
 v0 has a local-only RuntimeRequest foundation with kind=LOCAL, resources, and
 plain metadata
 authored stage runtime/executor fields remain rejected
-v0 runner APIs may accept minimal run directory and selector inputs directly
-full RunOptions normalization, profiles, dry-run, and executor selection are
-post-v0
+RunOptions is the canonical Python invocation-policy aggregate for run_uri,
+executor, dry_run, profile name, tags, notes, selector/resume adapter inputs,
+execution settings, exact stage runtime options, environment requests, and
+adapter options
+RunOptions can serialize to and from plain data and adapt to planning-owned
+PlanSelectors and ResumeOptions without owning graph or resume semantics
+RunRequest remains the execution envelope until later workflow wiring adds a
+normalized options field
 ```
 
-Recommended shape:
+Current public shape:
 
 ```python
 @dataclass(frozen=True)
 class RunOptions:
-    run_id: str | None = None
-    run_dir: Path | None = None
+    run_uri: str | None = None
     executor: str | None = None
     dry_run: bool = False
-    selected_stages: frozenset[str] | None = None
+    profile: str | None = None
     tags: Mapping[str, str] = field(default_factory=dict)
-    notes: str | None = None
+    notes: Sequence[str] = ()
+    selectors: PlanSelectors = field(default_factory=PlanSelectors)
     resume: ResumeOptions = field(default_factory=ResumeOptions)
     execution: ExecutionOptions = field(default_factory=ExecutionOptions)
+    stage_options: Mapping[str, StageRuntimeOptions] = field(default_factory=dict)
+    environment: RunEnvironmentRequest = field(default_factory=RunEnvironmentRequest)
+    adapter_options: Mapping[str, object] = field(default_factory=dict)
 ```
 
-The exact model can be adjusted to existing code, but runtime options should
-stay separate from pipeline specs.
+Runtime options stay separate from pipeline specs and are not wired into the
+local runner, config, CLI, preflight, stores, or persisted runtime metadata in
+this phase.
 
 ## Resume Options
 
@@ -247,30 +258,51 @@ pipeline graph itself.
 
 ## Execution Options
 
-`ExecutionOptions` captures execution behavior that applies across stages.
+`ExecutionOptions` captures strict plain-data execution settings that can apply
+at run or stage scope.
 
-Post-v0 direction:
+Current behavior:
 
 ```text
-v0 supports only in-process local execution
-parallelism, environment shaping, profiles, and executor selection are post-v0
+ExecutionOptions stores plain settings only
+no retry, timeout, wall-time, subprocess, parallel scheduling, preflight policy,
+or executor descriptor semantics are defined here
 ```
 
-Recommended shape:
+Current public shape:
 
 ```python
 @dataclass(frozen=True)
 class ExecutionOptions:
-    max_parallel_stages: int | None = None
-    fail_fast: bool = True
-    capture_logs: bool = True
-    environment: Mapping[str, str] = field(default_factory=dict)
-    profile: str | None = None
+    settings: Mapping[str, object] = field(default_factory=dict)
 ```
 
 Fields should be added only when multiple executors need the same concept.
 
 Executor-specific options belong in profiles.
+
+## Stage Runtime Options And Environment Requests
+
+`StageRuntimeOptions` carries exact-stage runtime data:
+
+```python
+@dataclass(frozen=True)
+class StageRuntimeOptions:
+    resources: ResourceRequest = field(default_factory=ResourceRequest)
+    execution: ExecutionOptions = field(default_factory=ExecutionOptions)
+    environment: StageEnvironmentRequest = field(default_factory=StageEnvironmentRequest)
+    adapter_options: Mapping[str, object] = field(default_factory=dict)
+```
+
+Stage option keys are exact stage identifiers. Runtime models validate basic
+identifier shape and expose a helper that checks supplied known-stage sets, but
+they do not implement profile merge, glob/tag/group matching, graph reachability
+checks, or executor capability checks.
+
+Run and stage environment request models carry future isolated-executor
+environment additions and removals. They do not apply local process environment
+changes. Safe metadata summaries record only counts and inheritance mode, never
+environment variable names or values.
 
 ## Runtime Profiles
 

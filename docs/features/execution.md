@@ -424,10 +424,18 @@ docker, later
 
 Invocation mode belongs to executor metadata, not to the stage implementation.
 
-### 5.8 Runtime Profile
+### 5.8 Runtime Options And Profiles
 
-Runtime profiles are later runtime work. Stage resources are typed resource
-entries preserved for inspection; the local executor does not interpret them.
+`RunOptions` is the runtime package's canonical invocation-policy model for
+Python callers. It owns run URI, executor, dry-run, selected profile name, tags,
+notes, selector/resume adapter inputs, execution settings, exact stage runtime
+options, environment requests, and adapter options.
+
+The execution `RunRequest` remains the runner envelope for config, pipeline,
+provenance, stores, lifecycle inputs, and existing compatibility fields until a
+later runtime workflow phase wires normalized `RunOptions` into execution.
+Stage resources are typed resource entries preserved for inspection; the local
+executor does not interpret them. Runtime profiles are later runtime work.
 
 Examples:
 
