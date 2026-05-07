@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined implementation plan
+- Status: completed; Phases 1-5 merged into `develop`
 - Related planning notes:
   `docs/implementation-plans/roadmap-v5-planning-notes.md`
 - Related source docs:
@@ -822,7 +822,7 @@ Completion summary:
 
 ### Phase 5 - Contract Hardening, Examples, And Documentation
 
-Status: pr_open
+Status: merged
 Branch: `codex/subprocess-contract-hardening`
 PR: https://github.com/samcantrill/loom/pull/81
 
@@ -910,5 +910,28 @@ Notes:
 
 Completion summary:
 
-- PR opened against `develop` on 2026-05-07:
+- PR opened against `develop` on 2026-05-07 and merged on 2026-05-07:
   https://github.com/samcantrill/loom/pull/81
+- Merge commit:
+  `b3d19281ea39b83600be480e0d7d10b47483f548`.
+- Implementation summary: added deterministic subprocess hardening tests for
+  invalid worker results, worker-result identity mismatches, launch errors,
+  signal metadata, and redacted command metadata. Added integration evidence
+  for local/subprocess success equivalence and subprocess failure status/log
+  diagnostics. Added runnable `pipelines.subprocess-run` examples for
+  local-versus-subprocess success, subprocess failure diagnostics, and direct
+  `loom stage run` execution of a prepared attempt. Updated execution and
+  testing docs to state current v5 guarantees, trust boundaries, no-sandboxing
+  scope, privacy defaults, and deferred behavior owners.
+- Review and validation: manager review found no blocking issues. PR #81
+  targeted `develop`; GitHub CI `checks` passed on commit
+  `fd2c5ebd77133d3cc4ce8c51b89f6f2ef71de94e`. Local validation passed before
+  merge: focused tests with config extras; focused Ruff and Pyright on touched
+  tests/examples; `make validate-pr`; and `make test-summary` with package 50
+  passed/1 skipped, unit 599 passed/1 skipped, contract 55 passed/2 skipped,
+  integration 21 passed/7 skipped/8 deselected, e2e 18 passed, config-extra
+  405 passed/743 deselected.
+- Follow-up notes: v5 is complete. Later roadmap versions own retries,
+  timeouts, worker pools, SLURM, containers, plugin-discovered executors,
+  remote stores, cleanup/retention, attempt archives, stronger locking, and
+  any stronger isolation/sandboxing guarantees.
