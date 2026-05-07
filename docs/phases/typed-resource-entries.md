@@ -5,6 +5,7 @@
 - Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 2: Typed Resource Entries`
+- PR URL: https://github.com/samcantrill/loom/pull/71
 - Branch: `codex/typed-resource-entries`
 - Worktree: `/home/samcantrill/work/loom-worktrees/typed-resource-entries`
 - Phase execution plan path: `docs/phases/typed-resource-entries.md`
@@ -347,6 +348,16 @@ make test-summary
   and `.codex/templates/phase-pr-body.md`; confirmed no `RunOptions`,
   profiles, executor descriptors/capabilities, preflight wiring, CLI/config
   runtime mapping, `runtime.json`, or runner request rewiring were added.
-- PR creation: pending push and GitHub PR creation in this refine/open pass
+- PR creation: opened https://github.com/samcantrill/loom/pull/71 on
+  2026-05-07 with explicit base `develop`, head
+  `codex/typed-resource-entries`, title `Runtime Options - Phase 2: Typed
+  Resource Entries`, and body file
+  `docs/phases/typed-resource-entries-pr-body.md`
+- PR verification: `gh pr view 71 --json baseRefName,headRefName,state,url`
+  returned base `develop`, head `codex/typed-resource-entries`, state `OPEN`,
+  URL https://github.com/samcantrill/loom/pull/71
+- PR merge eligibility: root phase PR targets `develop`; merge-eligible only
+  after automated review passes and validation/CI pass. No stack predecessor
+  or stack retargeting is required.
 - Stack maintenance: none required yet
 - Remaining blockers: none known
