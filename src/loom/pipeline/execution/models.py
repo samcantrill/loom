@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.context import StageContext
@@ -18,6 +18,11 @@ from loom.pipeline.planning import (
     ResumeOptions,
     StageFingerprintRecord,
     StagePlan,
+)
+from loom.pipeline.runtime import (
+    ResolvedStageRuntimeOptions,
+    RunOptions,
+    parse_run_options,
 )
 from loom.pipeline.specs import PipelineSpec, StageSpec
 from loom.pipeline.stage import Stage
@@ -92,6 +97,7 @@ class RunRequest:
     pipeline: PipelineSpec | None = None
     run_uri: str | None = None
     open_existing: bool = False
+    options: RunOptions | Mapping[str, object] = field(default_factory=RunOptions)
     selectors: PlanSelectors = field(default_factory=PlanSelectors)
     resume: ResumeOptions = field(default_factory=ResumeOptions)
     fingerprint_context: FingerprintContext = field(default_factory=FingerprintContext)
@@ -120,8 +126,22 @@ class RunRequest:
         if not isinstance(self.open_existing, bool):
             raise RunRequestError("RunRequest.open_existing must be a bool")
 
-        object.__setattr__(self, "selectors", _coerce_selectors(self.selectors))
-        object.__setattr__(self, "resume", _coerce_resume(self.resume))
+        selectors = _coerce_selectors(self.selectors)
+        resume = _coerce_resume(self.resume)
+        if self.run_uri is not None and (
+            not isinstance(self.run_uri, str) or not self.run_uri
+        ):
+            raise RunRequestError("RunRequest.run_uri must be a non-empty string")
+        options = _normalize_run_request_options(
+            self.options,
+            run_uri=self.run_uri,
+            selectors=selectors,
+            resume=resume,
+        )
+        object.__setattr__(self, "options", options)
+        object.__setattr__(self, "run_uri", options.run_uri)
+        object.__setattr__(self, "selectors", options.to_plan_selectors())
+        object.__setattr__(self, "resume", options.to_resume_options())
         object.__setattr__(
             self,
             "fingerprint_context",
@@ -146,10 +166,6 @@ class RunRequest:
         object.__setattr__(
             self, "failure_policy", _coerce_failure_policy(self.failure_policy)
         )
-        if self.run_uri is not None and (
-            not isinstance(self.run_uri, str) or not self.run_uri
-        ):
-            raise RunRequestError("RunRequest.run_uri must be a non-empty string")
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
 
 
@@ -313,6 +329,7 @@ class StageExecutionRequest:
     stderr_path: Path
     traceback_path: Path
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    resolved_runtime: ResolvedStageRuntimeOptions | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_uri, str) or not self.run_uri:
@@ -348,6 +365,11 @@ class StageExecutionRequest:
         object.__setattr__(self, "stderr_path", Path(self.stderr_path))
         object.__setattr__(self, "traceback_path", Path(self.traceback_path))
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+        object.__setattr__(
+            self,
+            "resolved_runtime",
+            _coerce_resolved_runtime(self.resolved_runtime, stage_name=self.stage.name),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +526,73 @@ class RunResult:
             _artifact_ref_mapping(self.artifact_index, "artifact_index"),
         )
         object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+
+
+def _normalize_run_request_options(
+    value: RunOptions | Mapping[str, object],
+    *,
+    run_uri: str | None,
+    selectors: PlanSelectors,
+    resume: ResumeOptions,
+) -> RunOptions:
+    options = _coerce_run_options(value)
+    data = options.to_dict()
+
+    if run_uri is not None:
+        if options.run_uri is not None and options.run_uri != run_uri:
+            raise RunRequestError(
+                "RunRequest.run_uri conflicts with RunRequest.options.run_uri"
+            )
+        data["run_uri"] = run_uri
+
+    option_selectors = options.to_plan_selectors()
+    if selectors != PlanSelectors():
+        if option_selectors != PlanSelectors() and option_selectors != selectors:
+            raise RunRequestError(
+                "RunRequest.selectors conflicts with RunRequest.options.selectors"
+            )
+        data["selectors"] = selectors.to_dict()
+
+    option_resume = options.to_resume_options()
+    if resume != ResumeOptions():
+        if option_resume != ResumeOptions() and option_resume != resume:
+            raise RunRequestError(
+                "RunRequest.resume conflicts with RunRequest.options.resume"
+            )
+        data["resume"] = resume.to_dict()
+
+    return RunOptions.from_dict(data)
+
+
+def _coerce_run_options(value: RunOptions | Mapping[str, object]) -> RunOptions:
+    try:
+        return parse_run_options(value)
+    except Exception as exc:
+        raise RunRequestError(f"RunRequest.options is invalid: {exc}") from exc
+
+
+def _coerce_resolved_runtime(
+    value: ResolvedStageRuntimeOptions | Mapping[str, object] | None,
+    *,
+    stage_name: str,
+) -> ResolvedStageRuntimeOptions:
+    if value is None:
+        return ResolvedStageRuntimeOptions(stage_id=stage_name)
+    if isinstance(value, ResolvedStageRuntimeOptions):
+        runtime = value
+    elif isinstance(value, Mapping):
+        data = dict(value)
+        data.setdefault("stage_id", stage_name)
+        runtime = ResolvedStageRuntimeOptions(**cast(Any, data))
+    else:
+        raise RunRequestError(
+            "StageExecutionRequest.resolved_runtime must be ResolvedStageRuntimeOptions or mapping"
+        )
+    if runtime.stage_id != stage_name:
+        raise RunRequestError(
+            "StageExecutionRequest.resolved_runtime.stage_id must match stage.name"
+        )
+    return runtime
 
 
 def _coerce_selectors(value: object) -> PlanSelectors:

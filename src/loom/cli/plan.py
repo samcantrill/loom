@@ -22,6 +22,7 @@ from loom.cli.results import PlanCliResult
 if TYPE_CHECKING:
     from loom.config.api import ComposedConfig
     from loom.pipeline.planning import ExecutionPlan, PlanSelectors, StageExplanation
+    from loom.pipeline.runtime import RunOptions
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.stores import LocalRunStore
     from loom.pipeline.stores.artifact_store import ArtifactStore
@@ -172,14 +173,29 @@ def build_plan_result(
     """Build the CLI-specific plan view."""
 
     store = _create_default_run_store()
-    run_uri = _resolve_run_uri_for_plan(store, plan_options)
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
         overrides=config_options.overrides,
     )
     pipeline_result = _validate_pipeline_config(composed.resolved)
-    selectors = _build_plan_selectors(selector_options)
+    runtime_options = _merge_runtime_options(
+        composed.resolved,
+        plan_options=plan_options,
+        selector_options=selector_options,
+        known_stage_ids=pipeline_result.spec.stage_names,
+    )
+    run_uri = _resolve_run_uri_for_plan(
+        store,
+        runtime_options.run_uri,
+        open_existing=plan_options.resume,
+    )
+    selectors = runtime_options.to_plan_selectors()
+    resume_enabled = (
+        plan_options.resume
+        and runtime_options.to_resume_options().enabled
+        and run_uri is not None
+    )
     run_store, artifact_store, planner_run_uri = _stores_for_plan(store, run_uri)
     plan = _plan_pipeline(
         pipeline_result.spec,
@@ -187,13 +203,13 @@ def build_plan_result(
         run_store=run_store,
         artifact_store=artifact_store,
         selectors=selectors,
-        resume_enabled=plan_options.resume,
+        resume_enabled=resume_enabled,
     )
     explanation = _explanation_payload(plan, plan_options.explain_stage)
     return _plan_result_from_execution_plan(
         config_path=config_options.config_path,
         display_run_uri=run_uri,
-        resume=plan_options.resume,
+        resume=resume_enabled,
         plan=plan,
         explanation=explanation,
     )
@@ -216,6 +232,22 @@ def _validate_pipeline_config(config: Mapping[str, object]) -> "PipelineValidati
     return validate_pipeline_config(config)
 
 
+def _merge_runtime_options(
+    config: Mapping[str, object],
+    *,
+    plan_options: PlanCliOptions,
+    selector_options: SelectorCliOptions,
+    known_stage_ids: Sequence[str],
+) -> "RunOptions":
+    from loom.pipeline.runtime import merge_config_run_options
+
+    return merge_config_run_options(
+        config,
+        explicit=plan_options.to_runtime_source(selectors=selector_options),
+        known_stage_ids=known_stage_ids,
+    )
+
+
 def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":
     from loom.pipeline.planning import PlanSelectors
 
@@ -233,19 +265,24 @@ def _create_default_run_store() -> "LocalRunStore":
     return LocalRunStore()
 
 
-def _resolve_run_uri_for_plan(store: "LocalRunStore", options: PlanCliOptions) -> str | None:
-    if options.resume and options.run_uri is None:
+def _resolve_run_uri_for_plan(
+    store: "LocalRunStore",
+    run_uri: str | None,
+    *,
+    open_existing: bool,
+) -> str | None:
+    if open_existing and run_uri is None:
         raise CliError(
             "`loom plan --resume` requires --run-uri.",
             code="cli.plan.resume_requires_run_uri",
-            hint="Pass --run-uri file:///absolute/run or omit --resume for a fresh read-only plan.",
+            hint="Pass --run-uri or configure runtime.run_uri for strict resume.",
             exit_code=ExitCode.PIPELINE,
         )
-    if options.run_uri is None:
+    if run_uri is None:
         return None
 
-    resolved = store.resolve_run_uri(options.run_uri)
-    if options.resume:
+    resolved = store.resolve_run_uri(run_uri)
+    if open_existing:
         store.open_run(resolved)
     elif store.run_uri_exists(resolved):
         from loom.pipeline.stores import RunAlreadyExistsError

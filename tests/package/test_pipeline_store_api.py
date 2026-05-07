@@ -28,6 +28,7 @@ def test_pipeline_store_public_exports() -> None:
         "RunArtifactIndexStore",
         "RunConfigStore",
         "RunProvenanceStore",
+        "RunRuntimeMetadataStore",
         "StageStateStore",
         "StageLogStore",
         "StageWorkspaceStore",

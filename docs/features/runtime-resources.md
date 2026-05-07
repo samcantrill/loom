@@ -204,8 +204,11 @@ execution settings, exact stage runtime options, environment requests, and
 adapter options
 RunOptions can serialize to and from plain data and adapt to planning-owned
 PlanSelectors and ResumeOptions without owning graph or resume semantics
-RunRequest remains the execution envelope until later workflow wiring adds a
-normalized options field
+RunRequest carries normalized RunOptions as its canonical invocation-policy
+field while legacy run_uri, selectors, and resume fields normalize into options
+when they do not conflict
+StageExecutionRequest carries a typed ResolvedStageRuntimeOptions handoff for
+executor-facing per-stage runtime data
 ```
 
 Current public shape:
@@ -228,9 +231,15 @@ class RunOptions:
 ```
 
 Runtime options stay separate from pipeline specs and are not wired into the
-local runner, stores, or persisted runtime metadata in this phase. Config and
-CLI inputs may normalize into `RunOptions` for preflight diagnostics, but the
-execution envelope remains unchanged until runner workflow wiring lands.
+local runner's semantic fingerprints. Config, CLI, and Python API inputs
+normalize into `RunOptions`; the runner passes resolved per-stage runtime data
+to executors and writes safe run-level runtime metadata as `runtime.json`.
+
+`runtime.json` is an observability record, not the executor handoff. It is
+schema-versioned and stores safe summaries such as executor name, selected
+profile, tags, notes, selector/resume summaries, resource entry summaries, and
+adapter namespace names/counts. It does not persist environment variable names
+or values, and it does not persist raw adapter payloads.
 
 ## Resume Options
 

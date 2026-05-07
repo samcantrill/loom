@@ -13,6 +13,8 @@ from loom.pipeline.execution import (
     RunRequest,
     RunRequestError,
 )
+from loom.pipeline.planning import PlanSelectors, ResumeOptions
+from loom.pipeline.runtime import RunOptions
 from loom.serialization import PlainData
 
 
@@ -67,6 +69,52 @@ def test_run_request_accepts_plain_mapping_config() -> None:
     request = RunRequest(config=config, run_uri="run1")
 
     assert request.config == config
+
+
+def test_run_request_options_are_canonical_invocation_policy() -> None:
+    spec = _minimal_pipeline_spec()
+
+    request = RunRequest(
+        pipeline=spec,
+        options={
+            "run_uri": "file:///runs/demo",
+            "selectors": {"only_stages": ["build"]},
+            "resume": {"enabled": False},
+        },
+    )
+
+    options = cast(RunOptions, request.options)
+    assert options.run_uri == "file:///runs/demo"
+    assert request.run_uri == "file:///runs/demo"
+    assert request.selectors == PlanSelectors(only_stages=("build",))
+    assert request.resume == ResumeOptions(enabled=False)
+
+
+def test_run_request_legacy_fields_normalize_into_options() -> None:
+    spec = _minimal_pipeline_spec()
+
+    request = RunRequest(
+        pipeline=spec,
+        run_uri="file:///runs/demo",
+        selectors=PlanSelectors(only_stages=("build",)),
+        resume=ResumeOptions(enabled=False),
+    )
+
+    options = cast(RunOptions, request.options)
+    assert options.run_uri == "file:///runs/demo"
+    assert options.to_plan_selectors() == PlanSelectors(only_stages=("build",))
+    assert options.to_resume_options() == ResumeOptions(enabled=False)
+
+
+def test_run_request_rejects_conflicting_legacy_options() -> None:
+    spec = _minimal_pipeline_spec()
+
+    with pytest.raises(RunRequestError, match="run_uri conflicts"):
+        RunRequest(
+            pipeline=spec,
+            run_uri="file:///runs/legacy",
+            options={"run_uri": "file:///runs/options"},
+        )
 
 
 def test_run_request_accepts_duck_typed_composed_config() -> None:

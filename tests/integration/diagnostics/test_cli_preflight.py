@@ -187,7 +187,7 @@ def test_preflight_missing_config_returns_failed_result(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
 
 
-def test_run_preflight_failure_exits_before_store_records(tmp_path: Path) -> None:
+def test_run_config_failure_exits_before_store_records(tmp_path: Path) -> None:
     config_path = tmp_path / "missing.yaml"
     run_path = tmp_path / "runs" / "blocked"
     stdout = io.StringIO()
@@ -199,11 +199,10 @@ def test_run_preflight_failure_exits_before_store_records(tmp_path: Path) -> Non
             stdout=stdout,
             stderr=stderr,
         )
-        == 4
-    )
+            == 3
+        )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["error"]["code"] == "cli.run.preflight_failed"
-    assert payload["error"]["details"]["preflight"]["status"] == "FAIL"
+    assert payload["error"]["code"] == "config.error"
     assert not run_path.exists()
     assert stderr.getvalue() == ""

@@ -51,6 +51,9 @@ _SCHEMA_VERSION = 1
 
 _RUN_WRAPPER_FIELDS = frozenset({"schema_version", "run_uri", "created_at", "metadata"})
 _PLAN_WRAPPER_FIELDS = frozenset({"schema_version", "run_uri", "updated_at", "plan"})
+_RUNTIME_METADATA_WRAPPER_FIELDS = frozenset(
+    {"schema_version", "run_uri", "updated_at", "runtime"}
+)
 _ARTIFACT_INDEX_WRAPPER_FIELDS = frozenset(
     {"schema_version", "run_uri", "updated_at", "artifacts"}
 )
@@ -283,6 +286,48 @@ class LocalRunStore:
             "plan": ensure_plain_data(plan, path="plan"),
         }
         atomic_write_json(self.local_run_dir(run_uri_text) / "plan.json", payload)
+
+    def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_run_dir(run_uri_text) / "runtime.json"
+        data = self._read_optional_json(path)
+        if data is None:
+            return None
+        payload = _require_document_object(data, path, label="runtime metadata document")
+        _validate_exact_document_fields(
+            payload,
+            path,
+            label="runtime metadata document",
+            fields=_RUNTIME_METADATA_WRAPPER_FIELDS,
+        )
+        _require_schema_version(payload, path, label="runtime metadata document")
+        _require_run_uri_field(
+            payload,
+            path,
+            expected=run_uri_text,
+            label="runtime metadata document",
+        )
+        _require_timestamp_field(
+            payload, path, "updated_at", label="runtime metadata document"
+        )
+        return _require_mapping_field(
+            payload, path, "runtime", label="runtime metadata document"
+        )
+
+    def write_runtime_metadata(
+        self, run_uri: str, metadata: Mapping[str, PlainData]
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        normalized = ensure_plain_data(metadata, path="runtime")
+        if not isinstance(normalized, dict):
+            raise UnsafeStorePathError("runtime metadata must be a mapping")
+        payload = {
+            "schema_version": _SCHEMA_VERSION,
+            "run_uri": run_uri_text,
+            "updated_at": utc_timestamp(),
+            "runtime": normalized,
+        }
+        atomic_write_json(self.local_run_dir(run_uri_text) / "runtime.json", payload)
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
         run_dir = self.local_run_dir(run_uri)

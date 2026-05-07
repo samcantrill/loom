@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined; ready for implementation
+- Status: implemented; ready for PR preparation
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 7: Run Workflow and Runtime Metadata`
 - Branch: `codex/runtime-metadata-workflow`
@@ -29,8 +29,8 @@
   CLI composition/run-URI ordering, request compatibility enforcement, dry-run
   handling boundaries, and the separation between planning resume policy and
   run-store open-existing lifecycle behavior
-- Setup limitations: branch/worktree created from local `develop`; no
-  validation has run for this planning-only pass
+- Setup limitations: branch/worktree created from local `develop`; phase
+  validation passed with `make validate-pr` on 2026-05-07
 - Blockers: none known
 
 ## Objective
@@ -409,7 +409,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used by managing agent local refinement
+  after focused tests and `make validate-pr` surfaced runtime coercion, CLI
+  ordering, public export, and documentation-contract updates
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -417,10 +419,19 @@ make test-summary
 
 - Draft plan: completed on 2026-05-07.
 - Final phase execution plan: refined on 2026-05-07.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
-- Blocker-resolution summary: pending.
+- Implementation summary: added public runtime metadata/resolution models,
+  `RunRequest.options` normalization, `StageExecutionRequest.resolved_runtime`,
+  runner `runtime.json` writes, run-store runtime metadata APIs, CLI
+  validate/plan/run normalized runtime option wiring, public exports, docs,
+  and focused unit/contract/package/integration coverage.
+- Implementation validation: `make validate-pr` passed on 2026-05-07
+  (Ruff, Pyright, default suite 677 passed / 14 skipped / 7 deselected,
+  config-extra suite 397 passed / 693 deselected, and `uv build`).
+- Refinement summary: fixed typed `RunOptions` idempotent parsing, safe
+  adapter metadata thaw/re-freeze, dry-run side-effect ordering, plan/dry-run
+  read-only run URI behavior, unsupported executor exit behavior, compose-first
+  missing-config expectations, and public API/export snapshots.
+- Blocker-resolution summary: not used.
 - PR preparation: pending.
 - Stack maintenance: not needed yet.
 - Remaining blockers: none known.

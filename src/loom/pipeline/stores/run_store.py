@@ -53,6 +53,15 @@ class RunPlanStore(Protocol):
 
 
 @runtime_checkable
+class RunRuntimeMetadataStore(Protocol):
+    def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None: ...
+
+    def write_runtime_metadata(
+        self, run_uri: str, metadata: Mapping[str, PlainData]
+    ) -> None: ...
+
+
+@runtime_checkable
 class RunArtifactIndexStore(Protocol):
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]: ...
 
@@ -254,6 +263,7 @@ class RunStore(
     RunEventStore,
     RunLockStore,
     RunInspectionStore,
+    RunRuntimeMetadataStore,
     StageStateStore,
     StageLogStore,
     StageWorkspaceStore,

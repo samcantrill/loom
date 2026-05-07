@@ -22,6 +22,7 @@ from loom.pipeline.stores import (
     RunLifecycleStore,
     RunProvenanceStore,
     RunPlanStore,
+    RunRuntimeMetadataStore,
     RunStore,
     RunStateInspection,
     RunStatusStore,
@@ -119,6 +120,14 @@ class DummyRunStore:
         return None
 
     def write_plan(self, run_uri: str, plan: Mapping[str, PlainData]) -> None:
+        return None
+
+    def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:
+        return {"schema_version": 1}
+
+    def write_runtime_metadata(
+        self, run_uri: str, metadata: Mapping[str, PlainData]
+    ) -> None:
         return None
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
@@ -385,6 +394,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunDocumentStore)
     assert isinstance(DummyRunStore(), RunStatusStore)
     assert isinstance(DummyRunStore(), RunPlanStore)
+    assert isinstance(DummyRunStore(), RunRuntimeMetadataStore)
     assert isinstance(DummyRunStore(), RunArtifactIndexStore)
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)
@@ -396,6 +406,9 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), StageWorkspaceStore)
     assert isinstance(DummyRunStore(), RunStore)
     assert DummyRunStore().read_composition_manifest("file:///tmp/run1") == {
+        "schema_version": 1
+    }
+    assert DummyRunStore().read_runtime_metadata("file:///tmp/run1") == {
         "schema_version": 1
     }
 

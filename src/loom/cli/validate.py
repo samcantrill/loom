@@ -82,6 +82,10 @@ def handle(namespace: argparse.Namespace) -> int:
         overrides=config_options.overrides,
     )
     pipeline_result = _validate_pipeline_config(composed.resolved)
+    _validate_runtime_options(
+        composed.resolved,
+        known_stage_ids=pipeline_result.spec.stage_names,
+    )
     target_count: int | None = None
 
     if validate_options.check_targets:
@@ -136,6 +140,16 @@ def _validate_pipeline_config(config: Mapping[str, object]) -> "PipelineValidati
     from loom.pipeline import validate_pipeline_config
 
     return validate_pipeline_config(config)
+
+
+def _validate_runtime_options(
+    config: Mapping[str, object],
+    *,
+    known_stage_ids: Sequence[str],
+) -> None:
+    from loom.pipeline.runtime import merge_config_run_options
+
+    merge_config_run_options(config, known_stage_ids=known_stage_ids)
 
 
 def _check_pipeline_stage_targets(spec: "PipelineSpec") -> "PipelineTargetCheckResult":
