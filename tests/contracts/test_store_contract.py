@@ -280,6 +280,36 @@ class DummyRunStore:
     ) -> None:
         return None
 
+    def read_stage_worker_request(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> dict[str, PlainData] | None:
+        return None
+
+    def write_stage_worker_request(
+        self,
+        run_uri: str,
+        stage_name: str,
+        request: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None:
+        return None
+
+    def read_stage_worker_result(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> dict[str, PlainData] | None:
+        return None
+
+    def write_stage_worker_result(
+        self,
+        run_uri: str,
+        stage_name: str,
+        result: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None:
+        return None
+
     def read_stage_provenance(
         self, run_uri: str, stage_name: str
     ) -> dict[str, PlainData] | None:
@@ -344,6 +374,12 @@ class DummyRunStorePaths:
 
     def local_stage_log_path(self, run_uri: str, stage_name: str, stream: str) -> Path:
         return Path(run_uri) / stage_name / f"{stream}.log"
+
+    def local_stage_worker_request_path(self, run_uri: str, stage_name: str) -> Path:
+        return Path(run_uri) / stage_name / "worker_request.json"
+
+    def local_stage_worker_result_path(self, run_uri: str, stage_name: str) -> Path:
+        return Path(run_uri) / stage_name / "worker_result.json"
 
     def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path:
         return Path(run_uri) / stage_name / "workspace"

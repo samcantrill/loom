@@ -196,6 +196,32 @@ class StageStateStore(Protocol):
         attempt: int,
     ) -> None: ...
 
+    def read_stage_worker_request(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> dict[str, PlainData] | None: ...
+
+    def write_stage_worker_request(
+        self,
+        run_uri: str,
+        stage_name: str,
+        request: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None: ...
+
+    def read_stage_worker_result(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> dict[str, PlainData] | None: ...
+
+    def write_stage_worker_result(
+        self,
+        run_uri: str,
+        stage_name: str,
+        result: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None: ...
+
     def read_stage_provenance(
         self, run_uri: str, stage_name: str
     ) -> dict[str, PlainData] | None: ...
@@ -247,6 +273,12 @@ class LocalRunStorePaths(Protocol):
     def local_stage_log_path(
         self, run_uri: str, stage_name: str, stream: str
     ) -> Path: ...
+
+    def local_stage_worker_request_path(
+        self, run_uri: str, stage_name: str
+    ) -> Path: ...
+
+    def local_stage_worker_result_path(self, run_uri: str, stage_name: str) -> Path: ...
 
     def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path: ...
 

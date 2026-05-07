@@ -384,11 +384,50 @@ def test_local_run_stage_docs_and_logs(tmp_path: Path) -> None:
     store.write_stage_failure(run_uri, "stage", {"reason": "boom"}, attempt=1)
     assert store.read_stage_failure(run_uri, "stage") == {"reason": "boom"}
 
+    store.write_stage_worker_request(
+        run_uri,
+        "stage",
+        {"stage_name": "stage", "attempt": 1},
+        attempt=1,
+    )
+    assert store.read_stage_worker_request(run_uri, "stage", attempt=1) == {
+        "stage_name": "stage",
+        "attempt": 1,
+    }
+
+    store.write_stage_worker_result(
+        run_uri,
+        "stage",
+        {"stage_name": "stage", "attempt": 1, "status": "SUCCEEDED"},
+        attempt=1,
+    )
+    assert store.read_stage_worker_result(run_uri, "stage", attempt=1) == {
+        "stage_name": "stage",
+        "attempt": 1,
+        "status": "SUCCEEDED",
+    }
+
     store.write_stage_provenance(run_uri, "stage", {"tool": "x"}, attempt=1)
     assert store.read_stage_provenance(run_uri, "stage") == {"tool": "x"}
 
     store.write_stage_log(run_uri, "stage", "stdout", "line1\n")
     assert store.read_stage_log(run_uri, "stage", "stdout") == "line1\n"
+
+
+def test_local_run_worker_records_validate_attempt_identity(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+
+    store.write_stage_worker_request(
+        run_uri,
+        "stage",
+        {"stage_name": "stage", "attempt": 1},
+        attempt=1,
+    )
+
+    with pytest.raises(CorruptStoreDocumentError, match="expected 2"):
+        store.read_stage_worker_request(run_uri, "stage", attempt=2)
 
 
 def test_local_run_inspection_discovers_stage_state(tmp_path: Path) -> None:

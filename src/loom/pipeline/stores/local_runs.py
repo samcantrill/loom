@@ -130,9 +130,7 @@ class LocalRunStore:
         stage_names: list[str] = []
         for child in sorted(stages_dir.iterdir(), key=lambda path: path.name):
             if not child.is_dir():
-                raise CorruptStoreDocumentError(
-                    f"Expected stage directory at {child}"
-                )
+                raise CorruptStoreDocumentError(f"Expected stage directory at {child}")
             stage_names.append(validate_stage_name(child.name, field="stage_name"))
         return tuple(stage_names)
 
@@ -196,6 +194,12 @@ class LocalRunStore:
             / "logs"
             / f"{validated_stream}.log"
         )
+
+    def local_stage_worker_request_path(self, run_uri: str, stage_name: str) -> Path:
+        return self.local_stage_dir(run_uri, stage_name) / "worker_request.json"
+
+    def local_stage_worker_result_path(self, run_uri: str, stage_name: str) -> Path:
+        return self.local_stage_dir(run_uri, stage_name) / "worker_result.json"
 
     def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path:
         return self.local_stage_dir(run_uri, stage_name) / "workspace"
@@ -293,7 +297,9 @@ class LocalRunStore:
         data = self._read_optional_json(path)
         if data is None:
             return None
-        payload = _require_document_object(data, path, label="runtime metadata document")
+        payload = _require_document_object(
+            data, path, label="runtime metadata document"
+        )
         _validate_exact_document_fields(
             payload,
             path,
@@ -831,6 +837,80 @@ class LocalRunStore:
         )
         atomic_write_json(path, payload)
 
+    def read_stage_worker_request(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> dict[str, PlainData] | None:
+        path = self.local_stage_worker_request_path(run_uri, stage_name)
+        data = self._read_optional_json(path)
+        if data is None:
+            return None
+        payload = _require_document_object(
+            data, path, label="stage worker request document"
+        )
+        return self._validate_stage_attempt_payload(
+            payload,
+            run_uri,
+            stage_name,
+            "worker_request",
+            path,
+            expected_attempt=attempt,
+        )
+
+    def write_stage_worker_request(
+        self,
+        run_uri: str,
+        stage_name: str,
+        request: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None:
+        path = self.local_stage_worker_request_path(run_uri, stage_name)
+        payload = self._build_stage_payload(
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            field_name="worker_request",
+            field_value=ensure_plain_data(request, path="worker_request"),
+        )
+        atomic_write_json(path, payload)
+
+    def read_stage_worker_result(
+        self, run_uri: str, stage_name: str, *, attempt: int
+    ) -> dict[str, PlainData] | None:
+        path = self.local_stage_worker_result_path(run_uri, stage_name)
+        data = self._read_optional_json(path)
+        if data is None:
+            return None
+        payload = _require_document_object(
+            data, path, label="stage worker result document"
+        )
+        return self._validate_stage_attempt_payload(
+            payload,
+            run_uri,
+            stage_name,
+            "worker_result",
+            path,
+            expected_attempt=attempt,
+        )
+
+    def write_stage_worker_result(
+        self,
+        run_uri: str,
+        stage_name: str,
+        result: Mapping[str, PlainData],
+        *,
+        attempt: int,
+    ) -> None:
+        path = self.local_stage_worker_result_path(run_uri, stage_name)
+        payload = self._build_stage_payload(
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            field_name="worker_result",
+            field_value=ensure_plain_data(result, path="worker_result"),
+        )
+        atomic_write_json(path, payload)
+
     def read_stage_provenance(
         self, run_uri: str, stage_name: str
     ) -> dict[str, PlainData] | None:
@@ -984,6 +1064,7 @@ class LocalRunStore:
         stage_name: str,
         field_name: str,
         source_path: Path,
+        expected_attempt: int | None = None,
     ) -> dict[str, PlainData]:
         failure_key = "failed_at" if field_name == "failure" else "created_at"
         fields = frozenset(
@@ -1015,6 +1096,10 @@ class LocalRunStore:
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
             raise CorruptStoreDocumentError(
                 f"{label} at {source_path} field 'attempt' must be a positive integer"
+            )
+        if expected_attempt is not None and attempt != expected_attempt:
+            raise CorruptStoreDocumentError(
+                f"{label} at {source_path} has attempt {attempt}, expected {expected_attempt}"
             )
         _require_timestamp_field(payload, source_path, failure_key, label=label)
         return _require_mapping_field(payload, source_path, field_name, label=label)

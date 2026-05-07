@@ -867,12 +867,28 @@ message
 traceback
 traceback_path
 exit_code
+signal
 stdout_path
 stderr_path
 ```
 
-For subprocess and SLURM execution, `exit_code` and log paths may be more
-important than Python exception fields.
+For subprocess and SLURM execution, `exit_code`, `signal`, and log paths may be
+more important than Python exception fields.
+
+### 8.10.1 Stage Worker Request And Result Handoffs
+
+V5 adds latest-stage-compatible worker handoff records:
+
+```text
+stages/<stage>/worker_request.json
+stages/<stage>/worker_result.json
+```
+
+These records carry explicit `run_uri`, `stage_name`, and `attempt` fields.
+The parent prepares the request and owns final commit semantics. The worker
+writes only the structured result handoff for the assigned attempt. Full
+`stages/<stage>/attempts/<n>/...` archives are deferred until retry or
+retention policy needs attempt history.
 
 ### 8.11 Stage `provenance.json`
 

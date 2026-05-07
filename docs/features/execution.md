@@ -646,8 +646,9 @@ Backend-specific details should be nested under executor metadata:
   "executor": "subprocess",
   "executor_metadata": {
     "pid": 12345,
-    "command": ["loom", "stage", "run", "--run-dir", "..."],
-    "exit_code": 1
+    "command": ["loom", "stage", "run", "--run-uri", "..."],
+    "exit_code": 1,
+    "signal": null
   }
 }
 ```
@@ -1069,6 +1070,7 @@ class StageExecutionResult:
     started_at: str | None = None
     finished_at: str | None = None
     exit_code: int | None = None
+    signal: int | None = None
     exception_type: str | None = None
     message: str | None = None
     traceback_path: Path | None = None
@@ -1111,7 +1113,7 @@ A failed result should include:
 
 ```text
 status = FAILED
-exception_type or exit_code
+exception_type, exit_code, or signal
 message
 traceback path when available
 stdout/stderr paths
@@ -1585,20 +1587,20 @@ It is the bridge between local execution and future remote execution.
 Recommended command:
 
 ```bash
-loom stage run --run-dir RUN_DIR --stage STAGE_NAME --attempt ATTEMPT
+loom stage run --run-uri RUN_URI --stage STAGE_NAME --attempt ATTEMPT
 ```
 
 Optional flags:
 
 ```text
---config CONFIG_PATH
---executor-worker
 --log-level LEVEL
 --strict
 ```
 
-The command should not require pickled Python objects. It should reconstruct
-stage context from run-store files and resolved config.
+The command should not require pickled Python objects or a normal `--config`
+input. It should reconstruct stage context from durable run-store files,
+prepared request metadata, resolved config/source records, and resolved runtime
+handoff data.
 
 ### 15.3 Coordinator Responsibilities
 
@@ -1641,10 +1643,12 @@ attempt.
 Recommended worker output:
 
 ```text
-stages/<stage>/attempts/<attempt>/result.json
+stages/<stage>/worker_result.json
 ```
 
-or the v0 equivalent under the stage directory.
+The latest-stage-compatible file carries explicit attempt identity. Full
+`stages/<stage>/attempts/<attempt>/...` archives are deferred until retry or
+retention policy needs attempt history.
 
 The result should include:
 
@@ -1654,6 +1658,8 @@ outputs
 exception metadata
 log paths
 executor metadata
+exit_code
+signal
 ```
 
 The parent process should read this result and perform final commit semantics.
@@ -1751,6 +1757,7 @@ exception_type
 message
 traceback_path
 exit_code
+signal
 stdout_path
 stderr_path
 executor_metadata
@@ -1758,7 +1765,8 @@ executor_metadata
 
 For local execution, Python exception fields are primary.
 
-For subprocess and future SLURM execution, exit code and log paths are primary.
+For subprocess and future SLURM execution, exit code, signal, and log paths are
+primary.
 
 ### 16.3 Executor Metadata
 
@@ -2128,7 +2136,7 @@ return non-zero on failure
 Example:
 
 ```bash
-loom run experiment.yaml --run-dir runs/example --executor local
+loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor local
 ```
 
 ### 21.2 `loom stage run`
@@ -2139,7 +2147,7 @@ v0 functional behavior.
 It should:
 
 ```text
-open an existing run directory
+open an existing run URI
 load stage information
 run exactly one stage attempt
 write structured result
@@ -2149,7 +2157,7 @@ exit with meaningful code
 Example:
 
 ```bash
-loom stage run --run-dir runs/example --stage train --attempt 1
+loom stage run --run-uri file:///abs/project/runs/example --stage train --attempt 1
 ```
 
 It should not:
