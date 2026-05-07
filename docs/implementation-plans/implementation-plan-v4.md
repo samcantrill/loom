@@ -434,9 +434,9 @@ Completion summary:
 
 ### Phase 2 - Typed Resource Entries
 
-Status: pending
+Status: merged
 Branch: `codex/typed-resource-entries`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/71
 
 Goal:
 
@@ -549,7 +549,25 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged on 2026-05-07 via PR #71 into `develop`.
+- Implementation hard-swapped the resource model to schema-versioned
+  `ResourceRequest(entries={...})` with immutable
+  `ResourceEntry(kind, amount, unit, attributes)` leaves.
+- Added deterministic explicit resource validator registry composition with
+  built-in `cpu`, `memory`, and `gpu` validators, duplicate-kind rejection,
+  custom registry isolation, unregistered-kind failures, resource-kind syntax
+  validation, and key/kind matching.
+- Rejected removed `cpus`, `memory_mb`, `gpus`, and `custom` constructor,
+  authored, and serialized resource fields rather than retaining aliases.
+- Updated `StageSpec.resources`, `StageSpec.resource_request`,
+  `RuntimeRequest.resources`, public `ResourceEntry` export, tests, docs, and
+  canonical examples to the entry-based schema while keeping resources excluded
+  from semantic fingerprints.
+- Validation evidence: `make validate-pr` passed before PR opening and after
+  the implementation refinement pass; GitHub CI `checks` passed on PR #71;
+  `make test-summary` reported 1005 passed, 10 skipped, and 621 deselected.
+- Follow-up for Phase 3: runtime option models can now reference the
+  entry-based `ResourceRequest` without carrying old resource aliases.
 
 ### Phase 3 - Run Options And Environment Models
 
