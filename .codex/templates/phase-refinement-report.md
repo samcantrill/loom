@@ -8,7 +8,9 @@
 - Phase execution plan:
 - Refiner:
 - Refinement date:
-- Phase implementation refinement budget status after this pass: used
+- Pass type: implementation refinement / blocker resolution
+- Phase implementation refinement budget status after this pass: used / unchanged
+- Blocker-resolution budget status after this pass: unchanged / <N>/3 used
 
 ## Refinement Scope
 

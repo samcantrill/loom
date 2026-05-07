@@ -24,6 +24,7 @@
 - Stack state checked:
 - Phase implementation refinement budget:
 - PR review budget:
+- Blocker-resolution budget:
 - Evidence checked for consumed budgets:
 
 ## Phase Brief

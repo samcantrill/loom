@@ -176,6 +176,7 @@ make test-summary
 
 - Phase implementation refinement: unused
 - PR review: unused
+- Blocker resolution: 0/3 used
 
 ## Completion Notes
 
@@ -184,6 +185,7 @@ make test-summary
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
+- Blocker-resolution summary:
 - PR preparation:
 - Stack maintenance:
 - Remaining blockers:

@@ -116,28 +116,30 @@ assign a pre-submit blocker gate against the phase plan, diff, PR body draft,
 validation evidence, scope boundary, and known review risks before opening or
 preparing the PR. Concrete blockers found before submission must be resolved in
 the phase branch before the PR is submitted, using the relevant remaining budget
-or a scoped blocker-resolution pass for the exact blocker. Do not submit a PR
-with known unresolved blockers merely to let GitHub review or CI rediscover
-them. If a blocker cannot be resolved within the assigned phase scope, mark the
-phase `blocked`, record the reason in the phase artifact, report the blocker,
-and stop before PR submission.
+or one of the phase's scoped blocker-resolution passes for the exact blocker.
+Do not submit a PR with known unresolved blockers merely to let GitHub review or
+CI rediscover them. If a blocker cannot be resolved within the assigned phase
+scope or the blocker-resolution budget is exhausted, mark the phase `blocked`,
+record the reason in the phase artifact, report the blocker, and stop before PR
+submission.
 
-Exception for explicit user-authorized blocker resolution:
+Scoped blocker-resolution budget:
 
 ```text
-create one scoped blocker-resolution subagent for the exact blocker, then
-validate, update artifacts, and resume the phase loop only if the blocker is
-resolved
+up to three scoped blocker-resolution passes per phase, each for a concrete
+blocker or a tight blocker cluster with the same root cause
 ```
 
-This exception applies only after the manager has reported or recorded a
-concrete blocker and the user explicitly asks Codex to address it. Use
-`loom_phase_refiner` for implementation or test blockers, `loom_pr_preparer`
-for PR body or metadata blockers, or the narrowest applicable project-scoped
-agent. The subagent handoff must cite the blocker, bound the write scope,
-prohibit future-phase work, require relevant validation, and require phase
-artifact updates. It does not reset the original gate budgets; if the blocker
-remains after the pass, report it to the user instead of spawning another fixer.
+This budget applies after the manager has reported or recorded a concrete
+blocker. Use `loom_phase_refiner` for implementation or test blockers,
+`loom_pr_preparer` for PR body or metadata blockers, or the narrowest applicable
+project-scoped agent. A blocker-resolution pass may also be an equivalent scoped
+local fix by the manager when no subagent is needed. The handoff or local notes
+must cite the blocker, bound the write scope, prohibit future-phase work,
+require relevant validation, and require phase artifact updates. It does not
+reset the original gate budgets. If the same blocker remains after a pass,
+spend another blocker-resolution pass only when there is a concrete new remedy;
+otherwise report the blocker instead of looping.
 
 Loop budget:
 
@@ -145,9 +147,9 @@ Loop budget:
 | --- | --- | --- |
 | Plan quality gate | One `loom_plan_reviewer` review, one plan refinement, one confirmation review | Mark the plan or next phase `blocked`, report the blocker, and stop |
 | Phase implementation | Fast path: zero refiner passes when targeted validation passes and coverage obligations are met. Expanded path or blocker case: one `loom_phase_refiner` pass after implementation | Report the blocker and stop before PR submission, approval, or merge |
-| Pre-submit blocker gate | One manager review or `loom_phase_reviewer` pass before PR submission; this consumes the phase PR-review budget when it reviews the diff, PR body, and suite evidence. Scoped blocker-resolution passes may address concrete blockers found before PR submission | Mark the phase `blocked`, report the exact blocker, and stop before PR submission when a blocker cannot be resolved in scope |
+| Pre-submit blocker gate | One manager review or `loom_phase_reviewer` pass before PR submission; this consumes the phase PR-review budget when it reviews the diff, PR body, and suite evidence. Up to three scoped blocker-resolution passes per phase may address concrete blockers found before PR submission | Mark the phase `blocked`, report the exact blocker, and stop before PR submission when a blocker cannot be resolved in scope or the blocker-resolution budget is exhausted |
 | Phase PR review | One `loom_phase_reviewer` pass or one equivalent local review only when no full pre-submit review occurred or the submitted diff changed afterward | Do not mark automated review approved, report the blocker, and stop |
-| User-authorized blocker resolution | One scoped subagent pass for the exact blocker named or accepted by the user | Report the remaining blocker and stop |
+| Blocker resolution | Up to three scoped subagent or manager-local passes per phase for concrete implementation, test, PR-body, validation, CI, or mergeability blockers | Report the remaining blocker and stop when the blocker is out of scope, no concrete new remedy exists, or all three passes are used |
 
 Before assigning any reviewer or refiner, check the current thread, phase
 execution plan, PR body, and implementation-plan notes for evidence that the
@@ -156,11 +158,12 @@ budget as consumed and escalate to the user instead of starting another
 automated pass.
 Do not use a different agent name or local review to bypass a consumed budget.
 Pre-submit blocker-resolution passes are not a way to bypass consumed plan,
-implementation, or PR-review budgets. Each pass must cite a current concrete
-pre-submit blocker and stop once that blocker is resolved or proven out of
-scope. After submission, only GitHub-only blockers that could not have been
-known earlier, such as branch protection, remote CI, or mergeability state, may
-receive scoped handling before merge or stacked continuation.
+implementation, or PR-review budgets; they consume the separate
+blocker-resolution budget. Each pass must cite a current concrete blocker and
+stop once that blocker is resolved or proven out of scope. After submission,
+only GitHub-only blockers that could not have been known earlier, such as
+branch protection, remote CI, or mergeability state, may receive scoped handling
+before merge or stacked continuation.
 
 Model policy:
 
@@ -314,11 +317,13 @@ For each phase:
 13. If the pre-submit blocker gate finds a blocker, resolve it before PR
    submission. Use `loom_phase_refiner` for implementation or test blockers,
    `loom_pr_preparer` for PR body or metadata blockers, or the narrowest
-   applicable local fix when no subagent is available. Commit the fix, update
-   phase artifacts, rerun relevant validation, and rerun the pre-submit gate.
-   If the blocker remains or cannot be fixed within the assigned phase scope,
-   mark the phase `blocked`, report the exact blocker, and stop without
-   submitting the PR.
+   applicable local fix when no subagent is available. Each attempt consumes
+   one blocker-resolution pass. Commit the fix, update phase artifacts, rerun
+   relevant validation, and rerun the pre-submit gate. If the blocker remains,
+   no concrete new remedy exists, the blocker cannot be fixed within the
+   assigned phase scope, or all three blocker-resolution passes are used, mark
+   the phase `blocked`, report the exact blocker, and stop without submitting
+   the PR.
 14. After the pre-submit blocker gate passes, open or prepare the PR and record
     `pr_open` metadata in the control checkout. Do not request GitHub
     reviewers or add human-review gating text to the PR.
@@ -342,10 +347,12 @@ For each phase:
 18. If a post-submit issue appears, handle only blockers that were not knowable
    before submission, such as remote CI failures, branch protection,
    mergeability state, or late review decisions. Resolve in-scope blockers with
-   a scoped fix, update the PR and phase notes, rerun relevant validation, and
-   resume the gate. If the blocker is out of scope or cannot be resolved, leave
-   the automated review unapproved, mark the phase `blocked` where appropriate,
-   report the blocker, and stop.
+   a scoped fix that consumes one blocker-resolution pass, update the PR and
+   phase notes, rerun relevant validation, and resume the gate. If the blocker
+   is out of scope, cannot be resolved, has no concrete new remedy, or all
+   three blocker-resolution passes are used, leave the automated review
+   unapproved, mark the phase `blocked` where appropriate, report the blocker,
+   and stop.
 19. Poll GitHub checks after PR submission. Once CI checks pass, verify the PR
    target with `gh pr view <PR> --json
    baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup`.
@@ -425,9 +432,9 @@ Rules:
 - Keep workflow prompt, template, and `AGENTS.md` refinements in the control
   checkout or a dedicated workflow PR unless explicitly assigned as phase work.
 - Do not loop on review/refinement. Escalate remaining blockers after the
-  bounded pass; do not re-label the same work as a new pass. Pre-submit blocker
-  resolution may address concrete blockers before PR submission, and
-  post-submit handling is limited to GitHub-only or late blockers that could
-  not have been known before submission.
+  bounded blocker-resolution budget is used; do not re-label the same work as a
+  new pass. Pre-submit blocker resolution may address concrete blockers before
+  PR submission, and post-submit handling is limited to GitHub-only or late
+  blockers that could not have been known before submission.
 - Use only these phase statuses: `pending`, `in_progress`, `pr_open`, `approved`, `merged`, `blocked`.
 - Project custom agents are configured in `.codex/agents/`.

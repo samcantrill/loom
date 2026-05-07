@@ -290,8 +290,8 @@ loom_phase_refiner performs one bounded refinement pass after implementation
 loom_pr_preparer may draft then refine the PR body before opening/preparing the PR
 ```
 
-Do not loop indefinitely. Each gate allows at most one automated refinement
-attempt:
+Do not loop indefinitely. Review and refinement gates stay bounded, while
+blocker resolution has a separate scoped phase budget:
 
 - Plan quality gate: one `loom_plan_reviewer` review, one refinement pass, and
   one confirmation review. If blocking findings remain, mark the plan `blocked`
@@ -299,9 +299,15 @@ attempt:
 - Phase implementation: zero `loom_phase_refiner` passes on the fast path, or
   one pass when targeted validation fails, suite coverage is missing, or the
   expanded path is active. If the PR is still unacceptable, the managing agent
-  must report the blocker to the user instead of spawning another fixer.
+  may use the separate blocker-resolution budget only for concrete blockers
+  with bounded remedies.
 - Phase PR review: one reviewer pass. The managing agent may merge only if no
   blocking findings remain and checks pass or unavailable checks are justified.
+- Blocker resolution: up to three scoped blocker-resolution passes per phase
+  may be used for concrete implementation, test, PR-body, validation, CI, or
+  mergeability blockers. Each pass must target one concrete blocker or a tight
+  cluster with the same root cause. If blockers remain after the third pass,
+  mark the phase or PR `blocked` and report the remaining blocker.
 
 The managing agent owns this loop budget. Before assigning any reviewer or
 refiner, confirm the relevant gate has not already consumed its allowed pass in
@@ -311,19 +317,21 @@ starting another automated review/refine cycle. No phase agent may reassign
 itself, spawn a replacement fixer, or request another automated pass for the
 same gate without an explicit user instruction.
 
-When the user explicitly authorizes blocker resolution after a gate has stopped,
-the managing agent may create one scoped blocker-resolution subagent to address
-the exact blocker. Use `loom_phase_refiner` for implementation or test fixes,
-`loom_pr_preparer` for PR body or metadata fixes, or the narrowest applicable
-project-scoped agent. The handoff must cite the concrete blocker, bound the
-write scope, prohibit future-phase work, require validation, and require phase
-artifact updates. This user-authorized pass does not reset the original review
-or refinement budgets, and any remaining blocker after the pass must be reported
-to the user instead of spawning another fixer.
+When blocker resolution is needed after a gate has stopped, the managing agent
+may use the phase's blocker-resolution budget to create a scoped
+blocker-resolution subagent or perform an equivalent scoped local fix. Use
+`loom_phase_refiner` for implementation or test fixes, `loom_pr_preparer` for
+PR body or metadata fixes, or the narrowest applicable project-scoped agent. The
+handoff must cite the concrete blocker, bound the write scope, prohibit
+future-phase work, require validation, and require phase artifact updates. These
+passes do not reset the original review or refinement budgets. If the same
+blocker remains after its scoped pass, spend another blocker-resolution pass
+only when there is a concrete new remedy; otherwise report the blocker instead
+of looping.
 
-Phase execution plans must record the phase implementation refinement and PR
-review budget status so later handoffs can see whether a pass is unused, used,
-or explicitly not needed.
+Phase execution plans must record the phase implementation refinement, PR
+review, and blocker-resolution budget status so later handoffs can see whether a
+pass is unused, used, or explicitly not needed.
 
 Model policy:
 

@@ -1,12 +1,14 @@
 You are refining the current phase implementation based on validation results.
 This prompt is intended for the `loom_phase_refiner` custom agent.
 
-This is the only automated refinement pass for the phase, and it is conditional.
-Use it when targeted validation fails, suite coverage is missing, the executor
-reports a blocker, or the expanded path is active. First make a concise
-refinement plan from the diff and validation output, then execute only that
-phase-scoped plan. This pass consumes the phase implementation refinement
-budget.
+This is a bounded phase fix pass. The manager must state whether it is the
+single phase implementation refinement pass or one of the phase's three scoped
+blocker-resolution passes. Use the implementation refinement pass when targeted
+validation fails, suite coverage is missing, the executor reports a blocker, or
+the expanded path is active. Use a blocker-resolution pass only for the exact
+concrete blocker named by the manager. First make a concise refinement plan
+from the diff and validation output, then execute only that phase-scoped plan.
+Record which budget the pass consumes.
 
 Read:
 
@@ -28,9 +30,11 @@ Task:
 6. Re-run the relevant targeted suite commands and broader validation commands
    when practical.
 7. Update the phase execution plan completion notes using the sections from
-   `.codex/templates/phase-refinement-report.md` and mark implementation
-   refinement budget as `used`. If the manager asks for a separate artifact,
-   write it to `docs/phases/<summary-of-feature>-refinement.md`.
+   `.codex/templates/phase-refinement-report.md` and mark the correct budget:
+   implementation refinement as `used` for the implementation refinement pass,
+   or blocker resolution as `<N>/3 used` for a blocker-resolution pass. If the
+   manager asks for a separate artifact, write it to
+   `docs/phases/<summary-of-feature>-refinement.md`.
 8. Commit refinements with `git commit -m "fix: refine after validation"`.
 
 Rules:
@@ -44,8 +48,9 @@ Rules:
 - Do not weaken tests unless the test is clearly obsolete because of the intended phase behavior; if so, explain why.
 - Do not add broad future-phase package, integration, e2e, or opt-in tests that
   were not required by the finalized phase execution plan.
-- Do not run a second refinement loop. If blockers remain after this pass,
-  document them for the managing agent and stop.
+- Do not request another pass. If blockers remain after this pass, document
+  them for the managing agent and stop; the manager owns any remaining
+  blocker-resolution budget decision.
 - Do not ask for a replacement fixer or another automated pass under a different
   name.
 - Do not prepare or open a PR.
