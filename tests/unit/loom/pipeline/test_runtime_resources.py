@@ -14,6 +14,22 @@ from loom.pipeline import (
 from loom.pipeline.errors import RuntimeResourceError
 
 
+def test_runtime_public_import_paths_are_compatible() -> None:
+    import loom.pipeline.runtime as runtime
+    from loom.pipeline import RuntimeKind as PipelineRuntimeKind
+    from loom.pipeline import RuntimeRequest as PipelineRuntimeRequest
+    from loom.pipeline import parse_runtime_request as pipeline_parse_runtime_request
+    from loom.pipeline.runtime import RuntimeKind as RuntimeModuleKind
+    from loom.pipeline.runtime import RuntimeRequest as RuntimeModuleRequest
+    from loom.pipeline.runtime import parse_runtime_request as runtime_module_parse
+
+    assert runtime.RuntimeKind is RuntimeModuleKind is PipelineRuntimeKind
+    assert runtime.RuntimeRequest is RuntimeModuleRequest is PipelineRuntimeRequest
+    assert runtime.parse_runtime_request is runtime_module_parse
+    assert runtime_module_parse is pipeline_parse_runtime_request
+    assert runtime_module_parse(None) == RuntimeModuleRequest()
+
+
 def test_resource_request_round_trips_and_freezes_custom() -> None:
     custom: dict[str, Any] = {"labels": ["fast"]}
     request = ResourceRequest(cpus=2, memory_mb=1024, gpus=0, custom=custom)
