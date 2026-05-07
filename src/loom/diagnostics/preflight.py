@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+import shutil
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -433,6 +436,7 @@ def _check_executor(context: _Context) -> tuple[PreflightCheckResult, ...]:
         *_check_local_executor(),
         *_check_executor_resolve(context),
         *_check_executor_capabilities(context),
+        *_check_subprocess_executor(context),
     )
 
 
@@ -537,6 +541,109 @@ def _check_executor_capabilities(context: _Context) -> tuple[PreflightCheckResul
             ),
             _capability_details(diagnostics),
         ),
+    )
+
+
+def _check_subprocess_executor(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    try:
+        options = cast(Any, context.runtime_options())
+        result = context.capability_validation()
+    except Exception:  # noqa: BLE001 - runtime/resolve checks already report this.
+        return ()
+
+    if (options.executor or "local") != "subprocess":
+        return ()
+
+    if _unknown_executor_diagnostic(result) is not None:
+        return (
+            _skip(
+                "executor.subprocess.python",
+                PreflightGroup.EXECUTOR,
+                "check skipped because the selected executor is unresolved",
+                {"reason": "executor_unresolved"},
+            ),
+            _skip(
+                "executor.subprocess.worker",
+                PreflightGroup.EXECUTOR,
+                "check skipped because the selected executor is unresolved",
+                {"reason": "executor_unresolved"},
+            ),
+        )
+
+    return (_check_subprocess_python(), _check_subprocess_worker())
+
+
+def _check_subprocess_python() -> PreflightCheckResult:
+    executable = sys.executable
+    if not executable:
+        return _result(
+            "executor.subprocess.python",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "subprocess Python executable is unavailable",
+            {"python_executable": "", "reason": "missing_sys_executable"},
+        )
+
+    resolved = shutil.which(executable)
+    if resolved is None:
+        return _result(
+            "executor.subprocess.python",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "subprocess Python executable is unavailable",
+            {"python_executable": executable, "reason": "not_found_or_not_executable"},
+        )
+
+    return _result(
+        "executor.subprocess.python",
+        PreflightGroup.EXECUTOR,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        "subprocess Python executable is available",
+        {"python_executable": executable, "resolved_python_executable": resolved},
+    )
+
+
+def _check_subprocess_worker() -> PreflightCheckResult:
+    module_name = "loom.cli.main"
+    command = "loom stage run"
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except Exception as exc:  # noqa: BLE001 - import resolution failure is a structured diagnostic.
+        return _result(
+            "executor.subprocess.worker",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "subprocess worker command is unavailable",
+            {
+                "module": module_name,
+                "command": command,
+                "reason": "module_resolution_error",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+
+    if spec is None:
+        return _result(
+            "executor.subprocess.worker",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "subprocess worker command is unavailable",
+            {"module": module_name, "command": command, "reason": "module_not_found"},
+        )
+
+    return _result(
+        "executor.subprocess.worker",
+        PreflightGroup.EXECUTOR,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        "subprocess worker command is available",
+        {"module": module_name, "command": command, "origin": spec.origin},
     )
 
 

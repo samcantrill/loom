@@ -94,3 +94,36 @@ def test_text_formatters_are_concise() -> None:
         ),
         config_path=Path("pipeline.yaml"),
     ) == ("OK preflight pipeline.yaml: PASS\nPASS config.load: config composed successfully")
+
+
+def test_format_run_text_includes_failure_diagnostics() -> None:
+    rendered = format_run_text(
+        RunCliResult(
+            run_uri="file:///runs/failed",
+            status="FAILED",
+            failure_summary={
+                "stage": "build",
+                "attempt": 1,
+                "executor": "subprocess",
+                "message": "stage failed intentionally",
+                "exit_code": None,
+                "signal": 15,
+                "failure_path": "/runs/failed/stages/build/failure.json",
+                "stdout_path": "/runs/failed/stages/build/logs/stdout.log",
+                "stderr_path": "/runs/failed/stages/build/logs/stderr.log",
+                "traceback_path": "/runs/failed/stages/build/logs/traceback.txt",
+            },
+        )
+    )
+
+    assert rendered == (
+        "FAILED run file:///runs/failed: FAILED\n"
+        "failure build: stage failed intentionally\n"
+        "  attempt: 1\n"
+        "  executor: subprocess\n"
+        "  signal: 15\n"
+        "  failure_record: /runs/failed/stages/build/failure.json\n"
+        "  stdout: /runs/failed/stages/build/logs/stdout.log\n"
+        "  stderr: /runs/failed/stages/build/logs/stderr.log\n"
+        "  traceback: /runs/failed/stages/build/logs/traceback.txt"
+    )

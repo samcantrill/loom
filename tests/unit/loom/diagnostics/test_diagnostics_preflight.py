@@ -165,6 +165,110 @@ def test_unknown_executor_fails_resolve_and_skips_capability_checks(
     assert by_id["resources.capabilities"].status is PreflightCheckStatus.SKIP
 
 
+def test_selected_subprocess_executor_runs_availability_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={"executor": "subprocess"},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.PASS
+    assert [check.check_id for check in result.checks] == [
+        "executor.local",
+        "executor.resolve",
+        "executor.capabilities",
+        "executor.subprocess.python",
+        "executor.subprocess.worker",
+    ]
+    assert by_id["executor.resolve"].details["executor"] == "subprocess"
+    assert by_id["executor.subprocess.python"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.subprocess.worker"].status is PreflightCheckStatus.PASS
+
+
+def test_selected_subprocess_executor_fails_when_python_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        preflight_module.sys,
+        "executable",
+        str(tmp_path / "missing-python"),
+    )
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={"executor": "subprocess"},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.subprocess.python"].status is PreflightCheckStatus.FAIL
+    assert by_id["executor.subprocess.python"].details["reason"] == (
+        "not_found_or_not_executable"
+    )
+
+
+def test_selected_subprocess_executor_fails_when_worker_module_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(preflight_module.importlib.util, "find_spec", lambda _name: None)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={"executor": "subprocess"},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.subprocess.worker"].status is PreflightCheckStatus.FAIL
+    assert by_id["executor.subprocess.worker"].details == {
+        "module": "loom.cli.main",
+        "command": "loom stage run",
+        "reason": "module_not_found",
+    }
+
+
+def test_local_executor_does_not_run_subprocess_availability_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={"executor": "local"},
+        )
+    )
+
+    assert [check.check_id for check in result.checks] == [
+        "executor.local",
+        "executor.resolve",
+        "executor.capabilities",
+    ]
+
+
 @dataclass(frozen=True, slots=True)
 class _FakeComposedConfig:
     resolved: dict[str, object]

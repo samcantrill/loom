@@ -50,6 +50,8 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
             "executor.local",
             "executor.resolve",
             "executor.capabilities",
+            "executor.subprocess.python",
+            "executor.subprocess.worker",
         ),
         PreflightGroup.RESOURCES: ("resources.capabilities",),
         PreflightGroup.FILESYSTEM: ("filesystem.input_exists",),

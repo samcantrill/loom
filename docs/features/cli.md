@@ -495,10 +495,10 @@ Recommended:
 --executor-config PATH, optional later
 ```
 
-V2 accepts the option shape but supports only `local`. The run handler rejects
-unsupported executor names with the executor exit code instead of relying on an
-argparse usage error. Executor-specific options should be minimal at the top
-level. Complex settings belong in config.
+The current run command supports `local` and serial `subprocess`. The run
+handler rejects unsupported executor names with the executor exit code instead
+of relying on an argparse usage error. Executor-specific options should be
+minimal at the top level. Complex settings belong in config.
 
 ### 7.5 Output Format Options
 
@@ -912,6 +912,12 @@ If `--run-uri` is omitted, `loom run` should request a default local run URI
 from store/runtime APIs. Non-resume execution should fail if the target run URI
 already exists. Resume should require an existing valid run URI and use strict
 resume behavior.
+
+On failure, text output should remain compact and include the failed stage,
+message, attempt when known, executor, exit code or signal, and persisted
+failure/log/traceback paths when available. JSON output should carry the same
+facts in `failure_summary` using optional scalar/string fields so local,
+subprocess, and future executors can omit unavailable values.
 
 Should not:
 

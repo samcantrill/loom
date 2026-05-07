@@ -78,6 +78,8 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
         "executor.local",
         "executor.resolve",
         "executor.capabilities",
+        "executor.subprocess.python",
+        "executor.subprocess.worker",
     ),
     PreflightGroup.RESOURCES: ("resources.capabilities",),
     PreflightGroup.FILESYSTEM: ("filesystem.input_exists",),

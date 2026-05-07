@@ -196,6 +196,16 @@ make test-summary
 
 - Draft plan: completed by manager on 2026-05-07.
 - Final phase execution plan: refined by manager on 2026-05-07 before implementation to clarify selected-executor gating, preflight no-user-code constraints, CLI failure-summary scope, and Phase 5 boundaries.
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: added selected-subprocess preflight checks for the
+  current Python executable and `loom stage run` worker importability, gated so
+  local executor preflight output remains unchanged. Extended run failure
+  summaries and text output with optional attempt, executor, exit code, signal,
+  failure record, stdout, stderr, and traceback paths. Updated focused
+  preflight, CLI, and execution docs for the current subprocess diagnostics UX.
+- Implementation validation:
+  - Focused tests passed:
+    `uv run pytest tests/contracts/test_diagnostics_preflight_contract.py tests/unit/loom/diagnostics/test_diagnostics_preflight.py tests/unit/loom/cli/test_run.py tests/unit/loom/cli/test_formatting.py tests/integration/diagnostics/test_diagnostics_preflight_integration.py tests/e2e/test_cli_core.py`
+    with 31 passed and 2 skipped.
+  - Focused Ruff passed for touched implementation and test files.
+  - Focused Pyright passed for touched diagnostics, CLI, and test files.
+- Refinement summary: TBD after final validation.
