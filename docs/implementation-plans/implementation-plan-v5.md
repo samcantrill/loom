@@ -577,7 +577,7 @@ Completion summary:
 
 ### Phase 3 - Subprocess Executor And Serial Run Integration
 
-Status: pr_open
+Status: merged
 Branch: `codex/subprocess-executor`
 PR: https://github.com/samcantrill/loom/pull/79
 
@@ -704,6 +704,15 @@ Completion summary:
   passed with package 50 passed/1 skipped, unit 587 passed/1 skipped, contract
   55 passed/2 skipped, integration 20 passed/7 skipped/7 deselected, e2e 18
   passed, and config-extra 400 passed/730 deselected.
+- Automated review and merge: manager review found no blocking findings after
+  the import-boundary fix. PR target was verified as base `develop` and head
+  `codex/subprocess-executor`, GitHub CI `checks` completed successfully,
+  merge state was `CLEAN`, and the PR was squash-merged with merge commit
+  `72580b5161e9cef7af51ce9b8cdae9641fb53b32`.
+- Follow-up notes: Phase 4 must build subprocess worker/Python availability
+  preflight and concise diagnostics UX on the process metadata and failure
+  records introduced here; timeout enforcement, retries, leases, and parallel
+  subprocess scheduling remain deferred.
 
 ### Phase 4 - Preflight, Diagnostics, And CLI UX
 
