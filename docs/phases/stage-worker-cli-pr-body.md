@@ -8,7 +8,8 @@ write a schema-versioned `worker_result.json` handoff.
 
 The worker preserves the parent/worker boundary: it writes only the structured
 result handoff and does not finalize stage outputs, failure records,
-provenance, artifact indexes, stage status, or run status. Subprocess parent
+provenance, artifact indexes, stage status, or run status. It also refuses to
+overwrite an existing handoff for the same attempt. Subprocess parent
 orchestration remains deferred to Phase 3.
 
 ## Acceptance Criteria
@@ -21,6 +22,8 @@ orchestration remains deferred to Phase 3.
   artifact/run-store paths, and prior input artifacts.
 - [x] The direct worker writes `worker_result.json` and does not perform
   parent-owned finalization.
+- [x] Existing worker result handoffs are not overwritten by a second direct
+  worker invocation for the same attempt.
 - [x] Missing, completed, invalid, or unprepared state fails clearly before
   running stage code.
 
@@ -37,8 +40,8 @@ orchestration remains deferred to Phase 3.
   while keeping subprocess execution out of scope.
 
 New tests cover worker attempt inference, exact attempts, state errors,
-handoff-only persistence, direct CLI output/exit codes, real successful worker
-execution, and real stage-failure handoffs.
+duplicate-result protection, handoff-only persistence, direct CLI output/exit
+codes, real successful worker execution, and real stage-failure handoffs.
 
 ## Tests And Validation
 
@@ -52,12 +55,12 @@ execution, and real stage-failure handoffs.
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 50 | 0 | 0 | 1 | 0 | 6.17s |
-| unit | passed | 578 | 0 | 0 | 1 | 0 | 6.63s |
-| contract | passed | 54 | 0 | 0 | 2 | 0 | 2.44s |
-| integration | passed | 18 | 0 | 0 | 7 | 7 | 2.48s |
-| e2e | passed | 16 | 0 | 0 | 0 | 0 | 6.48s |
-| config-extra | passed | 400 | 0 | 0 | 0 | 716 | 19.29s |
+| package | passed | 50 | 0 | 0 | 1 | 0 | 5.79s |
+| unit | passed | 579 | 0 | 0 | 1 | 0 | 6.27s |
+| contract | passed | 54 | 0 | 0 | 2 | 0 | 1.98s |
+| integration | passed | 18 | 0 | 0 | 7 | 7 | 2.14s |
+| e2e | passed | 16 | 0 | 0 | 0 | 0 | 5.94s |
+| config-extra | passed | 400 | 0 | 0 | 0 | 717 | 16.69s |
 
 ## Risks / Follow-Ups
 

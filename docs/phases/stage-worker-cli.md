@@ -216,22 +216,23 @@ make test-summary
   `StageWorkerRequest`, reconstructs a single `StageExecutionRequest` from the
   persisted execution plan and fingerprint payload, executes through the local
   executor path, writes only `worker_result.json`, and leaves parent-owned final
-  stage/run commits untouched. Added `loom stage run --run-uri RUN_URI --stage
-  STAGE [--attempt N]` with text/JSON output and direct-worker exit-code
-  mapping.
+  stage/run commits untouched. The worker refuses to overwrite an existing
+  worker result for the same attempt. Added `loom stage run --run-uri RUN_URI
+  --stage STAGE [--attempt N]` with text/JSON output and direct-worker
+  exit-code mapping.
 - Implementation validation:
   - Targeted tests passed:
     `uv run pytest tests/package/test_pipeline_execution_api.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage_cli.py tests/unit/loom/cli/test_main.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py`
-    with 24 passed.
+    with 25 passed.
   - Targeted Pyright passed:
     `uv run pyright src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage_cli.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py tests/package/test_pipeline_execution_api.py`.
   - `make validate-pr` passed after rebasing onto current `develop`: Ruff,
     Pyright with config extra, default test harness, config-extra test harness,
     and build.
   - `make test-summary` passed and wrote `build/test-summary.md`: package 50
-    passed/1 skipped; unit 578 passed/1 skipped; contract 54 passed/2 skipped;
+    passed/1 skipped; unit 579 passed/1 skipped; contract 54 passed/2 skipped;
     integration 18 passed/7 skipped/7 deselected; e2e 16 passed; config-extra
-    400 passed/716 deselected.
+    400 passed/717 deselected.
 - Refinement summary: not needed; targeted and full PR validation passed after
   a scoped test-file rename fixed a pytest module-name collision.
 - Blocker-resolution summary: none used
