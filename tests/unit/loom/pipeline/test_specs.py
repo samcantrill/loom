@@ -109,18 +109,25 @@ def test_stage_rejects_deferred_runtime_policy_fields(field: str) -> None:
 
 def test_stage_resources_validate_supported_local_subset() -> None:
     stage = _base_stage("build")
-    stage["resources"] = {"cpus": 2, "memory_mb": 1024, "gpus": 0, "custom": {"team": "local"}}
+    stage["resources"] = {
+        "entries": {
+            "cpu": {"kind": "cpu", "amount": 2, "unit": "count"},
+            "memory": {"kind": "memory", "amount": 1024, "unit": "MiB"},
+            "gpu": {"kind": "gpu", "amount": 0},
+        },
+    }
     spec = PipelineSpec.from_config({"stages": [stage]})
     parsed = spec.stages[0]
 
     assert parsed.resources == {
-        "cpus": 2,
-        "memory_mb": 1024,
-        "gpus": 0,
-        "custom": {"team": "local"},
+        "entries": {
+            "cpu": {"kind": "cpu", "amount": 2, "unit": "count"},
+            "memory": {"kind": "memory", "amount": 1024, "unit": "MiB"},
+            "gpu": {"kind": "gpu", "amount": 0},
+        },
     }
-    assert parsed.resource_request.cpus == 2
-    assert parsed.resource_request.custom == {"team": "local"}
+    assert parsed.resource_request.entries["cpu"].amount == 2
+    assert parsed.resource_request.entries["memory"].unit == "MiB"
 
 
 @pytest.mark.parametrize(
@@ -128,6 +135,9 @@ def test_stage_resources_validate_supported_local_subset() -> None:
     [
         {"cpus": True},
         {"memory_mb": 0},
+        {"entries": {"cpu": {"kind": "cpu", "amount": True}}},
+        {"entries": {"cpu": {"kind": "memory", "amount": 1, "unit": "MiB"}}},
+        {"entries": {"local.scratch": {"kind": "local.scratch", "amount": 1}}},
         {"timeout_seconds": 1},
         {"custom": {"slurm": "gpu"}},
     ],
@@ -216,7 +226,7 @@ def test_stage_spec_parsing_preserves_declared_dependencies_and_bindings() -> No
             "outputs": {"report": {"artifact_type": "text", "codec_key": "text.v1", "schema_version": 2}},
             "config": {"nested": {"enabled": True}},
             "fingerprint": {"label": "v1"},
-            "resources": {"custom": {"slot": "cpu"}},
+            "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 1}}},
         },
         path="$.stages[0]",
     )
@@ -248,7 +258,7 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
         stage_config=stage_config,
         dependencies=cast(tuple[str, ...], ["build"]),
         inputs={"artifact": "build.result"},
-        resources={"custom": {"slots": 1}},
+        resources={"entries": {"cpu": {"kind": "cpu", "amount": 1}}},
     )
     outputs["extra"] = OutputSpec(artifact_type="json")
     stage_config["changed"] = True
@@ -257,7 +267,7 @@ def test_direct_spec_constructors_normalize_sequences_and_plain_mappings() -> No
     assert stage.stage_config == {"threshold": 1}
     assert stage.dependencies == ("build",)
     assert stage.inputs == {"artifact": "build.result"}
-    assert stage.resources == {"custom": {"slots": 1}}
+    assert stage.resources == {"entries": {"cpu": {"kind": "cpu", "amount": 1}}}
 
     pipeline_metadata = cast(dict[str, PlainData], {"tags": ("static",)})
     stages = [stage]
@@ -284,7 +294,9 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
     factory_init: dict[str, Any] = {"labels": ["constructor"]}
     stage_config: dict[str, Any] = {"retry": {"max": 3}}
     inputs = {"artifact": "build.result"}
-    resources: dict[str, Any] = {"custom": {"slots": ["cpu"]}}
+    resources: dict[str, Any] = {
+        "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}},
+    }
 
     stage = StageSpec(
         name="report",
@@ -304,14 +316,16 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
     stage_config["retry"]["max"] = 4
     stage_config["retry"]["active"] = True
     inputs["artifact"] = "other.result"
-    resources["custom"]["slots"].append("gpu")
+    resources["entries"]["cpu"]["amount"] = 2
     pipeline_metadata["owner"]["labels"].append("secondary")
 
     assert stage.outputs == {"result": output}
     assert stage.factory.init == {"labels": ("constructor",)}
     assert stage.stage_config == {"retry": {"max": 3}}
     assert stage.inputs == {"artifact": "build.result"}
-    assert stage.resources == {"custom": {"slots": ("cpu",)}}
+    assert stage.resources == {
+        "entries": {"cpu": {"kind": "cpu", "amount": 1, "unit": "count"}},
+    }
     pipeline_owner = cast(dict[str, Any], pipeline.metadata["owner"])
     assert pipeline_owner["team"] == "analysis"
     assert pipeline_owner["labels"] == ("primary",)
@@ -325,7 +339,7 @@ def test_stage_and_pipeline_spec_normalization_freezes_constructor_inputs() -> N
     with pytest.raises(TypeError):
         cast(Any, stage.inputs)["artifact"] = "new.result"
     with pytest.raises(TypeError):
-        cast(Any, stage.resources)["custom"]["slots"] = ("gpu",)
+        cast(Any, stage.resources)["entries"]["cpu"]["amount"] = 2
     with pytest.raises(TypeError):
         cast(Any, pipeline.metadata)["owner"]["labels"][0] = "mutated"
 

@@ -14,24 +14,25 @@ much of that request they can enforce.
 
 ## Scope
 
-V0 alignment:
+Current alignment:
 
 ```text
-v0 keeps authored stage resources as a generic StageSpec.resources mapping,
-validated through ResourceRequest, with no executor-specific semantics and no
+StageSpec stores authored stage resources as frozen plain data and validates
+them through ResourceRequest, with no executor-specific semantics and no
 default fingerprint impact
-v0 supports ResourceRequest fields cpus, memory_mb, gpus, and custom
-v0 supports a local-only RuntimeRequest foundation for programmatic/runtime
+ResourceRequest uses typed entries keyed by resource kind
+the removed fixed fields are rejected instead of treated as aliases
+the runtime package supports a local-only RuntimeRequest foundation for programmatic/runtime
 vocabulary, not authored stage runtime selection
-v0 supports Python planning selector fields from_stage, only_stages,
+Python planning supports selector fields from_stage, only_stages,
 force_stages, and skip_stages
 RunOptions, ExecutionOptions, runtime profiles, preflight, and
-executor-specific resource mapping are post-v0
+executor-specific resource mapping are later runtime phases
 ```
 
 The sections below describe the intended stable direction for the runtime and
-resource surface. V0 implementations should not introduce the full option
-model unless a later phase explicitly expands scope.
+resource surface. Implementations should not introduce the full option model
+unless a later phase explicitly expands scope.
 
 This component owns:
 
@@ -78,7 +79,7 @@ make dry-run and preflight paths use the same normalized options as execution
 `ResourceRequest` is the scheduler-neutral declaration of resources requested
 by a stage.
 
-Post-v0 direction:
+Current behavior:
 
 ```text
 StageSpec stores resources as recursively immutable plain data
@@ -87,18 +88,22 @@ unsupported executor, retry, timeout, scheduler, container, environment, and
 remote-store fields are rejected instead of preserved as honored metadata
 ```
 
-Current v0 shape:
+Current resource shape:
 
 ```python
 @dataclass(frozen=True)
+class ResourceEntry:
+    kind: str
+    amount: int | float
+    unit: str | None = None
+    attributes: Mapping[str, object] = field(default_factory=dict)
+
+@dataclass(frozen=True)
 class ResourceRequest:
-    cpus: int | None = None
-    memory_mb: int | None = None
-    gpus: int | None = None
-    custom: Mapping[str, object] = field(default_factory=dict)
+    entries: Mapping[str, ResourceEntry] = field(default_factory=dict)
 ```
 
-Field names should remain generic.
+Built-in resource kinds remain generic.
 
 Avoid names such as:
 
@@ -110,30 +115,36 @@ gres
 sbatch_args
 ```
 
-Those belong in executor-specific profiles or custom metadata interpreted by a
+Those belong in executor-specific profiles or adapter metadata interpreted by a
 specific executor.
 
 ## Resource Field Semantics
 
-`cpus`:
+`cpu`:
 
 ```text
 number of CPU cores or logical worker slots requested for the stage
-positive integer when provided
+positive integer amount
+unit omitted or count
+attributes empty
 ```
 
-`memory_mb`:
+`memory`:
 
 ```text
-total memory requested for the stage in megabytes
-positive integer when provided
+total memory requested for the stage
+positive integer or finite positive numeric amount
+unit must be one of B, KiB, MiB, GiB, TiB
+attributes empty
 ```
 
-`gpus`:
+`gpu`:
 
 ```text
 number of GPUs requested
-zero or positive integer when provided
+zero or positive integer amount
+unit omitted or count
+attributes empty
 ```
 
 `wall_time_seconds`:
@@ -143,12 +154,12 @@ expected or requested maximum runtime for the stage
 deferred; rejected in v0 so callers do not assume timeout behavior is honored
 ```
 
-`custom`:
+Qualified resource kinds:
 
 ```text
-structured extension metadata for executors or plugins
-must be JSON-serializable
-must not affect core fingerprinting unless explicitly included by policy
+future adapters or plugins may use qualified kinds such as slurm.gres
+callers must provide a composed validator registry before validation
+unregistered kinds fail validation
 ```
 
 ## Resource Defaults
@@ -359,10 +370,10 @@ records command and exit code
 SLURM executor:
 
 ```text
-maps cpus to --cpus-per-task or equivalent
-maps memory_mb to --mem
+maps CPU entries to the scheduler CPU-count flag or equivalent
+maps memory entries to --mem
 maps wall_time_seconds to --time
-maps gpus through executor-specific policy
+maps gpu entries through executor-specific policy
 uses profiles for partition/account/qos
 ```
 
@@ -379,10 +390,11 @@ record image identity and command
 Resource validation should check:
 
 ```text
-numeric fields are integers
-numeric fields are in accepted ranges
-custom metadata is structured and serializable
-unknown core fields are rejected
+entry kinds use the lowercase dotted identifier syntax
+entry mapping keys match each entry kind
+amounts and units satisfy the validator for each registered kind
+attributes are structured and serializable
+unknown or unregistered resource kinds are rejected
 ```
 
 Runtime option validation should check:
@@ -406,12 +418,26 @@ Current foundation examples:
 
 ```json
 {
-  "schema_version": 1,
-  "cpus": 8,
-  "memory_mb": 32768,
-  "gpus": 1,
-  "custom": {
-    "hint": "large"
+  "schema_version": 2,
+  "entries": {
+    "cpu": {
+      "kind": "cpu",
+      "amount": 8,
+      "unit": "count",
+      "attributes": {}
+    },
+    "memory": {
+      "kind": "memory",
+      "amount": 32,
+      "unit": "GiB",
+      "attributes": {}
+    },
+    "gpu": {
+      "kind": "gpu",
+      "amount": 1,
+      "unit": "count",
+      "attributes": {}
+    }
   }
 }
 ```
@@ -421,11 +447,8 @@ Current foundation examples:
   "schema_version": 1,
   "kind": "LOCAL",
   "resources": {
-    "schema_version": 1,
-    "cpus": null,
-    "memory_mb": null,
-    "gpus": null,
-    "custom": {}
+    "schema_version": 2,
+    "entries": {}
   },
   "metadata": {}
 }
@@ -462,7 +485,7 @@ invalid negative resources
 invalid zero values where not allowed
 rejection of deferred timeout, retry, executor, scheduler, container, and
 remote-store fields
-custom metadata serialization
+extension attribute serialization
 local-only runtime request defaults
 resume option normalization
 selected stage validation

@@ -20,7 +20,12 @@ pipeline:
       inputs:
         numbers: seed.numbers
       resources:
-        cpus: 1
+        entries:
+          cpu:
+            kind: cpu
+            amount: 1
+            unit: count
+            attributes: {}
       outputs:
         summary:
           artifact_type: json

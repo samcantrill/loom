@@ -60,7 +60,7 @@ def test_fingerprint_changes_for_semantic_inputs_and_excludes_noisy_values() -> 
         fingerprint_context=context,
     )
     resource_changed = build_stage_fingerprint(
-        _stage(resources={"cpus": 99}),
+        _stage(resources={"entries": {"cpu": {"kind": "cpu", "amount": 99}}}),
         bound_inputs={"data": _input_ref()},
         fingerprint_context=context,
     )

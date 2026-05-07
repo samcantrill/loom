@@ -258,8 +258,32 @@ make test-summary
 
 - Draft plan: completed on 2026-05-07 by `loom_phase_planner`; committed as `plan: add phase execution plan`
 - Final phase execution plan: completed on 2026-05-07 by `loom_phase_planner`; refinement covered the breaking resource schema swap, validator registry determinism, built-in semantics, old-field rejection, docs/fixture/test obligations, semantic fingerprint non-impact, and future-phase exclusions
-- Implementation summary: pending
-- Implementation validation: pending
+- Implementation summary: implemented entry-based resource requests with
+  immutable `ResourceEntry(kind, amount, unit, attributes)`, schema-versioned
+  `ResourceRequest(entries={...})`, resource kind syntax validation, immutable
+  explicit validator registry composition, built-in `cpu`, `memory`, and `gpu`
+  validators, old-field rejection, StageSpec and RuntimeRequest resource
+  integration, public `ResourceEntry` export, migrated tests, updated docs, and
+  canonical resource examples. No `RunOptions`, profiles, executor
+  descriptors/capabilities, preflight wiring, CLI/config runtime mapping,
+  `runtime.json`, or runner request rewiring were added.
+- Implementation validation: passed targeted and final validation on
+  2026-05-07:
+  - `uv --cache-dir /tmp/uv-cache run pytest tests/unit/loom/pipeline/test_runtime_resources.py`
+    passed, 55 tests.
+  - `uv --cache-dir /tmp/uv-cache run pytest tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/planning/test_planning_fingerprints.py tests/package/test_pipeline_api.py`
+    passed, 40 tests.
+  - `uv --cache-dir /tmp/uv-cache run pytest tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`
+    passed, 119 tests.
+  - `uv --cache-dir /tmp/uv-cache run --extra config pytest -m optional_dependency tests/integration/config`
+    passed, 97 tests.
+  - `uv --cache-dir /tmp/uv-cache run ruff check .` passed.
+  - `uv --cache-dir /tmp/uv-cache run --extra config pyright` passed with 0
+    errors.
+  - `rg -n "cpus|memory_mb|gpus|custom" docs/features/runtime-resources.md docs/features/pipeline.md`
+    returned no matches.
+  - `make validate-pr` passed: Ruff, Pyright, default harness, config-extra
+    harness, and build.
 - Refinement summary: phase planning refine pass used; implementation refinement and PR review budgets remain unused
 - Blocker-resolution summary: none used
 - PR preparation: pending

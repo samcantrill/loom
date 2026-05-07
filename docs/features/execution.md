@@ -1784,20 +1784,17 @@ Runtime and resource profiles are post-v0.
 
 ### 17.1 Generic ResourceSpec
 
-Possible future generic fields:
+Current generic resource entries:
 
 ```text
-cpus
-memory_mb
-gpus
-wall_time_seconds
-disk_gb
-tmp_gb
+cpu
+memory
+gpu
 ```
 
-These fields would be hints. The v0 local executor ignores
-`StageSpec.resources`; post-v0 SLURM or container executors can translate a
-typed resource model after that contract is introduced.
+These entries are scheduler-neutral declarations. The local executor does not
+enforce `StageSpec.resources`; later SLURM or container executors can translate
+validated resource entries after their contracts are introduced.
 
 ### 17.2 RuntimeSpec
 
@@ -1819,10 +1816,22 @@ Backend-specific values should be nested:
 runtime:
   executor: slurm-afterok
   resources:
-    cpus: 16
-    memory_mb: 65536
-    gpus: 1
-    wall_time_seconds: 28800
+    entries:
+      cpu:
+        kind: cpu
+        amount: 16
+        unit: count
+        attributes: {}
+      memory:
+        kind: memory
+        amount: 64
+        unit: GiB
+        attributes: {}
+      gpu:
+        kind: gpu
+        amount: 1
+        unit: count
+        attributes: {}
   slurm:
     partition: gpu
     account: research

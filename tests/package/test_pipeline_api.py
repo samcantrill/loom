@@ -30,6 +30,7 @@ def test_pipeline_public_exports() -> None:
         "StageStatusRecord",
         "parse_run_status",
         "parse_stage_status",
+        "ResourceEntry",
         "ResourceRequest",
         "parse_resource_request",
         "RuntimeKind",
