@@ -366,7 +366,9 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 - Phase implementation refinement: used on 2026-05-07 by managing agent after
   `make validate-pr` exposed a Pyright tuple-narrowing issue and a pytest
   module-name collision; both were fixed and final validation passed.
-- PR review: unused
+- PR review: used on 2026-05-07 by managing agent during the pre-submit blocker
+  gate; diff scope, whitespace, PR-body evidence, suite evidence, and Phase 4
+  boundaries had no blocking findings.
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -396,6 +398,8 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   needed the CLI artifact test basename to avoid colliding with existing
   artifact tests; both fixes were committed and final validation passed.
 - Blocker-resolution summary:
-- PR preparation:
+- PR preparation: PR body drafted at
+  `docs/phases/add-artifact-diagnostics-pr-body.md`. Pre-submit blocker gate
+  completed on 2026-05-07 with no blocking findings; PR opening is pending.
 - Stack maintenance:
 - Remaining blockers:
