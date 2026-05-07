@@ -28,8 +28,10 @@ Python planning supports selector fields from_stage, only_stages,
 force_stages, and skip_stages
 RunOptions, ExecutionOptions, StageRuntimeOptions, and run/stage environment
 request models are public Python invocation models
-runtime profiles, preflight, CLI/config mapping, persisted runtime metadata,
-and executor-specific resource mapping are later runtime phases
+runtime profiles and deterministic base/profile/explicit merge helpers are
+public Python invocation APIs
+preflight, CLI/config mapping, runner handoff, persisted runtime metadata, and
+executor-specific resource mapping are later runtime phases
 ```
 
 The sections below describe the intended stable direction for the runtime and
@@ -308,8 +310,17 @@ environment variable names or values.
 
 A runtime profile is a named collection of operational defaults.
 
-Runtime profiles are post-v0. V0 should preserve the stage/resource boundary
-without adding profile merging or executor-specific profile validation.
+Current behavior:
+
+```text
+RuntimeProfile stores strict sparse runtime defaults as immutable plain data
+RuntimeProfileCollection owns named profile selection and deterministic
+serialization
+merge_run_options combines config-shaped base data, the selected profile, and
+explicit invocation data into a normalized RunOptions
+profile merge does not import config, CLI, diagnostics, execution runners,
+executor descriptors, plugins, or optional backend packages
+```
 
 Example:
 
@@ -318,7 +329,8 @@ runtime_profiles:
   local:
     executor: local
     execution:
-      max_parallel_stages: 2
+      settings:
+        max_parallel_stages: 2
 
   cluster:
     executor: slurm
@@ -330,8 +342,32 @@ runtime_profiles:
 Profiles are useful because the same pipeline may be run locally, on a shared
 filesystem, or on a cluster.
 
-Core runtime objects should preserve unknown profile sections for executor
-adapters, but should validate core sections strictly.
+Core runtime profile sections use the existing `RunOptions`,
+`ExecutionOptions`, `StageRuntimeOptions`, resource, selector/resume, and
+environment parsers. They validate strictly. Non-core top-level profile
+sections are preserved as adapter namespace payloads and folded into
+`RunOptions.adapter_options`; if a profile supplies the same namespace through
+`adapter_options` and a non-core top-level section, profile parsing fails.
+
+Merge precedence is deterministic:
+
+```text
+config-shaped base < selected runtime profile < explicit invocation options
+```
+
+Sparse mapping inputs preserve field absence. Typed `RunOptions` inputs are
+fully supplied sources. Scalars and sequences replace lower-precedence values.
+Mappings merge shallowly with no deletion syntax. Stage options merge only by
+exact stage ID. Stage resource requests merge by `ResourceRequest.entries`
+kind, replacing the whole `ResourceEntry` for a conflicting kind. Adapter
+namespaces are opaque plain data; a higher-precedence namespace replaces the
+whole lower-precedence payload.
+
+`merge_run_options` can run the existing known-stage validation helper after
+merge when callers supply canonical stage IDs. It does not implement glob,
+tag, group, graph reachability, executor capability, preflight, config loader,
+CLI, local environment application, runner handoff, or persisted
+`runtime.json` behavior.
 
 ## Configuration Boundary
 
@@ -345,10 +381,10 @@ environment defaults
 programmatic API arguments
 ```
 
-Precedence should be explicit and documented by the config/CLI layer.
-
-The runtime/resources layer should receive already-merged options and validate
-their shape.
+The runtime/resources layer defines the base/profile/explicit merge contract.
+Config and CLI layers may map their inputs into sparse base and explicit
+runtime dictionaries in later phases, but they should not duplicate the merge
+rules.
 
 ## Fingerprint Boundary
 

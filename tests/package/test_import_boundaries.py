@@ -356,12 +356,18 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "ExecutionOptions",
             "RunEnvironmentRequest",
             "RunOptions",
+            "RuntimeProfile",
+            "RuntimeProfileCollection",
             "RuntimeKind",
             "RuntimeRequest",
             "StageEnvironmentRequest",
             "StageRuntimeOptions",
+            "merge_run_options",
             "parse_run_options",
+            "parse_runtime_profile",
+            "parse_runtime_profiles",
             "parse_runtime_request",
+            "select_runtime_profile",
             "validate_stage_runtime_options",
         }
 

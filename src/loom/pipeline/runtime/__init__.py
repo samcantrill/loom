@@ -18,6 +18,14 @@ from loom.pipeline.runtime.options import (
     parse_run_options,
     validate_stage_runtime_options,
 )
+from loom.pipeline.runtime.profiles import (
+    RuntimeProfile,
+    RuntimeProfileCollection,
+    merge_run_options,
+    parse_runtime_profile,
+    parse_runtime_profiles,
+    select_runtime_profile,
+)
 
 __all__ = [
     "RUN_OPTIONS_SCHEMA_VERSION",
@@ -25,11 +33,17 @@ __all__ = [
     "ExecutionOptions",
     "RunEnvironmentRequest",
     "RunOptions",
+    "RuntimeProfile",
+    "RuntimeProfileCollection",
     "RuntimeKind",
     "RuntimeRequest",
     "StageEnvironmentRequest",
     "StageRuntimeOptions",
+    "merge_run_options",
     "parse_run_options",
+    "parse_runtime_profile",
+    "parse_runtime_profiles",
     "parse_runtime_request",
+    "select_runtime_profile",
     "validate_stage_runtime_options",
 ]
