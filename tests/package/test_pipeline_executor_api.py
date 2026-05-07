@@ -14,4 +14,6 @@ def test_pipeline_executor_public_exports_are_phase_scoped() -> None:
         "ExecutorError",
         "LocalExecutor",
         "LocalExecutorError",
+        "SubprocessExecutor",
+        "SubprocessRunResult",
     ]

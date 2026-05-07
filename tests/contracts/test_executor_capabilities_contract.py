@@ -15,6 +15,7 @@ from loom.pipeline.resources import ResourceEntry, ResourceRequest, ResourceVali
 from loom.pipeline.runtime import (
     CapabilityDiagnostic,
     CapabilitySeverity,
+    DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY,
     ExecutorDescriptor,
     ExecutorDescriptorRegistry,
     ResourceCapability,
@@ -118,6 +119,16 @@ def test_capability_validation_is_independent_of_preflight_models() -> None:
     assert "resources.capabilities" not in payload_text
     assert "PreflightGroup" not in payload_text
     assert stable_json_dumps(payload)
+
+
+def test_default_registry_includes_import_light_subprocess_descriptor() -> None:
+    result = validate_executor_capabilities(RunOptions(executor="subprocess"))
+
+    assert result.ok
+    descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("subprocess")
+    assert descriptor.name == "subprocess"
+    assert descriptor.details["process_isolating"] is True
+    assert descriptor.details["serial"] is True
 
 
 def test_runtime_capability_imports_do_not_load_diagnostics_or_executors() -> None:

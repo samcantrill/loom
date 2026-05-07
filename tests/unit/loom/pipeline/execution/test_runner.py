@@ -20,6 +20,7 @@ from loom.pipeline.execution import (
 )
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
 from loom.provenance.models import ProvenanceCaptureOptions
 from loom.serialization import PlainData
@@ -105,6 +106,36 @@ class TrackingExecutor:
     def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
         self.requests.append(request)
         return self._delegate.execute(request)
+
+
+class PreparedWorkerExecutor:
+    name = "subprocess"
+    requires_prepared_worker_request = True
+
+    def __init__(self) -> None:
+        self.requests: list[StageExecutionRequest] = []
+
+    def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
+        self.requests.append(request)
+        ref = request.context.save_artifact(
+            "data",
+            {"value": 99},
+            artifact_type="json",
+            codec_key="json.v1",
+        )
+        return StageExecutionResult(
+            stage_name=request.stage.name,
+            status=StageStatus.SUCCEEDED,
+            outputs={"data": ref},
+            failure=None,
+            started_at="2020-01-01T00:00:01Z",
+            finished_at="2020-01-01T00:00:02Z",
+            executor_name=self.name,
+            attempt=request.attempt,
+            stdout_path=str(request.stdout_path),
+            stderr_path=str(request.stderr_path),
+            executor_metadata={"fake_subprocess": True},
+        )
 
 
 def _stage(
@@ -255,6 +286,52 @@ def test_runner_passes_resolved_runtime_to_stage_execution_request(
     entries = cast(Mapping[str, PlainData], resources["entries"])
     cpu = cast(Mapping[str, PlainData], entries["cpu"])
     assert cpu["amount"] == 2
+
+
+def test_runner_prepares_worker_attempt_for_subprocess_without_constructing_stage(
+    tmp_path: Path,
+) -> None:
+    run_store = LocalRunStore(tmp_path / "runs")
+    executor = PreparedWorkerExecutor()
+
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.MissingStage"
+                    ),
+                )
+            ),
+            options={"executor": "subprocess"},
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert len(executor.requests) == 1
+    exec_request = executor.requests[0]
+    assert exec_request.stage.factory.target_path.endswith("MissingStage")
+    assert exec_request.context.metadata["worker_request"] is True
+    assert exec_request.resolved_runtime is not None
+    raw_request = run_store.read_stage_worker_request(
+        result.run_uri,
+        "build",
+        attempt=1,
+    )
+    assert raw_request is not None
+    assert raw_request["executor_name"] == "subprocess"
+    status = run_store.read_stage_status(result.run_uri, "build")
+    assert status is not None
+    assert status.status == StageStatus.SUCCEEDED
+    provenance = run_store.read_stage_provenance(result.run_uri, "build")
+    assert provenance is not None
+    assert provenance["executor_metadata"] == {"fake_subprocess": True}
 
 
 def test_runner_rejects_dry_run_execution_request(tmp_path: Path) -> None:

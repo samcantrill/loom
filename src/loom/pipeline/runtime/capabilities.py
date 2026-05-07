@@ -612,6 +612,27 @@ def _local_descriptor() -> ExecutorDescriptor:
     )
 
 
+def _subprocess_descriptor() -> ExecutorDescriptor:
+    ignored = ResourceCapability(
+        support_level=ResourceSupportLevel.IGNORED,
+        enforcement=ResourceEnforcementExpectation.NOT_ENFORCED,
+        severity=CapabilitySeverity.WARNING,
+        details={
+            "reason": "subprocess executor records resource requests but does not enforce them"
+        },
+    )
+    return ExecutorDescriptor(
+        name="subprocess",
+        resource_capabilities={
+            "cpu": ignored,
+            "memory": ignored,
+            "gpu": ignored,
+        },
+        adapter_namespaces=(),
+        details={"built_in": True, "process_isolating": True, "serial": True},
+    )
+
+
 def _adapter_namespace_diagnostics(
     options: RunOptions,
     descriptor: ExecutorDescriptor,
@@ -974,7 +995,7 @@ def _reject_unknown(
 
 
 DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY = ExecutorDescriptorRegistry(
-    {"local": _local_descriptor()}
+    {"local": _local_descriptor(), "subprocess": _subprocess_descriptor()}
 )
 
 

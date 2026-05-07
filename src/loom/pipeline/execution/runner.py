@@ -14,6 +14,7 @@ from loom.pipeline.planning import (
     ExecutionPlan,
     PlanAction,
     PlanReason,
+    StageFingerprintRecord,
     build_stage_fingerprint,
     plan_pipeline,
 )
@@ -58,16 +59,29 @@ from .models import (
     RunRequest,
     RunResult,
     StageExecutionRequest,
+    StageExecutionResult,
     StageRunResult,
 )
 from .outputs import validate_stage_outputs
 from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
+from .stage_attempts import prepare_stage_attempt
 
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
 
 
 class _TargetConstructionError(StageContractError):
     """Private marker for import or no-argument construction failures."""
+
+
+class _PreparedWorkerStage:
+    """Placeholder stage object for executors that launch the real worker."""
+
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        raise PipelineExecutionError("prepared worker placeholder must not run")
 
 
 class PipelineRunner:
@@ -400,6 +414,23 @@ class PipelineRunner:
         created_at: str,
         run_started_at: str,
     ) -> StageRunResult:
+        if bool(getattr(self.executor, "requires_prepared_worker_request", False)):
+            return self._run_prepared_worker_stage(
+                request=request,
+                run_uri=run_uri,
+                config_mapping=config_mapping,
+                stage=stage,
+                stage_plan=stage_plan,
+                resolved_runtime=resolved_runtime,
+                plan=plan,
+                artifact_store=artifact_store,
+                local_output_dir=local_output_dir,
+                local_workspace_dir=local_workspace_dir,
+                produced_outputs=produced_outputs,
+                created_at=created_at,
+                run_started_at=run_started_at,
+            )
+
         attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
         stage_started_at: str | None = None
         local_run_store = self._require_local_run_store()
@@ -469,87 +500,17 @@ class PipelineRunner:
             )
             execution_result = self.executor.execute(exec_request)
             stage_started_at = execution_result.started_at
-            if execution_result.status == StageStatus.FAILED:
-                failure = execution_result.failure or self._failure(
-                    run_uri=run_uri,
-                    stage_name=stage.name,
-                    attempt=attempt,
-                    failure_type="executor_infrastructure",
-                    message="executor failed without failure metadata",
-                    executor=str(getattr(self.executor, "name", "unknown")),
-                )
-                failure = self._record_stage_failure_and_failed_run(
-                    run_uri=run_uri,
-                    stage_name=stage.name,
-                    attempt=attempt,
-                    started_at=execution_result.started_at,
-                    created_at=created_at,
-                    run_started_at=run_started_at,
-                    failure=failure,
-                )
-                return StageRunResult(
-                    stage_name=stage.name,
-                    action=PlanAction.RUN,
-                    status=StageStatus.FAILED,
-                    attempt=attempt,
-                    outputs={},
-                    failure=failure,
-                    reasons=stage_plan.reasons,
-                    started_at=execution_result.started_at,
-                    finished_at=execution_result.finished_at,
-                    executor_metadata=execution_result.executor_metadata,
-                )
-            outputs = validate_stage_outputs(
-                stage=stage,
-                outputs=execution_result.outputs,
-                artifact_store=artifact_store,
-            )
-            self.run_store.write_stage_outputs(
-                run_uri, stage.name, outputs, attempt=attempt
-            )
-            self._write_artifact_index_for_stage(run_uri, stage, outputs, replace=True)
-            self._write_stage_provenance(
-                run_uri,
-                stage,
-                status=StageStatus.SUCCEEDED,
-                attempt=attempt,
-                started_at=execution_result.started_at,
-                finished_at=execution_result.finished_at,
-                fingerprint=fingerprint.to_dict(),
-                inputs=inputs,
-                outputs=outputs,
-                executor_metadata=execution_result.executor_metadata,
-            )
-            write_stage_succeeded(
-                self.run_store,
+            return self._commit_stage_execution_result(
                 run_uri=run_uri,
-                stage_name=stage.name,
+                stage=stage,
+                stage_plan=stage_plan,
                 attempt=attempt,
-                started_at=execution_result.started_at,
-                finished_at=execution_result.finished_at,
-                metadata={"action": PlanAction.RUN.value},
-            )
-            self._emit_stage_event(
-                run_uri,
-                stage.name,
-                "stage.completed",
-                timestamp=self.clock(),
-                payload={
-                    "attempt": attempt,
-                    "action": PlanAction.RUN.value,
-                    "status": StageStatus.SUCCEEDED.value,
-                },
-            )
-            return StageRunResult(
-                stage_name=stage.name,
-                action=PlanAction.RUN,
-                status=StageStatus.SUCCEEDED,
-                attempt=attempt,
-                outputs=outputs,
-                reasons=stage_plan.reasons,
-                started_at=execution_result.started_at,
-                finished_at=execution_result.finished_at,
-                executor_metadata=execution_result.executor_metadata,
+                inputs=inputs,
+                fingerprint=fingerprint,
+                artifact_store=artifact_store,
+                created_at=created_at,
+                run_started_at=run_started_at,
+                execution_result=execution_result,
             )
         except Exception as exc:
             failure = (
@@ -583,6 +544,244 @@ class PipelineRunner:
                 started_at=stage_started_at,
                 finished_at=failure.failed_at,
             )
+
+    def _run_prepared_worker_stage(
+        self,
+        *,
+        request: RunRequest,
+        run_uri: str,
+        config_mapping: Mapping[str, PlainData],
+        stage: StageSpec,
+        stage_plan,
+        resolved_runtime: ResolvedStageRuntimeOptions,
+        plan: ExecutionPlan,
+        artifact_store: ArtifactStore,
+        local_output_dir: Path,
+        local_workspace_dir: Path,
+        produced_outputs: Mapping[str, Mapping[str, ArtifactRef]],
+        created_at: str,
+        run_started_at: str,
+    ) -> StageRunResult:
+        attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
+        stage_started_at: str | None = None
+        local_run_store = self._require_local_run_store()
+        try:
+            prepared = prepare_stage_attempt(
+                run_store=self.run_store,
+                run_uri=run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                produced_outputs=produced_outputs,
+                fingerprint_context=request.fingerprint_context,
+                resolved_runtime=resolved_runtime,
+                executor_name=str(getattr(self.executor, "name", "unknown")),
+                executor_metadata={"worker_command": "loom stage run"},
+                metadata={"subprocess": True},
+                clock=self.clock,
+            )
+            attempt = prepared.attempt
+            inputs = prepared.inputs
+            fingerprint = cast(StageFingerprintRecord, prepared.fingerprint)
+            running_at = self.clock()
+            write_stage_running(
+                self.run_store,
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                started_at=running_at,
+                metadata={
+                    "action": PlanAction.RUN.value,
+                    "prepared": True,
+                    "worker_request": str(
+                        local_run_store.local_stage_worker_request_path(
+                            run_uri, stage.name
+                        )
+                    ),
+                },
+            )
+            self._emit_stage_event(
+                run_uri,
+                stage.name,
+                "stage.started",
+                timestamp=running_at,
+                payload={"attempt": attempt, "action": PlanAction.RUN.value},
+            )
+            stage_started_at = running_at
+            context = StageContext(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                resolved_config=config_mapping,
+                stage_config=stage.stage_config,
+                inputs=inputs,
+                local_output_dir=local_output_dir,
+                local_workspace_dir=local_workspace_dir,
+                provenance={},
+                metadata={
+                    "factory_target": stage.factory.target_path,
+                    "worker_request": True,
+                },
+                run_store=self.run_store,
+                artifact_store=artifact_store,
+                output_specs=stage.outputs,
+            )
+            exec_request = StageExecutionRequest(
+                run_uri=run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                stage_object=_PreparedWorkerStage(),
+                context=context,
+                inputs=inputs,
+                fingerprint=fingerprint,
+                attempt=attempt,
+                stdout_path=Path(prepared.stdout_path),
+                stderr_path=Path(prepared.stderr_path),
+                traceback_path=Path(prepared.traceback_path),
+                metadata={"worker_request": True},
+                resolved_runtime=resolved_runtime,
+            )
+            execution_result = self.executor.execute(exec_request)
+            stage_started_at = execution_result.started_at
+            return self._commit_stage_execution_result(
+                run_uri=run_uri,
+                stage=stage,
+                stage_plan=stage_plan,
+                attempt=attempt,
+                inputs=inputs,
+                fingerprint=fingerprint,
+                artifact_store=artifact_store,
+                created_at=created_at,
+                run_started_at=run_started_at,
+                execution_result=execution_result,
+            )
+        except Exception as exc:
+            failure = (
+                exc
+                if isinstance(exc, ExecutionFailure)
+                else self._failure_from_exception(
+                    run_uri=run_uri,
+                    stage_name=stage.name,
+                    attempt=attempt,
+                    failure_type=_failure_type_for_exception(exc),
+                    exc=exc,
+                )
+            )
+            failure = self._record_stage_failure_and_failed_run(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                started_at=stage_started_at,
+                created_at=created_at,
+                run_started_at=run_started_at,
+                failure=failure,
+            )
+            return StageRunResult(
+                stage_name=stage.name,
+                action=PlanAction.RUN,
+                status=StageStatus.FAILED,
+                attempt=attempt,
+                outputs={},
+                failure=failure,
+                reasons=stage_plan.reasons,
+                started_at=stage_started_at,
+                finished_at=failure.failed_at,
+            )
+
+    def _commit_stage_execution_result(
+        self,
+        *,
+        run_uri: str,
+        stage: StageSpec,
+        stage_plan,
+        attempt: int,
+        inputs: Mapping[str, ArtifactRef],
+        fingerprint: StageFingerprintRecord,
+        artifact_store: ArtifactStore,
+        created_at: str,
+        run_started_at: str,
+        execution_result: StageExecutionResult,
+    ) -> StageRunResult:
+        if execution_result.status == StageStatus.FAILED:
+            failure = execution_result.failure or self._failure(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                failure_type="executor_infrastructure",
+                message="executor failed without failure metadata",
+                executor=execution_result.executor_name,
+            )
+            failure = self._record_stage_failure_and_failed_run(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                started_at=execution_result.started_at,
+                created_at=created_at,
+                run_started_at=run_started_at,
+                failure=failure,
+            )
+            return StageRunResult(
+                stage_name=stage.name,
+                action=PlanAction.RUN,
+                status=StageStatus.FAILED,
+                attempt=attempt,
+                outputs={},
+                failure=failure,
+                reasons=stage_plan.reasons,
+                started_at=execution_result.started_at,
+                finished_at=execution_result.finished_at,
+                executor_metadata=execution_result.executor_metadata,
+            )
+        outputs = validate_stage_outputs(
+            stage=stage,
+            outputs=execution_result.outputs,
+            artifact_store=artifact_store,
+        )
+        self.run_store.write_stage_outputs(
+            run_uri, stage.name, outputs, attempt=attempt
+        )
+        self._write_artifact_index_for_stage(run_uri, stage, outputs, replace=True)
+        self._write_stage_provenance(
+            run_uri,
+            stage,
+            status=StageStatus.SUCCEEDED,
+            attempt=attempt,
+            started_at=execution_result.started_at,
+            finished_at=execution_result.finished_at,
+            fingerprint=fingerprint.to_dict(),
+            inputs=inputs,
+            outputs=outputs,
+            executor_metadata=execution_result.executor_metadata,
+        )
+        write_stage_succeeded(
+            self.run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            started_at=execution_result.started_at,
+            finished_at=execution_result.finished_at,
+            metadata={"action": PlanAction.RUN.value},
+        )
+        self._emit_stage_event(
+            run_uri,
+            stage.name,
+            "stage.completed",
+            timestamp=self.clock(),
+            payload={
+                "attempt": attempt,
+                "action": PlanAction.RUN.value,
+                "status": StageStatus.SUCCEEDED.value,
+            },
+        )
+        return StageRunResult(
+            stage_name=stage.name,
+            action=PlanAction.RUN,
+            status=StageStatus.SUCCEEDED,
+            attempt=attempt,
+            outputs=outputs,
+            reasons=stage_plan.reasons,
+            started_at=execution_result.started_at,
+            finished_at=execution_result.finished_at,
+            executor_metadata=execution_result.executor_metadata,
+        )
 
     def _require_local_run_store(self) -> LocalRunStorePaths:
         if not isinstance(self.run_store, LocalRunStorePaths):

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
     from loom.config.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
+    from loom.pipeline.executors import Executor
     from loom.pipeline.planning import PlanSelectors
     from loom.pipeline.runtime import RunOptions
     from loom.pipeline.stores import LocalRunStore
@@ -38,9 +39,9 @@ class UnsupportedExecutorError(CliError):
 
     def __init__(self, executor: str) -> None:
         super().__init__(
-            f"unsupported executor {executor!r}; v2 supports only 'local'.",
+            f"unsupported executor {executor!r}; supported executors: local, subprocess.",
             code="cli.run.unsupported_executor",
-            context={"executor": executor, "supported": ["local"]},
+            context={"executor": executor, "supported": ["local", "subprocess"]},
             exit_code=ExitCode.EXECUTOR,
         )
 
@@ -186,9 +187,7 @@ def build_run_result(
         open_existing=run_options.resume,
     )
     runtime_options = _with_resolved_run_uri(runtime_options, run_uri)
-    executor = runtime_options.executor or "local"
-    if executor != "local":
-        raise UnsupportedExecutorError(executor)
+    executor = _build_executor(runtime_options.executor or "local", store)
     _run_preflight_for_run(
         config_options=config_options,
         runtime_options=runtime_options,
@@ -199,7 +198,7 @@ def build_run_result(
         open_existing=run_options.resume,
         options=runtime_options,
     )
-    result = _run_pipeline(request, store)
+    result = _run_pipeline(request, store, executor=executor)
     return _run_result_from_execution_result(result)
 
 
@@ -399,10 +398,27 @@ def _build_run_request(
     )
 
 
-def _run_pipeline(request: "RunRequest", store: "LocalRunStore") -> "RunResult":
+def _build_executor(executor: str, store: "LocalRunStore") -> "Executor":
+    if executor == "local":
+        from loom.pipeline.executors import LocalExecutor
+
+        return LocalExecutor()
+    if executor == "subprocess":
+        from loom.pipeline.executors import SubprocessExecutor
+
+        return SubprocessExecutor(run_store=store)
+    raise UnsupportedExecutorError(executor)
+
+
+def _run_pipeline(
+    request: "RunRequest",
+    store: "LocalRunStore",
+    *,
+    executor: "Executor",
+) -> "RunResult":
     from loom.pipeline.execution import PipelineRunner
 
-    return PipelineRunner(run_store=store).run(request)
+    return PipelineRunner(run_store=store, executor=executor).run(request)
 
 
 def _run_result_from_execution_result(result: "RunResult") -> RunCliResult:

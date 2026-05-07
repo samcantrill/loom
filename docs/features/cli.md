@@ -4,16 +4,16 @@
 
 `loom.cli` is the command-line interface for `loom`.
 
-For v2, `loom.cli` exposes a functional local command surface:
+For v5, `loom.cli` exposes a functional local/subprocess command surface:
 `loom validate`, `loom plan`, `loom run`, and direct `loom stage run` worker
-execution. The v2 commands are thin `argparse` wrappers over config, pipeline,
+execution. The commands are thin `argparse` wrappers over config, pipeline,
 planning, store, and execution APIs. They do not introduce a separate runtime
 model.
 
 Roadmap commands for run status, logs, artifacts, sweeps, catalogs, bundles,
-plugins, remote stores, containers, cleanup, and non-local executors are
+plugins, remote stores, containers, cleanup, and scheduler/container executors are
 intentionally deferred. The later-command sections in this document describe
-future shape, not current v2 support.
+future shape, not current support.
 
 The v2 CLI should answer:
 
@@ -227,12 +227,13 @@ loom --version
 loom validate CONFIG
 loom plan CONFIG
 loom run CONFIG
+loom run CONFIG --executor subprocess
 loom stage run --run-uri RUN_URI --stage STAGE [--attempt N]
 basic top-level exception formatting
 non-zero exit codes for failures
 config overlays and CLI overrides
 resume selector flags shared by plan and run
-local executor execution
+local and serial subprocess executor execution
 machine-readable JSON output for validate, plan, run, stage run, and structured errors
 loom plan CONFIG --resume --explain STAGE
 ```
@@ -249,7 +250,7 @@ automatic config wizard
 domain-specific commands
 rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
-subprocess, SLURM, Docker, or Apptainer execution
+SLURM, Docker, or Apptainer execution
 remote run URI schemes
 status, logs, artifacts, sweep, catalog, bundle, plugin, cleanup, or reliability
 commands
@@ -933,7 +934,19 @@ loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor l
 loom run experiment.yaml --run-uri file:///abs/project/runs/example --resume
 ```
 
-### 13.6 Deferred Executor Example
+### 13.6 Subprocess Example
+
+```bash
+loom run experiment.yaml \
+  --run-uri file:///abs/project/runs/example \
+  --executor subprocess
+```
+
+This runs each planned stage as one prepared `loom stage run` worker process.
+The parent runner still owns final output validation, failure persistence,
+provenance, artifact indexes, stage status, and run status.
+
+### 13.7 Deferred Executor Example
 
 ```bash
 loom run experiment.yaml \
@@ -941,8 +954,8 @@ loom run experiment.yaml \
   --executor slurm-afterok
 ```
 
-In v2, this fails clearly because only `--executor local` is supported. A later
-executor phase can make this command submit work and include:
+This fails clearly because scheduler/container executors are not implemented.
+A later executor phase can make this command submit work and include:
 
 ```text
 run directory
@@ -951,7 +964,7 @@ job IDs, when submitted
 status command hint
 ```
 
-### 13.7 Dry Run
+### 13.8 Dry Run
 
 `--dry-run` should call the same planning/submission dry-run APIs used by tests.
 
