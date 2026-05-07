@@ -145,6 +145,23 @@ def format_run_text(result: RunCliResult) -> str:
     return "\n".join(lines)
 
 
+def format_stage_worker_text(result: object) -> str:
+    """Format one direct worker result."""
+
+    status = _enum_value(getattr(result, "status"))
+    prefix = "OK" if status == "SUCCEEDED" else "FAILED"
+    run_uri = str(getattr(result, "run_uri"))
+    stage_name = str(getattr(result, "stage_name"))
+    attempt = int(getattr(result, "attempt"))
+    lines = [f"{prefix} stage run {run_uri} {stage_name} attempt {attempt}: {status}"]
+    failure = getattr(result, "failure")
+    if failure is not None:
+        message = str(getattr(failure, "message", ""))
+        failure_type = str(getattr(failure, "failure_type", "failure"))
+        lines.append(f"failure {failure_type}: {message}")
+    return "\n".join(lines)
+
+
 def format_status_text(result: object) -> str:
     """Format a concise run status summary."""
 
@@ -249,6 +266,7 @@ __all__ = [
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
+    "format_stage_worker_text",
     "format_logs_text",
     "format_run_text",
     "format_status_text",

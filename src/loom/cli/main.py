@@ -100,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     from loom.cli import plan as plan_command
     from loom.cli import preflight as preflight_command
     from loom.cli import run as run_command
+    from loom.cli import stage as stage_command
     from loom.cli import status as status_command
     from loom.cli import validate as validate_command
 
@@ -107,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_command.register_subparser(subparsers)
     plan_command.register_subparser(subparsers)
     run_command.register_subparser(subparsers)
+    stage_command.register_subparser(subparsers)
     status_command.register_subparser(subparsers)
     logs_command.register_subparser(subparsers)
     artifacts_command.register_subparser(subparsers)

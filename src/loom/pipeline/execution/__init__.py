@@ -27,6 +27,13 @@ if TYPE_CHECKING:
     from loom.pipeline.execution.outputs import validate_stage_outputs
     from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
     from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
+    from loom.pipeline.execution.stage_worker import (
+        StageWorkerRunRequest,
+        StageWorkerStateError,
+        infer_stage_worker_attempt,
+        reconstruct_stage_execution_request,
+        run_stage_worker,
+    )
 
 
 def __getattr__(name: str) -> object:
@@ -46,10 +53,15 @@ def __getattr__(name: str) -> object:
         "StageExecutionResult",
         "StageExecutionRuntimeError",
         "StageRunResult",
+        "StageWorkerRunRequest",
         "StageWorkerRequest",
         "StageWorkerResult",
+        "StageWorkerStateError",
+        "infer_stage_worker_attempt",
         "prepare_stage_attempt",
+        "reconstruct_stage_execution_request",
         "redact_executor_metadata",
+        "run_stage_worker",
         "run_pipeline",
         "validate_stage_outputs",
     }:
@@ -77,6 +89,13 @@ def __getattr__(name: str) -> object:
         from loom.pipeline.execution.outputs import validate_stage_outputs
         from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
         from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
+        from loom.pipeline.execution.stage_worker import (
+            StageWorkerRunRequest,
+            StageWorkerStateError,
+            infer_stage_worker_attempt,
+            reconstruct_stage_execution_request,
+            run_stage_worker,
+        )
 
         return {
             "ConfigSnapshotInputs": ConfigSnapshotInputs,
@@ -94,10 +113,15 @@ def __getattr__(name: str) -> object:
             "StageExecutionResult": StageExecutionResult,
             "StageExecutionRuntimeError": StageExecutionRuntimeError,
             "StageRunResult": StageRunResult,
+            "StageWorkerRunRequest": StageWorkerRunRequest,
             "StageWorkerRequest": StageWorkerRequest,
             "StageWorkerResult": StageWorkerResult,
+            "StageWorkerStateError": StageWorkerStateError,
+            "infer_stage_worker_attempt": infer_stage_worker_attempt,
             "prepare_stage_attempt": prepare_stage_attempt,
+            "reconstruct_stage_execution_request": reconstruct_stage_execution_request,
             "redact_executor_metadata": redact_executor_metadata,
+            "run_stage_worker": run_stage_worker,
             "run_pipeline": run_pipeline,
             "validate_stage_outputs": validate_stage_outputs,
         }[name]
@@ -120,10 +144,15 @@ __all__ = [
     "StageExecutionResult",
     "StageExecutionRuntimeError",
     "StageRunResult",
+    "StageWorkerRunRequest",
     "StageWorkerRequest",
     "StageWorkerResult",
+    "StageWorkerStateError",
+    "infer_stage_worker_attempt",
     "prepare_stage_attempt",
+    "reconstruct_stage_execution_request",
     "redact_executor_metadata",
+    "run_stage_worker",
     "run_pipeline",
     "validate_stage_outputs",
 ]
