@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft implementation plan
+- Status: refined implementation plan
 - Related planning notes:
   `docs/implementation-plans/roadmap-v5-planning-notes.md`
 - Related source docs:
@@ -17,14 +17,11 @@
   - `docs/features/testing.md`
   - `docs/structure.md`
 - Draft pass: complete on 2026-05-07 from confirmed roadmap v5 planning notes
-- Refine pass: pending
-- Plan quality gate: pending `loom_plan_reviewer` review before Phase 1
-  implementation
-- Blockers:
-  - V5 implementation must not begin until v4 runtime options/resources work is
-    actually complete on the selected base branch.
-  - Phase execution must not begin until this plan is refined as needed and the
-    plan quality gate passes.
+- Refine pass: complete on 2026-05-07 after the initial
+  `loom_plan_reviewer` quality-gate review
+- Plan quality gate: passed on 2026-05-07 after initial
+  `loom_plan_reviewer` review, one refinement pass, and confirmation review
+- Blockers: none known
 
 ## Goal
 
@@ -73,6 +70,8 @@ When all phases are complete:
   only the structured result handoff for its assigned attempt.
 - Successful and failing subprocess stages persist schema-versioned
   request/result/failure metadata with explicit attempt identity.
+- Subprocess failures preserve exit-code and signal facts separately when the
+  operating system reports a signal termination.
 - Missing, invalid, stale, mismatched, or conflicting worker results fail
   loudly and leave useful diagnostics.
 - Subprocess preflight detects missing worker command or unresolvable Python
@@ -149,6 +148,8 @@ When all phases are complete:
   process launch, stdout/stderr capture, result readback, and process metadata.
 - Stage request/result/failure records are schema-versioned and describe
   exactly one prepared stage attempt.
+- Failure and process-result records preserve signal metadata separately from
+  exit codes when a worker process terminates by signal.
 - Worker reconstructs from durable Loom state: run URI, stage, attempt,
   prepared request/input/fingerprint metadata, resolved config/source
   snapshots, pipeline spec, run/artifact-store records, prior stage artifacts,
@@ -164,7 +165,9 @@ When all phases are complete:
   injectable, and in-memory runner paths may exist for deterministic component
   tests.
 - Exit-code handling and failure normalization are one policy surface:
-  structured success cannot override a nonzero worker process exit.
+  structured success cannot override a nonzero worker process exit, and signal
+  termination is reported as process failure rather than flattened into an
+  ambiguous exit-code-only record.
 - Selected subprocess preflight failures for missing worker command or Python
   executable are `FAIL`, not warnings.
 - Security/trust assumptions are explicit: authored configs are trusted, and
@@ -251,7 +254,7 @@ own roadmap versions.
 
 ## Plan Quality Gate
 
-- Status: pending
+- Status: passed on 2026-05-07
 - Required reviewer: `loom_plan_reviewer`
 - Required before: creating any v5 phase execution plan or starting Phase 1
   implementation
@@ -267,17 +270,36 @@ own roadmap versions.
     handoff, without requiring workers to reinterpret raw config/profile inputs;
   - compatibility of latest-stage-compatible layout with v3 diagnostics and
     future retry/reliability work;
-  - failure semantics for nonzero exits, missing results, invalid results,
-    stale/mismatched results, and conflicts;
+  - failure semantics for nonzero exits, signal terminations, missing results,
+    invalid results, stale/mismatched results, and conflicts;
   - subprocess preflight and diagnostics integration without launching user
     stage code;
   - package, unit, contract, integration, E2E, and example test obligations;
   - clarity of deferred later-version owners and trust/security assumptions.
 - Loop budget:
-  - Initial review: unused.
-  - Gate refinement pass: unused.
-  - Confirmation review: unused.
-- Current gate result: pending.
+  - Initial review: used on 2026-05-07; blockers found for pending refine/gate
+    state, Phase 3/Phase 4 subprocess CLI/preflight boundary, and missing
+    signal semantics.
+  - Gate refinement pass: used on 2026-05-07; Phase 3 now owns minimal
+    subprocess descriptor/CLI executor factory/preflight compatibility, Phase 4
+    owns worker/Python availability checks and diagnostics UX, and signal
+    metadata is part of the v5 schema/process contract.
+  - Confirmation review: used on 2026-05-07; no blocking findings remained.
+- Current gate result: passed.
+
+Refinement summary:
+
+- Pending draft/refine metadata was resolved by marking the implementation plan
+  refined and recording that the v4 prerequisite is verified complete on
+  `develop`.
+- The `loom run --executor subprocess` acceptance path remains in Phase 3, but
+  Phase 3 now explicitly owns the minimal executor descriptor registration, CLI
+  executor selection/factory wiring, and preflight compatibility needed for the
+  run to pass current `loom run` gates. Phase 4 keeps selected-subprocess
+  worker-command/Python availability checks, concise failure UX, diagnostics,
+  and JSON output behavior.
+- Signal metadata was added to the request/result/failure contract, process
+  mapping, diagnostics, CLI output, and test expectations where relevant.
 
 ## Phased Implementation
 
@@ -300,7 +322,7 @@ Scope:
   prepared attempt without invoking worker code.
 - Add baseline failure/result metadata fields for subprocess handoff,
   including attempt identity, log paths, traceback paths, executor metadata,
-  timestamps, and status.
+  timestamps, status, exit code, and signal when applicable.
 - Include an explicit request-field contract for the v4 resolved per-stage
   runtime handoff reference or safe summary, so workers and future executors do
   not reinterpret raw config/profile inputs.
@@ -331,7 +353,8 @@ Acceptance criteria:
 - Request/result/failure records round-trip through the selected serialization
   path and reject invalid, missing, or conflicting required fields.
 - Persisted records include run URI, stage, attempt, schema version, timestamps,
-  and executor/log/failure fields needed by later phases.
+  and executor/log/failure fields needed by later phases, including separate
+  exit-code and signal fields for process failures.
 - Request records include or reference the v4 resolved per-stage runtime handoff
   needed by workers and future executors.
 - The prepare-stage-attempt API writes enough durable state for Phase 2 worker
@@ -349,8 +372,8 @@ Test expectations:
 
 - Package: import-boundary tests for new public record/store exports.
 - Unit: schema validation, serialization, redaction, missing fields, invalid
-  status, result/failure field combinations, and resolved runtime handoff
-  request-field validation.
+  status, exit-code and signal fields, result/failure field combinations, and
+  resolved runtime handoff request-field validation.
 - Contract: prepare-stage-attempt API contract, run-store/artifact-store
   request/result/failure persistence contracts, and source-doc contract
   alignment for worker identity/finalization behavior.
@@ -515,6 +538,11 @@ Scope:
 - Implement `SubprocessExecutor` command construction, worker process launch,
   stdout/stderr capture, result-file location, process metadata collection, and
   structured result readback.
+- Register the subprocess executor descriptor/capability metadata needed for
+  runtime validation and current selected-executor preflight to recognize the
+  executor without loading optional backends.
+- Add CLI executor selection/factory wiring so `loom run CONFIG --executor
+  subprocess` invokes `SubprocessExecutor` through the existing run path.
 - Wire `loom run CONFIG --executor subprocess` into the existing planner and
   parent runner lifecycle as a serial one-worker-per-runnable-stage path using
   the shared prepare-stage-attempt API.
@@ -522,6 +550,8 @@ Scope:
   provenance/status, and run finalization.
 - Implement conflict handling where process exit and structured result
   disagree.
+- Preserve signal metadata separately from exit codes when subprocesses
+  terminate by signal.
 - Use fake/injectable process runner support for deterministic component tests
   and real subprocess integration tests for the production path.
 
@@ -531,6 +561,9 @@ Out of scope:
 - Timeout enforcement.
 - SLURM/container command construction.
 - Heavy locking, leases, or multi-coordinator semantics.
+- Worker command/Python executable availability checks beyond the minimal
+  selected-executor compatibility required for the current `loom run`
+  preflight gate; Phase 4 owns those diagnostics.
 
 Acceptance criteria:
 
@@ -543,17 +576,22 @@ Acceptance criteria:
   failures.
 - Nonzero process exit always fails the stage, including structured-success
   conflicts.
+- Signal termination always fails the stage and records the signal fact
+  distinctly from ordinary process exit code metadata.
+- Current `loom run` preflight no longer rejects the selected subprocess
+  executor merely because the executor name is unknown or unsupported.
 
 Test expectations:
 
 - Package: subprocess executor export/import-boundary tests.
-- Unit: command construction, redaction, process result mapping,
-  missing/invalid result handling, and conflict semantics.
+- Unit: command construction, redaction, process result mapping, signal
+  mapping, missing/invalid result handling, and conflict semantics.
 - Contract: parent/worker commit boundary, result identity validation, and
   failure normalization through real prepared attempts.
 - Integration: serial subprocess orchestration for synthetic success/failure
   pipelines using temporary run directories.
-- E2E: `loom run --executor subprocess` success/failure smoke coverage.
+- E2E: `loom run --executor subprocess` success/failure smoke coverage through
+  the real CLI selection path.
 - Opt-in: none.
 
 Design impact:
@@ -571,6 +609,9 @@ Alternatives rejected:
 - Treating subprocess as a second runner.
 - Relying only on in-memory tests.
 - Accepting nonzero exits as success when structured result says success.
+- Deferring all subprocess preflight compatibility to Phase 4, because Phase 3
+  must produce reviewable `loom run --executor subprocess` evidence through the
+  current CLI gate.
 
 Debt introduced:
 
@@ -609,8 +650,8 @@ Scope:
   executable is unavailable.
 - Keep checks deterministic and avoid launching user stage code.
 - Add concise CLI failure output for worker/subprocess failures, including
-  stage, attempt when known, exit code, message, stdout/stderr paths, and
-  traceback/failure path.
+  stage, attempt when known, exit code, signal when applicable, message,
+  stdout/stderr paths, and traceback/failure path.
 - Ensure existing v3 diagnostics/status/log/artifact inspection can explain
   subprocess failures from persisted records.
 - Support machine-readable output through existing JSON/output conventions.
@@ -625,6 +666,9 @@ Acceptance criteria:
 
 - Selected subprocess preflight reports structured failures for missing worker
   command or Python executable.
+- Selected subprocess preflight distinguishes missing worker/Python availability
+  from generic unknown-executor rejection, which Phase 3 resolves for normal
+  subprocess selection.
 - CLI output remains concise and local-run-like in normal runs.
 - Failure output points users to persisted logs and failure records.
 - Existing inspection paths read subprocess metadata without importing project
@@ -634,7 +678,8 @@ Test expectations:
 
 - Package: preflight/check ID import-boundary tests where public.
 - Unit: check result construction, selected-executor failure severity, CLI
-  formatting, JSON output shape, and no-user-code preflight behavior.
+  formatting including signal facts, JSON output shape, and no-user-code
+  preflight behavior.
 - Contract: diagnostics compatibility with persisted failure/log metadata.
 - Integration: CLI/preflight subprocess failure scenarios with controlled PATH
   or fake executable resolution.
@@ -689,7 +734,8 @@ Scope:
 
 - Add comprehensive cross-component tests for local/subprocess equivalence,
   worker result validation, failure normalization, stale/mismatched results,
-  missing/invalid results, redacted metadata, and diagnostics compatibility.
+  missing/invalid results, signal-aware process failures, redacted metadata,
+  and diagnostics compatibility.
 - Add local, synthetic examples that demonstrate:
   - local vs subprocess success behavior;
   - subprocess stage failure with logs/failure inspection;
@@ -722,8 +768,9 @@ Test expectations:
 
 - Package: final public export/import sweep.
 - Unit: targeted regression tests for hardening gaps found in prior phases.
-- Contract: executor contract tests covering local/subprocess equivalence and
-  parent/worker boundaries.
+- Contract: executor contract tests covering local/subprocess equivalence,
+  parent/worker boundaries, and signal-aware failure metadata where practical
+  without making default tests platform-fragile.
 - Integration: durable reconstruction, diagnostics, and subprocess
   orchestration edge cases.
 - E2E: synthetic success and failure pipelines through both local and
