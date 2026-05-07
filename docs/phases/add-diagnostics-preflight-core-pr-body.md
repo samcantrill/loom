@@ -55,7 +55,7 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default isolated suite passed with 523 passed and 13 skipped; config-extra passed with 380 passed and 541 deselected; uv build produced sdist and wheel artifacts. |
+| `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default isolated suite passed with 523 passed and 13 skipped; config-extra passed with 384 passed and 537 deselected; uv build produced sdist and wheel artifacts. |
 | `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | Wrote `build/test-summary.md` with all reported suites passing. |
 | GitHub checks | Pending | PR creation step will start CI after the branch is pushed. |
 
@@ -68,8 +68,8 @@ New tests implemented:
 | contract | passed | 39 | 0 | 0 | 2 | 0 |
 | integration | passed | 9 | 0 | 0 | 6 | 0 |
 | e2e | passed | 14 | 0 | 0 | 0 | 0 |
-| config-extra | passed | 380 | 0 | 0 | 0 | 541 |
-| Overall | passed | 917 | 0 | 0 | 10 | 541 |
+| config-extra | passed | 384 | 0 | 0 | 0 | 537 |
+| Overall | passed | 921 | 0 | 0 | 10 | 537 |
 
 ## Risks / Follow-Ups
 
