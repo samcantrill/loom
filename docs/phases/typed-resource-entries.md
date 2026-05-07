@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 2: Typed Resource Entries`
 - Branch: `codex/typed-resource-entries`
@@ -19,7 +19,7 @@
 - Plan quality gate: passed on 2026-05-07 after initial review, refinement, and confirmation review
 - Plan quality gate loop budget: initial review used; gate refinement pass used; confirmation review used
 - Draft pass: completed by `loom_phase_planner` in this artifact
-- Refine pass: pending after draft
+- Refine pass: completed by `loom_phase_planner` in this artifact on 2026-05-07
 - Setup limitations: none; `gh auth status` passed with network access, `gh auth setup-git` completed, `git fetch origin` completed, and local `develop` matched `origin/develop` at `60a23ba`
 - Blockers: none known
 
@@ -44,50 +44,90 @@ Future-phase work must stay out of this PR: no `RunOptions`, no profiles, no exe
 ## Source Phase Summary
 
 - Goal: hard-swap the resource schema to typed resource entries.
-- Required scope: implement `ResourceEntry(kind, amount, unit, attributes)`, replace canonical `ResourceRequest` with `entries={...}`, define kind syntax and explicit validator registry/composition behavior, add built-in `cpu`, `memory`, and `gpu` validation, reject old resource keys and constructor aliases, update `StageSpec`, `RuntimeRequest`, exports, docs, examples, and tests.
+- Required scope: implement `ResourceEntry(kind, amount, unit, attributes)`, replace canonical `ResourceRequest` with `entries={...}`, define kind syntax and explicit validator registry/composition behavior, add built-in `cpu`, `memory`, and `gpu` validation, reject old resource keys and constructor aliases, update `StageSpec.resources`, `StageSpec.resource_request`, `RuntimeRequest.resources`, exports, docs, examples, fixtures, and tests.
 - Required checkpoints: public exports expose `ResourceEntry`; authored canonical entry syntax parses; entries keys match `ResourceEntry.kind`; old fields are rejected everywhere; default registry is deterministic and isolated; docs and fixtures no longer advertise the old schema as current v4 behavior.
 - Acceptance criteria: the implementation satisfies the Phase 2 acceptance list in `implementation-plan-v4.md`, including unchanged semantic fingerprints and no future-phase runtime/capability behavior.
 
 ## Current Source And Harness Findings
 
 - Existing files or modules that constrain this phase: `src/loom/pipeline/resources.py` owns the old `ResourceRequest(cpus, memory_mb, gpus, custom)` schema and `parse_resource_request`; `src/loom/pipeline/specs.py` stores authored `StageSpec.resources` as frozen plain data and exposes `StageSpec.resource_request`; `src/loom/pipeline/runtime/_models.py` serializes `RuntimeRequest.resources` through `ResourceRequest.to_dict`; `src/loom/pipeline/__init__.py` and `src/loom/pipeline/runtime/__init__.py` expose public imports.
-- Existing tests or harness behavior: `tests/unit/loom/pipeline/test_runtime_resources.py`, `tests/unit/loom/pipeline/test_specs.py`, package import tests, fingerprint tests, and integration config fixtures currently encode old resource fields and must be migrated or explicitly asserted rejected.
+- Existing tests or harness behavior: `tests/unit/loom/pipeline/test_runtime_resources.py`, `tests/unit/loom/pipeline/test_specs.py`, package import tests, fingerprint tests, and integration config fixtures currently encode old resource fields and must be migrated or explicitly asserted rejected. Existing docs with current resource examples include `docs/features/runtime-resources.md` and `docs/features/pipeline.md`; related canonical examples that still present `cpus`, `memory_mb`, `gpus`, or `custom` as active resource schema must be updated or clearly marked historical.
 - Import-boundary or dependency constraints: keep resources import-light and domain-neutral; do not import CLI, diagnostics, executor implementations, plugins, or optional backends; use existing serialization helpers for plain data and immutability; do not add heavyweight dependencies.
 
 ## In-Scope Work
 
 - Add immutable `ResourceEntry` with `kind`, `amount`, optional `unit`, and plain-data-compatible `attributes`.
 - Replace canonical `ResourceRequest` construction and serialization with `ResourceRequest(entries={...})`.
-- Define and enforce resource-kind syntax: lowercase ASCII identifier segments separated by dots; built-ins use unqualified `cpu`, `memory`, and `gpu`.
+- Define and enforce resource-kind syntax: lowercase ASCII identifier segments separated by dots; built-ins use unqualified `cpu`, `memory`, and `gpu`, while future adapter/plugin kinds may use qualified names such as `slurm.gres`.
 - Define deterministic explicit validator registry/composition behavior, including no hidden process-global mutation, duplicate registration failure, custom registry isolation, and unregistered-kind rejection unless the caller supplies a composed registry before validation.
 - Add built-in validators for `cpu`, `memory`, and `gpu` covering amount, unit, and attributes semantics.
-- Reject old authored and constructor fields: `cpus`, `memory_mb`, `gpus`, and `custom`.
+- Reject old authored, constructor, and serialized fields: `cpus`, `memory_mb`, `gpus`, and `custom`.
 - Update `StageSpec.resources`, `StageSpec.resource_request`, `RuntimeRequest.resources`, package exports, public docs, examples, and affected fixtures for entry semantics.
 - Preserve immutable plain-data storage and serialization for stage resources, runtime resources, and resource attributes.
 - Preserve existing semantic fingerprint behavior: resource changes remain excluded from semantic fingerprints by default.
 
 ## Out-of-Scope Work
 
-- `RunOptions`, runtime profiles, stage runtime options, environment models, executor descriptors, capability checks, preflight wiring, and `runtime.json`.
-- CLI/config runtime mapping beyond resource schema fixes required for existing tests, fixtures, and docs.
+- `RunOptions`, runtime profiles, stage runtime options, environment models, executor descriptors/capabilities, capability checks, preflight wiring, CLI/config runtime mapping, and `runtime.json`.
+- CLI/config runtime mapping beyond mechanical resource schema fixes required for existing tests, fixtures, and docs.
 - Plugin discovery, entry point loading, or global third-party validator registration.
 - Executor-specific resource interpretation, local scheduling behavior, SLURM/container mapping, retry, timeout, wall-time, or adapter schema validation.
 - Compatibility aliases or migration shims that keep old resource constructor fields working.
 
 ## Assumptions
 
-- The resource schema version may stay at the current version only if the serialized document shape is intentionally the v4 replacement for the pre-v4 local contract; otherwise the executor should choose the smallest versioning update consistent with existing serialization helpers and tests.
-- The canonical authored form should make the resource mapping key the stable identity and require it to equal the entry's `kind`; any shorthand that omits `kind` should be avoided unless the refine pass explicitly accepts it.
-- Built-in semantics should be scheduler-neutral: `cpu` and `memory` require positive amounts, `gpu` permits non-negative or positive amounts only if the refine pass confirms the intended zero-GPU representation; unsupported attributes fail unless a built-in validator explicitly owns them.
-- Error messages should be path-aware enough for authored config and serialized runtime failures, but they do not need a new error class.
+- Bump `RESOURCE_SCHEMA_VERSION` to the next integer for the new entry-based resource document. `RuntimeRequest` schema version does not need to change unless the implementation finds an existing versioning helper requires a wrapper bump for nested resource schema replacement.
+- The canonical authored form makes the resource mapping key the stable identity and requires it to equal the entry's `kind`; do not add shorthand that omits `kind`.
+- Built-in semantics stay scheduler-neutral: `cpu` and `memory` require positive amounts, `gpu` accepts a non-negative integer amount so existing explicit no-GPU declarations can migrate to `amount: 0`, and unsupported attributes fail unless the built-in validator explicitly owns them.
+- Error messages should be path-aware enough for authored config, `StageSpec`, `RuntimeRequest`, and serialized resource failures, but they do not need a new error class.
 
 ## Scope Contract
 
-The public contract changes in this phase. `loom.pipeline.resources` must expose `ResourceEntry`, `ResourceRequest`, and `parse_resource_request`; `loom.pipeline` must re-export `ResourceEntry` and the entry-based `ResourceRequest`. `ResourceRequest` no longer accepts `cpus`, `memory_mb`, `gpus`, or `custom` as constructor inputs or serialized/authored fields.
+The public contract changes in this phase. `loom.pipeline.resources` must expose `ResourceEntry`, `ResourceRequest`, `parse_resource_request`, and the explicit validator registry/composition surface; `loom.pipeline` must re-export `ResourceEntry` and the entry-based `ResourceRequest`. `ResourceRequest` no longer accepts `cpus`, `memory_mb`, `gpus`, or `custom` as constructor inputs or serialized/authored fields.
 
-`ResourceRequest.to_dict()` and `ResourceRequest.from_dict()` must round-trip a schema-versioned plain-data document with an `entries` mapping. Authored `StageSpec.resources` may remain stored as frozen plain data, but parsing and `StageSpec.resource_request` must validate and return the typed entry request. `RuntimeRequest.resources` remains a `ResourceRequest` and must serialize the entry-based resource request.
+`ResourceEntry` is the typed leaf. It has `kind`, `amount`, `unit`, and `attributes`; freezes nested attributes; rejects non-plain-data attributes; rejects booleans as numeric amounts; and serializes as a plain-data mapping with those four fields. `ResourceRequest` has `entries={...}` and a schema version; its mapping keys must exactly match each entry's `kind`. Empty requests serialize with an empty `entries` mapping.
 
-Validation must be explicit and deterministic. The default built-in registry is immutable or copy-on-write; custom callers can compose a registry and pass it to resource parsing/validation; duplicate registration for a kind fails; validators never leak between calls; unregistered kinds fail with path-aware errors. Resource shape validation stays separate from future executor capability validation.
+The canonical serialized resource document is:
+
+```python
+{
+    "schema_version": RESOURCE_SCHEMA_VERSION,
+    "entries": {
+        "cpu": {"kind": "cpu", "amount": 2, "unit": "count", "attributes": {}},
+        "memory": {"kind": "memory", "amount": 1024, "unit": "MiB", "attributes": {}},
+        "gpu": {"kind": "gpu", "amount": 1, "unit": "count", "attributes": {}},
+    },
+}
+```
+
+The canonical authored `StageSpec.resources` form is the same entry mapping without requiring a schema wrapper:
+
+```yaml
+resources:
+  entries:
+    cpu:
+      kind: cpu
+      amount: 2
+      unit: count
+      attributes: {}
+    memory:
+      kind: memory
+      amount: 1024
+      unit: MiB
+      attributes: {}
+```
+
+Authored resources may omit optional `unit` and `attributes` fields only when the target validator accepts those defaults. Authored resources must not accept top-level `schema_version`, old top-level fields, or direct kind mappings outside `entries`; keeping one canonical shape is part of the breaking v4 swap.
+
+`ResourceRequest.to_dict()` and `ResourceRequest.from_dict()` must round-trip the schema-versioned plain-data document with an `entries` mapping. `ResourceRequest.from_dict()` must reject the old schema-versioned shape with `cpus`, `memory_mb`, `gpus`, or `custom`. Authored `StageSpec.resources` may remain stored as frozen plain data, but parsing and `StageSpec.resource_request` must validate and return the typed entry request. `RuntimeRequest.resources` remains a `ResourceRequest` and must serialize the entry-based resource request; `RuntimeRequest.from_dict()` must reject nested old resource documents.
+
+Resource kind syntax is part of the public contract: each kind is one or more lowercase ASCII identifier segments separated by dots; each segment starts with `a` through `z` and then contains only lowercase letters, digits, or underscores. Empty segments, uppercase letters, whitespace, hyphens, slashes, leading/trailing dots, and non-ASCII characters fail. The built-ins are exactly `cpu`, `memory`, and `gpu`.
+
+Validation must be explicit and deterministic. The default built-in registry is immutable or copy-on-write; custom callers can compose a registry and pass it to resource parsing/validation; duplicate registration for a kind fails; validators never leak between calls; unregistered kinds fail with path-aware errors. Registry composition order must be deterministic and must not replace an existing kind silently. The implementation may expose either an immutable registry class with `with_validator`/`compose` style methods or equivalent pure functions, but it must give callers an explicit object to pass rather than hidden process-global registration.
+
+Built-in validators must reject attributes unless explicitly documented otherwise in this phase. `cpu` requires an integer amount greater than zero and unit omitted or `count`. `memory` requires a positive integer or finite positive numeric amount with a memory unit; supported units are `B`, `KiB`, `MiB`, `GiB`, and `TiB`. `gpu` requires a non-negative integer amount and unit omitted or `count`. Bool values are invalid for every amount. Executor-specific details such as GPU model, partition, wall time, and SLURM/container translation remain out of scope; callers needing those later must use future qualified kinds or adapter/runtime options.
+
+Resource shape validation stays separate from future executor capability validation. A valid `gpu` entry means the request is well-formed, not that the selected executor can honor GPUs.
 
 ## Design Impact
 
@@ -125,12 +165,12 @@ Validation must be explicit and deterministic. The default built-in registry is 
 
 - Expected PR size and shape: medium schema-refactor PR centered on `resources.py`, stage/runtime integration, public exports, tests, docs, and fixtures; no executor/preflight/profile implementation.
 - Files and areas to inspect: `src/loom/pipeline/resources.py`, `src/loom/pipeline/specs.py`, `src/loom/pipeline/runtime/_models.py`, `src/loom/pipeline/__init__.py`, `src/loom/pipeline/runtime/__init__.py`, resource/stage/runtime/package tests, integration config fixtures, `docs/features/runtime-resources.md`, `docs/features/pipeline.md`, and canonical examples that mention runtime resources.
-- Scope-control checks: reject old keys instead of supporting aliases; no `RunOptions` or descriptor classes; no CLI flags; no semantic fingerprint inclusion; no global mutable validator state.
+- Scope-control checks: reject old keys instead of supporting aliases; no `RunOptions`, profiles, descriptor/capability classes, preflight wiring, CLI/config runtime mapping, or `runtime.json`; no semantic fingerprint inclusion; no global mutable validator state.
 
 ## Implementation Steps
 
 1. Replace the resource model surface with `ResourceEntry`, entry-based `ResourceRequest`, kind syntax validation, plain-data freezing/thawing, and schema-versioned entry serialization.
-2. Add the explicit validator registry and built-in `cpu`, `memory`, and `gpu` validators with deterministic composition, duplicate-kind failure, unregistered-kind failure, and path-aware error behavior.
+2. Add the explicit validator registry and built-in `cpu`, `memory`, and `gpu` validators with deterministic composition, duplicate-kind failure, unregistered-kind failure, no global mutation, and path-aware error behavior.
 3. Update stage and runtime integration so `StageSpec.resources`, `StageSpec.resource_request`, and `RuntimeRequest.resources` validate and serialize entry-based requests while preserving frozen plain-data storage.
 4. Update public exports and package/import tests so `ResourceEntry`, entry-based `ResourceRequest`, and `parse_resource_request` are available from the intended facades.
 5. Migrate unit, contract, integration, e2e fixtures, and fingerprint tests from old resource fields to entry syntax, adding explicit old-key rejection coverage.
@@ -148,7 +188,7 @@ Validation must be explicit and deterministic. The default built-in registry is 
 
 - Status: required
 - Expected paths: `tests/unit/loom/pipeline/test_runtime_resources.py`, `tests/unit/loom/pipeline/test_specs.py`, `tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`, plus any focused resource registry test module the executor adds
-- Required assertions or deferral reason: `ResourceEntry` immutability and plain-data attributes; `ResourceRequest(entries=...)` round-trips; authored entry syntax parses; entry keys must match `ResourceEntry.kind`; old authored and constructor fields fail; invalid kind syntax fails; built-in validators enforce `cpu`, `memory`, and `gpu`; unregistered kinds fail without a custom registry; duplicate registration fails; custom registry composition is isolated; `StageSpec.resource_request` and `RuntimeRequest` serialization use entries; resource changes still do not alter semantic fingerprints.
+- Required assertions or deferral reason: `ResourceEntry` immutability and plain-data attributes; `ResourceRequest(entries=...)` round-trips with the new resource schema version; authored `resources.entries` syntax parses; entry keys must match `ResourceEntry.kind`; old authored, constructor, and serialized fields fail; invalid kind syntax fails; built-in validators enforce `cpu`, `memory`, and `gpu` amount/unit/attribute semantics; unregistered kinds fail without a custom registry; duplicate registration fails; custom registry composition is isolated with no global test leakage; `StageSpec.resource_request` and `RuntimeRequest` serialization use entries; resource changes still do not alter semantic fingerprints.
 
 ### Contract Suite
 
@@ -160,7 +200,7 @@ Validation must be explicit and deterministic. The default built-in registry is 
 
 - Status: required
 - Expected paths: `tests/integration/config/` and any integration fixtures or composed pipeline configs that declare resources
-- Required assertions or deferral reason: existing local pipeline/config resource fixtures use entry syntax and still compose/validate; old resource fields in authored config fail with clear errors.
+- Required assertions or deferral reason: existing local pipeline/config resource fixtures use entry syntax and still compose/validate; old resource fields in authored config fail with clear errors; fixture migration does not introduce runtime profiles, CLI/config runtime mapping, preflight behavior, or executor capability behavior.
 
 ### E2E Suite
 
@@ -190,6 +230,7 @@ Targeted development commands:
 uv run pytest tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py
 uv run pytest tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/planning/test_planning_fingerprints.py
 uv run pytest tests/integration/config
+rg -n "cpus|memory_mb|gpus|custom" docs/features/runtime-resources.md docs/features/pipeline.md
 ```
 
 Final PR-preparation commands:
@@ -201,11 +242,11 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: resource model and registry first; stage/runtime integration second; exports and tests third; docs/examples last.
-- Tests to run with each slice: run focused resource unit tests after model/registry work, stage/runtime unit tests after integration, package tests after exports, integration config tests after fixture migration, and final PR validation before PR preparation.
-- Decisions the executor must not revisit: no old resource aliases, no process-global mutable registry, no executor capability checks, no `RunOptions`, no runtime profiles, no semantic fingerprint impact.
+- Safe implementation slices: resource model and registry first; stage/runtime integration second; exports and tests third; docs/fixtures/examples last.
+- Tests to run with each slice: run focused resource unit tests after model/registry work, stage/runtime unit tests after integration, package tests after exports, integration config tests after fixture migration, docs `rg` checks after docs migration, and final PR validation before PR preparation.
+- Decisions the executor must not revisit: canonical shape is `ResourceEntry(kind, amount, unit, attributes)` inside `ResourceRequest(entries={...})`; authored resources use `resources.entries`; keys must match `kind`; resource schema version bumps; no old resource aliases; no process-global mutable registry; no executor capability checks; no `RunOptions`; no runtime profiles; no semantic fingerprint impact.
 - Conditions that require stopping for the manager: inability to define deterministic registry composition without a public-contract choice, contradiction between built-in validator semantics and the implementation plan, or broad fixture/doc migration that would pull in future runtime option behavior.
-- Expanded-path refinement notes: the pending refine pass should focus on public registry API clarity, exact built-in amount/unit/attribute semantics, schema version decision, and whether the plan gives enough stop conditions for the breaking resource contract.
+- Expanded-path refinement notes: refine pass completed; public registry API expectations, built-in amount/unit/attribute semantics, schema version decision, canonical authored shape, and stop conditions for the breaking resource contract are now recorded.
 
 ## Refinement And Review Budget Status
 
@@ -216,10 +257,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed on 2026-05-07 by `loom_phase_planner`; committed as `plan: add phase execution plan`
-- Final phase execution plan: pending refine pass
+- Final phase execution plan: completed on 2026-05-07 by `loom_phase_planner`; refinement covered the breaking resource schema swap, validator registry determinism, built-in semantics, old-field rejection, docs/fixture/test obligations, semantic fingerprint non-impact, and future-phase exclusions
 - Implementation summary: pending
 - Implementation validation: pending
-- Refinement summary: pending
+- Refinement summary: phase planning refine pass used; implementation refinement and PR review budgets remain unused
 - Blocker-resolution summary: none used
 - PR preparation: pending
 - Stack maintenance: none required yet
