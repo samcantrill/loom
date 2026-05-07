@@ -305,9 +305,9 @@ Refinement summary:
 
 ### Phase 1 - Contracts And Persistence
 
-Status: pending
+Status: pr_open
 Branch: `codex/stage-worker-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/77
 
 Goal:
 
@@ -423,7 +423,23 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened on 2026-05-07 against `develop`.
+- Implemented schema-versioned stage-worker request/result records,
+  signal-aware failure metadata, executor metadata redaction, store APIs for
+  `worker_request.json` and `worker_result.json`, local handoff path helpers,
+  and the parent-owned `prepare_stage_attempt` API.
+- Updated source docs for `--run-uri`, no normal worker `--config`,
+  parent-owned finalization, signal metadata, and latest-stage-compatible
+  worker handoff files.
+- Validation before PR: `make validate-pr` passed, including Ruff, Pyright
+  with config extra, default/config-extra test harnesses, and build.
+- Suite evidence before PR: `make test-summary` passed; package 50 passed/1
+  skipped, unit 569 passed/1 skipped, contract 53 passed/2 skipped,
+  integration 15 passed/7 skipped/7 deselected, e2e 16 passed, config-extra
+  397 passed/703 deselected.
+- Follow-up notes: Phase 2 must consume the prepared request/store APIs for
+  direct worker execution; Phase 3 owns subprocess process launch and current
+  CLI executor selection wiring.
 
 ### Phase 2 - Worker Execution And Direct CLI
 
