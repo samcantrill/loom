@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft
+- Status: refined; ready for implementation
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 7: Run Workflow and Runtime Metadata`
 - Branch: `codex/runtime-metadata-workflow`
@@ -25,7 +25,9 @@
 - Plan quality gate loop budget: initial review used, gate refinement used,
   confirmation review used
 - Draft pass: completed by managing agent on 2026-05-07
-- Refine pass: pending
+- Refine pass: completed by managing agent on 2026-05-07; used to pin
+  CLI composition/run-URI ordering, request compatibility enforcement, and
+  dry-run handling boundaries
 - Setup limitations: branch/worktree created from local `develop`; no
   validation has run for this planning-only pass
 - Blockers: none known
@@ -108,6 +110,15 @@ add stable contracts and metadata, not backend-specific behavior.
 - Existing tests cover run request validation, runner wiring, local store
   document wrappers, import boundaries, CLI run/plan orchestration, and
   planning fingerprint non-impact for runtime unless explicitly declared.
+- `loom plan` and `loom run` currently resolve run URIs before composing
+  config. Phase 7 changes that ordering where needed so config-authored
+  `runtime.run_uri`, `runtime.profile`, selectors, and resume settings can
+  participate in the same normalized options object as explicit CLI flags.
+  CLI usage checks that previously happened before composition may need
+  targeted updates when config-authored runtime values can satisfy them.
+- `loom validate` has no runtime-specific CLI flags. Its Phase 7 responsibility
+  is config-authored runtime normalization and exact-stage validation after the
+  pipeline is validated, not adding another CLI runtime surface.
 
 ## In-Scope Work
 
@@ -127,9 +138,9 @@ add stable contracts and metadata, not backend-specific behavior.
   existing read-only callers still observe the effective run URI, selectors,
   and resume options.
 - Treat `RunRequest.open_existing` and `RunOptions.resume.enabled` as the same
-  resume/open-existing workflow policy for this phase. If either requests
-  resume/open-existing, the normalized request should require a run URI and
-  open the existing run.
+  resume/open-existing workflow policy for this phase. `RunRequest`
+  construction should normalize the effective policy, while runner/CLI workflow
+  code continues to enforce that resume/open-existing requires a run URI.
 - Use `request.options.run_uri`, `request.options.to_plan_selectors()`, and
   `request.options.to_resume_options()` in `PipelineRunner` and `run_pipeline`
   instead of legacy request fields.
@@ -144,8 +155,9 @@ add stable contracts and metadata, not backend-specific behavior.
   config/profile/CLI runtime options into `RunOptions` and pass normalized
   selectors/resume/run URI rather than reinterpreting CLI flags.
 - Keep `loom run --dry-run` as the existing plan-only CLI path. If the Python
-  runner receives `RunOptions.dry_run=True` for concrete execution, fail
-  clearly instead of silently executing a dry-run request.
+  runner receives `RunOptions.dry_run=True` for concrete execution, runner
+  workflow code should fail clearly instead of silently executing a dry-run
+  request.
 - Add user-facing docs for `runtime.json` safety boundaries and the resolved
   stage runtime handoff.
 
@@ -177,6 +189,10 @@ add stable contracts and metadata, not backend-specific behavior.
   but normalizes to resume/open-existing behavior in `RunOptions`.
 - Existing `RunRequest` callers with only legacy selectors/resume/run URI
   should continue to work when values do not conflict with `options`.
+- Config-authored `runtime.run_uri` may satisfy plan/run resume run-URI
+  requirements once config has been composed. Explicit CLI `--run-uri` remains
+  the highest-precedence source and should still be resolved through the run
+  store before persistence or planning.
 
 ## Scope Contract
 
@@ -256,12 +272,13 @@ fingerprints.
 1. Add runtime metadata/resolution models and tests for safe summaries,
    per-stage resolution, environment separation, and schema round trips.
 2. Extend `RunRequest` with normalized `options`, compatibility conflict
-   checks, dry-run execution rejection, and tests.
+   checks, resume/open-existing normalization, and tests.
 3. Add `StageExecutionRequest.resolved_runtime` and runner handoff wiring.
 4. Add run-store protocol/local-store `runtime.json` read/write APIs and
    contract/unit tests.
-5. Wire `PipelineRunner` to resolve runtime once, use normalized selectors and
-   resume, write runtime metadata, and pass per-stage runtime requests.
+5. Wire `PipelineRunner` to resolve runtime once, reject concrete dry-run
+   execution clearly, use normalized selectors and resume, write runtime
+   metadata, and pass per-stage runtime requests.
 6. Update CLI validate/plan/run to merge config/profile/CLI runtime options and
    pass normalized options to public APIs without duplicating runtime semantics.
 7. Add integration/e2e coverage for a local run with profile/resources/tags and
@@ -291,9 +308,9 @@ fingerprints.
   `tests/unit/loom/cli/test_plan.py`, `test_run.py`, and `test_validate.py`.
 - Required assertions: safe metadata excludes environment keys/values and raw
   adapter payloads; resolved stage runtime is typed and per-stage; `RunRequest`
-  normalizes compatibility fields and rejects conflicts; dry-run execution
-  fails clearly; local store writes/reads runtime metadata; CLI adapters pass
-  normalized options.
+  normalizes compatibility fields and rejects conflicts; runner dry-run
+  execution fails clearly; local store writes/reads runtime metadata; CLI
+  adapters pass normalized options.
 
 ### Contract Suite
 
@@ -344,6 +361,9 @@ fingerprints.
   execution, with clear schema wrapper fields.
 - CLI run URI allocation and config-authored run URI precedence must stay
   compatible with Phase 6 preflight behavior.
+- Moving CLI plan/run composition before final run URI resolution may change
+  the timing of some usage errors; tests should pin the intended cases where
+  config-authored runtime values are now allowed to satisfy the request.
 
 ## Validation Commands
 
@@ -390,7 +410,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed on 2026-05-07.
-- Final phase execution plan: pending.
+- Final phase execution plan: refined on 2026-05-07.
 - Implementation summary: pending.
 - Implementation validation: pending.
 - Refinement summary: pending.
