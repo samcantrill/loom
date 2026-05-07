@@ -34,7 +34,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ran after the implementation refinement pass; phase artifact records Ruff, Pyright, default no-extra pytest, config-extra pytest, and build passing. |
 | `make test-summary` | Passed | Reran for PR evidence on 2026-05-07; wrote `build/test-summary.md` with overall status `passed`. |
-| GitHub checks | Not run | Draft-only PR body pass; PR was not opened. |
+| GitHub checks | Pending | Expected to start after PR creation; do not count as local validation evidence yet. |
 
 ### Test Suite Summary
 

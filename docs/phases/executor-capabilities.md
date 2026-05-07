@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: pr_open
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 5: Executor Descriptors and Capability Validation`
 - Branch: `codex/executor-capabilities`
@@ -16,8 +16,11 @@
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`, automated review passes, and validation/CI pass
 - Workflow path: expanded path, draft and refine passes complete
-- PR preparation path: expanded path; draft PR body pass complete, open-PR
-  pass not started
+- PR preparation path: expanded path; draft PR body pass complete,
+  refine/open pass used on 2026-05-07
+- PR URL: https://github.com/samcantrill/loom/pull/74
+- PR state: OPEN
+- PR base/head verified: `develop` <- `codex/executor-capabilities`
 - Successor dependency notes: Phase 6 should consume these descriptor and validation contracts for preflight/CLI/config diagnostics; Phase 7 should not reinterpret raw capability data.
 - Plan quality gate: passed on 2026-05-07
 - Plan quality gate loop budget: initial review used, gate refinement used, confirmation review used
@@ -582,7 +585,10 @@ make test-summary
   construction.
 - PR review: unused
 - PR body draft: used on 2026-05-07 for a draft-only PR preparation pass
-- PR body refine/open pass: unused
+- PR body refine/open pass: used on 2026-05-07; refined the GitHub checks
+  row to avoid claiming CI before PR creation, opened PR #74, and verified
+  `baseRefName=develop`, `headRefName=codex/executor-capabilities`,
+  `state=OPEN`
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -649,6 +655,7 @@ make test-summary
 - PR facts: branch `codex/executor-capabilities`; target branch `develop`;
   stack predecessor none; title
   `Runtime Options - Phase 5: Executor Descriptors and Capability Validation`;
-  PR URL pending because this pass was draft-only.
-- Stack maintenance: none required so far; root phase targets `develop`.
+  PR URL https://github.com/samcantrill/loom/pull/74; PR state `OPEN`;
+  verified base/head `develop` <- `codex/executor-capabilities`.
+- Stack maintenance: none required; root phase targets `develop`.
 - Remaining blockers: none known.
