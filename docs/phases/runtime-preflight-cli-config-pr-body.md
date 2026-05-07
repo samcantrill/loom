@@ -46,6 +46,9 @@ or persisted `runtime.json`.
 - Preserved existing local executor availability probing through
   `executor.local`, existing preflight JSON envelope shape, and existing
   strict-mode warning escalation.
+- Tightened run/artifact path checks so explicit runtime `run_uri` values are
+  used without forcing config composition, while config-derived run URIs remain
+  available after runtime normalization has already run.
 
 New tests implemented:
 
@@ -62,7 +65,7 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Final run after refinement passed Ruff, Pyright, default no-extra tests, config-extra tests, and build on 2026-05-07. |
+| `make validate-pr` | Passed | Final run after blocker resolution passed Ruff, Pyright, default no-extra tests, config-extra tests, and build on 2026-05-07. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md` on 2026-05-07 with overall status `passed`. |
 | GitHub checks | Pending | Expected after PR creation; not used as local validation evidence yet. |
 
@@ -71,12 +74,12 @@ New tests implemented:
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | package | passed | 50 | 0 | 0 | 1 | 0 | 5.14s |
-| unit | passed | 548 | 0 | 0 | 1 | 0 | 5.20s |
-| contract | passed | 53 | 0 | 0 | 2 | 0 | 1.85s |
-| integration | passed | 15 | 0 | 0 | 7 | 7 | 2.01s |
-| e2e | passed | 16 | 0 | 0 | 0 | 0 | 5.68s |
-| config-extra | passed | 397 | 0 | 0 | 0 | 682 | 14.98s |
-| Overall | passed | 1079 | 0 | 0 | 11 | 689 | 34.86s |
+| unit | passed | 550 | 0 | 0 | 1 | 0 | 5.29s |
+| contract | passed | 53 | 0 | 0 | 2 | 0 | 1.82s |
+| integration | passed | 15 | 0 | 0 | 7 | 7 | 1.84s |
+| e2e | passed | 16 | 0 | 0 | 0 | 0 | 5.62s |
+| config-extra | passed | 397 | 0 | 0 | 0 | 684 | 14.89s |
+| Overall | passed | 1081 | 0 | 0 | 11 | 691 | 34.60s |
 
 ## Risks / Follow-Ups
 

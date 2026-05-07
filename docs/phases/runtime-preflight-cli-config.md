@@ -364,7 +364,7 @@ make test-summary
 
 - Phase implementation refinement: used on 2026-05-07
 - PR review: unused
-- Blocker resolution: 0/3 used
+- Blocker resolution: 1/3 used
 
 ## Completion Notes
 
@@ -391,7 +391,15 @@ make test-summary
   legacy `PreflightRequest.run_uri` remains compatible, and run/artifact-only
   preflight groups still skip without forcing config composition. Focused
   runtime/preflight tests, Ruff, and Pyright passed after the refinement.
-- Blocker-resolution summary: pending.
+- Blocker-resolution summary: used one scoped blocker-resolution pass on
+  2026-05-07 after PR-open review found that run/artifact-only preflight checks
+  could still compose config when CLI runtime options were present. The fix now
+  reads explicit runtime `run_uri` values directly, preserves legacy
+  `PreflightRequest.run_uri`, only uses config-derived runtime run URIs after
+  runtime normalization has already run, and adds diagnostics unit coverage for
+  explicit runtime run URI and non-URI runtime flags with missing configs.
+  Focused diagnostics unit tests and CLI preflight integration tests passed,
+  then `make validate-pr` and `make test-summary` passed on 2026-05-07.
 - PR preparation: draft PR body committed on 2026-05-07; PR opened as
   https://github.com/samcantrill/loom/pull/75 with verified base `develop`,
   head `codex/runtime-preflight-cli-config`, and state `OPEN`; GitHub CI
