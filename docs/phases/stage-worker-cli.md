@@ -154,7 +154,7 @@ The public worker contract is one prepared attempt addressed by `(run_uri, stage
 ### Integration Suite
 
 - Status: required
-- Expected paths: new `tests/integration/pipeline/test_stage_worker.py` and, if useful, `tests/integration/config/test_cli_run.py` or a new direct-worker CLI integration test.
+- Expected paths: new `tests/integration/pipeline/test_stage_worker_integration.py` and, if useful, `tests/integration/config/test_cli_run.py` or a new direct-worker CLI integration test.
 - Required assertions or deferral reason: real temporary runs are created and prepared through `prepare_stage_attempt`; direct worker success and stage failure write structured result handoffs through store APIs; prior stage artifacts can be consumed through the local artifact store.
 
 ### E2E Suite
@@ -181,8 +181,8 @@ The public worker contract is one prepared attempt addressed by `(run_uri, stage
 Targeted development commands:
 
 ```sh
-uv run pytest tests/package/test_pipeline_execution_api.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker.py
-uv run pyright src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker.py
+uv run pytest tests/package/test_pipeline_execution_api.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py
+uv run pyright src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/cli/test_stage.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_worker_integration.py
 ```
 
 Final PR-preparation commands:

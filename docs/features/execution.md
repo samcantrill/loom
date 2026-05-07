@@ -1590,11 +1590,12 @@ Recommended command:
 loom stage run --run-uri RUN_URI --stage STAGE_NAME --attempt ATTEMPT
 ```
 
-Optional flags:
+Current optional flags:
 
 ```text
---log-level LEVEL
---strict
+--attempt ATTEMPT
+--format {text,json}
+--traceback
 ```
 
 The command should not require pickled Python objects or a normal `--config`
@@ -2141,8 +2142,9 @@ loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor l
 
 ### 21.2 `loom stage run`
 
-`loom stage run` is the future subprocess worker entry point. It is not part of
-v0 functional behavior.
+`loom stage run` is the direct worker entry point for one prepared stage
+attempt. Future subprocess, scheduler, and container executors should invoke
+the same command instead of embedding stage execution logic.
 
 It should:
 
@@ -2167,6 +2169,16 @@ perform whole-pipeline planning
 modify unrelated stages
 finalize the whole run
 submit scheduler jobs
+```
+
+Current direct-worker exit codes:
+
+```text
+0  successful worker result handoff
+1  failed stage result handoff
+2  usage error
+3  missing, invalid, or ambiguous prepared worker state
+130 interrupted
 ```
 
 ### 21.3 `loom logs`

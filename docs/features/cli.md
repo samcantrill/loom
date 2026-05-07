@@ -5,14 +5,15 @@
 `loom.cli` is the command-line interface for `loom`.
 
 For v2, `loom.cli` exposes a functional local command surface:
-`loom validate`, `loom plan`, and `loom run`. The v2 commands are thin
-`argparse` wrappers over config, pipeline, planning, store, and execution APIs.
-They do not introduce a separate runtime model.
+`loom validate`, `loom plan`, `loom run`, and direct `loom stage run` worker
+execution. The v2 commands are thin `argparse` wrappers over config, pipeline,
+planning, store, and execution APIs. They do not introduce a separate runtime
+model.
 
-Roadmap commands for stage workers, run status, logs, artifacts, sweeps,
-catalogs, bundles, plugins, remote stores, containers, cleanup, and non-local
-executors are intentionally deferred. The later-command sections in this
-document describe future shape, not current v2 support.
+Roadmap commands for run status, logs, artifacts, sweeps, catalogs, bundles,
+plugins, remote stores, containers, cleanup, and non-local executors are
+intentionally deferred. The later-command sections in this document describe
+future shape, not current v2 support.
 
 The v2 CLI should answer:
 
@@ -25,7 +26,6 @@ How do I run this pipeline?
 Future CLI phases should answer:
 
 ```text
-How do subprocess, container, or SLURM workers run one stage?
 What is the current status of a run?
 Where are the logs for a failed stage?
 Which artifacts did the run produce?
@@ -227,12 +227,13 @@ loom --version
 loom validate CONFIG
 loom plan CONFIG
 loom run CONFIG
+loom stage run --run-uri RUN_URI --stage STAGE [--attempt N]
 basic top-level exception formatting
 non-zero exit codes for failures
 config overlays and CLI overrides
 resume selector flags shared by plan and run
 local executor execution
-machine-readable JSON output for validate, plan, run, and structured errors
+machine-readable JSON output for validate, plan, run, stage run, and structured errors
 loom plan CONFIG --resume --explain STAGE
 ```
 
@@ -250,8 +251,8 @@ rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
 subprocess, SLURM, Docker, or Apptainer execution
 remote run URI schemes
-status, logs, artifacts, stage-worker, sweep, catalog, bundle, plugin, cleanup,
-or reliability commands
+status, logs, artifacts, sweep, catalog, bundle, plugin, cleanup, or reliability
+commands
 --run-dir, --run-id, or --strict options
 ```
 
@@ -264,7 +265,6 @@ loom status RUN_URI
 loom logs RUN_URI STAGE
 loom artifacts list RUN_URI
 loom artifacts show RUN_URI ARTIFACT_ID
-loom stage run ...
 loom sweep plan ...
 loom sweep run ...
 loom slurm status RUN_URI
@@ -273,9 +273,8 @@ loom cancel RUN_URI
 shell completion
 ```
 
-These command families require later diagnostics, worker, executor, catalog,
-or remote-store APIs. V2 should fail clearly rather than partially implement
-them.
+These command families require later diagnostics, executor, catalog, or
+remote-store APIs. V2 should fail clearly rather than partially implement them.
 
 ---
 
@@ -988,10 +987,9 @@ Recommended:
 ```text
 --run-uri RUN_URI, required
 --stage STAGE, required
---attempt ATTEMPT
---executor-name NAME, optional metadata
---result-file PATH, optional
---log-level LEVEL
+--attempt ATTEMPT, optional exact prepared attempt
+--format {text,json}
+--traceback
 ```
 
 ### 14.3 Behavior
@@ -1032,6 +1030,16 @@ plan/stage request files
 ```
 
 It should not require pickled Python objects passed over the command line.
+
+Exit codes:
+
+```text
+0  successful worker result handoff
+1  failed stage result handoff
+2  usage error
+3  missing, invalid, or ambiguous prepared worker state
+130 interrupted
+```
 
 ### 14.5 Example
 
