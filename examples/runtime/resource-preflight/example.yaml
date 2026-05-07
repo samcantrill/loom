@@ -1,0 +1,16 @@
+id: runtime.resource-preflight
+title: Resource Preflight
+summary: Show local executor resource warnings and strict preflight escalation.
+capability: runtime
+level: intermediate
+introduced_in: v4
+status: runnable
+validation: full
+entrypoints:
+  - path: run_resource_preflight.py
+    kind: python
+    description: Run resource preflight with and without strict warning escalation.
+tags:
+  - resources
+  - preflight
+  - strict

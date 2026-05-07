@@ -1,0 +1,16 @@
+id: diagnostics.local-workflow
+title: Local Diagnostics Workflow
+summary: Run preflight, execute a local pipeline, and inspect status plus artifact metadata.
+capability: diagnostics
+level: intermediate
+introduced_in: v3
+status: runnable
+validation: smoke
+entrypoints:
+  - path: run_diagnostics.py
+    kind: python
+    description: Run the successful diagnostics workflow through CLI entrypoints.
+tags:
+  - preflight
+  - status
+  - artifacts

@@ -13,7 +13,9 @@ README with the runnable examples and what each one demonstrates.
 | Group | Demonstrates |
 | --- | --- |
 | [Config](config/README.md) | Trusted YAML composition, overlays, includes, recipes, artifact-safe records, structured errors, and explicit `_target_` instantiation. |
+| [Diagnostics](diagnostics/README.md) | Local preflight, run status, bounded logs, and metadata-only artifact inspection. |
 | [Pipelines](pipelines/README.md) | Local pipeline execution, artifact storage, provenance snapshots, and same-run resume behavior. |
+| [Runtime](runtime/README.md) | Runtime options, runtime profiles, resource requests, capability diagnostics, and safe `runtime.json` metadata. |
 
 Run smoke examples from the repository root with the commands listed in each
 group README.
@@ -30,5 +32,5 @@ directories.
 - `manual`: illustrative examples that cannot run in the default environment and
   must document why in their manifest.
 
-The v0 runtime is local-only. It does not provide a functional CLI, remote
+The current examples stay local and synthetic. They do not require remote
 stores, distributed execution, scheduler integration, or cross-run cache reuse.

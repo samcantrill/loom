@@ -233,7 +233,7 @@ def _required_string_list(
 
 
 @pytest.mark.parametrize(("example_id", "script"), _example_entrypoints("smoke"))
-def test_v0_smoke_example_scripts_execute(
+def test_smoke_example_scripts_execute(
     example_id: str,
     script: Path,
     tmp_path: Path,

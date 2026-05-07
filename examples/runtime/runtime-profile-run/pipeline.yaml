@@ -1,0 +1,42 @@
+name: runtime-profile-run
+schema_version: 1
+runtime:
+  profile: local-debug
+  tags:
+    configured: "true"
+  notes:
+    - configured runtime note
+  stage_options:
+    summarize:
+      resources:
+        entries:
+          memory:
+            kind: memory
+            amount: 512
+            unit: MiB
+runtime_profiles:
+  local-debug:
+    executor: local
+    execution:
+      settings:
+        max_parallel_stages: 1
+pipeline:
+  name: runtime-profile-run
+  stages:
+    - name: seed
+      factory:
+        _target_: stages:SeedNumbersStage
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: summarize
+      factory:
+        _target_: stages:SummarizeNumbersStage
+      inputs:
+        numbers: seed.numbers
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1

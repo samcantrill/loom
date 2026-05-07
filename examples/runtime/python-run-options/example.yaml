@@ -1,0 +1,16 @@
+id: runtime.python-run-options
+title: Python Run Options
+summary: Construct, merge, validate, and inspect runtime options through the public Python API.
+capability: runtime
+level: intermediate
+introduced_in: v4
+status: runnable
+validation: smoke
+entrypoints:
+  - path: run_options_api.py
+    kind: python
+    description: Demonstrate public RunOptions and capability diagnostics APIs.
+tags:
+  - python-api
+  - run-options
+  - capabilities

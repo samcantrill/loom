@@ -1,0 +1,16 @@
+id: diagnostics.captured-logs
+title: Captured Logs Diagnostics
+summary: Capture local stage stdout/stderr and inspect bounded logs through the CLI.
+capability: diagnostics
+level: intermediate
+introduced_in: v3
+status: runnable
+validation: full
+entrypoints:
+  - path: run_captured_logs.py
+    kind: python
+    description: Run with captured local logs and print CLI log summaries.
+tags:
+  - logs
+  - local-executor
+  - diagnostics

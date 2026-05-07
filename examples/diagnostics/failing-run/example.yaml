@@ -1,0 +1,16 @@
+id: diagnostics.failing-run
+title: Failing Run Diagnostics
+summary: Run a pipeline that fails and inspect the persisted failure diagnostics.
+capability: diagnostics
+level: intermediate
+introduced_in: v3
+status: runnable
+validation: full
+entrypoints:
+  - path: run_failure_diagnostics.py
+    kind: python
+    description: Execute an expected-failure run and print diagnostic summaries.
+tags:
+  - failure
+  - status
+  - artifacts

@@ -1,0 +1,29 @@
+name: runtime-resource-preflight
+schema_version: 1
+runtime:
+  executor: local
+  stage_options:
+    train:
+      resources:
+        entries:
+          cpu:
+            kind: cpu
+            amount: 2
+            unit: count
+          memory:
+            kind: memory
+            amount: 2
+            unit: GiB
+          gpu:
+            kind: gpu
+            amount: 0
+pipeline:
+  name: runtime-resource-preflight
+  stages:
+    - name: train
+      factory:
+        _target_: stages:NoopStage
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1

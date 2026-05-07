@@ -1,0 +1,12 @@
+name: diagnostics-captured-logs
+schema_version: 1
+pipeline:
+  name: diagnostics-captured-logs
+  stages:
+    - name: noisy
+      factory:
+        _target_: stages:NoisyStage
+      outputs:
+        data:
+          artifact_type: json
+          codec_key: json.v1
