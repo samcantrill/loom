@@ -32,7 +32,8 @@ are confirmed.
 
 Expected flow:
 
-1. Roadmap framing.
+1. Roadmap framing, starting with a comprehensive version briefing and user
+   clarification window.
 2. Intent discovery.
 3. Feature brainstorming.
 4. Functionality and behavior confirmation.
@@ -42,8 +43,21 @@ Expected flow:
 8. Final planning confirmation.
 9. Implementation-plan draft from the confirmed planning notes.
 
+At workflow startup, read the roadmap, linked feature docs, adjacent plans, and
+current architecture notes before asking the user to confirm functionality or
+behavior. First provide a comprehensive version briefing that explains what the
+version is, why it exists, what current or future work it impacts or links to,
+which public surfaces or durable artifacts it is likely to affect, why the
+planning structure appears appropriate, and which assumptions or risks are
+already visible. Then explicitly invite the user to ask clarifying questions and
+answer them before moving on to functionality and behavior confirmation.
+
 Ask small batches of high-impact questions and update the planning notes after
-each confirmed stage. After functionality and behavior are confirmed, record a
+each confirmed stage. When asking about functionality, behavior, design
+principles, or design decisions, include enough context for the user to make a
+real choice: what the question is deciding, why it matters, expected impact,
+relevant considerations or tradeoffs, and a recommended default when the repo
+evidence supports one. After functionality and behavior are confirmed, record a
 complete checkpoint in the planning notes and compact or reset context before
 starting the design decision review. The resumed design pass should reload the
 planning notes, draft the full design-decision review queue implied by the

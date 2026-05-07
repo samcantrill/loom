@@ -42,6 +42,36 @@ Compatibility obligations:
 
 - TBD
 
+## Version Briefing
+
+What this version is:
+
+- TBD
+
+Why this version exists:
+
+- TBD
+
+Impacted or linked work:
+
+- TBD
+
+Likely public surfaces and durable artifacts:
+
+- TBD
+
+Structure rationale:
+
+- TBD
+
+Visible assumptions, risks, and constraints:
+
+- TBD
+
+User clarification questions and resolved answers:
+
+- TBD
+
 ## User Intent
 
 Target audience:

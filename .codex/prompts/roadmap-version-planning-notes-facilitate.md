@@ -12,7 +12,7 @@ Input:
 
 - Roadmap version: `<VERSION>`, for example `v3`.
 
-Read before asking design questions:
+Read before presenting the startup briefing or asking design questions:
 
 - `AGENTS.md`
 - `docs/implementation-plans/implementation-roadmap.md`
@@ -32,27 +32,35 @@ Task:
 2. Create or update
    `docs/implementation-plans/roadmap-<VERSION>-planning-notes.md` from
    `.codex/templates/roadmap-version-planning-notes.md`.
-3. Facilitate the user discussion in the stages below.
-4. After each stage, update the planning notes with the confirmed decisions,
+3. Start the discussion by presenting a comprehensive version briefing before
+   asking the user to confirm functionality, behavior, or design principles.
+   The briefing must cover what the version is, why it exists, what it impacts
+   or links to, why the version appears structured the way it is, likely public
+   surfaces or durable artifacts, visible constraints, and open assumptions.
+4. Explicitly invite user clarifying questions about that briefing, answer them
+   from repo evidence where possible, and record the resolved clarifications in
+   the planning notes before advancing.
+5. Facilitate the user discussion in the stages below.
+6. After each stage, update the planning notes with the confirmed decisions,
    rejected alternatives, assumptions, risks, and open questions.
-5. Stop at each stage gate until the user has confirmed the stage or provided
+7. Stop at each stage gate until the user has confirmed the stage or provided
    enough detail to resolve the open questions.
-6. After functionality and behavior are confirmed, update the planning notes
+8. After functionality and behavior are confirmed, update the planning notes
    with a complete checkpoint, then compact context before starting the design
    decision review. If the client cannot compact context directly, reset or
    pause with a concise resume instruction that points to the planning notes
    path and this prompt.
-7. After compaction or reset, reload the planning notes, this prompt, and the
+9. After compaction or reset, reload the planning notes, this prompt, and the
    relevant source files before asking design-decision questions. Treat the
    confirmed functionality and behavior as the stable baseline for the design
    pass unless the user explicitly reopens it.
-8. At the start of the design decision review, draft the complete
+10. At the start of the design decision review, draft the complete
    design-decision review queue implied by the confirmed functionality and
    behavior, record it in the planning notes, and get user feedback on each
    decision before marking it confirmed.
-9. When all stages are confirmed, mark the planning notes ready for
+11. When all stages are confirmed, mark the planning notes ready for
    implementation-plan drafting and summarize the handoff inputs.
-10. Ask for explicit confirmation before drafting the implementation plan. If
+12. Ask for explicit confirmation before drafting the implementation plan. If
    the user confirms, create or update
    `docs/implementation-plans/implementation-plan-<VERSION>.md` by following
    `.codex/prompts/implementation-plan-draft.md` and using the completed
@@ -62,11 +70,22 @@ Task:
 Discussion stages:
 
 1. Roadmap framing
-   - Summarize the roadmap version in plain language.
+   - Present the startup version briefing in plain language before asking
+     planning questions. Cover what the version is, why it exists, the current
+     repository or roadmap gap it is meant to close, prerequisite and successor
+     links, primary feature-doc links, likely impacts on public APIs, CLI
+     surface, persisted records, file layout, ownership boundaries, tests, and
+     docs, and why the proposed discussion structure fits the version's scope.
+   - State the visible assumptions, risks, constraints, and structure choices
+     that should be validated with the user.
+   - Ask whether the user has clarifying questions about the version briefing.
+     Answer those questions before moving on, and record any resolved
+     clarifications in the planning notes.
    - Ask what the user wants this version to optimize for relative to the
      roadmap description.
    - Gate: user-visible outcome, target audience, and planning priority are
-     confirmed.
+     confirmed, and the user has had a chance to ask clarifying questions about
+     the version briefing.
 2. Intent discovery
    - Discuss workflows, success criteria, non-goals, constraints, and known
      operational realities.
@@ -79,6 +98,10 @@ Discussion stages:
    - Convert the brainstormed capability set into concrete included
      functionality, user-visible behavior, default behavior, failure behavior,
      and explicit deferrals.
+   - Before asking each question batch, explain what capability or behavior is
+     being decided, why it matters, expected impact on users or implementation
+     boundaries, important considerations or tradeoffs, and the recommended
+     default when one is supported by repo evidence.
    - Confirm what each included capability does, what it must not do, which
      behaviors are observable through public APIs, CLI output, persisted
      records, or docs, and which behaviors are deliberately left to later
@@ -110,8 +133,10 @@ Discussion stages:
    - Present the drafted decision queue to the user and ask whether any
      decision is missing, mis-scoped, or should be split before detailed review.
    - Discuss each queued decision with the user in small batches. For each
-     decision, state the implementation-relevant alternatives, the recommended
-     default, the tradeoffs, and the feedback needed from the user.
+     decision, state what the design decision or principle means, why it
+     matters, the expected impact, implementation-relevant alternatives, the
+     recommended default, the tradeoffs and considerations, and the feedback
+     needed from the user.
    - Do not mark a design decision confirmed until user feedback has accepted
      the selected approach or provided enough direction to choose one.
    - For each confirmed decision, record the selected approach, user feedback,
@@ -143,6 +168,9 @@ Question rules:
 - Before asking a question, first answer discoverable facts from the repo.
 - Ask questions in small batches of one to three high-impact choices.
 - Prefer concrete alternatives with a recommended default.
+- For functionality, behavior, and design-principle questions, lead with a short
+  decision brief: what is being decided, why it matters, expected impact,
+  considerations and tradeoffs, and the current recommended default.
 - Use available structured user-input tools when practical; otherwise ask
   concise direct questions.
 - Do not ask questions whose answer is already clear from the roadmap, feature
