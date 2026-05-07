@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.errors import StageContractError
 from loom.pipeline.planning import (
     FingerprintContext,
     PlanAction,
@@ -186,7 +185,7 @@ def _resolved_runtime_metadata(
     if isinstance(value, ResolvedStageRuntimeOptions):
         return value.to_safe_metadata()
     if not isinstance(value, Mapping):
-        raise StageContractError("resolved_runtime must be resolved runtime metadata")
+        raise PlanExecutionError("resolved_runtime must be resolved runtime metadata")
     return dict(value)
 
 
