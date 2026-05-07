@@ -5,6 +5,7 @@
 - Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 1: Runtime Package Boundary`
+- PR URL: https://github.com/samcantrill/loom/pull/70
 - Branch: `codex/runtime-package-boundary`
 - Worktree: `/home/samcantrill/work/loom-worktrees/runtime-package-boundary`
 - Phase execution plan path: `docs/phases/runtime-package-boundary.md`
@@ -13,7 +14,7 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
-- Merge eligibility: root phase, merge-eligible after PR targets `develop`, automated review passes, and validation/CI pass.
+- Merge eligibility: root phase, PR verified targeting `develop`; merge-eligible after automated review passes and validation/CI pass.
 - Workflow path: expanded path because this is an import/source-tree boundary phase.
 - Successor dependency notes: Phase 2 and later v4 runtime-options phases may build on this branch after its PR is open or prepared, validated, and recorded as `pr_open`; no predecessor branch is required for this root phase.
 - Plan quality gate: passed on 2026-05-07 after initial `loom_plan_reviewer` review, one refinement pass, and confirmation review.
@@ -304,8 +305,16 @@ make test-summary
   (396 passed, 567 deselected), and `uv build`. `make test-summary` wrote
   `build/test-summary.md` at 2026-05-07T05:44:37+00:00 with overall status
   passed: 963 passed, 0 failed, 0 errors, 10 skipped, and 579 deselected.
-  PR creation and opened-PR verification are the remaining steps in this pass.
+  Opened PR https://github.com/samcantrill/loom/pull/70 with explicit base
+  `develop`, head `codex/runtime-package-boundary`, title
+  `Runtime Options - Phase 1: Runtime Package Boundary`, and body file
+  `docs/phases/runtime-package-boundary-pr-body.md`. Verified the opened PR
+  with `gh pr view 70 --json baseRefName,headRefName,state,url`: base
+  `develop`, head `codex/runtime-package-boundary`, state `OPEN`, URL
+  https://github.com/samcantrill/loom/pull/70.
 - PR review budget: unused. Blocker resolution: 0/3 used.
-- Stack maintenance: pending; no predecessor branch exists and no PR has been
-  opened in this draft pass.
+- Stack maintenance: root PR targets `develop`; stack predecessor none. No
+  retarget or rebase action is needed before review. Merge eligibility remains
+  gated on automated review and validation/CI passing; do not merge in this
+  PR-preparation pass.
 - Remaining blockers: none known.
