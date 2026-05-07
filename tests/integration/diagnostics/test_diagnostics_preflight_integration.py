@@ -33,10 +33,16 @@ def test_full_local_preflight_passes_and_writes_no_run_documents(tmp_path: Path)
         "config.load",
         "pipeline.graph",
         "selectors.validate",
+        "runtime.options",
+        "runtime.profile",
+        "runtime.stage_options",
         "run_uri.resolve",
         "artifact_store.available",
         "codec_registry.available",
         "executor.local",
+        "executor.resolve",
+        "executor.capabilities",
+        "resources.capabilities",
         "filesystem.input_exists",
     ]
     assert all(check.status is PreflightCheckStatus.PASS for check in result.checks)

@@ -13,6 +13,7 @@ from loom.cli.options import (
     ConfigCliOptions,
     OutputFormat,
     PreflightCliOptions,
+    SelectorCliOptions,
     output_format_from_namespace,
 )
 
@@ -44,6 +45,57 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="config override expression",
     )
     parser.add_argument("--run-uri", metavar="URI", help="run URI for run-path checks")
+    parser.add_argument(
+        "--profile",
+        dest="runtime_profile",
+        metavar="NAME",
+        help="runtime profile to select",
+    )
+    parser.add_argument(
+        "--executor",
+        dest="runtime_executor",
+        default=None,
+        metavar="NAME",
+        help="executor name",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="mark runtime options as dry-run")
+    parser.add_argument("--resume", action="store_true", help="mark runtime options as resume")
+    parser.add_argument("--from-stage", metavar="STAGE", help="start at a stage")
+    parser.add_argument(
+        "--only-stage",
+        action="append",
+        default=None,
+        metavar="STAGE",
+        help="include only a selected stage",
+    )
+    parser.add_argument(
+        "--force-stage",
+        action="append",
+        default=None,
+        metavar="STAGE",
+        help="force a selected stage",
+    )
+    parser.add_argument(
+        "--skip-stage",
+        action="append",
+        default=None,
+        metavar="STAGE",
+        help="skip a selected stage",
+    )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="runtime tag; may be repeated",
+    )
+    parser.add_argument(
+        "--note",
+        action="append",
+        default=None,
+        metavar="TEXT",
+        help="runtime note; may be repeated",
+    )
     parser.add_argument(
         "--check",
         dest="check_group",
@@ -78,11 +130,13 @@ def handle(namespace: argparse.Namespace) -> int:
 
     config_options = ConfigCliOptions.from_namespace(namespace)
     preflight_options = PreflightCliOptions.from_namespace(namespace)
+    selector_options = SelectorCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
 
     result = build_preflight_result(
         config_options=config_options,
         preflight_options=preflight_options,
+        selector_options=selector_options,
     )
     exit_code = exit_code_for_preflight(result, strict=preflight_options.strict)
     ok = exit_code is ExitCode.SUCCESS
@@ -105,6 +159,7 @@ def build_preflight_result(
     *,
     config_options: ConfigCliOptions,
     preflight_options: PreflightCliOptions,
+    selector_options: SelectorCliOptions | None = None,
 ) -> "PreflightResult":
     """Run preflight diagnostics and return the diagnostics result."""
 
@@ -114,6 +169,7 @@ def build_preflight_result(
         request = _build_preflight_request(
             config_options=config_options,
             preflight_options=preflight_options,
+            selector_options=selector_options,
         )
         return _run_diagnostics_preflight(request)
     except PreflightError as exc:
@@ -135,10 +191,12 @@ def _build_preflight_request(
     *,
     config_options: ConfigCliOptions,
     preflight_options: PreflightCliOptions,
+    selector_options: SelectorCliOptions | None,
 ) -> "PreflightRequest":
     from loom.diagnostics import PreflightRequest
 
     groups = preflight_options.check_groups if preflight_options.check_groups else None
+    runtime_source = preflight_options.to_runtime_source(selectors=selector_options)
     return PreflightRequest(
         config_path=config_options.config_path,
         groups=groups,
@@ -146,6 +204,8 @@ def _build_preflight_request(
         cwd=Path.cwd(),
         overlays=config_options.overlays,
         overrides=config_options.overrides,
+        selectors=None if selector_options is None else selector_options.to_runtime_source(),
+        runtime_options=runtime_source or None,
     )
 
 

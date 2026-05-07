@@ -638,10 +638,12 @@ imports. Its current implementation exposes the local `RuntimeRequest`
 foundation plus public `RunOptions`, `ExecutionOptions`,
 `StageRuntimeOptions`, run/stage environment request models, runtime profiles,
 deterministic base/profile/explicit merge helpers, and executor
-descriptor/capability validation contracts without importing CLI, diagnostics,
-execution runners, concrete executors, plugins, optional backends, or project
-packages. Runtime option adapters import planning-owned selector/resume models
-lazily so the facade stays import-light. Future validation, registry,
+descriptor/capability validation contracts. It also owns config-section
+extraction for top-level `runtime` and `runtime_profiles` mappings. These
+imports remain stable without importing CLI, diagnostics, execution runners,
+concrete executors, plugins, optional backends, or project packages. Runtime
+option adapters import planning-owned selector/resume models lazily so the
+facade stays import-light. Future validation, registry,
 descriptor, and serialization modules should live under this package only when
 a phase adds real behavior and tests for that surface.
 

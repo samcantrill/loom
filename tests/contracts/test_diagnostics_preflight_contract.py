@@ -26,20 +26,32 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
         "config",
         "pipeline",
         "selectors",
+        "runtime",
         "run",
         "artifacts",
         "codecs",
         "executor",
+        "resources",
         "filesystem",
     ]
     assert STABLE_CHECK_IDS == {
         PreflightGroup.CONFIG: ("config.load",),
         PreflightGroup.PIPELINE: ("pipeline.graph",),
         PreflightGroup.SELECTORS: ("selectors.validate",),
+        PreflightGroup.RUNTIME: (
+            "runtime.options",
+            "runtime.profile",
+            "runtime.stage_options",
+        ),
         PreflightGroup.RUN: ("run_uri.resolve",),
         PreflightGroup.ARTIFACTS: ("artifact_store.available",),
         PreflightGroup.CODECS: ("codec_registry.available",),
-        PreflightGroup.EXECUTOR: ("executor.local",),
+        PreflightGroup.EXECUTOR: (
+            "executor.local",
+            "executor.resolve",
+            "executor.capabilities",
+        ),
+        PreflightGroup.RESOURCES: ("resources.capabilities",),
         PreflightGroup.FILESYSTEM: ("filesystem.input_exists",),
     }
 

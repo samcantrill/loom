@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("yaml")
+pytest.importorskip("omegaconf")
+pytest.importorskip("pydantic")
+
 from loom.cli.main import main
 from loom.pipeline.stores import path_to_run_uri
 
@@ -103,6 +107,70 @@ def test_preflight_explicit_run_uri_enables_path_checks(tmp_path: Path) -> None:
     assert payload["result"]["checks"][0]["details"]["run_uri"] == run_uri
     assert not (tmp_path / "runs" / "preflighted").exists()
     assert stderr.getvalue() == ""
+
+
+def test_preflight_resource_warnings_and_strict_exit(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    _write_pipeline_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "runtime:\n"
+            "  stage_options:\n"
+            "    build:\n"
+            "      resources:\n"
+            "        entries:\n"
+            "          cpu:\n"
+            "            kind: cpu\n"
+            "            amount: 2\n"
+        )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "preflight",
+                str(config_path),
+                "--check",
+                "resources",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["status"] == "WARN"
+    check = payload["result"]["checks"][0]
+    assert check["check_id"] == "resources.capabilities"
+    assert check["details"]["diagnostics"][0]["code"] == "resource.ignored"
+    assert stderr.getvalue() == ""
+
+    strict_stdout = io.StringIO()
+    strict_stderr = io.StringIO()
+    assert (
+        main(
+            [
+                "preflight",
+                str(config_path),
+                "--check",
+                "resources",
+                "--strict",
+                "--format",
+                "json",
+            ],
+            stdout=strict_stdout,
+            stderr=strict_stderr,
+        )
+        == 4
+    )
+    strict_payload = json.loads(strict_stdout.getvalue())
+    assert strict_payload["ok"] is False
+    assert strict_payload["result"]["status"] == "WARN"
+    assert strict_stderr.getvalue() == ""
 
 
 def test_preflight_missing_config_returns_failed_result(tmp_path: Path) -> None:

@@ -68,6 +68,16 @@ def test_preflight_json_passes_cli_options_to_diagnostics(monkeypatch: pytest.Mo
                 "a=1",
                 "--run-uri",
                 "file:///abs/runs/demo",
+                "--profile",
+                "cluster",
+                "--executor",
+                "local",
+                "--only-stage",
+                "build",
+                "--tag",
+                "team=platform",
+                "--note",
+                "review",
                 "--check",
                 "config",
                 "--format",
@@ -85,6 +95,14 @@ def test_preflight_json_passes_cli_options_to_diagnostics(monkeypatch: pytest.Mo
     assert request.overrides == ("a=1",)
     assert request.run_uri == "file:///abs/runs/demo"
     assert request.groups == ("config",)
+    assert request.runtime_options == {
+        "run_uri": "file:///abs/runs/demo",
+        "executor": "local",
+        "profile": "cluster",
+        "tags": {"team": "platform"},
+        "notes": ["review"],
+        "selectors": {"only_stages": ["build"]},
+    }
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == preflight_command.PREFLIGHT_RESULT_SCHEMA_VERSION
     assert payload["ok"] is True

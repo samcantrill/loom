@@ -43,22 +43,29 @@ guaranteeing cluster scheduling success
 
 ## Command Shape
 
-Potential CLI command:
+Current CLI command:
 
 ```bash
-loom preflight experiment.yaml --run-dir runs/example
+loom preflight experiment.yaml --run-uri file:///runs/example --check runtime
 ```
 
 Useful options:
 
 ```text
+--run-uri URI
 --profile PROFILE
 --executor EXECUTOR
---stage STAGE
+--dry-run
+--resume
+--from-stage STAGE
+--only-stage STAGE
+--force-stage STAGE
+--skip-stage STAGE
+--tag KEY=VALUE
+--note TEXT
+--check GROUP
 --strict
---json
---no-environment
---no-filesystem
+--format json
 ```
 
 The CLI layer owns argument parsing. The preflight component owns the checks and
@@ -111,18 +118,19 @@ Examples:
 
 ```text
 config.load
-config.resolve
-pipeline.validate
 pipeline.graph
+selectors.validate
 runtime.options
-run_dir.writable
+runtime.profile
+runtime.stage_options
+run_uri.resolve
 artifact_store.available
-input.exists
-executor.available
-executor.slurm.commands
-plugin.registry
-codec.registry
-disk_space.warning
+codec_registry.available
+executor.local
+executor.resolve
+executor.capabilities
+resources.capabilities
+filesystem.input_exists
 ```
 
 Stable IDs make JSON output useful for external tooling and tests.
@@ -169,12 +177,13 @@ invalidation, or resume logic.
 Runtime checks should verify:
 
 ```text
-executor name is known
+runtime options normalize through RunOptions
 runtime profile can be applied
-resource requests are valid
-resume options are consistent
-dry-run options are consistent
-log capture settings are valid
+exact-stage runtime options target known stage IDs
+executor name is known
+executor capability diagnostics can be reported
+resource capability diagnostics can be reported
+resume, dry-run, selector, tag, and note options are normalized
 ```
 
 Runtime checks should avoid executor-specific assumptions unless the selected

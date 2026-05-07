@@ -40,10 +40,12 @@ class PreflightGroup(StrEnum):
     CONFIG = "config"
     PIPELINE = "pipeline"
     SELECTORS = "selectors"
+    RUNTIME = "runtime"
     RUN = "run"
     ARTIFACTS = "artifacts"
     CODECS = "codecs"
     EXECUTOR = "executor"
+    RESOURCES = "resources"
     FILESYSTEM = "filesystem"
 
 
@@ -51,10 +53,12 @@ DEFAULT_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
     PreflightGroup.CONFIG,
     PreflightGroup.PIPELINE,
     PreflightGroup.SELECTORS,
+    PreflightGroup.RUNTIME,
     PreflightGroup.RUN,
     PreflightGroup.ARTIFACTS,
     PreflightGroup.CODECS,
     PreflightGroup.EXECUTOR,
+    PreflightGroup.RESOURCES,
     PreflightGroup.FILESYSTEM,
 )
 
@@ -62,10 +66,20 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
     PreflightGroup.CONFIG: ("config.load",),
     PreflightGroup.PIPELINE: ("pipeline.graph",),
     PreflightGroup.SELECTORS: ("selectors.validate",),
+    PreflightGroup.RUNTIME: (
+        "runtime.options",
+        "runtime.profile",
+        "runtime.stage_options",
+    ),
     PreflightGroup.RUN: ("run_uri.resolve",),
     PreflightGroup.ARTIFACTS: ("artifact_store.available",),
     PreflightGroup.CODECS: ("codec_registry.available",),
-    PreflightGroup.EXECUTOR: ("executor.local",),
+    PreflightGroup.EXECUTOR: (
+        "executor.local",
+        "executor.resolve",
+        "executor.capabilities",
+    ),
+    PreflightGroup.RESOURCES: ("resources.capabilities",),
     PreflightGroup.FILESYSTEM: ("filesystem.input_exists",),
 }
 
@@ -139,6 +153,7 @@ class PreflightRequest:
     overlays: tuple[str | Path, ...] = ()
     overrides: tuple[str, ...] = ()
     selectors: object | None = None
+    runtime_options: object | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "config_path", _path_like(self.config_path, "config_path"))

@@ -11,7 +11,7 @@ import pytest
 
 from loom.cli.errors import CliError
 from loom.cli.main import main
-from loom.cli.options import ConfigCliOptions, RunCliOptions
+from loom.cli.options import ConfigCliOptions, RunCliOptions, SelectorCliOptions
 from loom.cli.results import PlanCliResult
 import loom.cli.plan as plan_command
 import loom.cli.run as run_command
@@ -161,10 +161,12 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
         *,
         config_options: object,
         run_options: object,
+        selector_options: object,
         run_uri: str | None,
     ) -> None:
         calls["preflight_config_path"] = getattr(config_options, "config_path")
         calls["preflight_resume"] = getattr(run_options, "resume")
+        calls["preflight_selectors"] = selector_options
         calls["preflight_run_uri"] = run_uri
 
     monkeypatch.setattr(run_command, "_compose_config", compose)
@@ -287,10 +289,18 @@ def test_run_preflight_helper_skips_fresh_run_group_for_resume(
     run_command._run_preflight_for_run(
         config_options=ConfigCliOptions(config_path=Path("base.yaml")),
         run_options=RunCliOptions(run_uri="file:///abs/runs/demo", resume=True),
+        selector_options=SelectorCliOptions(),
         run_uri="file:///abs/runs/demo",
     )
 
-    assert calls["request"].groups == ("config", "pipeline", "executor")
+    assert calls["request"].groups == (
+        "config",
+        "pipeline",
+        "selectors",
+        "runtime",
+        "executor",
+        "resources",
+    )
 
 
 def test_run_preflight_failure_stops_before_execution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,6 +313,7 @@ def test_run_preflight_failure_stops_before_execution(monkeypatch: pytest.Monkey
         run_command._run_preflight_for_run(
             config_options=ConfigCliOptions(config_path=Path("base.yaml")),
             run_options=RunCliOptions(run_uri="file:///abs/runs/demo"),
+            selector_options=SelectorCliOptions(),
             run_uri="file:///abs/runs/demo",
         )
 

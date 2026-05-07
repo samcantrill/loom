@@ -158,6 +158,52 @@ def test_cli_preflight_failed_config_returns_diagnostics_result(tmp_path: Path) 
     assert stderr.getvalue() == ""
 
 
+def test_cli_preflight_strict_resource_warning_exits_pipeline_failure(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    _write_pipeline_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "runtime:\n"
+            "  stage_options:\n"
+            "    build:\n"
+            "      resources:\n"
+            "        entries:\n"
+            "          memory:\n"
+            "            kind: memory\n"
+            "            amount: 1024\n"
+            "            unit: MiB\n"
+        )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "preflight",
+                str(config_path),
+                "--check",
+                "resources",
+                "--strict",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 4
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["ok"] is False
+    assert payload["result"]["status"] == "WARN"
+    assert payload["result"]["checks"][0]["details"]["diagnostics"][0]["code"] == (
+        "resource.ignored"
+    )
+    assert stderr.getvalue() == ""
+
+
 def test_cli_validate_check_targets_constructs_trusted_targets(tmp_path: Path) -> None:
     reset_instantiate_probe_state()
     config_path = tmp_path / "pipeline.yaml"

@@ -64,9 +64,24 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="config override expression",
     )
     parser.add_argument("--run-uri", metavar="URI", help="explicit run URI")
-    parser.add_argument("--executor", default="local", metavar="NAME", help="executor name")
+    parser.add_argument("--profile", metavar="NAME", help="runtime profile to select")
+    parser.add_argument("--executor", default=None, metavar="NAME", help="executor name")
     parser.add_argument("--resume", action="store_true", help="resume an existing run")
     parser.add_argument("--dry-run", action="store_true", help="plan without executing")
+    parser.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="runtime tag; may be repeated",
+    )
+    parser.add_argument(
+        "--note",
+        action="append",
+        default=None,
+        metavar="TEXT",
+        help="runtime note; may be repeated",
+    )
     parser.add_argument("--from-stage", metavar="STAGE", help="start at a stage")
     parser.add_argument(
         "--only-stage",
@@ -158,8 +173,11 @@ def build_run_result(
     _run_preflight_for_run(
         config_options=config_options,
         run_options=run_options,
+        selector_options=selector_options,
         run_uri=run_uri,
     )
+    if run_options.executor != "local":
+        raise UnsupportedExecutorError(run_options.executor)
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -189,7 +207,11 @@ def _handle_dry_run(
         plan_options=PlanCliOptions(
             run_uri=run_options.run_uri,
             resume=run_options.resume,
+            profile=run_options.profile,
+            executor=run_options.executor if run_options.executor_explicit else None,
             explain_stage=None,
+            tags=run_options.tags,
+            notes=run_options.notes,
         ),
         selector_options=selector_options,
     )
@@ -254,14 +276,18 @@ def _run_preflight_for_run(
     *,
     config_options: ConfigCliOptions,
     run_options: RunCliOptions,
+    selector_options: SelectorCliOptions,
     run_uri: str | None,
 ) -> None:
     from loom.diagnostics import PreflightError, PreflightRequest
 
     if run_options.resume:
-        groups = ("config", "pipeline", "executor")
+        groups = ("config", "pipeline", "selectors", "runtime", "executor", "resources")
     else:
-        groups = ("config", "pipeline", "run", "executor")
+        groups = ("config", "pipeline", "selectors", "runtime", "run", "executor", "resources")
+    runtime_source = run_options.to_runtime_source(selectors=selector_options)
+    if run_uri is not None:
+        runtime_source["run_uri"] = run_uri
     try:
         result = _run_diagnostics_preflight(
             PreflightRequest(
@@ -271,6 +297,8 @@ def _run_preflight_for_run(
                 cwd=Path.cwd(),
                 overlays=config_options.overlays,
                 overrides=config_options.overrides,
+                selectors=selector_options.to_runtime_source(),
+                runtime_options=runtime_source or None,
             )
         )
     except PreflightError as exc:
