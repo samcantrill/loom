@@ -149,6 +149,28 @@ def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() 
         result.raise_for_errors()
 
 
+def test_whitespace_only_executor_returns_unknown_executor_diagnostic() -> None:
+    result = validate_executor_capabilities(RunOptions(executor="   "))
+
+    assert not result.ok
+    assert result.has_errors
+    assert result.to_dict()["diagnostics"] == [
+        {
+            "path": "RunOptions.executor",
+            "severity": "error",
+            "code": "executor.unknown",
+            "message": "selected executor name must be a non-empty string after stripping",
+            "executor": None,
+            "stage_id": None,
+            "resource_kind": None,
+            "adapter_namespace": None,
+            "support_level": None,
+            "enforcement": None,
+            "details": {},
+        }
+    ]
+
+
 def test_local_resource_requests_warn_without_failing_validation() -> None:
     options = RunOptions(
         stage_options={

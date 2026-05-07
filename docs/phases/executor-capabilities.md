@@ -572,8 +572,11 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase plan refinement: used on 2026-05-07 for this expanded-path refine pass
-- Phase implementation refinement: explicitly not needed; targeted validation
-  and coverage obligations passed.
+- Phase implementation refinement: used on 2026-05-07 for the expanded-path
+  implementation/test refinement pass; fixed whitespace-only selected
+  executor names so capability validation returns an `executor.unknown`
+  diagnostic result at `RunOptions.executor` instead of raising before result
+  construction.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -610,8 +613,19 @@ make test-summary
   severity/support/enforcement semantics, strict result behavior, deterministic
   ordering, local descriptor defaults, adapter namespace policy, and the
   decision not to export descriptors from `loom.pipeline.executors`.
-- Phase implementation refinement: not needed; targeted validation and
-  `make validate-pr` passed with coverage obligations met.
+- Phase implementation refinement: used on 2026-05-07 by
+  `loom_phase_refiner`; added a bounded executor-name normalization fix and
+  regression test for whitespace-only selected executors reaching descriptor
+  capability validation.
+- Refinement validation:
+  - `uv run pytest tests/unit/loom/pipeline/test_executor_capabilities.py`
+    passed, 13 passed.
+  - `uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/package/test_pipeline_executor_api.py tests/unit/loom/pipeline/test_runtime_resources.py`
+    passed, 83 passed.
+  - `uv run pytest tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_executor_capabilities.py tests/contracts/test_runtime_options_contract.py tests/contracts/test_executor_capabilities_contract.py tests/integration/pipeline -k "runtime_options or runtime_profiles or runtime_capabilities or executor_capabilities"`
+    passed, 45 passed, 104 deselected.
+  - `make validate-pr` passed: Ruff, Pyright, default no-extra suite,
+    config extra suite, and build.
 - Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: none required so far; root phase targets `develop`.

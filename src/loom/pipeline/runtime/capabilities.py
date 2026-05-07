@@ -552,25 +552,43 @@ def validate_executor_capabilities(
 ) -> CapabilityValidationResult:
     run_options = options if isinstance(options, RunOptions) else parse_run_options(options)
     descriptor_registry = _coerce_registry(registry)
-    executor_name = _selected_executor_name(run_options.executor)
+    try:
+        executor_name = _selected_executor_name(run_options.executor)
+    except RuntimeResourceError:
+        return _unknown_executor_result(
+            executor_name=run_options.executor,
+            message="selected executor name must be a non-empty string after stripping",
+        )
     descriptor = descriptor_registry.get(executor_name)
     if descriptor is None:
-        return CapabilityValidationResult(
-            [
-                CapabilityDiagnostic(
-                    path="RunOptions.executor",
-                    severity=CapabilitySeverity.ERROR,
-                    code="executor.unknown",
-                    message=f"executor {executor_name!r} is not registered",
-                    executor=executor_name,
-                )
-            ]
+        return _unknown_executor_result(
+            executor_name=executor_name,
+            message=f"executor {executor_name!r} is not registered",
         )
 
     diagnostics: list[CapabilityDiagnostic] = []
     diagnostics.extend(_adapter_namespace_diagnostics(run_options, descriptor))
     diagnostics.extend(_resource_capability_diagnostics(run_options, descriptor))
     return CapabilityValidationResult(diagnostics)
+
+
+def _unknown_executor_result(
+    *,
+    executor_name: str | None,
+    message: str,
+) -> CapabilityValidationResult:
+    normalized_name = None if executor_name is None else executor_name.strip() or None
+    return CapabilityValidationResult(
+        [
+            CapabilityDiagnostic(
+                path="RunOptions.executor",
+                severity=CapabilitySeverity.ERROR,
+                code="executor.unknown",
+                message=message,
+                executor=normalized_name,
+            )
+        ]
+    )
 
 
 def _local_descriptor() -> ExecutorDescriptor:
