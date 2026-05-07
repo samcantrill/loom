@@ -208,4 +208,10 @@ make test-summary
     with 31 passed and 2 skipped.
   - Focused Ruff passed for touched implementation and test files.
   - Focused Pyright passed for touched diagnostics, CLI, and test files.
-- Refinement summary: TBD after final validation.
+  - `make validate-pr` passed: Ruff, Pyright with config extra, default test
+    harness, config-extra test harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 50
+    passed/1 skipped; unit 593 passed/1 skipped; contract 55 passed/2
+    skipped; integration 20 passed/7 skipped/7 deselected; e2e 18 passed;
+    config-extra 401 passed/736 deselected.
+- Refinement summary: not needed after focused checks and full validation passed.
