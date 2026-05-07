@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: implementation complete; validation passed; refinement pending
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 6: Runtime Preflight and CLI/Config Mapping`
 - Branch: `codex/runtime-preflight-cli-config`
@@ -369,8 +369,21 @@ make test-summary
 
 - Draft plan: completed on 2026-05-07.
 - Final phase execution plan: refined on 2026-05-07.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: added runtime config-section extraction and
+  `merge_config_run_options`; exported config helpers from the import-light
+  runtime and pipeline facades; extended sparse CLI runtime sources for
+  profile, executor, run URI, dry-run, selectors, resume, tags, and notes;
+  added runtime/resource preflight groups and stable check IDs; mapped runtime
+  option, profile, exact-stage, executor resolve, executor capability, and
+  resource capability diagnostics into preflight results; preserved local-only
+  run execution and avoided runner, store, plugin, adapter schema, and
+  `runtime.json` wiring.
+- Implementation validation: `make validate-pr` passed on 2026-05-07,
+  including Ruff, Pyright, default no-extra test harness, config-extra test
+  harness, and package build. Targeted pre-validation also passed for runtime
+  config/CLI/preflight unit tests, preflight contracts, package import/API
+  tests, diagnostics integration tests with config extras, and CLI e2e tests
+  with config extras.
 - Refinement summary: pending.
 - Blocker-resolution summary: pending.
 - PR preparation: pending.
