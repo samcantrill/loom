@@ -435,7 +435,9 @@ The execution `RunRequest` remains the runner envelope for config, pipeline,
 provenance, stores, lifecycle inputs, and existing compatibility fields until a
 later runtime workflow phase wires normalized `RunOptions` into execution.
 Stage resources are typed resource entries preserved for inspection; the local
-executor does not interpret them. Runtime profiles are later runtime work.
+executor does not interpret them. Runtime profiles and executor descriptor
+capability validation are runtime package APIs; execution runners do not consume
+them until later workflow wiring.
 
 Examples:
 

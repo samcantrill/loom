@@ -6,6 +6,19 @@ from loom.pipeline.runtime._models import (
     RuntimeRequest,
     parse_runtime_request,
 )
+from loom.pipeline.runtime.capabilities import (
+    DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY,
+    CapabilityDiagnostic,
+    CapabilitySeverity,
+    CapabilityValidationResult,
+    ExecutorDescriptor,
+    ExecutorDescriptorRegistry,
+    ResourceCapability,
+    ResourceEnforcementExpectation,
+    ResourceSupportLevel,
+    resolve_executor_descriptor,
+    validate_executor_capabilities,
+)
 from loom.pipeline.runtime.environment import (
     RunEnvironmentRequest,
     StageEnvironmentRequest,
@@ -28,11 +41,20 @@ from loom.pipeline.runtime.profiles import (
 )
 
 __all__ = [
+    "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
     "RUN_OPTIONS_SCHEMA_VERSION",
     "RUNTIME_SCHEMA_VERSION",
+    "CapabilityDiagnostic",
+    "CapabilitySeverity",
+    "CapabilityValidationResult",
     "ExecutionOptions",
+    "ExecutorDescriptor",
+    "ExecutorDescriptorRegistry",
     "RunEnvironmentRequest",
     "RunOptions",
+    "ResourceCapability",
+    "ResourceEnforcementExpectation",
+    "ResourceSupportLevel",
     "RuntimeProfile",
     "RuntimeProfileCollection",
     "RuntimeKind",
@@ -44,6 +66,8 @@ __all__ = [
     "parse_runtime_profile",
     "parse_runtime_profiles",
     "parse_runtime_request",
+    "resolve_executor_descriptor",
     "select_runtime_profile",
+    "validate_executor_capabilities",
     "validate_stage_runtime_options",
 ]
