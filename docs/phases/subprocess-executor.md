@@ -186,8 +186,8 @@ V5 Phase 1 created the prepared attempt and worker result persistence contract. 
 Targeted development commands:
 
 ```sh
-uv run pytest tests/package/test_pipeline_execution_api.py tests/contracts/test_executor_contract.py tests/contracts/test_executor_capabilities_contract.py tests/unit/loom/pipeline/executors/test_subprocess_executor.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/cli/test_run.py tests/integration/pipeline/test_subprocess_executor.py tests/e2e/test_cli_core.py
-uv run pyright src/loom/pipeline/executors src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/executors/test_subprocess_executor.py tests/integration/pipeline/test_subprocess_executor.py
+uv run pytest tests/package/test_pipeline_execution_api.py tests/contracts/test_executor_contract.py tests/contracts/test_executor_capabilities_contract.py tests/unit/loom/pipeline/executors/test_subprocess_executor.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/cli/test_run.py tests/integration/pipeline/test_subprocess_executor_integration.py tests/e2e/test_cli_core.py
+uv run pyright src/loom/pipeline/executors src/loom/pipeline/execution src/loom/cli tests/unit/loom/pipeline/executors/test_subprocess_executor.py tests/integration/pipeline/test_subprocess_executor_integration.py
 ```
 
 Final PR-preparation commands:
@@ -214,9 +214,30 @@ make test-summary
 
 - Draft plan: completed by manager on 2026-05-07.
 - Final phase execution plan: refined by manager on 2026-05-07 before implementation to clarify parent finalization, command launch, process/result conflict policy, and Phase 4 preflight boundaries.
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: added `SubprocessExecutor`, subprocess command
+  construction, injected process-runner support, process metadata redaction,
+  worker-result readback, missing/invalid/mismatched result failures,
+  structured/process conflict failures, and signal-vs-exit-code mapping. Wired
+  the parent runner's prepared-worker path so subprocess stages write
+  `worker_request.json`, mark the stage running, invoke one `loom stage run`
+  worker, and then reuse parent-owned finalization for outputs, failures,
+  provenance, artifact indexes, stage status, and run status. Registered the
+  import-light subprocess runtime descriptor and CLI executor selection for
+  `loom run CONFIG --executor subprocess`. Updated execution and CLI docs for
+  current subprocess behavior and Phase 4 preflight boundaries.
+- Implementation validation:
+  - Focused tests passed:
+    `uv run pytest tests/unit/loom/pipeline/executors/test_subprocess_executor.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/cli/test_run.py tests/contracts/test_executor_contract.py tests/contracts/test_executor_capabilities_contract.py tests/package/test_pipeline_executor_api.py tests/integration/pipeline/test_subprocess_executor_integration.py tests/e2e/test_cli_core.py`
+    with 36 passed and 1 skipped.
+  - Focused Ruff passed for touched implementation and test files.
+  - Focused Pyright passed for touched implementation and test files.
+  - `make validate-pr` passed: Ruff, Pyright with config extra, default test
+    harness, config-extra test harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 50
+    passed/1 skipped; unit 587 passed/1 skipped; contract 55 passed/2 skipped;
+    integration 20 passed/7 skipped/7 deselected; e2e 18 passed; config-extra
+    400 passed/730 deselected.
+- Refinement summary: not needed after focused fixes; full validation passed.
 - Blocker-resolution summary: none used
 - PR preparation: TBD
 - Stack maintenance: none required; all earlier phases are merged into `develop`
