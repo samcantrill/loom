@@ -363,7 +363,9 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07 by managing agent after
+  `make validate-pr` exposed a Pyright tuple-narrowing issue and a pytest
+  module-name collision; both were fixed and final validation passed.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -375,9 +377,24 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   artifact ID selection, duplicate handling, provenance payload shape,
   zero-artifact behavior, and no-payload/no-verification boundaries were made
   implementation-ready.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
+- Implementation summary: completed Phase 4 artifact inspection. Added
+  metadata-only artifact diagnostics models and facades over the public
+  run-store artifact index and stage provenance readers, added `loom artifacts
+  list` and `loom artifacts show`, added compact text output and schema-versioned
+  JSON envelopes, and preserved no-payload/no-checksum/no-private-layout
+  boundaries.
+- Implementation validation: targeted package, unit, contract, integration,
+  e2e, and Ruff checks passed. Final `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed with Ruff clean, Pyright 0 errors, default isolated suite
+  550 passed/13 skipped/12 deselected, config-extra 396 passed/565 deselected,
+  and build artifacts produced. Final `UV_CACHE_DIR=/tmp/uv-cache make
+  test-summary` passed with package 48 passed/1 skipped, unit 452 passed/1
+  skipped, contract 41 passed/2 skipped, integration 9 passed/6 skipped/12
+  deselected, e2e 15 passed, and config-extra 396 passed/565 deselected.
+- Refinement summary: implementation refinement completed on 2026-05-07.
+  Validation found Pyright needed explicit artifact-match narrowing and pytest
+  needed the CLI artifact test basename to avoid colliding with existing
+  artifact tests; both fixes were committed and final validation passed.
 - Blocker-resolution summary:
 - PR preparation:
 - Stack maintenance:
