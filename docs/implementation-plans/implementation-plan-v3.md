@@ -414,9 +414,9 @@ Completion summary:
 
 ### Phase 2 - Preflight CLI And Run Reuse
 
-Status: pending
+Status: merged
 Branch: `codex/add-preflight-cli`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/67 (merged)
 
 Goal:
 
@@ -509,12 +509,27 @@ Notes:
 
 - PR feature focus: `Local Diagnostics`
 - Intended PR title: `Local Diagnostics - Phase 2: Preflight CLI and Run Reuse`
-- Phase implementation refinement budget: unused
-- Phase PR review budget: unused
+- Phase implementation refinement budget: used on 2026-05-07 by managing agent;
+  no code changes were needed in the expanded-path refinement review.
+- Phase PR review budget: used on 2026-05-07 by managing agent; no blocking
+  findings.
 
 Completion summary:
 
-- Pending.
+- Merged by https://github.com/samcantrill/loom/pull/67 on 2026-05-07 with
+  merge commit `d34f47eded60b286bcd3035254dc9278103499c2`.
+- Added `loom preflight CONFIG` with text and JSON output, `--strict`,
+  optional `--run-uri`, repeatable `--check GROUP`, selected-group validation,
+  and stable diagnostics result envelopes.
+- Updated `loom run` to reuse the Phase 1 diagnostics runner for a minimal
+  local preflight subset before execution. Fresh default runs now allocate one
+  implicit local run URI before preflight and pass the same URI into execution;
+  resume keeps the existing `store.open_run()` validation path.
+- Added package, unit, contract, integration, and e2e coverage for preflight CLI
+  behavior, JSON envelope shape, import-light command registration, run-command
+  preflight reuse, default URI alignment, and no-store-write failure behavior.
+- Final validation passed: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`,
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`, and GitHub CI for PR #67.
 
 ### Phase 3 - Status And Logs Inspection
 
