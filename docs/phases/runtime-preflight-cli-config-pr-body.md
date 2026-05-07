@@ -67,7 +67,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Final run after blocker resolution passed Ruff, Pyright, default no-extra tests, config-extra tests, and build on 2026-05-07. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md` on 2026-05-07 with overall status `passed`. |
-| GitHub checks | Pending | Expected after PR creation; not used as local validation evidence yet. |
+| GitHub checks | Passed | Required `checks` workflow passed for the reviewed PR head on 2026-05-07. |
 
 ### Test Suite Summary
 

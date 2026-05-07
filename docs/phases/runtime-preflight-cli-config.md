@@ -404,7 +404,8 @@ make test-summary
   https://github.com/samcantrill/loom/pull/75 with verified base `develop`,
   head `codex/runtime-preflight-cli-config`, and state `OPEN`; GitHub CI
   started and was initially pending. PR body refinement was completed after
-  blocker resolution and refreshed with the latest validation evidence.
+  blocker resolution and refreshed with the latest validation evidence. GitHub
+  required `checks` workflow passed for the reviewed PR head on 2026-05-07.
 - PR review: local managing-agent review found one blocking run/artifact
   preflight issue, fixed it under the blocker-resolution budget, then
   re-reviewed the final diff for public API shape, sparse CLI merge behavior,
