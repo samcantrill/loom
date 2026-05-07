@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 5: Executor Descriptors and Capability Validation`
 - Branch: `codex/executor-capabilities`
@@ -14,13 +14,15 @@
 - Base branch: `develop`
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`, automated review passes, and validation/CI pass
-- Workflow path: expanded path, draft pass only
+- Workflow path: expanded path, draft and refine passes complete
 - Successor dependency notes: Phase 6 should consume these descriptor and validation contracts for preflight/CLI/config diagnostics; Phase 7 should not reinterpret raw capability data.
 - Plan quality gate: passed on 2026-05-07
 - Plan quality gate loop budget: initial review used, gate refinement used, confirmation review used
 - Draft pass: completed by `loom_phase_planner` on 2026-05-07
-- Refine pass: pending because the manager selected the expanded path; not consumed in this draft pass
-- Setup limitations: branch/worktree created from local `develop`; no remote fetch or broad validation was run for this draft-only planning pass
+- Refine pass: completed by `loom_phase_planner` on 2026-05-07; used to pin
+  public descriptor names, diagnostic strictness, local defaults, and
+  runtime/executor import boundaries
+- Setup limitations: branch/worktree created from local `develop`; no remote fetch or broad validation was run for this planning-only pass
 - Blockers: none known
 
 ## Objective
@@ -96,7 +98,8 @@ SLURM/Docker/Apptainer schemas.
   must not be imported by runtime descriptor modules.
 - `src/loom/pipeline/executors/__init__.py` currently exports
   `Executor`, `ExecutorError`, `LocalExecutor`, and `LocalExecutorError`;
-  descriptor exports should not force optional backend or plugin imports.
+  descriptor APIs should not be added to this facade in Phase 5 because the
+  facade imports the concrete `LocalExecutor`.
 - Package import-boundary tests already assert `loom.pipeline.runtime` does not
   import CLI, config, diagnostics, execution, concrete executors, plugins, or
   optional backend packages.
@@ -112,15 +115,17 @@ SLURM/Docker/Apptainer schemas.
 - Add descriptor, resource-capability, adapter-namespace, diagnostic-policy,
   registry, and validation models under the import-light runtime boundary,
   with public facade exports consistent with existing runtime model exports.
-- Define executor descriptor identity around normalized executor names, with a
-  deterministic immutable registry and duplicate-name rejection.
+- Define executor descriptor identity around normalized executor names:
+  non-empty stripped strings are accepted, lookup is exact after stripping, and
+  duplicate normalized names are rejected.
 - Add a built-in default registry containing a metadata-only `local`
   descriptor without importing or constructing `LocalExecutor`.
 - Treat `RunOptions.executor` as the selected executor when present and the
   local default when absent for capability validation, matching current local
   runner/CLI defaults without wiring this into runner behavior.
 - Validate selected executor names through the descriptor registry: unknown
-  names produce an error diagnostic and strict validation fails clearly.
+  names produce an error diagnostic, `CapabilityValidationResult.ok` is false,
+  and `raise_for_errors()` fails clearly.
 - Validate only already parsed and schema-valid `ResourceRequest` entries
   against descriptor capability metadata; unregistered resource kinds remain
   `ResourceRequest` schema errors from Phase 2.
@@ -155,6 +160,10 @@ SLURM/Docker/Apptainer schemas.
 - Persisted `runtime.json`, run-store APIs, raw adapter payload persistence, or
   environment key/value persistence.
 - Semantic fingerprint changes.
+- Preflight IDs or groups, including `runtime.options`, `runtime.profile`,
+  `runtime.stage_options`, `executor.resolve`, `executor.capabilities`, and
+  `resources.capabilities`; Phase 6 owns mapping Phase 5 diagnostics into those
+  IDs.
 
 ## Assumptions
 
@@ -171,6 +180,153 @@ SLURM/Docker/Apptainer schemas.
   results. Phase 6 may map these records into stable preflight IDs and groups.
 - Descriptor-claimed adapter namespaces identify ownership only. This phase
   does not validate payload schemas or persist payload contents.
+
+## Public API And Model Names
+
+Implement descriptor and validation APIs in `loom.pipeline.runtime`, preferably
+using focused submodules such as `descriptors.py` and `capabilities.py` while
+exporting the stable public names through `loom.pipeline.runtime.__all__`.
+Export the same import-light names from `loom.pipeline` if the existing package
+facade pattern is preserved.
+
+Required public model names and responsibilities:
+
+- `ExecutorDescriptor`: immutable metadata for one executor name. Fields should
+  include `name`, `resource_capabilities`, `adapter_namespaces`, and optional
+  plain `details`.
+- `ResourceCapability`: per-resource-kind support policy keyed by the same
+  resource kind strings accepted by `ResourceValidatorRegistry`.
+- `ResourceSupportLevel`: stable string enum or literal-like value with
+  `supported`, `advisory`, `ignored`, and `unsupported`.
+- `ResourceEnforcementExpectation`: stable string enum or literal-like value
+  with `enforced`, `best_effort`, `not_enforced`, and `not_applicable`.
+- `CapabilitySeverity`: stable string enum or literal-like value with `info`,
+  `warning`, and `error`.
+- `CapabilityDiagnostic`: plain-data-compatible record for one validation
+  finding.
+- `CapabilityValidationResult`: immutable result with sorted diagnostics,
+  `has_errors`, `ok`, `to_dict()`, and `raise_for_errors()` behavior.
+- `ExecutorDescriptorRegistry`: immutable explicit registry with lookup,
+  duplicate-name rejection, deterministic serialization, and composition.
+- `DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY`: built-in registry containing only the
+  metadata-only `local` descriptor.
+- `resolve_executor_descriptor()` and `validate_executor_capabilities()`:
+  import-light helper functions for selected-executor lookup and capability
+  validation over a normalized `RunOptions`.
+
+Do not export these names from `loom.pipeline.executors` in Phase 5. That
+facade currently imports `LocalExecutor`, so descriptor exports there would
+mix runtime metadata with concrete execution ownership. Keep
+`tests/package/test_pipeline_executor_api.py` asserting the existing executor
+facade exports unless the implementation finds a way to split executor
+protocol exports without importing `local.py`, which is out of scope here.
+
+## Diagnostic Data Model
+
+Capability diagnostics are not preflight results. They should be small,
+deterministic runtime validation records that Phase 6 can map into preflight
+checks later.
+
+Required diagnostic fields:
+
+- `path`: dotted/bracketed runtime path, for example
+  `RunOptions.executor`,
+  `RunOptions.stage_options['train'].resources.entries['gpu']`, or
+  `RunOptions.adapter_options['slurm']`.
+- `severity`: `CapabilitySeverity.info`, `.warning`, or `.error`.
+- `code`: stable runtime-local code such as `executor.unknown`,
+  `resource.ignored`, `resource.unsupported`, or
+  `adapter_namespace.unclaimed`. These are not Phase 6 preflight check IDs.
+- `message`: concise human-readable explanation.
+- `executor`: resolved or requested executor name when available.
+- `stage_id`: exact stage ID when the finding is stage-scoped, otherwise
+  `None`.
+- `resource_kind` or `adapter_namespace`: populated for resource/adapter
+  findings.
+- `support_level` and `enforcement`: populated for resource capability
+  findings when descriptor metadata is available.
+- `details`: immutable plain mapping for deterministic extra data; sort keys
+  during serialization.
+
+Support-level interpretation:
+
+- `supported`: descriptor claims it can honor the resource kind. Default
+  severity should be `info` unless descriptor policy overrides it.
+- `advisory`: descriptor accepts the request but may only use it as a hint.
+  Default severity should be `warning`.
+- `ignored`: descriptor accepts the request shape but ignores it. Default
+  severity should be `warning`.
+- `unsupported`: descriptor rejects the resource kind for that executor.
+  Default severity should be `error`.
+
+Enforcement expectation interpretation:
+
+- `enforced`: executor is expected to enforce the request.
+- `best_effort`: executor may attempt to honor the request but cannot promise
+  enforcement.
+- `not_enforced`: executor will not enforce the request.
+- `not_applicable`: used when the concept is not meaningful for the finding.
+
+Result strictness behavior:
+
+- `validate_executor_capabilities()` should always return a
+  `CapabilityValidationResult` rather than raising for warnings.
+- `CapabilityValidationResult.ok` is true only when there are no `error`
+  diagnostics. Warnings do not make `ok` false in Phase 5.
+- `CapabilityValidationResult.raise_for_errors()` raises the existing
+  pipeline `RuntimeResourceError` only when error diagnostics are present, and
+  its message must include deterministic diagnostic codes and paths.
+- Phase 5 must not implement preflight `--strict` warning escalation. Phase 6
+  owns mapping warning diagnostics into strict preflight failures.
+
+Deterministic ordering:
+
+- Diagnostics must sort by `path`, then `code`, then `resource_kind` or
+  `adapter_namespace`, then `message`.
+- Registry serialization and descriptor resource capability mappings must sort
+  by normalized executor name, resource kind, and adapter namespace.
+- Validation should visit run-level adapter namespaces before stage-level
+  adapter namespaces, and stage-level checks by sorted exact stage ID.
+
+## Default Local Descriptor Behavior
+
+The default descriptor registry contains exactly one built-in executor
+descriptor named `local`.
+
+Executor name resolution:
+
+- `RunOptions.executor=None` resolves to `local` for Phase 5 validation
+  helpers only.
+- Explicit executor names are stripped for lookup but otherwise not lowercased
+  or aliased; `local` is the only built-in accepted value.
+- Empty or whitespace-only explicit executor names remain a `RunOptions`
+  validation error from the Phase 3 model layer when possible; if encountered
+  by descriptor resolution, report `executor.unknown` at `RunOptions.executor`.
+
+Local resource capability policy:
+
+- The `local` descriptor should include metadata for built-in `cpu`, `memory`,
+  and `gpu` resource kinds because Phase 2 registers those kinds by default.
+- Local `cpu`, `memory`, and `gpu` are `ignored` with
+  `ResourceEnforcementExpectation.not_enforced` and default
+  `CapabilitySeverity.warning`.
+- A registered custom resource kind not mentioned by `local` should produce a
+  resource capability diagnostic using the descriptor fallback policy. The
+  fallback for omitted resource kinds should be `unsupported` with default
+  severity `error` unless the descriptor explicitly sets a different unknown
+  resource policy.
+- Phase 5 does not change local executor behavior, scheduling, resource
+  enforcement, or stage invocation.
+
+Adapter namespace policy:
+
+- `ExecutorDescriptor.adapter_namespaces` is a sorted immutable set or mapping
+  of namespace names claimed by the descriptor.
+- The built-in `local` descriptor claims no adapter namespaces.
+- Any run-level or stage-level adapter namespace not claimed by the selected
+  descriptor produces an `adapter_namespace.unclaimed` warning by default.
+- Namespace validation checks only the namespace key. It must not inspect,
+  schema-validate, redact, or persist adapter payload values.
 
 ## Scope Contract
 
@@ -247,16 +403,17 @@ payloads.
 ## Reviewability
 
 - Expected PR size and shape: small-to-medium model/test PR, focused on new
-  runtime descriptor/capability modules, facade exports, optional executor API
-  export updates, and targeted docs/tests.
+  runtime descriptor/capability modules, runtime and pipeline facade exports,
+  and targeted docs/tests. Executor facade exports should remain unchanged.
 - Files and areas to inspect:
   - `src/loom/pipeline/runtime/`
   - `src/loom/pipeline/__init__.py`
-  - `src/loom/pipeline/executors/__init__.py` only if descriptor exports are
-    intentionally surfaced there without importing implementations
+  - `src/loom/pipeline/executors/__init__.py` only to verify descriptor exports
+    were not added and concrete executor imports did not leak into runtime
   - `tests/package/test_import_boundaries.py`
   - `tests/package/test_pipeline_api.py`
-  - `tests/package/test_pipeline_executor_api.py`
+  - `tests/package/test_pipeline_executor_api.py` to pin unchanged executor
+    facade exports
   - new `tests/unit/loom/pipeline/test_executor_capabilities.py` or similar
   - `tests/contracts/test_executor_contract.py`
   - new `tests/contracts/test_executor_capabilities_contract.py` or similar
@@ -270,13 +427,14 @@ payloads.
 ## Implementation Steps
 
 1. Add import-light descriptor, capability, diagnostic, and registry models
-   with deterministic serialization, duplicate-name rejection, and facade
-   exports.
+   with the names in this plan, deterministic serialization, duplicate-name
+   rejection, and runtime/pipeline facade exports.
 2. Add the metadata-only built-in `local` descriptor and default registry
    without importing `LocalExecutor` or changing executor behavior.
 3. Add runtime capability validation helpers for selected executor resolution,
    registered resource entries in run stage options, ignored local resources,
-   unsupported resource kinds, and unclaimed run/stage adapter namespaces.
+   descriptor fallback unsupported resources, and unclaimed run/stage adapter
+   namespaces.
 4. Add fake descriptor tests that prove descriptors can claim, ignore, warn,
    or reject registered resource kinds without altering `ResourceRequest`.
 5. Add package, unit, contract, and narrow integration coverage for import
@@ -292,13 +450,14 @@ payloads.
 - Status: required.
 - Expected paths: `tests/package/test_import_boundaries.py`,
   `tests/package/test_pipeline_api.py`, and
-  `tests/package/test_pipeline_executor_api.py` if executor facade exports
-  change.
+  `tests/package/test_pipeline_executor_api.py`.
 - Required assertions or deferral reason: descriptor, registry, capability,
-  and validation APIs are exported from the intended public facades; importing
-  `loom.pipeline.runtime` remains import-light and does not import CLI,
-  config, diagnostics, execution runners, concrete executors, plugins,
-  optional backend packages, stores, or project modules.
+  and validation APIs are exported from `loom.pipeline.runtime` and, if the
+  existing runtime facade pattern is preserved, from `loom.pipeline`; importing
+  `loom.pipeline.runtime` remains import-light and does not import CLI, config,
+  diagnostics, execution runners, concrete executors, plugins, optional backend
+  packages, stores, or project modules; `loom.pipeline.executors.__all__`
+  remains limited to executor protocol/error/concrete local executor exports.
 
 ### Unit Suite
 
@@ -307,13 +466,15 @@ payloads.
   or equivalent, plus focused updates to runtime resource/options tests only
   when needed.
 - Required assertions or deferral reason: descriptor construction and
-  serialization, capability support records, diagnostic policy/severity
-  defaults, registry lookup and duplicate rejection, default `local`
-  descriptor behavior, `RunOptions.executor=None` resolving to local for
-  validation, unknown executor error diagnostics and strict failure,
-  registered resource support/ignore/reject behavior, ignored local resource
-  warnings, unclaimed run/stage adapter namespace warnings, path-aware
-  diagnostics, and deterministic result ordering.
+  serialization, normalized-name lookup, exact stripped-name behavior,
+  duplicate-name rejection, capability support records, default severity and
+  enforcement values, result `ok` and `raise_for_errors()` behavior, default
+  `local` descriptor behavior, `RunOptions.executor=None` resolving to local
+  for validation, unknown executor error diagnostics, registered resource
+  support/advisory/ignored/unsupported behavior, ignored local resource
+  warnings, local omitted registered resource fallback errors, unclaimed
+  run/stage adapter namespace warnings, path-aware diagnostics, and
+  deterministic result ordering.
 
 ### Contract Suite
 
@@ -324,7 +485,8 @@ payloads.
   structural and import-light; fake descriptors can claim or reject resource
   kinds without changing resource schema validation; capability diagnostics are
   plain-data-compatible and independent of `loom.diagnostics`; `RunRequest` and
-  `StageExecutionRequest` remain unwired for runtime options in this phase.
+  `StageExecutionRequest` remain unwired for runtime options in this phase;
+  no preflight check IDs/groups are emitted by capability validation.
 
 ### Integration Suite
 
@@ -335,9 +497,10 @@ payloads.
 - Required assertions or deferral reason: normalized or merged `RunOptions`
   with synthetic exact stage IDs validate against the default local descriptor;
   local resource requests produce warnings; unknown selected executors fail;
-  fake custom descriptors validate custom registered resource kinds; unclaimed
-  adapter namespaces warn without invoking config, CLI, runner, stores, or
-  preflight.
+  fake custom descriptors validate custom registered resource kinds through an
+  explicit `ResourceValidatorRegistry` and explicit
+  `ExecutorDescriptorRegistry`; unclaimed adapter namespaces warn without
+  invoking config, CLI, runner, stores, or preflight.
 
 ### E2E Suite
 
@@ -403,11 +566,12 @@ make test-summary
 - Conditions that require stopping for the manager: implementing Phase 5 would
   require importing concrete executor implementations from runtime modules,
   changing `ResourceRequest` unknown-kind behavior, adding preflight groups or
-  check IDs, or changing execution request/runner behavior.
+  check IDs, exposing descriptor APIs from `loom.pipeline.executors`, or
+  changing execution request/runner behavior.
 
 ## Refinement And Review Budget Status
 
-- Phase plan refinement: unused; pending expanded-path refine assignment
+- Phase plan refinement: used on 2026-05-07 for this expanded-path refine pass
 - Phase implementation refinement: unused
 - PR review: unused
 - Blocker resolution: 0/3 used
@@ -415,10 +579,13 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed on 2026-05-07 by `loom_phase_planner`.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: refined on 2026-05-07 by `loom_phase_planner`.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: pinned public descriptor/capability names, diagnostic
+  severity/support/enforcement semantics, strict result behavior, deterministic
+  ordering, local descriptor defaults, adapter namespace policy, and the
+  decision not to export descriptors from `loom.pipeline.executors`.
 - Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: none required so far; root phase targets `develop`.
