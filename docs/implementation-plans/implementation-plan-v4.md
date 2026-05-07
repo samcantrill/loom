@@ -688,9 +688,9 @@ Completion summary:
 
 ### Phase 4 - Runtime Profiles And Merge Semantics
 
-Status: pending
+Status: merged
 Branch: `codex/runtime-profiles-merge`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/73
 
 Goal:
 
@@ -767,7 +767,33 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged on 2026-05-07 via PR #73 into `develop`.
+- Implementation added `RuntimeProfile`, `RuntimeProfileCollection`,
+  profile parsing/selection helpers, and `merge_run_options`, exported from
+  `loom.pipeline.runtime` and `loom.pipeline`.
+- The merge contract now normalizes base/profile/explicit sources into
+  canonical `RunOptions` with deterministic precedence, sparse mapping
+  field-presence behavior, typed `RunOptions` as fully supplied sources,
+  scalar/list replacement, shallow mapping merge, exact-stage option merge,
+  resource-entry merge by kind, environment field merge, and no deletion or
+  sentinel syntax.
+- Runtime profile core sections validate through the existing Phase 3 runtime
+  models, while non-core top-level profile sections are preserved as
+  `adapter_options` namespaces and duplicate in-profile namespaces fail
+  clearly.
+- Preserved the intended ownership boundary: no executor descriptors,
+  preflight checks, persisted `runtime.json`, CLI/config command mapping,
+  plugins/adapter schemas, runner wiring, local environment application, or
+  glob/tag/group stage matching were introduced.
+- Automated review found no blocking findings; the expanded-path refinement
+  pass fixed one documentation example so profile execution settings match the
+  `ExecutionOptions.settings` shape.
+- Validation evidence: `make validate-pr` passed during implementation;
+  GitHub CI `checks` passed on PR #73; `make test-summary` reported 1047
+  passed, 10 skipped, and 663 deselected.
+- Follow-up for Phase 5: executor descriptor and capability validation can
+  consume the resolved `RunOptions` output and preserved adapter namespaces
+  without redefining profile merge behavior.
 
 ### Phase 5 - Executor Descriptors And Capability Validation
 
