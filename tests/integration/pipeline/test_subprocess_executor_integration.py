@@ -7,9 +7,9 @@ from typing import cast
 
 from loom.pipeline import PipelineSpec
 from loom.pipeline.execution import ExecutionFailure, PipelineRunner, RunRequest
-from loom.pipeline.executors import SubprocessExecutor
+from loom.pipeline.executors import LocalExecutor, SubprocessExecutor
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.provenance.models import ProvenanceCaptureOptions
 
 
@@ -43,6 +43,62 @@ def _request(target: str) -> RunRequest:
             capture_command=False,
         ),
     )
+
+
+def _request_with_executor(target: str, *, executor: str, run_uri: str) -> RunRequest:
+    return RunRequest(
+        pipeline=_spec(target=target),
+        run_uri=run_uri,
+        options={"executor": executor},
+        provenance_options=ProvenanceCaptureOptions(
+            capture_git=False,
+            capture_environment=False,
+            capture_dependencies=False,
+            capture_command=False,
+        ),
+    )
+
+
+def test_local_and_subprocess_success_runs_are_equivalent(tmp_path: Path) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    local_uri = path_to_run_uri(tmp_path / "runs" / "local")
+    subprocess_uri = path_to_run_uri(tmp_path / "runs" / "subprocess")
+
+    local = PipelineRunner(run_store=store, executor=LocalExecutor()).run(
+        _request_with_executor(
+            "tests.support.pipeline_execution_stages.JsonProducerStage",
+            executor="local",
+            run_uri=local_uri,
+        )
+    )
+    subprocess = PipelineRunner(
+        run_store=store,
+        executor=SubprocessExecutor(run_store=store),
+    ).run(
+        _request_with_executor(
+            "tests.support.pipeline_execution_stages.JsonProducerStage",
+            executor="subprocess",
+            run_uri=subprocess_uri,
+        )
+    )
+
+    local_outputs = store.read_stage_outputs(local.run_uri, "build")
+    subprocess_outputs = store.read_stage_outputs(subprocess.run_uri, "build")
+    assert local_outputs is not None
+    assert subprocess_outputs is not None
+    local_artifacts = LocalArtifactStore(store.local_artifact_root(local.run_uri))
+    subprocess_artifacts = LocalArtifactStore(
+        store.local_artifact_root(subprocess.run_uri)
+    )
+
+    assert local.status == subprocess.status == RunStatus.SUCCEEDED
+    assert local.stage_results["build"].status == StageStatus.SUCCEEDED
+    assert subprocess.stage_results["build"].status == StageStatus.SUCCEEDED
+    assert local_artifacts.load(local_outputs["data"]) == subprocess_artifacts.load(
+        subprocess_outputs["data"]
+    )
+    assert store.read_stage_worker_result(subprocess.run_uri, "build", attempt=1)
+    assert store.read_stage_worker_result(local.run_uri, "build", attempt=1) is None
 
 
 def test_subprocess_executor_success_parent_finalizes_stage(tmp_path: Path) -> None:

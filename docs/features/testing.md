@@ -850,7 +850,9 @@ metadata recording
 
 ### 14.2 Subprocess Executor
 
-Subprocess executor tests are post-v0.
+Subprocess executor tests are active in v5 and should remain local,
+deterministic, and synthetic. They should not require a scheduler, container
+runtime, network, or downstream project.
 
 Test:
 
@@ -858,9 +860,17 @@ Test:
 command construction
 stage worker invocation
 exit code interpretation
+signal interpretation
 result file read
 stdout/stderr log paths
 missing result file error
+invalid result file error
+mismatched run_uri/stage/attempt identity
+structured-success/process-failure conflict
+structured worker failure wrapping
+redacted command/process metadata
+local/subprocess equivalence for synthetic pipelines
+status/log diagnostics compatibility for subprocess failures
 ```
 
 Use synthetic stage workers and temporary run directories.

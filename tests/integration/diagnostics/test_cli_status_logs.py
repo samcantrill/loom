@@ -66,17 +66,26 @@ def _write_two_stage_pipeline_config(path: Path) -> None:
     )
 
 
-def _run_pipeline(tmp_path: Path, *, failing: bool = False) -> str:
+def _run_pipeline(
+    tmp_path: Path,
+    *,
+    failing: bool = False,
+    executor: str = "local",
+) -> str:
     config_path = tmp_path / "pipeline.yaml"
-    run_uri = path_to_run_uri(tmp_path / "runs" / ("failed" if failing else "ok"))
+    suffix = f"{executor}-{'failed' if failing else 'ok'}"
+    run_uri = path_to_run_uri(tmp_path / "runs" / suffix)
     _write_pipeline_config(config_path, failing=failing)
     stdout = io.StringIO()
     stderr = io.StringIO()
     expected = 5 if failing else 0
 
+    argv = ["run", str(config_path), "--run-uri", run_uri, "--format", "json"]
+    if executor != "local":
+        argv.extend(["--executor", executor])
     assert (
         main(
-            ["run", str(config_path), "--run-uri", run_uri, "--format", "json"],
+            argv,
             stdout=stdout,
             stderr=stderr,
         )
@@ -188,6 +197,42 @@ def test_status_and_logs_report_failed_run(tmp_path: Path) -> None:
         json.loads(logs_stdout.getvalue())["result"]["streams"][0]["content"]
         == "failed\n"
     )
+
+
+def test_status_and_logs_report_subprocess_failure_metadata(tmp_path: Path) -> None:
+    run_uri = _run_pipeline(tmp_path, failing=True, executor="subprocess")
+    status_stdout = io.StringIO()
+    logs_stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["status", run_uri, "--format", "json"], stdout=status_stdout, stderr=stderr
+        )
+        == 0
+    )
+    status_payload = json.loads(status_stdout.getvalue())
+    stage = status_payload["result"]["stages"][0]
+    failure = stage["failure"]
+    assert stage["status"] == "FAILED"
+    assert failure["executor"] == "subprocess"
+    assert failure["exit_code"] == 1
+    assert failure["signal"] is None
+    assert failure["stdout_path"].endswith("/stages/build/logs/stdout.log")
+    assert failure["stderr_path"].endswith("/stages/build/logs/stderr.log")
+    assert failure["traceback_path"].endswith("/stages/build/logs/traceback.txt")
+
+    assert (
+        main(
+            ["logs", run_uri, "build", "--stream", "stderr", "--format", "json"],
+            stdout=logs_stdout,
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
+    logs_payload = json.loads(logs_stdout.getvalue())
+    assert logs_payload["result"]["streams"][0]["available"] is True
+    assert logs_payload["result"]["streams"][0]["content"] is not None
 
 
 def test_logs_missing_stage_fails_clearly(tmp_path: Path) -> None:

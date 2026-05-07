@@ -1,0 +1,79 @@
+"""Run the same pipeline locally and through subprocess workers."""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+from pathlib import Path
+from uuid import uuid4
+
+from loom.cli.main import main as loom_main
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+
+
+HERE = Path(__file__).resolve().parent
+
+
+def main() -> None:
+    _configure_import_path()
+    output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
+    run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
+    config_path = HERE / "pipeline.yaml"
+    local_uri = path_to_run_uri(run_root / f"local-{uuid4().hex[:8]}")
+    subprocess_uri = path_to_run_uri(run_root / f"subprocess-{uuid4().hex[:8]}")
+
+    local = _run_cli(["run", str(config_path), "--run-uri", local_uri, "--format", "json"])
+    subprocess = _run_cli(
+        [
+            "run",
+            str(config_path),
+            "--run-uri",
+            subprocess_uri,
+            "--executor",
+            "subprocess",
+            "--format",
+            "json",
+        ]
+    )
+
+    store = LocalRunStore()
+    provenance = store.read_stage_provenance(subprocess_uri, "seed")
+    executor = None
+    if provenance is not None:
+        metadata = provenance.get("executor_metadata", {})
+        if isinstance(metadata, dict):
+            executor = metadata.get("executor")
+
+    print(f"local_run_uri: {local_uri}")
+    print(f"local_status: {local['result']['status']}")
+    print(f"local_artifact_count: {local['result']['artifact_count']}")
+    print(f"subprocess_run_uri: {subprocess_uri}")
+    print(f"subprocess_status: {subprocess['result']['status']}")
+    print(f"subprocess_artifact_count: {subprocess['result']['artifact_count']}")
+    print(f"subprocess_seed_executor: {executor}")
+
+
+def _configure_import_path() -> None:
+    sys.path.insert(0, str(HERE))
+    existing = os.environ.get("PYTHONPATH")
+    os.environ["PYTHONPATH"] = (
+        str(HERE) if not existing else str(HERE) + os.pathsep + existing
+    )
+
+
+def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, object]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    code = loom_main(argv, stdout=stdout, stderr=stderr)
+    if code != expected:
+        raise RuntimeError(
+            f"loom {' '.join(argv)} exited {code}; stdout={stdout.getvalue()!r}; "
+            f"stderr={stderr.getvalue()!r}"
+        )
+    return json.loads(stdout.getvalue())
+
+
+if __name__ == "__main__":
+    main()
