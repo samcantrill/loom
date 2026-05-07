@@ -250,7 +250,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07 by `loom_phase_refiner`
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -284,7 +284,36 @@ make test-summary
     returned no matches.
   - `make validate-pr` passed: Ruff, Pyright, default harness, config-extra
     harness, and build.
-- Refinement summary: phase planning refine pass used; implementation refinement and PR review budgets remain unused
+- Implementation refinement report: completed on 2026-05-07 by
+  `loom_phase_refiner` as the one allowed expanded-path implementation/test
+  refinement pass. Reviewed `AGENTS.md`, implementation plan v4, this phase
+  plan, `.codex/prompts/implementation-test-refinement.md`, the current diff,
+  focused validation output, and full `make validate-pr` output. Confirmed the
+  implementation remains scoped to typed resource entries and does not add
+  `RunOptions`, profiles, executor descriptors/capabilities, preflight wiring,
+  CLI/config runtime mapping, `runtime.json`, or runner request rewiring.
+- Implementation refinement fixes: updated stale related feature-doc wording in
+  `docs/features/pipeline.md` and `docs/features/execution.md` so current
+  resource docs describe typed `ResourceRequest` entries rather than opaque
+  v0/plain-data resources or post-v0 typed resource hints. No code or test
+  fixes were needed.
+- Implementation refinement validation: passed on 2026-05-07:
+  - `uv run pytest tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py`
+    passed, 26 tests.
+  - `uv run pytest tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/test_specs.py tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`
+    passed, 93 tests.
+  - `uv run pytest tests/integration/config/test_*.py` passed, 97 tests.
+    Direct `uv run pytest tests/integration/config` collected 0 tests in this
+    environment, so the file-glob command was used for explicit integration
+    evidence.
+  - `rg -n "cpus|memory_mb|gpus|custom" docs/features/runtime-resources.md docs/features/pipeline.md docs/features/execution.md docs/features/container-executors.md docs/features/slurm.md examples/pipelines/local-run/pipeline.yaml`
+    returned only SLURM option names such as `--cpus-per-task` and unrelated
+    prose such as `custom retry behavior`; it found no current old resource
+    schema examples.
+  - `make validate-pr` passed after refinement: Ruff, Pyright, default
+    harness, config-extra harness, and build.
+- Refinement summary: phase planning refine pass used; implementation
+  refinement budget used; PR review budget remains unused
 - Blocker-resolution summary: none used
 - PR preparation: pending
 - Stack maintenance: none required yet

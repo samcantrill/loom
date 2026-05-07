@@ -426,9 +426,8 @@ Invocation mode belongs to executor metadata, not to the stage implementation.
 
 ### 5.8 Runtime Profile
 
-Runtime profiles and typed resource hints are post-v0. In v0, stage resources
-are opaque plain-data metadata preserved for inspection; the local executor does
-not interpret them.
+Runtime profiles are later runtime work. Stage resources are typed resource
+entries preserved for inspection; the local executor does not interpret them.
 
 Examples:
 

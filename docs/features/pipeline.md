@@ -811,7 +811,7 @@ fingerprint:
   explicit stage-level semantic fingerprint fields
 
 resources:
-  opaque plain-data metadata preserved for inspection; v0 does not interpret
+  typed resource entries validated by ResourceRequest; Loom does not interpret
   scheduler fields or include resources in semantic fingerprints by default
 
 runtime:
