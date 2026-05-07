@@ -24,6 +24,7 @@ def test_build_parser_includes_v2_commands() -> None:
     assert "run" in help_text
     assert "status" in help_text
     assert "logs" in help_text
+    assert "artifacts" in help_text
 
 
 def test_help_and_version_return_zero() -> None:
@@ -72,7 +73,9 @@ def test_command_errors_are_text_by_default(monkeypatch: pytest.MonkeyPatch) -> 
     assert "command failed" in stderr.getvalue()
 
 
-def test_command_errors_are_json_when_command_format_is_known(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_command_errors_are_json_when_command_format_is_known(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fail(_namespace: object) -> int:
         raise CliError("command failed", code="cli.test_failure")
 
@@ -80,7 +83,10 @@ def test_command_errors_are_json_when_command_format_is_known(monkeypatch: pytes
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["run", "pipeline.yaml", "--format", "json"], stdout=stdout, stderr=stderr) == 1
+    assert (
+        main(["run", "pipeline.yaml", "--format", "json"], stdout=stdout, stderr=stderr)
+        == 1
+    )
     assert stderr.getvalue() == ""
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == "loom.cli.error.v2"
@@ -90,7 +96,9 @@ def test_command_errors_are_json_when_command_format_is_known(monkeypatch: pytes
     assert payload["error"]["code"] == "cli.test_failure"
 
 
-def test_traceback_is_accepted_before_or_after_command(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_traceback_is_accepted_before_or_after_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fail(_namespace: object) -> int:
         raise CliError("command failed", code="cli.test_failure")
 
