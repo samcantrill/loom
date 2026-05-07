@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: `Local Diagnostics`
 - PR title: `Local Diagnostics - Phase 2: Preflight CLI and Run Reuse`
 - Branch: `codex/add-preflight-cli`
@@ -23,7 +23,9 @@
 - Plan quality gate loop budget: initial review used, plan refinement used,
   confirmation review used
 - Draft pass: completed by managing agent on 2026-05-07
-- Refine pass: pending for expanded path
+- Refine pass: completed by managing agent on 2026-05-07; clarified `loom run
+  --resume` handling, default URI ordering, JSON `ok` semantics, and budget
+  accounting before implementation
 - Setup limitations: none known
 - Blockers: none known
 
@@ -106,10 +108,14 @@ diagnostic workflow command is added here.
 - Reject unknown or empty `--check` selections as CLI usage errors that can be
   rendered as JSON when `--format json` is requested.
 - Reuse `run_preflight()` from `loom run` for the minimal groups `config`,
-  `pipeline`, `run`, and `executor` before execution.
+  `pipeline`, `run`, and `executor` before fresh execution.
 - Allocate an implicit local run URI once in `loom run` before preflight when
   `--run-uri` is omitted, pass that URI into the preflight request, and pass the
   same URI into `RunRequest`.
+- Preserve `loom run --resume` behavior by relying on the existing
+  `store.open_run()` validation for existing run state instead of applying the
+  fresh-run `run_uri.resolve` diagnostics check to a directory that is expected
+  to exist.
 - Preserve existing `--resume`, explicit URI existence, unsupported executor,
   dry-run, selector, text, and JSON behavior except for the planned default URI
   allocation timing.
@@ -141,6 +147,9 @@ diagnostic workflow command is added here.
   context, such as run-path groups without `RUN_URI`; this is nonfatal.
 - `LocalRunStore.allocate_run_uri()` is non-persistent and safe to call before
   run-store creation.
+- The Phase 1 `run_uri.resolve` check is a fresh-run availability check. Resume
+  validation is already owned by `LocalRunStore.open_run()` and should not be
+  reinterpreted in Phase 2.
 
 ## Scope Contract
 
@@ -173,13 +182,17 @@ JSON.
 
 `loom run` must call the diagnostics runner through a helper before
 `PipelineRunner.run()`. The minimal group set is `config`, `pipeline`, `run`,
-and `executor`. When the user supplies `--run-uri`, existing explicit URI
-resolution, existence, and resume behavior stays authoritative. When the user
+and `executor` for fresh runs. When the user supplies `--run-uri`, existing
+explicit URI resolution and existence checks stay authoritative before the
+diagnostics helper runs. When the user supplies `--resume`, existing
+`store.open_run()` validation stays authoritative and the diagnostics helper
+must not run the fresh-run `run` group against a directory that is expected to
+exist; it may still run config, pipeline, and executor groups. When the user
 omits `--run-uri`, the CLI allocates one URI once using the default
-`LocalRunStore`, preflights that URI, and builds `RunRequest` with the same
-string. Preflight must not create `run.json`, status files, plan files, or run
-directories before execution. Dry-run remains delegated to `loom plan` and does
-not run the `loom run` minimal preflight.
+`LocalRunStore`, preflights that URI with the fresh-run minimal groups, and
+builds `RunRequest` with the same string. Preflight must not create `run.json`,
+status files, plan files, or run directories before execution. Dry-run remains
+delegated to `loom plan` and does not run the `loom run` minimal preflight.
 
 ## Design Impact
 
@@ -218,6 +231,7 @@ not run the `loom run` minimal preflight.
 | --- | --- | --- |
 | `loom run` uses only a minimal preflight subset. | The phase is a local safety screen, not a durable audit or full diagnostic workflow. | Revisit when runtime/resource, remote-store, or policy checks are introduced. |
 | Preflight CLI JSON is an output contract, not a persisted report schema. | V3 intentionally avoids diagnostics persistence. | Revisit if catalogs, bundles, dashboards, or audit reports need durable diagnostics records. |
+| `loom run` may compose config once for preflight and again for execution. | Sharing composed objects through the diagnostics result would expand the Phase 1 public API and blur diagnostics with execution setup. | Revisit if config composition cost or trusted resolver side effects become a measured problem. |
 
 ## Reviewability
 
@@ -274,7 +288,8 @@ not run the `loom run` minimal preflight.
   schema; strict warnings fail; failures return the expected exit code; selected
   groups are passed through; unknown groups produce CLI usage errors; `loom run`
   calls minimal preflight before execution and uses one allocated default URI
-  for both preflight and `RunRequest`.
+  for both preflight and `RunRequest`; `loom run --resume` does not apply the
+  fresh-run run-path diagnostics check to the existing run directory.
 
 ### Contract Suite
 
@@ -294,7 +309,8 @@ not run the `loom run` minimal preflight.
   `--check` limits checks; `--run-uri` enables run-path checks; omitted
   `RUN_URI` still checks general readiness; strict warning behavior is covered
   by unit tests unless a real warning case exists; `loom run` preflight failure
-  exits before creating run-store records.
+  exits before creating run-store records; default `loom run` uses the same
+  allocated URI in preflight and execution.
 
 ### E2E Suite
 
@@ -320,6 +336,8 @@ not run the `loom run` minimal preflight.
   before execution if the store API is used incorrectly.
 - `loom run` preflight and execution can drift if one path sees an implicit URI
   and the other still sees `None`.
+- Resume can regress if the fresh-run preflight path treats an existing run
+  directory as a failure before normal resume validation runs.
 - Strict warning semantics can become confusing if JSON `ok`, process exit, and
   aggregate diagnostics status disagree.
 - Group-selection errors can bypass JSON error formatting if implemented only
@@ -355,7 +373,9 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 - Decisions the executor must not revisit: no status/log/artifact commands; no
   persisted preflight reports; no external or remote checks; no selector flags
   for explicit preflight; default `loom run` must allocate one implicit URI
-  before preflight and reuse it for execution.
+  before preflight and reuse it for execution; resume must preserve existing
+  `store.open_run()` behavior and not run the fresh-run path-availability check
+  against the existing run directory.
 - Conditions that require stopping for the manager: the existing diagnostics API
   cannot express the required minimal run checks; default URI preflight would
   require store writes; JSON envelope conventions conflict with diagnostics
@@ -365,13 +385,16 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Phase implementation refinement: unused
 - PR review: unused
-- Blocker resolution: 0/3 used
+- Blocker resolution: not used; no Phase 2 blocker-resolution pass has been
+  authorized
 
 ## Completion Notes
 
 - Draft plan: completed on 2026-05-07 by managing agent; committed as
   `plan: add phase 2 execution plan`.
-- Final phase execution plan:
+- Final phase execution plan: refined on 2026-05-07 by managing agent; resume
+  handling, default URI ordering, diagnostics JSON semantics, and suite
+  obligations were made implementation-ready.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
