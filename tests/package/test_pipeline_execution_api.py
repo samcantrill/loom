@@ -30,6 +30,10 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
         "StageExecutionResult",
         "StageExecutionRuntimeError",
         "StageRunResult",
+        "StageWorkerRequest",
+        "StageWorkerResult",
+        "prepare_stage_attempt",
+        "redact_executor_metadata",
         "run_pipeline",
         "validate_stage_outputs",
     ]

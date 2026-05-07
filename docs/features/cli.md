@@ -964,7 +964,7 @@ It should not fake behavior in CLI code.
 
 ### 14.1 Purpose
 
-Run exactly one stage attempt from an existing run directory.
+Run exactly one stage attempt from an existing run URI.
 
 This command is the stable worker entry point for:
 
@@ -1000,11 +1000,11 @@ Should:
 
 ```text
 open existing run directory
-load resolved config
+load resolved config and prepared stage request metadata
 load pipeline spec or stage execution request
-bind inputs for the selected stage
+load prepared inputs for the selected stage
 run exactly one stage attempt through execution API
-write status, outputs, logs, failure metadata, and result file
+write logs and structured worker result handoff
 exit with meaningful code
 ```
 
@@ -1016,6 +1016,7 @@ modify unrelated stages
 submit scheduler jobs
 finalize the whole run
 create a new run directory from scratch
+accept a normal --config input instead of durable run metadata
 ```
 
 ### 14.4 Worker Contract

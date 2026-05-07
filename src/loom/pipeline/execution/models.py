@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from loom.artifacts import ArtifactRef
+from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.context import StageContext
 from loom.pipeline.planning import (
     ExecutionPlan,
@@ -36,6 +36,8 @@ if TYPE_CHECKING:
     from loom.provenance.models import CommandProvenance, ProvenanceCaptureOptions
 
 EXECUTION_FAILURE_SCHEMA_VERSION = 1
+STAGE_WORKER_REQUEST_SCHEMA_VERSION = 1
+STAGE_WORKER_RESULT_SCHEMA_VERSION = 1
 
 _VALID_FAILURE_TYPES = {
     "stage_exception",
@@ -184,6 +186,7 @@ class ExecutionFailure:
     stdout_path: str | None = None
     stderr_path: str | None = None
     exit_code: int | None = None
+    signal: int | None = None
     executor_metadata: Mapping[str, PlainData] = field(default_factory=dict)
     details: Mapping[str, PlainData] = field(default_factory=dict)
 
@@ -233,6 +236,18 @@ class ExecutionFailure:
             raise RunRequestError(
                 "ExecutionFailure.exit_code must be an integer when set"
             )
+        if self.signal is not None and (
+            not isinstance(self.signal, int)
+            or isinstance(self.signal, bool)
+            or self.signal <= 0
+        ):
+            raise RunRequestError(
+                "ExecutionFailure.signal must be a positive integer when set"
+            )
+        if self.signal is not None and self.exit_code is not None:
+            raise RunRequestError(
+                "ExecutionFailure.exit_code and signal must not both be set"
+            )
         object.__setattr__(
             self,
             "executor_metadata",
@@ -255,6 +270,7 @@ class ExecutionFailure:
             "stdout_path": self.stdout_path,
             "stderr_path": self.stderr_path,
             "exit_code": self.exit_code,
+            "signal": self.signal,
             "executor_metadata": dict(self.executor_metadata),
             "details": dict(self.details),
         }
@@ -280,6 +296,7 @@ class ExecutionFailure:
                     "stdout_path",
                     "stderr_path",
                     "exit_code",
+                    "signal",
                     "executor_metadata",
                     "details",
                 },
@@ -305,12 +322,348 @@ class ExecutionFailure:
             stdout_path=_optional_str(mapping.get("stdout_path"), "stdout_path"),
             stderr_path=_optional_str(mapping.get("stderr_path"), "stderr_path"),
             exit_code=_optional_int(mapping.get("exit_code"), "exit_code"),
+            signal=_optional_int(mapping.get("signal"), "signal"),
             executor_metadata=_plain_mapping(
                 cast(Mapping[str, PlainData], mapping.get("executor_metadata", {})),
                 "executor_metadata",
             ),
             details=_plain_mapping(
                 cast(Mapping[str, PlainData], mapping.get("details", {})), "details"
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StageWorkerRequest:
+    schema_version: int
+    run_uri: str
+    stage_name: str
+    attempt: int
+    prepared_at: str
+    executor_name: str
+    inputs: Mapping[str, ArtifactRef]
+    fingerprint: StageFingerprintRecord | Mapping[str, PlainData]
+    stdout_path: str
+    stderr_path: str
+    traceback_path: str
+    result_path: str
+    resolved_runtime: Mapping[str, PlainData]
+    executor_metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.schema_version != STAGE_WORKER_REQUEST_SCHEMA_VERSION:
+            raise RunRequestError("StageWorkerRequest.schema_version must be 1")
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise RunRequestError(
+                "StageWorkerRequest.run_uri must be a non-empty string"
+            )
+        if not isinstance(self.stage_name, str) or not self.stage_name:
+            raise RunRequestError(
+                "StageWorkerRequest.stage_name must be a non-empty string"
+            )
+        if (
+            not isinstance(self.attempt, int)
+            or isinstance(self.attempt, bool)
+            or self.attempt <= 0
+        ):
+            raise RunRequestError("StageWorkerRequest.attempt must be positive")
+        if not isinstance(self.prepared_at, str) or not self.prepared_at:
+            raise RunRequestError(
+                "StageWorkerRequest.prepared_at must be a non-empty string"
+            )
+        if not isinstance(self.executor_name, str) or not self.executor_name:
+            raise RunRequestError(
+                "StageWorkerRequest.executor_name must be a non-empty string"
+            )
+        for name in ("stdout_path", "stderr_path", "traceback_path", "result_path"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise RunRequestError(
+                    f"StageWorkerRequest.{name} must be a non-empty string"
+                )
+        object.__setattr__(self, "inputs", _artifact_ref_mapping(self.inputs, "inputs"))
+        object.__setattr__(
+            self,
+            "fingerprint",
+            _coerce_fingerprint_record(self.fingerprint, "fingerprint"),
+        )
+        runtime = _plain_mapping(self.resolved_runtime, "resolved_runtime")
+        stage_id = runtime.get("stage_id")
+        if stage_id != self.stage_name:
+            raise RunRequestError(
+                "StageWorkerRequest.resolved_runtime.stage_id must match stage_name"
+            )
+        if "executor" not in runtime:
+            raise RunRequestError(
+                "StageWorkerRequest.resolved_runtime must include executor"
+            )
+        object.__setattr__(self, "resolved_runtime", runtime)
+        object.__setattr__(
+            self,
+            "executor_metadata",
+            _plain_mapping(self.executor_metadata, "executor_metadata"),
+        )
+        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
+
+    def to_dict(self) -> dict[str, PlainData]:
+        fingerprint = cast(StageFingerprintRecord, self.fingerprint)
+        return {
+            "schema_version": self.schema_version,
+            "run_uri": self.run_uri,
+            "stage_name": self.stage_name,
+            "attempt": self.attempt,
+            "prepared_at": self.prepared_at,
+            "executor_name": self.executor_name,
+            "inputs": {name: ref.to_dict() for name, ref in self.inputs.items()},
+            "fingerprint": fingerprint.to_dict(),
+            "stdout_path": self.stdout_path,
+            "stderr_path": self.stderr_path,
+            "traceback_path": self.traceback_path,
+            "result_path": self.result_path,
+            "resolved_runtime": dict(self.resolved_runtime),
+            "executor_metadata": dict(self.executor_metadata),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "StageWorkerRequest":
+        try:
+            mapping = load_versioned_document(
+                data,
+                current_version=STAGE_WORKER_REQUEST_SCHEMA_VERSION,
+                required={
+                    "run_uri",
+                    "stage_name",
+                    "attempt",
+                    "prepared_at",
+                    "executor_name",
+                    "inputs",
+                    "fingerprint",
+                    "stdout_path",
+                    "stderr_path",
+                    "traceback_path",
+                    "result_path",
+                    "resolved_runtime",
+                },
+                optional={"executor_metadata", "metadata"},
+            )
+        except SchemaVersionError as exc:
+            raise RunRequestError(f"StageWorkerRequest.from_dict: {exc}") from exc
+        return cls(
+            schema_version=_int(mapping["schema_version"], "schema_version"),
+            run_uri=_str(mapping["run_uri"], "run_uri"),
+            stage_name=_str(mapping["stage_name"], "stage_name"),
+            attempt=_int(mapping["attempt"], "attempt"),
+            prepared_at=_str(mapping["prepared_at"], "prepared_at"),
+            executor_name=_str(mapping["executor_name"], "executor_name"),
+            inputs=_artifact_ref_mapping(
+                _object_mapping(mapping["inputs"], "inputs"),
+                "inputs",
+            ),
+            fingerprint=_plain_mapping(
+                cast(Mapping[str, PlainData], mapping["fingerprint"]),
+                "fingerprint",
+            ),
+            stdout_path=_str(mapping["stdout_path"], "stdout_path"),
+            stderr_path=_str(mapping["stderr_path"], "stderr_path"),
+            traceback_path=_str(mapping["traceback_path"], "traceback_path"),
+            result_path=_str(mapping["result_path"], "result_path"),
+            resolved_runtime=_plain_mapping(
+                cast(Mapping[str, PlainData], mapping["resolved_runtime"]),
+                "resolved_runtime",
+            ),
+            executor_metadata=_plain_mapping(
+                cast(Mapping[str, PlainData], mapping.get("executor_metadata", {})),
+                "executor_metadata",
+            ),
+            metadata=_plain_mapping(
+                cast(Mapping[str, PlainData], mapping.get("metadata", {})),
+                "metadata",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StageWorkerResult:
+    schema_version: int
+    run_uri: str
+    stage_name: str
+    attempt: int
+    status: StageStatus
+    started_at: str
+    finished_at: str
+    executor_name: str
+    outputs: Mapping[str, ArtifactRef] = field(default_factory=dict)
+    failure: ExecutionFailure | Mapping[str, PlainData] | None = None
+    stdout_path: str | None = None
+    stderr_path: str | None = None
+    traceback_path: str | None = None
+    exit_code: int | None = None
+    signal: int | None = None
+    executor_metadata: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.schema_version != STAGE_WORKER_RESULT_SCHEMA_VERSION:
+            raise RunRequestError("StageWorkerResult.schema_version must be 1")
+        if not isinstance(self.run_uri, str) or not self.run_uri:
+            raise RunRequestError(
+                "StageWorkerResult.run_uri must be a non-empty string"
+            )
+        if not isinstance(self.stage_name, str) or not self.stage_name:
+            raise RunRequestError(
+                "StageWorkerResult.stage_name must be a non-empty string"
+            )
+        if (
+            not isinstance(self.attempt, int)
+            or isinstance(self.attempt, bool)
+            or self.attempt <= 0
+        ):
+            raise RunRequestError("StageWorkerResult.attempt must be positive")
+        object.__setattr__(self, "status", _stage_status(self.status))
+        if self.status not in {StageStatus.SUCCEEDED, StageStatus.FAILED}:
+            raise RunRequestError(
+                "StageWorkerResult.status must be SUCCEEDED or FAILED"
+            )
+        if not isinstance(self.started_at, str) or not self.started_at:
+            raise RunRequestError(
+                "StageWorkerResult.started_at must be a non-empty string"
+            )
+        if not isinstance(self.finished_at, str) or not self.finished_at:
+            raise RunRequestError(
+                "StageWorkerResult.finished_at must be a non-empty string"
+            )
+        if not isinstance(self.executor_name, str) or not self.executor_name:
+            raise RunRequestError(
+                "StageWorkerResult.executor_name must be a non-empty string"
+            )
+        for name in ("stdout_path", "stderr_path", "traceback_path"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise RunRequestError(
+                    f"StageWorkerResult.{name} must be a string when set"
+                )
+        if self.exit_code is not None and (
+            not isinstance(self.exit_code, int) or isinstance(self.exit_code, bool)
+        ):
+            raise RunRequestError("StageWorkerResult.exit_code must be an integer")
+        if self.signal is not None and (
+            not isinstance(self.signal, int)
+            or isinstance(self.signal, bool)
+            or self.signal <= 0
+        ):
+            raise RunRequestError("StageWorkerResult.signal must be a positive integer")
+        if self.signal is not None and self.exit_code is not None:
+            raise RunRequestError(
+                "StageWorkerResult.exit_code and signal must not both be set"
+            )
+        failure = _optional_execution_failure(self.failure)
+        if self.status == StageStatus.SUCCEEDED:
+            if failure is not None:
+                raise RunRequestError(
+                    "StageWorkerResult.failure must be null for SUCCEEDED"
+                )
+            if self.signal is not None or self.exit_code not in {None, 0}:
+                raise RunRequestError(
+                    "StageWorkerResult SUCCEEDED cannot carry nonzero process failure metadata"
+                )
+        if self.status == StageStatus.FAILED and failure is None:
+            raise RunRequestError("StageWorkerResult.failure is required for FAILED")
+        if failure is not None:
+            if failure.run_uri != self.run_uri:
+                raise RunRequestError("StageWorkerResult.failure.run_uri mismatch")
+            if failure.stage_name != self.stage_name:
+                raise RunRequestError("StageWorkerResult.failure.stage_name mismatch")
+            if failure.attempt != self.attempt:
+                raise RunRequestError("StageWorkerResult.failure.attempt mismatch")
+        outputs = _artifact_ref_mapping(self.outputs, "outputs")
+        if self.status == StageStatus.FAILED and outputs:
+            raise RunRequestError("StageWorkerResult FAILED must not include outputs")
+        object.__setattr__(self, "outputs", outputs)
+        object.__setattr__(self, "failure", failure)
+        object.__setattr__(
+            self,
+            "executor_metadata",
+            _plain_mapping(self.executor_metadata, "executor_metadata"),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        failure = cast(ExecutionFailure | None, self.failure)
+        return {
+            "schema_version": self.schema_version,
+            "run_uri": self.run_uri,
+            "stage_name": self.stage_name,
+            "attempt": self.attempt,
+            "status": self.status.value,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "executor_name": self.executor_name,
+            "outputs": {name: ref.to_dict() for name, ref in self.outputs.items()},
+            "failure": failure.to_dict() if failure is not None else None,
+            "stdout_path": self.stdout_path,
+            "stderr_path": self.stderr_path,
+            "traceback_path": self.traceback_path,
+            "exit_code": self.exit_code,
+            "signal": self.signal,
+            "executor_metadata": dict(self.executor_metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "StageWorkerResult":
+        try:
+            mapping = load_versioned_document(
+                data,
+                current_version=STAGE_WORKER_RESULT_SCHEMA_VERSION,
+                required={
+                    "run_uri",
+                    "stage_name",
+                    "attempt",
+                    "status",
+                    "started_at",
+                    "finished_at",
+                    "executor_name",
+                    "outputs",
+                    "failure",
+                },
+                optional={
+                    "stdout_path",
+                    "stderr_path",
+                    "traceback_path",
+                    "exit_code",
+                    "signal",
+                    "executor_metadata",
+                },
+            )
+        except SchemaVersionError as exc:
+            raise RunRequestError(f"StageWorkerResult.from_dict: {exc}") from exc
+        return cls(
+            schema_version=_int(mapping["schema_version"], "schema_version"),
+            run_uri=_str(mapping["run_uri"], "run_uri"),
+            stage_name=_str(mapping["stage_name"], "stage_name"),
+            attempt=_int(mapping["attempt"], "attempt"),
+            status=_stage_status(_str(mapping["status"], "status")),
+            started_at=_str(mapping["started_at"], "started_at"),
+            finished_at=_str(mapping["finished_at"], "finished_at"),
+            executor_name=_str(mapping["executor_name"], "executor_name"),
+            outputs=_artifact_ref_mapping(
+                _object_mapping(mapping["outputs"], "outputs"),
+                "outputs",
+            ),
+            failure=_optional_execution_failure(
+                cast(
+                    ExecutionFailure | Mapping[str, PlainData] | None,
+                    mapping.get("failure"),
+                )
+            ),
+            stdout_path=_optional_str(mapping.get("stdout_path"), "stdout_path"),
+            stderr_path=_optional_str(mapping.get("stderr_path"), "stderr_path"),
+            traceback_path=_optional_str(
+                mapping.get("traceback_path"), "traceback_path"
+            ),
+            exit_code=_optional_int(mapping.get("exit_code"), "exit_code"),
+            signal=_optional_int(mapping.get("signal"), "signal"),
+            executor_metadata=_plain_mapping(
+                cast(Mapping[str, PlainData], mapping.get("executor_metadata", {})),
+                "executor_metadata",
             ),
         )
 
@@ -688,7 +1041,7 @@ def _plain_mapping(value: Mapping[str, PlainData], path: str) -> dict[str, Plain
 
 
 def _artifact_ref_mapping(
-    value: Mapping[str, ArtifactRef], path: str
+    value: Mapping[str, ArtifactRef | object], path: str
 ) -> dict[str, ArtifactRef]:
     if not isinstance(value, Mapping):
         raise RunRequestError(f"{path} must be a mapping")
@@ -696,10 +1049,108 @@ def _artifact_ref_mapping(
     for key, ref in value.items():
         if not isinstance(key, str) or not key:
             raise RunRequestError(f"{path} keys must be non-empty strings")
-        if not isinstance(ref, ArtifactRef):
-            raise RunRequestError(f"{path}[{key!r}] must be ArtifactRef")
-        output[key] = ref
+        if isinstance(ref, ArtifactRef):
+            output[key] = ref
+            continue
+        try:
+            output[key] = ArtifactRef.from_dict(ref)
+        except ArtifactValidationError as exc:
+            raise RunRequestError(f"{path}[{key!r}] must be ArtifactRef") from exc
     return output
+
+
+def _coerce_fingerprint_record(
+    value: StageFingerprintRecord | Mapping[str, PlainData], path: str
+) -> StageFingerprintRecord:
+    if isinstance(value, StageFingerprintRecord):
+        return value
+    try:
+        return StageFingerprintRecord.from_dict(value)
+    except Exception as exc:
+        raise RunRequestError(f"{path} must be StageFingerprintRecord") from exc
+
+
+def _optional_execution_failure(
+    value: ExecutionFailure | Mapping[str, PlainData] | None,
+) -> ExecutionFailure | None:
+    if value is None:
+        return None
+    if isinstance(value, ExecutionFailure):
+        return value
+    if isinstance(value, Mapping):
+        return ExecutionFailure.from_dict(value)
+    raise RunRequestError("failure must be ExecutionFailure or mapping when set")
+
+
+def _object_mapping(value: object, path: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise RunRequestError(f"{path} must be a mapping")
+    return cast(Mapping[str, object], value)
+
+
+_SENSITIVE_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "auth",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
+
+
+def redact_executor_metadata(
+    metadata: Mapping[str, PlainData] | None,
+) -> dict[str, PlainData]:
+    """Return executor metadata safe for persisted worker records."""
+
+    return cast(
+        dict[str, PlainData],
+        _redact_plain_value(dict(metadata or {}), key_path=()),
+    )
+
+
+def _redact_plain_value(value: object, *, key_path: tuple[str, ...]) -> PlainData:
+    if key_path and _is_sensitive_key(key_path[-1]):
+        return "[redacted]"
+    if isinstance(value, Mapping):
+        if key_path and key_path[-1].lower() in {"env", "environment"}:
+            return {
+                "key_count": len(value),
+                "keys": cast(list[PlainData], sorted(str(key) for key in value)),
+            }
+        output: dict[str, PlainData] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            output[key_text] = _redact_plain_value(
+                item,
+                key_path=(*key_path, key_text),
+            )
+        return output
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, str)):
+        redacted_items: list[PlainData] = []
+        for item in value:
+            if isinstance(item, str) and _looks_like_secret_argument(item):
+                redacted_items.append("[redacted]")
+            else:
+                redacted_items.append(_redact_plain_value(item, key_path=key_path))
+        return redacted_items
+    try:
+        return ensure_plain_data(value, path="executor_metadata")
+    except PlainDataError as exc:
+        raise RunRequestError(
+            f"executor_metadata must be plain-data-compatible: {exc}"
+        ) from exc
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower().replace("-", "_")
+    return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
+
+
+def _looks_like_secret_argument(value: str) -> bool:
+    lowered = value.lower().replace("-", "_")
+    return any(part in lowered for part in _SENSITIVE_KEY_PARTS) and "=" in value
 
 
 def _reason_tuple(value: tuple[PlanReason, ...]) -> tuple[PlanReason, ...]:
@@ -766,6 +1217,8 @@ def _bool(value: object, field_name: str) -> bool:
 
 __all__ = [
     "EXECUTION_FAILURE_SCHEMA_VERSION",
+    "STAGE_WORKER_REQUEST_SCHEMA_VERSION",
+    "STAGE_WORKER_RESULT_SCHEMA_VERSION",
     "ConfigSnapshotInputs",
     "ExecutionFailure",
     "FailurePolicy",
@@ -774,4 +1227,7 @@ __all__ = [
     "StageExecutionRequest",
     "StageExecutionResult",
     "StageRunResult",
+    "StageWorkerRequest",
+    "StageWorkerResult",
+    "redact_executor_metadata",
 ]

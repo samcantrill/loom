@@ -20,9 +20,13 @@ if TYPE_CHECKING:
         StageExecutionRequest,
         StageExecutionResult,
         StageRunResult,
+        StageWorkerRequest,
+        StageWorkerResult,
     )
+    from loom.pipeline.execution.models import redact_executor_metadata
     from loom.pipeline.execution.outputs import validate_stage_outputs
     from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+    from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
 
 
 def __getattr__(name: str) -> object:
@@ -42,6 +46,10 @@ def __getattr__(name: str) -> object:
         "StageExecutionResult",
         "StageExecutionRuntimeError",
         "StageRunResult",
+        "StageWorkerRequest",
+        "StageWorkerResult",
+        "prepare_stage_attempt",
+        "redact_executor_metadata",
         "run_pipeline",
         "validate_stage_outputs",
     }:
@@ -62,9 +70,13 @@ def __getattr__(name: str) -> object:
             StageExecutionRequest,
             StageExecutionResult,
             StageRunResult,
+            StageWorkerRequest,
+            StageWorkerResult,
+            redact_executor_metadata,
         )
         from loom.pipeline.execution.outputs import validate_stage_outputs
         from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+        from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
 
         return {
             "ConfigSnapshotInputs": ConfigSnapshotInputs,
@@ -82,10 +94,15 @@ def __getattr__(name: str) -> object:
             "StageExecutionResult": StageExecutionResult,
             "StageExecutionRuntimeError": StageExecutionRuntimeError,
             "StageRunResult": StageRunResult,
+            "StageWorkerRequest": StageWorkerRequest,
+            "StageWorkerResult": StageWorkerResult,
+            "prepare_stage_attempt": prepare_stage_attempt,
+            "redact_executor_metadata": redact_executor_metadata,
             "run_pipeline": run_pipeline,
             "validate_stage_outputs": validate_stage_outputs,
         }[name]
     raise AttributeError(f"module 'loom.pipeline.execution' has no attribute {name!r}")
+
 
 __all__ = [
     "ConfigSnapshotInputs",
@@ -103,6 +120,10 @@ __all__ = [
     "StageExecutionResult",
     "StageExecutionRuntimeError",
     "StageRunResult",
+    "StageWorkerRequest",
+    "StageWorkerResult",
+    "prepare_stage_attempt",
+    "redact_executor_metadata",
     "run_pipeline",
     "validate_stage_outputs",
 ]
