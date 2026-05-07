@@ -217,7 +217,10 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; planning refinement did not consume this later implementation/test fixer budget.
+- Phase implementation refinement: used on 2026-05-07 for the one allowed
+  expanded-path implementation/test refinement pass; no source, test, or
+  `docs/structure.md` fixes were required after diff review and targeted
+  validation.
 - PR review: unused; no PR review has been requested or performed.
 - Blocker resolution: 0/3 used; no blocker-resolution pass has been needed.
 
@@ -247,7 +250,27 @@ make test-summary
   `make validate-pr` passed: Ruff, Pyright, default harness
   (552 passed, 13 skipped, 12 deselected), config-extra harness (396 passed,
   567 deselected), and `uv build`.
-- Refinement summary: scope boundaries tightened; preserved public runtime imports made explicit; `RunOptions`, resource schema, and descriptor behavior excluded; import-light package tests and `docs/structure.md` boundary updates made required; implementation refinement, PR review, and blocker-resolution budgets remain unused.
+- Planning refinement summary: scope boundaries tightened; preserved public runtime imports made explicit; `RunOptions`, resource schema, and descriptor behavior excluded; import-light package tests and `docs/structure.md` boundary updates made required.
+- Implementation/test refinement report: completed on 2026-05-07 as the one
+  allowed expanded-path implementation refinement pass. Reviewed
+  `AGENTS.md`, `docs/implementation-plans/implementation-plan-v4.md`, this
+  phase execution plan, `.codex/prompts/implementation-test-refinement.md`,
+  `.codex/templates/phase-refinement-report.md`, and the current diff from
+  `develop` through commit `d5c88a9`. Confirmed the diff remains strictly
+  limited to the runtime package boundary write scope, preserves
+  `import loom.pipeline.runtime`, preserved runtime public imports, existing
+  `RuntimeRequest` behavior and serialization, and does not introduce
+  `RunOptions`, typed resources, profiles, environment models, descriptors,
+  registries, preflight, CLI/config mapping, `runtime.json`, or runner request
+  rewiring.
+- Refinement fixes made: none. No blocking issues caused by this phase were
+  found in source, tests, or `docs/structure.md`; the only change in this pass
+  is this phase-plan completion and budget record.
+- Refinement validation: targeted package/unit command
+  `uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/unit/loom/pipeline/test_runtime_resources.py`
+  passed with 42 tests on 2026-05-07.
+- Refinement budget status after pass: phase implementation refinement used;
+  PR review unused; blocker resolution 0/3 used.
 - Blocker-resolution summary: none used.
 - PR preparation: not performed per fallback executor handoff; pending for
   `loom_pr_preparer`.
