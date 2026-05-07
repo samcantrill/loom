@@ -1037,7 +1037,7 @@ Completion summary:
 
 ### Phase 7 - Run Workflow And Runtime Metadata
 
-Status: pr_open
+Status: merged
 Branch: `codex/runtime-metadata-workflow`
 PR: https://github.com/samcantrill/loom/pull/76
 
@@ -1156,7 +1156,8 @@ Notes:
 
 Completion summary:
 
-- PR opened on 2026-05-07 against `develop`.
+- PR opened on 2026-05-07 against `develop` and merged on 2026-05-07.
+- Merge commit: `df1397745eae25e0df2d4070f3c5862661908699`.
 - Branch/worktree:
   `codex/runtime-metadata-workflow` /
   `/home/samcantrill/work/loom-worktrees/runtime-metadata-workflow`.
@@ -1170,3 +1171,6 @@ Completion summary:
   with package 50 passed / 1 skipped, unit 559 passed / 1 skipped, contract 53
   passed / 2 skipped, integration 15 passed / 7 skipped / 7 deselected, e2e
   16 passed, and config-extra 397 passed / 693 deselected.
+- Automated review: managing-agent review found and fixed allocated-run
+  runtime metadata incorrectly recording a null run URI for Python API callers.
+  GitHub CI `checks` passed after the fix.
