@@ -361,7 +361,9 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07 by managing agent after
+  full validation exposed public export contract expectations for the new store
+  inspection API; the contract tests were updated and validation passed.
 - PR review: unused
 - Blocker resolution: not used; no Phase 3 blocker-resolution pass has been
   authorized
@@ -374,10 +376,24 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   facade names, plain-data inspection shape, missing optional documents,
   missing-stage behavior, and bounded log semantics were made
   implementation-ready.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
+- Implementation summary: completed Phase 3 status/log inspection. Added
+  read-only store inspection models and `LocalRunStore` stage discovery/run-state
+  scanning, diagnostics status/log summary facades, `loom status`, `loom logs`,
+  bounded tail handling, path-only log mode, text formatting, and JSON result
+  envelopes.
+- Implementation validation: targeted package, unit, contract, integration,
+  e2e, Ruff, and Pyright checks passed. Final `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed with Ruff clean, Pyright 0 errors, default isolated suite
+  542 passed/13 skipped/9 deselected, config-extra 393 passed/557 deselected,
+  and build artifacts produced. Final `UV_CACHE_DIR=/tmp/uv-cache make
+  test-summary` passed with package 48 passed/1 skipped, unit 445 passed/1
+  skipped, contract 40 passed/2 skipped, integration 9 passed/6 skipped/9
+  deselected, e2e 15 passed, and config-extra 393 passed/557 deselected.
+- Refinement summary: expanded-path implementation refinement completed on
+  2026-05-07. Full validation found store public-export expectation updates
+  needed for `RunInspectionStore`, `RunStageInspection`, and
+  `RunStateInspection`; tests were updated, and final validation passed.
 - Blocker-resolution summary:
 - PR preparation:
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none known.
