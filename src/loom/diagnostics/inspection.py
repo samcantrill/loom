@@ -216,22 +216,29 @@ def inspect_run_artifact(
     if not artifact_id:
         raise DiagnosticsInspectionError("artifact_id must be a non-empty string")
     summary = inspect_run_artifacts(run_uri, run_store=run_store)
-    matches = tuple(
-        artifact
-        for artifact in summary.artifacts
-        if artifact.artifact_id == artifact_id
-    )
-    if not matches:
+    match: ArtifactSummary | None = None
+    duplicate_keys: list[str] = []
+    for artifact in summary.artifacts:
+        if artifact.artifact_id != artifact_id:
+            continue
+        if match is None:
+            match = artifact
+        else:
+            if not duplicate_keys:
+                duplicate_keys.append(match.key)
+            duplicate_keys.append(artifact.key)
+
+    if match is None:
         raise DiagnosticsInspectionError(
             f"unknown artifact {artifact_id!r} for run {run_uri}"
         )
-    if len(matches) > 1:
-        keys = ", ".join(artifact.key for artifact in matches)
+    if duplicate_keys:
+        keys = ", ".join(duplicate_keys)
         raise DiagnosticsInspectionError(
             f"ambiguous artifact {artifact_id!r} for run {run_uri}: {keys}"
         )
 
-    artifact = matches[0]
+    artifact = match
     store = _default_run_store() if run_store is None else run_store
     provenance = _plain_mapping_or_none(
         store.read_stage_provenance(run_uri, artifact.stage_name)

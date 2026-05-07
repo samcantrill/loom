@@ -153,7 +153,7 @@ def test_inspect_run_artifacts_sorts_and_summarizes_metadata(tmp_path: Path) -> 
     assert build.output_name == "data"
     assert build.metadata == {"label": "build/data"}
     assert build.provenance_available is True
-    assert summary.to_dict()["artifacts"][0]["artifact_type"] == "json"
+    assert build.to_dict()["artifact_type"] == "json"
 
 
 def test_inspect_run_artifact_includes_stage_provenance(tmp_path: Path) -> None:
