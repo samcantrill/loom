@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 4: Runtime Profiles and Merge Semantics`
 - PR URL: pending
@@ -17,11 +17,12 @@
 - Base branch: `develop`
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`, automated review passes, and validation/CI pass
-- Workflow path: expanded path, draft pass only in this assignment
+- Workflow path: expanded path, draft and refine passes completed
 - Plan quality gate: passed on 2026-05-07 after initial review, refinement, and confirmation review
 - Plan quality gate loop budget: initial review used, gate refinement used, confirmation review used
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: unused in this draft assignment; expected only if the manager continues the expanded path before implementation
+- Refine pass: completed by `loom_phase_planner` on 2026-05-07 to pin
+  absent-vs-explicit merge semantics
 - Blockers: none known
 
 ## Objective
@@ -76,6 +77,17 @@ resolved per-stage executor handoff data, and persisted `runtime.json`.
   `validate_stage_runtime_options`.
 - `src/loom/pipeline/runtime/environment.py` owns strict run/stage environment
   request models and privacy-preserving safe summaries.
+- `RunOptions.from_dict` and nested Phase 3 model parsers normalize defaults
+  for omitted fields, so parsed `RunOptions` objects cannot preserve authored
+  field presence. Phase 4 merge helpers therefore need an explicit source
+  contract rather than hidden sentinel state.
+- `ResourceRequest` owns entry validation, schema-versioned serialization, and
+  entry identity by resource kind. Phase 4 should merge stage resources by
+  `ResourceRequest.entries` key and replace a whole `ResourceEntry` when the
+  same kind appears in a higher-precedence source.
+- `ExecutionOptions.settings`, `RunOptions.adapter_options`, and
+  `StageRuntimeOptions.adapter_options` are frozen plain-data mappings; Phase
+  4 should preserve that shape and avoid deep adapter payload inspection.
 - `src/loom/pipeline/runtime/__init__.py` and `src/loom/pipeline/__init__.py`
   expose the current runtime option API; Phase 4 should add profile/merge names
   there without making runtime imports eager.
@@ -108,6 +120,11 @@ resolved per-stage executor handoff data, and persisted `runtime.json`.
 - Implement deterministic merge helpers that combine base options, the selected
   profile, and explicit options with this precedence:
   `config base < selected profile < explicit CLI/API invocation options`.
+- Define merge source handling explicitly: mapping sources are sparse and only
+  present keys participate in merge; already-normalized `RunOptions` and
+  `StageRuntimeOptions` instances are accepted as fully supplied typed sources
+  for their replaceable fields, while mapping-valued fields still use the
+  phase's shallow overlay rules.
 - Merge mappings shallowly unless an existing typed model owns stricter
   behavior; replace scalar values and lists/tuples; merge `stage_options` by
   exact stage ID.
@@ -153,9 +170,13 @@ resolved per-stage executor handoff data, and persisted `runtime.json`.
   diagnostics, but the profile selection object must not imply executor
   capability validation.
 - Optional or absent values should not clobber lower-precedence values unless a
-  source explicitly represents replacement according to the model contract. If
-  this cannot be expressed cleanly with current `RunOptions` defaults, stop for
-  the manager rather than inventing broad sentinel semantics.
+  source explicitly represents replacement according to the model contract.
+  Mapping inputs are the preferred way to preserve field absence. Typed
+  `RunOptions` inputs are already normalized and therefore represent a
+  fully-supplied source where replaceable default fields, such as
+  `dry_run=False`, `profile=None`, selector defaults, resume defaults, and
+  environment inheritance defaults, may intentionally override lower-precedence
+  data.
 - Adapter namespaces are opaque plain data in this phase. Preservation covers
   explicitly supplied `adapter_options` data and non-core top-level profile
   namespace sections, with deterministic freeze/serialization and shallow
@@ -189,6 +210,104 @@ from merged typed fields. If a profile mentions an unknown stage, the model can
 be constructed but supplied known-stage validation must fail deterministically
 after the pipeline's canonical stage IDs are known.
 
+## Merge Input Contract
+
+Phase 4 merge helpers should accept `None`, mappings, `RunOptions`,
+`RuntimeProfile`, and typed nested Phase 3 model instances where the public API
+surface makes that natural. `None` means "no source". Mapping sources are
+sparse: a missing key is absent and must not affect lower-precedence values.
+A present key is explicit, including present `None` for nullable scalar fields.
+Mapping sources should be normalized only after presence-aware merge decisions
+are made.
+
+Already-normalized `RunOptions` is a fully supplied invocation source. The
+helper may obtain its fields through `to_dict()` or equivalent typed access, and
+its default scalar/model fields are explicit for merge purposes. This is the
+simple public contract for callers that deliberately want to construct a full
+override object. It does not require adding sentinel values to `RunOptions`.
+
+Already-normalized `StageRuntimeOptions`, `ExecutionOptions`,
+`RunEnvironmentRequest`, `StageEnvironmentRequest`, and `ResourceRequest`
+instances are likewise typed supplied sections. Their scalar and sequence
+fields are explicit, while their mapping fields participate in the same
+shallow overlay rules as mapping input. In particular, an empty mapping does
+not delete lower-precedence mapping keys because Phase 4 has no deletion
+syntax.
+
+Profile selection is resolved before applying the profile source. The selected
+profile name is the highest-precedence present `profile` value from base and
+explicit sources, unless an explicit merge API argument selects the profile
+directly. A present `profile: null` in a sparse mapping or `profile=None` in a
+typed explicit `RunOptions` clears profile selection. Selecting an unknown
+profile fails before option merge. The resolved `RunOptions.profile` records
+the selected profile name, or `None` when no profile is selected, unless a
+higher-precedence explicit source intentionally clears it.
+
+## Field Merge Semantics
+
+Run-level fields:
+
+- `schema_version`: validate any present value against the current
+  `RUN_OPTIONS_SCHEMA_VERSION`; never use it for precedence. The resolved
+  output serializes the current schema version.
+- `run_uri`, `executor`, and `profile`: absent keeps the lower value; present
+  string or `None` replaces the lower value. Executor name validation remains
+  syntactic only in this phase.
+- `dry_run`: absent keeps the lower value; present bool replaces the lower
+  value. A typed `RunOptions(dry_run=False)` can intentionally override a
+  lower `True`.
+- `tags`: shallow merge by tag key. Higher-precedence values replace matching
+  keys. There is no tag deletion syntax; an empty sparse mapping does not clear
+  lower tags.
+- `notes`: replace the full sequence when present. An explicit empty sequence
+  clears lower notes.
+- `selectors`: merge by selector field presence. `force_stages`,
+  `only_stages`, and `skip_stages` replace their full sequences when present;
+  `from_stage` replaces with a string or `None` when present. Do not evaluate
+  graph reachability or stage eligibility.
+- `resume`: merge by `ResumeOptions` field presence. `enabled` replaces when
+  present. Do not add resume artifact or fingerprint policy here.
+- `execution`: shallow merge `ExecutionOptions.settings` by setting key.
+  Higher-precedence values replace matching keys. There is no setting deletion
+  syntax.
+- `environment`: merge by environment field presence. `inherit` replaces when
+  present; `set_variables` shallow-merges by variable name; `unset_variables`
+  replaces the full sequence when present. Do not apply environment variables
+  locally or persist names/values.
+- `adapter_options`: shallow merge by namespace. A higher-precedence namespace
+  replaces the whole namespace payload; nested adapter mappings are not deep
+  merged or schema-validated.
+
+Stage-level fields:
+
+- `stage_options`: shallow merge by exact stage ID. A higher-precedence source
+  adding a new stage ID adds that stage. A higher-precedence source for an
+  existing stage ID merges that stage's `StageRuntimeOptions` fields. There is
+  no stage-option deletion syntax.
+- `StageRuntimeOptions.resources`: merge by `ResourceRequest.entries` key.
+  A higher-precedence resource kind replaces the whole `ResourceEntry` for
+  that kind. Different kinds are retained together. Empty `entries` does not
+  clear lower resource entries.
+- `StageRuntimeOptions.execution`: shallow merge
+  `ExecutionOptions.settings` by setting key, with higher values replacing
+  matching keys and no deletion syntax.
+- `StageRuntimeOptions.environment`: same field behavior as run-level
+  environment, using `StageEnvironmentRequest`.
+- `StageRuntimeOptions.adapter_options`: shallow merge by namespace; matching
+  namespaces replace the whole payload, with no deep merge or validation.
+
+Profile-specific mapping behavior:
+
+- Core profile fields are the existing `RunOptions` fields except
+  `schema_version`; they parse and validate using the Phase 3 models.
+- Non-core top-level profile sections are adapter namespace payloads. They are
+  folded into `RunOptions.adapter_options` under the section name.
+- If one profile mapping supplies the same adapter namespace both through
+  `adapter_options` and as a non-core top-level section, fail with a clear
+  path-aware duplicate namespace error rather than choosing an implicit winner.
+- Duplicate namespaces across different precedence sources are normal merge
+  conflicts: the higher-precedence namespace payload replaces the lower one.
+
 ## Acceptance Criteria
 
 - Public imports expose runtime profile and merge APIs from
@@ -200,8 +319,18 @@ after the pipeline's canonical stage IDs are known.
 - Selecting a missing or invalid profile fails clearly before merge.
 - Base/profile/explicit sources merge deterministically into a normalized
   `RunOptions`.
-- Scalars and sequences replace; mappings merge shallowly; `stage_options`
-  merge by exact stage ID.
+- Sparse mapping sources preserve absent fields; typed `RunOptions` sources are
+  treated as fully supplied for replaceable fields without adding sentinel
+  machinery.
+- Run-level fields follow the documented behavior for nullable scalars,
+  booleans, tags, notes, selectors, resume, execution settings, environment,
+  and adapter namespaces.
+- Stage-level fields follow the documented behavior for exact stage IDs,
+  resource entries, execution settings, environment, and adapter namespaces.
+- Resource entries merge by resource kind and replace the whole
+  `ResourceEntry` on kind conflict.
+- Scalars and sequences replace; mappings merge shallowly with no deletion
+  syntax; `stage_options` merge by exact stage ID.
 - Adapter namespaces and payloads, including non-core top-level profile
   sections, are preserved as frozen plain data without descriptor/schema
   interpretation.
@@ -246,6 +375,7 @@ after the pipeline's canonical stage IDs are known.
 | Silently accept misspelled core fields as adapter namespaces | Core runtime fields must stay strict so profile typos fail; intentional non-core namespaces remain preserved as adapter data. |
 | Glob, tag, group, or pattern stage matching | Exact stage IDs are the v4 contract and avoid inventing graph or selection policy in runtime. |
 | Validate executor names or adapter namespaces during merge | Descriptor/capability ownership starts in Phase 5. |
+| Broad sentinel machinery for every `RunOptions` field | Sparse mapping sources plus fully supplied typed sources provide a simpler explicit contract for absent-vs-explicit semantics. |
 
 ## Debt Introduced
 
@@ -253,7 +383,8 @@ after the pipeline's canonical stage IDs are known.
 | --- | --- | --- |
 | No glob/tag/group stage option matching | Exact IDs keep merge deterministic and reviewable. | Revisit only when a later roadmap phase defines matching semantics. |
 | Adapter payloads are preserved but not validated | Phase 4 must not introduce descriptors, schemas, or plugins. | Revisit in descriptor, adapter, and plugin phases. |
-| Config-shaped data is supported only as plain mappings | Config loading and CLI mapping are Phase 6 scope. | Revisit when Phase 6 wires config and CLI inputs. |
+| Config-shaped data is supported only as plain sparse mappings | Config loading and CLI mapping are Phase 6 scope; sparse mappings also avoid sentinel state for absent fields. | Revisit when Phase 6 wires config and CLI inputs. |
+| No deletion syntax for mapping fields | Shallow overlay keeps Phase 4 predictable and avoids inventing unset semantics before config/CLI UX exists. | Revisit when users need to clear inherited tags, settings, resource entries, or adapter namespaces. |
 | No explicit user-facing profile command behavior | This phase is Python/runtime API behavior only. | Revisit in Phase 6 CLI/config mapping. |
 
 ## Reviewability
@@ -282,10 +413,11 @@ after the pipeline's canonical stage IDs are known.
    serialization, profile-name validation, and facade exports.
 2. Add profile collection/selection helpers with clear errors for missing or
    invalid selected profiles.
-3. Add merge helpers for base/profile/explicit sources that return normalized
-   `RunOptions` and preserve existing Phase 3 model behavior.
-4. Add exact-stage merge behavior for `StageRuntimeOptions` and compose with
-   known-stage validation after merge.
+3. Add presence-aware merge helpers for sparse mapping sources and
+   fully-supplied typed sources that return normalized `RunOptions`.
+4. Add exact-stage merge behavior for `StageRuntimeOptions`, including
+   resource-entry merge/replacement by kind, and compose with known-stage
+   validation after merge.
 5. Add package, unit, contract, and narrow integration tests that pin import
    boundaries, selection failures, schema failures, adapter namespace
    preservation, and deterministic merge rules.
@@ -313,9 +445,13 @@ after the pipeline's canonical stage IDs are known.
   `tests/unit/loom/pipeline/test_runtime_options.py` if needed.
 - Required assertions or deferral reason: profile construction,
   serialization, strict core-field validation, selected-profile success and
-  failures, schema errors, base/profile/explicit precedence, scalar/list
-  replacement, shallow mapping merge, exact-stage option merge, adapter
-  namespace preservation, and known-stage validation after merge.
+  failures, schema errors, base/profile/explicit precedence, sparse mapping
+  field-presence behavior, typed `RunOptions` as a fully supplied source,
+  nullable scalar clearing, scalar/list replacement, shallow mapping merge,
+  selector/resume field merge, run/stage environment merge, resource-entry
+  merge/replacement by kind, exact-stage option merge, adapter namespace
+  preservation, duplicate in-profile adapter namespace errors, and known-stage
+  validation after merge.
 
 ### Contract Suite
 
@@ -324,8 +460,10 @@ after the pipeline's canonical stage IDs are known.
   similarly focused coverage.
 - Required assertions or deferral reason: plain-data profile serialization and
   deterministic merge contract, including that callers receive normalized
-  `RunOptions`, adapter namespaces are preserved as plain data, and runtime
-  merge does not import or depend on config/CLI/execution/descriptors.
+  `RunOptions`, sparse mappings preserve absent fields, typed `RunOptions`
+  sources are accepted as fully supplied, adapter namespaces are preserved as
+  plain data, resource entries merge by kind, and runtime merge does not import
+  or depend on config/CLI/execution/descriptors.
 
 ### Integration Suite
 
@@ -334,8 +472,10 @@ after the pipeline's canonical stage IDs are known.
   or focused additions near `tests/integration/pipeline/test_runtime_options_integration.py`.
 - Required assertions or deferral reason: config-shaped base/profile/explicit
   dictionaries normalize to expected `RunOptions` using synthetic exact stage
-  IDs; known-stage validation succeeds/fails deterministically after merge.
-  No actual config loader, CLI, runner, preflight, or store wiring is required.
+  IDs; profile selection through `profile` fields resolves before merge;
+  explicit `profile: null` disables profile selection; known-stage validation
+  succeeds/fails deterministically after merge. No actual config loader, CLI,
+  runner, preflight, or store wiring is required.
 
 ### E2E Suite
 
@@ -357,10 +497,14 @@ after the pipeline's canonical stage IDs are known.
 
 - Merge semantics become a durable public contract. Tests must pin precedence,
   replacement, shallow mapping behavior, and exact-stage merge behavior.
-- Current `RunOptions` defaults can make "unset" versus "explicit default"
-  ambiguous. If preserving lower-precedence values cannot be done without a
-  clear caller contract, stop for the manager instead of adding broad sentinel
-  behavior.
+- Current `RunOptions` defaults make "unset" versus "explicit default"
+  ambiguous after normalization. The refined contract resolves this by treating
+  mappings as sparse and typed `RunOptions` as fully supplied. Implementation
+  must not add broad sentinel machinery or silently reinterpret typed defaults
+  as absent.
+- Mapping fields have no deletion syntax in this phase. This is accepted debt,
+  but tests should make it explicit that empty sparse mappings do not clear
+  inherited tags, execution settings, resource entries, or adapter namespaces.
 - Adapter namespace preservation can drift into schema validation. Keep
   adapter data opaque and leave warnings/claims to Phase 5.
 - Import boundaries can regress if profile code imports config, CLI, execution,
@@ -393,13 +537,14 @@ make test-summary
   helpers; narrow integration tests after known-stage validation composition.
 - Decisions the executor must not revisit: precedence is
   `config base < selected profile < explicit CLI/API invocation options`;
-  mappings merge shallowly except where typed models own stricter behavior;
-  scalars and lists/tuples replace; stage options merge by exact stage ID; no
-  descriptor/preflight/config/CLI/runtime.json/plugin/runner behavior belongs
-  in this phase.
-- Conditions that require stopping for the manager: current `RunOptions`
-  defaults cannot distinguish absent from explicit values well enough to
-  preserve deterministic precedence; profile merge needs public sentinel or
+  sparse mappings preserve absent fields; typed `RunOptions` sources are fully
+  supplied; mappings merge shallowly except where typed models own stricter
+  behavior; scalars and lists/tuples replace; resource entries merge by kind
+  and replace whole entries on conflict; stage options merge by exact stage ID;
+  no descriptor/preflight/config/CLI/runtime.json/plugin/runner behavior
+  belongs in this phase.
+- Conditions that require stopping for the manager: implementation would need
+  public sentinel values, deletion syntax, deep adapter payload merge, or
   replacement semantics not approved by the plan; satisfying tests requires
   importing config/CLI/execution/descriptors; adapter namespace preservation
   cannot be represented without schema validation.
@@ -407,8 +552,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase execution plan draft: used on 2026-05-07.
-- Phase execution plan refine: unused; expanded-path continuation is expected
-  only if the manager assigns a refine pass before implementation.
+- Phase execution plan refine: used on 2026-05-07 to define sparse mapping
+  versus typed-source merge semantics and exact field behavior.
 - Phase implementation refinement: unused; reserved for the implementation
   stage if targeted validation fails, suite coverage is missing, or the manager
   continues the expanded path.
