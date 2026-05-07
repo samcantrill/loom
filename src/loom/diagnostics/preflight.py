@@ -626,12 +626,11 @@ def _coerce_selectors(value: object) -> object:
 
 
 def _selected_run_uri(context: _Context) -> str | None:
-    if context.request.run_uri is not None:
-        return context.request.run_uri
-    if context.request.runtime_options is None and context._runtime_options is None:
-        return None
-    options = cast(Any, context.runtime_options())
-    return cast(str | None, options.run_uri)
+    if context.request.runtime_options is not None or context._runtime_options is not None:
+        options = cast(Any, context.runtime_options())
+        if options.run_uri is not None:
+            return cast(str, options.run_uri)
+    return context.request.run_uri
 
 
 def _request_runtime_source(request: PreflightRequest) -> object | None:
