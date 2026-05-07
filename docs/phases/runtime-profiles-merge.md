@@ -528,6 +528,41 @@ make validate-pr
 make test-summary
 ```
 
+## Implementation Completion Notes
+
+- Implementation status: complete on 2026-05-07; PR preparation remains
+  pending.
+- Implementation commit: `7a929d3` (`feat: add runtime profile merge APIs`).
+- Summary: added `RuntimeProfile`, `RuntimeProfileCollection`, profile
+  parsing/selection helpers, and `merge_run_options` under
+  `loom.pipeline.runtime`; exported the API from `loom.pipeline.runtime` and
+  `loom.pipeline`; added package, unit, contract, and integration coverage for
+  strict profile parsing, adapter namespace preservation, sparse mapping
+  behavior, typed `RunOptions` behavior, exact-stage stage option merge,
+  resource-entry merge, profile selection failures, and known-stage
+  validation.
+- Scope notes: no executor descriptors, preflight checks, config/CLI mapping,
+  runner handoff, persisted `runtime.json`, plugin/adapter schemas, local
+  environment application, or glob/tag/group stage matching were added.
+- Targeted validation passed:
+  - `uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py`
+    reported 27 passed.
+  - `uv run pytest tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_runtime_profiles.py`
+    reported 31 passed.
+  - `uv run pytest tests/contracts/test_runtime_options_contract.py tests/contracts/test_runtime_profiles_contract.py`
+    reported 7 passed.
+  - `uv run pytest tests/integration/pipeline -k "runtime_options or runtime_profiles"`
+    reported 3 passed, 4 skipped, and 7 deselected.
+- Final validation passed:
+  - `make validate-pr` passed Ruff, Pyright, default harness tests
+    (636 passed, 13 skipped, 12 deselected), config-extra harness tests
+    (396 passed, 651 deselected), and `uv build`.
+  - `make test-summary` wrote `build/test-summary.md` with package
+    (50 passed, 1 skipped), unit (526 passed, 1 skipped), contract
+    (48 passed, 2 skipped), integration (12 passed, 6 skipped, 12 deselected),
+    e2e (15 passed), and config-extra (396 passed, 651 deselected) summaries.
+- Blockers: none.
+
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices: profile model and exports first, selection
@@ -554,9 +589,8 @@ make test-summary
 - Phase execution plan draft: used on 2026-05-07.
 - Phase execution plan refine: used on 2026-05-07 to define sparse mapping
   versus typed-source merge semantics and exact field behavior.
-- Phase implementation refinement: unused; reserved for the implementation
-  stage if targeted validation fails, suite coverage is missing, or the manager
-  continues the expanded path.
+- Phase implementation refinement: not needed after local implementation; the
+  required targeted suites and `make validate-pr` passed.
 - PR body draft: unused; reserved for PR preparation.
 - PR body refine/open pass: unused; reserved for PR preparation.
 - PR review: unused; reserved for automated PR review.
