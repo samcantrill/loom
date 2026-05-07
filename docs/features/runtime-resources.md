@@ -329,7 +329,8 @@ runtime_profiles:
   local:
     executor: local
     execution:
-      max_parallel_stages: 2
+      settings:
+        max_parallel_stages: 2
 
   cluster:
     executor: slurm

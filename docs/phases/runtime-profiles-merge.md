@@ -561,6 +561,23 @@ make test-summary
     (50 passed, 1 skipped), unit (526 passed, 1 skipped), contract
     (48 passed, 2 skipped), integration (12 passed, 6 skipped, 12 deselected),
     e2e (15 passed), and config-extra (396 passed, 651 deselected) summaries.
+- Implementation refinement pass: used on 2026-05-07 for the expanded-path
+  public merge/API review. Findings: no implementation or test defects found
+  against the refined sparse-mapping, typed-source, no-deletion,
+  stage/resource/environment, adapter namespace, and profile-selection
+  contract. Documentation refinement corrected the public runtime profile
+  example so `max_parallel_stages` appears under `execution.settings`, matching
+  the `ExecutionOptions` shape.
+- Implementation refinement validation passed:
+  - `uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py`
+    reported 27 passed.
+  - `uv run pytest tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_runtime_profiles.py`
+    reported 31 passed.
+  - `uv run pytest tests/contracts/test_runtime_options_contract.py tests/contracts/test_runtime_profiles_contract.py`
+    reported 7 passed.
+  - `uv run pytest tests/integration/pipeline -k "runtime_options or runtime_profiles"`
+    reported 3 passed and 20 deselected.
+  - `git diff --check` passed.
 - Blockers: none.
 
 ## Handoff Notes For `loom_phase_executor`
@@ -589,8 +606,9 @@ make test-summary
 - Phase execution plan draft: used on 2026-05-07.
 - Phase execution plan refine: used on 2026-05-07 to define sparse mapping
   versus typed-source merge semantics and exact field behavior.
-- Phase implementation refinement: not needed after local implementation; the
-  required targeted suites and `make validate-pr` passed.
+- Phase implementation refinement: used on 2026-05-07 for the expanded-path
+  refinement pass; documentation example alignment was fixed and no code/test
+  defects were found.
 - PR body draft: unused; reserved for PR preparation.
 - PR body refine/open pass: unused; reserved for PR preparation.
 - PR review: unused; reserved for automated PR review.
