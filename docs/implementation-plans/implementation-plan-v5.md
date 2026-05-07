@@ -577,9 +577,9 @@ Completion summary:
 
 ### Phase 3 - Subprocess Executor And Serial Run Integration
 
-Status: pending
+Status: pr_open
 Branch: `codex/subprocess-executor`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/79
 
 Goal:
 
@@ -682,7 +682,28 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened on 2026-05-07 against `develop`:
+  https://github.com/samcantrill/loom/pull/79.
+- Implemented `SubprocessExecutor`, subprocess worker command construction,
+  process metadata redaction, worker result readback, process/result conflict
+  handling, missing/invalid/mismatched result failures, and signal-aware
+  process failure mapping.
+- Wired `loom run CONFIG --executor subprocess` through CLI executor selection
+  and the parent runner's prepared-worker path. The worker writes only
+  `worker_result.json`; the parent runner still owns final outputs, failure
+  persistence, provenance, artifact indexes, stage status, and run status.
+- Registered an import-light subprocess runtime descriptor so selected
+  subprocess execution passes current executor capability validation without
+  loading executor implementation modules through runtime imports.
+- Added package, unit, contract, integration, and e2e coverage for subprocess
+  exports/import boundaries, command construction, process failure mapping,
+  signal metadata, result conflicts, runner preparation/finalization, CLI
+  selection, and real success/failure subprocess CLI smoke runs.
+- Validation before PR: focused tests passed with 36 passed/1 skipped; focused
+  Ruff and Pyright passed; `make validate-pr` passed; `make test-summary`
+  passed with package 50 passed/1 skipped, unit 587 passed/1 skipped, contract
+  55 passed/2 skipped, integration 20 passed/7 skipped/7 deselected, e2e 18
+  passed, and config-extra 400 passed/730 deselected.
 
 ### Phase 4 - Preflight, Diagnostics, And CLI UX
 
