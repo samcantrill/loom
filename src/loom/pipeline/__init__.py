@@ -14,7 +14,18 @@ from loom.pipeline.errors import (
     StatusSerializationError,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
-from loom.pipeline.runtime import RuntimeKind, RuntimeRequest, parse_runtime_request
+from loom.pipeline.runtime import (
+    ExecutionOptions,
+    RunEnvironmentRequest,
+    RunOptions,
+    RuntimeKind,
+    RuntimeRequest,
+    StageEnvironmentRequest,
+    StageRuntimeOptions,
+    parse_run_options,
+    parse_runtime_request,
+    validate_stage_runtime_options,
+)
 from loom.pipeline.specs import (
     PipelineSpec,
     StageFactorySpec,
@@ -81,7 +92,14 @@ __all__ = [
     "ResourceRequest",
     "ResourceEntry",
     "parse_resource_request",
+    "ExecutionOptions",
+    "RunEnvironmentRequest",
+    "RunOptions",
     "RuntimeKind",
     "RuntimeRequest",
+    "StageEnvironmentRequest",
+    "StageRuntimeOptions",
+    "parse_run_options",
     "parse_runtime_request",
+    "validate_stage_runtime_options",
 ]

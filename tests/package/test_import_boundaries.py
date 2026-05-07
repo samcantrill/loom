@@ -164,6 +164,36 @@ def test_import_pipeline_does_not_import_forbidden_runtime_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.runtime
+
+        for forbidden in (
+            "loom.config",
+            "loom.cli",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.pipeline.runtime")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_stores_does_not_import_config_or_cli_layers() -> None:
     script = dedent(
         """
@@ -321,10 +351,18 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
         assert PipelineRuntimeRequest is RuntimeRequest
         assert pipeline_parse_runtime_request is parse_runtime_request
         assert set(runtime.__all__) == {
+            "RUN_OPTIONS_SCHEMA_VERSION",
             "RUNTIME_SCHEMA_VERSION",
+            "ExecutionOptions",
+            "RunEnvironmentRequest",
+            "RunOptions",
             "RuntimeKind",
             "RuntimeRequest",
+            "StageEnvironmentRequest",
+            "StageRuntimeOptions",
+            "parse_run_options",
             "parse_runtime_request",
+            "validate_stage_runtime_options",
         }
 
         for forbidden in (
