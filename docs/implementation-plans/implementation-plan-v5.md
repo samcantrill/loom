@@ -716,9 +716,9 @@ Completion summary:
 
 ### Phase 4 - Preflight, Diagnostics, And CLI UX
 
-Status: pending
+Status: pr_open
 Branch: `codex/subprocess-preflight-diagnostics`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/80
 
 Goal:
 
@@ -800,7 +800,8 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened against `develop` on 2026-05-07:
+  https://github.com/samcantrill/loom/pull/80
 
 ### Phase 5 - Contract Hardening, Examples, And Documentation
 
