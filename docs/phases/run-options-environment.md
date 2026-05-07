@@ -251,8 +251,23 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-07.
 - Final phase execution plan: refined on 2026-05-07 for expanded-path implementation.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed on 2026-05-07. Added import-light public
+  runtime option models with `RunOptions`, `ExecutionOptions`,
+  `StageRuntimeOptions`, `RunEnvironmentRequest`, and
+  `StageEnvironmentRequest`; exposed facade and `loom.pipeline` exports; added
+  plain-data serialization, immutable mappings, safe metadata summaries,
+  planning-owned selector/resume adapters, entry-based resource integration,
+  exact-stage validation, and supplied-known-stage validation without wiring
+  runner/config/CLI/stores/preflight/profile behavior.
+- Implementation validation: targeted package tests passed
+  (`uv run pytest tests/package/test_import_boundaries.py
+  tests/package/test_pipeline_api.py`); targeted runtime unit tests passed
+  (`uv run pytest tests/unit/loom/pipeline/test_runtime_resources.py
+  tests/unit/loom/pipeline/test_runtime_options.py`); runtime options contract
+  tests passed (`uv run pytest tests/contracts/test_runtime_options_contract.py`);
+  narrow integration selection passed (`uv run pytest tests/integration/pipeline
+  -k runtime_options`); `make validate-pr` passed after renaming the integration
+  runtime-options test file to avoid a Pytest module basename collision.
 - Refinement summary: scope clarified for durable public runtime models, entry-based resource integration, planning adapters, execution-envelope deferral, privacy guarantees, stage validation boundaries, and explicit later-phase exclusions.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
