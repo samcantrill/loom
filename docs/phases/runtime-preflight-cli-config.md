@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; validation passed; refinement pending
+- Status: refinement complete; validation passed; PR preparation pending
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 6: Runtime Preflight and CLI/Config Mapping`
 - Branch: `codex/runtime-preflight-cli-config`
@@ -361,7 +361,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -384,7 +384,12 @@ make test-summary
   config/CLI/preflight unit tests, preflight contracts, package import/API
   tests, diagnostics integration tests with config extras, and CLI e2e tests
   with config extras.
-- Refinement summary: pending.
+- Refinement summary: bounded implementation refinement reviewed the Phase 6
+  diff for scope leaks and future-version risk, then tightened preflight run
+  URI precedence so an explicit `runtime_options.run_uri` wins when supplied,
+  legacy `PreflightRequest.run_uri` remains compatible, and run/artifact-only
+  preflight groups still skip without forcing config composition. Focused
+  runtime/preflight tests, Ruff, and Pyright passed after the refinement.
 - Blocker-resolution summary: pending.
 - PR preparation: pending.
 - Stack maintenance: not needed yet.
