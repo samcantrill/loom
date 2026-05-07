@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: Runtime Options
 - PR title: `Runtime Options - Phase 6: Runtime Preflight and CLI/Config Mapping`
 - Branch: `codex/runtime-preflight-cli-config`
@@ -16,7 +16,7 @@
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`,
   automated review passes, and validation/CI pass
-- Workflow path: expanded path, draft pass complete and refine pass pending
+- Workflow path: expanded path, draft and refine passes complete
 - PR preparation path: expanded path
 - Successor dependency notes: Phase 7 should consume the normalized
   `RunOptions` and preflight diagnostics from this phase without redefining
@@ -25,8 +25,9 @@
 - Plan quality gate loop budget: initial review used, gate refinement used,
   confirmation review used
 - Draft pass: completed by managing agent on 2026-05-07
-- Refine pass: pending; required because this phase changes public CLI/config
-  and stable preflight contracts
+- Refine pass: completed by managing agent on 2026-05-07; used to pin sparse
+  explicit CLI merge behavior, preflight check ownership, and run-command
+  executor boundaries
 - Setup limitations: branch/worktree created from local `develop`; no full
   validation has run for this planning-only pass
 - Blockers: none known
@@ -119,7 +120,9 @@ payload schemas, and concrete executor descriptors beyond the metadata-only
   `--profile`, `--executor`, `--run-uri`, `--dry-run`, selector flags,
   `--resume`, repeatable `--tag KEY=VALUE`, and repeatable `--note TEXT`.
 - Keep CLI flags as explicit `RunOptions` sources, layered after config
-  runtime sections and the selected runtime profile.
+  runtime sections and the selected runtime profile. This source must be a
+  sparse mapping, not a fully defaulted `RunOptions`, so absent CLI flags do
+  not override config/profile fields.
 - Add `PreflightGroup.RUNTIME` and `PreflightGroup.RESOURCES`, update default
   group order, group normalization, and `STABLE_CHECK_IDS`.
 - Add checks for `runtime.options`, `runtime.profile`,
@@ -128,6 +131,12 @@ payload schemas, and concrete executor descriptors beyond the metadata-only
 - Map Phase 5 capability diagnostics into executor or resource preflight
   checks with deterministic details while preserving the existing preflight
   result JSON schema.
+- Extend `PreflightRequest` with an explicit runtime-options source and keep
+  `selectors` compatibility for existing callers until CLI/preflight uses the
+  normalized runtime options internally.
+- Let `loom run` run the new runtime preflight before concrete execution, then
+  keep the existing local-only execution guard for any descriptor-known
+  non-local executor that future registries might make preflight-clean.
 - Preserve v3 strict behavior by keeping warnings as `WARN` results and using
   the existing CLI strict exit-code logic.
 - Add focused docs if needed to describe user-facing config and CLI runtime
@@ -157,6 +166,8 @@ payload schemas, and concrete executor descriptors beyond the metadata-only
   data still passes through the strict Phase 3/4 runtime parsers.
 - CLI `--tag` uses `KEY=VALUE` pairs and rejects missing or empty keys.
 - CLI notes append in argument order and are plain strings.
+- CLI boolean flags are explicit only when set. In particular, absent
+  `--dry-run` and `--resume` must not overwrite config/profile runtime values.
 - Runtime profile selection can come from config `runtime.profile` or explicit
   CLI `--profile`; explicit CLI selection wins through the existing merge
   helper.
@@ -170,11 +181,18 @@ must output the same normalized `RunOptions.to_dict()` shape as the Python API.
 Preflight request/result serialization remains the existing plain-data schema;
 new checks only add stable group/check values and details payloads.
 
+`runtime.options` owns parse/merge failures for runtime option data.
+`runtime.profile` owns selected-profile existence and reports the active
+profile when selection succeeds. `runtime.stage_options` owns exact-stage
+validation against the composed pipeline's stage IDs.
+
 `executor.resolve` owns selected-executor existence. `executor.capabilities`
 owns non-resource capability diagnostics such as unclaimed adapter namespaces.
-`resources.capabilities` owns resource support diagnostics. Unknown profiles
-and malformed runtime sections are runtime/profile check failures. Unknown
-resource kinds remain Phase 2 schema errors before capability validation.
+If executor resolution fails, capability checks should skip with a clear
+`executor_unresolved` reason rather than duplicating the unknown-executor
+failure. `resources.capabilities` owns resource support diagnostics and should
+skip when the executor is unresolved. Unknown resource kinds remain Phase 2
+schema errors before capability validation.
 
 ## Design Impact
 
@@ -212,7 +230,7 @@ resource kinds remain Phase 2 schema errors before capability validation.
 | --- | --- | --- |
 | Nested runtime/profile/adapter fields remain config/Python API only | This keeps CLI scope reviewable and avoids inventing ad hoc nested flag syntax. | A later roadmap requires ergonomic CLI control for a specific nested field. |
 | Built-in preflight uses the default descriptor registry only | Plugin discovery is out of scope for v4 Phase 6. | A plugin/adapter roadmap adds descriptor loading or registry injection. |
-| Run command may still reject non-local execution after preflight | Concrete executor behavior is out of scope until Phase 7+ executor workflow work. | A later phase adds non-local executor implementations or run workflow dispatch. |
+| Run command still rejects non-local concrete execution after preflight | Concrete executor behavior is out of scope until Phase 7+ executor workflow work. | A later phase adds non-local executor implementations or run workflow dispatch. |
 
 ## Reviewability
 
@@ -228,7 +246,7 @@ resource kinds remain Phase 2 schema errors before capability validation.
 ## Implementation Steps
 
 1. Add runtime config extraction/merge helpers and tests for
-   `runtime`/`runtime_profiles` plus explicit `RunOptions` layering.
+   `runtime`/`runtime_profiles` plus sparse explicit runtime-option layering.
 2. Extend CLI option adapters and parsers for runtime flags, tags, notes, and
    shared conversion into explicit `RunOptions`.
 3. Extend preflight request/context/group/check models and map normalized
@@ -350,7 +368,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed on 2026-05-07.
-- Final phase execution plan: pending refine pass.
+- Final phase execution plan: refined on 2026-05-07.
 - Implementation summary: pending.
 - Implementation validation: pending.
 - Refinement summary: pending.
