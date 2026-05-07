@@ -572,7 +572,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase plan refinement: used on 2026-05-07 for this expanded-path refine pass
-- Phase implementation refinement: unused
+- Phase implementation refinement: explicitly not needed; targeted validation
+  and coverage obligations passed.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -580,12 +581,37 @@ make test-summary
 
 - Draft plan: completed on 2026-05-07 by `loom_phase_planner`.
 - Final phase execution plan: refined on 2026-05-07 by `loom_phase_planner`.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed on 2026-05-07 with import-light runtime
+  descriptor/capability contracts exported from `loom.pipeline.runtime` and
+  `loom.pipeline`; added metadata-only local descriptor defaults, immutable
+  descriptor registry composition, selected-executor resolution,
+  deterministic capability diagnostics, local ignored-resource warnings,
+  descriptor fallback unsupported-resource errors, and adapter namespace
+  ownership warnings without importing concrete executors or diagnostics.
+- Implementation commits:
+  - `cf8e129` `feat: add executor capability validation`
+  - `c559f0f` `test: cover executor capability contracts`
+- Implementation validation:
+  - `uv run pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/package/test_pipeline_executor_api.py`
+    passed, 28 passed.
+  - `uv run pytest tests/unit/loom/pipeline/test_runtime_resources.py tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_executor_capabilities.py`
+    passed, 85 passed.
+  - `uv run pytest tests/contracts/test_executor_contract.py tests/contracts/test_runtime_options_contract.py tests/contracts/test_executor_capabilities_contract.py`
+    passed, 9 passed.
+  - `uv run pytest tests/integration/pipeline -k "runtime_options or runtime_profiles or runtime_capabilities or executor_capabilities"`
+    passed, 6 passed, 4 skipped, 7 deselected.
+  - `make validate-pr` passed: Ruff, Pyright, default no-extra suite, config
+    extra suite, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 50
+    passed/1 skipped, unit 538 passed/1 skipped, contract 53 passed/2 skipped,
+    integration 15 passed/6 skipped/12 deselected, e2e 15 passed, config-extra
+    396 passed/671 deselected.
 - Refinement summary: pinned public descriptor/capability names, diagnostic
   severity/support/enforcement semantics, strict result behavior, deterministic
   ordering, local descriptor defaults, adapter namespace policy, and the
   decision not to export descriptors from `loom.pipeline.executors`.
+- Phase implementation refinement: not needed; targeted validation and
+  `make validate-pr` passed with coverage obligations met.
 - Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: none required so far; root phase targets `develop`.

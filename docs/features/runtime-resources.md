@@ -30,6 +30,8 @@ RunOptions, ExecutionOptions, StageRuntimeOptions, and run/stage environment
 request models are public Python invocation models
 runtime profiles and deterministic base/profile/explicit merge helpers are
 public Python invocation APIs
+executor descriptors and capability validation are public Python metadata APIs
+under the import-light runtime boundary
 preflight, CLI/config mapping, runner handoff, persisted runtime metadata, and
 executor-specific resource mapping are later runtime phases
 ```
@@ -298,8 +300,10 @@ class StageRuntimeOptions:
 
 Stage option keys are exact stage identifiers. Runtime models validate basic
 identifier shape and expose a helper that checks supplied known-stage sets, but
-they do not implement profile merge, glob/tag/group matching, graph reachability
-checks, or executor capability checks.
+they do not implement profile merge, glob/tag/group matching, graph
+reachability checks, preflight IDs/groups, config loading, CLI behavior, or
+runner wiring. Executor capability validation is a separate runtime helper over
+normalized `RunOptions`.
 
 Run and stage environment request models carry future isolated-executor
 environment additions and removals. They do not apply local process environment
@@ -365,9 +369,55 @@ whole lower-precedence payload.
 
 `merge_run_options` can run the existing known-stage validation helper after
 merge when callers supply canonical stage IDs. It does not implement glob,
-tag, group, graph reachability, executor capability, preflight, config loader,
-CLI, local environment application, runner handoff, or persisted
-`runtime.json` behavior.
+tag, group, graph reachability, preflight, config loader, CLI, local
+environment application, runner handoff, or persisted `runtime.json` behavior.
+
+## Executor Descriptors And Capability Validation
+
+Executor descriptors are scheduler-neutral metadata. They describe what a named
+executor claims, ignores, or rejects without importing or constructing concrete
+executor implementations.
+
+Current behavior:
+
+```text
+ExecutorDescriptor records a stripped non-empty executor name
+ResourceCapability records support level, enforcement expectation, severity,
+and plain details for one resource kind
+ExecutorDescriptorRegistry is immutable, explicit, serializes deterministically,
+and rejects duplicate stripped executor names
+DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY contains only the metadata-only local
+descriptor
+resolve_executor_descriptor resolves None to local for validation helpers
+validate_executor_capabilities returns plain capability diagnostics and does
+not import diagnostics or preflight models
+```
+
+The built-in `local` descriptor claims `cpu`, `memory`, and `gpu` as ignored,
+not enforced, warning-level resource capabilities. It claims no adapter
+namespaces. This describes the current local behavior without changing local
+execution, scheduling, or resource enforcement.
+
+Capability validation operates on already parsed `RunOptions` and
+`ResourceRequest` objects:
+
+```text
+unknown selected executors emit executor.unknown error diagnostics
+registered resource entries are checked against the selected descriptor
+omitted resource capabilities use the descriptor fallback, unsupported/error by
+default
+unregistered resource kinds remain resource schema errors before capability
+validation
+run-level and stage-level adapter option namespaces are checked only by
+ownership
+unclaimed adapter namespaces emit adapter_namespace.unclaimed warnings
+adapter payload values are not inspected or schema-validated
+```
+
+Capability diagnostics are not preflight results. They carry runtime-local
+codes such as `executor.unknown`, `resource.ignored`, `resource.unsupported`,
+and `adapter_namespace.unclaimed`; Phase 6-style preflight check IDs and
+strict-mode escalation remain outside this layer.
 
 ## Configuration Boundary
 
@@ -472,8 +522,16 @@ selected stages exist
 force stages exist
 from_stage exists
 max_parallel_stages is positive when provided
-executor name is known or plugin-resolvable
 profile name is known when profile selection is used
+```
+
+Capability validation should check:
+
+```text
+selected executor is known to the supplied descriptor registry
+requested registered resource kinds are supported, advisory, ignored, or
+unsupported according to the selected descriptor
+unclaimed adapter namespaces are reported without inspecting payloads
 ```
 
 Validation that requires filesystem access belongs in preflight.
@@ -559,6 +617,9 @@ resume option normalization
 selected stage validation
 force stage validation
 profile merge behavior if implemented in this layer
+executor descriptor registry behavior
+resource capability diagnostics
+adapter namespace ownership warnings
 executor mapping smoke tests in executor-specific packages
 ```
 
