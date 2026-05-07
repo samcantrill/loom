@@ -1,0 +1,22 @@
+id: pipelines.subprocess-run
+title: Subprocess Pipeline Run
+summary: Run synthetic pipelines with local and subprocess executors, inspect subprocess failures, and invoke a prepared stage worker directly.
+capability: pipelines
+level: intermediate
+introduced_in: v5
+status: runnable
+validation: smoke
+entrypoints:
+  - path: run_subprocess_pipeline.py
+    kind: python
+    description: Run the same success pipeline locally and through subprocess workers.
+  - path: run_failure_diagnostics.py
+    kind: python
+    description: Run a failing subprocess stage and inspect status and stderr logs.
+  - path: run_direct_worker.py
+    kind: python
+    description: Prepare one stage attempt and execute it through the public worker command.
+tags:
+  - subprocess
+  - stage-worker
+  - diagnostics

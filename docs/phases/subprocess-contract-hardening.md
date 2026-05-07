@@ -194,6 +194,22 @@ make test-summary
 
 - Draft plan: completed by manager on 2026-05-07.
 - Final phase execution plan: refined by manager on 2026-05-07 before implementation to identify concrete hardening gaps, example scope, documentation boundaries, and deferred behavior ownership.
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: added deterministic subprocess hardening tests for
+  invalid worker results, worker-result identity mismatches, launch errors,
+  signal metadata, and redacted command metadata. Added integration evidence for
+  local/subprocess success equivalence and subprocess failure status/log
+  diagnostics. Added runnable `pipelines.subprocess-run` examples for
+  local-versus-subprocess success, subprocess failure diagnostics, and direct
+  `loom stage run` execution of a prepared attempt. Updated execution and
+  testing docs to state current v5 guarantees, trust boundaries, no-sandboxing
+  scope, privacy defaults, and deferred behavior owners.
+- Implementation validation:
+  - Initial targeted command without config extras failed because
+    `tests/integration/diagnostics/test_cli_status_logs.py` requires optional
+    config dependencies. Reran the same target with config extras.
+  - Focused tests passed:
+    `uv run --extra config pytest tests/unit/loom/pipeline/executors/test_subprocess_executor.py tests/contracts/test_executor_contract.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_subprocess_executor_integration.py tests/integration/diagnostics/test_cli_status_logs.py tests/integration/docs/test_v0_python_examples.py tests/e2e/test_cli_core.py`
+    with 53 passed.
+  - Focused Ruff passed for touched tests and examples.
+  - Focused Pyright passed for touched tests.
+- Refinement summary: TBD after final validation.

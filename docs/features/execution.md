@@ -1727,6 +1727,46 @@ The executor records redacted command and process metadata. Availability
 preflight for the Python executable and worker command is handled by selected
 subprocess executor checks before `loom run` invokes user stage code.
 
+### 15.8 Current v5 Guarantees And Boundaries
+
+Current v5 support covers local in-process execution and serial subprocess
+execution on the same machine. Subprocess execution provides process isolation
+for stage calls and durable worker handoff files; it is not a security sandbox
+for untrusted project code. Authored configs, stage targets, and example stage
+modules are trusted project code.
+
+Subprocess runs currently guarantee:
+
+```text
+one prepared worker request per runnable stage attempt
+parent-owned finalization for outputs, failures, provenance, artifact indexes,
+stage status, and run status
+structured failures for missing, invalid, mismatched, and process-failed worker
+results
+separate exit-code and signal facts
+redacted command/process metadata
+selected-executor preflight for Python and worker command availability
+```
+
+Subprocess runs currently do not guarantee:
+
+```text
+timeouts
+automatic retries
+parallel worker pools
+SLURM or container submission
+plugin-discovered executors
+remote run stores
+attempt archive directories
+full environment persistence
+automatic cleanup or retention
+strong multi-coordinator locking
+```
+
+Full environment persistence is deferred because environments can contain
+secrets. Current metadata records command and process facts with redaction and
+does not persist complete environment variable values by default.
+
 ---
 
 ## 16. Logs and Failure Metadata
@@ -1930,6 +1970,23 @@ retry:
 Retries require careful attempt directories, failure preservation, and artifact
 commit semantics. They should be designed after single-attempt execution is
 stable.
+
+### 17.6 Deferred Behavior Owners
+
+Later roadmap work should own deferred behavior explicitly:
+
+| Deferred behavior | Likely owner | Revisit trigger |
+| --- | --- | --- |
+| Retries and failure policy | Reliability policy and runner lifecycle | Users need more than single-attempt stop-on-first-failure execution. |
+| Timeouts | Executor-specific reliability support | Subprocess or scheduler execution needs bounded wall-clock enforcement. |
+| Worker pools and parallel scheduling | Runner scheduling plus store locking | Independent stages should run concurrently. |
+| SLURM | `loom.pipeline.executors.slurm` | Cluster submission is added. |
+| Containers | Container executor layer | Docker/Apptainer execution is added. |
+| Plugins | Plugin registry and capability discovery | Executors or stores are loaded outside built-ins. |
+| Remote stores | Run-store and artifact-store backends | Non-local run URIs are supported. |
+| Cleanup and retention | Reliability cleanup commands | Managed temporary files or old runs need explicit lifecycle. |
+| Attempt archives | Run-store attempt layout | Retries or retention require historical attempt state. |
+| Stronger locking | Store concurrency and scheduler integration | Multiple coordinators may mutate the same run. |
 
 ---
 

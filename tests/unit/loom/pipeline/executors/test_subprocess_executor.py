@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from loom.artifacts import ArtifactRef
 from loom.pipeline import (
     OutputSpec,
@@ -31,6 +33,7 @@ from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.planning import FingerprintContext, build_stage_fingerprint, plan_pipeline
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.serialization import PlainData
 from tests.support.pipeline_execution_stages import JsonProducerStage
 
 
@@ -212,6 +215,73 @@ def test_subprocess_executor_missing_result_is_failure(tmp_path: Path) -> None:
     assert result.failure.exit_code == 1
 
 
+def test_subprocess_executor_invalid_worker_result_is_failure(tmp_path: Path) -> None:
+    store, run_uri, request = _request(tmp_path)
+
+    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+        store.write_stage_worker_result(
+            run_uri,
+            "build",
+            {"schema_version": STAGE_WORKER_RESULT_SCHEMA_VERSION},
+            attempt=1,
+        )
+        return SubprocessRunResult(returncode=0)
+
+    result = SubprocessExecutor(run_store=store, process_runner=runner).execute(request)
+
+    assert result.status == StageStatus.FAILED
+    failure = cast(ExecutionFailure, result.failure)
+    assert failure.message.startswith("subprocess worker result is invalid")
+    assert failure.details["result"] == "invalid"
+    assert failure.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_message", "detail_key"),
+    (
+        (
+            "run_uri",
+            "file:///tmp/other-run",
+            "subprocess worker result run_uri does not match request",
+            "result_run_uri",
+        ),
+        (
+            "stage_name",
+            "other",
+            "subprocess worker result stage does not match request",
+            "result_stage",
+        ),
+        (
+            "attempt",
+            2,
+            "subprocess worker result attempt does not match request",
+            "result_attempt",
+        ),
+    ),
+)
+def test_subprocess_executor_rejects_mismatched_worker_result_identity(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    expected_message: str,
+    detail_key: str,
+) -> None:
+    store, run_uri, request = _request(tmp_path)
+
+    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+        worker_result = _worker_success(run_uri).to_dict()
+        worker_result[field] = cast(PlainData, value)
+        store.write_stage_worker_result(run_uri, "build", worker_result, attempt=1)
+        return SubprocessRunResult(returncode=0)
+
+    result = SubprocessExecutor(run_store=store, process_runner=runner).execute(request)
+
+    assert result.status == StageStatus.FAILED
+    failure = cast(ExecutionFailure, result.failure)
+    assert failure.message == expected_message
+    assert failure.details[detail_key] == value
+
+
 def test_subprocess_executor_process_failure_overrides_structured_success(
     tmp_path: Path,
 ) -> None:
@@ -235,6 +305,23 @@ def test_subprocess_executor_process_failure_overrides_structured_success(
     assert result.outputs == {}
 
 
+def test_subprocess_executor_launch_error_is_structured_failure(
+    tmp_path: Path,
+) -> None:
+    store, _run_uri, request = _request(tmp_path)
+
+    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+        raise OSError("worker command missing")
+
+    result = SubprocessExecutor(run_store=store, process_runner=runner).execute(request)
+
+    assert result.status == StageStatus.FAILED
+    failure = cast(ExecutionFailure, result.failure)
+    assert failure.message == "subprocess worker launch failed: worker command missing"
+    assert failure.details["launch_error"] == "worker command missing"
+    assert "OSError" in cast(str, failure.executor_metadata["launch_error"])
+
+
 def test_subprocess_executor_preserves_signal_metadata(tmp_path: Path) -> None:
     store, _run_uri, request = _request(tmp_path)
 
@@ -248,6 +335,29 @@ def test_subprocess_executor_preserves_signal_metadata(tmp_path: Path) -> None:
     assert result.failure.exit_code is None
     assert result.failure.signal == 15
     assert result.executor_metadata["signal"] == 15
+
+
+def test_subprocess_executor_redacts_command_metadata(tmp_path: Path) -> None:
+    store, run_uri, request = _request(tmp_path)
+
+    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+        store.write_stage_worker_result(
+            run_uri,
+            "build",
+            _worker_success(run_uri).to_dict(),
+            attempt=1,
+        )
+        return SubprocessRunResult(returncode=0)
+
+    result = SubprocessExecutor(
+        run_store=store,
+        python_executable="python --token=secret",
+        process_runner=runner,
+    ).execute(request)
+
+    command = cast(list[object], result.executor_metadata["command"])
+    assert command[0] == "[redacted]"
+    assert "--token=secret" not in str(result.executor_metadata)
 
 
 def test_subprocess_executor_wraps_failed_worker_result(tmp_path: Path) -> None:
