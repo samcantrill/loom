@@ -910,9 +910,9 @@ Completion summary:
 
 ### Phase 6 - Runtime Preflight And CLI/Config Mapping
 
-Status: pending
+Status: merged
 Branch: `codex/runtime-preflight-cli-config`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/75
 
 Goal:
 
@@ -1001,7 +1001,39 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged on 2026-05-07 via PR #75.
+- Added `src/loom/pipeline/runtime/config.py` with top-level `runtime` and
+  `runtime_profiles` extraction plus `merge_config_run_options`, keeping
+  config composition opaque and runtime merge semantics owned by the public
+  runtime models.
+- Added sparse CLI runtime option sources for `plan`, `preflight`, and `run`,
+  covering profile, executor, run URI, dry-run, selectors, resume, repeatable
+  tags, and repeatable notes without letting absent flags override
+  config/profile values.
+- Added `runtime` and `resources` preflight groups and stable checks for
+  normalized runtime options, profile selection, exact-stage runtime options,
+  executor resolution, executor capability diagnostics, and resource
+  capability diagnostics.
+- Mapped Phase 5 capability diagnostics into preflight results while preserving
+  the descriptor ownership boundary and existing `executor.local` probing.
+  Unknown executors fail `executor.resolve`; unresolved capability/resource
+  checks skip; ignored local resources and unclaimed adapter namespaces warn
+  and remain strict-mode escalatable.
+- Automated review found one blocker in run/artifact-only run URI handling:
+  CLI runtime options could force config composition even when an explicit
+  run URI was present. The blocker was fixed before merge, with regression
+  coverage for explicit runtime run URI and non-URI runtime flags against a
+  missing config.
+- Preserved the intended boundary: no runner/request runtime wiring,
+  `runtime.json` persistence, raw adapter payload persistence, environment
+  key/value persistence, plugin discovery, concrete non-local executor
+  behavior, or nested adapter CLI syntax was introduced.
+- Validation evidence: `make validate-pr` passed; GitHub CI `checks` passed on
+  PR #75; `make test-summary` reported 1081 passed, 11 skipped, and 691
+  deselected.
+- Follow-up for Phase 7: thread the normalized `RunOptions` produced by this
+  phase into run workflow requests, resolved per-stage runtime handoff, and
+  safe persisted runtime metadata without redefining CLI/config parsing.
 
 ### Phase 7 - Run Workflow And Runtime Metadata
 
