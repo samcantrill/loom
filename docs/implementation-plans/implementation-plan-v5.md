@@ -305,7 +305,7 @@ Refinement summary:
 
 ### Phase 1 - Contracts And Persistence
 
-Status: pr_open
+Status: merged
 Branch: `codex/stage-worker-contracts`
 PR: https://github.com/samcantrill/loom/pull/77
 
@@ -423,7 +423,8 @@ Notes:
 
 Completion summary:
 
-- PR opened on 2026-05-07 against `develop`.
+- PR opened on 2026-05-07 against `develop` and merged on 2026-05-07:
+  https://github.com/samcantrill/loom/pull/77.
 - Implemented schema-versioned stage-worker request/result records,
   signal-aware failure metadata, executor metadata redaction, store APIs for
   `worker_request.json` and `worker_result.json`, local handoff path helpers,
@@ -437,6 +438,11 @@ Completion summary:
   skipped, unit 569 passed/1 skipped, contract 53 passed/2 skipped,
   integration 15 passed/7 skipped/7 deselected, e2e 16 passed, config-extra
   397 passed/703 deselected.
+- Automated review and merge: manager review found no blocking findings, PR
+  target was verified as base `develop` and head `codex/stage-worker-contracts`,
+  GitHub CI `checks` completed successfully, merge state was `CLEAN`, and the
+  PR was squash-merged with merge commit
+  `82ecfb9cadd08abc2286b91ad94d04ac58a5d54f`.
 - Follow-up notes: Phase 2 must consume the prepared request/store APIs for
   direct worker execution; Phase 3 owns subprocess process launch and current
   CLI executor selection wiring.
