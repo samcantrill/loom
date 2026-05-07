@@ -383,7 +383,8 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-07 by managing agent for the
+  expanded-path implementation review; no code changes were needed.
 - PR review: unused
 - Blocker resolution: not used; no Phase 2 blocker-resolution pass has been
   authorized
@@ -395,10 +396,26 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 - Final phase execution plan: refined on 2026-05-07 by managing agent; resume
   handling, default URI ordering, diagnostics JSON semantics, and suite
   obligations were made implementation-ready.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
+- Implementation summary: completed Phase 2 CLI preflight and run reuse. Added
+  `loom preflight`, preflight CLI options, compact text formatting, JSON result
+  envelopes, strict warning exit behavior, selected-group handling, and
+  command-level invalid group errors. Updated `loom run` to allocate an
+  implicit local run URI before minimal preflight and pass the same URI into
+  execution, while preserving explicit URI and resume behavior.
+- Implementation validation: targeted unit, contract, integration, e2e, package,
+  Ruff, and Pyright checks passed. Final `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed with Ruff clean, Pyright 0 errors, default isolated suite
+  532 passed/13 skipped/5 deselected, config-extra 389 passed/547 deselected,
+  and build artifacts produced. Final `UV_CACHE_DIR=/tmp/uv-cache make
+  test-summary` passed with package 47 passed/1 skipped, unit 436 passed/1
+  skipped, contract 40 passed/2 skipped, integration 9 passed/6 skipped/5
+  deselected, e2e 15 passed, and config-extra 389 passed/547 deselected.
+- Refinement summary: expanded-path implementation review completed on
+  2026-05-07. Scope, import boundaries, preflight JSON/text behavior,
+  run-command URI reuse, resume handling, no-store-write behavior, and suite
+  obligations were checked against the phase plan; no blocking defects were
+  found.
 - Blocker-resolution summary:
 - PR preparation:
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none known.
