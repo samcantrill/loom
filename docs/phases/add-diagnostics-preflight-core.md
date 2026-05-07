@@ -419,7 +419,9 @@ make test-summary
 
 - Phase implementation refinement: used on 2026-05-07 by `loom_phase_refiner`;
   no implementation or test changes were needed.
-- PR review: unused
+- PR review: used on 2026-05-07 by `loom_phase_reviewer`; one blocking
+  optional-dependency marker finding was resolved in the user-authorized
+  blocker-resolution pass.
 
 ## Completion Notes
 
@@ -484,6 +486,16 @@ make test-summary
   results from `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` and
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary`; both passed as recorded below
   and `build/test-summary.md` is present for suite-level evidence.
+- PR review: completed on 2026-05-07 by `loom_phase_reviewer`; PR-review budget
+  consumed. The review found one blocking suite-gate issue: the config-extra
+  diagnostics integration tests lacked the `optional_dependency` marker and were
+  therefore outside the standard `config-extra` gate.
+- Blocker resolution: user authorized one scoped blocker-resolution pass on
+  2026-05-07. Added the `optional_dependency` marker to the diagnostics
+  integration test module, confirmed `pytest tests/integration/diagnostics -m
+  optional_dependency --collect-only` collects the four diagnostics integration
+  tests, reran `make validate-pr` and `make test-summary`, and updated the PR
+  evidence with the new config-extra counts.
 - Remaining blockers: none.
 
 ### Implementation Handoff
@@ -585,6 +597,22 @@ command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
 result: passed and wrote build/test-summary.md; package 46 passed/1 skipped,
 unit 429 passed/1 skipped, contract 39 passed/2 skipped, integration 9
 passed/6 skipped, e2e 14 passed, and config-extra 380 passed/541 deselected
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/integration/diagnostics -m optional_dependency --collect-only
+result: passed; collected the 4 diagnostics integration tests under the
+optional_dependency marker after blocker-resolution marker fix
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed after blocker resolution; Ruff passed, Pyright reported 0
+errors, the default isolated suite passed with 523 passed and 13 skipped,
+config-extra passed with 384 passed and 537 deselected, and uv build produced
+sdist and wheel artifacts
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: passed after blocker resolution and wrote build/test-summary.md;
+package 46 passed/1 skipped, unit 429 passed/1 skipped, contract 39 passed/2
+skipped, integration 9 passed/6 skipped, e2e 14 passed, and config-extra 384
+passed/537 deselected
 ```
 
 #### Known Issues Or Blockers

@@ -14,7 +14,7 @@ from loom.diagnostics import PreflightCheckStatus, PreflightRequest, PreflightSt
 from loom.pipeline.stores import path_to_run_uri
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
 
 
 def test_full_local_preflight_passes_and_writes_no_run_documents(tmp_path: Path) -> None:
