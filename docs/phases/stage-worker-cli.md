@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Stage Worker
 - PR title: `Stage Worker - Phase 2: Worker Execution and Direct CLI`
 - Branch: `codex/stage-worker-cli`
@@ -235,8 +235,9 @@ make test-summary
 - Refinement summary: not needed; targeted and full PR validation passed after
   a scoped test-file rename fixed a pytest module-name collision.
 - Blocker-resolution summary: none used
-- PR preparation: PR body drafted in
-  `docs/phases/stage-worker-cli-pr-body.md`; PR opening pending.
+- PR preparation: PR opened on 2026-05-07:
+  https://github.com/samcantrill/loom/pull/78. Verified base `develop`, head
+  `codex/stage-worker-cli`, state `OPEN`.
 - Stack maintenance: branch rebased onto current `develop` after `develop`
   advanced with `docs: add v3 v4 examples`; no successor branches depend on
   this phase.
