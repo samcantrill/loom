@@ -8,6 +8,7 @@
 - Branch: `codex/executor-capabilities`
 - Worktree: `/home/samcantrill/work/loom-worktrees/executor-capabilities`
 - Phase execution plan path: `docs/phases/executor-capabilities.md`
+- PR body draft path: `docs/phases/executor-capabilities-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v4.md`
 - Source phase: Phase 5 - Executor Descriptors And Capability Validation
 - Stack predecessor: none; Phases 1-4 are merged into `develop`
@@ -15,6 +16,8 @@
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop`, automated review passes, and validation/CI pass
 - Workflow path: expanded path, draft and refine passes complete
+- PR preparation path: expanded path; draft PR body pass complete, open-PR
+  pass not started
 - Successor dependency notes: Phase 6 should consume these descriptor and validation contracts for preflight/CLI/config diagnostics; Phase 7 should not reinterpret raw capability data.
 - Plan quality gate: passed on 2026-05-07
 - Plan quality gate loop budget: initial review used, gate refinement used, confirmation review used
@@ -578,6 +581,8 @@ make test-summary
   diagnostic result at `RunOptions.executor` instead of raising before result
   construction.
 - PR review: unused
+- PR body draft: used on 2026-05-07 for a draft-only PR preparation pass
+- PR body refine/open pass: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -627,6 +632,23 @@ make test-summary
   - `make validate-pr` passed: Ruff, Pyright, default no-extra suite,
     config extra suite, and build.
 - Blocker-resolution summary: none.
-- PR preparation: pending.
+- PR preparation: draft-only pass completed on 2026-05-07 by
+  `loom_pr_preparer`; wrote
+  `docs/phases/executor-capabilities-pr-body.md`, refreshed
+  `build/test-summary.md`, and did not open a PR.
+- PR preparation validation:
+  - `make validate-pr` was not rerun during the draft-only PR body pass; the
+    implementation refinement pass already recorded it passing after the final
+    code/test changes: Ruff, Pyright, default no-extra suite, config extra
+    suite, and build.
+  - `make test-summary` passed on 2026-05-07 and wrote
+    `build/test-summary.md`: package 50 passed/1 skipped, unit 539 passed/1
+    skipped, contract 53 passed/2 skipped, integration 15 passed/6 skipped/12
+    deselected, e2e 15 passed, config-extra 396 passed/672 deselected;
+    overall 1068 passed, 10 skipped, 684 deselected.
+- PR facts: branch `codex/executor-capabilities`; target branch `develop`;
+  stack predecessor none; title
+  `Runtime Options - Phase 5: Executor Descriptors and Capability Validation`;
+  PR URL pending because this pass was draft-only.
 - Stack maintenance: none required so far; root phase targets `develop`.
 - Remaining blockers: none known.
