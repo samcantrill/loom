@@ -82,6 +82,21 @@ def test_cli_validate_plan_and_json_outputs(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "planned")
     _write_pipeline_config(config_path)
 
+    preflight_stdout = io.StringIO()
+    preflight_stderr = io.StringIO()
+    assert (
+        main(
+            ["preflight", str(config_path), "--format", "json"],
+            stdout=preflight_stdout,
+            stderr=preflight_stderr,
+        )
+        == 0
+    )
+    preflight_payload = json.loads(preflight_stdout.getvalue())
+    assert preflight_payload["schema_version"] == "loom.cli.preflight.v3"
+    assert preflight_payload["result"]["status"] == "PASS"
+    assert preflight_stderr.getvalue() == ""
+
     validate_stdout = io.StringIO()
     validate_stderr = io.StringIO()
     assert main(["validate", str(config_path)], stdout=validate_stdout, stderr=validate_stderr) == 0
@@ -103,6 +118,26 @@ def test_cli_validate_plan_and_json_outputs(tmp_path: Path) -> None:
     assert payload["result"]["run_uri"] == run_uri
     assert payload["result"]["explanation"]["stage"] == "build"
     assert not run_uri_to_path(run_uri).exists()
+
+
+def test_cli_preflight_failed_config_returns_diagnostics_result(tmp_path: Path) -> None:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["preflight", str(tmp_path / "missing.yaml"), "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 4
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == "loom.cli.preflight.v3"
+    assert payload["ok"] is False
+    assert payload["result"]["status"] == "FAIL"
+    assert stderr.getvalue() == ""
 
 
 def test_cli_validate_check_targets_constructs_trusted_targets(tmp_path: Path) -> None:

@@ -408,6 +408,37 @@ def test_import_cli_validate_remains_import_light() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_cli_preflight_remains_import_light() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.cli.preflight
+
+        for forbidden in (
+            "loom.config",
+            "loom.pipeline",
+            "loom.pipeline.stores",
+            "loom.pipeline.executors",
+            "loom.diagnostics.preflight",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.cli.preflight")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_cli_plan_remains_import_light() -> None:
     script = dedent(
         """

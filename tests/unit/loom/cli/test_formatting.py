@@ -11,10 +11,18 @@ from loom.cli.formatting import (
     CLI_RESULT_SCHEMA_VERSION,
     format_json_envelope,
     format_plan_text,
+    format_preflight_text,
     format_run_text,
     format_validation_text,
 )
 from loom.cli.results import CliWarning, PlanCliResult, RunCliResult, ValidationCliResult
+from loom.diagnostics import (
+    PreflightCheckResult,
+    PreflightCheckStatus,
+    PreflightGroup,
+    PreflightResult,
+    PreflightSeverity,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -71,3 +79,18 @@ def test_text_formatters_are_concise() -> None:
     assert format_run_text(RunCliResult(run_uri="file://./runs/example", status="SUCCEEDED")) == (
         "OK run file://./runs/example: SUCCEEDED"
     )
+    assert format_preflight_text(
+        PreflightResult(
+            checks=(
+                PreflightCheckResult(
+                    check_id="config.load",
+                    group=PreflightGroup.CONFIG,
+                    status=PreflightCheckStatus.PASS,
+                    severity=PreflightSeverity.INFO,
+                    message="config composed successfully",
+                ),
+            ),
+            groups=(PreflightGroup.CONFIG,),
+        ),
+        config_path=Path("pipeline.yaml"),
+    ) == ("OK preflight pipeline.yaml: PASS\nPASS config.load: config composed successfully")
