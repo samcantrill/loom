@@ -449,7 +449,7 @@ Completion summary:
 
 ### Phase 2 - Worker Execution And Direct CLI
 
-Status: pr_open
+Status: merged
 Branch: `codex/stage-worker-cli`
 PR: https://github.com/samcantrill/loom/pull/78
 
@@ -542,7 +542,7 @@ Notes:
 
 Completion summary:
 
-- PR opened on 2026-05-07 against `develop`:
+- PR opened on 2026-05-07 against `develop` and merged on 2026-05-07:
   https://github.com/samcantrill/loom/pull/78.
 - Implemented execution-owned direct worker APIs for prepared-attempt
   inference, durable reconstruction, local execution, and structured
@@ -557,12 +557,23 @@ Completion summary:
   persistence, successful worker execution, and stage-failure handoffs.
 - Validation before PR: targeted tests passed with 24 passed; targeted Pyright
   passed; `make validate-pr` passed after rebasing onto current `develop`;
-  `make test-summary` passed with package 50 passed/1 skipped, unit 578
+  `make test-summary` passed with package 50 passed/1 skipped, unit 579
   passed/1 skipped, contract 54 passed/2 skipped, integration 18 passed/7
-  skipped/7 deselected, e2e 16 passed, and config-extra 400 passed/716
+  skipped/7 deselected, e2e 16 passed, and config-extra 400 passed/717
   deselected.
+- Automated review and merge: manager review found a duplicate worker handoff
+  overwrite risk, which was fixed before merge by rejecting existing
+  `worker_result.json` handoffs for the same attempt. After that fix, review
+  found no remaining blocking findings. PR target was verified as base
+  `develop` and head `codex/stage-worker-cli`, GitHub CI `checks` completed
+  successfully, merge state was `CLEAN`, and the PR was squash-merged with
+  merge commit `bcb2c41cb391ffb4176d3c396d11df8edb486025`.
 - Stack maintenance: branch was rebased onto current `develop` after `develop`
   advanced with `docs: add v3 v4 examples`.
+- Follow-up notes: Phase 3 must consume the direct worker command and handoff
+  readback contract for subprocess process launch and parent-owned run
+  finalization; Phase 4 still owns selected-executor preflight and diagnostics
+  UX.
 
 ### Phase 3 - Subprocess Executor And Serial Run Integration
 
