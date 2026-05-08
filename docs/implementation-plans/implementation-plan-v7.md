@@ -482,9 +482,9 @@ Completion summary:
 
 ### Phase 2 - SLURM Live Command And Manifest Models
 
-Status: pending
+Status: merged
 Branch: `codex/slurm-live-command-models`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/89
 
 Goal:
 
@@ -572,7 +572,25 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan and PR body are recorded in
+  `docs/phases/slurm-live-command-models.md` and
+  `docs/phases/slurm-live-command-models-pr-body.md`.
+- Implemented fakeable SLURM command runner contracts, bounded command result
+  persistence, `sbatch --parsable` job ID parsing, live manifest schema version
+  2 records, canonical `manifest.json` live read/write helpers, and
+  unit/contract/integration coverage.
+- Validation before PR opening: `make validate-pr` passed; `make test-summary`
+  passed with package 52 passed / 1 skipped, unit 709 passed / 1 skipped,
+  contract 63 passed / 2 skipped, integration 35 passed / 7 skipped / 9
+  deselected, e2e 22 passed, and config-extra 411 passed / 881 deselected.
+- PR #89 targeted `develop` from `codex/slurm-live-command-models` and was
+  squash-merged on 2026-05-08 as merge commit
+  `bd5564f235bf3015458eb156d283bd044b1ac541`.
+- Final merge gate: PR target verified as `develop`, head verified as
+  `codex/slurm-live-command-models`, GitHub CI `checks` passed, and manager
+  pre-submit review found no remaining scope, validation, or PR-body blockers.
+- Stack and cleanup: no successor branches were based on Phase 2; the remote
+  phase branch was deleted by the merge operation.
 
 ### Phase 3 - Live Single-Job Submission
 
