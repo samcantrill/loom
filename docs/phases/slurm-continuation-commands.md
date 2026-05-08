@@ -8,6 +8,7 @@
 - Branch: `codex/slurm-continuation-commands`
 - Worktree: `/home/samcantrill/work/loom-worktrees/slurm-continuation-commands`
 - Phase execution plan path: `docs/phases/slurm-continuation-commands.md`
+- PR body path: `docs/phases/slurm-continuation-commands-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v6.md`
 - Source phase: Phase 2 - Generic Continuation Commands
 - Stack predecessor: none; Phase 1 is merged into `develop`
@@ -231,9 +232,12 @@ make test-summary
   default harness `764 passed, 14 skipped, 8 deselected`, config-extra harness
   `405 passed, 783 deselected`, and `uv build`).
 - Blocker-resolution summary: not used
-- PR preparation: not started per fallback executor handoff; no PR body prepared or PR opened
+- PR preparation: in progress. PR body drafted at
+  `docs/phases/slurm-continuation-commands-pr-body.md`; PR not yet opened at
+  this checkpoint.
 - Stack maintenance: none performed
-- Remaining blockers: none known from implementation and initial validation
+- Remaining blockers: none known from implementation, refinement validation,
+  and PR-prep suite evidence
 
 ### Phase Implementation Handoff
 
@@ -307,10 +311,34 @@ command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
 result: passed; ruff check, pyright, default harness 764 passed/14 skipped/8 deselected, config-extra harness 405 passed/783 deselected, and uv build all succeeded
 ```
 
+## PR Preparation Notes
+
+- PR body path: `docs/phases/slurm-continuation-commands-pr-body.md`
+- PR title: `SLURM Script Planning - Phase 2: Generic Continuation Commands`
+- Target branch: `develop`
+- Head branch: `codex/slurm-continuation-commands`
+- Stack predecessor: none; this is a root phase because Phase 1 is merged
+- Diff reviewed against `develop`: generic execution and CLI continuation
+  behavior, focused tests, and this phase artifact only. No SLURM models,
+  generated scripts, manifests, scheduler IDs, live submission, or
+  `loom run --executor slurm-*` wiring were present.
+- Worktree cleanliness before PR-prep edits: clean at `ca99fa2`.
+- `make validate-pr`: cited from the refinement pass at `ca99fa2`; passed
+  `ruff check`, `pyright`, default harness `764 passed, 14 skipped, 8
+  deselected`, config-extra harness `405 passed, 783 deselected`, and
+  `uv build`.
+- `make test-summary`: passed during PR preparation with
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`; `build/test-summary.md`
+  recorded package `50 passed, 1 skipped`, unit `633 passed, 1 skipped`,
+  contract `57 passed, 2 skipped`, integration `24 passed, 7 skipped, 8
+  deselected`, e2e `19 passed`, config-extra `405 passed, 783 deselected`,
+  and overall `1188 passed, 11 skipped, 791 deselected`.
+
 ## Known Issues Or Blockers
 
-- `make test-summary` was not run because PR preparation is explicitly out of scope for this pass.
-- Whole-run prepared continuation currently validates and returns structured insufficient prepared state before user code because no explicit safe replay payload exists in Phase 2 state.
+- Whole-run prepared continuation currently validates and returns structured
+  insufficient prepared state before user code because no explicit safe replay
+  payload exists in Phase 2 state.
 
 ## Refiner Handoff
 
