@@ -819,7 +819,7 @@ Completion summary:
 
 ### Phase 5 - CLI And Preflight Integration
 
-Status: pr_open
+Status: merged
 Branch: `codex/slurm-cli-preflight`
 PR: https://github.com/samcantrill/loom/pull/86
 
@@ -887,16 +887,35 @@ Notes:
 
 Completion summary:
 
-- PR #86 opened against `develop` on 2026-05-08 after the expanded-path
-  implementation refinement pass.
+- Phase execution plan:
+  `docs/phases/slurm-cli-preflight.md`.
+- PR #86 opened against `develop` from `codex/slurm-cli-preflight` on
+  2026-05-08 after the expanded-path implementation refinement pass.
+- PR #86 merged into `develop` on 2026-05-08 with squash merge commit
+  `2379e14a81304d2d48bc3dc7a28921cf2b8aef5b`.
 - Implemented public SLURM dry-run CLI routing for explicit, config-resolved,
   and profile-resolved `slurm-single-job` and `slurm-afterok` selections.
 - Added dry-run-only runtime capability descriptors, stable SLURM preflight
-  check IDs, concise text/JSON output, and v7-deferred non-dry-run SLURM
-  errors.
-- Validation before PR opening: targeted Phase 5 suite passed with 319 tests;
-  `make validate-pr` passed; `make test-summary` passed with 1262 passed, 11
-  skipped, and 860 deselected.
+  check IDs, concise text/JSON output, default wrapper log-path pointers, and
+  v7-deferred non-dry-run SLURM errors.
+- Automated PR review found two blocking findings: stage-level SLURM adapter
+  options were validated but not applied to generated artifacts, and default
+  text output omitted wrapper log-path pointers. Blocker-resolution pass 1/3
+  fixed both findings; manager verification found no remaining blocker.
+- Final merge verification: before merge, `gh pr view 86 --json
+  baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/slurm-cli-preflight`,
+  `state=OPEN`, no merge commit yet, and CI check `checks` completed with
+  `SUCCESS`.
+- Final local validation after blocker resolution: focused Phase 5 tests passed
+  with 21 tests; CLI/diagnostics unit coverage passed with 28 tests;
+  `make validate-pr` passed Ruff, Pyright, isolated default tests (`833
+  passed, 15 skipped, 8 deselected`), isolated config-extra tests (`410
+  passed, 853 deselected`), and build; `make test-summary` passed with overall
+  `1263 passed, 11 skipped, 861 deselected`.
+- Stack cleanup: no successor branches depended on
+  `codex/slurm-cli-preflight`; the remote branch was deleted, the local
+  worktree was removed, and stale local branch/tracking refs were pruned.
 
 ### Phase 6 - End-To-End Hardening And Documentation
 
