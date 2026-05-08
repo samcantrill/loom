@@ -20,6 +20,7 @@ from loom.pipeline.stores import (
     RunInspectionStore,
     RunLockStore,
     RunLifecycleStore,
+    RunPreparedRunStore,
     RunProvenanceStore,
     RunPlanStore,
     RunRuntimeMetadataStore,
@@ -120,6 +121,18 @@ class DummyRunStore:
         return None
 
     def write_plan(self, run_uri: str, plan: Mapping[str, PlainData]) -> None:
+        return None
+
+    def read_prepared_run(self, run_uri: str) -> dict[str, PlainData] | None:
+        return {
+            "schema_version": 1,
+            "run_uri": run_uri,
+            "prepared_at": "2020-01-01T00:00:00Z",
+        }
+
+    def write_prepared_run(
+        self, run_uri: str, prepared_run: Mapping[str, PlainData]
+    ) -> None:
         return None
 
     def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:
@@ -384,6 +397,9 @@ class DummyRunStorePaths:
     def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path:
         return Path(run_uri) / stage_name / "workspace"
 
+    def local_generated_artifact_path(self, run_uri: str, relative_path: str) -> Path:
+        return Path(run_uri) / relative_path
+
 
 class TrackingArtifactDiagnosticsStore:
     def __init__(self) -> None:
@@ -430,6 +446,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunDocumentStore)
     assert isinstance(DummyRunStore(), RunStatusStore)
     assert isinstance(DummyRunStore(), RunPlanStore)
+    assert isinstance(DummyRunStore(), RunPreparedRunStore)
     assert isinstance(DummyRunStore(), RunRuntimeMetadataStore)
     assert isinstance(DummyRunStore(), RunArtifactIndexStore)
     assert isinstance(DummyRunStore(), RunConfigStore)
@@ -443,6 +460,11 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunStore)
     assert DummyRunStore().read_composition_manifest("file:///tmp/run1") == {
         "schema_version": 1
+    }
+    assert DummyRunStore().read_prepared_run("file:///tmp/run1") == {
+        "schema_version": 1,
+        "run_uri": "file:///tmp/run1",
+        "prepared_at": "2020-01-01T00:00:00Z",
     }
     assert DummyRunStore().read_runtime_metadata("file:///tmp/run1") == {
         "schema_version": 1
@@ -466,6 +488,9 @@ def test_fake_run_store_does_not_satisfy_local_paths() -> None:
 
 def test_fake_local_run_store_paths_matches_protocol() -> None:
     assert isinstance(DummyRunStorePaths(), LocalRunStorePaths)
+    assert DummyRunStorePaths().local_generated_artifact_path(
+        "file:///tmp/run", "generated/manifest.json"
+    ) == Path("file:/tmp/run/generated/manifest.json")
 
 
 def test_artifact_diagnostics_use_public_run_store_readers() -> None:

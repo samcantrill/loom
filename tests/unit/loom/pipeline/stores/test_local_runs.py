@@ -40,6 +40,21 @@ def _run_uri(tmp_path: Path, name: str = "run1") -> str:
     return path_to_run_uri(tmp_path / "runs" / name)
 
 
+def _prepared_run_payload(run_uri: str) -> dict[str, PlainData]:
+    return {
+        "schema_version": 1,
+        "run_uri": run_uri,
+        "prepared_at": "2020-01-01T00:00:00Z",
+        "executor_name": "local",
+        "continuation_type": "whole_run",
+        "plan": {"plan_path": "plan.json"},
+        "config": {"composition_manifest_ref": "config/composition_manifest.json"},
+        "provenance": {"command_ref": "provenance/command.json"},
+        "runtime": {"document_ref": "runtime.json", "executor": "local"},
+        "metadata": {},
+    }
+
+
 def test_run_uri_resolves_documented_local_forms(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -268,6 +283,16 @@ def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
     plan_payload: dict[str, PlainData] = {"stage": ["a", "b"]}
     store.write_plan(run_uri, plan_payload)
     assert store.read_plan(run_uri) == plan_payload
+
+    prepared_run = _prepared_run_payload(run_uri)
+    store.write_prepared_run(run_uri, prepared_run)
+    assert store.read_prepared_run(run_uri) == prepared_run
+    prepared_wrapper = json.loads(
+        (store.local_run_dir(run_uri) / "prepared_run.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert prepared_wrapper == prepared_run
 
     runtime_payload: dict[str, PlainData] = {
         "schema_version": 1,
@@ -532,6 +557,68 @@ def test_local_run_rejects_non_mapping_composition_manifest_write(
 
     with pytest.raises(UnsafeStorePathError, match="composition manifest"):
         store.write_composition_manifest(run_uri, ["not", "a", "mapping"])  # type: ignore[arg-type]
+
+
+def test_local_run_generated_artifact_path_helper_is_safe_relative(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+
+    path = store.local_generated_artifact_path(
+        run_uri,
+        "generated/submissions/p1/manifest.json",
+    )
+
+    assert path == store.local_run_dir(run_uri) / "generated" / "submissions" / "p1" / "manifest.json"
+    assert path.parent.exists() is False
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "",
+        "/absolute",
+        "generated//manifest.json",
+        "generated/../manifest.json",
+        "generated/./manifest.json",
+        "generated\\manifest.json",
+        "generated/manifest\n.json",
+    ],
+)
+def test_local_run_generated_artifact_path_rejects_unsafe_relative_paths(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+
+    with pytest.raises(UnsafeStorePathError):
+        store.local_generated_artifact_path(run_uri, relative_path)
+
+
+def test_local_run_validates_prepared_run_document(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    path = store.local_run_dir(run_uri) / "prepared_run.json"
+    valid = _prepared_run_payload(run_uri)
+    cases = [
+        {key: value for key, value in valid.items() if key != "prepared_at"},
+        {**valid, "unexpected": True},
+        {**valid, "schema_version": 2},
+        {**valid, "run_uri": _run_uri(tmp_path, "other")},
+        {**valid, "prepared_at": "2020-01-01 00:00:00"},
+        {**valid, "plan": []},
+    ]
+
+    for payload in cases:
+        atomic_write_json(path, payload)
+        with pytest.raises(CorruptStoreDocumentError) as exc_info:
+            store.read_prepared_run(run_uri)
+        assert str(path) in str(exc_info.value)
 
 
 def test_local_run_validates_composition_manifest_wrapper(tmp_path: Path) -> None:

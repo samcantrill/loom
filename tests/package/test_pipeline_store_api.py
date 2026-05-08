@@ -25,6 +25,7 @@ def test_pipeline_store_public_exports() -> None:
         "RunLockStore",
         "RunStatusStore",
         "RunPlanStore",
+        "RunPreparedRunStore",
         "RunArtifactIndexStore",
         "RunConfigStore",
         "RunProvenanceStore",
@@ -80,8 +81,11 @@ def test_pipeline_store_public_exports() -> None:
     assert "write_stage_worker_request" in stores.StageStateStore.__dict__
     assert "read_stage_worker_result" in stores.StageStateStore.__dict__
     assert "write_stage_worker_result" in stores.StageStateStore.__dict__
+    assert "read_prepared_run" in stores.RunPreparedRunStore.__dict__
+    assert "write_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "local_stage_worker_request_path" in stores.LocalRunStorePaths.__dict__
     assert "local_stage_worker_result_path" in stores.LocalRunStorePaths.__dict__
+    assert "local_generated_artifact_path" in stores.LocalRunStorePaths.__dict__
     write_signature = inspect.signature(
         stores.RunConfigStore.write_composition_manifest
     )
