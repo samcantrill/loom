@@ -221,6 +221,7 @@ make test-summary
   before reading them, and updated the config-extra SLURM live preflight
   expectation.
 - Blocker-resolution summary: TBD
-- PR preparation: TBD
+- PR preparation: PR body drafted at
+  `docs/phases/slurm-live-afterok-pr-body.md`; PR creation pending
 - Stack maintenance: TBD
 - Remaining blockers: none known
