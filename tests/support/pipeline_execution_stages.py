@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -82,6 +83,30 @@ class FailingStage:
     ) -> Mapping[str, ArtifactRef]:
         _ = context, inputs
         raise RuntimeError("stage failed intentionally")
+
+
+class SleepStage:
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        raw_seconds = context.stage_config.get("seconds", 30)
+        seconds = (
+            float(raw_seconds)
+            if isinstance(raw_seconds, int | float | str)
+            else 30.0
+        )
+        time.sleep(seconds)
+        return {
+            "data": context.save_artifact(
+                "data",
+                {"slept": seconds},
+                artifact_type="json",
+                codec_key="json.v1",
+            )
+        }
 
 
 class BadOutputStage:
