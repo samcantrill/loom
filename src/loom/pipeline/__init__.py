@@ -67,6 +67,13 @@ from loom.pipeline.validation import (
     validate_pipeline_config,
 )
 from loom.pipeline.stage import Stage
+from loom.pipeline.submitted import (
+    SubmittedOperationError,
+    SubmittedOperationRecord,
+    SubmittedOperationState,
+    is_active_submitted_operation,
+    is_terminal_submitted_operation,
+)
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
@@ -105,6 +112,11 @@ __all__ = [
     "StageStatusRecord",
     "parse_run_status",
     "parse_stage_status",
+    "SubmittedOperationError",
+    "SubmittedOperationRecord",
+    "SubmittedOperationState",
+    "is_active_submitted_operation",
+    "is_terminal_submitted_operation",
     "PipelineValidationError",
     "PipelineSpecError",
     "RuntimeResourceError",

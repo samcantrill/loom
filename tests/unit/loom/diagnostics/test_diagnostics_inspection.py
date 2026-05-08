@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -20,6 +21,7 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
+from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 
 
@@ -83,6 +85,33 @@ def test_inspect_run_status_uses_store_scan(tmp_path: Path) -> None:
     assert summary.stages[0].stage_name == "build"
     assert summary.stages[0].status == "SUCCEEDED"
     assert summary.stages[0].log_available == {"stdout": False, "stderr": False}
+
+
+def test_inspect_run_status_includes_submitted_operation_summaries(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _store_with_stage(tmp_path)
+    record = SubmittedOperationRecord(
+        run_uri=run_uri,
+        submission_id="sub-1",
+        backend="test-backend",
+        mode="batch",
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        state=SubmittedOperationState.SUBMITTED,
+        manifest_relative_path="submitted/sub-1/manifest.json",
+        summary_counts={"submitted": 1},
+    )
+    store.write_submitted_operation(run_uri, record)
+
+    summary = inspect_run_status(run_uri, run_store=store)
+
+    assert summary.submitted_operations[0].submission_id == "sub-1"
+    assert summary.submitted_operations[0].active is True
+    operations = cast(
+        list[dict[str, object]], summary.to_dict()["submitted_operations"]
+    )
+    assert operations[0]["backend"] == "test-backend"
 
 
 def test_inspect_stage_logs_tails_each_stream(tmp_path: Path) -> None:

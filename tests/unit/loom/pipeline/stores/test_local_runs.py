@@ -3,6 +3,7 @@
 import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -11,6 +12,7 @@ from loom.artifacts import ArtifactRef
 from loom.pipeline import RunStatus, StageStatus
 from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
+from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
     CorruptStoreDocumentError,
     InvalidRunURIError,
@@ -54,6 +56,27 @@ def _prepared_run_payload(run_uri: str) -> dict[str, PlainData]:
         "runtime": {"document_ref": "runtime.json", "executor": "local"},
         "metadata": {},
     }
+
+
+def _submitted_operation(
+    run_uri: str,
+    submission_id: str,
+    *,
+    state: SubmittedOperationState = SubmittedOperationState.SUBMITTED,
+    created_at: str = "2020-01-01T00:00:00Z",
+    summary_counts: dict[str, int] | None = None,
+) -> SubmittedOperationRecord:
+    return SubmittedOperationRecord(
+        run_uri=run_uri,
+        submission_id=submission_id,
+        backend="test-backend",
+        mode="batch",
+        created_at=created_at,
+        updated_at="2020-01-01T00:00:01Z",
+        state=state,
+        manifest_relative_path=f"submitted/{submission_id}/manifest.json",
+        summary_counts=summary_counts or {},
+    )
 
 
 def test_run_uri_resolves_documented_local_forms(
@@ -289,9 +312,7 @@ def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
     store.write_prepared_run(run_uri, prepared_run)
     assert store.read_prepared_run(run_uri) == prepared_run
     prepared_wrapper = json.loads(
-        (store.local_run_dir(run_uri) / "prepared_run.json").read_text(
-            encoding="utf-8"
-        )
+        (store.local_run_dir(run_uri) / "prepared_run.json").read_text(encoding="utf-8")
     )
     assert prepared_wrapper == prepared_run
 
@@ -324,6 +345,75 @@ def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
     assert store.read_artifact_index(run_uri) == {"stage.output": ref}
 
 
+def test_local_run_persists_submitted_operations_and_discovers_latest(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    older_active = _submitted_operation(
+        run_uri,
+        "sub-a",
+        created_at="2020-01-01T00:00:00Z",
+    )
+    newer_terminal = _submitted_operation(
+        run_uri,
+        "sub-z",
+        state=SubmittedOperationState.COMPLETED,
+        created_at="2020-01-01T00:00:02Z",
+    )
+    tied_latest = _submitted_operation(
+        run_uri,
+        "sub-b",
+        created_at="2020-01-01T00:00:00Z",
+    )
+
+    store.write_submitted_operation(run_uri, older_active)
+    store.write_submitted_operation(run_uri, newer_terminal)
+    store.write_submitted_operation(run_uri, tied_latest)
+
+    assert store.read_submitted_operation(run_uri, "sub-a") == older_active
+    assert [
+        record.submission_id for record in store.list_submitted_operations(run_uri)
+    ] == [
+        "sub-a",
+        "sub-b",
+        "sub-z",
+    ]
+    assert store.latest_submitted_operation(run_uri) == newer_terminal
+    assert store.latest_active_submitted_operation(run_uri) == tied_latest
+
+
+def test_local_run_read_missing_submitted_operation_is_side_effect_free(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+
+    assert store.read_submitted_operation(run_uri, "sub-a") is None
+
+    assert not (store.local_run_dir(run_uri) / "submitted_operations").exists()
+
+
+def test_local_run_inspection_includes_submitted_operation_summaries(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    record = _submitted_operation(run_uri, "sub-a", summary_counts={"submitted": 1})
+    store.write_submitted_operation(run_uri, record)
+
+    state = store.inspect_run_state(run_uri)
+
+    assert state.submitted_operations == (record,)
+    operations = cast(
+        list[dict[str, object]], state.to_dict()["submitted_operations"]
+    )
+    assert operations[0]["submission_id"] == "sub-a"
+
+
 def test_local_run_write_prepared_run_rejects_unsafe_nested_payload(
     tmp_path: Path,
 ) -> None:
@@ -343,8 +433,7 @@ def test_local_run_write_prepared_run_rejects_unsafe_nested_payload(
 
     assert exc_info.value.category == "unsafe_field"
     assert (
-        exc_info.value.field
-        == "prepared_run.metadata.adapter.data.raw_adapter_payload"
+        exc_info.value.field == "prepared_run.metadata.adapter.data.raw_adapter_payload"
     )
     assert not (store.local_run_dir(run_uri) / "prepared_run.json").exists()
 
@@ -597,7 +686,14 @@ def test_local_run_generated_artifact_path_helper_is_safe_relative(
         "generated/submissions/p1/manifest.json",
     )
 
-    assert path == store.local_run_dir(run_uri) / "generated" / "submissions" / "p1" / "manifest.json"
+    assert (
+        path
+        == store.local_run_dir(run_uri)
+        / "generated"
+        / "submissions"
+        / "p1"
+        / "manifest.json"
+    )
     assert path.parent.exists() is False
 
 

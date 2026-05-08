@@ -9,6 +9,7 @@ from typing import Protocol, runtime_checkable
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
+from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores.inspection import RunStateInspection
 from loom.serialization import PlainData
@@ -68,6 +69,29 @@ class RunRuntimeMetadataStore(Protocol):
     def write_runtime_metadata(
         self, run_uri: str, metadata: Mapping[str, PlainData]
     ) -> None: ...
+
+
+@runtime_checkable
+class RunSubmittedOperationStore(Protocol):
+    def write_submitted_operation(
+        self, run_uri: str, record: SubmittedOperationRecord
+    ) -> None: ...
+
+    def read_submitted_operation(
+        self, run_uri: str, submission_id: str
+    ) -> SubmittedOperationRecord | None: ...
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[SubmittedOperationRecord, ...]: ...
+
+    def latest_submitted_operation(
+        self, run_uri: str
+    ) -> SubmittedOperationRecord | None: ...
+
+    def latest_active_submitted_operation(
+        self, run_uri: str
+    ) -> SubmittedOperationRecord | None: ...
 
 
 @runtime_checkable
@@ -310,6 +334,7 @@ class RunStore(
     RunLockStore,
     RunInspectionStore,
     RunRuntimeMetadataStore,
+    RunSubmittedOperationStore,
     StageStateStore,
     StageLogStore,
     StageWorkspaceStore,

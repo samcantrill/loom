@@ -8,6 +8,7 @@ from loom.diagnostics.inspection import inspect_run_artifact, inspect_run_artifa
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline import RunStatusRecord, StageStatusRecord
+from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     ArtifactStore,
     LocalArtifactStore,
@@ -27,6 +28,7 @@ from loom.pipeline.stores import (
     RunStore,
     RunStateInspection,
     RunStatusStore,
+    RunSubmittedOperationStore,
     StageLogStore,
     StageStateStore,
     StageWorkspaceStore,
@@ -141,6 +143,31 @@ class DummyRunStore:
     def write_runtime_metadata(
         self, run_uri: str, metadata: Mapping[str, PlainData]
     ) -> None:
+        return None
+
+    def write_submitted_operation(
+        self, run_uri: str, record: SubmittedOperationRecord
+    ) -> None:
+        return None
+
+    def read_submitted_operation(
+        self, run_uri: str, submission_id: str
+    ) -> SubmittedOperationRecord | None:
+        return None
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[SubmittedOperationRecord, ...]:
+        return ()
+
+    def latest_submitted_operation(
+        self, run_uri: str
+    ) -> SubmittedOperationRecord | None:
+        return None
+
+    def latest_active_submitted_operation(
+        self, run_uri: str
+    ) -> SubmittedOperationRecord | None:
         return None
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
@@ -448,6 +475,7 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunPlanStore)
     assert isinstance(DummyRunStore(), RunPreparedRunStore)
     assert isinstance(DummyRunStore(), RunRuntimeMetadataStore)
+    assert isinstance(DummyRunStore(), RunSubmittedOperationStore)
     assert isinstance(DummyRunStore(), RunArtifactIndexStore)
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)

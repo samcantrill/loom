@@ -15,6 +15,7 @@ from loom.diagnostics.inspection import (
     RunStatusSummary,
     StageLogsSummary,
     StageStatusSummary,
+    SubmittedOperationSummary,
 )
 
 
@@ -27,19 +28,46 @@ def test_status_json_uses_diagnostics_payload(monkeypatch: pytest.MonkeyPatch) -
         "build_status_result",
         lambda run_uri: RunStatusSummary(
             run_uri=run_uri,
-            status="SUCCEEDED",
+            status="SUBMITTED",
             artifact_count=1,
-            stages=(StageStatusSummary(stage_name="build", status="SUCCEEDED", output_count=1),),
+            submitted_operations=(
+                SubmittedOperationSummary(
+                    submission_id="sub-1",
+                    backend="test-backend",
+                    mode="batch",
+                    state="SUBMITTED",
+                    created_at="2020-01-01T00:00:00Z",
+                    updated_at="2020-01-01T00:00:01Z",
+                    manifest_relative_path="submitted/sub-1/manifest.json",
+                    summary_counts={"submitted": 1},
+                    active=True,
+                ),
+            ),
+            stages=(
+                StageStatusSummary(
+                    stage_name="build",
+                    status="SUBMITTED",
+                    output_count=1,
+                ),
+            ),
         ),
     )
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["status", "file:///tmp/run1", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    assert (
+        main(
+            ["status", "file:///tmp/run1", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == status_command.STATUS_RESULT_SCHEMA_VERSION
-    assert payload["result"]["status"] == "SUCCEEDED"
+    assert payload["result"]["status"] == "SUBMITTED"
+    assert payload["result"]["submitted_operations"][0]["submission_id"] == "sub-1"
     assert payload["result"]["stages"][0]["stage_name"] == "build"
     assert stderr.getvalue() == ""
 
@@ -109,7 +137,14 @@ def test_logs_invalid_tail_is_usage_error() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["logs", "file:///tmp/run1", "build", "--tail", "0"], stdout=stdout, stderr=stderr) == 2
+    assert (
+        main(
+            ["logs", "file:///tmp/run1", "build", "--tail", "0"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 2
+    )
 
     assert stdout.getvalue() == ""
     assert "--tail must be a positive integer" in stderr.getvalue()

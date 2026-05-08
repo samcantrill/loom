@@ -30,6 +30,7 @@ def test_pipeline_store_public_exports() -> None:
         "RunConfigStore",
         "RunProvenanceStore",
         "RunRuntimeMetadataStore",
+        "RunSubmittedOperationStore",
         "StageStateStore",
         "StageLogStore",
         "StageWorkspaceStore",

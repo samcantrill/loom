@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from loom.cli.results import (
     CliWarning,
@@ -162,7 +163,9 @@ def format_run_text(result: RunCliResult) -> str:
 def format_slurm_dry_run_text(result: SlurmDryRunCliResult) -> str:
     """Format a concise SLURM dry-run artifact summary."""
 
-    suffix = "1 script" if result.script_count == 1 else f"{result.script_count} scripts"
+    suffix = (
+        "1 script" if result.script_count == 1 else f"{result.script_count} scripts"
+    )
     lines = [
         f"OK slurm dry-run {result.run_uri}: {result.mode}",
         f"planning_id: {result.planning_id}",
@@ -251,6 +254,20 @@ def format_status_text(result: object) -> str:
     status = getattr(result, "status")
     status_text = "<unknown>" if status is None else str(status)
     lines = [f"status {run_uri}: {status_text}"]
+    submitted_operations = cast(
+        Sequence[object], getattr(result, "submitted_operations", ())
+    )
+    if submitted_operations:
+        lines.append("submitted operations:")
+        for operation in submitted_operations:
+            active_suffix = " active" if bool(getattr(operation, "active")) else ""
+            lines.append(
+                "  "
+                f"{getattr(operation, 'submission_id')}: "
+                f"{getattr(operation, 'backend')}/{getattr(operation, 'mode')} "
+                f"{getattr(operation, 'state')}{active_suffix} "
+                f"manifest={getattr(operation, 'manifest_relative_path')}"
+            )
     for stage in getattr(result, "stages", ()):
         stage_name = str(getattr(stage, "stage_name"))
         stage_status = getattr(stage, "status")

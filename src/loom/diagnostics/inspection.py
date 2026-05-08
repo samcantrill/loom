@@ -20,6 +20,32 @@ class DiagnosticsInspectionError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class SubmittedOperationSummary:
+    submission_id: str
+    backend: str
+    mode: str
+    state: str
+    created_at: str
+    updated_at: str
+    manifest_relative_path: str
+    summary_counts: Mapping[str, int] = field(default_factory=dict)
+    active: bool = False
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "submission_id": self.submission_id,
+            "backend": self.backend,
+            "mode": self.mode,
+            "state": self.state,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "manifest_relative_path": self.manifest_relative_path,
+            "summary_counts": dict(self.summary_counts),
+            "active": self.active,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class StageStatusSummary:
     stage_name: str
     status: str | None = None
@@ -53,6 +79,7 @@ class RunStatusSummary:
     status: str | None = None
     message: str | None = None
     artifact_count: int = 0
+    submitted_operations: tuple[SubmittedOperationSummary, ...] = ()
     stages: tuple[StageStatusSummary, ...] = ()
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -61,6 +88,9 @@ class RunStatusSummary:
             "status": self.status,
             "message": self.message,
             "artifact_count": self.artifact_count,
+            "submitted_operations": [
+                operation.to_dict() for operation in self.submitted_operations
+            ],
             "stages": [stage.to_dict() for stage in self.stages],
         }
 
@@ -185,6 +215,20 @@ def inspect_run_status(
         status=None if run_status is None else run_status.status.value,
         message=None if run_status is None else run_status.message,
         artifact_count=state.artifact_count,
+        submitted_operations=tuple(
+            SubmittedOperationSummary(
+                submission_id=record.submission_id,
+                backend=record.backend,
+                mode=record.mode,
+                state=record.state.value,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+                manifest_relative_path=record.manifest_relative_path,
+                summary_counts=record.summary_counts,
+                active=record.active,
+            )
+            for record in state.submitted_operations
+        ),
         stages=tuple(_stage_summary(stage) for stage in state.stage_inspections),
     )
 

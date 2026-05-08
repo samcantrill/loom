@@ -14,7 +14,14 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.cli.main import main
+from loom.pipeline.status import (
+    RunStatus,
+    RunStatusRecord,
+    StageStatus,
+    StageStatusRecord,
+)
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
+from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from tests.support.config_samples import (
     construction_event_log,
     reset_instantiate_probe_state,
@@ -402,6 +409,58 @@ def test_cli_run_default_and_explicit_run_uri(
     assert run_uri_to_path(explicit_run_uri).is_dir()
 
 
+def test_cli_status_submitted_state_smoke(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "runs" / "submitted")
+    store = LocalRunStore(tmp_path / "runs")
+    store.create_run(run_uri)
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=RunStatus.SUBMITTED,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.SUBMITTED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    store.write_submitted_operation(
+        run_uri,
+        SubmittedOperationRecord(
+            run_uri=run_uri,
+            submission_id="sub-1",
+            backend="test-backend",
+            mode="batch",
+            created_at="2020-01-01T00:00:01Z",
+            updated_at="2020-01-01T00:00:01Z",
+            state=SubmittedOperationState.SUBMITTED,
+            manifest_relative_path="submitted/sub-1/manifest.json",
+            summary_counts={"submitted": 1},
+        ),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(["status", run_uri, "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["status"] == "SUBMITTED"
+    assert payload["result"]["stages"][0]["status"] == "SUBMITTED"
+    assert payload["result"]["submitted_operations"][0]["submission_id"] == "sub-1"
+    assert stderr.getvalue() == ""
+
+
 def test_cli_run_subprocess_success_smoke(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     run_uri = path_to_run_uri(tmp_path / "runs" / "subprocess-success")
@@ -474,9 +533,7 @@ def test_cli_run_subprocess_failure_smoke(tmp_path: Path) -> None:
     assert failure_summary["executor"] == "subprocess"
     assert failure_summary["exit_code"] == 1
     assert failure_summary["signal"] is None
-    assert (
-        "stage failed intentionally" in failure_summary["message"]
-    )
+    assert "stage failed intentionally" in failure_summary["message"]
     assert failure_summary["failure_path"].endswith("/stages/build/failure.json")
     assert failure_summary["stdout_path"].endswith("/stages/build/logs/stdout.log")
     assert failure_summary["stderr_path"].endswith("/stages/build/logs/stderr.log")

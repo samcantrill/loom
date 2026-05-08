@@ -20,6 +20,7 @@ class RunStatus(StrEnum):
     CREATED = "CREATED"
     PLANNED = "PLANNED"
     RUNNING = "RUNNING"
+    SUBMITTED = "SUBMITTED"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -29,6 +30,7 @@ class RunStatus(StrEnum):
 class StageStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
+    SUBMITTED = "SUBMITTED"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"

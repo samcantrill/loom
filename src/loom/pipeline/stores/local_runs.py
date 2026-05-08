@@ -12,6 +12,14 @@ from typing import cast
 from loom.artifacts import ArtifactRef, ArtifactValidationError
 from loom.pipeline.events import PipelineEvent, PipelineEventError, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord, RunLockValidationError
+from loom.pipeline.submitted import (
+    SubmittedOperationError,
+    SubmittedOperationRecord,
+    latest_active_submitted_operation,
+    latest_submitted_operation,
+    sort_submitted_operations,
+    validate_submission_id,
+)
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.serialization import (
     PlainData,
@@ -152,6 +160,7 @@ class LocalRunStore:
             run_status=self.read_run_status(run_uri_text),
             stage_inspections=stage_inspections,
             artifact_count=len(self.read_artifact_index(run_uri_text)),
+            submitted_operations=self.list_submitted_operations(run_uri_text),
         )
 
     def local_run_dir(self, run_uri: str) -> Path:
@@ -369,6 +378,69 @@ class LocalRunStore:
             "runtime": normalized,
         }
         atomic_write_json(self.local_run_dir(run_uri_text) / "runtime.json", payload)
+
+    def write_submitted_operation(
+        self, run_uri: str, record: SubmittedOperationRecord
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        if not isinstance(record, SubmittedOperationRecord):
+            raise UnsafeStorePathError("submitted operation must be a record")
+        if record.run_uri != run_uri_text:
+            raise UnsafeStorePathError(
+                f"run_uri mismatch for submitted operation: {record.run_uri} != {run_uri_text}"
+            )
+        submission_id = validate_submission_id(record.submission_id)
+        path = self._submitted_operation_path(
+            run_uri_text, submission_id, create_parent=True
+        )
+        atomic_write_json(path, record.to_dict())
+
+    def read_submitted_operation(
+        self, run_uri: str, submission_id: str
+    ) -> SubmittedOperationRecord | None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        submission_id_text = validate_submission_id(submission_id)
+        path = self._submitted_operation_path(run_uri_text, submission_id_text)
+        data = self._read_optional_json(path)
+        if data is None:
+            return None
+        return self._submitted_operation_from_payload(run_uri_text, path, data)
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[SubmittedOperationRecord, ...]:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        self.open_run(run_uri_text)
+        directory = self.local_run_dir(run_uri_text) / "submitted_operations"
+        if not directory.exists():
+            return ()
+        if not directory.is_dir():
+            raise CorruptStoreDocumentError(f"Expected directory at {directory}")
+        records: list[SubmittedOperationRecord] = []
+        for path in sorted(directory.iterdir(), key=lambda item: item.name):
+            if not path.is_file() or path.suffix != ".json":
+                raise CorruptStoreDocumentError(
+                    f"Expected submitted-operation JSON file at {path}"
+                )
+            data = self._read_optional_json(path)
+            if data is None:
+                continue
+            records.append(
+                self._submitted_operation_from_payload(run_uri_text, path, data)
+            )
+        return sort_submitted_operations(records)
+
+    def latest_submitted_operation(
+        self, run_uri: str
+    ) -> SubmittedOperationRecord | None:
+        return latest_submitted_operation(self.list_submitted_operations(run_uri))
+
+    def latest_active_submitted_operation(
+        self, run_uri: str
+    ) -> SubmittedOperationRecord | None:
+        return latest_active_submitted_operation(
+            self.list_submitted_operations(run_uri)
+        )
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
         run_dir = self.local_run_dir(run_uri)
@@ -1023,6 +1095,41 @@ class LocalRunStore:
         stage_dir = self.local_stage_dir(run_uri, stage_name)
         stage_dir.mkdir(parents=True, exist_ok=True)
         return stage_dir / filename
+
+    def _submitted_operation_path(
+        self, run_uri: str, submission_id: str, *, create_parent: bool = False
+    ) -> Path:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        submission_id_text = validate_submission_id(submission_id)
+        directory = self.local_run_dir(run_uri_text) / "submitted_operations"
+        if create_parent:
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"{submission_id_text}.json"
+
+    def _submitted_operation_from_payload(
+        self,
+        run_uri: str,
+        path: Path,
+        data: object,
+    ) -> SubmittedOperationRecord:
+        try:
+            record = SubmittedOperationRecord.from_dict(data)
+        except SubmittedOperationError as exc:
+            raise CorruptStoreDocumentError(
+                f"Malformed submitted-operation record at {path}: {exc}"
+            ) from exc
+        expected = validate_run_uri(run_uri, field="run_uri")
+        actual = validate_run_uri(record.run_uri, field="submitted_operation.run_uri")
+        if actual != expected:
+            raise CorruptStoreDocumentError(
+                f"submitted-operation record at {path} has run_uri {actual!r}, expected {expected!r}"
+            )
+        expected_name = f"{record.submission_id}.json"
+        if path.name != expected_name:
+            raise CorruptStoreDocumentError(
+                f"submitted-operation record at {path} has submission_id {record.submission_id!r}, expected filename {expected_name!r}"
+            )
+        return record
 
     def _read_optional_json(
         self, path: Path
