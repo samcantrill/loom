@@ -8,21 +8,24 @@ from pathlib import Path
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.errors import StageContractError
 from loom.pipeline.planning import ExecutionPlan, PlanAction, StageFingerprintRecord
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
 from loom.pipeline.stores.artifact_store import ArtifactStore
+from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
 from loom.serialization import PlainData, ensure_plain_data
 from loom.timestamps import utc_timestamp
 
-from .errors import PipelineExecutionError
+from .errors import OutputValidationError, PipelineExecutionError, PlanExecutionError
 from .eventing import emit_run_event, emit_stage_event
 from .lifecycle import (
     commit_stage_execution_result,
+    record_stage_failure_and_failed_run,
     write_run_status,
     write_stage_running,
 )
-from .models import ExecutionFailure, StageRunResult
+from .models import EXECUTION_FAILURE_SCHEMA_VERSION, ExecutionFailure, StageRunResult
 from .prepared_run import PREPARED_RUN_CONTINUATION_WHOLE_RUN, PreparedRunRecord
 from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_worker import (
@@ -319,6 +322,12 @@ def _run_stage_job_locked(
         stage_name=request.stage_name,
         attempt=attempt,
     )
+    _validate_worker_request_identity(
+        worker_request=worker_request,
+        run_uri=request.run_uri,
+        stage_name=request.stage_name,
+        attempt=attempt,
+    )
     _validate_executor(worker_request.executor_name)
     _validate_worker_attempt_state(
         run_store=run_store,
@@ -364,25 +373,61 @@ def _run_stage_job_locked(
 
     from loom.pipeline.executors import LocalExecutor
 
-    execution_result = LocalExecutor(capture_stdout_stderr=True).execute(exec_request)
     run_status_before = _require_run_status(run_store, request.run_uri)
-    stage_result = commit_stage_execution_result(
-        run_store,
-        run_uri=request.run_uri,
-        stage=exec_request.stage,
-        stage_plan=stage_plan,
-        attempt=attempt,
-        inputs=exec_request.inputs,
-        fingerprint=cast(StageFingerprintRecord, exec_request.fingerprint).to_dict(),
-        artifact_store=artifact_store_factory(
-            cast(LocalRunStorePaths, run_store).local_artifact_root(request.run_uri)
-        ),
-        created_at=run_status_before.created_at,
-        run_started_at=run_status_before.started_at or run_status_before.updated_at,
-        execution_result=execution_result,
-        executor_name=request.executor,
-        clock=clock,
-    )
+    try:
+        execution_result = LocalExecutor(capture_stdout_stderr=True).execute(exec_request)
+        stage_result = commit_stage_execution_result(
+            run_store,
+            run_uri=request.run_uri,
+            stage=exec_request.stage,
+            stage_plan=stage_plan,
+            attempt=attempt,
+            inputs=exec_request.inputs,
+            fingerprint=cast(StageFingerprintRecord, exec_request.fingerprint).to_dict(),
+            artifact_store=artifact_store_factory(
+                cast(LocalRunStorePaths, run_store).local_artifact_root(request.run_uri)
+            ),
+            created_at=run_status_before.created_at,
+            run_started_at=run_status_before.started_at or run_status_before.updated_at,
+            execution_result=execution_result,
+            executor_name=request.executor,
+            clock=clock,
+        )
+    except Exception as exc:
+        failure = _failure_from_stage_job_exception(
+            run_uri=request.run_uri,
+            stage_name=request.stage_name,
+            attempt=attempt,
+            executor=request.executor,
+            stdout_path=exec_request.stdout_path,
+            stderr_path=exec_request.stderr_path,
+            traceback_path=exec_request.traceback_path,
+            exc=exc,
+            clock=clock,
+        )
+        failure = record_stage_failure_and_failed_run(
+            run_store,
+            run_uri=request.run_uri,
+            stage_name=request.stage_name,
+            attempt=attempt,
+            started_at=running_at,
+            created_at=run_status_before.created_at,
+            run_started_at=run_status_before.started_at or run_status_before.updated_at,
+            failure=failure,
+            executor_name=request.executor,
+            clock=clock,
+        )
+        stage_result = StageRunResult(
+            stage_name=request.stage_name,
+            action=PlanAction.RUN,
+            status=StageStatus.FAILED,
+            attempt=attempt,
+            outputs={},
+            failure=failure,
+            reasons=stage_plan.reasons,
+            started_at=running_at,
+            finished_at=failure.failed_at,
+        )
     run_status = _update_stage_job_run_status(
         run_store=run_store,
         run_uri=request.run_uri,
@@ -488,6 +533,32 @@ def _read_worker_request(
             code="execution.stage_job.insufficient_reconstruction_state",
             context={"run_uri": run_uri, "stage": stage_name, "attempt": attempt},
         ) from exc
+
+
+def _validate_worker_request_identity(
+    *,
+    worker_request: StageWorkerRequest,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+) -> None:
+    if (
+        worker_request.run_uri != run_uri
+        or worker_request.stage_name != stage_name
+        or worker_request.attempt != attempt
+    ):
+        raise ContinuationStateError(
+            "prepared worker request identity does not match requested stage-job",
+            code="execution.stage_job.insufficient_reconstruction_state",
+            context={
+                "run_uri": run_uri,
+                "stage": stage_name,
+                "attempt": attempt,
+                "worker_run_uri": worker_request.run_uri,
+                "worker_stage": worker_request.stage_name,
+                "worker_attempt": worker_request.attempt,
+            },
+        )
 
 
 def _validate_worker_attempt_state(
@@ -655,6 +726,46 @@ def _require_run_status(run_store: RunStore, run_uri: str):
             context={"run_uri": run_uri},
         )
     return status
+
+
+def _failure_from_stage_job_exception(
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    executor: str,
+    stdout_path: Path,
+    stderr_path: Path,
+    traceback_path: Path,
+    exc: Exception,
+    clock: Clock,
+) -> ExecutionFailure:
+    return ExecutionFailure(
+        schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        failed_at=clock(),
+        executor=executor,
+        failure_type=_failure_type_for_stage_job_exception(exc),
+        message=str(exc) or type(exc).__name__,
+        exception_type=f"{type(exc).__module__}.{type(exc).__name__}",
+        stdout_path=str(stdout_path),
+        stderr_path=str(stderr_path),
+        traceback_path=str(traceback_path),
+    )
+
+
+def _failure_type_for_stage_job_exception(exc: Exception) -> str:
+    if isinstance(exc, OutputValidationError):
+        return "output_validation"
+    if isinstance(exc, StageContractError):
+        return "stage_contract"
+    if isinstance(exc, PlanExecutionError):
+        return "plan_execution"
+    if isinstance(exc, (StoreError, ArtifactStoreError)):
+        return "store_commit"
+    return "executor_infrastructure"
 
 
 def _update_stage_job_run_status(

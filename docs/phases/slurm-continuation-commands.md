@@ -209,7 +209,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-08 for expanded-path lifecycle
+  and state-safety fixes
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -219,7 +220,16 @@ make test-summary
 - Final phase execution plan: completed in expanded-path refine pass
 - Implementation summary: completed fallback implementation pass in this worktree. Added generic execution-owned continuation APIs for prepared whole-run validation and self-finalizing stage jobs; added import-light `loom prepared-run continue` and `loom stage-job run` CLI groups; extracted narrow runner lifecycle commit helpers for stage output validation, provenance, artifact-index, failure, stage status/event, and failed-run status; preserved the v5 `loom stage run` handoff-only worker path while adding a safe-mode reconstruction option that disables `config/resolved.yaml` fallback for stage jobs. Whole-run prepared continuation validates durable prepared metadata, persisted plan, runtime metadata, run identity, and executor choice, then returns structured `execution.prepared_run.insufficient_prepared_state` before user code when no explicit safe replay payload exists. Stage-job continuation requires `--executor local`, rejects recursive submitted executor names before user code, reconstructs from prepared durable worker state without resolved-config replay, validates upstream outputs and runtime environment safety before execution, finalizes only the target stage, marks the run failed on target failure, marks the run succeeded only when all planned stages are terminal success/reuse/skip, and otherwise leaves the run running without blocking downstream stages.
 - Implementation validation: targeted package/unit command passed (`55 passed`); targeted contract/integration/e2e smoke command passed (`20 passed, 4 skipped`); `make validate-pr` passed after a small typecheck fix (`ruff check`, `pyright`, default test harness `762 passed, 14 skipped, 8 deselected`, config-extra harness `405 passed, 781 deselected`, and `uv build`). `make test-summary` was not run because this pass stops before PR preparation.
-- Refinement summary: tightened Phase 2 around narrow lifecycle helper extraction, state-only stage-job reconstruction, safe prepared-run continuation behavior, local-only required executor selection, exact run-level status semantics, import-light CLI module registration, and realistic suite obligations
+- Refinement summary: used the required expanded-path implementation refinement
+  pass. Fixed two concrete stage-job blockers: success-finalization exceptions
+  such as output validation failures now commit a stage failure and failed run
+  instead of escaping after the stage is marked running, and tampered prepared
+  worker request identity now fails before executor construction/user code.
+- Refinement validation: targeted stage-job unit test passed (`6 passed`);
+  targeted continuation/lifecycle/runner/contract/integration/e2e command
+  passed (`43 passed`); `make validate-pr` passed (`ruff check`, `pyright`,
+  default harness `764 passed, 14 skipped, 8 deselected`, config-extra harness
+  `405 passed, 783 deselected`, and `uv build`).
 - Blocker-resolution summary: not used
 - PR preparation: not started per fallback executor handoff; no PR body prepared or PR opened
 - Stack maintenance: none performed
@@ -259,11 +269,17 @@ make test-summary
 - Future-phase work avoided: yes; no SLURM package, script generation, dry-run manifest, submitted state, scheduler IDs, `sbatch`, or `loom run --executor slurm-*`
 - Unrelated refactors avoided: yes; lifecycle extraction was limited to runner commit helpers required by stage-job finalization
 - Public contract decisions changed: no
+- Expanded-path implementation refinement: used on 2026-05-08; fixed
+  stage-job lifecycle failure finalization and worker-request identity
+  validation before executor construction
 
 ## Tests Added Or Updated
 
 - Package: updated `tests/package/test_pipeline_execution_api.py`
 - Unit: added `tests/unit/loom/cli/test_prepared_run_cli.py`, `tests/unit/loom/cli/test_stage_job_cli.py`, `tests/unit/loom/pipeline/execution/test_prepared_run_continue.py`, and `tests/unit/loom/pipeline/execution/test_stage_job.py`
+- Refinement unit coverage: updated
+  `tests/unit/loom/pipeline/execution/test_stage_job.py` for output-validation
+  lifecycle failure finalization and prepared worker-request identity mismatch
 - Contract: added `tests/contracts/test_continuation_commands_contract.py`
 - Integration: added `tests/integration/pipeline/test_prepared_run_continuation.py` and `tests/integration/pipeline/test_stage_job_continuation.py`
 - E2E: updated `tests/e2e/test_cli_core.py`
@@ -280,6 +296,15 @@ result: passed, 20 passed and 4 skipped in 2.11s
 
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
 result: passed; ruff check, pyright, default harness, config-extra harness, and uv build all succeeded
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/execution/test_stage_job.py
+result: passed, 6 passed in 0.65s
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/cli/test_prepared_run_cli.py tests/unit/loom/cli/test_stage_job_cli.py tests/unit/loom/pipeline/execution/test_prepared_run_continue.py tests/unit/loom/pipeline/execution/test_stage_job.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_runner.py tests/contracts/test_continuation_commands_contract.py tests/integration/pipeline/test_prepared_run_continuation.py tests/integration/pipeline/test_stage_job_continuation.py tests/e2e/test_cli_core.py
+result: passed, 43 passed in 4.78s
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; ruff check, pyright, default harness 764 passed/14 skipped/8 deselected, config-extra harness 405 passed/783 deselected, and uv build all succeeded
 ```
 
 ## Known Issues Or Blockers

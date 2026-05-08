@@ -31,6 +31,16 @@ def _producer_stage() -> StageSpec:
     )
 
 
+def _bad_output_stage() -> StageSpec:
+    return StageSpec(
+        name="build",
+        factory=StageFactorySpec(
+            target_path="tests.support.pipeline_execution_stages.BadOutputStage"
+        ),
+        outputs={"data": OutputSpec(artifact_type="json")},
+    )
+
+
 def _consumer_stage() -> StageSpec:
     return StageSpec(
         name="consume",
@@ -164,3 +174,50 @@ def test_stage_job_fails_before_user_code_when_prepared_state_missing(
         )
 
     assert exc_info.value.code == "execution.stage_job.insufficient_reconstruction_state"
+
+
+def test_stage_job_records_failed_run_when_output_validation_fails(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path, stages=(_bad_output_stage(),))
+
+    result = run_stage_job(
+        run_store=store,
+        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+    )
+
+    assert result.status == StageStatus.FAILED
+    assert result.run_status == RunStatus.FAILED
+    assert result.failure is not None
+    assert result.failure.failure_type == "output_validation"
+    stage_status = store.read_stage_status(run_uri, "build")
+    run_status = store.read_run_status(run_uri)
+    failure = store.read_stage_failure(run_uri, "build")
+    assert stage_status is not None
+    assert run_status is not None
+    assert failure is not None
+    assert stage_status.status == StageStatus.FAILED
+    assert run_status.status == RunStatus.FAILED
+    assert failure["failure_type"] == "output_validation"
+
+
+def test_stage_job_rejects_worker_request_identity_mismatch_before_running(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path)
+    raw_request = store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert isinstance(raw_request, dict)
+    tampered_request = dict(raw_request)
+    tampered_request["run_uri"] = "file:///tmp/other-run"
+    store.write_stage_worker_request(run_uri, "build", tampered_request, attempt=1)
+
+    with pytest.raises(ContinuationStateError) as exc_info:
+        run_stage_job(
+            run_store=store,
+            request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        )
+
+    assert exc_info.value.code == "execution.stage_job.insufficient_reconstruction_state"
+    status = store.read_stage_status(run_uri, "build")
+    assert status is not None
+    assert status.status == StageStatus.PENDING
