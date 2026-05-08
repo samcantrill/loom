@@ -7,14 +7,21 @@ import sys
 from typing import TYPE_CHECKING
 
 from loom.cli.errors import CliError, ExitCode
-from loom.cli.formatting import format_json_envelope, format_status_text
+from loom.cli.formatting import (
+    format_json_envelope,
+    format_status_jobs_text,
+    format_status_text,
+)
 from loom.cli.options import OutputFormat, output_format_from_namespace
 
 if TYPE_CHECKING:
     from loom.diagnostics.inspection import RunStatusSummary
+    from loom.pipeline.executors.slurm.commands import SlurmCommandRunner
+    from loom.pipeline.executors.slurm.status import SlurmJobsStatusReport
 
 
 STATUS_RESULT_SCHEMA_VERSION = "loom.cli.status.v3"
+STATUS_JOBS_RESULT_SCHEMA_VERSION = "loom.cli.status.jobs.v1"
 
 
 def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -22,6 +29,11 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 
     parser = subparsers.add_parser("status", help="inspect a local run")
     parser.add_argument("run_uri", metavar="RUN_URI", help="run URI to inspect")
+    parser.add_argument(
+        "--jobs",
+        action="store_true",
+        help="include submitted scheduler job status for the latest operation",
+    )
     parser.add_argument(
         "--format",
         dest="output_format",
@@ -42,6 +54,23 @@ def handle(namespace: argparse.Namespace) -> int:
     """Handle ``loom status``."""
 
     output_format = output_format_from_namespace(namespace)
+    if bool(getattr(namespace, "jobs", False)):
+        result = build_status_jobs_result(str(namespace.run_uri))
+        warnings = [warning.to_dict() for warning in result.warnings]
+        if output_format is OutputFormat.JSON:
+            sys.stdout.write(
+                format_json_envelope(
+                    schema_version=STATUS_JOBS_RESULT_SCHEMA_VERSION,
+                    ok=True,
+                    warnings=warnings,
+                    payload_name="result",
+                    payload=result.to_dict(),
+                )
+            )
+        else:
+            sys.stdout.write(format_status_jobs_text(result) + "\n")
+        return int(ExitCode.SUCCESS)
+
     result = build_status_result(str(namespace.run_uri))
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
@@ -69,6 +98,36 @@ def build_status_result(run_uri: str) -> "RunStatusSummary":
         raise _run_state_error(exc) from exc
 
 
+def build_status_jobs_result(run_uri: str) -> "SlurmJobsStatusReport":
+    """Build a scheduler-aware run status summary."""
+
+    from loom.pipeline.executors.slurm.status import (
+        SlurmStatusInspectionError,
+        inspect_slurm_job_status,
+    )
+
+    try:
+        return inspect_slurm_job_status(
+            run_uri,
+            command_runner=_build_slurm_status_command_runner(),
+        )
+    except SlurmStatusInspectionError as exc:
+        raise CliError(
+            str(exc),
+            code=exc.code,
+            context=exc.context,
+            exit_code=ExitCode.RUN_STATE,
+        ) from exc
+    except Exception as exc:
+        raise _run_state_error(exc) from exc
+
+
+def _build_slurm_status_command_runner() -> "SlurmCommandRunner":
+    from loom.pipeline.executors.slurm.status import default_slurm_status_command_runner
+
+    return default_slurm_status_command_runner()
+
+
 def _run_state_error(error: BaseException) -> CliError:
     return CliError(
         str(error),
@@ -78,4 +137,11 @@ def _run_state_error(error: BaseException) -> CliError:
     )
 
 
-__all__ = ["STATUS_RESULT_SCHEMA_VERSION", "build_status_result", "handle", "register_subparser"]
+__all__ = [
+    "STATUS_JOBS_RESULT_SCHEMA_VERSION",
+    "STATUS_RESULT_SCHEMA_VERSION",
+    "build_status_jobs_result",
+    "build_status_result",
+    "handle",
+    "register_subparser",
+]

@@ -195,6 +195,41 @@ def test_status_reports_persisted_submitted_state_without_scheduler_access(
     assert stderr.getvalue() == ""
 
 
+def test_status_without_jobs_never_builds_scheduler_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.cli.status as status_command
+
+    def fail_scheduler_runner() -> object:
+        raise AssertionError("ordinary status must not query scheduler state")
+
+    monkeypatch.setattr(
+        status_command,
+        "_build_slurm_status_command_runner",
+        fail_scheduler_runner,
+    )
+    run_uri = path_to_run_uri(tmp_path / "runs" / "scheduler-free-status")
+    store = LocalRunStore(tmp_path / "runs")
+    store.create_run(run_uri)
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=RunStatus.SUCCEEDED,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert main(["status", run_uri], stdout=stdout, stderr=stderr) == 0
+
+    assert stdout.getvalue().startswith(f"status {run_uri}: SUCCEEDED")
+    assert stderr.getvalue() == ""
+
+
 def test_logs_returns_bounded_content(tmp_path: Path) -> None:
     run_uri = _run_pipeline(tmp_path)
     LocalRunStore().write_stage_log(run_uri, "build", "stdout", "a\nb\nc\n")

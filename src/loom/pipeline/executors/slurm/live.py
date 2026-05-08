@@ -401,7 +401,7 @@ class SlurmSchedulerStatusSnapshot:
             "source": self.source,
             "state": self.state,
             "exit_code": self.exit_code,
-            "details": dict(self.details),
+            "details": thaw_plain_data(self.details, path="details"),
         }
 
     @classmethod
