@@ -696,7 +696,7 @@ def _status_from_scheduler_fact(fact: SlurmSchedulerFact) -> str:
 
 
 def _normalize_slurm_state(value: str) -> str:
-    state = value.strip().upper().replace(" ", "_")
+    state = value.strip().upper().split()[0].replace(" ", "_")
     return state.split("+", 1)[0] if "+" in state else state
 
 

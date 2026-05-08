@@ -22,7 +22,7 @@ pytestmark = pytest.mark.e2e
         ("", "100|RUNNING|None\n", (), "RUNNING"),
         ("100|COMPLETED|0:0\n", "", (), "SUCCEEDED"),
         ("100|FAILED|1:0\n", "", (), "FAILED"),
-        ("100|CANCELLED|0:15\n", "", (), "CANCELLED"),
+        ("100|CANCELLED by 123|0:15\n", "", (), "CANCELLED"),
         ("", "100|PENDING|Dependency\n", (), "DEPENDENCY_BLOCKED"),
         ("", "100|CONFIG_ERROR|Unknown\n", (), "UNKNOWN"),
     ),
