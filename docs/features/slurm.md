@@ -424,11 +424,11 @@ code, and input artifacts needed by the job.
 
 SLURM should run commands that `loom` already understands.
 
-The command body should be built from stable entry points:
+The command body should be built from stable continuation entry points:
 
 ```text
-loom run
-loom stage run
+loom prepared-run continue
+loom stage-job run
 ```
 
 This avoids a second path for stage construction, artifact registration, and

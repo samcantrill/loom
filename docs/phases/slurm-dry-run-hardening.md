@@ -14,16 +14,17 @@
 - PR: https://github.com/samcantrill/loom/pull/87
 - PR state: open
 - Stack predecessor: none; Phases 1-5 are merged into `develop`
-- Base branch: `develop` at `9f4c4b2`
+- Base branch: `develop` at `33e35c8` after rebasing onto the Phase 6
+  PR-open metadata commit
 - Target branch: `develop`
 - Base/head verification: `gh pr view 87 --json baseRefName,headRefName,state,url`
   returned `baseRefName=develop`,
   `headRefName=codex/slurm-dry-run-hardening`, `state=OPEN`, and URL
   `https://github.com/samcantrill/loom/pull/87` on 2026-05-08.
-- GitHub checks: pending after PR opening
-- Merge eligibility: root phase; not merge-eligible until automated review
-  passes, GitHub CI passes, PR body evidence is accurate, and the PR targets
-  `develop`
+- GitHub checks: CI `checks` passed for PR #87 on 2026-05-08
+- Merge eligibility: root phase; eligible after automated manager review found
+  no remaining blockers, GitHub CI passed, PR body evidence was updated, and
+  the PR target was verified as `develop`
 - Workflow path: expanded path because the phase spans e2e behavior, persisted
   secret-boundary contracts, feature documentation, and v7 handoff notes
 - Successor dependency notes: this is the final v6 phase. No successor phase
@@ -71,9 +72,9 @@ hard to regress and make the docs stop recommending stale resolved-config or
   in the v6 implementation plan
 - Why this base branch is correct: all earlier v6 phases are merged into
   `develop`, and Phase 5 metadata is pushed on `develop`
-- Retarget/rebase plan after predecessor merge: none required unless `develop`
-  moves before PR preparation, in which case rebase this branch onto updated
-  `develop` and rerun focused validation
+- Retarget/rebase plan after predecessor merge: no predecessor; branch was
+  rebased onto updated `origin/develop` at `33e35c8` after PR-open metadata was
+  pushed, then force-pushed to keep PR #87 current
 - Branch cleanup constraints: branch can be deleted after merge because no v6
   successor branch should depend on it
 
@@ -394,7 +395,8 @@ make test-summary
   resolved `oc.env` value in dry-run `plan.json`; fixed by persisting the
   SLURM dry-run plan from the composed config's artifact-safe unresolved
   pipeline view
-- PR review: unused
+- PR review: used locally by the managing agent on 2026-05-08; one stale
+  SLURM docs command-shape note was fixed, and no blocking findings remain
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -425,11 +427,15 @@ make test-summary
 - Refinement summary: expanded-path implementation refinement was used locally
   to fix the dry-run plan secret-boundary blocker before PR opening. No
   separate blocker-resolution pass was needed.
-- Blocker-resolution summary: pending.
+- Blocker-resolution summary: no blocker-resolution passes were needed.
 - PR preparation: PR body drafted in
   `docs/phases/slurm-dry-run-hardening-pr-body.md` using final
   `make test-summary` evidence. PR #87 opened against `develop` and base/head
   verification passed.
 - Stack maintenance: root phase targeting `develop`; no predecessor and no
-  retargeting required at PR opening.
+  retargeting required. Rebased the phase branch onto `origin/develop` at
+  `33e35c8` after control metadata moved `develop`, then force-pushed PR #87.
+- Automated review: local manager review used on 2026-05-08; fixed one stale
+  docs command-shape note and found no remaining blockers.
+- GitHub CI: PR #87 CI `checks` passed on 2026-05-08.
 - Remaining blockers: none known.

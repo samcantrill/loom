@@ -49,7 +49,7 @@ behavior.
 | Focused Phase 6 suite | Passed | `26 passed` across SLURM CLI e2e, CLI integration, SLURM planning integration, manifest/CLI/continuation/preflight contracts. |
 | `make validate-pr` | Passed | Ruff, Pyright, default pytest (`833 passed, 15 skipped, 8 deselected`), config-extra pytest (`410 passed, 854 deselected`), and build passed. |
 | `make test-summary` | Passed | Overall `1264 passed, 11 skipped, 862 deselected`; suite table below. |
-| GitHub checks | Pending | To be run after the PR is opened. |
+| GitHub checks | Passed | CI `checks` completed successfully for PR #87. |
 
 ### Test Suite Summary
 
