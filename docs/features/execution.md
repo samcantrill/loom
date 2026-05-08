@@ -19,9 +19,10 @@ perform the selected stages and record what happened?
 ```
 
 The current design supports local in-process execution and serial subprocess
-execution through the durable `loom stage run` worker contract. Cluster and
-container execution details in this document remain future scaffolding and must
-not be treated as acceptance criteria unless an implementation plan adds a
+execution through the durable `loom stage run` worker contract. V6 SLURM
+dry-run scripts use `loom prepared-run continue` and `loom stage-job run` as
+generic continuation surfaces; live cluster and container execution details in
+this document remain future scaffolding unless an implementation plan adds a
 phase for them.
 
 ### 1.1 Alignment With `loom.md`
@@ -1577,12 +1578,15 @@ Use cases:
 ```text
 stage isolation
 independent logs
-closer behavior to SLURM and containers
+closer behavior to parent-managed submitted workers
 debugging command entry points
 avoiding leaked in-process state
 ```
 
-It is the bridge between local execution and future remote execution.
+It is the bridge between local execution and parent-managed subprocess
+execution. Submitted afterok jobs use `loom stage-job run` instead because they
+must finalize one stage from durable run-store state without a live parent
+process.
 
 ### 15.2 Command Contract
 
@@ -1646,6 +1650,9 @@ exit with a meaningful code
 
 The worker should not finalize the whole run. It should only perform one stage
 attempt.
+
+SLURM afterok dry-run scripts generated in v6 do not call `loom stage run`.
+They call `loom stage-job run --run-uri RUN_URI --stage STAGE --executor local`.
 
 ### 15.5 Result Handoff
 
@@ -2214,9 +2221,10 @@ loom run experiment.yaml --run-uri file:///abs/project/runs/example --executor l
 
 ### 21.2 `loom stage run`
 
-`loom stage run` is the direct worker entry point for one prepared stage
-attempt. Future subprocess, scheduler, and container executors should invoke
-the same command instead of embedding stage execution logic.
+`loom stage run` is the direct parent-managed worker entry point for one
+prepared stage attempt. Subprocess workers invoke this command instead of
+embedding stage execution logic. Submitted afterok workers use `loom stage-job
+run` so they can finalize one stage without a live parent process.
 
 It should:
 
