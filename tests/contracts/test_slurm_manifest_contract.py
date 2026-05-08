@@ -9,6 +9,7 @@ import pytest
 from loom.pipeline.executors.slurm import (
     SLURM_LIVE_SUBMISSION_SCHEMA_VERSION,
     SLURM_PLANNED_SUBMISSION_SCHEMA_VERSION,
+    SlurmCancellationAttempt,
     SlurmCommandResult,
     SlurmGeneratedArtifactPath,
     SlurmLiveSubmissionManifest,
@@ -155,6 +156,75 @@ def test_slurm_live_manifest_schema_extends_canonical_manifest_path() -> None:
     assert '"submission_status":"SUBMITTED"' in rendered
     assert '"scheduler_job_id":"123456"' in rendered
     assert "submission.json" not in rendered
+    assert "raw_adapter" not in rendered
+
+
+def test_slurm_live_manifest_schema_preserves_cancellation_attempts() -> None:
+    command = build_single_job_command_argv("file:///runs/run-1")
+    planned = SlurmPlannedSubmission(
+        run_uri="file:///runs/run-1",
+        mode=SlurmMode.SINGLE_JOB,
+        planning_id="p1",
+        created_at="2026-05-08T00:00:00Z",
+        plan_relative_path="slurm/submissions/p1/plan.json",
+        manifest_relative_path="slurm/submissions/p1/manifest.json",
+        jobs=(
+            SlurmPlannedJob(
+                logical_key="pipeline",
+                mode=SlurmMode.SINGLE_JOB,
+                command=command,
+                script_relative_path="slurm/submissions/p1/scripts/pipeline.sh",
+            ),
+        ),
+        generated_command_argv=(command,),
+    )
+    manifest = live_manifest_from_planned_submission(
+        planned,
+        status=SlurmLiveSubmissionStatus.CANCELLED,
+        updated_at="2026-05-08T00:00:03Z",
+    )
+    manifest = SlurmLiveSubmissionManifest(
+        **{
+            **manifest.to_dict(),
+            "submitted_jobs": [
+                SlurmSubmittedJob(
+                    logical_key="pipeline",
+                    scheduler_job_id="123456",
+                    raw_job_id_output="123456\n",
+                    submitted_at="2026-05-08T00:00:02Z",
+                    command_record=SlurmCommandResult(
+                        command="sbatch",
+                        argv=("sbatch", "--parsable", "pipeline.sh"),
+                        returncode=0,
+                        stdout="123456\n",
+                    ),
+                ).to_dict()
+            ],
+            "cancellation_attempts": [
+                SlurmCancellationAttempt(
+                    logical_key="pipeline",
+                    scheduler_job_id="123456",
+                    attempted_at="2026-05-08T00:00:03Z",
+                    outcome="cancelled",
+                    message="cancelled",
+                    command_record=SlurmCommandResult(
+                        command="scancel",
+                        argv=("scancel", "123456"),
+                        returncode=0,
+                    ),
+                ).to_dict()
+            ],
+        }
+    )
+
+    payload = ensure_plain_data(manifest.to_dict())
+    rendered = stable_json_dumps(payload)
+
+    assert SlurmLiveSubmissionManifest.from_dict(payload).to_dict() == manifest.to_dict()
+    assert '"cancellation_attempts":[' in rendered
+    assert '"command":"scancel"' in rendered
+    assert '"outcome":"cancelled"' in rendered
+    assert '"scheduler_job_id":"123456"' in rendered
     assert "raw_adapter" not in rendered
 
 

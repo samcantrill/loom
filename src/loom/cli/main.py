@@ -96,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     from loom.cli import artifacts as artifacts_command
+    from loom.cli import cancel as cancel_command
     from loom.cli import logs as logs_command
     from loom.cli import plan as plan_command
     from loom.cli import preflight as preflight_command
@@ -114,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_command.register_subparser(subparsers)
     stage_job_command.register_subparser(subparsers)
     status_command.register_subparser(subparsers)
+    cancel_command.register_subparser(subparsers)
     logs_command.register_subparser(subparsers)
     artifacts_command.register_subparser(subparsers)
 
