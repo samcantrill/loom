@@ -35,7 +35,7 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | Ruff passed; Pyright passed; default tests `825 passed, 14 skipped, 8 deselected`; config-extra tests `405 passed, 844 deselected`; build produced sdist and wheel. |
 | `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | Overall `1249 passed, 0 failed, 0 errors, 11 skipped, 852 deselected`; summary written to `build/test-summary.md`. |
-| GitHub checks | Pending | CI `checks` was pending after PR creation. |
+| GitHub checks | Passed before merge verification | CI passed on the reviewed PR head; the manager verifies the final head before merge. |
 
 ### Test Suite Summary
 
