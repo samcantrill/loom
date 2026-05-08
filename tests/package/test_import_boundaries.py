@@ -468,6 +468,39 @@ def test_import_slurm_models_does_not_import_scheduler_cli_or_config_layers() ->
     assert result.stdout.strip() == "ok"
 
 
+def test_import_slurm_dry_run_modules_does_not_import_forbidden_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.slurm.artifacts
+        import loom.pipeline.executors.slurm.planning
+        import loom.pipeline.executors.slurm.rendering
+
+        for forbidden in (
+            "loom.cli",
+            "loom.config",
+            "project",
+            "slurm",
+            "pyslurm",
+            "subprocess",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through SLURM dry-run modules")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_cli_remains_import_safe() -> None:
     script = dedent(
         """
