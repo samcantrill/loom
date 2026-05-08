@@ -703,7 +703,7 @@ Completion summary:
 
 ### Phase 4 - SLURM Script Builders And Dry-Run Planning APIs
 
-Status: pr_open
+Status: merged
 Branch: `codex/slurm-dry-run-scripts`
 PR: https://github.com/samcantrill/loom/pull/85
 
@@ -786,6 +786,8 @@ Completion summary:
   `docs/phases/slurm-dry-run-scripts.md`.
 - PR #85 opened against `develop` from `codex/slurm-dry-run-scripts` on
   2026-05-08.
+- PR #85 merged into `develop` on 2026-05-08 with squash merge commit
+  `4ae86f1537357006d973cfee172c2c7f14bd8b65`.
 - Implemented SLURM-only rendering, artifact writing, and dry-run planning APIs
   for deterministic single-job and afterok scripts. The planner reads persisted
   execution plans and prepared-run metadata through public store protocols,
@@ -794,12 +796,26 @@ Completion summary:
   with shell quoting, and writes scripts, manifest, and secret-safe planning
   metadata under `slurm/submissions/<planning_id>/...` through store-owned path
   helpers and atomic writes.
+- Automated PR review found no blocking findings; residual secret-surface
+  hardening remains assigned to Phase 6.
 - Kept CLI wiring, live scheduler calls, scheduler IDs/state, submitted state,
   and Phase 5/7 behavior out of scope.
-- Local validation before PR: `make validate-pr` passed; `make test-summary`
-  passed with overall `1249 passed, 11 skipped, 852 deselected`.
+- Final merge verification: before merge, `gh pr view 85 --json
+  baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/slurm-dry-run-scripts`,
+  `state=OPEN`, no merge commit yet, and CI check `checks` completed with
+  `SUCCESS`.
+- Final local validation: `make validate-pr` passed Ruff, Pyright, isolated
+  default tests (`825 passed, 14 skipped, 8 deselected`), isolated
+  config-extra tests (`405 passed, 844 deselected`), and build;
+  `make test-summary` passed with overall `1249 passed, 11 skipped, 852
+  deselected`.
 - Expanded-path implementation refinement was used and found no code or test
-  blocker; blocker resolution budget remains unused at PR open.
+  blocker; blocker resolution budget remained unused.
+- Stack cleanup: no successor branches depended on
+  `codex/slurm-dry-run-scripts`; branch deletion was requested during squash
+  merge and remaining local worktree/branch cleanup is recorded in the manager
+  handoff.
 
 ### Phase 5 - CLI And Preflight Integration
 
