@@ -936,9 +936,9 @@ Completion summary:
 
 ### Phase 6 - Submitted-Job Cancellation
 
-Status: pending
+Status: merged
 Branch: `codex/slurm-job-cancellation`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/93
 
 Goal:
 
@@ -1030,7 +1030,35 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan and PR body are recorded in
+  `docs/phases/slurm-job-cancellation.md` and
+  `docs/phases/slurm-job-cancellation-pr-body.md`.
+- Implemented `loom cancel RUN_URI --jobs` for the latest active submitted
+  SLURM operation, with per-job `scancel`, schema-versioned JSON/text output,
+  live-manifest cancellation attempts, submitted-operation backend metadata,
+  terminal-target skips, partial/unknown outcomes, and nonzero exit behavior
+  for failed requested cancellation.
+- Core status mutation remains conservative: successfully cancelled non-final
+  stages may become `CANCELLED`; full cancellation can mark the run
+  `CANCELLED`; final `SUCCEEDED` or `FAILED` stages are never overwritten; a
+  final failed stage prevents marking the run `CANCELLED`.
+- Exact submission ID selection, retries, cleanup, and real-cluster
+  cancellation acceptance remain deferred to follow-up or Phase 7 scope.
+- Validation before merge: `make validate-pr` passed with default 911 passed /
+  17 skipped / 10 deselected, config-extra 412 passed / 936 deselected, and
+  build succeeded; `make test-summary` passed with package 52 passed / 1
+  skipped, unit 731 passed / 1 skipped, contract 72 passed / 2 skipped,
+  integration 45 passed / 7 skipped / 10 deselected, e2e 36 passed, and
+  config-extra 412 passed / 936 deselected.
+- PR #93 targeted `develop` from `codex/slurm-job-cancellation` and was
+  squash-merged on 2026-05-08 as merge commit
+  `c2c45c23b13a4082019342ccef8e36f2b6a55a7c`.
+- Final merge gate: PR target verified as `develop`, head verified as
+  `codex/slurm-job-cancellation`, GitHub CI `checks` passed, and manager local
+  review found no blocking issues after the registry active-summary edge case
+  was fixed before PR opening.
+- Stack and cleanup: no successor branches were based on Phase 6; remote and
+  local branch/worktree cleanup were handled after merge.
 
 ### Phase 7 - Preflight, Opt-In Cluster Acceptance, Docs, And Hardening
 
