@@ -271,15 +271,24 @@ make test-summary
   `.codex/prompts/pr-body-draft.md`, `.codex/templates/phase-pr-body.md`, and
   `.github/PULL_REQUEST_TEMPLATE.md`. Created
   `docs/phases/slurm-prepared-run-foundations-pr-body.md` for the expanded-path
-  draft pass. PR body refine pass remains pending by manager instruction.
-- PR facts for refine/open pass: branch
+  draft pass.
+- PR body refine/open pass: completed on 2026-05-08 using
+  `.codex/prompts/pr-body-refine.md`. Verified the dedicated worktree,
+  branch, refined phase plan, draft PR body, implementation diff, acceptance
+  criteria, validation evidence, scope boundaries, assumptions, risks, and PR
+  template. Updated the PR body GitHub checks row to `Pending` because remote
+  checks run after PR creation.
+- PR facts for refine/open pass: opened PR
+  `https://github.com/samcantrill/loom/pull/82` with branch
   `codex/slurm-prepared-run-foundations`; target branch `develop`; stack
-  predecessor none; root PR target confirmed as `develop`; PR title
+  predecessor none; PR title
   `SLURM Script Planning - Phase 1: Prepared-Run And Lifecycle Foundations`.
-  Merge eligibility remains root phase; merge-eligible only after PR targets
-  `develop`, automated review passes, and validation/CI passes. PR not opened
-  in this draft pass because the expanded path leaves creation to
-  `.codex/prompts/pr-body-refine.md`.
+  Immediate `gh pr view 82 --json baseRefName,headRefName,state,url`
+  verification returned base `develop`, head
+  `codex/slurm-prepared-run-foundations`, state `OPEN`, and URL
+  `https://github.com/samcantrill/loom/pull/82`. Merge eligibility remains
+  root phase; merge-eligible only after automated review passes and
+  validation/CI passes.
 - PR body scope confirmation: final diff matches Phase 1 generic
   execution/store foundations only. No SLURM package, script generation,
   dry-run manifest, CLI continuation command, scheduler state, scheduler job
@@ -292,7 +301,7 @@ make test-summary
     7 skipped, 8 deselected; e2e 18 passed; config-extra 405 passed,
     765 deselected; overall 1170 passed, 0 failed, 0 errors, 11 skipped,
     773 deselected in 47.36s.
-- PR body draft status: complete; refine status: pending; PR review budget:
+- PR body draft status: complete; refine status: complete; PR review budget:
   unused; blocker-resolution budget remains 1/3 used for the prepared-run store
   persistence payload-safety blocker resolved during implementation refinement.
 - Stack maintenance: not started; no successor branch work in this implementation pass.
