@@ -228,9 +228,15 @@ For roadmap-version work before an implementation plan exists:
    `.codex/prompts/roadmap-version-planning-notes-facilitate.md` before
    drafting downstream artifacts. The planning notes must confirm
    functionality and behavior, checkpoint and compact context when available,
-   then draft and review a complete design-decision queue with the user before
-   the implementation-plan draft. Use a reset or explicit resume handoff only
-   when direct compaction is unavailable.
+   then complete design-decision triage before the implementation-plan draft.
+   Record clear repo-supported recommendations without user review, and review
+   only high-impact decisions that lack a strong recommendation with the user.
+   Use a reset or explicit resume handoff only when direct compaction is
+   unavailable.
+   If the user gives feedback about the roadmap-planning workflow itself,
+   evaluate whether the feedback should refine reusable workflow artifacts or
+   only the current planning session; make generic workflow refinements in
+   `.codex/` artifacts and avoid encoding roadmap-version-specific examples.
 2. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`,
    using completed roadmap-version planning notes as source input when present.
 3. Review and refine the implementation plan using the plan quality gate below.

@@ -60,9 +60,10 @@ relevant considerations or tradeoffs, and a recommended default when the repo
 evidence supports one. After functionality and behavior are confirmed, record a
 complete checkpoint in the planning notes and compact or reset context before
 starting the design decision review. The resumed design pass should reload the
-planning notes and draft only the design-decision review queue needed for
-choices that could materially affect system maintainability or extensibility.
-Do not turn every behavior or implementation detail into a user question.
+planning notes, identify the necessary design decisions, and classify them
+before asking the user anything. Do not ask the user whether more design
+decisions should be reviewed. The facilitator owns that triage and should not
+turn every behavior or implementation detail into a user question.
 
 Classify each candidate design decision before discussing it:
 
@@ -75,8 +76,18 @@ Classify each candidate design decision before discussing it:
   no strong recommendation, discuss it with the user before marking it
   confirmed.
 
-Each user-facing decision discussion should cover the maintainability impact,
-extensibility and expansion impact, accepted debt, rejected alternatives, and
-the specific user feedback needed. Do not start phase implementation from this
-entrypoint; the drafted implementation plan still needs the normal plan quality
-gate before phase work begins.
+Each user-facing decision discussion should be presented independently with
+concrete options, maintainability impact, extensibility and expansion impact,
+accepted debt, rejected alternatives, and the specific user feedback needed.
+Do not expose clear-recommendation decisions as confirmation questions. Do not
+start phase implementation from this entrypoint; the drafted implementation plan
+still needs the normal plan quality gate before phase work begins.
+
+When the user gives feedback about the workflow itself, treat that as a
+first-class workflow refinement signal. Decide whether the feedback should
+change reusable workflow behavior or only the current planning session. For
+reusable feedback, update the relevant `.codex/workflows/`, `.codex/prompts/`,
+or `.codex/templates/` file generically, without encoding
+roadmap-version-specific or phase-specific examples. For current-session
+preferences, record a short planning-process note in the roadmap planning notes
+and continue.

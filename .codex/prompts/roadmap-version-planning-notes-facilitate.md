@@ -61,9 +61,15 @@ Task:
    recommendations without asking the user; get user feedback only for
    high-impact decisions that do not have a strong recommendation before
    marking them confirmed.
-11. When all stages are confirmed, mark the planning notes ready for
+11. If the user gives feedback about the planning workflow itself, evaluate
+   whether the feedback describes a generally useful workflow refinement. If it
+   does, update the reusable workflow, prompt, or template artifacts directly
+   and keep product planning notes focused on product decisions. If it is
+   specific to the current roadmap discussion, record it as a planning-process
+   note or facilitation preference for the current notes only.
+12. When all stages are confirmed, mark the planning notes ready for
    implementation-plan drafting and summarize the handoff inputs.
-12. Ask for explicit confirmation before drafting the implementation plan. If
+13. Ask for explicit confirmation before drafting the implementation plan. If
    the user confirms, create or update
    `docs/implementation-plans/implementation-plan-<VERSION>.md` by following
    `.codex/prompts/implementation-plan-draft.md` and using the completed
@@ -144,14 +150,25 @@ Discussion stages:
    - Record `recorded recommendation` decisions directly in the planning notes
      with the selected approach, rationale, alternatives rejected, debt, and
      revisit trigger. Do not ask the user to confirm these individually.
-   - Present the `needs discussion` queue to the user and ask whether any
-     high-impact decision is missing, mis-scoped, or should be split before
-     detailed review.
-   - Discuss only the `needs discussion` decisions with the user in small
-     batches. For each decision, state what the decision means, why it matters
-     for maintainability or extensibility, the expected impact,
-     implementation-relevant alternatives, why there is no strong default, the
-     tradeoffs and considerations, and the feedback needed from the user.
+   - The facilitator owns queue completeness. Do not ask the user whether the
+     queue is missing decisions or whether more decisions should be reviewed.
+     Instead, evaluate the necessary design decisions from repo evidence,
+     confirmed behavior, and feature docs, then surface only the decisions that
+     genuinely need user feedback.
+   - If the user asks for more design decisions to be considered, revisit the
+     triage yourself. Add additional decisions only when they materially affect
+     maintainability or extensibility; classify each added decision before
+     deciding whether to record a recommendation or surface it for feedback.
+     Do not turn that request into an open-ended user audit of the queue.
+   - Present only the `needs discussion` decisions to the user. Keep the
+     user-facing presentation independent per decision: state what the decision
+     means, why it matters for maintainability or extensibility, the expected
+     impact, implementation-relevant options, why there is no strong default,
+     the tradeoffs and considerations, and the specific feedback needed from
+     the user.
+   - Discuss `needs discussion` decisions in small batches, usually one
+     decision at a time when the tradeoffs are subtle. Do not ask the user to
+     audit the hidden or recorded-recommendation portions of the queue.
    - Do not mark a `needs discussion` decision confirmed until user feedback has
      accepted the selected approach or provided enough direction to choose one.
    - For each confirmed decision, record the selected approach, user feedback,
@@ -160,10 +177,11 @@ Discussion stages:
      introduced, and revisit trigger.
    - Use `docs/implementation-plans/implementation-plan-v2.md` as an example
      of the expected plan-level design-decision depth.
-   - Gate: the decision queue is complete, every queued decision is reviewed
-     with user feedback, and core design decisions, rejected alternatives,
-     maintainability and extensibility assessment, flexibility and expansion
-     assessment, and debt revisit triggers are confirmed.
+   - Gate: the facilitator has completed the design-decision triage, every
+     surfaced decision is reviewed with user feedback, clear recommendations
+     are recorded without user review, and core design decisions, rejected
+     alternatives, maintainability and extensibility assessment, flexibility and
+     expansion assessment, and debt revisit triggers are confirmed.
 7. Phase shaping
    - Convert the design into reviewable implementation phases.
    - Discuss phase order, granularity, dependencies, and review boundaries with
@@ -201,6 +219,24 @@ Question rules:
 - During design decision review, keep the decision queue visible in the notes
   and update each decision's status as `draft`, `reviewing`, `confirmed`, or
   `deferred`.
+
+Workflow feedback rules:
+
+- Treat user feedback about the planning workflow as actionable process input,
+  not as a product requirement by default.
+- First decide whether the feedback should change reusable workflow behavior,
+  only the current roadmap planning session, or neither.
+- For reusable feedback, update the relevant `.codex/workflows/`,
+  `.codex/prompts/`, or `.codex/templates/` artifact directly and keep the
+  change generic. Do not encode roadmap-version-specific or stage-specific
+  examples unless the reusable workflow itself is explicitly about that
+  artifact type.
+- For current-session facilitation preferences, record a concise note in the
+  planning notes without changing product scope or durable design decisions.
+- When workflow feedback affects how future user questions are asked, preserve
+  useful interaction qualities explicitly, such as presenting independent
+  decisions with concrete options, context, tradeoffs, and the specific
+  feedback needed.
 
 Rules:
 
