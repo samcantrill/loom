@@ -235,6 +235,12 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_stage_job.py tests/unit/loom/diagnostics/test_diagnostics_inspection.py tests/unit/loom/cli/test_status_logs.py tests/contracts/test_store_contract.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_job_continuation.py tests/integration/pipeline/test_local_stores.py tests/integration/diagnostics/test_cli_status_logs.py tests/e2e/test_cli_core.py` passed, 160 tests.
   - `make lint` passed.
   - `make typecheck` passed.
+  - `make validate-pr` passed after the store export contract expectation was
+    updated for `RunSubmittedOperationStore`.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 52
+    passed / 1 skipped; unit 702 passed / 1 skipped; contract 61 passed / 2
+    skipped; integration 33 passed / 7 skipped / 9 deselected; e2e 22 passed;
+    config-extra 411 passed / 870 deselected.
 - Refinement summary: expanded-path planning refinement complete; manager-local
   implementation refinement used once to resolve targeted validation/type issues.
 - Blocker-resolution summary: none used.
