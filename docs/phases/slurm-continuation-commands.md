@@ -236,7 +236,10 @@ make test-summary
 - PR preparation: complete. PR body committed at
   `docs/phases/slurm-continuation-commands-pr-body.md`; PR #83 opened against
   `develop`.
-- Stack maintenance: none performed
+- Stack maintenance: rebased `codex/slurm-continuation-commands` onto updated
+  `develop` at `0a6e0d1` after the manager pushed Phase 2 `pr_open` metadata
+  to the control checkout. No predecessor branch exists and no PR retargeting
+  was required.
 - Remaining blockers: none known from implementation, refinement validation,
   and PR-prep suite evidence
 
@@ -264,9 +267,13 @@ make test-summary
 
 | Commit | Summary |
 | --- | --- |
-| `849c2c1` | `feat: add generic continuation commands` |
-| `013e769` | `test: cover continuation command behavior` |
-| `25438a0` | `fix: satisfy continuation type checks` |
+| `d11873c` | `feat: add generic continuation commands` |
+| `75c7acc` | `test: cover continuation command behavior` |
+| `44139ae` | `fix: satisfy continuation type checks` |
+| `86f794b` | `docs: record phase implementation handoff` |
+| `30c50b5` | `fix: refine implementation after validation` |
+| `66d9081` | `docs: prepare phase 2 pr body` |
+| `ec56fad` | `docs: record phase 2 pr open` |
 
 ## Scope Control
 
@@ -330,8 +337,8 @@ result: passed; ruff check, pyright, default harness 764 passed/14 skipped/8 des
   behavior, focused tests, and this phase artifact only. No SLURM models,
   generated scripts, manifests, scheduler IDs, live submission, or
   `loom run --executor slurm-*` wiring were present.
-- Worktree cleanliness before PR-prep edits: clean at `ca99fa2`.
-- `make validate-pr`: cited from the refinement pass at `ca99fa2`; passed
+- Worktree cleanliness before PR-prep edits: clean at `30c50b5` after rebase.
+- `make validate-pr`: cited from the refinement pass at `30c50b5`; passed
   `ruff check`, `pyright`, default harness `764 passed, 14 skipped, 8
   deselected`, config-extra harness `405 passed, 783 deselected`, and
   `uv build`.
@@ -341,6 +348,10 @@ result: passed; ruff check, pyright, default harness 764 passed/14 skipped/8 des
   contract `57 passed, 2 skipped`, integration `24 passed, 7 skipped, 8
   deselected`, e2e `19 passed`, config-extra `405 passed, 783 deselected`,
   and overall `1188 passed, 11 skipped, 791 deselected`.
+- Base refresh: after the manager pushed `0a6e0d1 docs: record v6 phase 2 pr
+  open` directly to `develop`, this branch was rebased onto `origin/develop`.
+  The rebase was clean and changed only commit identities plus these stack
+  maintenance notes.
 
 ## Known Issues Or Blockers
 
