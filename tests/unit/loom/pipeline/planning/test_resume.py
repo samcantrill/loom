@@ -218,6 +218,47 @@ def test_direct_resume_marks_running_as_stale(tmp_path: Path) -> None:
     assert result.check.reasons[0].code == PlanReasonCode.PRIOR_STATUS_RUNNING
 
 
+def test_direct_resume_marks_submitted_as_non_reusable(tmp_path: Path) -> None:
+    run_store, artifact_store, run_uri = _stores(tmp_path)
+    stage = _stage()
+    current = build_stage_fingerprint(stage, bound_inputs={})
+    output = artifact_store.save(
+        {"x": 1},
+        stage_name="build",
+        name="data",
+        artifact_type="json",
+        codec_key="json.v1",
+    )
+    run_store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.SUBMITTED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+        ),
+    )
+    run_store.write_stage_inputs(run_uri, "build", {}, attempt=1)
+    run_store.write_stage_outputs(run_uri, "build", {"data": output}, attempt=1)
+    run_store.write_stage_fingerprint(run_uri, "build", current.to_dict(), attempt=1)
+
+    result = check_stage_resume(
+        stage,
+        run_uri=run_uri,
+        run_store=run_store,
+        artifact_store=artifact_store,
+        current_fingerprint=current,
+        resume=ResumeOptions(),
+        eligible_to_run=True,
+    )
+
+    assert result.final_action == PlanAction.RUN
+    assert result.check.status == "SUBMITTED"
+    assert result.check.reasons[0].code == PlanReasonCode.PRIOR_STATUS_NOT_SUCCEEDED
+
+
 def test_direct_resume_marks_failed_as_stale(tmp_path: Path) -> None:
     run_store, artifact_store, run_uri = _stores(tmp_path)
     stage = _stage()
