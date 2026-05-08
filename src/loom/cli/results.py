@@ -178,12 +178,51 @@ class SlurmDryRunCliResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SlurmLiveRunCliResult:
+    """CLI-facing SLURM live submission summary."""
+
+    run_uri: str
+    mode: str
+    submission_id: str
+    status: str
+    manifest_path: str
+    manifest_relative_path: str
+    plan_path: str
+    plan_relative_path: str
+    submitted_jobs: tuple[Mapping[str, object], ...] = ()
+    log_paths: tuple[Mapping[str, object], ...] = ()
+    job_count: int = 0
+    submitted_job_count: int = 0
+    dry_run: bool = False
+
+    def to_dict(self) -> dict[str, PlainCliData]:
+        """Return the result as plain data."""
+
+        return {
+            "run_uri": self.run_uri,
+            "mode": self.mode,
+            "dry_run": self.dry_run,
+            "submission_id": self.submission_id,
+            "status": self.status,
+            "manifest_path": self.manifest_path,
+            "manifest_relative_path": self.manifest_relative_path,
+            "plan_path": self.plan_path,
+            "plan_relative_path": self.plan_relative_path,
+            "submitted_jobs": to_plain_cli_data(self.submitted_jobs),
+            "log_paths": to_plain_cli_data(self.log_paths),
+            "job_count": self.job_count,
+            "submitted_job_count": self.submitted_job_count,
+        }
+
+
 __all__ = [
     "CliWarning",
     "PlainCliData",
     "PlanCliResult",
     "RunCliResult",
     "SlurmDryRunCliResult",
+    "SlurmLiveRunCliResult",
     "ValidationCliResult",
     "to_plain_cli_data",
 ]

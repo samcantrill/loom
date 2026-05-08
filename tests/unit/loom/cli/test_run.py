@@ -12,8 +12,8 @@ import pytest
 from loom.cli.errors import CliError
 from loom.cli.main import main
 from loom.cli.options import ConfigCliOptions
-from loom.cli.results import PlanCliResult
-from loom.cli.results import SlurmDryRunCliResult
+from loom.cli.results import PlanCliResult, RunCliResult
+from loom.cli.results import SlurmDryRunCliResult, SlurmLiveRunCliResult
 import loom.cli.plan as plan_command
 import loom.cli.run as run_command
 from loom.diagnostics import (
@@ -62,7 +62,9 @@ class FakeStageResult:
     outputs: dict[str, object] | None = None
     failure: object | None = None
     reasons: tuple[PlanReason, ...] = (
-        PlanReason(PlanReasonCode.RESUME_DISABLED, "resume is disabled", stage_name="build"),
+        PlanReason(
+            PlanReasonCode.RESUME_DISABLED, "resume is disabled", stage_name="build"
+        ),
     )
 
     def __post_init__(self) -> None:
@@ -109,8 +111,14 @@ class FakeRunRequest:
     options: RunOptions
 
 
-def _preflight_result(status: PreflightCheckStatus = PreflightCheckStatus.PASS) -> PreflightResult:
-    severity = PreflightSeverity.ERROR if status is PreflightCheckStatus.FAIL else PreflightSeverity.INFO
+def _preflight_result(
+    status: PreflightCheckStatus = PreflightCheckStatus.PASS,
+) -> PreflightResult:
+    severity = (
+        PreflightSeverity.ERROR
+        if status is PreflightCheckStatus.FAIL
+        else PreflightSeverity.INFO
+    )
     return PreflightResult(
         checks=(
             PreflightCheckResult(
@@ -147,11 +155,15 @@ class FakeRunStore:
         return "file:///abs/runs/generated"
 
 
-def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None = None) -> dict[str, object]:
+def _patch_common(
+    monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None = None
+) -> dict[str, object]:
     calls: dict[str, object] = {}
     fake_store = store or FakeRunStore()
 
-    def compose(config_path: object, *, overlays: tuple[Path, ...], overrides: tuple[str, ...]) -> FakeComposedConfig:
+    def compose(
+        config_path: object, *, overlays: tuple[Path, ...], overrides: tuple[str, ...]
+    ) -> FakeComposedConfig:
         calls["config_path"] = config_path
         calls["overlays"] = overlays
         calls["overrides"] = overrides
@@ -193,7 +205,9 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
         calls["preflight_run_uri"] = getattr(runtime_options, "run_uri")
 
     monkeypatch.setattr(run_command, "_compose_config", compose)
-    monkeypatch.setattr(run_command, "_validate_pipeline_config", lambda _config: FakePipelineResult())
+    monkeypatch.setattr(
+        run_command, "_validate_pipeline_config", lambda _config: FakePipelineResult()
+    )
     monkeypatch.setattr(run_command, "_create_default_run_store", lambda: fake_store)
     monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
     monkeypatch.setattr(run_command, "_run_preflight_for_run", run_preflight)
@@ -316,7 +330,9 @@ def test_run_preflight_helper_skips_fresh_run_group_for_resume(
     )
 
 
-def test_run_preflight_failure_stops_before_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_preflight_failure_stops_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fail_preflight(_request: PreflightRequest) -> PreflightResult:
         return _preflight_result(PreflightCheckStatus.FAIL)
 
@@ -357,7 +373,7 @@ def test_run_unsupported_executor_returns_executor_exit_code(
     assert payload["error"]["code"] == "cli.run.unsupported_executor"
 
 
-def test_run_non_dry_run_slurm_returns_v7_deferred_error(
+def test_run_non_dry_run_slurm_afterok_returns_deferred_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_common(monkeypatch)
@@ -366,7 +382,7 @@ def test_run_non_dry_run_slurm_returns_v7_deferred_error(
 
     assert (
         main(
-            ["run", "base.yaml", "--executor", "slurm-single-job", "--format", "json"],
+            ["run", "base.yaml", "--executor", "slurm-afterok", "--format", "json"],
             stdout=stdout,
             stderr=stderr,
         )
@@ -376,7 +392,7 @@ def test_run_non_dry_run_slurm_returns_v7_deferred_error(
     payload = json.loads(stdout.getvalue())
     assert stderr.getvalue() == ""
     assert payload["error"]["code"] == "cli.run.slurm_live_submission_deferred"
-    assert payload["error"]["context"]["deferred_to"] == "v7"
+    assert payload["error"]["context"]["deferred_to"] == "v7_phase_4"
     assert payload["error"]["hint"].endswith("without submitting jobs.")
 
 
@@ -394,10 +410,18 @@ def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) ->
     def build_plan_result(*_args: object, **_kwargs: object) -> PlanCliResult:
         return PlanCliResult(
             config_path=Path("base.yaml"),
-            stage_actions=({"stage": "build", "action": "RUN", "reason_codes": ("RESUME_DISABLED",)},),
+            stage_actions=(
+                {
+                    "stage": "build",
+                    "action": "RUN",
+                    "reason_codes": ("RESUME_DISABLED",),
+                },
+            ),
         )
 
-    monkeypatch.setattr(run_command, "_dry_run_selects_slurm_executor", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        run_command, "_dry_run_selects_slurm_executor", lambda **_kwargs: False
+    )
     monkeypatch.setattr(plan_command, "build_plan_result", build_plan_result)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -419,7 +443,9 @@ def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) ->
 def test_run_slurm_dry_run_uses_slurm_result_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def build_slurm_result(*_args: object, **_kwargs: object) -> tuple[SlurmDryRunCliResult, tuple[object, ...]]:
+    def build_slurm_result(
+        *_args: object, **_kwargs: object
+    ) -> tuple[SlurmDryRunCliResult, tuple[object, ...]]:
         return (
             SlurmDryRunCliResult(
                 run_uri="file:///abs/runs/dry",
@@ -469,7 +495,67 @@ def test_run_slurm_dry_run_uses_slurm_result_schema(
     assert payload["result"]["script_count"] == 1
 
 
-def test_run_failed_result_returns_run_failed_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_slurm_live_single_job_uses_live_result_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def build_slurm_result(*_args: object, **_kwargs: object) -> SlurmLiveRunCliResult:
+        return SlurmLiveRunCliResult(
+            run_uri="file:///abs/runs/live",
+            mode="slurm-single-job",
+            submission_id="planning-1",
+            status="SUBMITTED",
+            manifest_path="/abs/runs/live/slurm/submissions/planning-1/manifest.json",
+            manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+            plan_path="/abs/runs/live/slurm/submissions/planning-1/plan.json",
+            plan_relative_path="slurm/submissions/planning-1/plan.json",
+            submitted_jobs=(
+                {
+                    "logical_key": "pipeline",
+                    "scheduler_job_id": "1234",
+                    "scheduler_cluster": None,
+                },
+            ),
+            job_count=1,
+            submitted_job_count=1,
+        )
+
+    def fail_generic_run(*_args: object, **_kwargs: object) -> RunCliResult:
+        raise AssertionError("SLURM live submission must not use generic run output")
+
+    monkeypatch.setattr(
+        run_command, "build_slurm_live_submission_result", build_slurm_result
+    )
+    monkeypatch.setattr(run_command, "build_run_result", fail_generic_run)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                "base.yaml",
+                "--executor",
+                "slurm-single-job",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["schema_version"] == "loom.cli.slurm_live_run.v1"
+    assert payload["result"]["mode"] == "slurm-single-job"
+    assert payload["result"]["status"] == "SUBMITTED"
+    assert payload["result"]["submitted_jobs"][0]["scheduler_job_id"] == "1234"
+
+
+def test_run_failed_result_returns_run_failed_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_common(monkeypatch)
 
     def failed_run(
@@ -497,7 +583,10 @@ def test_run_failed_result_returns_run_failed_exit_code(monkeypatch: pytest.Monk
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["run", "base.yaml", "--format", "json"], stdout=stdout, stderr=stderr) == 5
+    assert (
+        main(["run", "base.yaml", "--format", "json"], stdout=stdout, stderr=stderr)
+        == 5
+    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is False

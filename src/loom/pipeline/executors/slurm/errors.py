@@ -50,8 +50,28 @@ class SlurmManifestUpdateError(SlurmLiveOperationError):
     """Raised when a live SLURM manifest cannot be written or updated."""
 
 
+class SlurmActiveSubmissionError(SlurmLiveOperationError):
+    """Raised when a run already has active submitted scheduler work."""
+
+
+class SlurmSubmissionError(SlurmLiveOperationError):
+    """Raised when live SLURM submission fails after preparation begins."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        context: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.context = dict(context or {})
+
+
 __all__ = [
     "SlurmCapabilityUnavailableError",
+    "SlurmActiveSubmissionError",
     "SlurmCommandExecutionError",
     "SlurmCommandUnavailableError",
     "SlurmJobIdParseError",
@@ -62,4 +82,5 @@ __all__ = [
     "SlurmPathError",
     "SlurmPlanningError",
     "SlurmResourceMappingError",
+    "SlurmSubmissionError",
 ]

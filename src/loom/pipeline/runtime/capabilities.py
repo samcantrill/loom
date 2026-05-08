@@ -8,12 +8,21 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import cast
 
-from loom.serialization import PlainData, ensure_plain_data, freeze_plain_data, thaw_plain_data
+from loom.serialization import (
+    PlainData,
+    ensure_plain_data,
+    freeze_plain_data,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError
 
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.resources import ResourceRequest, validate_resource_kind
-from loom.pipeline.runtime.options import RunOptions, StageRuntimeOptions, parse_run_options
+from loom.pipeline.runtime.options import (
+    RunOptions,
+    StageRuntimeOptions,
+    parse_run_options,
+)
 
 
 class ResourceSupportLevel(StrEnum):
@@ -95,7 +104,9 @@ class ResourceCapability:
             path="ResourceCapability",
         )
         if "support_level" not in mapping:
-            raise RuntimeResourceError("ResourceCapability missing required field(s): support_level")
+            raise RuntimeResourceError(
+                "ResourceCapability missing required field(s): support_level"
+            )
         return cls(
             support_level=cast(str, mapping["support_level"]),
             enforcement=cast(str | None, mapping.get("enforcement")),
@@ -112,8 +123,8 @@ class ExecutorDescriptor:
     """Import-light metadata for one executor name."""
 
     name: str
-    resource_capabilities: Mapping[str, ResourceCapability | Mapping[str, object]] = field(
-        default_factory=dict
+    resource_capabilities: Mapping[str, ResourceCapability | Mapping[str, object]] = (
+        field(default_factory=dict)
     )
     adapter_namespaces: Iterable[str] | Mapping[str, object] = ()
     details: Mapping[str, PlainData] = field(default_factory=dict)
@@ -147,7 +158,9 @@ class ExecutorDescriptor:
         object.__setattr__(
             self,
             "details",
-            _freeze_plain_mapping(self.details, path=f"ExecutorDescriptor[{name!r}].details"),
+            _freeze_plain_mapping(
+                self.details, path=f"ExecutorDescriptor[{name!r}].details"
+            ),
         )
         object.__setattr__(
             self,
@@ -206,7 +219,9 @@ class ExecutorDescriptor:
             path="ExecutorDescriptor",
         )
         if "name" not in mapping:
-            raise RuntimeResourceError("ExecutorDescriptor missing required field(s): name")
+            raise RuntimeResourceError(
+                "ExecutorDescriptor missing required field(s): name"
+            )
         return cls(
             name=_string_value(mapping["name"], path="ExecutorDescriptor.name"),
             resource_capabilities=cast(
@@ -255,7 +270,9 @@ class CapabilityDiagnostic:
     details: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "path", _string_value(self.path, path="CapabilityDiagnostic.path"))
+        object.__setattr__(
+            self, "path", _string_value(self.path, path="CapabilityDiagnostic.path")
+        )
         object.__setattr__(
             self,
             "severity",
@@ -264,7 +281,9 @@ class CapabilityDiagnostic:
                 path="CapabilityDiagnostic.severity",
             ),
         )
-        object.__setattr__(self, "code", _string_value(self.code, path="CapabilityDiagnostic.code"))
+        object.__setattr__(
+            self, "code", _string_value(self.code, path="CapabilityDiagnostic.code")
+        )
         object.__setattr__(
             self,
             "message",
@@ -368,7 +387,9 @@ class CapabilityDiagnostic:
             path=_string_value(mapping["path"], path="CapabilityDiagnostic.path"),
             severity=cast(str, mapping["severity"]),
             code=_string_value(mapping["code"], path="CapabilityDiagnostic.code"),
-            message=_string_value(mapping["message"], path="CapabilityDiagnostic.message"),
+            message=_string_value(
+                mapping["message"], path="CapabilityDiagnostic.message"
+            ),
             executor=cast(str | None, mapping.get("executor")),
             stage_id=cast(str | None, mapping.get("stage_id")),
             resource_kind=cast(str | None, mapping.get("resource_kind")),
@@ -395,7 +416,9 @@ class CapabilityValidationResult:
             else CapabilityDiagnostic.from_dict(diagnostic)
             for diagnostic in self.diagnostics
         )
-        object.__setattr__(self, "diagnostics", tuple(sorted(diagnostics, key=_diagnostic_sort_key)))
+        object.__setattr__(
+            self, "diagnostics", tuple(sorted(diagnostics, key=_diagnostic_sort_key))
+        )
 
     @property
     def has_errors(self) -> bool:
@@ -414,7 +437,9 @@ class CapabilityValidationResult:
             "has_errors": self.has_errors,
             "diagnostics": [
                 diagnostic.to_dict()
-                for diagnostic in cast(tuple[CapabilityDiagnostic, ...], self.diagnostics)
+                for diagnostic in cast(
+                    tuple[CapabilityDiagnostic, ...], self.diagnostics
+                )
             ],
         }
 
@@ -474,12 +499,16 @@ class ExecutorDescriptorRegistry:
 
     def resolve(self, name: str | None) -> ExecutorDescriptor:
         lookup_name = _selected_executor_name(name)
-        descriptor = cast(Mapping[str, ExecutorDescriptor], self.descriptors).get(lookup_name)
+        descriptor = cast(Mapping[str, ExecutorDescriptor], self.descriptors).get(
+            lookup_name
+        )
         if descriptor is None:
             raise RuntimeResourceError(f"unknown executor {lookup_name!r}")
         return descriptor
 
-    def with_descriptor(self, descriptor: ExecutorDescriptor) -> "ExecutorDescriptorRegistry":
+    def with_descriptor(
+        self, descriptor: ExecutorDescriptor
+    ) -> "ExecutorDescriptorRegistry":
         if not isinstance(descriptor, ExecutorDescriptor):
             raise RuntimeResourceError(
                 "ExecutorDescriptorRegistry.with_descriptor requires an ExecutorDescriptor"
@@ -488,7 +517,9 @@ class ExecutorDescriptorRegistry:
             raise RuntimeResourceError(
                 f"executor descriptor already registered for name {descriptor.name!r}"
             )
-        return ExecutorDescriptorRegistry({**self.descriptors, descriptor.name: descriptor})
+        return ExecutorDescriptorRegistry(
+            {**self.descriptors, descriptor.name: descriptor}
+        )
 
     def compose(
         self,
@@ -500,7 +531,9 @@ class ExecutorDescriptorRegistry:
                 raise RuntimeResourceError(
                     "ExecutorDescriptorRegistry.compose requires ExecutorDescriptorRegistry instances"
                 )
-            for descriptor in cast(Mapping[str, ExecutorDescriptor], registry.descriptors).values():
+            for descriptor in cast(
+                Mapping[str, ExecutorDescriptor], registry.descriptors
+            ).values():
                 composed = composed.with_descriptor(descriptor)
         return composed
 
@@ -550,7 +583,9 @@ def validate_executor_capabilities(
     *,
     registry: ExecutorDescriptorRegistry | None = None,
 ) -> CapabilityValidationResult:
-    run_options = options if isinstance(options, RunOptions) else parse_run_options(options)
+    run_options = (
+        options if isinstance(options, RunOptions) else parse_run_options(options)
+    )
     descriptor_registry = _coerce_registry(registry)
     try:
         executor_name = _selected_executor_name(run_options.executor)
@@ -634,13 +669,12 @@ def _subprocess_descriptor() -> ExecutorDescriptor:
 
 
 def _slurm_descriptor(name: str) -> ExecutorDescriptor:
+    single_job_live = name == "slurm-single-job"
     supported = ResourceCapability(
         support_level=ResourceSupportLevel.SUPPORTED,
         enforcement=ResourceEnforcementExpectation.ENFORCED,
         severity=CapabilitySeverity.INFO,
-        details={
-            "reason": "SLURM dry-run planning maps this resource to SBATCH directives"
-        },
+        details={"reason": "SLURM planning maps this resource to SBATCH directives"},
     )
     return ExecutorDescriptor(
         name=name,
@@ -652,9 +686,9 @@ def _slurm_descriptor(name: str) -> ExecutorDescriptor:
         adapter_namespaces=("slurm",),
         details={
             "built_in": True,
-            "dry_run_only": True,
-            "live_submission": "deferred_to_v7",
-            "scheduler_commands": False,
+            "dry_run_only": not single_job_live,
+            "live_submission": True if single_job_live else "deferred_to_v7_phase_4",
+            "scheduler_commands": single_job_live,
         },
     )
 
@@ -739,7 +773,9 @@ def _resource_capability_diagnostics(
                     stage_id=stage_id,
                     resource_kind=kind,
                     support_level=cast(ResourceSupportLevel, capability.support_level),
-                    enforcement=cast(ResourceEnforcementExpectation, capability.enforcement),
+                    enforcement=cast(
+                        ResourceEnforcementExpectation, capability.enforcement
+                    ),
                     details=capability.details,
                 )
             )
@@ -811,7 +847,9 @@ def _adapter_namespace_tuple(
     path: str,
 ) -> tuple[str, ...]:
     if isinstance(value, str):
-        raise RuntimeResourceError(f"{path} must be a sequence or mapping of namespace names")
+        raise RuntimeResourceError(
+            f"{path} must be a sequence or mapping of namespace names"
+        )
     names = value.keys() if isinstance(value, Mapping) else value
     normalized: list[str] = []
     seen: set[str] = set()
@@ -820,7 +858,9 @@ def _adapter_namespace_tuple(
         if not namespace:
             raise RuntimeResourceError(f"{path}[{index}] must be a non-empty string")
         if namespace in seen:
-            raise RuntimeResourceError(f"{path} contains duplicate namespace {namespace!r}")
+            raise RuntimeResourceError(
+                f"{path} contains duplicate namespace {namespace!r}"
+            )
         seen.add(namespace)
         normalized.append(namespace)
     return tuple(sorted(normalized))
@@ -844,7 +884,9 @@ def _diagnostic_sort_key(diagnostic: CapabilityDiagnostic) -> tuple[str, str, st
     return (diagnostic.path, diagnostic.code, identity, diagnostic.message)
 
 
-def _coerce_support_level(value: ResourceSupportLevel | str, *, path: str) -> ResourceSupportLevel:
+def _coerce_support_level(
+    value: ResourceSupportLevel | str, *, path: str
+) -> ResourceSupportLevel:
     if isinstance(value, ResourceSupportLevel):
         return value
     if not isinstance(value, str):
@@ -976,7 +1018,9 @@ def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     try:
         normalized = ensure_plain_data(value, path=path)
     except PlainDataError as exc:
-        raise RuntimeResourceError(f"{path} must be plain-data-compatible mapping: {exc}") from exc
+        raise RuntimeResourceError(
+            f"{path} must be plain-data-compatible mapping: {exc}"
+        ) from exc
     if not isinstance(normalized, Mapping):
         raise RuntimeResourceError(f"{path} must be a mapping")
     return cast(Mapping[str, PlainData], normalized)
@@ -985,7 +1029,9 @@ def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
 def _freeze_plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     return cast(
         Mapping[str, PlainData],
-        freeze_plain_data(_sorted_plain_mapping(_plain_mapping(value, path=path)), path=path),
+        freeze_plain_data(
+            _sorted_plain_mapping(_plain_mapping(value, path=path)), path=path
+        ),
     )
 
 

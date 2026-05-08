@@ -12,6 +12,7 @@ from loom.cli.results import (
     PlainCliData,
     RunCliResult,
     SlurmDryRunCliResult,
+    SlurmLiveRunCliResult,
     ValidationCliResult,
     to_plain_cli_data,
 )
@@ -191,6 +192,33 @@ def format_slurm_dry_run_text(result: SlurmDryRunCliResult) -> str:
     return "\n".join(lines)
 
 
+def format_slurm_live_submission_text(result: SlurmLiveRunCliResult) -> str:
+    """Format a concise SLURM live submission summary."""
+
+    suffix = (
+        "1 submitted job"
+        if result.submitted_job_count == 1
+        else f"{result.submitted_job_count} submitted jobs"
+    )
+    lines = [
+        f"OK slurm submit {result.run_uri}: {result.mode} {result.status}",
+        f"submission_id: {result.submission_id}",
+        f"manifest: {result.manifest_path}",
+        f"plan: {result.plan_path}",
+        f"jobs: {suffix}",
+    ]
+    for job in result.submitted_jobs:
+        cluster = job.get("scheduler_cluster")
+        cluster_suffix = "" if cluster is None else f";{cluster}"
+        lines.append(
+            f"  {job.get('logical_key')}: {job.get('scheduler_job_id')}{cluster_suffix}"
+        )
+    if result.log_paths:
+        lines.append(f"logs: {_slurm_log_summary(result.log_paths)}")
+    lines.append(f"status: loom status {result.run_uri} --jobs")
+    return "\n".join(lines)
+
+
 def _slurm_log_summary(log_paths: Sequence[Mapping[str, object]]) -> str:
     if not log_paths:
         return "none"
@@ -365,6 +393,7 @@ __all__ = [
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
+    "format_slurm_live_submission_text",
     "format_slurm_dry_run_text",
     "format_stage_worker_text",
     "format_logs_text",

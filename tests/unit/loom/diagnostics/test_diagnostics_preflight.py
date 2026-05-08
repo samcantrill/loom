@@ -9,7 +9,12 @@ from typing import Any, cast
 
 import pytest
 
-from loom.diagnostics import PreflightCheckStatus, PreflightRequest, PreflightStatus, run_preflight
+from loom.diagnostics import (
+    PreflightCheckStatus,
+    PreflightRequest,
+    PreflightStatus,
+    run_preflight,
+)
 from loom.diagnostics.models import PreflightError
 
 
@@ -17,7 +22,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_selected_codec_group_runs_only_codec_check() -> None:
-    result = run_preflight(PreflightRequest(config_path="missing.yaml", groups=("codecs",)))
+    result = run_preflight(
+        PreflightRequest(config_path="missing.yaml", groups=("codecs",))
+    )
 
     assert result.status is PreflightStatus.PASS
     assert result.groups[0].value == "codecs"
@@ -115,9 +122,7 @@ def test_runtime_executor_and_resource_checks_map_capability_diagnostics(
                 "adapter_options": {"future": {"enabled": True}},
                 "stage_options": {
                     "train": {
-                        "resources": {
-                            "entries": {"cpu": {"kind": "cpu", "amount": 2}}
-                        }
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}}
                     }
                 },
             },
@@ -228,7 +233,9 @@ def test_selected_subprocess_executor_fails_when_worker_module_is_unavailable(
     import loom.diagnostics.preflight as preflight_module
 
     _patch_runtime_preflight_dependencies(monkeypatch)
-    monkeypatch.setattr(preflight_module.importlib.util, "find_spec", lambda _name: None)
+    monkeypatch.setattr(
+        preflight_module.importlib.util, "find_spec", lambda _name: None
+    )
 
     result = run_preflight(
         PreflightRequest(
@@ -333,10 +340,33 @@ def test_slurm_dry_run_preflight_emits_stable_checks_and_warns_without_sbatch(
     assert by_id["resources.slurm.mapping"].status is PreflightCheckStatus.PASS
 
 
-def test_slurm_non_dry_run_preflight_reports_v7_deferred_mode(
+def test_slurm_afterok_non_dry_run_preflight_reports_deferred_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={"executor": "slurm-afterok"},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.FAIL
+    assert by_id["executor.slurm.mode"].details["deferred_to"] == "v7_phase_4"
+
+
+def test_slurm_single_job_live_preflight_requires_sbatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
 
     result = run_preflight(
         PreflightRequest(
@@ -348,9 +378,10 @@ def test_slurm_non_dry_run_preflight_reports_v7_deferred_mode(
 
     by_id = {check.check_id: check for check in result.checks}
     assert result.status is PreflightStatus.FAIL
-    assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
-    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.FAIL
-    assert by_id["executor.slurm.mode"].details["deferred_to"] == "v7"
+    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.slurm.mode"].details["live_submission"] is True
+    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.FAIL
+    assert by_id["executor.slurm.sbatch"].details["required"] is True
 
 
 @dataclass(frozen=True, slots=True)
