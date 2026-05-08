@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: ready for implementation
+- Status: implemented; validation passed; PR body prepared
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 6: End-To-End Hardening and Documentation`
 - Branch: `codex/slurm-dry-run-hardening`
@@ -16,9 +16,9 @@
 - Stack predecessor: none; Phases 1-5 are merged into `develop`
 - Base branch: `develop` at `9f4c4b2`
 - Target branch: `develop`
-- Merge eligibility: root phase; merge-eligible only after implementation
-  remains phase-scoped, automated review passes, final validation/CI passes,
-  PR body evidence is accurate, and the PR targets `develop`
+- Merge eligibility: root phase; not merge-eligible until PR is open, automated
+  review passes, GitHub CI passes, PR body evidence is accurate, and the PR
+  targets `develop`
 - Workflow path: expanded path because the phase spans e2e behavior, persisted
   secret-boundary contracts, feature documentation, and v7 handoff notes
 - Successor dependency notes: this is the final v6 phase. No successor phase
@@ -35,7 +35,7 @@
 - Setup limitations: branch/worktree were created from local `develop` after
   Phase 5 merge metadata was pushed. No product-code validation or broad checks
   were run during this planning pass.
-- Blockers: none known for implementation handoff
+- Blockers: none known after local validation
 
 ## Objective
 
@@ -384,7 +384,11 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used locally during the expanded-path
+  implementation pass after the new e2e secret-boundary test exposed a
+  resolved `oc.env` value in dry-run `plan.json`; fixed by persisting the
+  SLURM dry-run plan from the composed config's artifact-safe unresolved
+  pipeline view
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -392,10 +396,33 @@ make test-summary
 
 - Draft plan: completed on 2026-05-08 in this artifact.
 - Final phase execution plan: completed on 2026-05-08 in this artifact.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary: added public CLI e2e hardening for both SLURM
+  dry-run modes using a diamond DAG, repeated afterok dry-runs, generated
+  manifest/script/log/command inspection, and secret-boundary scanning across
+  persisted run artifacts. Updated SLURM dry-run preparation so root `plan.json`
+  persists artifact-safe unresolved pipeline data instead of resolved
+  environment values. Updated SLURM, CLI, execution, pipeline, and preflight
+  docs to describe the implemented v6 dry-run contract and v7-deferred live
+  submission handoff.
+- Implementation validation: targeted suite passed
+  (`UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest
+  tests/e2e/test_cli_slurm_dry_run.py tests/integration/config/test_cli_run.py
+  tests/integration/pipeline/test_slurm_dry_run_planning.py
+  tests/contracts/test_slurm_manifest_contract.py
+  tests/contracts/test_cli_run_slurm_contract.py
+  tests/contracts/test_continuation_commands_contract.py
+  tests/contracts/test_diagnostics_preflight_contract.py`; 26 passed);
+  focused Ruff passed for changed Python files; focused Pyright passed for
+  changed Python files; `make validate-pr` passed Ruff, Pyright, default tests
+  (`833 passed, 15 skipped, 8 deselected`), config-extra tests (`410 passed,
+  854 deselected`), and build; `make test-summary` passed with overall `1264
+  passed, 11 skipped, 862 deselected`.
+- Refinement summary: expanded-path implementation refinement was used locally
+  to fix the dry-run plan secret-boundary blocker before PR opening. No
+  separate blocker-resolution pass was needed.
 - Blocker-resolution summary: pending.
-- PR preparation: pending.
+- PR preparation: PR body drafted in
+  `docs/phases/slurm-dry-run-hardening-pr-body.md` using final
+  `make test-summary` evidence.
 - Stack maintenance: pending.
 - Remaining blockers: none known.
