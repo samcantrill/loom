@@ -2,14 +2,14 @@
 
 ## Metadata
 
-- Status: refined/final phase execution plan
+- Status: pr_open
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 3: SLURM Models and Manifest Schema`
 - Branch: `codex/slurm-dry-run-models`
 - Worktree: `/home/samcantrill/work/loom-worktrees/slurm-dry-run-models`
 - Phase execution plan path: `docs/phases/slurm-dry-run-models.md`
 - PR body path: `docs/phases/slurm-dry-run-models-pr-body.md`
-- PR URL: pending PR creation
+- PR URL: https://github.com/samcantrill/loom/pull/84
 - Full plan: `docs/implementation-plans/implementation-plan-v6.md`
 - Source phase: Phase 3 - SLURM Models, Options, Resources, And Manifest Schema
 - Stack predecessor: none; Phase 2 is merged into `develop`
@@ -333,7 +333,7 @@ make test-summary
 - Implementation validation caveat: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff
   format --check .` reports pre-existing formatting drift across unrelated
   files, so only the new/modified files were formatted.
-- PR preparation: in progress on 2026-05-08. Verified branch
+- PR preparation: completed on 2026-05-08. Verified branch
   `codex/slurm-dry-run-models`, target branch `develop`, stack predecessor
   none, clean worktree, and final diff scope against `develop`. Drafted and
   refined concise PR body at `docs/phases/slurm-dry-run-models-pr-body.md`.
@@ -349,4 +349,15 @@ make test-summary
   passed, 2 skipped`, integration `29 passed, 7 skipped, 8 deselected`, e2e
   `19 passed`, config-extra `405 passed, 828 deselected`, overall `1233
   passed, 11 skipped, 836 deselected`.
+- PR opened: https://github.com/samcantrill/loom/pull/84 with explicit base
+  `develop`, head `codex/slurm-dry-run-models`, and title
+  `SLURM Script Planning - Phase 3: SLURM Models and Manifest Schema`.
+- PR base/head verification: `gh pr view 84 --json
+  baseRefName,headRefName,state,url` returned `baseRefName=develop`,
+  `headRefName=codex/slurm-dry-run-models`, `state=OPEN`, and
+  `url=https://github.com/samcantrill/loom/pull/84`.
+- Stack state: root phase PR targeting `develop`; stack predecessor none
+  because Phase 2 is merged. No successor branch is recorded in this artifact.
+- GitHub checks: pending after PR creation; managing agent owns CI polling and
+  merge decision.
 - Remaining blockers: none known.
