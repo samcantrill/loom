@@ -194,8 +194,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
-- PR review: unused
+- Phase implementation refinement: not needed
+- PR review: used by manager local review on 2026-05-08; no blocking findings
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -220,6 +220,9 @@ make test-summary
 - Refinement summary: not needed; targeted validation and final PR validation
   passed after updating the stable-ID contract snapshot.
 - Blocker-resolution summary: 0/3 used
-- PR preparation: in progress
+- PR preparation: complete. PR #94 opened at
+  https://github.com/samcantrill/loom/pull/94 against `develop` from
+  `codex/slurm-acceptance-hardening`; target/head verification passed; GitHub
+  checks passed before the final phase-artifact metadata update.
 - Stack maintenance: no successor branch exists; this is the final v7 phase
 - Remaining blockers: none known

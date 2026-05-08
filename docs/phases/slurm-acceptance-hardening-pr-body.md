@@ -31,7 +31,7 @@ New tests implemented:
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default suite 915 passed / 17 skipped / 14 deselected; config-extra 413 passed / 943 deselected; build succeeded. |
 | `make test-summary` | Passed | Overall 1353 passed / 11 skipped / 954 deselected across package, unit, contract, integration, e2e, and config-extra. |
 | `uv run pytest tests/slurm_acceptance -m slurm` | Passed by skip gate | 3 tests collected and skipped because real SLURM acceptance env vars were not set. |
-| GitHub checks | Pending | To be verified after PR creation. |
+| GitHub checks | Passed | PR #94 checks passed before the final phase-artifact metadata update. |
 
 ### Test Suite Summary
 
