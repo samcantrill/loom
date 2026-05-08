@@ -593,9 +593,9 @@ Completion summary:
 
 ### Phase 3 - SLURM Models, Options, Resources, And Manifest Schema
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-dry-run-models`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/84
 
 Goal:
 
@@ -670,7 +670,21 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan:
+  `docs/phases/slurm-dry-run-models.md`.
+- PR #84 opened against `develop` from `codex/slurm-dry-run-models` on
+  2026-05-08.
+- Implemented pure, optional-dependency-free SLURM dry-run contracts under
+  `loom.pipeline.executors.slurm`, including mode/options parsing,
+  `extra_sbatch` validation, continuation argv models, resource-to-SBATCH
+  mapping, logical job keys, planned dependencies, planned jobs, planned
+  submissions, and generated-artifact path helpers.
+- Kept generated scripts, CLI integration, live scheduler calls, submitted
+  state, job ID assignment, and Phase 4 dry-run planning APIs out of scope.
+- Local validation before PR: `make validate-pr` passed; `make test-summary`
+  passed with overall `1233 passed, 11 skipped, 836 deselected`.
+- Phase implementation refinement was used and found no code blocker; blocker
+  resolution budget remains unused at PR open.
 
 ### Phase 4 - SLURM Script Builders And Dry-Run Planning APIs
 
