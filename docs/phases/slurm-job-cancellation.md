@@ -152,7 +152,7 @@ The cancellation attempt records and conservative status mutation rules can feed
 ### Integration Suite
 
 - Status: required
-- Expected paths: `tests/integration/pipeline/test_slurm_cancellation.py`
+- Expected paths: `tests/integration/pipeline/test_slurm_cancellation_integration.py`
 - Required assertions or deferral reason: fake `scancel` success, partial failure, missing command, and terminal-job skip scenarios persist manifest/registry/status mutations correctly.
 
 ### E2E Suite
@@ -179,7 +179,7 @@ The cancellation attempt records and conservative status mutation rules can feed
 Targeted development commands:
 
 ```sh
-uv run pytest tests/unit/loom/pipeline/executors/slurm tests/unit/loom/cli tests/contracts/test_cli_cancel_slurm_contract.py tests/contracts/test_slurm_manifest_contract.py tests/integration/pipeline/test_slurm_cancellation.py tests/e2e/test_cli_slurm_cancellation.py
+uv run pytest tests/unit/loom/pipeline/executors/slurm tests/unit/loom/cli tests/contracts/test_cli_cancel_slurm_contract.py tests/contracts/test_slurm_manifest_contract.py tests/integration/pipeline/test_slurm_cancellation_integration.py tests/e2e/test_cli_slurm_cancellation.py
 ```
 
 Final PR-preparation commands:
@@ -206,10 +206,24 @@ make test-summary
 
 - Draft plan: complete
 - Final phase execution plan: complete
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: complete. Added `loom cancel RUN_URI --jobs` with
+  text/JSON output, latest-active SLURM submission discovery, per-job `scancel`
+  attempts, live-manifest cancellation attempt persistence, submitted-operation
+  backend metadata, partial/unknown result mapping, and conservative run/stage
+  `CANCELLED` mutation. Exact submission ID selection remains deferred.
+- Implementation validation: targeted cancellation, broader SLURM/CLI, full
+  PR gate, and suite-summary validation passed. `make validate-pr` passed with
+  default 911 passed / 17 skipped / 10 deselected, config-extra 412 passed /
+  936 deselected, and build succeeded. `make test-summary` passed with package
+  52 passed / 1 skipped; unit 731 passed / 1 skipped; contract 72 passed / 2
+  skipped; integration 45 passed / 7 skipped / 10 deselected; e2e 36 passed;
+  config-extra 412 passed / 936 deselected.
+- Refinement summary: no separate implementation refinement pass was needed;
+  targeted validation found only local test typing/name issues and the registry
+  active-summary edge case, both fixed before the implementation commit.
 - Blocker-resolution summary: 0/3 used
-- PR preparation: TBD
+- PR preparation: PR body drafted in
+  `docs/phases/slurm-job-cancellation-pr-body.md`; ready to open against
+  `develop`
 - Stack maintenance: no successor branch exists yet
 - Remaining blockers: none known
