@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft pending refine
+- Status: refined; ready for implementation handoff
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 4: SLURM Script Builders and Dry-Run APIs`
 - Branch: `codex/slurm-dry-run-scripts`
@@ -18,26 +18,29 @@
   `develop`, the expanded-path refine pass is complete, implementation is
   phase-scoped, automated review passes, and validation/CI passes
 - Workflow path: expanded path
-- Expanded-path status: draft pass complete; refine pass pending before
+- Expanded-path status: draft pass complete; refine pass complete; ready for
   implementation handoff
 - Plan quality gate: passed on 2026-05-08 after initial review, one refinement
   pass, and confirmation review
 - Plan quality gate loop budget: initial review used, refinement used,
   confirmation review used
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: pending; required before implementation starts
+- Refine pass: completed on 2026-05-08 using architecture findings for SLURM
+  package boundaries, persisted plan reads, store-owned writes, and renderer
+  contracts
 - Setup limitations: worktree was created from local `develop` at `434a9c1`; no
   remote synchronization or validation was run in this planning-only pass
-- Blockers: none known for the refine pass
+- Blockers: none known for implementation handoff
 
 ## Objective
 
 Generate deterministic, reviewable SLURM dry-run artifacts from an existing Loom
-run plan and prepared-run state. This phase turns Phase 3 planned-submission
-models into concrete scripts, manifest files, wrapper log paths, and planning
-metadata through Python APIs only. It must not add CLI executor selection,
-preflight presentation, live scheduler calls, scheduler job IDs, submitted
-status, or fake scheduler state.
+run plan and prepared-run state. This phase stays inside
+`src/loom/pipeline/executors/slurm/` and turns the Phase 3 model layer into
+concrete scripts, manifest files, wrapper log paths, and planning metadata
+through Python APIs only. It must not add CLI executor selection, preflight
+presentation, shell lifecycle logic, live scheduler calls, scheduler job IDs,
+submitted status, or fake scheduler state.
 
 ## Full-Plan Context
 
@@ -49,10 +52,10 @@ Phase 5 CLI integration.
 
 The scripts produced here are durable review artifacts. Single-job scripts must
 invoke `loom prepared-run continue --run-uri RUN_URI --executor local` through
-the structured launcher argv. Afterok scripts must invoke
+`build_single_job_command_argv`. Afterok scripts must invoke
 `loom stage-job run --run-uri RUN_URI --stage STAGE --executor local` through
-the same launcher argv and express dependencies in manifests through logical job
-keys, not scheduler job IDs.
+`build_stage_job_command_argv` and express dependencies in manifests through
+logical job keys, not scheduler job IDs.
 
 ## Stack Context
 
@@ -92,15 +95,33 @@ keys, not scheduler job IDs.
   `SlurmPlannedJob`, `SlurmPlannedDependency`, `SlurmPlannedSubmission`,
   `SlurmSbatchDirective`, resource mapping, logical job keys, and generated
   artifact path helpers.
+- Phase 4 should reuse the Phase 3 contracts directly:
+  `SlurmOptions`, `SlurmCommandArgv`, `build_single_job_command_argv`,
+  `build_stage_job_command_argv`, `build_sbatch_directives`,
+  `SlurmPlannedJob`, `SlurmPlannedSubmission`, and
+  `resolve_slurm_generated_artifact_path`.
 - Phase 3 command argv helpers already target the v6 continuation commands:
   single-job argv uses `prepared-run continue`, and afterok argv uses
   `stage-job run`.
 - Phase 3 path helpers build safe relative paths under
   `slurm/submissions/<planning_id>/...` and resolve them through
   `LocalRunStorePaths.local_generated_artifact_path`.
-- The local run store persists `plan.json` and `prepared_run.json`; Phase 4 may
-  read existing run-store state through public store protocols but must not
-  inspect local run-directory layout directly.
+- The local run store persists `plan.json` and `prepared_run.json`; Phase 4
+  should read them through `RunStore.read_plan` and
+  `RunStore.read_prepared_run`, then parse through `ExecutionPlan.from_dict`
+  and `PreparedRunRecord.from_dict`.
+- `ExecutionPlan.ordered_stage_plans`, `StagePlan.action`, and
+  `StagePlan.upstream_stages` provide the public dependency inputs needed for
+  afterok planning. Prefer these plan facts over recomputing pipeline graph
+  semantics.
+- Store-owned local generated artifact resolution and atomic writes already
+  exist through `local_generated_artifact_path`,
+  `resolve_slurm_generated_artifact_path`, `atomic_write_text`, and
+  `atomic_write_json`. Phase 4 must not walk run directories or import
+  `LocalRunStore` internals.
+- There is no existing shell-safe command renderer. Phase 4 needs a dedicated
+  renderer module that turns structured `SlurmCommandArgv.argv` into shell text
+  with standard-library `shlex.quote`.
 - Existing SLURM tests cover options, resources, manifests, and store path
   helpers. Phase 4 should add script-rendering, dependency planning, artifact
   writing, and planning API tests without weakening Phase 3 contracts.
@@ -125,6 +146,10 @@ keys, not scheduler job IDs.
   `manifest.json` under a distinct
   `slurm/submissions/<planning_id>/...` directory through store-owned generated
   artifact path helpers.
+- Add an artifact writer/result model that records generated relative paths and
+  local paths returned by the store helper, writes script text with
+  `atomic_write_text`, writes manifest/metadata with `atomic_write_json`, and
+  returns the parsed `SlurmPlannedSubmission` plus generated artifact paths.
 - Keep scripts and manifests secret-safe: no unredacted resolved config values,
   resolver outputs, environment variable values, raw adapter payloads, full
   environment dumps, or submitted scheduler state by default.
@@ -148,6 +173,8 @@ keys, not scheduler job IDs.
   support, plugin discovery, retries, timeout enforcement, cleanup policy, or
   retention policy.
 - No broad runner, planner, store, config, runtime, or CLI refactors.
+- No imports from `loom.cli`, `loom.config`, scheduler libraries, `subprocess`,
+  or new root `loom` exports from the SLURM dry-run planner.
 
 ## Assumptions
 
@@ -172,16 +199,39 @@ already-prepared run state and structured SLURM options, then return a typed
 planned-submission result with manifest data and generated artifact paths. Lower
 layers must remain independent of `loom.cli`.
 
+The likely implementation modules are:
+
+- `src/loom/pipeline/executors/slurm/rendering.py` or equivalent for shell-safe
+  command and script rendering from structured argv and directive records.
+- `src/loom/pipeline/executors/slurm/planning.py` or equivalent for the dry-run
+  API that reads public run-store state, builds jobs/dependencies, and returns
+  planned submissions.
+- `src/loom/pipeline/executors/slurm/artifacts.py` or equivalent for generated
+  artifact path resolution, atomic writes, and typed result records.
+
+These names are guidance, not a mandate. Keep all Phase 4 product code under
+the SLURM package and preserve import-light package behavior.
+
 Script rendering must be deterministic. SBATCH directives are rendered from
 generated directives, modeled `SlurmOptions`, mapped resources, and validated
 `extra_sbatch` records in stable order. Generated directives own job name,
 stdout path, stderr path, and dependency syntax. `extra_sbatch` remains unable
 to override those fields through Phase 3 validation.
 
-Shell command rendering must use standard-library quoting over structured argv.
-Scripts must not reconstruct commands by string parsing, print environment
-values, inline resolver outputs, or replay an unredacted resolved config. The
-only generated Loom command targets are the Phase 2 continuation commands.
+Shell command rendering must use standard-library `shlex.quote` over structured
+argv. Scripts must not reconstruct commands by string parsing, print
+environment values, inline resolver outputs, or replay an unredacted resolved
+config. The only generated Loom command targets are the Phase 2 continuation
+commands: `prepared-run continue` and `stage-job run` with `--executor local`.
+
+Afterok planning must be derived from public persisted plan data:
+`RunStore.read_plan`, `ExecutionPlan.from_dict`,
+`ExecutionPlan.ordered_stage_plans`, `StagePlan.action`, and
+`StagePlan.upstream_stages`. Use `PreparedRunRecord.from_dict` from
+`RunStore.read_prepared_run` only for safe prepared-run/run metadata needed to
+build the continuation commands and validate the run being planned. Do not
+derive dependencies from scheduler assumptions, raw config, private DAG
+internals, or run-directory walking.
 
 Manifest and planning metadata remain dry-run-only. Scheduler job IDs, raw job
 IDs, submitted status, scheduler state, and command-runner results must be
@@ -191,6 +241,8 @@ absent or null. Dependencies are logical records only, with dependency type
 Generated artifact paths remain store-owned. SLURM code supplies relative paths
 under `slurm/submissions/<planning_id>/...` to the Phase 1/3 path helpers and
 does not derive absolute run-directory paths by walking local store internals.
+All writes should go through the resulting local paths with
+`atomic_write_text` or `atomic_write_json`.
 
 ## Acceptance Criteria
 
@@ -217,6 +269,9 @@ does not derive absolute run-directory paths by walking local store internals.
 - Secret-bearing resolved config values, resolver outputs, environment variable
   values, and raw adapter payloads are absent from scripts, manifests, and
   planning metadata by default.
+- Import-boundary tests prove the new SLURM dry-run modules do not import
+  `loom.cli`, `loom.config`, scheduler libraries, `subprocess`, or root package
+  exports.
 
 ## Design Impact
 
@@ -280,7 +335,7 @@ does not derive absolute run-directory paths by walking local store internals.
 ## Implementation Steps
 
 1. Add focused script-builder records/helpers for generated SBATCH directives,
-   trusted prelude lines, shell-quoted command rendering, and per-job script
+   trusted prelude lines, `shlex.quote` command rendering, and per-job script
    content.
 2. Add dry-run planning APIs that consume persisted run plan/prepared-run state,
    `SlurmOptions`, resource mappings, and Phase 3 path helpers to build
@@ -289,7 +344,8 @@ does not derive absolute run-directory paths by walking local store internals.
    manifests through store-resolved generated artifact paths and returns typed
    result data.
 4. Add dependency graph construction for afterok logical jobs using planned
-   `RUN` stages and persisted upstream relationships.
+   `RUN` stages and `StagePlan.upstream_stages` from
+   `ExecutionPlan.ordered_stage_plans`.
 5. Add package, unit, contract, and integration coverage, then run targeted
    suites before PR preparation.
 
@@ -302,8 +358,9 @@ does not derive absolute run-directory paths by walking local store internals.
   `tests/package/test_public_api.py`, `tests/package/test_import_boundaries.py`
 - Required assertions or deferral reason: SLURM script/planner APIs remain
   importable without scheduler dependencies; package exports stay import-light;
-  lower layers do not import `loom.cli`; no root `loom.__init__` export or
-  optional SLURM dependency is introduced.
+  lower layers do not import `loom.cli`, `loom.config`, scheduler libraries, or
+  `subprocess`; no root `loom.__init__` export or optional SLURM dependency is
+  introduced.
 
 ### Unit Suite
 
@@ -317,8 +374,10 @@ does not derive absolute run-directory paths by walking local store internals.
   shell quoting for argv entries with whitespace/shell metacharacters; trusted
   prelude placement; single-job command body; afterok command body; rejection
   of `loom stage run` as a generated target; chain/fan-in/fan-out/diamond
-  logical dependencies; repeated planning ID behavior; script content
-  determinism; no environment values or raw adapter payloads in rendered output.
+  logical dependencies from `StagePlan.upstream_stages`; repeated planning ID
+  behavior; script content determinism; no environment values or raw adapter
+  payloads in rendered output; no direct string command assembly bypassing
+  `SlurmCommandArgv`.
 
 ### Contract Suite
 
@@ -340,8 +399,9 @@ does not derive absolute run-directory paths by walking local store internals.
 - Required assertions or deferral reason: single-job and afterok planning read
   a prepared local run, write scripts/planning metadata/manifest under
   `slurm/submissions/<planning_id>/...`, return store-resolved paths, preserve
-  manifest round trips, keep paths under the run directory, and avoid local
-  store internals.
+  manifest round trips, keep paths under the run directory, use
+  `atomic_write_text`/`atomic_write_json` behavior, and avoid local store
+  internals.
 
 ### E2E Suite
 
@@ -360,12 +420,22 @@ does not derive absolute run-directory paths by walking local store internals.
 
 ## Risks
 
-- Dependency extraction from persisted plans can couple to private plan shape;
-  mitigate by using existing public plan/store records and stopping if required
-  safe fields are unavailable.
+- Dependency extraction from persisted plans can couple to private plan shape or
+  scheduler assumptions; mitigate by using only `ExecutionPlan.from_dict`,
+  `ordered_stage_plans`, `StagePlan.action`, and `StagePlan.upstream_stages`,
+  and stopping if required safe fields are unavailable.
+- Command assembly can be duplicated or drift from Phase 3 helpers; mitigate by
+  using `build_single_job_command_argv` and `build_stage_job_command_argv` as
+  the only generated command constructors.
 - Shell rendering can become stringly typed; mitigate by rendering only from
   `SlurmCommandArgv`, `SlurmOptions`, and `SlurmSbatchDirective` records with
-  standard-library quoting.
+  `shlex.quote`.
+- `extra_sbatch` can accidentally bypass generated or modeled directive
+  validation; mitigate by using `SlurmOptions` and `build_sbatch_directives`
+  rather than accepting raw directive strings.
+- Artifact writing can regress into path walking; mitigate by resolving paths
+  through `resolve_slurm_generated_artifact_path` and writing only through
+  `atomic_write_text`/`atomic_write_json`.
 - Manifest and script metadata can drift; mitigate by generating both from the
   same planned job records and testing round trips.
 - Secret leaks can enter through convenience debug metadata; mitigate with
@@ -396,15 +466,16 @@ make test-summary
 ## Handoff Notes For `loom_phase_executor`
 
 - Do not start implementation until the expanded-path refine pass completes in
-  this artifact.
-- Safe implementation slices after refine: script rendering first, dry-run
-  planned-submission construction second, artifact writing third, dependency
-  graph coverage fourth, tests throughout.
+  this artifact. The refine pass is now complete.
+- Safe implementation slices: script rendering first, dry-run
+  planned-submission construction from public persisted state second, artifact
+  writing third, dependency graph coverage fourth, tests throughout.
 - Decisions the executor must not revisit: no CLI wiring, no live scheduler
   calls, no scheduler job IDs or fake submitted status, no changes to
   continuation command spellings, no `loom stage run` generated afterok
-  scripts, no path walking outside store helpers, no unredacted config/env
-  persistence, and no generic wall-time resource.
+  scripts, no shell lifecycle logic, no path walking outside store helpers, no
+  unredacted config/env persistence, no `extra_sbatch` bypass, and no generic
+  wall-time resource.
 - Conditions that require stopping for the manager: persisted plan state is
   insufficient to derive `RUN` stages and dependencies safely; script generation
   requires changing Phase 2 continuation commands; artifact writing requires
@@ -414,9 +485,10 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase execution plan refinement: unused; expanded-path refine pass pending
+- Phase execution plan refinement: used; expanded-path refine pass completed on
+  2026-05-08
 - Phase implementation refinement: unused; reserved for the later implementation
-  workflow if expanded-path refinement or validation requires it
+  workflow if validation or expanded-path implementation review requires it
 - PR review: unused; reserved for the later PR review gate
 - Blocker resolution: 0/3 used; no blocker-resolution pass has been consumed
   for Phase 4
@@ -424,6 +496,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed in this draft pass and committed with a `plan:` commit.
-- Refinement summary: pending.
+- Refinement summary: completed on 2026-05-08; tightened Phase 4 around SLURM
+  package-only implementation, Phase 3 model reuse, public persisted
+  plan/prepared-run reads, store-owned generated artifact writes, dedicated
+  `shlex.quote` rendering, import-boundary restrictions, and focused test
+  obligations.
 - Implementation summary: not started.
-- Validation summary: not run in this planning-only pass.
+- Validation summary: not run in this planning-only refine pass.
