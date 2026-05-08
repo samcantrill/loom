@@ -456,9 +456,9 @@ Completion summary:
 
 ### Phase 2 - Generic Continuation Commands
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-continuation-commands`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/83
 
 Goal:
 
@@ -490,7 +490,10 @@ Out of scope:
 
 Acceptance criteria:
 
-- Whole-run continuation can execute a prepared run with a non-SLURM executor.
+- Whole-run continuation validates prepared metadata, executor choice,
+  persisted plan identity, and runtime state, then either executes from an
+  explicitly safe prepared payload or returns structured insufficient-state
+  failure before user code when no safe replay payload exists.
 - Stage-job continuation can finalize one planned `RUN` stage from run-store
   state without a parent process.
 - Stage-job success writes the same durable output records, provenance,
@@ -515,10 +518,11 @@ Test expectations:
   run-level terminal status rules.
 - Contract: command result/error envelopes match CLI conventions; stage-job
   success/failure artifacts match parent-runner lifecycle semantics.
-- Integration: whole-run and stage-job continuation against a local run store,
-  including success and failure paths that do not use `loom stage run`.
-- E2E: a tiny prepared run continues through the public CLI and one planned
-  stage can be finalized through `loom stage-job run`.
+- Integration: prepared-run validation and stage-job continuation against a
+  local run store, including stage-job success and failure paths that do not use
+  `loom stage run`.
+- E2E: public continuation parser and structured-failure smoke coverage, with
+  successful stage-job finalization covered in integration.
 - Opt-in: none.
 
 Design impact:
@@ -555,7 +559,23 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan:
+  `docs/phases/slurm-continuation-commands.md`.
+- PR #83 opened against `develop` from
+  `codex/slurm-continuation-commands` on 2026-05-08.
+- Implemented generic execution-owned continuation APIs for prepared-run
+  validation and self-finalizing stage jobs, import-light
+  `loom prepared-run continue` and `loom stage-job run` CLI groups, and narrow
+  shared lifecycle helpers used by both the parent runner and stage-job runner.
+- Preserved `loom stage run` as the v5 handoff-only worker path and kept Phase
+  3 SLURM scripts, manifests, scheduler state, and dry-run executors out of the
+  diff.
+- Whole-run prepared continuation intentionally returns structured
+  `execution.prepared_run.insufficient_prepared_state` before user code unless a
+  future safe replay payload is added.
+- Validation before PR open: `make validate-pr` passed in the phase worktree;
+  `make test-summary` passed with overall `1188 passed, 11 skipped, 791
+  deselected`.
 
 ### Phase 3 - SLURM Models, Options, Resources, And Manifest Schema
 
