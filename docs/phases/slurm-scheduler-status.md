@@ -198,7 +198,9 @@ make test-summary
   targeted tests exposed nested scheduler snapshot metadata that needed thawed
   plain-data serialization and command-runner `squeue` formatting needed to
   match the parser contract
-- PR review: unused
+- PR review: used by manager local review before merge; the review found one
+  scheduler-state normalization edge for `sacct` states such as
+  `CANCELLED by 123`, fixed before final validation
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -221,8 +223,9 @@ make test-summary
   deselected.
 - Refinement summary: fixed status snapshot `details` serialization to thaw
   nested frozen mappings before JSON persistence, aligned fake and subprocess
-  `squeue` command arguments to emit `job|state|reason`, and added command
-  argument coverage.
+  `squeue` command arguments to emit `job|state|reason`, normalized
+  accounting states with explanatory suffixes such as `CANCELLED by 123`, and
+  added command/status coverage.
 - Blocker-resolution summary: 0/3 used
 - PR preparation: PR body recorded in
   `docs/phases/slurm-scheduler-status-pr-body.md`.
