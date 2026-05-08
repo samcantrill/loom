@@ -175,6 +175,33 @@ def format_stage_worker_text(result: object) -> str:
     return "\n".join(lines)
 
 
+def format_stage_job_text(result: object) -> str:
+    """Format one self-finalizing stage-job result."""
+
+    status = _enum_value(getattr(result, "status"))
+    run_status = _enum_value(getattr(result, "run_status"))
+    prefix = "OK" if status == "SUCCEEDED" else "FAILED"
+    run_uri = str(getattr(result, "run_uri"))
+    stage_name = str(getattr(result, "stage_name"))
+    attempt = int(getattr(result, "attempt"))
+    lines = [
+        f"{prefix} stage-job run {run_uri} {stage_name} attempt {attempt}: {status}",
+        f"run: {run_status}",
+    ]
+    failure = getattr(result, "failure")
+    if failure is not None:
+        message = str(getattr(failure, "message", ""))
+        failure_type = str(getattr(failure, "failure_type", "failure"))
+        lines.append(f"failure {failure_type}: {message}")
+    return "\n".join(lines)
+
+
+def format_prepared_run_continue_text(error: object) -> str:
+    """Format a prepared-run continuation failure."""
+
+    return f"FAILED prepared-run continue: {error}"
+
+
 def format_status_text(result: object) -> str:
     """Format a concise run status summary."""
 

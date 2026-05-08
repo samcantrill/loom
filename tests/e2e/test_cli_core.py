@@ -159,6 +159,48 @@ def test_cli_preflight_failed_config_returns_diagnostics_result(tmp_path: Path) 
     assert stderr.getvalue() == ""
 
 
+def test_cli_continuation_commands_reject_recursive_executors_as_json() -> None:
+    for argv, executor in (
+        (
+            [
+                "prepared-run",
+                "continue",
+                "--run-uri",
+                "file:///tmp/missing-run",
+                "--executor",
+                "slurm-single-job",
+                "--format",
+                "json",
+            ],
+            "slurm-single-job",
+        ),
+        (
+            [
+                "stage-job",
+                "run",
+                "--run-uri",
+                "file:///tmp/missing-run",
+                "--stage",
+                "build",
+                "--executor",
+                "slurm-afterok",
+                "--format",
+                "json",
+            ],
+            "slurm-afterok",
+        ),
+    ):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        assert main(argv, stdout=stdout, stderr=stderr) == 7
+        payload = json.loads(stdout.getvalue())
+        assert payload["ok"] is False
+        assert payload["error"]["code"] == "execution.continuation.unsupported_executor"
+        assert payload["error"]["context"]["executor"] == executor
+        assert stderr.getvalue() == ""
+
+
 def test_cli_preflight_strict_resource_warning_exits_pipeline_failure(
     tmp_path: Path,
 ) -> None:

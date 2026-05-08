@@ -205,6 +205,7 @@ def reconstruct_stage_execution_request(
     stage_plan: StagePlan,
     stage_index: int,
     artifact_store_factory: ArtifactStoreFactory | None = None,
+    allow_resolved_config_fallback: bool = True,
 ) -> StageExecutionRequest:
     """Reconstruct the local execution request for a prepared worker attempt."""
 
@@ -231,7 +232,12 @@ def reconstruct_stage_execution_request(
     context = StageContext(
         run_uri=worker_request.run_uri,
         stage_name=worker_request.stage_name,
-        resolved_config=_resolved_config_context(run_store, worker_request, stage),
+        resolved_config=_resolved_config_context(
+            run_store,
+            worker_request,
+            stage,
+            allow_resolved_config_fallback=allow_resolved_config_fallback,
+        ),
         stage_config=stage.stage_config,
         inputs=worker_request.inputs,
         local_output_dir=run_store.local_stage_artifact_dir(
@@ -401,20 +407,23 @@ def _resolved_config_context(
     run_store: RunStore,
     request: StageWorkerRequest,
     stage: StageSpec,
+    *,
+    allow_resolved_config_fallback: bool,
 ) -> Mapping[str, PlainData]:
-    snapshot = run_store.read_config_snapshot(request.run_uri, "resolved")
-    if snapshot is not None:
-        try:
-            decoded = json_loads(snapshot, path="config/resolved.yaml")
-        except DeserializationError as exc:
-            raise StageWorkerStateError(
-                f"resolved config snapshot for run {request.run_uri!r} is invalid JSON: {exc}"
-            ) from exc
-        if not isinstance(decoded, Mapping):
-            raise StageWorkerStateError(
-                f"resolved config snapshot for run {request.run_uri!r} must be a mapping"
-            )
-        return cast(Mapping[str, PlainData], dict(decoded))
+    if allow_resolved_config_fallback:
+        snapshot = run_store.read_config_snapshot(request.run_uri, "resolved")
+        if snapshot is not None:
+            try:
+                decoded = json_loads(snapshot, path="config/resolved.yaml")
+            except DeserializationError as exc:
+                raise StageWorkerStateError(
+                    f"resolved config snapshot for run {request.run_uri!r} is invalid JSON: {exc}"
+                ) from exc
+            if not isinstance(decoded, Mapping):
+                raise StageWorkerStateError(
+                    f"resolved config snapshot for run {request.run_uri!r} must be a mapping"
+                )
+            return cast(Mapping[str, PlainData], dict(decoded))
     return _minimal_resolved_config(stage)
 
 
