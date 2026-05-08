@@ -283,7 +283,7 @@ make test-summary
 | `30c50b5` | `fix: refine implementation after validation` |
 | `66d9081` | `docs: prepare phase 2 pr body` |
 | `ec56fad` | `docs: record phase 2 pr open` |
-| this blocker-resolution pass | `fix: finalize stage-job construction failures` |
+| `0a74aae` | `fix: finalize stage-job construction failures` |
 
 ## Scope Control
 
@@ -344,6 +344,9 @@ result: passed, 40 passed in 4.40s
 
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
 result: passed; ruff check, pyright, default harness 766 passed/14 skipped/8 deselected, config-extra harness 405 passed/785 deselected, and uv build all succeeded
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: passed after blocker-resolution pass 1; package 50 passed/1 skipped, unit 635 passed/1 skipped, contract 57 passed/2 skipped, integration 24 passed/7 skipped/8 deselected, e2e 19 passed, config-extra 405 passed/785 deselected, and overall 1190 passed/11 skipped/793 deselected
 ```
 
 ## PR Preparation Notes
@@ -375,6 +378,12 @@ result: passed; ruff check, pyright, default harness 766 passed/14 skipped/8 des
   contract `57 passed, 2 skipped`, integration `24 passed, 7 skipped, 8
   deselected`, e2e `19 passed`, config-extra `405 passed, 783 deselected`,
   and overall `1188 passed, 11 skipped, 791 deselected`.
+- Post-blocker `make test-summary`: passed with
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary`; `build/test-summary.md`
+  recorded package `50 passed, 1 skipped`, unit `635 passed, 1 skipped`,
+  contract `57 passed, 2 skipped`, integration `24 passed, 7 skipped, 8
+  deselected`, e2e `19 passed`, config-extra `405 passed, 785 deselected`,
+  and overall `1190 passed, 11 skipped, 793 deselected`.
 - Base refresh: after the manager pushed `0a6e0d1 docs: record v6 phase 2 pr
   open` directly to `develop`, this branch was rebased onto `origin/develop`.
   The rebase was clean and changed only commit identities plus these stack
