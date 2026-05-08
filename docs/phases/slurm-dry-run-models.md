@@ -253,7 +253,9 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase execution plan refinement: used; expanded-path refine pass completed in this artifact
-- Phase implementation refinement: unused; expanded-path implementation refinement remains available after implementation if targeted validation fails, suite coverage is missing, or design-risk review finds a concrete blocker
+- Phase implementation refinement: used; expanded-path review found no
+  phase-scoped code or test blocker, so this pass records a no-change rationale
+  only
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -302,6 +304,30 @@ make test-summary
   Pyright, isolated default tests (`809 passed, 14 skipped, 8 deselected`),
   isolated config-extra tests (`405 passed, 828 deselected`), and build
   (`dist/loom-0.1.0.tar.gz`, `dist/loom-0.1.0-py3-none-any.whl`).
+- Implementation refinement pass: completed on 2026-05-08. Reviewed the
+  current implementation commits (`ab597b0`, `81bc5dc`, `5b6c527`) against the
+  finalized Phase 3 plan, including exact mode/dependency wire values,
+  generated argv targets, absence/null-only scheduler job IDs, deterministic
+  schema-versioned plain-data manifests, `extra_sbatch` conflicts,
+  CPU/memory/GPU mapping, generated-artifact path helper usage, import
+  boundaries, and Phase 4/5/7 exclusions. No code changes were required.
+- Implementation refinement validation: reran `UV_CACHE_DIR=/tmp/uv-cache uv
+  run pytest tests/package/test_import.py tests/package/test_public_api.py
+  tests/package/test_import_boundaries.py
+  tests/package/test_pipeline_execution_api.py
+  tests/package/test_pipeline_executor_api.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_options.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_resources.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_manifest.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_paths.py
+  tests/contracts/test_slurm_manifest_contract.py
+  tests/integration/pipeline/test_slurm_model_store_paths.py`; passed with 82
+  tests.
+- Implementation refinement full validation: reran `UV_CACHE_DIR=/tmp/uv-cache
+  make validate-pr`; passed Ruff, Pyright, isolated default tests (`809 passed,
+  14 skipped, 8 deselected`), isolated config-extra tests (`405 passed, 828
+  deselected`), and build (`dist/loom-0.1.0.tar.gz`,
+  `dist/loom-0.1.0-py3-none-any.whl`).
 - Implementation validation caveat: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff
   format --check .` reports pre-existing formatting drift across unrelated
   files, so only the new/modified files were formatted.
