@@ -594,9 +594,9 @@ Completion summary:
 
 ### Phase 3 - Live Single-Job Submission
 
-Status: pending
+Status: merged
 Branch: `codex/slurm-live-single-job`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/90
 
 Goal:
 
@@ -683,7 +683,23 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Merged on 2026-05-08 via PR #90, merge commit
+  `df04062de0e4fccb74c5c83c6f0f7281a1fa2feb`.
+- Added the live `slurm-single-job` submission service, CLI live-result
+  output, fakeable command-runner submission path, live manifest updates,
+  submitted-operation registry updates, and run `SUBMITTED` persistence.
+- Updated SLURM executor descriptors and preflight so live single-job requires
+  `sbatch` while `slurm-afterok` remains live-deferred to Phase 4.
+- Added unit, contract, integration, and e2e fake-runner coverage for live
+  single-job success, unavailable `sbatch`, active submission guards, stable
+  CLI JSON/text output, and persisted registry/status facts.
+- Validation: `make validate-pr` passed before merge; `make test-summary`
+  passed with package 52 passed/1 skipped, unit 714 passed/1 skipped,
+  contract 65 passed/2 skipped, integration 37 passed/7 skipped/9 deselected,
+  e2e 23 passed, and config-extra 411 passed/891 deselected.
+- PR #90 target verified as `develop`, head verified as
+  `codex/slurm-live-single-job`, GitHub `checks` completed successfully, and
+  manager review found no blocking findings before merge.
 
 ### Phase 4 - Live Afterok DAG Submission
 
