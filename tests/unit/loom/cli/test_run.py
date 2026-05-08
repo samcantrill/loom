@@ -13,6 +13,7 @@ from loom.cli.errors import CliError
 from loom.cli.main import main
 from loom.cli.options import ConfigCliOptions
 from loom.cli.results import PlanCliResult
+from loom.cli.results import SlurmDryRunCliResult
 import loom.cli.plan as plan_command
 import loom.cli.run as run_command
 from loom.diagnostics import (
@@ -356,6 +357,29 @@ def test_run_unsupported_executor_returns_executor_exit_code(
     assert payload["error"]["code"] == "cli.run.unsupported_executor"
 
 
+def test_run_non_dry_run_slurm_returns_v7_deferred_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_common(monkeypatch)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--executor", "slurm-single-job", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 7
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["error"]["code"] == "cli.run.slurm_live_submission_deferred"
+    assert payload["error"]["context"]["deferred_to"] == "v7"
+    assert payload["error"]["hint"].endswith("without submitting jobs.")
+
+
 def test_run_build_executor_supports_subprocess(tmp_path: Path) -> None:
     executor = run_command._build_executor(
         "subprocess",
@@ -389,6 +413,59 @@ def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) ->
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == "loom.cli.plan.v2"
     assert payload["result"]["stage_actions"][0]["stage"] == "build"
+
+
+def test_run_slurm_dry_run_uses_slurm_result_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def build_slurm_result(*_args: object, **_kwargs: object) -> tuple[SlurmDryRunCliResult, tuple[object, ...]]:
+        return (
+            SlurmDryRunCliResult(
+                run_uri="file:///abs/runs/dry",
+                mode="slurm-single-job",
+                planning_id="planning-1",
+                manifest_path="/abs/runs/dry/slurm/submissions/planning-1/manifest.json",
+                manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+                plan_path="/abs/runs/dry/slurm/submissions/planning-1/plan.json",
+                plan_relative_path="slurm/submissions/planning-1/plan.json",
+                script_directory="/abs/runs/dry/slurm/submissions/planning-1/scripts",
+                script_count=1,
+                job_count=1,
+                dependency_count=0,
+            ),
+            (),
+        )
+
+    def fail_plan(*_args: object, **_kwargs: object) -> PlanCliResult:
+        raise AssertionError("SLURM dry-run must not use generic plan output")
+
+    monkeypatch.setattr(run_command, "build_slurm_dry_run_result", build_slurm_result)
+    monkeypatch.setattr(plan_command, "build_plan_result", fail_plan)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                "base.yaml",
+                "--executor",
+                "slurm-single-job",
+                "--dry-run",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["schema_version"] == "loom.cli.slurm_dry_run.v1"
+    assert payload["result"]["mode"] == "slurm-single-job"
+    assert payload["result"]["script_count"] == 1
 
 
 def test_run_failed_result_returns_run_failed_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
