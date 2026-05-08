@@ -353,7 +353,7 @@ source of submitted-job identity.
 
 ### Phase 1 - Submitted Lifecycle And Registry Foundations
 
-Status: pr_open
+Status: merged
 Branch: `codex/slurm-submitted-lifecycle`
 PR: https://github.com/samcantrill/loom/pull/88
 
@@ -471,7 +471,14 @@ Completion summary:
   passed with package 52 passed / 1 skipped, unit 703 passed / 1 skipped,
   contract 61 passed / 2 skipped, integration 33 passed / 7 skipped / 9
   deselected, e2e 22 passed, and config-extra 411 passed / 871 deselected.
-- PR #88 targets `develop` from `codex/slurm-submitted-lifecycle`.
+- PR #88 targeted `develop` from `codex/slurm-submitted-lifecycle` and was
+  squash-merged on 2026-05-08 as merge commit
+  `90533a813573c7a3de2501040a02aa606599b128`.
+- Final merge gate: PR target verified as `develop`, head verified as
+  `codex/slurm-submitted-lifecycle`, GitHub CI `checks` passed, and manager
+  pre-submit review found no remaining scope, validation, or PR-body blockers.
+- Stack and cleanup: no successor branches were based on Phase 1; the remote
+  phase branch was deleted after merge.
 
 ### Phase 2 - SLURM Live Command And Manifest Models
 
