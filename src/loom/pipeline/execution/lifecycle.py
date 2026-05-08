@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from loom.artifacts import ArtifactRef
+from loom.pipeline.planning import StagePlan
+from loom.pipeline.specs import StageSpec
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
@@ -11,7 +14,10 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import RunStore
+from loom.pipeline.stores.indexes import format_artifact_key, merge_artifact_index
 from loom.serialization import PlainData, ensure_plain_data
+
+from .errors import PlanExecutionError
 
 
 def next_stage_attempt(run_store: RunStore, run_uri: str, stage_name: str) -> int:
@@ -19,6 +25,56 @@ def next_stage_attempt(run_store: RunStore, run_uri: str, stage_name: str) -> in
     if status is None:
         return 1
     return status.attempt + 1
+
+
+def bind_stage_inputs(
+    *,
+    stage: StageSpec,
+    stage_plan: StagePlan,
+    produced_outputs: Mapping[str, Mapping[str, ArtifactRef]],
+) -> dict[str, ArtifactRef]:
+    inputs: dict[str, ArtifactRef] = {
+        name: bound.artifact_ref for name, bound in stage_plan.bound_inputs.items()
+    }
+    for pending in stage_plan.pending_inputs:
+        upstream = produced_outputs.get(pending.source_stage)
+        if upstream is None or pending.source_output not in upstream:
+            raise PlanExecutionError(
+                f"Cannot bind input {stage.name}.{pending.input_name} from "
+                f"{pending.source_stage}.{pending.source_output}"
+            )
+        inputs[pending.input_name] = upstream[pending.source_output]
+    expected = set(stage.inputs)
+    if set(inputs) != expected:
+        missing = expected - set(inputs)
+        extra = set(inputs) - expected
+        parts: list[str] = []
+        if missing:
+            parts.append(f"missing {', '.join(sorted(missing))}")
+        if extra:
+            parts.append(f"extra {', '.join(sorted(extra))}")
+        raise PlanExecutionError(
+            f"Input binding mismatch for stage {stage.name}: {'; '.join(parts)}"
+        )
+    return inputs
+
+
+def write_stage_artifact_index_refs(
+    run_store: RunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    outputs: Mapping[str, ArtifactRef],
+    replace: bool,
+) -> None:
+    updates = {
+        format_artifact_key(stage_name, output_name): ref
+        for output_name, ref in outputs.items()
+    }
+    existing = run_store.read_artifact_index(run_uri)
+    run_store.write_artifact_index(
+        run_uri, merge_artifact_index(existing, updates, replace=replace)
+    )
 
 
 def write_run_status(
@@ -216,7 +272,9 @@ def write_stage_blocked(
 
 
 __all__ = [
+    "bind_stage_inputs",
     "next_stage_attempt",
+    "write_stage_artifact_index_refs",
     "write_run_status",
     "write_stage_running",
     "write_stage_succeeded",

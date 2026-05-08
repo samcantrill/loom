@@ -26,10 +26,12 @@ from loom.timestamps import parse_timestamp, utc_timestamp
 from ._paths import (
     VALID_CONFIG_SNAPSHOTS,
     VALID_PROVENANCE_NAMES,
+    ensure_subpath,
     validate_output_name,
     validate_config_snapshot_name,
     validate_log_stream,
     validate_provenance_name,
+    validate_safe_relative_path,
     validate_stage_name,
 )
 from .atomic import atomic_write_json, atomic_write_text
@@ -51,6 +53,20 @@ _SCHEMA_VERSION = 1
 
 _RUN_WRAPPER_FIELDS = frozenset({"schema_version", "run_uri", "created_at", "metadata"})
 _PLAN_WRAPPER_FIELDS = frozenset({"schema_version", "run_uri", "updated_at", "plan"})
+_PREPARED_RUN_FIELDS = frozenset(
+    {
+        "schema_version",
+        "run_uri",
+        "prepared_at",
+        "executor_name",
+        "continuation_type",
+        "plan",
+        "config",
+        "provenance",
+        "runtime",
+        "metadata",
+    }
+)
 _RUNTIME_METADATA_WRAPPER_FIELDS = frozenset(
     {"schema_version", "run_uri", "updated_at", "runtime"}
 )
@@ -204,6 +220,12 @@ class LocalRunStore:
     def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path:
         return self.local_stage_dir(run_uri, stage_name) / "workspace"
 
+    def local_generated_artifact_path(self, run_uri: str, relative_path: str) -> Path:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        relative = validate_safe_relative_path(relative_path, field="relative_path")
+        run_dir = self.local_run_dir(run_uri_text)
+        return ensure_subpath(run_dir.joinpath(*relative.parts), run_dir)
+
     def prepare_stage_workspace(self, run_uri: str, stage_name: str) -> None:
         self.local_stage_workspace_dir(run_uri, stage_name).mkdir(
             parents=True, exist_ok=True
@@ -290,6 +312,62 @@ class LocalRunStore:
             "plan": ensure_plain_data(plan, path="plan"),
         }
         atomic_write_json(self.local_run_dir(run_uri_text) / "plan.json", payload)
+
+    def read_prepared_run(self, run_uri: str) -> dict[str, PlainData] | None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_run_dir(run_uri_text) / "prepared_run.json"
+        data = self._read_optional_json(path)
+        if data is None:
+            return None
+        payload = _require_document_object(data, path, label="prepared-run document")
+        _validate_exact_document_fields(
+            payload,
+            path,
+            label="prepared-run document",
+            fields=_PREPARED_RUN_FIELDS,
+        )
+        _require_schema_version(payload, path, label="prepared-run document")
+        _require_run_uri_field(
+            payload, path, expected=run_uri_text, label="prepared-run document"
+        )
+        _require_timestamp_field(
+            payload, path, "prepared_at", label="prepared-run document"
+        )
+        for field_name in ("plan", "config", "provenance", "runtime", "metadata"):
+            _require_mapping_field(
+                payload, path, field_name, label="prepared-run document"
+            )
+        return payload
+
+    def write_prepared_run(
+        self, run_uri: str, prepared_run: Mapping[str, PlainData]
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        normalized = ensure_plain_data(prepared_run, path="prepared_run")
+        if not isinstance(normalized, dict):
+            raise UnsafeStorePathError("prepared-run metadata must be a mapping")
+        path = self.local_run_dir(run_uri_text) / "prepared_run.json"
+        payload = _require_document_object(
+            normalized, path, label="prepared-run document"
+        )
+        _validate_exact_document_fields(
+            payload,
+            path,
+            label="prepared-run document",
+            fields=_PREPARED_RUN_FIELDS,
+        )
+        _require_schema_version(payload, path, label="prepared-run document")
+        _require_run_uri_field(
+            payload, path, expected=run_uri_text, label="prepared-run document"
+        )
+        _require_timestamp_field(
+            payload, path, "prepared_at", label="prepared-run document"
+        )
+        for field_name in ("plan", "config", "provenance", "runtime", "metadata"):
+            _require_mapping_field(
+                payload, path, field_name, label="prepared-run document"
+            )
+        atomic_write_json(path, payload)
 
     def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")

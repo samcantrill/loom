@@ -32,7 +32,6 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
-from loom.pipeline.stores.indexes import format_artifact_key, merge_artifact_index
 from loom.serialization import PlainData, ensure_plain_data, json_dumps_pretty
 from loom.timestamps import utc_timestamp
 
@@ -44,7 +43,9 @@ from .errors import (
 )
 from .eventing import emit_run_event, emit_stage_event
 from .lifecycle import (
+    bind_stage_inputs,
     next_stage_attempt,
+    write_stage_artifact_index_refs,
     write_run_status,
     write_stage_blocked,
     write_stage_failed,
@@ -435,7 +436,11 @@ class PipelineRunner:
         stage_started_at: str | None = None
         local_run_store = self._require_local_run_store()
         try:
-            inputs = self._bind_inputs(stage, stage_plan, produced_outputs)
+            inputs = bind_stage_inputs(
+                stage=stage,
+                stage_plan=stage_plan,
+                produced_outputs=produced_outputs,
+            )
             fingerprint = build_stage_fingerprint(
                 stage,
                 bound_inputs=inputs,
@@ -931,37 +936,6 @@ class PipelineRunner:
                     run_uri, "git", {"capture_error": str(exc)}
                 )
 
-    def _bind_inputs(
-        self,
-        stage: StageSpec,
-        stage_plan,
-        produced_outputs: Mapping[str, Mapping[str, ArtifactRef]],
-    ) -> dict[str, ArtifactRef]:
-        inputs: dict[str, ArtifactRef] = {
-            name: bound.artifact_ref for name, bound in stage_plan.bound_inputs.items()
-        }
-        for pending in stage_plan.pending_inputs:
-            upstream = produced_outputs.get(pending.source_stage)
-            if upstream is None or pending.source_output not in upstream:
-                raise PlanExecutionError(
-                    f"Cannot bind input {stage.name}.{pending.input_name} from "
-                    f"{pending.source_stage}.{pending.source_output}"
-                )
-            inputs[pending.input_name] = upstream[pending.source_output]
-        expected = set(stage.inputs)
-        if set(inputs) != expected:
-            missing = expected - set(inputs)
-            extra = set(inputs) - expected
-            parts: list[str] = []
-            if missing:
-                parts.append(f"missing {', '.join(sorted(missing))}")
-            if extra:
-                parts.append(f"extra {', '.join(sorted(extra))}")
-            raise PlanExecutionError(
-                f"Input binding mismatch for stage {stage.name}: {'; '.join(parts)}"
-            )
-        return inputs
-
     def _construct_stage(self, spec: PipelineSpec, stage: StageSpec) -> Stage:
         try:
             stage_path = f"pipeline.stages[{spec.stage_names.index(stage.name)}]"
@@ -1239,13 +1213,12 @@ class PipelineRunner:
         *,
         replace: bool,
     ) -> None:
-        updates = {
-            format_artifact_key(stage.name, output_name): ref
-            for output_name, ref in outputs.items()
-        }
-        existing = self.run_store.read_artifact_index(run_uri)
-        self.run_store.write_artifact_index(
-            run_uri, merge_artifact_index(existing, updates, replace=replace)
+        write_stage_artifact_index_refs(
+            self.run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            outputs=outputs,
+            replace=replace,
         )
 
     def _write_artifact_index_refs(
@@ -1256,13 +1229,12 @@ class PipelineRunner:
         *,
         replace: bool,
     ) -> None:
-        updates = {
-            format_artifact_key(stage_name, output_name): ref
-            for output_name, ref in outputs.items()
-        }
-        existing = self.run_store.read_artifact_index(run_uri)
-        self.run_store.write_artifact_index(
-            run_uri, merge_artifact_index(existing, updates, replace=replace)
+        write_stage_artifact_index_refs(
+            self.run_store,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            outputs=outputs,
+            replace=replace,
         )
 
     def _write_stage_provenance(
