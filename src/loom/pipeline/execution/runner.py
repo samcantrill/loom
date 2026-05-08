@@ -44,14 +44,16 @@ from .errors import (
 from .eventing import emit_run_event, emit_stage_event
 from .lifecycle import (
     bind_stage_inputs,
+    commit_stage_execution_result,
     next_stage_attempt,
+    persist_stage_failure,
+    record_stage_failure_and_failed_run,
     write_stage_artifact_index_refs,
+    write_failed_run,
     write_run_status,
     write_stage_blocked,
-    write_stage_failed,
     write_stage_running,
     write_stage_skipped,
-    write_stage_succeeded,
 )
 from .logs import traceback_log_path
 from .models import (
@@ -63,7 +65,6 @@ from .models import (
     StageExecutionResult,
     StageRunResult,
 )
-from .outputs import validate_stage_outputs
 from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_attempts import prepare_stage_attempt
 
@@ -705,87 +706,20 @@ class PipelineRunner:
         run_started_at: str,
         execution_result: StageExecutionResult,
     ) -> StageRunResult:
-        if execution_result.status == StageStatus.FAILED:
-            failure = execution_result.failure or self._failure(
-                run_uri=run_uri,
-                stage_name=stage.name,
-                attempt=attempt,
-                failure_type="executor_infrastructure",
-                message="executor failed without failure metadata",
-                executor=execution_result.executor_name,
-            )
-            failure = self._record_stage_failure_and_failed_run(
-                run_uri=run_uri,
-                stage_name=stage.name,
-                attempt=attempt,
-                started_at=execution_result.started_at,
-                created_at=created_at,
-                run_started_at=run_started_at,
-                failure=failure,
-            )
-            return StageRunResult(
-                stage_name=stage.name,
-                action=PlanAction.RUN,
-                status=StageStatus.FAILED,
-                attempt=attempt,
-                outputs={},
-                failure=failure,
-                reasons=stage_plan.reasons,
-                started_at=execution_result.started_at,
-                finished_at=execution_result.finished_at,
-                executor_metadata=execution_result.executor_metadata,
-            )
-        outputs = validate_stage_outputs(
-            stage=stage,
-            outputs=execution_result.outputs,
-            artifact_store=artifact_store,
-        )
-        self.run_store.write_stage_outputs(
-            run_uri, stage.name, outputs, attempt=attempt
-        )
-        self._write_artifact_index_for_stage(run_uri, stage, outputs, replace=True)
-        self._write_stage_provenance(
-            run_uri,
-            stage,
-            status=StageStatus.SUCCEEDED,
-            attempt=attempt,
-            started_at=execution_result.started_at,
-            finished_at=execution_result.finished_at,
-            fingerprint=fingerprint.to_dict(),
-            inputs=inputs,
-            outputs=outputs,
-            executor_metadata=execution_result.executor_metadata,
-        )
-        write_stage_succeeded(
+        return commit_stage_execution_result(
             self.run_store,
             run_uri=run_uri,
-            stage_name=stage.name,
+            stage=stage,
+            stage_plan=stage_plan,
             attempt=attempt,
-            started_at=execution_result.started_at,
-            finished_at=execution_result.finished_at,
-            metadata={"action": PlanAction.RUN.value},
-        )
-        self._emit_stage_event(
-            run_uri,
-            stage.name,
-            "stage.completed",
-            timestamp=self.clock(),
-            payload={
-                "attempt": attempt,
-                "action": PlanAction.RUN.value,
-                "status": StageStatus.SUCCEEDED.value,
-            },
-        )
-        return StageRunResult(
-            stage_name=stage.name,
-            action=PlanAction.RUN,
-            status=StageStatus.SUCCEEDED,
-            attempt=attempt,
-            outputs=outputs,
-            reasons=stage_plan.reasons,
-            started_at=execution_result.started_at,
-            finished_at=execution_result.finished_at,
-            executor_metadata=execution_result.executor_metadata,
+            inputs=inputs,
+            fingerprint=fingerprint.to_dict(),
+            artifact_store=artifact_store,
+            created_at=created_at,
+            run_started_at=run_started_at,
+            execution_result=execution_result,
+            executor_name=str(getattr(self.executor, "name", "unknown")),
+            clock=self.clock,
         )
 
     def _require_local_run_store(self) -> LocalRunStorePaths:
@@ -1251,27 +1185,20 @@ class PipelineRunner:
         outputs: Mapping[str, ArtifactRef],
         executor_metadata: Mapping[str, PlainData],
     ) -> None:
-        from loom.provenance.models import StageProvenance
+        from .lifecycle import write_stage_provenance
 
-        provenance = StageProvenance(
+        write_stage_provenance(
+            self.run_store,
             run_uri=run_uri,
-            stage_name=stage.name,
-            status=status.value,
+            stage=stage,
+            status=status,
             attempt=attempt,
-            target=stage.target_path,
             started_at=started_at,
             finished_at=finished_at,
             fingerprint=fingerprint,
-            input_artifacts={
-                name: _plain(ref.to_dict()) for name, ref in inputs.items()
-            },
-            output_artifacts={
-                name: _plain(ref.to_dict()) for name, ref in outputs.items()
-            },
+            inputs=inputs,
+            outputs=outputs,
             executor_metadata=executor_metadata,
-        )
-        self.run_store.write_stage_provenance(
-            run_uri, stage.name, _plain(provenance.to_dict()), attempt=attempt
         )
 
     def _persist_stage_failure(
@@ -1282,25 +1209,14 @@ class PipelineRunner:
         started_at: str | None,
         failure: ExecutionFailure,
     ) -> None:
-        self.run_store.write_stage_failure(
-            run_uri, stage_name, failure.to_dict(), attempt=attempt
-        )
-        write_stage_failed(
+        persist_stage_failure(
             self.run_store,
             run_uri=run_uri,
             stage_name=stage_name,
             attempt=attempt,
             started_at=started_at,
-            finished_at=failure.failed_at,
-            message=failure.message,
-            metadata={"failure_type": failure.failure_type},
-        )
-        self._emit_stage_event(
-            run_uri,
-            stage_name,
-            "stage.failed",
-            timestamp=self.clock(),
-            payload={"attempt": attempt, "failure_type": failure.failure_type},
+            failure=failure,
+            clock=self.clock,
         )
 
     def _record_stage_failure_and_failed_run(
@@ -1314,20 +1230,18 @@ class PipelineRunner:
         run_started_at: str,
         failure: ExecutionFailure,
     ) -> ExecutionFailure:
-        try:
-            self._persist_stage_failure(
-                run_uri, stage_name, attempt, started_at, failure
-            )
-        except Exception as exc:
-            failure = self._failure_from_exception(
-                run_uri=run_uri,
-                stage_name=stage_name,
-                attempt=attempt,
-                failure_type="store_commit",
-                exc=exc,
-            )
-        self._write_failed_run(run_uri, created_at, run_started_at, failure)
-        return failure
+        return record_stage_failure_and_failed_run(
+            self.run_store,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            started_at=started_at,
+            created_at=created_at,
+            run_started_at=run_started_at,
+            failure=failure,
+            executor_name=str(getattr(self.executor, "name", "unknown")),
+            clock=self.clock,
+        )
 
     def _write_failed_run(
         self,
@@ -1336,19 +1250,12 @@ class PipelineRunner:
         started_at: str,
         failure: ExecutionFailure,
     ) -> None:
-        write_run_status(
+        write_failed_run(
             self.run_store,
             run_uri=run_uri,
-            status=RunStatus.FAILED,
             created_at=created_at,
-            updated_at=failure.failed_at,
             started_at=started_at,
-            finished_at=failure.failed_at,
-            message=failure.message,
-            metadata={
-                "failed_stage": failure.stage_name,
-                "failure_type": failure.failure_type,
-            },
+            failure=failure,
         )
 
     def _created_at(self, run_uri: str, fallback: str) -> str:
