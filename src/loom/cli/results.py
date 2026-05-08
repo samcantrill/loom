@@ -130,11 +130,60 @@ class RunCliResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SlurmDryRunCliResult:
+    """CLI-facing SLURM dry-run artifact summary."""
+
+    run_uri: str
+    mode: str
+    planning_id: str
+    manifest_path: str
+    manifest_relative_path: str
+    plan_path: str
+    plan_relative_path: str
+    script_directory: str | None
+    script_count: int
+    script_paths: tuple[Mapping[str, object], ...] = ()
+    log_paths: tuple[Mapping[str, object], ...] = ()
+    job_count: int = 0
+    dependency_count: int = 0
+    generated_commands: tuple[Mapping[str, object], ...] = ()
+    resource_summary: Mapping[str, object] = field(default_factory=dict)
+    generated_artifact_count: int = 0
+    preflight_warnings: tuple[Mapping[str, object], ...] = ()
+    dry_run: bool = True
+
+    def to_dict(self) -> dict[str, PlainCliData]:
+        """Return the result as plain data."""
+
+        return {
+            "run_uri": self.run_uri,
+            "mode": self.mode,
+            "dry_run": self.dry_run,
+            "planning_id": self.planning_id,
+            "manifest_path": self.manifest_path,
+            "manifest_relative_path": self.manifest_relative_path,
+            "plan_path": self.plan_path,
+            "plan_relative_path": self.plan_relative_path,
+            "script_directory": self.script_directory,
+            "script_count": self.script_count,
+            "script_paths": to_plain_cli_data(self.script_paths),
+            "log_paths": to_plain_cli_data(self.log_paths),
+            "job_count": self.job_count,
+            "dependency_count": self.dependency_count,
+            "generated_commands": to_plain_cli_data(self.generated_commands),
+            "resource_summary": to_plain_cli_data(dict(self.resource_summary)),
+            "generated_artifact_count": self.generated_artifact_count,
+            "preflight_warnings": to_plain_cli_data(self.preflight_warnings),
+        }
+
+
 __all__ = [
     "CliWarning",
     "PlainCliData",
     "PlanCliResult",
     "RunCliResult",
+    "SlurmDryRunCliResult",
     "ValidationCliResult",
     "to_plain_cli_data",
 ]

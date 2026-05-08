@@ -41,6 +41,7 @@ from .resources import SlurmSbatchDirective, build_sbatch_directives
 
 type SlurmResourceInput = ResourceRequest | Mapping[str, ResourceEntry]
 type SlurmStageResourceInputs = Mapping[str, SlurmResourceInput]
+type SlurmStageOptionInputs = Mapping[str, SlurmOptions]
 
 SLURM_DRY_RUN_PLAN_METADATA_SCHEMA_VERSION = 1
 
@@ -92,6 +93,7 @@ def plan_afterok_slurm_dry_run(
     run_store: RunStore,
     run_uri: str,
     options: SlurmOptions | None = None,
+    stage_options: SlurmStageOptionInputs | None = None,
     stage_resources: SlurmStageResourceInputs | None = None,
     planning_id: str | None = None,
     created_at: str | None = None,
@@ -106,13 +108,18 @@ def plan_afterok_slurm_dry_run(
         planning_id=_planning_id(planning_id, mode=SlurmMode.AFTEROK),
         created_at=created_at or utc_timestamp(),
         options=options or SlurmOptions(),
+        stage_options=stage_options,
         stage_resources=stage_resources,
     )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
         job.logical_key: render_slurm_script(
             job,
-            options=cast(SlurmOptions, planned_submission.options),
+            options=_job_options(
+                job.logical_key,
+                run_options=cast(SlurmOptions, planned_submission.options),
+                stage_options=stage_options,
+            ),
         )
         for job in jobs
     }
@@ -179,6 +186,7 @@ def build_afterok_planned_submission(
     planning_id: str,
     created_at: str,
     options: SlurmOptions,
+    stage_options: SlurmStageOptionInputs | None = None,
     stage_resources: SlurmStageResourceInputs | None = None,
 ) -> SlurmPlannedSubmission:
     """Build a deterministic afterok dry-run manifest in memory."""
@@ -200,6 +208,11 @@ def build_afterok_planned_submission(
 
     for stage_plan in run_stage_plans:
         logical_key = stage_job_key(stage_plan.stage_name)
+        job_options = _stage_options(
+            stage_plan.stage_name,
+            stage_options,
+            fallback=options,
+        )
         upstream_job_keys = tuple(
             stage_job_key(stage_name)
             for stage_name in stage_plan.upstream_stages
@@ -208,7 +221,7 @@ def build_afterok_planned_submission(
         command = build_stage_job_command_argv(
             run_uri,
             stage_plan.stage_name,
-            launcher_argv=options.launcher_argv,
+            launcher_argv=job_options.launcher_argv,
         )
         resources = _stage_resources(stage_plan.stage_name, stage_resources)
         jobs.append(
@@ -218,7 +231,7 @@ def build_afterok_planned_submission(
                 mode=SlurmMode.AFTEROK,
                 logical_key=logical_key,
                 command=command,
-                options=options,
+                options=job_options,
                 resources=resources,
                 dependency_job_keys=upstream_job_keys,
                 manifest_relative_path=manifest_relative_path,
@@ -416,6 +429,30 @@ def _stage_resources(
         return None
     logical_key = stage_job_key(stage_name)
     return stage_resources.get(stage_name) or stage_resources.get(logical_key)
+
+
+def _stage_options(
+    stage_name: str,
+    stage_options: SlurmStageOptionInputs | None,
+    *,
+    fallback: SlurmOptions,
+) -> SlurmOptions:
+    if stage_options is None:
+        return fallback
+    logical_key = stage_job_key(stage_name)
+    return stage_options.get(stage_name) or stage_options.get(logical_key) or fallback
+
+
+def _job_options(
+    logical_key: str,
+    *,
+    run_options: SlurmOptions,
+    stage_options: SlurmStageOptionInputs | None,
+) -> SlurmOptions:
+    if not logical_key.startswith("stage:"):
+        return run_options
+    stage_name = logical_key.removeprefix("stage:")
+    return _stage_options(stage_name, stage_options, fallback=run_options)
 
 
 def _read_persisted_state(

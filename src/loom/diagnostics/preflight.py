@@ -8,7 +8,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loom.serialization import PlainData
 
@@ -22,6 +22,12 @@ from .models import (
     PreflightSeverity,
     normalize_groups,
 )
+
+if TYPE_CHECKING:
+    from loom.pipeline.executors.slurm import SlurmOptions
+
+
+_SLURM_EXECUTORS = frozenset({"slurm-single-job", "slurm-afterok"})
 
 
 @dataclass
@@ -210,6 +216,7 @@ def _check_runtime(context: _Context) -> tuple[PreflightCheckResult, ...]:
     return (
         *_check_runtime_options(context),
         *_check_runtime_profile(context),
+        *_check_runtime_slurm_options(context),
         *_check_runtime_stage_options(context),
     )
 
@@ -265,6 +272,55 @@ def _check_runtime_profile(context: _Context) -> tuple[PreflightCheckResult, ...
     )
 
 
+def _check_runtime_slurm_options(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    try:
+        options = cast(Any, context.runtime_options())
+    except Exception:  # noqa: BLE001 - runtime.options reports normalization failures.
+        return ()
+
+    if not _is_slurm_executor(options):
+        return ()
+
+    try:
+        run_options = _slurm_options_from_adapter(
+            options.adapter_options,
+            path="RunOptions.adapter_options['slurm']",
+        )
+        stage_options = {
+            stage_id: _slurm_options_from_adapter(
+                stage_runtime.adapter_options,
+                path=f"RunOptions.stage_options[{stage_id!r}].adapter_options['slurm']",
+            )
+            for stage_id, stage_runtime in cast(Mapping[str, Any], options.stage_options).items()
+            if "slurm" in stage_runtime.adapter_options
+        }
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "runtime.slurm.options",
+                PreflightGroup.RUNTIME,
+                "SLURM adapter options are invalid",
+                exc,
+            ),
+        )
+
+    return (
+        _result(
+            "runtime.slurm.options",
+            PreflightGroup.RUNTIME,
+            PreflightCheckStatus.PASS,
+            PreflightSeverity.INFO,
+            "SLURM adapter options are valid",
+            cast(Mapping[str, PlainData], {
+                "executor": options.executor,
+                "run_option_keys": _slurm_option_keys(run_options),
+                "stage_option_count": len(stage_options),
+                "stage_options": sorted(stage_options),
+            }),
+        ),
+    )
+
+
 def _check_runtime_stage_options(context: _Context) -> tuple[PreflightCheckResult, ...]:
     try:
         options = context.runtime_options()
@@ -299,6 +355,10 @@ def _check_runtime_stage_options(context: _Context) -> tuple[PreflightCheckResul
 
 
 def _check_run_uri(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    return (*_check_run_uri_resolve(context), *_check_slurm_run_uri_local(context))
+
+
+def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...]:
     try:
         run_uri = _selected_run_uri(context)
     except Exception as exc:  # noqa: BLE001
@@ -342,6 +402,38 @@ def _check_run_uri(context: _Context) -> tuple[PreflightCheckResult, ...]:
             PreflightSeverity.INFO,
             "run URI resolves to an available local path",
             {"run_uri": resolved.uri, "path": str(path), "exists": False},
+        ),
+    )
+
+
+def _check_slurm_run_uri_local(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_slurm(context):
+        return ()
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return (_fail("run_uri.slurm.local", PreflightGroup.RUN, "SLURM run URI probe failed", exc),)
+    if run_uri is None:
+        return (_missing_run_uri("run_uri.slurm.local", PreflightGroup.RUN),)
+    try:
+        resolved = cast(Any, context.run_uri())
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "run_uri.slurm.local",
+                PreflightGroup.RUN,
+                "SLURM dry-run requires a local run URI",
+                exc,
+            ),
+        )
+    return (
+        _result(
+            "run_uri.slurm.local",
+            PreflightGroup.RUN,
+            PreflightCheckStatus.PASS,
+            PreflightSeverity.INFO,
+            "SLURM dry-run run URI resolves locally",
+            {"run_uri": resolved.uri, "path": str(resolved.path)},
         ),
     )
 
@@ -437,6 +529,7 @@ def _check_executor(context: _Context) -> tuple[PreflightCheckResult, ...]:
         *_check_executor_resolve(context),
         *_check_executor_capabilities(context),
         *_check_subprocess_executor(context),
+        *_check_slurm_executor(context),
     )
 
 
@@ -647,7 +740,103 @@ def _check_subprocess_worker() -> PreflightCheckResult:
     )
 
 
+def _check_slurm_executor(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    try:
+        options = cast(Any, context.runtime_options())
+    except Exception:  # noqa: BLE001 - runtime checks already report this.
+        return ()
+    if not _is_slurm_executor(options):
+        return ()
+    return (
+        _check_slurm_mode(options),
+        _check_slurm_launcher(options),
+        _check_slurm_sbatch(),
+    )
+
+
+def _check_slurm_mode(options: object) -> PreflightCheckResult:
+    executor = str(getattr(options, "executor", ""))
+    dry_run = bool(getattr(options, "dry_run", False))
+    if executor not in _SLURM_EXECUTORS:
+        return _result(
+            "executor.slurm.mode",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "selected SLURM executor mode is unsupported",
+            cast(
+                Mapping[str, PlainData],
+                {"executor": executor, "supported": sorted(_SLURM_EXECUTORS)},
+            ),
+        )
+    if not dry_run:
+        return _result(
+            "executor.slurm.mode",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "SLURM live submission is deferred to v7",
+            {"executor": executor, "dry_run": False, "deferred_to": "v7"},
+        )
+    return _result(
+        "executor.slurm.mode",
+        PreflightGroup.EXECUTOR,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        "SLURM dry-run executor mode is supported",
+        {"executor": executor, "dry_run": True, "live_submission": "deferred_to_v7"},
+    )
+
+
+def _check_slurm_launcher(options: object) -> PreflightCheckResult:
+    try:
+        slurm_options = _slurm_options_from_adapter(
+            cast(Any, options).adapter_options,
+            path="RunOptions.adapter_options['slurm']",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "executor.slurm.launcher",
+            PreflightGroup.EXECUTOR,
+            "SLURM launcher argv is invalid",
+            exc,
+        )
+    return _result(
+        "executor.slurm.launcher",
+        PreflightGroup.EXECUTOR,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        "SLURM launcher argv is valid",
+        {
+            "launcher_argv": list(slurm_options.launcher_argv),
+            "argc": len(slurm_options.launcher_argv),
+        },
+    )
+
+
+def _check_slurm_sbatch() -> PreflightCheckResult:
+    resolved = shutil.which("sbatch")
+    if resolved is None:
+        return _result(
+            "executor.slurm.sbatch",
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.WARN,
+            PreflightSeverity.WARNING,
+            "sbatch is not available; SLURM dry-run artifact generation can continue",
+            {"command": "sbatch", "available": False},
+        )
+    return _result(
+        "executor.slurm.sbatch",
+        PreflightGroup.EXECUTOR,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        "sbatch is available",
+        {"command": "sbatch", "available": True, "path": resolved},
+    )
+
+
 def _check_resources(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    checks: list[PreflightCheckResult] = []
     try:
         result = context.capability_validation()
     except Exception as exc:  # noqa: BLE001
@@ -661,14 +850,15 @@ def _check_resources(context: _Context) -> tuple[PreflightCheckResult, ...]:
         )
 
     if _unknown_executor_diagnostic(result) is not None:
-        return (
+        checks.append(
             _skip(
                 "resources.capabilities",
                 PreflightGroup.RESOURCES,
                 "check skipped because the selected executor is unresolved",
                 {"reason": "executor_unresolved"},
-            ),
+            )
         )
+        return tuple(checks)
 
     diagnostics = [
         diagnostic
@@ -676,7 +866,7 @@ def _check_resources(context: _Context) -> tuple[PreflightCheckResult, ...]:
         if str(diagnostic.code).startswith("resource.")
     ]
     status = _status_from_capability_diagnostics(diagnostics)
-    return (
+    checks.append(
         _result(
             "resources.capabilities",
             PreflightGroup.RESOURCES,
@@ -688,6 +878,55 @@ def _check_resources(context: _Context) -> tuple[PreflightCheckResult, ...]:
                 status=status,
             ),
             _capability_details(diagnostics),
+        )
+    )
+    checks.extend(_check_slurm_resource_mapping(context))
+    return tuple(checks)
+
+
+def _check_slurm_resource_mapping(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    try:
+        options = cast(Any, context.runtime_options())
+    except Exception:  # noqa: BLE001 - runtime checks already report this.
+        return ()
+    if not _is_slurm_executor(options):
+        return ()
+    try:
+        from loom.pipeline.executors.slurm.resources import build_sbatch_directives
+
+        run_slurm_options = _slurm_options_from_adapter(
+            options.adapter_options,
+            path="RunOptions.adapter_options['slurm']",
+        )
+        mapped: dict[str, int] = {}
+        for stage_id, stage_runtime in cast(Mapping[str, Any], options.stage_options).items():
+            directives = build_sbatch_directives(
+                options=_slurm_stage_options(options, stage_id, run_slurm_options),
+                resources=stage_runtime.resources,
+            )
+            mapped[stage_id] = len(directives)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "resources.slurm.mapping",
+                PreflightGroup.RESOURCES,
+                "SLURM resource mapping failed",
+                exc,
+            ),
+        )
+
+    return (
+        _result(
+            "resources.slurm.mapping",
+            PreflightGroup.RESOURCES,
+            PreflightCheckStatus.PASS,
+            PreflightSeverity.INFO,
+            "SLURM resource mapping is valid",
+            cast(Mapping[str, PlainData], {
+                "stage_count": len(mapped),
+                "directive_counts_by_stage": mapped,
+                "supported_resources": ["cpu", "gpu", "memory"],
+            }),
         ),
     )
 
@@ -699,8 +938,9 @@ def _check_filesystem(context: _Context) -> tuple[PreflightCheckResult, ...]:
     )
     missing = [str(path) for path in paths if not path.exists()]
     non_files = [str(path) for path in paths if path.exists() and not path.is_file()]
+    results: list[PreflightCheckResult] = []
     if missing or non_files:
-        return (
+        results.append(
             _result(
                 "filesystem.input_exists",
                 PreflightGroup.FILESYSTEM,
@@ -708,16 +948,83 @@ def _check_filesystem(context: _Context) -> tuple[PreflightCheckResult, ...]:
                 PreflightSeverity.ERROR,
                 "one or more input files are unavailable",
                 cast(Mapping[str, PlainData], {"missing": missing, "non_files": non_files}),
+            )
+        )
+    else:
+        results.append(
+            _result(
+                "filesystem.input_exists",
+                PreflightGroup.FILESYSTEM,
+                PreflightCheckStatus.PASS,
+                PreflightSeverity.INFO,
+                "configured input files exist",
+                cast(Mapping[str, PlainData], {"paths": [str(path) for path in paths]}),
+            )
+        )
+    results.extend(_check_slurm_generated_paths(context))
+    return tuple(results)
+
+
+def _check_slurm_generated_paths(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_slurm(context):
+        return ()
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "filesystem.slurm.generated_paths",
+                PreflightGroup.FILESYSTEM,
+                "SLURM generated path probe failed",
+                exc,
+            ),
+        )
+    if run_uri is None:
+        return (_missing_run_uri("filesystem.slurm.generated_paths", PreflightGroup.FILESYSTEM),)
+    try:
+        from loom.pipeline.executors.slurm.paths import (
+            resolve_slurm_generated_artifact_path,
+            slurm_job_log_relative_path,
+            slurm_job_script_relative_path,
+            slurm_manifest_relative_path,
+            slurm_plan_relative_path,
+        )
+        from loom.pipeline.stores import LocalRunStore
+
+        resolved = cast(Any, context.run_uri())
+        store = LocalRunStore(resolved.path.parent)
+        relative_paths = (
+            slurm_plan_relative_path("preflight"),
+            slurm_manifest_relative_path("preflight"),
+            slurm_job_script_relative_path("preflight", "pipeline"),
+            slurm_job_log_relative_path("preflight", "pipeline", "stdout"),
+            slurm_job_log_relative_path("preflight", "pipeline", "stderr"),
+        )
+        artifacts = [
+            resolve_slurm_generated_artifact_path(store, resolved.uri, relative)
+            for relative in relative_paths
+        ]
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "filesystem.slurm.generated_paths",
+                PreflightGroup.FILESYSTEM,
+                "SLURM generated paths are unsafe",
+                exc,
             ),
         )
     return (
         _result(
-            "filesystem.input_exists",
+            "filesystem.slurm.generated_paths",
             PreflightGroup.FILESYSTEM,
             PreflightCheckStatus.PASS,
             PreflightSeverity.INFO,
-            "configured input files exist",
-            cast(Mapping[str, PlainData], {"paths": [str(path) for path in paths]}),
+            "SLURM generated paths resolve under the local run directory",
+            cast(Mapping[str, PlainData], {
+                "run_uri": cast(Any, context.run_uri()).uri,
+                "path_count": len(artifacts),
+                "relative_paths": [artifact.relative_path for artifact in artifacts],
+            }),
         ),
     )
 
@@ -730,6 +1037,78 @@ def _coerce_selectors(value: object) -> object:
 
         return PlanSelectors.from_dict(value)
     return value
+
+
+def _request_selects_slurm(context: _Context) -> bool:
+    try:
+        return _is_slurm_executor(cast(Any, context.runtime_options()))
+    except Exception:  # noqa: BLE001 - caller-specific checks report request failures.
+        runtime_options = context.request.runtime_options
+        executor = None
+        if isinstance(runtime_options, Mapping):
+            executor = runtime_options.get("executor")
+        else:
+            executor = getattr(runtime_options, "executor", None)
+        return executor in _SLURM_EXECUTORS
+
+
+def _is_slurm_executor(options: object) -> bool:
+    return getattr(options, "executor", None) in _SLURM_EXECUTORS
+
+
+def _slurm_options_from_adapter(
+    adapter_options: Mapping[str, object],
+    *,
+    path: str,
+) -> "SlurmOptions":
+    from loom.pipeline.executors.slurm.options import SlurmOptions
+
+    raw = adapter_options.get("slurm", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise TypeError(f"{path} must be a mapping")
+    if not raw:
+        return SlurmOptions()
+    try:
+        return SlurmOptions.from_dict(raw)
+    except Exception as exc:  # noqa: BLE001
+        raise type(exc)(f"{path}: {exc}") from exc
+
+
+def _slurm_stage_options(
+    options: object,
+    stage_id: str,
+    fallback: "SlurmOptions",
+) -> "SlurmOptions":
+    stage_runtime = cast(Mapping[str, Any], getattr(options, "stage_options"))[stage_id]
+    if "slurm" not in stage_runtime.adapter_options:
+        return fallback
+    raw = stage_runtime.adapter_options.get("slurm", {})
+    if not isinstance(raw, Mapping):
+        raise TypeError(
+            f"RunOptions.stage_options[{stage_id!r}].adapter_options['slurm'] "
+            "must be a mapping"
+        )
+    merged = dict(fallback.to_dict())
+    merged.update(raw)
+    try:
+        from loom.pipeline.executors.slurm.options import SlurmOptions
+
+        return SlurmOptions.from_dict(merged)
+    except Exception as exc:  # noqa: BLE001
+        raise type(exc)(
+            f"RunOptions.stage_options[{stage_id!r}].adapter_options['slurm']: {exc}"
+        ) from exc
+
+
+def _slurm_option_keys(options: object) -> list[str]:
+    data = cast(Any, options).to_dict()
+    return [
+        key
+        for key, value in sorted(data.items())
+        if key != "schema_version" and value not in (None, [], {})
+    ]
 
 
 def _selected_run_uri(context: _Context) -> str | None:

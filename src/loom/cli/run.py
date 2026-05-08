@@ -6,10 +6,14 @@ import argparse
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from loom.cli.errors import CliError, ExitCode
-from loom.cli.formatting import format_json_envelope, format_run_text
+from loom.cli.formatting import (
+    format_json_envelope,
+    format_run_text,
+    format_slurm_dry_run_text,
+)
 from loom.cli.options import (
     ConfigCliOptions,
     OutputFormat,
@@ -18,20 +22,25 @@ from loom.cli.options import (
     SelectorCliOptions,
     output_format_from_namespace,
 )
-from loom.cli.results import RunCliResult
+from loom.cli.results import CliWarning, RunCliResult, SlurmDryRunCliResult
 
 if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
     from loom.config.api import ComposedConfig
     from loom.pipeline.execution import RunRequest, RunResult
+    from loom.pipeline.executors.slurm import SlurmDryRunPlanningResult, SlurmOptions
     from loom.pipeline.executors import Executor
-    from loom.pipeline.planning import PlanSelectors
+    from loom.pipeline.planning import ExecutionPlan, PlanSelectors
     from loom.pipeline.runtime import RunOptions
+    from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.stores import LocalRunStore
     from loom.pipeline.validation import PipelineValidationResult
+    from loom.serialization import PlainData
 
 
 RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v2"
+SLURM_DRY_RUN_RESULT_SCHEMA_VERSION = "loom.cli.slurm_dry_run.v1"
+_SLURM_EXECUTORS = frozenset({"slurm-single-job", "slurm-afterok"})
 
 
 class UnsupportedExecutorError(CliError):
@@ -42,6 +51,19 @@ class UnsupportedExecutorError(CliError):
             f"unsupported executor {executor!r}; supported executors: local, subprocess.",
             code="cli.run.unsupported_executor",
             context={"executor": executor, "supported": ["local", "subprocess"]},
+            exit_code=ExitCode.EXECUTOR,
+        )
+
+
+class SlurmLiveSubmissionDeferredError(CliError):
+    """Raised when v6 CLI receives a live SLURM executor selection."""
+
+    def __init__(self, executor: str) -> None:
+        super().__init__(
+            f"SLURM executor {executor!r} only supports --dry-run in this build; live submission is deferred to v7.",
+            code="cli.run.slurm_live_submission_deferred",
+            hint="Re-run with --dry-run to generate SLURM scripts and manifests without submitting jobs.",
+            context={"executor": executor, "dry_run_supported": True, "deferred_to": "v7"},
             exit_code=ExitCode.EXECUTOR,
         )
 
@@ -181,6 +203,8 @@ def build_run_result(
         selector_options=selector_options,
         known_stage_ids=pipeline_result.spec.stage_names,
     )
+    if _is_slurm_executor(runtime_options.executor):
+        raise SlurmLiveSubmissionDeferredError(cast(str, runtime_options.executor))
     run_uri = _resolve_run_uri_for_run(
         store,
         runtime_options.run_uri,
@@ -209,6 +233,30 @@ def _handle_dry_run(
     selector_options: SelectorCliOptions,
     output_format: OutputFormat,
 ) -> int:
+    if _dry_run_selects_slurm_executor(
+        config_options=config_options,
+        run_options=run_options,
+        selector_options=selector_options,
+    ):
+        result, warnings = build_slurm_dry_run_result(
+            config_options=config_options,
+            run_options=run_options,
+            selector_options=selector_options,
+        )
+        if output_format is OutputFormat.JSON:
+            sys.stdout.write(
+                format_json_envelope(
+                    schema_version=SLURM_DRY_RUN_RESULT_SCHEMA_VERSION,
+                    ok=True,
+                    warnings=warnings,
+                    payload_name="result",
+                    payload=result.to_dict(),
+                )
+            )
+        else:
+            sys.stdout.write(format_slurm_dry_run_text(result) + "\n")
+        return int(ExitCode.SUCCESS)
+
     from loom.cli.plan import PLAN_RESULT_SCHEMA_VERSION, build_plan_result
 
     plan_result = build_plan_result(
@@ -239,6 +287,123 @@ def _handle_dry_run(
 
         sys.stdout.write(format_plan_text(plan_result) + "\n")
     return int(ExitCode.SUCCESS)
+
+
+def _dry_run_selects_slurm_executor(
+    *,
+    config_options: ConfigCliOptions,
+    run_options: RunCliOptions,
+    selector_options: SelectorCliOptions,
+) -> bool:
+    if run_options.executor_explicit:
+        return _is_slurm_executor(run_options.executor)
+
+    composed = _compose_config(
+        config_options.config_path,
+        overlays=config_options.overlays,
+        overrides=config_options.overrides,
+    )
+    pipeline_result = _validate_pipeline_config(composed.resolved)
+    runtime_options = _merge_runtime_options(
+        composed.resolved,
+        run_options=run_options,
+        selector_options=selector_options,
+        known_stage_ids=pipeline_result.spec.stage_names,
+    )
+    return _is_slurm_executor(runtime_options.executor)
+
+
+def build_slurm_dry_run_result(
+    *,
+    config_options: ConfigCliOptions,
+    run_options: RunCliOptions,
+    selector_options: SelectorCliOptions,
+) -> tuple[SlurmDryRunCliResult, tuple[CliWarning, ...]]:
+    """Prepare persisted state and invoke the public SLURM dry-run planners."""
+
+    store = _create_default_run_store()
+    composed = _compose_config(
+        config_options.config_path,
+        overlays=config_options.overlays,
+        overrides=config_options.overrides,
+    )
+    pipeline_result = _validate_pipeline_config(composed.resolved)
+    runtime_options = _merge_runtime_options(
+        composed.resolved,
+        run_options=run_options,
+        selector_options=selector_options,
+        known_stage_ids=pipeline_result.spec.stage_names,
+    )
+    executor = runtime_options.executor or "local"
+    if not _is_slurm_executor(executor):
+        raise UnsupportedExecutorError(executor)
+
+    run_uri = _resolve_run_uri_for_run(
+        store,
+        runtime_options.run_uri,
+        open_existing=run_options.resume,
+    )
+    if run_uri is None:
+        raise CliError(
+            "SLURM dry-run requires a resolved local run URI.",
+            code="cli.run.slurm_missing_run_uri",
+            exit_code=ExitCode.PIPELINE,
+        )
+    runtime_options = _with_resolved_run_uri(runtime_options, run_uri)
+    preflight = _run_preflight_for_slurm_dry_run(
+        config_options=config_options,
+        runtime_options=runtime_options,
+        open_existing=run_options.resume,
+    )
+    warnings = _preflight_cli_warnings(preflight)
+    if not run_options.resume:
+        store.create_run(
+            run_uri,
+            metadata={
+                "command": "loom run",
+                "executor": executor,
+                "dry_run": True,
+            },
+        )
+
+    plan = _persist_slurm_dry_run_plan(
+        pipeline_result.spec,
+        run_uri=run_uri,
+        store=store,
+        runtime_options=runtime_options,
+    )
+    _write_slurm_prepared_run(
+        store,
+        run_uri=run_uri,
+        executor=executor,
+        plan=plan,
+        runtime_options=runtime_options,
+        composed=composed,
+    )
+    slurm_options = _slurm_options_from_runtime(runtime_options)
+    if executor == "slurm-single-job":
+        from loom.pipeline.executors.slurm import plan_single_job_slurm_dry_run
+
+        result = plan_single_job_slurm_dry_run(
+            run_store=store,
+            run_uri=run_uri,
+            options=slurm_options,
+            resources=None,
+        )
+    else:
+        from loom.pipeline.executors.slurm import plan_afterok_slurm_dry_run
+
+        result = plan_afterok_slurm_dry_run(
+            run_store=store,
+            run_uri=run_uri,
+            options=slurm_options,
+            stage_options=_stage_slurm_options(
+                runtime_options,
+                fallback=slurm_options,
+            ),
+            stage_resources=cast(Any, _stage_slurm_resources(runtime_options)),
+        )
+    return _slurm_dry_run_cli_result(result, warnings=warnings), warnings
 
 
 def _compose_config(
@@ -361,6 +526,70 @@ def _run_preflight_for_run(
         )
 
 
+def _run_preflight_for_slurm_dry_run(
+    *,
+    config_options: ConfigCliOptions,
+    runtime_options: "RunOptions",
+    open_existing: bool,
+) -> "PreflightResult":
+    from loom.diagnostics import PreflightError, PreflightRequest
+
+    if open_existing:
+        groups = (
+            "config",
+            "pipeline",
+            "selectors",
+            "runtime",
+            "executor",
+            "resources",
+            "filesystem",
+        )
+    else:
+        groups = (
+            "config",
+            "pipeline",
+            "selectors",
+            "runtime",
+            "run",
+            "executor",
+            "resources",
+            "filesystem",
+        )
+    try:
+        result = _run_diagnostics_preflight(
+            PreflightRequest(
+                config_path=config_options.config_path,
+                groups=groups,
+                run_uri=runtime_options.run_uri,
+                cwd=Path.cwd(),
+                overlays=config_options.overlays,
+                overrides=config_options.overrides,
+                runtime_options=runtime_options,
+            )
+        )
+    except PreflightError as exc:
+        raise CliError(
+            f"SLURM dry-run preflight request failed: {exc}",
+            code="cli.run.slurm_preflight_request_failed",
+            context={"error": str(exc)},
+            exit_code=ExitCode.PIPELINE,
+        ) from exc
+
+    if _preflight_status_value(result) == "FAIL":
+        error = CliError(
+            "SLURM dry-run preflight failed",
+            code="cli.run.slurm_preflight_failed",
+            hint="Run `loom preflight --executor "
+            f"{runtime_options.executor} --dry-run` for detailed diagnostics.",
+            context={"status": _preflight_status_value(result)},
+            details={"preflight": result.to_dict()},
+            exit_code=ExitCode.PIPELINE,
+        )
+        error.cli_warnings = _preflight_cli_warnings(result)  # type: ignore[attr-defined]
+        raise error
+    return result
+
+
 def _run_diagnostics_preflight(request: "PreflightRequest") -> "PreflightResult":
     from loom.diagnostics import run_preflight
 
@@ -381,6 +610,246 @@ def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":
         only_stages=tuple(options.only_stages),
         skip_stages=tuple(options.skip_stages),
     )
+
+
+def _persist_slurm_dry_run_plan(
+    spec: "PipelineSpec",
+    *,
+    run_uri: str,
+    store: "LocalRunStore",
+    runtime_options: "RunOptions",
+) -> "ExecutionPlan":
+    from loom.pipeline.planning import ResumeOptions, plan_pipeline
+    from loom.pipeline.stores import LocalArtifactStore
+
+    return plan_pipeline(
+        spec,
+        run_uri=run_uri,
+        run_store=store,
+        artifact_store=LocalArtifactStore(store.local_artifact_root(run_uri)),
+        selectors=runtime_options.to_plan_selectors(),
+        resume=ResumeOptions(
+            enabled=runtime_options.to_resume_options().enabled,
+        ),
+        persist=True,
+    )
+
+
+def _write_slurm_prepared_run(
+    store: "LocalRunStore",
+    *,
+    run_uri: str,
+    executor: str,
+    plan: "ExecutionPlan",
+    runtime_options: "RunOptions",
+    composed: "ComposedConfig",
+) -> None:
+    from loom.pipeline.execution import (
+        PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+        PREPARED_RUN_SCHEMA_VERSION,
+        PreparedRunRecord,
+    )
+    from loom.timestamps import utc_timestamp
+
+    record = PreparedRunRecord(
+        schema_version=PREPARED_RUN_SCHEMA_VERSION,
+        run_uri=run_uri,
+        prepared_at=utc_timestamp(),
+        executor_name=executor,
+        continuation_type=PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+        plan=cast(Mapping[str, "PlainData"], {
+            "document_ref": "plan.json",
+            "plan_path": "plan.json",
+            "plan_summary": dict(plan.summary),
+        }),
+        config={
+            "summary": {
+                "source_artifact_count": len(getattr(composed, "source_artifacts", ())),
+            }
+        },
+        runtime=cast(Mapping[str, "PlainData"], {
+            "executor": executor,
+            "executor_kind": "slurm",
+            "stage_count": len(plan.stage_order),
+            "resource_summary": _runtime_resource_summary(runtime_options),
+            "stage_executor_summary": _stage_executor_summary(runtime_options),
+        }),
+        metadata={
+            "slurm_dry_run": {
+                "kind": "loom.slurm_dry_run.prepared",
+                "data": {
+                    "mode": executor,
+                    "dry_run": True,
+                    "continuation_type": PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+                },
+            }
+        },
+    )
+    store.write_prepared_run(run_uri, record.to_dict())
+
+
+def _slurm_options_from_runtime(runtime_options: "RunOptions") -> "SlurmOptions":
+    from loom.pipeline.executors.slurm import SlurmOptions
+
+    raw = runtime_options.adapter_options.get("slurm", {})
+    return _slurm_options_from_mapping(
+        raw,
+        path="runtime.adapter_options.slurm",
+        fallback=SlurmOptions(),
+    )
+
+
+def _slurm_options_from_mapping(
+    raw: object,
+    *,
+    path: str,
+    fallback: "SlurmOptions",
+) -> "SlurmOptions":
+    from loom.pipeline.executors.slurm import SlurmOptions
+
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise CliError(
+            "SLURM adapter options must be a mapping.",
+            code="cli.run.slurm_options_invalid",
+            context={"path": path},
+            exit_code=ExitCode.PIPELINE,
+        )
+    if not raw:
+        return fallback
+    merged = dict(fallback.to_dict())
+    merged.update(raw)
+    try:
+        return SlurmOptions.from_dict(merged)
+    except Exception as exc:  # noqa: BLE001
+        raise CliError(
+            f"SLURM adapter options are invalid: {exc}",
+            code="cli.run.slurm_options_invalid",
+            context={"path": path},
+            exit_code=ExitCode.PIPELINE,
+        ) from exc
+
+
+def _stage_slurm_options(
+    runtime_options: "RunOptions",
+    *,
+    fallback: "SlurmOptions",
+) -> Mapping[str, "SlurmOptions"]:
+    stage_options: dict[str, SlurmOptions] = {}
+    for stage_id, runtime in cast(Mapping[str, Any], runtime_options.stage_options).items():
+        if "slurm" not in runtime.adapter_options:
+            continue
+        stage_options[stage_id] = _slurm_options_from_mapping(
+            runtime.adapter_options.get("slurm", {}),
+            path=f"runtime.stage_options.{stage_id}.adapter_options.slurm",
+            fallback=fallback,
+        )
+    return stage_options
+
+
+def _stage_slurm_resources(runtime_options: "RunOptions") -> Mapping[str, object]:
+    return {
+        stage_id: stage_options.resources
+        for stage_id, stage_options in cast(
+            Mapping[str, Any],
+            runtime_options.stage_options,
+        ).items()
+    }
+
+
+def _runtime_resource_summary(runtime_options: "RunOptions") -> dict[str, object]:
+    summary: dict[str, object] = {}
+    for stage_id, stage_options in cast(Mapping[str, Any], runtime_options.stage_options).items():
+        entries = getattr(stage_options.resources, "entries", {})
+        if entries:
+            summary[stage_id] = sorted(str(kind) for kind in entries)
+    return summary
+
+
+def _stage_executor_summary(runtime_options: "RunOptions") -> dict[str, object]:
+    executor = runtime_options.executor or "local"
+    return {
+        stage_id: executor
+        for stage_id in cast(Mapping[str, Any], runtime_options.stage_options)
+    }
+
+
+def _preflight_cli_warnings(result: "PreflightResult") -> tuple[CliWarning, ...]:
+    warnings: list[CliWarning] = []
+    for check in getattr(result, "checks", ()):
+        if _enum_value(getattr(check, "status")) != "WARN":
+            continue
+        warnings.append(
+            CliWarning(
+                code=str(getattr(check, "check_id")),
+                message=str(getattr(check, "message")),
+                details=cast(Mapping[str, object], getattr(check, "details", {})),
+            )
+        )
+    return tuple(warnings)
+
+
+def _slurm_dry_run_cli_result(
+    result: "SlurmDryRunPlanningResult",
+    *,
+    warnings: tuple[CliWarning, ...],
+) -> SlurmDryRunCliResult:
+    submission = result.submission
+    jobs = tuple(cast(Any, submission).jobs)
+    dependencies = tuple(cast(Any, submission).dependencies)
+    script_artifacts = result.script_artifacts
+    first_script = next(iter(script_artifacts.values()), None)
+    script_directory = None if first_script is None else str(first_script.local_path.parent)
+    return SlurmDryRunCliResult(
+        run_uri=submission.run_uri,
+        mode=_enum_value(submission.mode),
+        planning_id=submission.planning_id,
+        manifest_path=str(result.manifest_artifact.local_path),
+        manifest_relative_path=result.manifest_artifact.relative_path,
+        plan_path=str(result.plan_artifact.local_path),
+        plan_relative_path=result.plan_artifact.relative_path,
+        script_directory=script_directory,
+        script_count=len(script_artifacts),
+        script_paths=tuple(
+            {
+                "logical_key": logical_key,
+                "relative_path": artifact.relative_path,
+                "path": str(artifact.local_path),
+            }
+            for logical_key, artifact in script_artifacts.items()
+        ),
+        log_paths=tuple(_slurm_log_path_summary(job) for job in jobs),
+        job_count=len(jobs),
+        dependency_count=len(dependencies),
+        generated_commands=tuple(
+            {
+                "logical_key": getattr(job, "logical_key"),
+                "argv": list(getattr(job, "command").argv),
+            }
+            for job in jobs
+        ),
+        resource_summary=cast(Mapping[str, object], dict(submission.resources)),
+        generated_artifact_count=len(result.generated_artifacts),
+        preflight_warnings=tuple(warning.to_dict() for warning in warnings),
+    )
+
+
+def _slurm_log_path_summary(job: object) -> Mapping[str, object]:
+    return {
+        "logical_key": getattr(job, "logical_key"),
+        "stdout_relative_path": getattr(job, "stdout_relative_path"),
+        "stderr_relative_path": getattr(job, "stderr_relative_path"),
+    }
+
+
+def _enum_value(value: object) -> str:
+    enum_value = getattr(value, "value", value)
+    return str(enum_value)
+
+
+def _is_slurm_executor(executor: object) -> bool:
+    return executor in _SLURM_EXECUTORS
 
 
 def _build_run_request(
@@ -483,8 +952,11 @@ def _failure_record_path(failure: object) -> str | None:
 
 __all__ = [
     "RUN_RESULT_SCHEMA_VERSION",
+    "SLURM_DRY_RUN_RESULT_SCHEMA_VERSION",
+    "SlurmLiveSubmissionDeferredError",
     "UnsupportedExecutorError",
     "build_run_result",
+    "build_slurm_dry_run_result",
     "handle",
     "register_subparser",
 ]

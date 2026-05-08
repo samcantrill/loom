@@ -12,6 +12,7 @@ from loom.pipeline.executors.slurm import (
     SlurmOptions,
     SlurmPlannedDependency,
     SlurmPlannedJob,
+    SlurmSbatchDirective,
 )
 from loom.pipeline.executors.slurm.planning import (
     build_afterok_planned_submission,
@@ -142,6 +143,51 @@ def test_afterok_planning_omits_reused_upstreams_from_afterok_dependencies() -> 
     jobs = cast(tuple[SlurmPlannedJob, ...], submission.jobs)
     assert [job.logical_key for job in jobs] == ["stage:run"]
     assert submission.dependencies == ()
+
+
+def test_afterok_planning_applies_stage_slurm_options_to_each_job() -> None:
+    plan = _execution_plan({"build": (), "report": ("build",)})
+
+    submission = build_afterok_planned_submission(
+        run_uri="file:///runs/run-1",
+        execution_plan=plan,
+        planning_id="planning-1",
+        created_at="2026-05-08T00:00:00Z",
+        options=SlurmOptions(partition="shared", launcher_argv=("loom",)),
+        stage_options={
+            "report": SlurmOptions(
+                partition="report",
+                time="00:30:00",
+                launcher_argv=("uv", "run", "loom"),
+            )
+        },
+    )
+
+    jobs = {
+        job.logical_key: job for job in cast(tuple[SlurmPlannedJob, ...], submission.jobs)
+    }
+    build_directives = {
+        directive.name: directive.value
+        for directive in cast(
+            tuple[SlurmSbatchDirective, ...],
+            jobs["stage:build"].sbatch_directives,
+        )
+    }
+    report_directives = {
+        directive.name: directive.value
+        for directive in cast(
+            tuple[SlurmSbatchDirective, ...],
+            jobs["stage:report"].sbatch_directives,
+        )
+    }
+    build_command = cast(SlurmCommandArgv, jobs["stage:build"].command)
+    report_command = cast(SlurmCommandArgv, jobs["stage:report"].command)
+
+    assert build_directives["partition"] == "shared"
+    assert report_directives["partition"] == "report"
+    assert report_directives["time"] == "00:30:00"
+    assert build_command.launcher_argv == ("loom",)
+    assert report_command.launcher_argv == ("uv", "run", "loom")
 
 
 def _execution_plan(

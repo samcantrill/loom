@@ -10,6 +10,7 @@ from loom.cli.results import (
     PlanCliResult,
     PlainCliData,
     RunCliResult,
+    SlurmDryRunCliResult,
     ValidationCliResult,
     to_plain_cli_data,
 )
@@ -156,6 +157,47 @@ def format_run_text(result: RunCliResult) -> str:
             if value is not None:
                 lines.append(f"  {label}: {value}")
     return "\n".join(lines)
+
+
+def format_slurm_dry_run_text(result: SlurmDryRunCliResult) -> str:
+    """Format a concise SLURM dry-run artifact summary."""
+
+    suffix = "1 script" if result.script_count == 1 else f"{result.script_count} scripts"
+    lines = [
+        f"OK slurm dry-run {result.run_uri}: {result.mode}",
+        f"planning_id: {result.planning_id}",
+        f"manifest: {result.manifest_path}",
+        f"plan: {result.plan_path}",
+        f"scripts: {suffix}"
+        + ("" if result.script_directory is None else f" in {result.script_directory}"),
+        f"logs: {_slurm_log_summary(result.log_paths)}",
+        f"jobs: {result.job_count}",
+        f"dependencies: {result.dependency_count}",
+    ]
+    if result.preflight_warnings:
+        warning_suffix = (
+            "1 warning"
+            if len(result.preflight_warnings) == 1
+            else f"{len(result.preflight_warnings)} warnings"
+        )
+        lines.append(f"warnings: {warning_suffix}")
+        for warning in result.preflight_warnings:
+            code = str(warning.get("code", "warning"))
+            message = str(warning.get("message", ""))
+            lines.append(f"  {code}: {message}")
+    return "\n".join(lines)
+
+
+def _slurm_log_summary(log_paths: Sequence[Mapping[str, object]]) -> str:
+    if not log_paths:
+        return "none"
+    first = log_paths[0]
+    stdout = str(first.get("stdout_relative_path", ""))
+    stderr = str(first.get("stderr_relative_path", ""))
+    if len(log_paths) == 1:
+        return f"stdout={stdout}, stderr={stderr}"
+    parent = stdout.rsplit("/", 1)[0] if "/" in stdout else stdout
+    return f"{len(log_paths)} job log pairs under {parent}"
 
 
 def format_stage_worker_text(result: object) -> str:
@@ -306,6 +348,7 @@ __all__ = [
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
+    "format_slurm_dry_run_text",
     "format_stage_worker_text",
     "format_logs_text",
     "format_run_text",
