@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .errors import UnsafeStorePathError
 
@@ -96,6 +96,43 @@ def ensure_subpath(path: Path, root: Path, *, field: str = "path") -> Path:
             f"{field} must stay inside {resolved_root}; got {resolved_path}",
         ) from exc
     return resolved_path
+
+
+def validate_safe_relative_path(value: object, *, field: str = "path") -> PurePosixPath:
+    """Validate a generated artifact path relative to a run directory."""
+
+    if not isinstance(value, str):
+        raise UnsafeStorePathError(f"{field} must be a non-empty relative string path")
+    if not value:
+        raise UnsafeStorePathError(f"{field} must be a non-empty relative string path")
+    if value.strip() != value:
+        raise UnsafeStorePathError(
+            f"{field} must not contain leading or trailing whitespace: {value!r}"
+        )
+    if "\\" in value:
+        raise UnsafeStorePathError(f"{field} cannot contain backslash separators")
+    if value.startswith("/"):
+        raise UnsafeStorePathError(f"{field} must be relative, got absolute path")
+    if "//" in value:
+        raise UnsafeStorePathError(f"{field} cannot contain empty path components")
+    if value == "." or value.startswith("./") or "/./" in value or value.endswith("/."):
+        raise UnsafeStorePathError(
+            f"{field} cannot contain empty, '.', or '..' components: {value!r}"
+        )
+    if any(ch.isspace() or ord(ch) < 32 for ch in value):
+        raise UnsafeStorePathError(
+            f"{field} cannot contain whitespace or control characters: {value!r}"
+        )
+
+    relative = PurePosixPath(value)
+    if relative.is_absolute():
+        raise UnsafeStorePathError(f"{field} must be relative, got absolute path")
+    for component in relative.parts:
+        if component in {"", ".", ".."}:
+            raise UnsafeStorePathError(
+                f"{field} cannot contain empty, '.', or '..' components: {value!r}"
+            )
+    return relative
 
 
 def _validate_identifier(value: object, *, field: str, allow_dot: bool) -> str:

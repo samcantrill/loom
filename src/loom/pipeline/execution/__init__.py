@@ -23,6 +23,12 @@ if TYPE_CHECKING:
         StageWorkerRequest,
         StageWorkerResult,
     )
+    from loom.pipeline.execution.prepared_run import (
+        PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+        PREPARED_RUN_SCHEMA_VERSION,
+        PreparedRunPayloadError,
+        PreparedRunRecord,
+    )
     from loom.pipeline.execution.models import redact_executor_metadata
     from loom.pipeline.execution.outputs import validate_stage_outputs
     from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
@@ -46,6 +52,10 @@ def __getattr__(name: str) -> object:
         "PipelineExecutionError",
         "PipelineRunner",
         "PlanExecutionError",
+        "PREPARED_RUN_CONTINUATION_WHOLE_RUN",
+        "PREPARED_RUN_SCHEMA_VERSION",
+        "PreparedRunPayloadError",
+        "PreparedRunRecord",
         "RunRequest",
         "RunRequestError",
         "RunResult",
@@ -87,6 +97,12 @@ def __getattr__(name: str) -> object:
             redact_executor_metadata,
         )
         from loom.pipeline.execution.outputs import validate_stage_outputs
+        from loom.pipeline.execution.prepared_run import (
+            PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+            PREPARED_RUN_SCHEMA_VERSION,
+            PreparedRunPayloadError,
+            PreparedRunRecord,
+        )
         from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
         from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
         from loom.pipeline.execution.stage_worker import (
@@ -106,6 +122,10 @@ def __getattr__(name: str) -> object:
             "PipelineExecutionError": PipelineExecutionError,
             "PipelineRunner": PipelineRunner,
             "PlanExecutionError": PlanExecutionError,
+            "PREPARED_RUN_CONTINUATION_WHOLE_RUN": PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+            "PREPARED_RUN_SCHEMA_VERSION": PREPARED_RUN_SCHEMA_VERSION,
+            "PreparedRunPayloadError": PreparedRunPayloadError,
+            "PreparedRunRecord": PreparedRunRecord,
             "RunRequest": RunRequest,
             "RunRequestError": RunRequestError,
             "RunResult": RunResult,
@@ -137,6 +157,10 @@ __all__ = [
     "PipelineExecutionError",
     "PipelineRunner",
     "PlanExecutionError",
+    "PREPARED_RUN_CONTINUATION_WHOLE_RUN",
+    "PREPARED_RUN_SCHEMA_VERSION",
+    "PreparedRunPayloadError",
+    "PreparedRunRecord",
     "RunRequest",
     "RunRequestError",
     "RunResult",

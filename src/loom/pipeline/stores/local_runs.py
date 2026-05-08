@@ -26,10 +26,12 @@ from loom.timestamps import parse_timestamp, utc_timestamp
 from ._paths import (
     VALID_CONFIG_SNAPSHOTS,
     VALID_PROVENANCE_NAMES,
+    ensure_subpath,
     validate_output_name,
     validate_config_snapshot_name,
     validate_log_stream,
     validate_provenance_name,
+    validate_safe_relative_path,
     validate_stage_name,
 )
 from .atomic import atomic_write_json, atomic_write_text
@@ -37,6 +39,7 @@ from .errors import (
     ArtifactStoreError,
     CorruptStoreDocumentError,
     MissingStoreDocumentError,
+    PreparedRunStorePayloadError,
     RunAlreadyExistsError,
     RunLockConflictError,
     RunLockReleaseError,
@@ -45,6 +48,7 @@ from .errors import (
 )
 from .indexes import artifact_index_from_dict, artifact_index_to_dict
 from .inspection import RunStageInspection, RunStateInspection, ensure_failure_payload
+from .prepared_run import validate_prepared_run_document
 from .run_uri import allocate_local_run_uri, run_uri_to_path, validate_run_uri
 
 _SCHEMA_VERSION = 1
@@ -204,6 +208,12 @@ class LocalRunStore:
     def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path:
         return self.local_stage_dir(run_uri, stage_name) / "workspace"
 
+    def local_generated_artifact_path(self, run_uri: str, relative_path: str) -> Path:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        relative = validate_safe_relative_path(relative_path, field="relative_path")
+        run_dir = self.local_run_dir(run_uri_text)
+        return ensure_subpath(run_dir.joinpath(*relative.parts), run_dir)
+
     def prepare_stage_workspace(self, run_uri: str, stage_name: str) -> None:
         self.local_stage_workspace_dir(run_uri, stage_name).mkdir(
             parents=True, exist_ok=True
@@ -290,6 +300,31 @@ class LocalRunStore:
             "plan": ensure_plain_data(plan, path="plan"),
         }
         atomic_write_json(self.local_run_dir(run_uri_text) / "plan.json", payload)
+
+    def read_prepared_run(self, run_uri: str) -> dict[str, PlainData] | None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_run_dir(run_uri_text) / "prepared_run.json"
+        data = self._read_optional_json(path)
+        if data is None:
+            return None
+        try:
+            return validate_prepared_run_document(
+                data, expected_run_uri=run_uri_text, field="prepared_run"
+            )
+        except PreparedRunStorePayloadError as exc:
+            raise CorruptStoreDocumentError(
+                f"Malformed prepared-run document at {path}: {exc}"
+            ) from exc
+
+    def write_prepared_run(
+        self, run_uri: str, prepared_run: Mapping[str, PlainData]
+    ) -> None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_run_dir(run_uri_text) / "prepared_run.json"
+        payload = validate_prepared_run_document(
+            prepared_run, expected_run_uri=run_uri_text, field="prepared_run"
+        )
+        atomic_write_json(path, payload)
 
     def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")

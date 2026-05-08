@@ -4,6 +4,7 @@ from pathlib import Path
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent
+from loom.pipeline.execution import PreparedRunRecord
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
@@ -75,6 +76,31 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
 
     run_store.write_plan(run_uri, {"stage": ["a", "b"]})
     assert run_store.read_plan(run_uri) == {"stage": ["a", "b"]}
+
+    prepared_run = PreparedRunRecord(
+        schema_version=1,
+        run_uri=run_uri,
+        prepared_at="2020-01-01T00:00:00Z",
+        executor_name="local",
+        continuation_type="whole_run",
+        plan={"plan_path": "plan.json", "plan_summary": {"stage_count": 1}},
+        config={"composition_manifest_ref": "config/composition_manifest.json"},
+        provenance={"command_ref": "provenance/command.json"},
+        runtime={"document_ref": "runtime.json", "executor": "local"},
+    )
+    run_store.write_prepared_run(run_uri, prepared_run.to_dict())
+    assert PreparedRunRecord.from_dict(run_store.read_prepared_run(run_uri)) == prepared_run
+    assert (
+        run_store.local_generated_artifact_path(
+            run_uri,
+            "generated/submissions/p1/manifest.json",
+        )
+        == run_store.local_run_dir(run_uri)
+        / "generated"
+        / "submissions"
+        / "p1"
+        / "manifest.json"
+    )
 
     first_event = run_store.append_event(
         run_uri,
@@ -153,6 +179,7 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
         run_store.local_run_dir(run_uri) / "stages" / "stage" / "logs" / "stderr.log",
         run_store.local_run_dir(run_uri) / "stages" / "blocked" / "status.json",
         run_store.local_run_dir(run_uri) / "plan.json",
+        run_store.local_run_dir(run_uri) / "prepared_run.json",
         run_store.local_run_dir(run_uri) / "events.jsonl",
         run_store.local_run_dir(run_uri) / "artifacts.json",
         artifact_root / "stage",

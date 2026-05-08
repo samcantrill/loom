@@ -53,6 +53,15 @@ class RunPlanStore(Protocol):
 
 
 @runtime_checkable
+class RunPreparedRunStore(Protocol):
+    def read_prepared_run(self, run_uri: str) -> dict[str, PlainData] | None: ...
+
+    def write_prepared_run(
+        self, run_uri: str, prepared_run: Mapping[str, PlainData]
+    ) -> None: ...
+
+
+@runtime_checkable
 class RunRuntimeMetadataStore(Protocol):
     def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None: ...
 
@@ -282,6 +291,10 @@ class LocalRunStorePaths(Protocol):
 
     def local_stage_workspace_dir(self, run_uri: str, stage_name: str) -> Path: ...
 
+    def local_generated_artifact_path(
+        self, run_uri: str, relative_path: str
+    ) -> Path: ...
+
 
 @runtime_checkable
 class RunStore(
@@ -289,6 +302,7 @@ class RunStore(
     RunDocumentStore,
     RunStatusStore,
     RunPlanStore,
+    RunPreparedRunStore,
     RunArtifactIndexStore,
     RunConfigStore,
     RunProvenanceStore,

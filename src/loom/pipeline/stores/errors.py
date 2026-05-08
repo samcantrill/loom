@@ -17,6 +17,18 @@ class RunStoreError(StoreError):
     """Base error for run-store failures."""
 
 
+class PreparedRunStorePayloadError(RunStoreError):
+    """Raised when prepared-run metadata is unsafe for persistence."""
+
+    def __init__(self, field: str, reason: str, *, category: str) -> None:
+        self.field = field
+        self.reason = reason
+        self.category = category
+        super().__init__(
+            f"unsafe prepared-run payload at {field}: {reason} ({category})"
+        )
+
+
 class RunLockError(RunStoreError):
     """Base error for run lock failures."""
 
@@ -89,6 +101,7 @@ __all__ = [
     "StoreError",
     "ArtifactStoreError",
     "RunStoreError",
+    "PreparedRunStorePayloadError",
     "RunLockError",
     "RunLockConflictError",
     "RunLockReleaseError",
