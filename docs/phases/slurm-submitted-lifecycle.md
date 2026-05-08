@@ -238,9 +238,9 @@ make test-summary
   - `make validate-pr` passed after the store export contract expectation was
     updated for `RunSubmittedOperationStore`.
   - `make test-summary` passed and wrote `build/test-summary.md`: package 52
-    passed / 1 skipped; unit 702 passed / 1 skipped; contract 61 passed / 2
+    passed / 1 skipped; unit 703 passed / 1 skipped; contract 61 passed / 2
     skipped; integration 33 passed / 7 skipped / 9 deselected; e2e 22 passed;
-    config-extra 411 passed / 870 deselected.
+    config-extra 411 passed / 871 deselected.
 - Refinement summary: expanded-path planning refinement complete; manager-local
   implementation refinement used once to resolve targeted validation/type issues.
 - Blocker-resolution summary: none used.
