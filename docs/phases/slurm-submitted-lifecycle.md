@@ -219,8 +219,10 @@ make test-summary
 - Phase implementation refinement: used by manager-local fallback hardening after
   the Spark executor hit usage limits and the fallback worker stalled with
   uncommitted edits; fixes were limited to Phase 1 validation/type issues.
-- PR review: unused.
-- Blocker resolution: 0/3 used.
+- PR review: used by manager pre-submit blocker gate on 2026-05-08; no
+  remaining blockers.
+- Blocker resolution: 1/3 used for the pre-submit coverage blocker requiring
+  explicit `SUBMITTED` resume behavior coverage.
 
 ## Completion Notes
 
@@ -243,7 +245,11 @@ make test-summary
     config-extra 411 passed / 871 deselected.
 - Refinement summary: expanded-path planning refinement complete; manager-local
   implementation refinement used once to resolve targeted validation/type issues.
-- Blocker-resolution summary: none used.
-- PR preparation: pending later workflow stage.
+- Blocker-resolution summary: 1/3 used. The pre-submit blocker gate found that
+  resume behavior relied on the existing non-`SUCCEEDED` path without explicit
+  `SUBMITTED` coverage; fixed with `test: cover submitted resume behavior`.
+- PR preparation: PR body prepared in
+  `docs/phases/slurm-submitted-lifecycle-pr-body.md`; pre-submit review found
+  no remaining scope, validation, or PR-body blockers.
 - Stack maintenance: none required for this root phase.
 - Remaining blockers: none known.
