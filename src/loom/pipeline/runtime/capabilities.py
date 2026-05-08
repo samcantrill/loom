@@ -633,6 +633,32 @@ def _subprocess_descriptor() -> ExecutorDescriptor:
     )
 
 
+def _slurm_descriptor(name: str) -> ExecutorDescriptor:
+    supported = ResourceCapability(
+        support_level=ResourceSupportLevel.SUPPORTED,
+        enforcement=ResourceEnforcementExpectation.ENFORCED,
+        severity=CapabilitySeverity.INFO,
+        details={
+            "reason": "SLURM dry-run planning maps this resource to SBATCH directives"
+        },
+    )
+    return ExecutorDescriptor(
+        name=name,
+        resource_capabilities={
+            "cpu": supported,
+            "memory": supported,
+            "gpu": supported,
+        },
+        adapter_namespaces=("slurm",),
+        details={
+            "built_in": True,
+            "dry_run_only": True,
+            "live_submission": "deferred_to_v7",
+            "scheduler_commands": False,
+        },
+    )
+
+
 def _adapter_namespace_diagnostics(
     options: RunOptions,
     descriptor: ExecutorDescriptor,
@@ -995,7 +1021,12 @@ def _reject_unknown(
 
 
 DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY = ExecutorDescriptorRegistry(
-    {"local": _local_descriptor(), "subprocess": _subprocess_descriptor()}
+    {
+        "local": _local_descriptor(),
+        "slurm-afterok": _slurm_descriptor("slurm-afterok"),
+        "slurm-single-job": _slurm_descriptor("slurm-single-job"),
+        "subprocess": _subprocess_descriptor(),
+    }
 )
 
 

@@ -269,6 +269,90 @@ def test_local_executor_does_not_run_subprocess_availability_checks(
     ]
 
 
+def test_slurm_dry_run_preflight_emits_stable_checks_and_warns_without_sbatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+    from loom.pipeline.stores import path_to_run_uri
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("pipeline: {}\n", encoding="utf-8")
+    run_uri = path_to_run_uri(tmp_path / "runs" / "dry")
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            groups=("runtime", "run", "executor", "resources", "filesystem"),
+            runtime_options={
+                "run_uri": run_uri,
+                "executor": "slurm-afterok",
+                "dry_run": True,
+                "adapter_options": {
+                    "slurm": {
+                        "schema_version": 1,
+                        "launcher_argv": ["loom", "--profile", "batch"],
+                    }
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 4,
+                                    "unit": "GiB",
+                                },
+                                "gpu": {"kind": "gpu", "amount": 0},
+                            }
+                        }
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.WARN
+    for check_id in (
+        "runtime.slurm.options",
+        "run_uri.slurm.local",
+        "executor.slurm.mode",
+        "executor.slurm.launcher",
+        "executor.slurm.sbatch",
+        "resources.slurm.mapping",
+        "filesystem.slurm.generated_paths",
+    ):
+        assert check_id in by_id
+    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.WARN
+    assert by_id["executor.slurm.sbatch"].details["available"] is False
+    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.PASS
+    assert by_id["resources.slurm.mapping"].status is PreflightCheckStatus.PASS
+
+
+def test_slurm_non_dry_run_preflight_reports_v7_deferred_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={"executor": "slurm-single-job"},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.FAIL
+    assert by_id["executor.slurm.mode"].details["deferred_to"] == "v7"
+
+
 @dataclass(frozen=True, slots=True)
 class _FakeComposedConfig:
     resolved: dict[str, object]

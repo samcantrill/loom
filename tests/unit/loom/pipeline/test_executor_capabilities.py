@@ -116,6 +116,8 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
 
     assert tuple(DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.descriptors) == (
         "local",
+        "slurm-afterok",
+        "slurm-single-job",
         "subprocess",
     )
     assert descriptor.name == "local"
@@ -129,6 +131,17 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     subprocess_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("subprocess")
     assert subprocess_descriptor.details["process_isolating"] is True
     assert subprocess_descriptor.details["serial"] is True
+    slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
+    assert slurm_descriptor.adapter_namespaces == ("slurm",)
+    assert slurm_descriptor.details["dry_run_only"] is True
+    assert slurm_descriptor.details["live_submission"] == "deferred_to_v7"
+    assert {
+        kind: capability.to_dict()["support_level"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability],
+            slurm_descriptor.resource_capabilities,
+        ).items()
+    } == {"cpu": "supported", "memory": "supported", "gpu": "supported"}
 
 
 def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() -> None:
@@ -153,6 +166,34 @@ def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() 
     ]
     with pytest.raises(RuntimeResourceError, match="executor.unknown at RunOptions.executor"):
         result.raise_for_errors()
+
+
+def test_slurm_descriptor_claims_adapter_namespace_and_resources() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="slurm-afterok",
+            adapter_options={"slurm": {"launcher_argv": ["loom"]}},
+            stage_options={
+                "train": StageRuntimeOptions(
+                    resources=ResourceRequest(
+                        entries={
+                            "cpu": ResourceEntry(kind="cpu", amount=2),
+                            "memory": ResourceEntry(kind="memory", amount=4, unit="GiB"),
+                            "gpu": ResourceEntry(kind="gpu", amount=1),
+                        }
+                    )
+                )
+            },
+        )
+    )
+
+    assert result.ok
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert [(item["code"], item["resource_kind"]) for item in diagnostics] == [
+        ("resource.supported", "cpu"),
+        ("resource.supported", "gpu"),
+        ("resource.supported", "memory"),
+    ]
 
 
 def test_whitespace_only_executor_returns_unknown_executor_diagnostic() -> None:
