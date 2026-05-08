@@ -10,6 +10,10 @@ from typing import cast
 from loom.artifacts import ArtifactRef
 from loom.pipeline.errors import StageContractError
 from loom.pipeline.planning import ExecutionPlan, PlanAction, StageFingerprintRecord
+from loom.pipeline.submitted import (
+    SUBMITTED_OPERATION_METADATA_KEY,
+    SubmittedOperationRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
 from loom.pipeline.stores.artifact_store import ArtifactStore
@@ -225,7 +229,9 @@ def continue_prepared_run(
             code="execution.prepared_run.invalid_continuation_type",
             context={"run_uri": run_uri},
         )
-    _validate_prepared_plan_summary(run_store=run_store, run_uri=run_uri, prepared=prepared)
+    _validate_prepared_plan_summary(
+        run_store=run_store, run_uri=run_uri, prepared=prepared
+    )
     _validate_prepared_runtime_summary(runtime=runtime, prepared=prepared)
     raise InsufficientPreparedStateError(run_uri)
 
@@ -293,7 +299,12 @@ def _run_stage_job_locked(
             code="execution.stage_job.invalid_target_stage",
             context={"run_uri": request.run_uri, "stage": request.stage_name},
         )
-    _validate_upstream_ready(run_store=run_store, run_uri=request.run_uri, plan=plan, stage_name=request.stage_name)
+    _validate_upstream_ready(
+        run_store=run_store,
+        run_uri=request.run_uri,
+        plan=plan,
+        stage_name=request.stage_name,
+    )
     runtime = run_store.read_runtime_metadata(request.run_uri)
     if runtime is None:
         raise ContinuationStateError(
@@ -305,7 +316,7 @@ def _run_stage_job_locked(
     attempt = request.attempt
     if attempt is None:
         try:
-            attempt = infer_stage_worker_attempt(
+            attempt = _infer_stage_job_attempt(
                 run_store=run_store,
                 run_uri=request.run_uri,
                 stage_name=request.stage_name,
@@ -334,6 +345,8 @@ def _run_stage_job_locked(
         run_uri=request.run_uri,
         stage_name=request.stage_name,
         attempt=attempt,
+        worker_request=worker_request,
+        continuation_executor=request.executor,
     )
     _validate_worker_runtime_environment(worker_request)
     run_status_before = _require_run_status(run_store, request.run_uri)
@@ -412,7 +425,9 @@ def _run_stage_job_locked(
     from loom.pipeline.executors import LocalExecutor
 
     try:
-        execution_result = LocalExecutor(capture_stdout_stderr=True).execute(exec_request)
+        execution_result = LocalExecutor(capture_stdout_stderr=True).execute(
+            exec_request
+        )
         stage_result = commit_stage_execution_result(
             run_store,
             run_uri=request.run_uri,
@@ -420,7 +435,9 @@ def _run_stage_job_locked(
             stage_plan=stage_plan,
             attempt=attempt,
             inputs=exec_request.inputs,
-            fingerprint=cast(StageFingerprintRecord, exec_request.fingerprint).to_dict(),
+            fingerprint=cast(
+                StageFingerprintRecord, exec_request.fingerprint
+            ).to_dict(),
             artifact_store=artifact_store_factory(
                 cast(LocalRunStorePaths, run_store).local_artifact_root(request.run_uri)
             ),
@@ -548,6 +565,41 @@ def _stage_plan(plan: ExecutionPlan, stage_name: str):
     )
 
 
+def _infer_stage_job_attempt(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    stage_name: str,
+) -> int:
+    status = run_store.read_stage_status(run_uri, stage_name)
+    if status is None:
+        raise StageWorkerStateError(
+            f"cannot infer attempt for stage {stage_name!r}: no stage status exists"
+        )
+    if status.status != StageStatus.SUBMITTED:
+        return infer_stage_worker_attempt(
+            run_store=run_store,
+            run_uri=run_uri,
+            stage_name=stage_name,
+        )
+    raw_request = run_store.read_stage_worker_request(
+        run_uri,
+        stage_name,
+        attempt=status.attempt,
+    )
+    if raw_request is None:
+        raise StageWorkerStateError(
+            f"cannot infer attempt for stage {stage_name!r}: worker request is missing"
+        )
+    try:
+        StageWorkerRequest.from_dict(raw_request)
+    except Exception as exc:
+        raise StageWorkerStateError(
+            f"cannot infer attempt for stage {stage_name!r}: worker request is invalid: {exc}"
+        ) from exc
+    return status.attempt
+
+
 def _read_worker_request(
     *,
     run_store: RunStore,
@@ -604,6 +656,8 @@ def _validate_worker_attempt_state(
     run_uri: str,
     stage_name: str,
     attempt: int,
+    worker_request: StageWorkerRequest,
+    continuation_executor: str,
 ) -> None:
     status = run_store.read_stage_status(run_uri, stage_name)
     if status is None or status.attempt != attempt:
@@ -612,17 +666,186 @@ def _validate_worker_attempt_state(
             code="execution.stage_job.missing_required_handoff_state",
             context={"run_uri": run_uri, "stage": stage_name, "attempt": attempt},
         )
-    if status.status not in {StageStatus.PENDING, StageStatus.RUNNING}:
+    if status.status == StageStatus.SUBMITTED:
+        _validate_submitted_worker_attempt(
+            run_store=run_store,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            continuation_executor=continuation_executor,
+            status_metadata=status.metadata,
+            worker_request=worker_request,
+        )
+    elif status.status not in {StageStatus.PENDING, StageStatus.RUNNING}:
         raise ContinuationStateError(
-            f"stage {stage_name!r} attempt {attempt} is {status.status.value}, not PENDING or RUNNING",
+            f"stage {stage_name!r} attempt {attempt} is {status.status.value}, not PENDING, SUBMITTED, or RUNNING",
             code="execution.stage_job.missing_required_handoff_state",
             context={"run_uri": run_uri, "stage": stage_name, "attempt": attempt},
         )
-    if run_store.read_stage_worker_result(run_uri, stage_name, attempt=attempt) is not None:
+    if (
+        run_store.read_stage_worker_result(run_uri, stage_name, attempt=attempt)
+        is not None
+    ):
         raise ContinuationStateError(
             f"stage {stage_name!r} attempt {attempt} already has a worker result",
             code="execution.stage_job.missing_required_handoff_state",
             context={"run_uri": run_uri, "stage": stage_name, "attempt": attempt},
+        )
+
+
+def _validate_submitted_worker_attempt(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    continuation_executor: str,
+    status_metadata: Mapping[str, PlainData],
+    worker_request: StageWorkerRequest,
+) -> None:
+    status_submission = _require_submitted_stage_metadata(
+        status_metadata,
+        field="stage status metadata",
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        continuation_executor=continuation_executor,
+    )
+    worker_submission = _require_submitted_stage_metadata(
+        worker_request.metadata,
+        field="worker request metadata",
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        continuation_executor=continuation_executor,
+    )
+    if status_submission != worker_submission:
+        raise ContinuationStateError(
+            "submitted stage status metadata does not match worker request metadata",
+            code="execution.stage_job.submitted_identity_mismatch",
+            context={"run_uri": run_uri, "stage": stage_name, "attempt": attempt},
+        )
+    record = run_store.read_submitted_operation(
+        run_uri,
+        cast(str, status_submission["submission_id"]),
+    )
+    if record is None:
+        raise ContinuationStateError(
+            "submitted stage has no matching submitted-operation registry record",
+            code="execution.stage_job.submitted_registry_missing",
+            context={
+                "run_uri": run_uri,
+                "stage": stage_name,
+                "attempt": attempt,
+                "submission_id": status_submission["submission_id"],
+            },
+        )
+    _validate_submitted_registry_match(
+        record=record,
+        submission=status_submission,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+    )
+
+
+def _require_submitted_stage_metadata(
+    metadata: Mapping[str, PlainData],
+    *,
+    field: str,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    continuation_executor: str,
+) -> dict[str, PlainData]:
+    raw = metadata.get(SUBMITTED_OPERATION_METADATA_KEY)
+    if not isinstance(raw, Mapping):
+        raise ContinuationStateError(
+            f"{field} is missing submitted-operation identity",
+            code="execution.stage_job.submitted_identity_missing",
+            context={"run_uri": run_uri, "stage": stage_name, "attempt": attempt},
+        )
+    submission = _plain_mapping(raw, f"{field}.{SUBMITTED_OPERATION_METADATA_KEY}")
+    expected: dict[str, object] = {
+        "run_uri": run_uri,
+        "stage_name": stage_name,
+        "attempt": attempt,
+        "continuation_executor": continuation_executor,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": submission.get(key)}
+        for key, value in expected.items()
+        if submission.get(key) != value
+    }
+    required_strings = (
+        "submission_id",
+        "backend",
+        "mode",
+        "manifest_relative_path",
+    )
+    for key in required_strings:
+        if not isinstance(submission.get(key), str) or not submission.get(key):
+            mismatches[key] = {
+                "expected": "non-empty string",
+                "actual": submission.get(key),
+            }
+    stage_metadata = submission.get("stage_metadata")
+    if stage_metadata is not None and not isinstance(stage_metadata, Mapping):
+        mismatches["stage_metadata"] = {
+            "expected": "mapping or null",
+            "actual": type(stage_metadata).__name__,
+        }
+    if mismatches:
+        raise ContinuationStateError(
+            f"{field} submitted-operation identity does not match requested stage-job",
+            code="execution.stage_job.submitted_identity_mismatch",
+            context={
+                "run_uri": run_uri,
+                "stage": stage_name,
+                "attempt": attempt,
+                "mismatches": cast(PlainData, mismatches),
+            },
+        )
+    return submission
+
+
+def _validate_submitted_registry_match(
+    *,
+    record: SubmittedOperationRecord,
+    submission: Mapping[str, PlainData],
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+) -> None:
+    expected = {
+        "run_uri": run_uri,
+        "submission_id": submission["submission_id"],
+        "backend": submission["backend"],
+        "mode": submission["mode"],
+        "manifest_relative_path": submission["manifest_relative_path"],
+    }
+    actual = {
+        "run_uri": record.run_uri,
+        "submission_id": record.submission_id,
+        "backend": record.backend,
+        "mode": record.mode,
+        "manifest_relative_path": record.manifest_relative_path,
+    }
+    mismatches = {
+        key: {"expected": expected[key], "actual": actual[key]}
+        for key in expected
+        if expected[key] != actual[key]
+    }
+    if mismatches:
+        raise ContinuationStateError(
+            "submitted-operation registry record does not match stage identity",
+            code="execution.stage_job.submitted_registry_mismatch",
+            context={
+                "run_uri": run_uri,
+                "stage": stage_name,
+                "attempt": attempt,
+                "mismatches": cast(PlainData, mismatches),
+            },
         )
 
 
@@ -722,7 +945,9 @@ def _validate_runtime_environment(
             code="execution.stage_job.missing_runtime_metadata",
             context={"stage": stage_name},
         )
-    _reject_environment_requirements(stage_runtime, code="execution.stage_job.missing_environment")
+    _reject_environment_requirements(
+        stage_runtime, code="execution.stage_job.missing_environment"
+    )
 
 
 def _validate_worker_runtime_environment(worker_request: StageWorkerRequest) -> None:

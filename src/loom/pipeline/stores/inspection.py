@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.serialization import PlainData, ensure_plain_data
 
@@ -48,17 +49,25 @@ class RunStateInspection:
     run_status: RunStatusRecord | None = None
     stage_inspections: tuple[RunStageInspection, ...] = ()
     artifact_count: int = 0
+    submitted_operations: tuple[SubmittedOperationRecord, ...] = ()
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "run_uri": self.run_uri,
-            "run_status": None if self.run_status is None else self.run_status.to_dict(),
+            "run_status": None
+            if self.run_status is None
+            else self.run_status.to_dict(),
             "stage_inspections": [stage.to_dict() for stage in self.stage_inspections],
             "artifact_count": self.artifact_count,
+            "submitted_operations": [
+                record.to_summary_dict() for record in self.submitted_operations
+            ],
         }
 
 
-def ensure_failure_payload(value: Mapping[str, PlainData] | None) -> Mapping[str, PlainData] | None:
+def ensure_failure_payload(
+    value: Mapping[str, PlainData] | None,
+) -> Mapping[str, PlainData] | None:
     """Normalize an optional stage failure payload to plain data."""
 
     if value is None:

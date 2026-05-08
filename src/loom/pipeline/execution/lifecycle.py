@@ -116,8 +116,7 @@ def write_stage_provenance(
             name: _plain(ref.to_dict(), path="inputs") for name, ref in inputs.items()
         },
         output_artifacts={
-            name: _plain(ref.to_dict(), path="outputs")
-            for name, ref in outputs.items()
+            name: _plain(ref.to_dict(), path="outputs") for name, ref in outputs.items()
         },
         executor_metadata=_plain(executor_metadata, path="executor_metadata"),
     )
@@ -372,6 +371,57 @@ def write_run_status(
     return record
 
 
+def write_run_submitted(
+    run_store: RunStore,
+    *,
+    run_uri: str,
+    created_at: str,
+    submitted_at: str,
+    message: str | None = None,
+    metadata: Mapping[str, PlainData] | None = None,
+) -> RunStatusRecord:
+    return write_run_status(
+        run_store,
+        run_uri=run_uri,
+        status=RunStatus.SUBMITTED,
+        created_at=created_at,
+        updated_at=submitted_at,
+        message=message,
+        metadata=metadata,
+    )
+
+
+def write_stage_submitted(
+    run_store: RunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    submitted_at: str,
+    message: str | None = None,
+    owner: Mapping[str, PlainData] | None = None,
+    metadata: Mapping[str, PlainData] | None = None,
+) -> StageStatusRecord:
+    normalized_owner = ensure_plain_data(dict(owner or {}), path="owner")
+    normalized_metadata = ensure_plain_data(dict(metadata or {}), path="metadata")
+    if not isinstance(normalized_owner, dict) or not isinstance(
+        normalized_metadata, dict
+    ):
+        raise ValueError("owner and metadata must be mappings")
+    record = StageStatusRecord(
+        run_uri=run_uri,
+        stage_name=stage_name,
+        status=StageStatus.SUBMITTED,
+        attempt=attempt,
+        updated_at=submitted_at,
+        message=message,
+        owner=normalized_owner,
+        metadata=normalized_metadata,
+    )
+    run_store.write_stage_status(run_uri, stage_name, record)
+    return record
+
+
 def write_stage_running(
     run_store: RunStore,
     *,
@@ -553,7 +603,9 @@ __all__ = [
     "write_stage_artifact_index_refs",
     "write_failed_run",
     "write_run_status",
+    "write_run_submitted",
     "write_stage_provenance",
+    "write_stage_submitted",
     "write_stage_running",
     "write_stage_succeeded",
     "write_stage_failed",
