@@ -243,6 +243,7 @@ make test-summary
     passed / 1 skipped; unit 703 passed / 1 skipped; contract 61 passed / 2
     skipped; integration 33 passed / 7 skipped / 9 deselected; e2e 22 passed;
     config-extra 411 passed / 871 deselected.
+  - GitHub CI `checks` job passed for PR #88 before merge eligibility review.
 - Refinement summary: expanded-path planning refinement complete; manager-local
   implementation refinement used once to resolve targeted validation/type issues.
 - Blocker-resolution summary: 1/3 used. The pre-submit blocker gate found that

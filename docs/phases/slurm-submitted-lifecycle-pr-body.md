@@ -29,7 +29,7 @@ New tests cover status serialization, submitted-operation validation and predica
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default isolated suite, config-extra isolated suite, and build all passed. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; overall 1282 passed, 11 skipped, 880 deselected. |
-| GitHub checks | Pending | PR not opened yet. |
+| GitHub checks | Passed | CI `checks` job passed for PR #88. |
 
 ### Test Suite Summary
 
