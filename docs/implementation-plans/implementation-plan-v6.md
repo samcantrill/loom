@@ -919,9 +919,9 @@ Completion summary:
 
 ### Phase 6 - End-To-End Hardening And Documentation
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-dry-run-hardening`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/87
 
 Goal:
 
@@ -998,4 +998,30 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan:
+  `docs/phases/slurm-dry-run-hardening.md`.
+- PR #87 opened against `develop` from `codex/slurm-dry-run-hardening` on
+  2026-05-08 after final local validation.
+- Implemented final public CLI e2e hardening for both SLURM dry-run modes using
+  a diamond DAG, generated manifest/script/log/command inspection, repeated
+  afterok dry-run evidence, and secret-boundary scanning across persisted run
+  artifacts.
+- Fixed SLURM dry-run preparation so persisted root `plan.json` is built from
+  the composed config's artifact-safe unresolved pipeline view rather than
+  resolved environment values. This preserves authored resolver expressions
+  while avoiding resolver-output persistence.
+- Updated SLURM, CLI, execution, pipeline, and preflight feature docs to
+  describe the implemented v6 dry-run contract, generated `prepared-run` and
+  `stage-job` command shapes, missing-`sbatch` warning behavior, and v7-deferred
+  live submission/status/cancel/real-cluster work.
+- Final local validation before PR opening: targeted Phase 6 suite passed with
+  26 tests; focused Ruff and Pyright passed for changed Python files;
+  `make validate-pr` passed Ruff, Pyright, isolated default tests (`833
+  passed, 15 skipped, 8 deselected`), isolated config-extra tests (`410
+  passed, 854 deselected`), and build; `make test-summary` passed with overall
+  `1264 passed, 11 skipped, 862 deselected`.
+- Expanded-path implementation refinement was used locally after the new e2e
+  secret-boundary test exposed a resolved environment value in dry-run
+  `plan.json`. No blocker-resolution pass was needed before PR opening.
+- Stack state: root phase PR targets `develop`; no predecessor branch and no
+  successor dependency at PR opening.
