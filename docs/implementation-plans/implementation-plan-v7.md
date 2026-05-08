@@ -703,9 +703,9 @@ Completion summary:
 
 ### Phase 4 - Live Afterok DAG Submission
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-live-afterok`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/91
 
 Goal:
 
@@ -802,7 +802,9 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR #91 opened on 2026-05-08 targeting `develop` from
+  `codex/slurm-live-afterok`; local validation passed before opening with
+  `make validate-pr` and `make test-summary`.
 
 ### Phase 5 - Scheduler-Aware Status
 
