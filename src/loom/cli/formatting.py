@@ -376,6 +376,38 @@ def format_status_jobs_text(result: object) -> str:
     return "\n".join(lines)
 
 
+def format_cancel_jobs_text(result: object) -> str:
+    """Format submitted-job cancellation output."""
+
+    run_uri = str(getattr(result, "run_uri"))
+    status = str(getattr(result, "status"))
+    prefix = "OK" if bool(getattr(result, "ok")) else "PARTIAL"
+    lines = [
+        f"{prefix} cancel {run_uri}: {status}",
+        f"submission_id: {getattr(result, 'submission_id')}",
+        f"manifest: {getattr(result, 'manifest_path')}",
+        (
+            "jobs: "
+            f"{getattr(result, 'cancelled_count')} cancelled, "
+            f"{getattr(result, 'failed_count')} failed, "
+            f"{getattr(result, 'skipped_count')} skipped, "
+            f"{getattr(result, 'unknown_count')} unknown"
+        ),
+    ]
+    run_status_before = getattr(result, "run_status_before")
+    run_status_after = getattr(result, "run_status_after")
+    if run_status_before != run_status_after:
+        lines.append(f"run: {run_status_before} -> {run_status_after}")
+    for job in getattr(result, "job_results", ()):
+        outcome = str(getattr(job, "outcome"))
+        scheduler_job_id = str(getattr(job, "scheduler_job_id"))
+        logical_key = str(getattr(job, "logical_key"))
+        message = getattr(job, "message")
+        suffix = "" if message is None else f" ({message})"
+        lines.append(f"{logical_key}: {scheduler_job_id} {outcome}{suffix}")
+    return "\n".join(lines)
+
+
 def format_logs_text(result: object) -> str:
     """Format bounded stage log content."""
 
@@ -452,6 +484,7 @@ __all__ = [
     "CLI_RESULT_SCHEMA_VERSION",
     "format_artifact_show_text",
     "format_artifacts_list_text",
+    "format_cancel_jobs_text",
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
