@@ -41,6 +41,16 @@ def _bad_output_stage() -> StageSpec:
     )
 
 
+def _missing_target_stage() -> StageSpec:
+    return StageSpec(
+        name="build",
+        factory=StageFactorySpec(
+            target_path="tests.support.pipeline_execution_stages.MissingStage"
+        ),
+        outputs={"data": OutputSpec(artifact_type="json")},
+    )
+
+
 def _consumer_stage() -> StageSpec:
     return StageSpec(
         name="consume",
@@ -176,6 +186,25 @@ def test_stage_job_fails_before_user_code_when_prepared_state_missing(
     assert exc_info.value.code == "execution.stage_job.insufficient_reconstruction_state"
 
 
+def test_stage_job_fails_before_reconstruction_when_run_status_missing(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path)
+    stage_status_before = store.read_stage_status(run_uri, "build")
+    assert stage_status_before is not None
+    (store.local_run_dir(run_uri) / "status.json").unlink()
+
+    with pytest.raises(ContinuationStateError) as exc_info:
+        run_stage_job(
+            run_store=store,
+            request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        )
+
+    assert exc_info.value.code == "execution.stage_job.missing_run_status"
+    assert store.read_stage_status(run_uri, "build") == stage_status_before
+    assert store.read_stage_failure(run_uri, "build") is None
+
+
 def test_stage_job_records_failed_run_when_output_validation_fails(
     tmp_path: Path,
 ) -> None:
@@ -199,6 +228,31 @@ def test_stage_job_records_failed_run_when_output_validation_fails(
     assert stage_status.status == StageStatus.FAILED
     assert run_status.status == RunStatus.FAILED
     assert failure["failure_type"] == "output_validation"
+
+
+def test_stage_job_records_failed_run_when_target_construction_fails(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path, stages=(_missing_target_stage(),))
+
+    result = run_stage_job(
+        run_store=store,
+        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+    )
+
+    assert result.status == StageStatus.FAILED
+    assert result.run_status == RunStatus.FAILED
+    assert result.failure is not None
+    assert result.failure.failure_type == "target_construction"
+    stage_status = store.read_stage_status(run_uri, "build")
+    run_status = store.read_run_status(run_uri)
+    failure = store.read_stage_failure(run_uri, "build")
+    assert stage_status is not None
+    assert run_status is not None
+    assert failure is not None
+    assert stage_status.status == StageStatus.FAILED
+    assert run_status.status == RunStatus.FAILED
+    assert failure["failure_type"] == "target_construction"
 
 
 def test_stage_job_rejects_worker_request_identity_mismatch_before_running(

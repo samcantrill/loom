@@ -213,8 +213,10 @@ make test-summary
 
 - Phase implementation refinement: used on 2026-05-08 for expanded-path lifecycle
   and state-safety fixes
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used on 2026-05-08; automated review found blocking stage-job
+  durable-failure and missing-run-status ordering defects
+- Blocker resolution: 1/3 used on 2026-05-08 for the concrete PR #83
+  stage-job durable-state blockers
 
 ## Completion Notes
 
@@ -232,7 +234,14 @@ make test-summary
   passed (`43 passed`); `make validate-pr` passed (`ruff check`, `pyright`,
   default harness `764 passed, 14 skipped, 8 deselected`, config-extra harness
   `405 passed, 783 deselected`, and `uv build`).
-- Blocker-resolution summary: not used
+- Blocker-resolution summary: pass 1/3 used for PR #83 automated-review
+  blockers. Moved stage-job run-status validation before target reconstruction
+  and before `write_stage_running`, preserving structured
+  `execution.stage_job.missing_run_status` failures without mutating prepared
+  stage state. Converted target construction/import/init `StageContractError`
+  failures during stage-job reconstruction into self-finalized
+  `StageJobRunResult` failures with persisted failed stage status, failed run
+  status, and failure records.
 - PR preparation: complete. PR body committed at
   `docs/phases/slurm-continuation-commands-pr-body.md`; PR #83 opened against
   `develop`.
@@ -241,7 +250,7 @@ make test-summary
   to the control checkout. No predecessor branch exists and no PR retargeting
   was required.
 - Remaining blockers: none known from implementation, refinement validation,
-  and PR-prep suite evidence
+  PR-prep suite evidence, and blocker-resolution pass 1 targeted evidence
 
 ### Phase Implementation Handoff
 
@@ -274,6 +283,7 @@ make test-summary
 | `30c50b5` | `fix: refine implementation after validation` |
 | `66d9081` | `docs: prepare phase 2 pr body` |
 | `ec56fad` | `docs: record phase 2 pr open` |
+| this blocker-resolution pass | `fix: finalize stage-job construction failures` |
 
 ## Scope Control
 
@@ -284,6 +294,8 @@ make test-summary
 - Expanded-path implementation refinement: used on 2026-05-08; fixed
   stage-job lifecycle failure finalization and worker-request identity
   validation before executor construction
+- Blocker-resolution pass 1/3: used on 2026-05-08; limited to PR #83
+  stage-job durable-state blockers
 
 ## Tests Added Or Updated
 
@@ -292,6 +304,9 @@ make test-summary
 - Refinement unit coverage: updated
   `tests/unit/loom/pipeline/execution/test_stage_job.py` for output-validation
   lifecycle failure finalization and prepared worker-request identity mismatch
+- Blocker-resolution unit coverage: updated
+  `tests/unit/loom/pipeline/execution/test_stage_job.py` for missing run
+  status before reconstruction and target-construction failure self-finalization
 - Contract: added `tests/contracts/test_continuation_commands_contract.py`
 - Integration: added `tests/integration/pipeline/test_prepared_run_continuation.py` and `tests/integration/pipeline/test_stage_job_continuation.py`
 - E2E: updated `tests/e2e/test_cli_core.py`
@@ -317,6 +332,18 @@ result: passed, 43 passed in 4.78s
 
 command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
 result: passed; ruff check, pyright, default harness 764 passed/14 skipped/8 deselected, config-extra harness 405 passed/783 deselected, and uv build all succeeded
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/execution/test_stage_job.py
+result: passed, 8 passed in 0.80s
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/execution/continuation.py tests/unit/loom/pipeline/execution/test_stage_job.py
+result: passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/cli/test_stage_job_cli.py tests/unit/loom/pipeline/execution/test_stage_job.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_runner.py tests/contracts/test_continuation_commands_contract.py tests/integration/pipeline/test_stage_job_continuation.py tests/e2e/test_cli_core.py
+result: passed, 40 passed in 4.40s
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; ruff check, pyright, default harness 766 passed/14 skipped/8 deselected, config-extra harness 405 passed/785 deselected, and uv build all succeeded
 ```
 
 ## PR Preparation Notes
@@ -358,6 +385,9 @@ result: passed; ruff check, pyright, default harness 764 passed/14 skipped/8 des
 - Whole-run prepared continuation currently validates and returns structured
   insufficient prepared state before user code because no explicit safe replay
   payload exists in Phase 2 state.
+- No residual PR #83 blockers are known after blocker-resolution pass 1/3;
+  targeted continuation validation and `make validate-pr` passed for the
+  blocker-resolution commit.
 
 ## Refiner Handoff
 

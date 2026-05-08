@@ -336,6 +336,7 @@ def _run_stage_job_locked(
         attempt=attempt,
     )
     _validate_worker_runtime_environment(worker_request)
+    run_status_before = _require_run_status(run_store, request.run_uri)
     stage_index = plan.stage_order.index(request.stage_name)
     try:
         exec_request = reconstruct_stage_execution_request(
@@ -345,6 +346,43 @@ def _run_stage_job_locked(
             stage_index=stage_index,
             artifact_store_factory=artifact_store_factory,
             allow_resolved_config_fallback=False,
+        )
+    except StageContractError as exc:
+        started_at = clock()
+        failure = _failure_from_stage_job_exception(
+            run_uri=request.run_uri,
+            stage_name=request.stage_name,
+            attempt=attempt,
+            executor=request.executor,
+            stdout_path=Path(worker_request.stdout_path),
+            stderr_path=Path(worker_request.stderr_path),
+            traceback_path=Path(worker_request.traceback_path),
+            exc=exc,
+            clock=clock,
+        )
+        failure = record_stage_failure_and_failed_run(
+            run_store,
+            run_uri=request.run_uri,
+            stage_name=request.stage_name,
+            attempt=attempt,
+            started_at=started_at,
+            created_at=run_status_before.created_at,
+            run_started_at=run_status_before.started_at or run_status_before.updated_at,
+            failure=failure,
+            executor_name=request.executor,
+            clock=clock,
+        )
+        return StageJobRunResult(
+            schema_version=STAGE_JOB_RUN_RESULT_SCHEMA_VERSION,
+            run_uri=request.run_uri,
+            stage_name=request.stage_name,
+            attempt=attempt,
+            status=StageStatus.FAILED,
+            run_status=RunStatus.FAILED,
+            outputs={},
+            failure=failure,
+            started_at=started_at,
+            finished_at=failure.failed_at,
         )
     except StageWorkerStateError as exc:
         raise ContinuationStateError(
@@ -373,7 +411,6 @@ def _run_stage_job_locked(
 
     from loom.pipeline.executors import LocalExecutor
 
-    run_status_before = _require_run_status(run_store, request.run_uri)
     try:
         execution_result = LocalExecutor(capture_stdout_stderr=True).execute(exec_request)
         stage_result = commit_stage_execution_result(
@@ -760,7 +797,7 @@ def _failure_type_for_stage_job_exception(exc: Exception) -> str:
     if isinstance(exc, OutputValidationError):
         return "output_validation"
     if isinstance(exc, StageContractError):
-        return "stage_contract"
+        return "target_construction"
     if isinstance(exc, PlanExecutionError):
         return "plan_execution"
     if isinstance(exc, (StoreError, ArtifactStoreError)):
