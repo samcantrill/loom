@@ -129,8 +129,9 @@ def _cli_error_from_continuation(
     exit_code: ExitCode = ExitCode.RUN_STATE,
 ) -> StageJobCliError:
     to_dict = getattr(error, "to_dict", None)
-    payload = to_dict() if callable(to_dict) else {}
-    context = payload.get("context", {}) if isinstance(payload, dict) else {}
+    raw_payload = to_dict() if callable(to_dict) else {}
+    payload: dict[str, object] = raw_payload if isinstance(raw_payload, dict) else {}
+    context = payload.get("context", {})
     if not isinstance(context, dict):
         context = {}
     code = payload.get("code", "cli.stage_job.continuation_state")

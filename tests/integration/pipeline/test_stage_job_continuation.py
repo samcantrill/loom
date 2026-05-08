@@ -29,8 +29,12 @@ def test_stage_job_finalizes_target_without_parent_process(tmp_path: Path) -> No
     assert result.status == StageStatus.SUCCEEDED
     assert result.run_status == RunStatus.SUCCEEDED
     assert store.read_stage_worker_result(run_uri, "build", attempt=1) is None
-    assert store.read_stage_status(run_uri, "build").status == StageStatus.SUCCEEDED
-    assert store.read_run_status(run_uri).status == RunStatus.SUCCEEDED
+    stage_status = store.read_stage_status(run_uri, "build")
+    run_status = store.read_run_status(run_uri)
+    assert stage_status is not None
+    assert run_status is not None
+    assert stage_status.status == StageStatus.SUCCEEDED
+    assert run_status.status == RunStatus.SUCCEEDED
 
 
 def test_stage_job_does_not_mutate_downstream_stage_status(tmp_path: Path) -> None:

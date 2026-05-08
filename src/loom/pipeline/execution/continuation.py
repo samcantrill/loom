@@ -22,7 +22,7 @@ from .lifecycle import (
     write_run_status,
     write_stage_running,
 )
-from .models import StageRunResult
+from .models import ExecutionFailure, StageRunResult
 from .prepared_run import PREPARED_RUN_CONTINUATION_WHOLE_RUN, PreparedRunRecord
 from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_worker import (
@@ -165,14 +165,12 @@ class StageJobRunResult:
     status: StageStatus
     run_status: RunStatus
     outputs: Mapping[str, ArtifactRef] = field(default_factory=dict)
-    failure: object | None = None
+    failure: ExecutionFailure | None = None
     started_at: str | None = None
     finished_at: str | None = None
     executor_metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, PlainData]:
-        failure = self.failure
-        to_dict = getattr(failure, "to_dict", None)
         return {
             "schema_version": self.schema_version,
             "run_uri": self.run_uri,
@@ -181,7 +179,7 @@ class StageJobRunResult:
             "status": self.status.value,
             "run_status": self.run_status.value,
             "outputs": {name: ref.to_dict() for name, ref in self.outputs.items()},
-            "failure": to_dict() if callable(to_dict) else None,
+            "failure": self.failure.to_dict() if self.failure is not None else None,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "executor_metadata": dict(self.executor_metadata),

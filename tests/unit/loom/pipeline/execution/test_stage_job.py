@@ -113,8 +113,12 @@ def test_stage_job_success_finalizes_target_and_run(tmp_path: Path) -> None:
     assert store.read_stage_outputs(run_uri, "build") is not None
     assert store.read_stage_provenance(run_uri, "build") is not None
     assert store.read_artifact_index(run_uri)
-    assert store.read_stage_status(run_uri, "build").status == StageStatus.SUCCEEDED
-    assert store.read_run_status(run_uri).status == RunStatus.SUCCEEDED
+    stage_status = store.read_stage_status(run_uri, "build")
+    run_status = store.read_run_status(run_uri)
+    assert stage_status is not None
+    assert run_status is not None
+    assert stage_status.status == StageStatus.SUCCEEDED
+    assert run_status.status == RunStatus.SUCCEEDED
 
 
 def test_stage_job_success_leaves_run_running_when_downstream_pending(
@@ -130,7 +134,9 @@ def test_stage_job_success_leaves_run_running_when_downstream_pending(
     assert result.status == StageStatus.SUCCEEDED
     assert result.run_status == RunStatus.RUNNING
     assert store.read_stage_status(run_uri, "consume") is None
-    assert store.read_run_status(run_uri).status == RunStatus.RUNNING
+    run_status = store.read_run_status(run_uri)
+    assert run_status is not None
+    assert run_status.status == RunStatus.RUNNING
 
 
 def test_stage_job_fails_before_user_code_when_prepared_state_missing(
