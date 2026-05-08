@@ -2,9 +2,10 @@
 
 ## Metadata
 
-- Status: refined phase execution plan
+- Status: pr_open
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 2: Generic Continuation Commands`
+- PR: https://github.com/samcantrill/loom/pull/83
 - Branch: `codex/slurm-continuation-commands`
 - Worktree: `/home/samcantrill/work/loom-worktrees/slurm-continuation-commands`
 - Phase execution plan path: `docs/phases/slurm-continuation-commands.md`
@@ -232,9 +233,9 @@ make test-summary
   default harness `764 passed, 14 skipped, 8 deselected`, config-extra harness
   `405 passed, 783 deselected`, and `uv build`).
 - Blocker-resolution summary: not used
-- PR preparation: in progress. PR body drafted at
-  `docs/phases/slurm-continuation-commands-pr-body.md`; PR not yet opened at
-  this checkpoint.
+- PR preparation: complete. PR body committed at
+  `docs/phases/slurm-continuation-commands-pr-body.md`; PR #83 opened against
+  `develop`.
 - Stack maintenance: none performed
 - Remaining blockers: none known from implementation, refinement validation,
   and PR-prep suite evidence
@@ -314,10 +315,17 @@ result: passed; ruff check, pyright, default harness 764 passed/14 skipped/8 des
 ## PR Preparation Notes
 
 - PR body path: `docs/phases/slurm-continuation-commands-pr-body.md`
+- PR URL: https://github.com/samcantrill/loom/pull/83
 - PR title: `SLURM Script Planning - Phase 2: Generic Continuation Commands`
 - Target branch: `develop`
 - Head branch: `codex/slurm-continuation-commands`
 - Stack predecessor: none; this is a root phase because Phase 1 is merged
+- Base/head verification: `gh pr view 83 --json
+  baseRefName,headRefName,state,url` returned `baseRefName=develop`,
+  `headRefName=codex/slurm-continuation-commands`, `state=OPEN`, and
+  `url=https://github.com/samcantrill/loom/pull/83`.
+- Stack state: root PR targeting `develop`; no predecessor branch and no stack
+  retarget/rebase work required for PR preparation.
 - Diff reviewed against `develop`: generic execution and CLI continuation
   behavior, focused tests, and this phase artifact only. No SLURM models,
   generated scripts, manifests, scheduler IDs, live submission, or
