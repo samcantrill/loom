@@ -218,7 +218,7 @@ class SubprocessSlurmCommandRunner:
         return self._run("sbatch", argv)
 
     def squeue(self, *, job_ids: Sequence[str] = ()) -> SlurmCommandResult:
-        argv = ["squeue", "--noheader", "--parsable2"]
+        argv = ["squeue", "--noheader", "--format", "%i|%T|%r"]
         ids = _job_id_tuple(job_ids, field="job_ids")
         if ids:
             argv.extend(("--jobs", ",".join(ids)))
@@ -315,7 +315,9 @@ class FakeSlurmCommandRunner:
 
     def squeue(self, *, job_ids: Sequence[str] = ()) -> SlurmCommandResult:
         ids = _job_id_tuple(job_ids, field="job_ids")
-        argv = ("squeue", "--noheader", "--parsable2", *ids)
+        argv = ("squeue", "--noheader", "--format", "%i|%T|%r")
+        if ids:
+            argv = (*argv, "--jobs", ",".join(ids))
         return self._result(
             "squeue",
             argv,
@@ -324,7 +326,15 @@ class FakeSlurmCommandRunner:
 
     def sacct(self, *, job_ids: Sequence[str] = ()) -> SlurmCommandResult:
         ids = _job_id_tuple(job_ids, field="job_ids")
-        argv = ("sacct", "--noheader", "--parsable2", *ids)
+        argv = (
+            "sacct",
+            "--noheader",
+            "--parsable2",
+            "--format",
+            "JobIDRaw,State,ExitCode",
+        )
+        if ids:
+            argv = (*argv, "--jobs", ",".join(ids))
         return self._result(
             "sacct",
             argv,

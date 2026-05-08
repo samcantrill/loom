@@ -80,3 +80,36 @@ def test_fake_runner_can_script_failures_and_unavailable_commands() -> None:
     assert runner.sbatch("job.sh").returncode == 1
     with pytest.raises(SlurmCommandUnavailableError):
         runner.squeue()
+
+
+def test_fake_runner_records_status_query_arguments() -> None:
+    runner = FakeSlurmCommandRunner()
+
+    runner.sacct(job_ids=("1", "2"))
+    runner.squeue(job_ids=("1", "2"))
+
+    assert runner.calls == [
+        (
+            "sacct",
+            (
+                "sacct",
+                "--noheader",
+                "--parsable2",
+                "--format",
+                "JobIDRaw,State,ExitCode",
+                "--jobs",
+                "1,2",
+            ),
+        ),
+        (
+            "squeue",
+            (
+                "squeue",
+                "--noheader",
+                "--format",
+                "%i|%T|%r",
+                "--jobs",
+                "1,2",
+            ),
+        ),
+    ]

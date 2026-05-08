@@ -17,6 +17,11 @@ from loom.diagnostics.inspection import (
     StageStatusSummary,
     SubmittedOperationSummary,
 )
+from loom.pipeline.executors.slurm.status import (
+    SlurmJobsStatusReport,
+    SlurmJobStatusSummary,
+    SlurmStatusWarning,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -69,6 +74,69 @@ def test_status_json_uses_diagnostics_payload(monkeypatch: pytest.MonkeyPatch) -
     assert payload["result"]["status"] == "SUBMITTED"
     assert payload["result"]["submitted_operations"][0]["submission_id"] == "sub-1"
     assert payload["result"]["stages"][0]["stage_name"] == "build"
+    assert stderr.getvalue() == ""
+
+
+def test_status_jobs_json_uses_scheduler_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warning = SlurmStatusWarning(
+        code="executor.slurm.status.scheduler_state_uncertain",
+        message="state is uncertain",
+        details={"scheduler_job_id": "123"},
+    )
+    monkeypatch.setattr(
+        status_command,
+        "build_status_jobs_result",
+        lambda run_uri: SlurmJobsStatusReport(
+            run_uri=run_uri,
+            run_status="SUBMITTED",
+            submission={
+                "submission_id": "sub-1",
+                "backend": "slurm",
+                "mode": "slurm-afterok",
+                "state": "SUBMITTED",
+                "created_at": "2026-05-08T00:00:00Z",
+                "updated_at": "2026-05-08T00:00:01Z",
+                "manifest_relative_path": "slurm/submissions/sub-1/manifest.json",
+                "summary_counts": {"submitted": 1},
+                "active": True,
+            },
+            manifest_path="/tmp/run/slurm/submissions/sub-1/manifest.json",
+            manifest_relative_path="slurm/submissions/sub-1/manifest.json",
+            jobs=(
+                SlurmJobStatusSummary(
+                    logical_key="stage:build",
+                    stage_name="build",
+                    scheduler_job_id="123",
+                    status="SUBMITTED",
+                    source="manifest",
+                    scheduler_state="SUBMITTED",
+                    loom_run_status="SUBMITTED",
+                    loom_stage_status="SUBMITTED",
+                    warnings=(warning,),
+                ),
+            ),
+            warnings=(warning,),
+        ),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["status", "file:///tmp/run1", "--jobs", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == status_command.STATUS_JOBS_RESULT_SCHEMA_VERSION
+    assert payload["warnings"][0]["code"] == warning.code
+    assert payload["result"]["jobs"][0]["scheduler_job_id"] == "123"
+    assert payload["result"]["jobs"][0]["warnings"][0]["code"] == warning.code
     assert stderr.getvalue() == ""
 
 

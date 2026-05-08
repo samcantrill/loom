@@ -322,6 +322,60 @@ def format_status_text(result: object) -> str:
     return "\n".join(lines)
 
 
+def format_status_jobs_text(result: object) -> str:
+    """Format scheduler-aware submitted job status."""
+
+    run_uri = str(getattr(result, "run_uri"))
+    run_status = getattr(result, "run_status")
+    status_text = "<unknown>" if run_status is None else str(run_status)
+    lines = [f"status {run_uri} jobs: {status_text}"]
+    submission = getattr(result, "submission")
+    if isinstance(submission, Mapping):
+        lines.append(
+            "submission: "
+            f"{submission.get('submission_id')} "
+            f"{submission.get('backend')}/{submission.get('mode')} "
+            f"{submission.get('state')} "
+            f"manifest={submission.get('manifest_relative_path')}"
+        )
+    for job in getattr(result, "jobs", ()):
+        logical_key = str(getattr(job, "logical_key"))
+        scheduler_job_id = str(getattr(job, "scheduler_job_id"))
+        status = str(getattr(job, "status"))
+        source = str(getattr(job, "source"))
+        scheduler_state = str(getattr(job, "scheduler_state"))
+        exit_code = getattr(job, "exit_code")
+        suffix = "" if exit_code is None else f" exit={exit_code}"
+        lines.append(
+            f"{logical_key}: {scheduler_job_id} {status} "
+            f"scheduler={scheduler_state} source={source}{suffix}"
+        )
+        dependency_state = getattr(job, "dependency_state")
+        if dependency_state is not None:
+            dependencies = ", ".join(str(item) for item in getattr(job, "dependency_job_ids", ()))
+            lines.append(f"  dependency: {dependency_state} [{dependencies}]")
+        log_paths = getattr(job, "log_paths")
+        if isinstance(log_paths, Mapping) and log_paths:
+            stdout = log_paths.get("stdout_relative_path")
+            stderr = log_paths.get("stderr_relative_path")
+            lines.append(f"  logs: stdout={stdout}, stderr={stderr}")
+        for warning in getattr(job, "warnings", ()):
+            lines.append(
+                f"  warning {getattr(warning, 'code')}: {getattr(warning, 'message')}"
+            )
+    failed = cast(Sequence[Mapping[str, object]], getattr(result, "failed_submissions", ()))
+    for item in failed:
+        lines.append(f"failed {item.get('logical_key')}: {item.get('reason')}")
+    warnings = getattr(result, "warnings", ())
+    if warnings:
+        lines.append("warnings:")
+        for warning in warnings:
+            lines.append(
+                f"  {getattr(warning, 'code')}: {getattr(warning, 'message')}"
+            )
+    return "\n".join(lines)
+
+
 def format_logs_text(result: object) -> str:
     """Format bounded stage log content."""
 
@@ -406,6 +460,7 @@ __all__ = [
     "format_stage_worker_text",
     "format_logs_text",
     "format_run_text",
+    "format_status_jobs_text",
     "format_status_text",
     "format_validation_text",
 ]
