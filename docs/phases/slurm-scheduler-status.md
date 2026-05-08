@@ -194,7 +194,10 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used for manager-local validation fixes after
+  targeted tests exposed nested scheduler snapshot metadata that needed thawed
+  plain-data serialization and command-runner `squeue` formatting needed to
+  match the parser contract
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -202,10 +205,26 @@ make test-summary
 
 - Draft plan: complete
 - Final phase execution plan: complete
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: added `loom status RUN_URI --jobs`, a SLURM
+  scheduler-aware inspection service, `sacct`/`squeue` parsing and precedence,
+  job-level text/JSON output, status snapshot persistence in the live manifest
+  and submitted-operation backend metadata, warning reporting for uncertainty,
+  stale/conflicting/dependency-blocked/worker-never-started cases, and coverage
+  proving ordinary status remains scheduler-free.
+- Implementation validation: targeted Phase 5 and surrounding SLURM/status
+  slice passed with 90 tests; package import/API slice passed with 35 tests;
+  `make validate-pr` passed with default 895 passed / 17 skipped / 10
+  deselected, config-extra 412 passed / 920 deselected, and build succeeded;
+  `make test-summary` passed with package 52 passed / 1 skipped, unit 724
+  passed / 1 skipped, contract 69 passed / 2 skipped, integration 43 passed /
+  7 skipped / 10 deselected, e2e 32 passed, and config-extra 412 passed / 920
+  deselected.
+- Refinement summary: fixed status snapshot `details` serialization to thaw
+  nested frozen mappings before JSON persistence, aligned fake and subprocess
+  `squeue` command arguments to emit `job|state|reason`, and added command
+  argument coverage.
 - Blocker-resolution summary: 0/3 used
-- PR preparation: TBD
+- PR preparation: PR body recorded in
+  `docs/phases/slurm-scheduler-status-pr-body.md`.
 - Stack maintenance: no successor branch exists yet
 - Remaining blockers: none known
