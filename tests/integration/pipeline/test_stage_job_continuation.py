@@ -10,6 +10,7 @@ from loom.pipeline.execution import StageJobRunRequest, run_stage_job
 from loom.pipeline.status import RunStatus, StageStatus
 from tests.unit.loom.pipeline.execution.test_stage_job import (
     _consumer_stage,
+    _mark_build_submitted,
     _prepare_run,
     _producer_stage,
 )
@@ -23,7 +24,9 @@ def test_stage_job_finalizes_target_without_parent_process(tmp_path: Path) -> No
 
     result = run_stage_job(
         run_store=store,
-        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        request=StageJobRunRequest(
+            run_uri=run_uri, stage_name="build", executor="local"
+        ),
     )
 
     assert result.status == StageStatus.SUCCEEDED
@@ -38,12 +41,35 @@ def test_stage_job_finalizes_target_without_parent_process(tmp_path: Path) -> No
 
 
 def test_stage_job_does_not_mutate_downstream_stage_status(tmp_path: Path) -> None:
-    store, run_uri = _prepare_run(tmp_path, stages=(_producer_stage(), _consumer_stage()))
+    store, run_uri = _prepare_run(
+        tmp_path, stages=(_producer_stage(), _consumer_stage())
+    )
 
     result = run_stage_job(
         run_store=store,
-        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        request=StageJobRunRequest(
+            run_uri=run_uri, stage_name="build", executor="local"
+        ),
     )
 
     assert result.run_status == RunStatus.RUNNING
     assert store.read_stage_status(run_uri, "consume") is None
+
+
+def test_stage_job_continues_matching_submitted_prepared_attempt(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path)
+    _mark_build_submitted(store, run_uri)
+
+    result = run_stage_job(
+        run_store=store,
+        request=StageJobRunRequest(
+            run_uri=run_uri,
+            stage_name="build",
+            executor="local",
+        ),
+    )
+
+    assert result.status == StageStatus.SUCCEEDED
+    assert result.run_status == RunStatus.SUCCEEDED

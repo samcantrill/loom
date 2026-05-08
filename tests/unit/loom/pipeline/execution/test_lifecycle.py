@@ -9,11 +9,13 @@ from loom.pipeline import PipelineSpec
 from loom.pipeline.execution.errors import PlanExecutionError
 from loom.pipeline.execution.lifecycle import (
     bind_stage_inputs,
+    write_run_submitted,
     write_stage_artifact_index_refs,
     write_stage_blocked,
+    write_stage_submitted,
 )
 from loom.pipeline.planning import plan_pipeline
-from loom.pipeline.status import StageStatus
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
@@ -91,6 +93,40 @@ def test_write_stage_blocked_writes_status_only(tmp_path: Path) -> None:
     assert store.read_stage_provenance(run_uri, "downstream") is None
     assert not (stage_dir / "logs").exists()
     assert sorted(path.name for path in stage_dir.iterdir()) == ["status.json"]
+
+
+def test_submitted_lifecycle_writers_do_not_set_execution_timestamps(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+
+    run_record = write_run_submitted(
+        store,
+        run_uri=run_uri,
+        created_at="2020-01-01T00:00:00Z",
+        submitted_at="2020-01-01T00:00:01Z",
+        metadata={"backend": "test-backend"},
+    )
+    stage_record = write_stage_submitted(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        submitted_at="2020-01-01T00:00:02Z",
+        owner={"component": "submitter"},
+        metadata={"submission_id": "sub-1"},
+    )
+
+    assert run_record.status is RunStatus.SUBMITTED
+    assert run_record.started_at is None
+    assert run_record.finished_at is None
+    assert stage_record.status is StageStatus.SUBMITTED
+    assert stage_record.started_at is None
+    assert stage_record.finished_at is None
+    assert store.read_run_status(run_uri) == run_record
+    assert store.read_stage_status(run_uri, "build") == stage_record
 
 
 def test_write_stage_blocked_requires_message_and_reason_code_when_present(

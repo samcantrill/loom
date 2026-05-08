@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -15,9 +16,20 @@ from loom.pipeline.execution import (
     run_stage_job,
 )
 from loom.pipeline.execution.lifecycle import write_run_status
+from loom.pipeline.execution.lifecycle import write_stage_submitted
 from loom.pipeline.planning import plan_pipeline
-from loom.pipeline.runtime import ResolvedStageRuntimeOptions, RunOptions, build_runtime_metadata
+from loom.pipeline.runtime import (
+    ResolvedStageRuntimeOptions,
+    RunOptions,
+    build_runtime_metadata,
+)
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.submitted import (
+    SubmittedOperationRecord,
+    SubmittedOperationState,
+    submitted_stage_metadata,
+)
+from loom.serialization import PlainData
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 
 
@@ -93,17 +105,63 @@ def _prepare_run(
             stage_ids=spec.stage_names,
         ).to_dict(),
     )
-    stage_plan = next(item for item in plan.ordered_stage_plans if item.stage_name == "build")
+    stage_plan = next(
+        item for item in plan.ordered_stage_plans if item.stage_name == "build"
+    )
     prepare_stage_attempt(
         run_store=store,
         run_uri=run_uri,
         stage=spec.get_stage("build"),
         stage_plan=stage_plan,
-        resolved_runtime=ResolvedStageRuntimeOptions(stage_id="build", executor="local"),
+        resolved_runtime=ResolvedStageRuntimeOptions(
+            stage_id="build", executor="local"
+        ),
         executor_name="local",
         clock=lambda: "2020-01-01T00:00:02Z",
     )
     return store, run_uri
+
+
+def _mark_build_submitted(
+    store: LocalRunStore, run_uri: str
+) -> SubmittedOperationRecord:
+    worker_request = store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert isinstance(worker_request, dict)
+    record = SubmittedOperationRecord(
+        run_uri=run_uri,
+        submission_id="sub-1",
+        backend="test-backend",
+        mode="afterok",
+        created_at="2020-01-01T00:00:03Z",
+        updated_at="2020-01-01T00:00:03Z",
+        state=SubmittedOperationState.SUBMITTED,
+        manifest_relative_path="submitted/sub-1/manifest.json",
+        summary_counts={"submitted": 1},
+    )
+    metadata = submitted_stage_metadata(
+        record=record,
+        stage_name="build",
+        attempt=1,
+        continuation_executor="local",
+        stage_metadata={"job_key": "build"},
+    )
+    store.write_submitted_operation(run_uri, record)
+    store.write_stage_worker_request(
+        run_uri,
+        "build",
+        {**worker_request, "metadata": metadata},
+        attempt=1,
+    )
+    write_stage_submitted(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        submitted_at="2020-01-01T00:00:04Z",
+        owner={"component": "test-submitter"},
+        metadata=metadata,
+    )
+    return record
 
 
 def test_stage_job_rejects_recursive_executor_before_user_code(tmp_path: Path) -> None:
@@ -125,7 +183,9 @@ def test_stage_job_success_finalizes_target_and_run(tmp_path: Path) -> None:
 
     result = run_stage_job(
         run_store=store,
-        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        request=StageJobRunRequest(
+            run_uri=run_uri, stage_name="build", executor="local"
+        ),
     )
 
     assert result.status == StageStatus.SUCCEEDED
@@ -144,11 +204,15 @@ def test_stage_job_success_finalizes_target_and_run(tmp_path: Path) -> None:
 def test_stage_job_success_leaves_run_running_when_downstream_pending(
     tmp_path: Path,
 ) -> None:
-    store, run_uri = _prepare_run(tmp_path, stages=(_producer_stage(), _consumer_stage()))
+    store, run_uri = _prepare_run(
+        tmp_path, stages=(_producer_stage(), _consumer_stage())
+    )
 
     result = run_stage_job(
         run_store=store,
-        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        request=StageJobRunRequest(
+            run_uri=run_uri, stage_name="build", executor="local"
+        ),
     )
 
     assert result.status == StageStatus.SUCCEEDED
@@ -180,10 +244,14 @@ def test_stage_job_fails_before_user_code_when_prepared_state_missing(
     with pytest.raises(ContinuationStateError) as exc_info:
         run_stage_job(
             run_store=store,
-            request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+            request=StageJobRunRequest(
+                run_uri=run_uri, stage_name="build", executor="local"
+            ),
         )
 
-    assert exc_info.value.code == "execution.stage_job.insufficient_reconstruction_state"
+    assert (
+        exc_info.value.code == "execution.stage_job.insufficient_reconstruction_state"
+    )
 
 
 def test_stage_job_fails_before_reconstruction_when_run_status_missing(
@@ -197,7 +265,9 @@ def test_stage_job_fails_before_reconstruction_when_run_status_missing(
     with pytest.raises(ContinuationStateError) as exc_info:
         run_stage_job(
             run_store=store,
-            request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+            request=StageJobRunRequest(
+                run_uri=run_uri, stage_name="build", executor="local"
+            ),
         )
 
     assert exc_info.value.code == "execution.stage_job.missing_run_status"
@@ -212,7 +282,9 @@ def test_stage_job_records_failed_run_when_output_validation_fails(
 
     result = run_stage_job(
         run_store=store,
-        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        request=StageJobRunRequest(
+            run_uri=run_uri, stage_name="build", executor="local"
+        ),
     )
 
     assert result.status == StageStatus.FAILED
@@ -237,7 +309,9 @@ def test_stage_job_records_failed_run_when_target_construction_fails(
 
     result = run_stage_job(
         run_store=store,
-        request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+        request=StageJobRunRequest(
+            run_uri=run_uri, stage_name="build", executor="local"
+        ),
     )
 
     assert result.status == StageStatus.FAILED
@@ -268,10 +342,91 @@ def test_stage_job_rejects_worker_request_identity_mismatch_before_running(
     with pytest.raises(ContinuationStateError) as exc_info:
         run_stage_job(
             run_store=store,
-            request=StageJobRunRequest(run_uri=run_uri, stage_name="build", executor="local"),
+            request=StageJobRunRequest(
+                run_uri=run_uri, stage_name="build", executor="local"
+            ),
         )
 
-    assert exc_info.value.code == "execution.stage_job.insufficient_reconstruction_state"
+    assert (
+        exc_info.value.code == "execution.stage_job.insufficient_reconstruction_state"
+    )
     status = store.read_stage_status(run_uri, "build")
     assert status is not None
     assert status.status == StageStatus.PENDING
+
+
+def test_stage_job_accepts_matching_submitted_prepared_attempt(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path)
+    _mark_build_submitted(store, run_uri)
+
+    result = run_stage_job(
+        run_store=store,
+        request=StageJobRunRequest(
+            run_uri=run_uri, stage_name="build", executor="local"
+        ),
+    )
+
+    assert result.status == StageStatus.SUCCEEDED
+    assert result.run_status == RunStatus.SUCCEEDED
+    stage_status = store.read_stage_status(run_uri, "build")
+    assert stage_status is not None
+    assert stage_status.status == StageStatus.SUCCEEDED
+
+
+def test_stage_job_rejects_submitted_stage_without_registry_record(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path)
+    record = _mark_build_submitted(store, run_uri)
+    (
+        store.local_run_dir(run_uri)
+        / "submitted_operations"
+        / f"{record.submission_id}.json"
+    ).unlink()
+    before = store.read_stage_status(run_uri, "build")
+
+    with pytest.raises(ContinuationStateError) as exc_info:
+        run_stage_job(
+            run_store=store,
+            request=StageJobRunRequest(
+                run_uri=run_uri, stage_name="build", executor="local"
+            ),
+        )
+
+    assert exc_info.value.code == "execution.stage_job.submitted_registry_missing"
+    assert store.read_stage_status(run_uri, "build") == before
+    assert store.read_stage_failure(run_uri, "build") is None
+
+
+def test_stage_job_rejects_submitted_metadata_mismatch_before_user_code(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepare_run(tmp_path)
+    _mark_build_submitted(store, run_uri)
+    status = store.read_stage_status(run_uri, "build")
+    assert status is not None
+    tampered = dict(status.metadata)
+    submitted = dict(cast(dict[str, PlainData], tampered["submitted_operation"]))
+    submitted["backend"] = "other-backend"
+    tampered["submitted_operation"] = submitted
+    write_stage_submitted(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        submitted_at="2020-01-01T00:00:05Z",
+        metadata=tampered,
+    )
+
+    with pytest.raises(ContinuationStateError) as exc_info:
+        run_stage_job(
+            run_store=store,
+            request=StageJobRunRequest(
+                run_uri=run_uri, stage_name="build", executor="local"
+            ),
+        )
+
+    assert exc_info.value.code == "execution.stage_job.submitted_identity_mismatch"
+    assert store.read_stage_failure(run_uri, "build") is None

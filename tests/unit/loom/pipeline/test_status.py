@@ -26,8 +26,10 @@ def _common_ts() -> tuple[str, str]:
 
 def test_run_status_parse() -> None:
     assert parse_run_status("SUCCEEDED") is RunStatus.SUCCEEDED
+    assert parse_run_status("SUBMITTED") is RunStatus.SUBMITTED
     assert parse_stage_status("FAILED") is StageStatus.FAILED
     assert parse_stage_status("BLOCKED") is StageStatus.BLOCKED
+    assert parse_stage_status("SUBMITTED") is StageStatus.SUBMITTED
 
 
 def test_run_status_round_trip() -> None:
@@ -89,6 +91,32 @@ def test_blocked_stage_status_round_trip_is_distinct() -> None:
     assert record.finished_at is None
     assert record.owner == {}
     assert StageStatusRecord.from_dict(record.to_dict()) == record
+
+
+def test_submitted_status_round_trips_without_execution_timestamps() -> None:
+    created, updated = _common_ts()
+    run = RunStatusRecord(
+        run_uri="run-1",
+        status=RunStatus.SUBMITTED,
+        created_at=created,
+        updated_at=updated,
+        metadata={"backend": "test-backend"},
+    )
+    stage = StageStatusRecord(
+        run_uri="run-1",
+        stage_name="build",
+        status=StageStatus.SUBMITTED,
+        updated_at=updated,
+        attempt=1,
+        metadata={"submitted": True},
+    )
+
+    assert RunStatusRecord.from_dict(run.to_dict()) == run
+    assert StageStatusRecord.from_dict(stage.to_dict()) == stage
+    assert run.started_at is None
+    assert run.finished_at is None
+    assert stage.started_at is None
+    assert stage.finished_at is None
 
 
 def test_status_record_rejects_invalid_schema_version() -> None:
