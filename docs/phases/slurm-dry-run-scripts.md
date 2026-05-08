@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR not opened per assignment
+- Status: pr_open
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 4: SLURM Script Builders and Dry-Run APIs`
 - Branch: `codex/slurm-dry-run-scripts`
@@ -11,9 +11,19 @@
 - PR body path: `docs/phases/slurm-dry-run-scripts-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v6.md`
 - Source phase: Phase 4 - SLURM Script Builders And Dry-Run Planning APIs
+- PR: https://github.com/samcantrill/loom/pull/85
+- PR state: open
 - Stack predecessor: none; Phases 1-3 are merged into `develop`
 - Base branch: `develop`
 - Target branch: `develop`
+- Base/head verification: `gh pr view 85 --json
+  baseRefName,headRefName,state,url,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/slurm-dry-run-scripts`,
+  `state=OPEN`, and URL `https://github.com/samcantrill/loom/pull/85` on
+  2026-05-08.
+- Stack state: root phase targeting `develop`; no stack predecessor and no
+  retargeting required at PR opening.
+- GitHub checks: CI `checks` queued at PR verification on 2026-05-08.
 - Merge eligibility: root phase; merge-eligible only after the PR targets
   `develop`, the expanded-path refine pass is complete, implementation is
   phase-scoped, automated review passes, and validation/CI passes
@@ -30,7 +40,7 @@
   contracts
 - Setup limitations: worktree was created from local `develop` at `434a9c1`; no
   remote synchronization or validation was run in this planning-only pass
-- Blockers: none known after implementation
+- Blockers: none known after PR preparation
 
 ## Objective
 
@@ -534,3 +544,22 @@ make test-summary
   dry-run-only manifests/metadata, and forbidden import/live scheduler
   boundaries. No code or test patch was needed. Re-ran the targeted pytest
   command above during the refinement pass; it passed with 87 tests.
+- PR preparation summary: completed on 2026-05-08. Inspected the final diff
+  against `develop` and confirmed it is Phase 4 only: SLURM package script
+  rendering, dry-run planning, artifact writing, package/unit/contract/
+  integration tests, and phase artifacts; no CLI executor selection, preflight
+  presentation, live scheduler calls, scheduler job IDs, submitted status, or
+  future Phase 5/7 work was added. Added
+  `docs/phases/slurm-dry-run-scripts-pr-body.md` and opened PR #85 against
+  `develop`.
+- PR-prep validation summary: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed Ruff, Pyright, default tests (`825 passed, 14 skipped, 8 deselected`),
+  config-extra tests (`405 passed, 844 deselected`), and build.
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall
+  `1249 passed, 0 failed, 0 errors, 11 skipped, 852 deselected`; suite summary
+  was written to `build/test-summary.md`.
+- PR verification summary: `gh pr view 85 --json
+  baseRefName,headRefName,state,url,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/slurm-dry-run-scripts`,
+  `state=OPEN`, URL `https://github.com/samcantrill/loom/pull/85`, and CI
+  `checks` status `QUEUED`.
