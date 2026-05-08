@@ -822,9 +822,9 @@ Completion summary:
 
 ### Phase 5 - Scheduler-Aware Status
 
-Status: pending
+Status: merged
 Branch: `codex/slurm-scheduler-status`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/92
 
 Goal:
 
@@ -907,7 +907,32 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan and PR body are recorded in
+  `docs/phases/slurm-scheduler-status.md` and
+  `docs/phases/slurm-scheduler-status-pr-body.md`.
+- Implemented `loom status RUN_URI --jobs` for the latest submitted SLURM
+  operation, with run-store/`sacct`/`squeue`/manifest precedence, job-level
+  text and JSON output, status snapshot persistence in the live manifest,
+  compact submitted-operation backend metadata, and explicit warnings for
+  uncertainty, stale data, conflicts, dependency-blocked jobs, and
+  worker-never-started cases.
+- Ordinary `loom status RUN_URI` remains scheduler-free, and status inspection
+  does not rewrite core run or stage statuses.
+- Validation before merge: `make validate-pr` passed with default 895 passed /
+  17 skipped / 10 deselected, config-extra 412 passed / 920 deselected, and
+  build succeeded; `make test-summary` passed with package 52 passed / 1
+  skipped, unit 724 passed / 1 skipped, contract 69 passed / 2 skipped,
+  integration 43 passed / 7 skipped / 10 deselected, e2e 32 passed, and
+  config-extra 412 passed / 920 deselected.
+- PR #92 targeted `develop` from `codex/slurm-scheduler-status` and was
+  squash-merged on 2026-05-08 as merge commit
+  `e7fe5e48a78c80f00a448dcc03d9245b3f3a51ea`.
+- Final merge gate: PR target verified as `develop`, head verified as
+  `codex/slurm-scheduler-status`, GitHub CI `checks` passed, and manager local
+  review found and resolved the `sacct` state normalization edge for values
+  such as `CANCELLED by 123`.
+- Stack and cleanup: no successor branches were based on Phase 5; the remote
+  phase branch was deleted by the merge operation.
 
 ### Phase 6 - Submitted-Job Cancellation
 
