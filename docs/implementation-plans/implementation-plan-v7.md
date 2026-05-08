@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: ready for phase implementation
+- Status: completed; Phases 1-7 merged into `develop`
 - Related planning notes:
   `docs/implementation-plans/roadmap-v7-planning-notes.md`
 - Plan review report:
@@ -1062,9 +1062,9 @@ Completion summary:
 
 ### Phase 7 - Preflight, Opt-In Cluster Acceptance, Docs, And Hardening
 
-Status: pending
+Status: merged
 Branch: `codex/slurm-acceptance-hardening`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/94
 
 Goal:
 
@@ -1166,4 +1166,34 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan and PR body are recorded in
+  `docs/phases/slurm-acceptance-hardening.md` and
+  `docs/phases/slurm-acceptance-hardening-pr-body.md`.
+- Added final SLURM preflight hardening: stable IDs and checks for optional
+  `squeue`/`sacct`/`scancel`, active submitted-operation detection, and
+  generated-path writability.
+- Added fake-command e2e coverage for live afterok submit, scheduler-aware
+  status, cancellation, manifest updates, and artifact-safe secret handling.
+- Added skipped-by-default real SLURM acceptance coverage under
+  `tests/slurm_acceptance/`, gated by `LOOM_RUN_SLURM_ACCEPTANCE=1` and
+  `LOOM_SLURM_ACCEPTANCE_ROOT`, for single-job success, afterok dependencies,
+  and sleeping-job cancellation.
+- Updated SLURM, preflight, CLI, testing, and execution-example docs to describe
+  the implemented v7 live submit/status/cancel surface and added
+  `examples/execution/slurm-live/`.
+- Validation before merge: `make validate-pr` passed with default 915 passed /
+  17 skipped / 14 deselected, config-extra 413 passed / 943 deselected, and
+  build succeeded; `make test-summary` passed with package 52 passed / 1
+  skipped, unit 734 passed / 1 skipped, contract 73 passed / 2 skipped,
+  integration 45 passed / 7 skipped / 10 deselected, e2e 36 passed / 1
+  deselected, and config-extra 413 passed / 943 deselected. The opt-in command
+  `uv run pytest tests/slurm_acceptance -m slurm` collected three tests and
+  skipped them because the real-cluster environment variables were not set.
+- PR #94 targeted `develop` from `codex/slurm-acceptance-hardening` and was
+  squash-merged on 2026-05-08 as merge commit
+  `b06db13bdc9b37d9ababfb8c1d41b5eeb5e44d19`.
+- Final merge gate: PR target verified as `develop`, head verified as
+  `codex/slurm-acceptance-hardening`, GitHub CI `checks` passed, and manager
+  local review found no blocking issues.
+- Stack and cleanup: no successor branches were based on Phase 7; this was the
+  final v7 phase.
