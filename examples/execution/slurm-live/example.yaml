@@ -1,0 +1,15 @@
+id: execution.slurm-live
+title: SLURM Live Operations
+summary: Submit a small two-stage pipeline to SLURM, inspect scheduler-aware status, and cancel active jobs explicitly.
+capability: execution
+level: advanced
+introduced_in: v7
+status: illustrative
+validation: manual
+reason: Requires a real SLURM cluster and a shared filesystem visible to submit and compute nodes.
+entrypoints: []
+tags:
+  - slurm
+  - scheduler
+  - status
+  - cancellation

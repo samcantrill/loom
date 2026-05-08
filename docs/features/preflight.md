@@ -259,7 +259,8 @@ Examples:
 ```text
 local executor requires no external command
 subprocess executor requires executable commands to be resolvable
-SLURM dry-run checks warn when sbatch is missing; live squeue/sacct checks are v7/later
+SLURM dry-run checks warn when sbatch is missing
+SLURM live checks fail when sbatch is missing and warn on missing squeue/sacct/scancel
 Docker executor requires docker
 Apptainer executor requires apptainer or singularity
 ```
@@ -276,22 +277,44 @@ executor name.
 
 ## SLURM Checks
 
-For SLURM runs, preflight may check:
+For SLURM runs, preflight checks:
 
 ```text
-executor mode is a supported v6 dry-run mode
+executor mode is supported
 structured SLURM options and profile shape are valid
 launcher argv is non-empty and shell-safe
 generic CPU, memory, and GPU resources can map to SBATCH directives
 generated script/log paths remain under the run directory
+generated path parents are writable
 shared/local run URI assumptions are satisfied
-sbatch availability, reported as warning/info for v6 dry-runs
+active submitted SLURM work is not present for the selected run URI
+sbatch availability, warning for dry-runs and failure for live submission
+squeue, sacct, and scancel availability as live-operation warnings
 ```
 
-V6 SLURM dry-runs must not fail only because `sbatch` is missing. Live
-submission, `squeue`, `sacct`, and `scancel` checks are v7/later behavior.
-Preflight should not submit a test job unless explicitly requested by a future
+SLURM dry-runs must not fail only because `sbatch` is missing. Live submission
+requires `sbatch`. Missing `squeue`, `sacct`, or `scancel` remains a warning in
+preflight because `loom status RUN_URI --jobs` and
+`loom cancel RUN_URI --jobs` enforce their operation-time requirements.
+Preflight does not submit a test job unless explicitly requested by a future
 option.
+
+Stable SLURM check IDs include:
+
+```text
+runtime.slurm.options
+run_uri.slurm.local
+run_uri.slurm.active_submission
+executor.slurm.mode
+executor.slurm.launcher
+executor.slurm.sbatch
+executor.slurm.squeue
+executor.slurm.sacct
+executor.slurm.scancel
+resources.slurm.mapping
+filesystem.slurm.generated_paths
+filesystem.slurm.generated_writable
+```
 
 ## Container Checks
 

@@ -1,0 +1,35 @@
+name: slurm-live-example
+schema_version: 1
+runtime:
+  adapter_options:
+    slurm:
+      time: "00:05:00"
+  stage_options:
+    summarize:
+      resources:
+        entries:
+          cpu:
+            kind: cpu
+            amount: 1
+pipeline:
+  name: slurm-live-example
+  description: Two small stages for live SLURM submit/status/cancel checks.
+  stages:
+    - name: seed
+      factory:
+        _target_: stages:SeedNumbersStage
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: summarize
+      depends_on: [seed]
+      factory:
+        _target_: stages:SummarizeNumbersStage
+      inputs:
+        numbers: seed.numbers
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1

@@ -886,19 +886,49 @@ SBATCH script generation
 sbatch command construction
 dependency flags
 submission manifest
-squeue/sacct parsing, if implemented
+squeue/sacct parsing
 cancel command construction
 unavailable command errors
 partial submission handling
+status snapshot recording
+cancellation attempt recording
+artifact-safe scheduler metadata
 ```
 
-Real cluster smoke tests should be separately marked:
+Real cluster acceptance tests are separately marked:
 
 ```python
 pytest.mark.slurm
+pytest.mark.slow
 ```
 
-and skipped unless explicitly enabled.
+and skipped unless explicitly enabled. The acceptance suite lives under
+`tests/slurm_acceptance/` and requires all of:
+
+```text
+LOOM_RUN_SLURM_ACCEPTANCE=1
+LOOM_SLURM_ACCEPTANCE_ROOT=/shared/filesystem/path
+```
+
+Optional environment variables let maintainers adapt to site policy:
+
+```text
+LOOM_SLURM_ACCEPTANCE_PARTITION
+LOOM_SLURM_ACCEPTANCE_ACCOUNT
+LOOM_SLURM_ACCEPTANCE_QOS
+LOOM_SLURM_ACCEPTANCE_TIME
+LOOM_SLURM_ACCEPTANCE_TIMEOUT
+LOOM_SLURM_ACCEPTANCE_POLL
+```
+
+Run it explicitly:
+
+```bash
+uv run pytest tests/slurm_acceptance -m slurm
+```
+
+Default local validation must stay cluster-free and must not submit a real
+SLURM job.
 
 ---
 
@@ -988,6 +1018,7 @@ Examples:
 
 ```bash
 uv run pytest -m slurm
+uv run pytest tests/slurm_acceptance -m slurm
 uv run pytest -m network
 uv run pytest -m "e2e and not slow"
 ```

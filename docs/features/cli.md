@@ -10,6 +10,11 @@ execution. The commands are thin `argparse` wrappers over config, pipeline,
 planning, store, and execution APIs. They do not introduce a separate runtime
 model.
 
+V7 adds optional live SLURM operations through the same general command surface:
+`loom run CONFIG --executor slurm-single-job`,
+`loom run CONFIG --executor slurm-afterok`, `loom status RUN_URI --jobs`, and
+`loom cancel RUN_URI --jobs`.
+
 Roadmap commands for run status, logs, artifacts, sweeps, catalogs, bundles,
 plugins, remote stores, containers, cleanup, and scheduler/container executors are
 intentionally deferred. The later-command sections in this document describe
@@ -205,8 +210,8 @@ CLI responsibilities:
 expose executor selection flags
 call public SLURM dry-run APIs for --dry-run
 print generated manifest/script/log/command summaries
-print submitted job IDs and status hints when live APIs exist
-call cancellation/status APIs when present in a future phase
+print submitted job IDs and status hints for live submission
+call scheduler-aware status and cancellation APIs for --jobs
 ```
 
 CLI non-responsibilities:
@@ -232,6 +237,11 @@ loom run CONFIG
 loom run CONFIG --executor subprocess
 loom run CONFIG --executor slurm-single-job --dry-run
 loom run CONFIG --executor slurm-afterok --dry-run
+loom run CONFIG --executor slurm-single-job
+loom run CONFIG --executor slurm-afterok
+loom status RUN_URI
+loom status RUN_URI --jobs
+loom cancel RUN_URI --jobs
 loom stage run --run-uri RUN_URI --stage STAGE [--attempt N]
 loom prepared-run continue --run-uri RUN_URI --executor local
 loom stage-job run --run-uri RUN_URI --stage STAGE --executor local
@@ -241,7 +251,7 @@ config overlays and CLI overrides
 resume selector flags shared by plan and run
 local and serial subprocess executor execution
 machine-readable JSON output for validate, plan, run, stage run, prepared-run,
-stage-job, SLURM dry-run, and structured errors
+stage-job, SLURM dry-run/live submission/status/cancel, and structured errors
 loom plan CONFIG --resume --explain STAGE
 ```
 
@@ -257,10 +267,9 @@ automatic config wizard
 domain-specific commands
 rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
-live SLURM, Docker, or Apptainer execution
+Docker or Apptainer execution
 remote run URI schemes
-status, logs, artifacts, sweep, catalog, bundle, plugin, cleanup, or reliability
-commands
+logs, artifacts, sweep, catalog, bundle, plugin, cleanup, or reliability commands
 --run-dir, --run-id, or --strict options
 ```
 
@@ -269,7 +278,6 @@ Domain packages can expose their own CLIs that call `loom` Python APIs.
 ### 4.3 Deferred Command Families
 
 ```text
-loom status RUN_URI
 loom logs RUN_URI STAGE
 loom artifacts list RUN_URI
 loom artifacts show RUN_URI ARTIFACT_ID
@@ -277,7 +285,6 @@ loom sweep plan ...
 loom sweep run ...
 loom slurm status RUN_URI
 loom slurm cancel RUN_URI
-loom cancel RUN_URI
 shell completion
 ```
 
@@ -963,7 +970,7 @@ This runs each planned stage as one prepared `loom stage run` worker process.
 The parent runner still owns final output validation, failure persistence,
 provenance, artifact indexes, stage status, and run status.
 
-### 13.7 Deferred Executor Example
+### 13.7 SLURM Executor Example
 
 ```bash
 loom run experiment.yaml \
@@ -971,8 +978,9 @@ loom run experiment.yaml \
   --executor slurm-afterok
 ```
 
-Without `--dry-run`, this fails clearly because live scheduler submission is
-deferred to v7. The v6 dry-run form creates scripts and manifests:
+Without `--dry-run`, this submits to SLURM with `sbatch --parsable`, records
+job IDs in the submission manifest, and marks submitted work `SUBMITTED`. The
+dry-run form creates scripts and manifests without calling `sbatch`:
 
 ```bash
 loom run experiment.yaml \
@@ -981,12 +989,12 @@ loom run experiment.yaml \
   --dry-run
 ```
 
-A later executor phase can make the non-dry-run command submit work and include:
+Live submission output includes:
 
 ```text
 run directory
 submission manifest path
-job IDs, when submitted
+job IDs
 status command hint
 ```
 
@@ -1256,41 +1264,58 @@ codec code, so it should be explicit.
 
 ---
 
-## 18. `loom slurm` and `loom cancel`
+## 18. Scheduler-Aware Status and Cancellation
 
 ### 18.1 Purpose
 
-Expose scheduler-specific status and cancellation without mixing scheduler logic
-into general status commands.
+Expose submitted-job status and cancellation without mixing scheduler parsing
+logic into CLI modules.
 
-Possible commands:
+Implemented commands:
 
 ```bash
 loom status RUN_URI --jobs
-loom cancel RUN_URI
-loom slurm status RUN_URI
-loom slurm cancel RUN_URI
+loom cancel RUN_URI --jobs
 ```
 
-### 18.2 Starting Point
+### 18.2 Behavior
 
-When diagnostic CLI behavior exists, start with:
+Default status reads persisted run-store state only:
 
-```text
+```bash
 loom status RUN_URI
 ```
 
-and let SLURM run submission print job IDs and status hints.
+Scheduler-aware status is explicit:
 
-Add explicit scheduler commands after SLURM APIs are stable.
+```bash
+loom status RUN_URI --jobs
+```
+
+It discovers the latest submitted backend from run-store records, delegates to
+the backend status API, records safe scheduler snapshots, and reports
+uncertainty when neither run-store final state nor scheduler data can prove a
+final outcome.
+
+Submitted-job cancellation is also explicit:
+
+```bash
+loom cancel RUN_URI --jobs
+```
+
+It targets the latest active submitted operation by default, records per-job
+cancellation attempts, and returns nonzero for partial cancellation. Exact
+submission selectors, cleanup commands, retries, and `loom slurm ...` aliases
+remain deferred.
 
 ### 18.3 Boundary
 
-The CLI should call executor APIs:
+The CLI calls executor or generic submitted-operation APIs:
 
 ```text
 SlurmExecutor.status(...)
 SlurmExecutor.cancel(...)
+submitted-operation discovery helpers
 ```
 
 or a scheduler client abstraction.
@@ -1693,16 +1718,17 @@ loom artifacts show
 text and JSON output
 ```
 
-### 25.7 Phase 7: Executor-Specific Commands
+### 25.7 Phase 7: Submitted-Job Commands
 
-Add after executor APIs are stable:
+Implemented:
 
 ```text
-loom status --jobs
-loom cancel
-loom slurm status
-loom slurm cancel
+loom status RUN_URI --jobs
+loom cancel RUN_URI --jobs
 ```
+
+Executor-specific `loom slurm ...` aliases are deferred until a diagnostic
+cannot fit the general command model.
 
 ### 25.8 Phase 8: Sweep Commands
 
@@ -1763,8 +1789,8 @@ Recommended answer:
 no
 ```
 
-Default status should read persisted run state. Use `--jobs` or `loom slurm
-status` for scheduler state.
+Default status should read persisted run state. Use `--jobs` for scheduler
+state. A `loom slurm status` alias remains deferred.
 
 ### 26.5 Should Artifact Commands Load Artifact Contents?
 
