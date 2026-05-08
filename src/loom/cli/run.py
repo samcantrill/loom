@@ -233,7 +233,11 @@ def _handle_dry_run(
     selector_options: SelectorCliOptions,
     output_format: OutputFormat,
 ) -> int:
-    if run_options.executor_explicit and _is_slurm_executor(run_options.executor):
+    if _dry_run_selects_slurm_executor(
+        config_options=config_options,
+        run_options=run_options,
+        selector_options=selector_options,
+    ):
         result, warnings = build_slurm_dry_run_result(
             config_options=config_options,
             run_options=run_options,
@@ -283,6 +287,30 @@ def _handle_dry_run(
 
         sys.stdout.write(format_plan_text(plan_result) + "\n")
     return int(ExitCode.SUCCESS)
+
+
+def _dry_run_selects_slurm_executor(
+    *,
+    config_options: ConfigCliOptions,
+    run_options: RunCliOptions,
+    selector_options: SelectorCliOptions,
+) -> bool:
+    if run_options.executor_explicit:
+        return _is_slurm_executor(run_options.executor)
+
+    composed = _compose_config(
+        config_options.config_path,
+        overlays=config_options.overlays,
+        overrides=config_options.overrides,
+    )
+    pipeline_result = _validate_pipeline_config(composed.resolved)
+    runtime_options = _merge_runtime_options(
+        composed.resolved,
+        run_options=run_options,
+        selector_options=selector_options,
+        known_stage_ids=pipeline_result.spec.stage_names,
+    )
+    return _is_slurm_executor(runtime_options.executor)
 
 
 def build_slurm_dry_run_result(

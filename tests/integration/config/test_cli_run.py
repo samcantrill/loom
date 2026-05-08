@@ -272,6 +272,98 @@ def test_run_slurm_afterok_dry_run_creates_stage_scripts(tmp_path: Path) -> None
     assert stderr.getvalue() == ""
 
 
+def test_run_config_resolved_slurm_dry_run_uses_slurm_artifact_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+    config_path = tmp_path / "pipeline.yaml"
+    run_path = tmp_path / "runs" / "configured-slurm"
+    _write_pipeline_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write("runtime:\n  executor: slurm-single-job\n")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--dry-run",
+                "--run-uri",
+                path_to_run_uri(run_path),
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    result = payload["result"]
+    assert payload["schema_version"] == "loom.cli.slurm_dry_run.v1"
+    assert result["mode"] == "slurm-single-job"
+    assert Path(result["manifest_path"]).is_file()
+    assert (run_path / "prepared_run.json").is_file()
+    assert stderr.getvalue() == ""
+
+
+def test_run_profile_resolved_slurm_dry_run_uses_slurm_artifact_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+    config_path = tmp_path / "pipeline.yaml"
+    run_path = tmp_path / "runs" / "profile-slurm"
+    _write_pipeline_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "runtime_profiles:\n"
+            "  cluster:\n"
+            "    executor: slurm-afterok\n"
+            "    slurm:\n"
+            "      schema_version: 1\n"
+            "      launcher_argv: [loom]\n"
+        )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--profile",
+                "cluster",
+                "--dry-run",
+                "--run-uri",
+                path_to_run_uri(run_path),
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    result = payload["result"]
+    assert payload["schema_version"] == "loom.cli.slurm_dry_run.v1"
+    assert result["mode"] == "slurm-afterok"
+    assert result["dependency_count"] == 1
+    assert Path(result["manifest_path"]).is_file()
+    assert (run_path / "prepared_run.json").is_file()
+    assert stderr.getvalue() == ""
+
+
 def test_run_configured_slurm_without_dry_run_is_v7_deferred(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     _write_pipeline_config(config_path)

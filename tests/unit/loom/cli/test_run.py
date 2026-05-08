@@ -397,6 +397,7 @@ def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) ->
             stage_actions=({"stage": "build", "action": "RUN", "reason_codes": ("RESUME_DISABLED",)},),
         )
 
+    monkeypatch.setattr(run_command, "_dry_run_selects_slurm_executor", lambda **_kwargs: False)
     monkeypatch.setattr(plan_command, "build_plan_result", build_plan_result)
     stdout = io.StringIO()
     stderr = io.StringIO()

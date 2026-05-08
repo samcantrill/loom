@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: ready_for_implementation
+- Status: implementation_refined
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 5: CLI and Preflight Integration`
 - Branch: `codex/slurm-cli-preflight`
@@ -33,6 +33,29 @@
   no remote synchronization, product-code validation, or broad checks were run
   in this planning-only pass
 - Blockers: none known for implementation handoff
+- Implementation refinement pass: completed on 2026-05-08; fixed dry-run
+  routing so config-resolved and profile-resolved SLURM executor selections use
+  the SLURM artifact generation path, not the generic plan-only dry-run path
+- Refinement validation: targeted Phase 5 suite passed
+  (`UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import.py
+  tests/package/test_public_api.py tests/package/test_import_boundaries.py
+  tests/unit/loom/cli tests/unit/loom/diagnostics
+  tests/unit/loom/pipeline/test_runtime_config.py
+  tests/unit/loom/pipeline/test_runtime_metadata.py
+  tests/unit/loom/pipeline/test_runtime_options.py
+  tests/unit/loom/pipeline/test_runtime_profiles.py
+  tests/unit/loom/pipeline/test_runtime_resources.py
+  tests/unit/loom/pipeline/test_executor_capabilities.py
+  tests/unit/loom/pipeline/executors/slurm
+  tests/contracts/test_cli_run_slurm_contract.py
+  tests/contracts/test_cli_preflight_contract.py
+  tests/contracts/test_diagnostics_preflight_contract.py
+  tests/contracts/test_executor_capabilities_contract.py
+  tests/contracts/test_slurm_manifest_contract.py
+  tests/integration/config/test_cli_run.py
+  tests/integration/pipeline/test_slurm_dry_run_planning.py
+  tests/e2e/test_cli_slurm_dry_run.py`; 319 passed); `make validate-pr`
+  passed (Ruff, Pyright, default test harness, config-extra harness, build)
 
 ## Objective
 
@@ -552,8 +575,29 @@ make test-summary
 - Phase plan refine: used on 2026-05-08 to lock the bounded artifact-safe CLI
   preparation flow, dry-run-only runtime/diagnostics support for SLURM executor
   names, exact stable preflight check IDs, and existing CLI output-envelope use
-- Phase implementation refinement: unused; reserved for the implementation
-  stage if expanded-path refinement, validation failure, or missing coverage
-  requires it
+- Phase implementation refinement: used on 2026-05-08 for the required
+  expanded-path pass; refined dry-run routing for config/profile-resolved SLURM
+  executor selections and added integration coverage
 - PR review: unused; reserved for the PR review stage
 - Blocker resolution: 0/3 used
+
+## Implementation Refinement Completion Notes
+
+- Reviewed the committed Phase 5 implementation and tests against the
+  finalized scope, focusing on explicit versus resolved SLURM dry-run
+  selection, v7-deferred live SLURM errors, artifact-safe persisted state,
+  warnings, stable preflight IDs/statuses, stage-level SLURM option validation,
+  and import-light boundaries.
+- Fixed one Phase 5 correctness gap: `loom run --dry-run` now detects
+  config-resolved and profile-resolved `slurm-single-job`/`slurm-afterok`
+  selections and enters the SLURM dry-run artifact path. Explicit non-SLURM
+  dry-runs still use the generic plan-only output.
+- Added integration coverage proving config-authored `runtime.executor:
+  slurm-single-job` and CLI-selected profiles resolving to `slurm-afterok`
+  create SLURM manifests and prepared-run state through the public CLI.
+- No live scheduler behavior, status/cancel surface, scheduler IDs, sbatch
+  execution, CLI-owned script rendering, broad refactors, or future Phase 6
+  behavior were added.
+- Validation evidence: targeted Phase 5 suite passed with 319 tests; `make
+  validate-pr` passed Ruff, Pyright, default tests, config-extra tests, and
+  package build.
