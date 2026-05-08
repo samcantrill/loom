@@ -669,7 +669,6 @@ def _subprocess_descriptor() -> ExecutorDescriptor:
 
 
 def _slurm_descriptor(name: str) -> ExecutorDescriptor:
-    single_job_live = name == "slurm-single-job"
     supported = ResourceCapability(
         support_level=ResourceSupportLevel.SUPPORTED,
         enforcement=ResourceEnforcementExpectation.ENFORCED,
@@ -686,9 +685,9 @@ def _slurm_descriptor(name: str) -> ExecutorDescriptor:
         adapter_namespaces=("slurm",),
         details={
             "built_in": True,
-            "dry_run_only": not single_job_live,
-            "live_submission": True if single_job_live else "deferred_to_v7_phase_4",
-            "scheduler_commands": single_job_live,
+            "dry_run_only": False,
+            "live_submission": True,
+            "scheduler_commands": True,
         },
     )
 

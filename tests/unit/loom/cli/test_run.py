@@ -373,10 +373,33 @@ def test_run_unsupported_executor_returns_executor_exit_code(
     assert payload["error"]["code"] == "cli.run.unsupported_executor"
 
 
-def test_run_non_dry_run_slurm_afterok_returns_deferred_error(
+def test_run_non_dry_run_slurm_afterok_uses_live_result_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_common(monkeypatch)
+    def build_slurm_result(*_args: object, **_kwargs: object) -> SlurmLiveRunCliResult:
+        return SlurmLiveRunCliResult(
+            run_uri="file:///abs/runs/live",
+            mode="slurm-afterok",
+            submission_id="planning-1",
+            status="SUBMITTED",
+            manifest_path="/abs/runs/live/slurm/submissions/planning-1/manifest.json",
+            manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+            plan_path="/abs/runs/live/slurm/submissions/planning-1/plan.json",
+            plan_relative_path="slurm/submissions/planning-1/plan.json",
+            submitted_jobs=(
+                {
+                    "logical_key": "stage:build",
+                    "scheduler_job_id": "1234",
+                    "scheduler_cluster": None,
+                },
+            ),
+            job_count=1,
+            submitted_job_count=1,
+        )
+
+    monkeypatch.setattr(
+        run_command, "build_slurm_live_submission_result", build_slurm_result
+    )
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -386,14 +409,14 @@ def test_run_non_dry_run_slurm_afterok_returns_deferred_error(
             stdout=stdout,
             stderr=stderr,
         )
-        == 7
+        == 0
     )
 
     payload = json.loads(stdout.getvalue())
     assert stderr.getvalue() == ""
-    assert payload["error"]["code"] == "cli.run.slurm_live_submission_deferred"
-    assert payload["error"]["context"]["deferred_to"] == "v7_phase_4"
-    assert payload["error"]["hint"].endswith("without submitting jobs.")
+    assert payload["schema_version"] == "loom.cli.slurm_live_run.v1"
+    assert payload["result"]["mode"] == "slurm-afterok"
+    assert payload["result"]["submitted_jobs"][0]["scheduler_job_id"] == "1234"
 
 
 def test_run_build_executor_supports_subprocess(tmp_path: Path) -> None:
@@ -551,6 +574,59 @@ def test_run_slurm_live_single_job_uses_live_result_schema(
     assert payload["result"]["mode"] == "slurm-single-job"
     assert payload["result"]["status"] == "SUBMITTED"
     assert payload["result"]["submitted_jobs"][0]["scheduler_job_id"] == "1234"
+
+
+def test_run_slurm_live_afterok_partial_returns_run_failed_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def build_slurm_result(*_args: object, **_kwargs: object) -> SlurmLiveRunCliResult:
+        return SlurmLiveRunCliResult(
+            run_uri="file:///abs/runs/live",
+            mode="slurm-afterok",
+            submission_id="planning-1",
+            status="PARTIAL",
+            manifest_path="/abs/runs/live/slurm/submissions/planning-1/manifest.json",
+            manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+            plan_path="/abs/runs/live/slurm/submissions/planning-1/plan.json",
+            plan_relative_path="slurm/submissions/planning-1/plan.json",
+            submitted_jobs=(
+                {
+                    "logical_key": "stage:build",
+                    "scheduler_job_id": "1234",
+                    "scheduler_cluster": None,
+                },
+            ),
+            failed_submissions=(
+                {
+                    "logical_key": "stage:train",
+                    "reason": "partition unavailable",
+                },
+            ),
+            job_count=2,
+            submitted_job_count=1,
+            failed_submission_count=1,
+        )
+
+    monkeypatch.setattr(
+        run_command, "build_slurm_live_submission_result", build_slurm_result
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--executor", "slurm-afterok", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 5
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["ok"] is False
+    assert payload["result"]["status"] == "PARTIAL"
+    assert payload["result"]["failed_submission_count"] == 1
 
 
 def test_run_failed_result_returns_run_failed_exit_code(

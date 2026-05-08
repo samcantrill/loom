@@ -27,12 +27,12 @@ def _write_pipeline_config(
         config_block = ""
     else:
         build_target = "tests.support.pipeline_execution_stages.JsonProducerStage"
-        counter_line = f"        counter_path: {counter_path}\n" if counter_path is not None else ""
-        config_block = (
-            "      config:\n"
-            f"        value: {value}\n"
-            f"{counter_line}"
+        counter_line = (
+            f"        counter_path: {counter_path}\n"
+            if counter_path is not None
+            else ""
         )
+        config_block = f"      config:\n        value: {value}\n{counter_line}"
 
     path.write_text(
         "pipeline:\n"
@@ -69,7 +69,12 @@ def test_run_default_uri_executes_under_store_default_root(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["run", str(config_path), "--format", "json"], stdout=stdout, stderr=stderr) == 0
+    assert (
+        main(
+            ["run", str(config_path), "--format", "json"], stdout=stdout, stderr=stderr
+        )
+        == 0
+    )
 
     payload = json.loads(stdout.getvalue())
     run_uri = payload["result"]["run_uri"]
@@ -130,14 +135,29 @@ def test_run_resume_reuses_existing_state(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "resume")
     _write_pipeline_config(config_path, counter_path=counter_path)
 
-    assert main(["run", str(config_path), "--run-uri", run_uri], stdout=io.StringIO(), stderr=io.StringIO()) == 0
+    assert (
+        main(
+            ["run", str(config_path), "--run-uri", run_uri],
+            stdout=io.StringIO(),
+            stderr=io.StringIO(),
+        )
+        == 0
+    )
     assert counter_path.read_text(encoding="utf-8") == "1"
 
     stdout = io.StringIO()
     stderr = io.StringIO()
     assert (
         main(
-            ["run", str(config_path), "--run-uri", run_uri, "--resume", "--format", "json"],
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--resume",
+                "--format",
+                "json",
+            ],
             stdout=stdout,
             stderr=stderr,
         )
@@ -145,7 +165,10 @@ def test_run_resume_reuses_existing_state(tmp_path: Path) -> None:
     )
 
     payload = json.loads(stdout.getvalue())
-    actions = {stage["stage"]: stage["action"] for stage in payload["result"]["stage_summaries"]}
+    actions = {
+        stage["stage"]: stage["action"]
+        for stage in payload["result"]["stage_summaries"]
+    }
     assert actions == {"build": "REUSE", "report": "REUSE"}
     assert counter_path.read_text(encoding="utf-8") == "1"
 
@@ -229,7 +252,9 @@ def test_run_slurm_single_job_dry_run_persists_plan_prepared_run_and_artifacts(
     assert (run_path / "plan.json").is_file()
     assert (run_path / "prepared_run.json").is_file()
     assert "SECRET" not in (run_path / "prepared_run.json").read_text(encoding="utf-8")
-    assert any(warning["code"] == "executor.slurm.sbatch" for warning in payload["warnings"])
+    assert any(
+        warning["code"] == "executor.slurm.sbatch" for warning in payload["warnings"]
+    )
     assert stderr.getvalue() == ""
 
 
@@ -280,7 +305,9 @@ def test_run_slurm_afterok_dry_run_creates_stage_scripts(tmp_path: Path) -> None
     assert result["job_count"] == 2
     assert result["script_count"] == 2
     assert result["dependency_count"] == 1
-    script_paths = {item["logical_key"]: Path(item["path"]) for item in result["script_paths"]}
+    script_paths = {
+        item["logical_key"]: Path(item["path"]) for item in result["script_paths"]
+    }
     assert set(script_paths) == {"stage:build", "stage:report"}
     assert all(path.is_file() for path in script_paths.values())
     build_script = script_paths["stage:build"].read_text(encoding="utf-8")
@@ -383,7 +410,9 @@ def test_run_profile_resolved_slurm_dry_run_uses_slurm_artifact_path(
     assert stderr.getvalue() == ""
 
 
-def test_run_configured_slurm_without_dry_run_is_v7_deferred(tmp_path: Path) -> None:
+def test_run_configured_slurm_without_dry_run_requires_sbatch(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "pipeline.yaml"
     _write_pipeline_config(config_path)
     with config_path.open("a", encoding="utf-8") as handle:
@@ -391,11 +420,20 @@ def test_run_configured_slurm_without_dry_run_is_v7_deferred(tmp_path: Path) -> 
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["run", str(config_path), "--format", "json"], stdout=stdout, stderr=stderr) == 7
+    assert (
+        main(
+            ["run", str(config_path), "--format", "json"], stdout=stdout, stderr=stderr
+        )
+        == 4
+    )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["error"]["code"] == "cli.run.slurm_live_submission_deferred"
-    assert "dry-run" in payload["error"]["hint"]
+    assert payload["error"]["code"] == "cli.run.slurm_live_preflight_failed"
+    assert payload["error"]["details"]["preflight"]["status"] == "FAIL"
+    assert any(
+        check["check_id"] == "executor.slurm.sbatch" and check["status"] == "FAIL"
+        for check in payload["error"]["details"]["preflight"]["checks"]
+    )
     assert stderr.getvalue() == ""
 
 
@@ -419,7 +457,9 @@ def test_run_failed_pipeline_returns_run_failed_exit_code(tmp_path: Path) -> Non
     assert payload["ok"] is False
     assert payload["result"]["status"] == "FAILED"
     assert payload["result"]["failure_summary"]["stage"] == "build"
-    assert "stage failed intentionally" in payload["result"]["failure_summary"]["message"]
+    assert (
+        "stage failed intentionally" in payload["result"]["failure_summary"]["message"]
+    )
 
 
 def test_run_unsupported_executor_is_not_usage_error(tmp_path: Path) -> None:

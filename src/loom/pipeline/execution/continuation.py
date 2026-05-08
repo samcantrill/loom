@@ -9,7 +9,13 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.errors import StageContractError
-from loom.pipeline.planning import ExecutionPlan, PlanAction, StageFingerprintRecord
+from loom.pipeline.planning import (
+    ExecutionPlan,
+    PlanAction,
+    StageFingerprintRecord,
+    build_stage_fingerprint,
+)
+from loom.pipeline.specs import parse_pipeline_config
 from loom.pipeline.submitted import (
     SUBMITTED_OPERATION_METADATA_KEY,
     SubmittedOperationRecord,
@@ -18,7 +24,7 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, ensure_plain_data, json_loads
 from loom.timestamps import utc_timestamp
 
 from .errors import OutputValidationError, PipelineExecutionError, PlanExecutionError
@@ -29,7 +35,13 @@ from .lifecycle import (
     write_run_status,
     write_stage_running,
 )
-from .models import EXECUTION_FAILURE_SCHEMA_VERSION, ExecutionFailure, StageRunResult
+from .logs import traceback_log_path
+from .models import (
+    EXECUTION_FAILURE_SCHEMA_VERSION,
+    STAGE_WORKER_REQUEST_SCHEMA_VERSION,
+    ExecutionFailure,
+    StageRunResult,
+)
 from .prepared_run import PREPARED_RUN_CONTINUATION_WHOLE_RUN, PreparedRunRecord
 from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_worker import (
@@ -315,18 +327,44 @@ def _run_stage_job_locked(
     _validate_runtime_environment(runtime, request.stage_name)
     attempt = request.attempt
     if attempt is None:
-        try:
-            attempt = _infer_stage_job_attempt(
-                run_store=run_store,
-                run_uri=request.run_uri,
-                stage_name=request.stage_name,
+        submitted_status = run_store.read_stage_status(
+            request.run_uri, request.stage_name
+        )
+        if (
+            submitted_status is not None
+            and submitted_status.status == StageStatus.SUBMITTED
+            and run_store.read_stage_worker_request(
+                request.run_uri,
+                request.stage_name,
+                attempt=submitted_status.attempt,
             )
-        except StageWorkerStateError as exc:
-            raise ContinuationStateError(
-                str(exc),
-                code="execution.stage_job.insufficient_reconstruction_state",
-                context={"run_uri": request.run_uri, "stage": request.stage_name},
-            ) from exc
+            is None
+        ):
+            attempt = submitted_status.attempt
+        else:
+            try:
+                attempt = _infer_stage_job_attempt(
+                    run_store=run_store,
+                    run_uri=request.run_uri,
+                    stage_name=request.stage_name,
+                )
+            except StageWorkerStateError as exc:
+                raise ContinuationStateError(
+                    str(exc),
+                    code="execution.stage_job.insufficient_reconstruction_state",
+                    context={"run_uri": request.run_uri, "stage": request.stage_name},
+                ) from exc
+    _materialize_submitted_worker_request_if_needed(
+        run_store=run_store,
+        run_uri=request.run_uri,
+        stage_name=request.stage_name,
+        attempt=attempt,
+        plan=plan,
+        stage_plan=stage_plan,
+        runtime=runtime,
+        continuation_executor=request.executor,
+        clock=clock,
+    )
     worker_request = _read_worker_request(
         run_store=run_store,
         run_uri=request.run_uri,
@@ -509,6 +547,200 @@ def _run_stage_job_locked(
 def _validate_executor(executor: str) -> None:
     if executor not in _SUPPORTED_CONTINUATION_EXECUTORS:
         raise UnsupportedContinuationExecutorError(executor)
+
+
+def _materialize_submitted_worker_request_if_needed(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    plan: ExecutionPlan,
+    stage_plan,
+    runtime: Mapping[str, PlainData],
+    continuation_executor: str,
+    clock: Clock,
+) -> None:
+    status = run_store.read_stage_status(run_uri, stage_name)
+    if (
+        status is None
+        or status.status != StageStatus.SUBMITTED
+        or status.attempt != attempt
+        or run_store.read_stage_worker_request(run_uri, stage_name, attempt=attempt)
+        is not None
+    ):
+        return
+
+    status_submission = _require_submitted_stage_metadata(
+        status.metadata,
+        field="stage status metadata",
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        continuation_executor=continuation_executor,
+    )
+    record = run_store.read_submitted_operation(
+        run_uri,
+        cast(str, status_submission["submission_id"]),
+    )
+    if record is None:
+        raise ContinuationStateError(
+            "submitted stage has no matching submitted-operation registry record",
+            code="execution.stage_job.submitted_registry_missing",
+            context={
+                "run_uri": run_uri,
+                "stage": stage_name,
+                "attempt": attempt,
+                "submission_id": status_submission["submission_id"],
+            },
+        )
+    _validate_submitted_registry_match(
+        record=record,
+        submission=status_submission,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+    )
+
+    stage = _stage_spec_from_config_snapshot(run_store, run_uri, stage_name)
+    inputs = _bind_stage_job_inputs(
+        run_store=run_store,
+        run_uri=run_uri,
+        stage_plan=stage_plan,
+    )
+    fingerprint = build_stage_fingerprint(
+        stage,
+        bound_inputs=inputs,
+        fingerprint_context=plan.fingerprint_context,
+    )
+    local_paths = cast(LocalRunStorePaths, run_store)
+    worker_request = StageWorkerRequest(
+        schema_version=STAGE_WORKER_REQUEST_SCHEMA_VERSION,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        prepared_at=clock(),
+        executor_name=continuation_executor,
+        inputs=inputs,
+        fingerprint=fingerprint,
+        stdout_path=str(
+            local_paths.local_stage_log_path(run_uri, stage_name, "stdout")
+        ),
+        stderr_path=str(
+            local_paths.local_stage_log_path(run_uri, stage_name, "stderr")
+        ),
+        traceback_path=str(
+            traceback_log_path(
+                run_store=local_paths,
+                run_uri=run_uri,
+                stage_name=stage_name,
+            )
+        ),
+        result_path=str(
+            local_paths.local_stage_worker_result_path(run_uri, stage_name)
+        ),
+        resolved_runtime=_stage_runtime_metadata(
+            runtime=runtime,
+            stage_name=stage_name,
+            continuation_executor=continuation_executor,
+        ),
+        executor_metadata={"worker_command": "loom stage-job run"},
+        metadata=dict(status.metadata),
+    )
+    run_store.write_stage_inputs(run_uri, stage_name, inputs, attempt=attempt)
+    run_store.write_stage_fingerprint(
+        run_uri,
+        stage_name,
+        fingerprint.to_dict(),
+        attempt=attempt,
+    )
+    run_store.prepare_stage_workspace(run_uri, stage_name)
+    run_store.write_stage_worker_request(
+        run_uri,
+        stage_name,
+        worker_request.to_dict(),
+        attempt=attempt,
+    )
+
+
+def _stage_spec_from_config_snapshot(
+    run_store: RunStore, run_uri: str, stage_name: str
+):
+    snapshot = run_store.read_config_snapshot(run_uri, "resolved")
+    if snapshot is None:
+        raise ContinuationStateError(
+            "submitted stage cannot be materialized without a safe resolved config snapshot",
+            code="execution.stage_job.insufficient_reconstruction_state",
+            context={"run_uri": run_uri, "stage": stage_name},
+        )
+    try:
+        decoded = json_loads(snapshot, path="config/resolved.json")
+    except Exception as exc:
+        raise ContinuationStateError(
+            f"safe resolved config snapshot is invalid JSON: {exc}",
+            code="execution.stage_job.insufficient_reconstruction_state",
+            context={"run_uri": run_uri, "stage": stage_name},
+        ) from exc
+    if not isinstance(decoded, Mapping) or "pipeline" not in decoded:
+        raise ContinuationStateError(
+            "safe resolved config snapshot does not contain a pipeline definition",
+            code="execution.stage_job.insufficient_reconstruction_state",
+            context={"run_uri": run_uri, "stage": stage_name},
+        )
+    try:
+        return parse_pipeline_config(decoded["pipeline"]).get_stage(stage_name)
+    except Exception as exc:
+        raise ContinuationStateError(
+            f"submitted stage cannot be reconstructed from config snapshot: {exc}",
+            code="execution.stage_job.insufficient_reconstruction_state",
+            context={"run_uri": run_uri, "stage": stage_name},
+        ) from exc
+
+
+def _bind_stage_job_inputs(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    stage_plan,
+) -> dict[str, ArtifactRef]:
+    inputs: dict[str, ArtifactRef] = {
+        name: bound.artifact_ref for name, bound in stage_plan.bound_inputs.items()
+    }
+    for pending in stage_plan.pending_inputs:
+        upstream = run_store.read_stage_outputs(run_uri, pending.source_stage) or {}
+        ref = upstream.get(pending.source_output)
+        if ref is None:
+            raise ContinuationStateError(
+                f"upstream output {pending.source_stage}.{pending.source_output} is not ready",
+                code="execution.stage_job.upstream_not_ready",
+                context={
+                    "run_uri": run_uri,
+                    "stage": stage_plan.stage_name,
+                    "upstream_stage": pending.source_stage,
+                    "output": pending.source_output,
+                },
+            )
+        inputs[pending.input_name] = ref
+    return inputs
+
+
+def _stage_runtime_metadata(
+    *,
+    runtime: Mapping[str, PlainData],
+    stage_name: str,
+    continuation_executor: str,
+) -> Mapping[str, PlainData]:
+    stages = runtime.get("stages")
+    stage_runtime = (
+        stages.get(stage_name)
+        if isinstance(stages, Mapping) and isinstance(stages.get(stage_name), Mapping)
+        else {}
+    )
+    return {
+        **dict(cast(Mapping[str, PlainData], stage_runtime)),
+        "stage_id": stage_name,
+        "executor": continuation_executor,
+    }
 
 
 def _read_prepared_run(run_store: RunStore, run_uri: str) -> PreparedRunRecord:

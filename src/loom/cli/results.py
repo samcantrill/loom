@@ -191,9 +191,11 @@ class SlurmLiveRunCliResult:
     plan_path: str
     plan_relative_path: str
     submitted_jobs: tuple[Mapping[str, object], ...] = ()
+    failed_submissions: tuple[Mapping[str, object], ...] = ()
     log_paths: tuple[Mapping[str, object], ...] = ()
     job_count: int = 0
     submitted_job_count: int = 0
+    failed_submission_count: int = 0
     dry_run: bool = False
 
     def to_dict(self) -> dict[str, PlainCliData]:
@@ -210,9 +212,11 @@ class SlurmLiveRunCliResult:
             "plan_path": self.plan_path,
             "plan_relative_path": self.plan_relative_path,
             "submitted_jobs": to_plain_cli_data(self.submitted_jobs),
+            "failed_submissions": to_plain_cli_data(self.failed_submissions),
             "log_paths": to_plain_cli_data(self.log_paths),
             "job_count": self.job_count,
             "submitted_job_count": self.submitted_job_count,
+            "failed_submission_count": self.failed_submission_count,
         }
 
 

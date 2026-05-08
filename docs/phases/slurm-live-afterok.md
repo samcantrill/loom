@@ -193,7 +193,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used for manager-local validation fixes after
+  targeted tests, Pyright, and config-extra surfaced stale expectations and
+  missing test type narrowing
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -201,9 +203,23 @@ make test-summary
 
 - Draft plan: complete
 - Final phase execution plan: complete
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: added live `slurm-afterok` submission with
+  scheduler-ID `afterok` dependencies, incremental manifest and
+  submitted-operation writes, accepted-stage `SUBMITTED` records, partial
+  submission results, CLI JSON/text output, live preflight support, descriptor
+  updates, and lazy submitted stage-job worker-request materialization at
+  startup.
+- Implementation validation: targeted Phase 4 slice passed with 63 tests;
+  `make validate-pr` passed with default 878 passed / 17 skipped / 9
+  deselected and config-extra 411 passed / 903 deselected; `make test-summary`
+  passed with package 52 passed / 1 skipped, unit 719 passed / 1 skipped,
+  contract 67 passed / 2 skipped, integration 40 passed / 7 skipped / 9
+  deselected, e2e 25 passed, and config-extra 411 passed / 903 deselected.
+- Refinement summary: fixed Pyright type narrowing in new afterok tests,
+  restored the single-job unit fixture after helper expansion, taught
+  submitted stage-job continuation to materialize missing worker requests
+  before reading them, and updated the config-extra SLURM live preflight
+  expectation.
 - Blocker-resolution summary: TBD
 - PR preparation: TBD
 - Stack maintenance: TBD

@@ -340,10 +340,13 @@ def test_slurm_dry_run_preflight_emits_stable_checks_and_warns_without_sbatch(
     assert by_id["resources.slurm.mapping"].status is PreflightCheckStatus.PASS
 
 
-def test_slurm_afterok_non_dry_run_preflight_reports_deferred_mode(
+def test_slurm_afterok_live_preflight_requires_sbatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
     _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
 
     result = run_preflight(
         PreflightRequest(
@@ -356,8 +359,9 @@ def test_slurm_afterok_non_dry_run_preflight_reports_deferred_mode(
     by_id = {check.check_id: check for check in result.checks}
     assert result.status is PreflightStatus.FAIL
     assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
-    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.FAIL
-    assert by_id["executor.slurm.mode"].details["deferred_to"] == "v7_phase_4"
+    assert by_id["executor.slurm.mode"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.slurm.mode"].details["live_submission"] is True
+    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.FAIL
 
 
 def test_slurm_single_job_live_preflight_requires_sbatch(

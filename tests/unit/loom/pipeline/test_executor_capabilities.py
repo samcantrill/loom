@@ -143,9 +143,9 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     assert slurm_descriptor.details["live_submission"] is True
     assert slurm_descriptor.details["scheduler_commands"] is True
     afterok_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-afterok")
-    assert afterok_descriptor.details["dry_run_only"] is True
-    assert afterok_descriptor.details["live_submission"] == "deferred_to_v7_phase_4"
-    assert afterok_descriptor.details["scheduler_commands"] is False
+    assert afterok_descriptor.details["dry_run_only"] is False
+    assert afterok_descriptor.details["live_submission"] is True
+    assert afterok_descriptor.details["scheduler_commands"] is True
     assert {
         kind: capability.to_dict()["support_level"]
         for kind, capability in cast(
