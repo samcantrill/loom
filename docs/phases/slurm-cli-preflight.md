@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft
+- Status: ready_for_implementation
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 5: CLI and Preflight Integration`
 - Branch: `codex/slurm-cli-preflight`
@@ -19,18 +19,20 @@
   review passes, and validation/CI passes with the PR targeting `develop`
 - Workflow path: expanded path because this phase exposes public CLI behavior
   and diagnostics/preflight integration
-- Expanded-path status: draft pass complete; refine pass pending before
+- Expanded-path status: draft pass complete; refine pass complete; ready for
   implementation handoff
 - Plan quality gate: passed on 2026-05-08 after initial review, one refinement
   pass, and confirmation review
 - Plan quality gate loop budget: initial review used, refinement used,
   confirmation review used
 - Draft pass: completed by `loom_phase_planner`
-- Refine pass: not yet run
+- Refine pass: completed by `loom_phase_planner` using architecture findings
+  for `loom run --dry-run`, Phase 4 persisted-state inputs, dry-run-only SLURM
+  executor resolution, preflight stable IDs, and CLI output envelope helpers
 - Setup limitations: worktree was created from local `develop` at `9480ac0`;
   no remote synchronization, product-code validation, or broad checks were run
   in this planning-only pass
-- Blockers: none known for draft planning
+- Blockers: none known for implementation handoff
 
 ## Objective
 
@@ -50,11 +52,19 @@ as v7-deferred live submission.
 ## Full-Plan Context
 
 Phases 1-4 provide the generic prepared-run state, continuation commands, SLURM
-models/options/resources/manifests, and Python dry-run planning APIs. Phase 5 is
-the presentation and diagnostics layer over those APIs. CLI code may compose
-config, normalize runtime options, persist safe plan/prepared-run state, and
-call public SLURM dry-run APIs. CLI code must not render scripts directly or
-duplicate SLURM planning logic.
+models/options/resources/manifests, and Python dry-run planning APIs. Phase 4
+SLURM planners deliberately read persisted execution-plan and prepared-run
+records from the run store before writing artifacts. Therefore Phase 5's central
+architectural decision is that the CLI must perform a bounded, artifact-safe
+preparation flow before calling those public Phase 4 APIs. It must not use
+`PipelineRunner.run()` for SLURM dry-runs, because the runner is an execution
+surface and rejects dry-run requests by design.
+
+Phase 5 is also the diagnostics/runtime integration point. Runtime capability
+support must make `slurm-single-job` and `slurm-afterok` resolvable dry-run
+executor names, claim the `slurm` adapter namespace, and expose resource
+mapping diagnostics without constructing a live scheduler executor or implying
+live submission support.
 
 Preflight is best-effort diagnostics. For v6, SLURM preflight checks must report
 shape, support, and local readiness issues for dry-run planning while treating
@@ -105,6 +115,9 @@ missing `sbatch` as warning or informational output, not a dry-run blocker.
   `plan_single_job_slurm_dry_run` and `plan_afterok_slurm_dry_run`; both read
   persisted plan and prepared-run state and write artifacts through public
   store/path APIs.
+- `PipelineRunner.run()` is not a valid implementation shortcut for this
+  phase. It is an execution path, not a dry-run artifact-preparation path, and
+  it must not be invoked for SLURM dry-run generation.
 - `src/loom/pipeline/executors/slurm` already owns script rendering,
   artifact writing, manifest records, options, resources, and logical job keys.
   Phase 5 should reuse those public APIs and result models.
@@ -118,6 +131,10 @@ missing `sbatch` as warning or informational output, not a dry-run blocker.
 - The default executor capability registry includes `local` and `subprocess`
   only. Phase 5 must decide how to make `slurm-single-job` and `slurm-afterok`
   resolvable for dry-run diagnostics without enabling live execution.
+- Existing output envelope helpers live in `src/loom/cli/formatting.py` and
+  CLI result/warning plain-data helpers live in `src/loom/cli/results.py`;
+  Phase 5 should extend these patterns instead of inventing a separate output
+  envelope.
 
 ## In-Scope Work
 
@@ -129,6 +146,16 @@ missing `sbatch` as warning or informational output, not a dry-run blocker.
   run according to existing run-uri semantics, persist a safe execution plan,
   persist prepared-run metadata, and call the matching Phase 4 public dry-run
   planning API.
+- Keep the bounded preparation flow local to the CLI layer:
+  1. compose config and validate pipeline;
+  2. merge runtime/profile/selector options;
+  3. resolve or allocate a local run URI;
+  4. run preflight using the resolved dry-run runtime options;
+  5. create the run directory;
+  6. plan with `persist=True`;
+  7. write a schema-versioned artifact-safe `PreparedRunRecord`;
+  8. call the selected Phase 4 SLURM dry-run planner;
+  9. adapt the typed result into existing CLI text/JSON envelope helpers.
 - Parse SLURM options from `RunOptions.adapter_options["slurm"]` and
   stage-level `adapter_options["slurm"]` using `SlurmOptions`, preserving
   existing runtime profile merge semantics and path-aware structured errors.
@@ -155,6 +182,14 @@ missing `sbatch` as warning or informational output, not a dry-run blocker.
   structured SLURM options/profile shape, resource mapping, run URI locality,
   generated script/log path safety, launcher argv shape, and `sbatch`
   availability.
+- Register these exact new preflight check IDs in `STABLE_CHECK_IDS` and lock
+  them with contract tests:
+  - Runtime group: `runtime.slurm.options`
+  - Run group: `run_uri.slurm.local`
+  - Executor group: `executor.slurm.mode`, `executor.slurm.launcher`,
+    `executor.slurm.sbatch`
+  - Resources group: `resources.slurm.mapping`
+  - Filesystem group: `filesystem.slurm.generated_paths`
 - Treat missing `sbatch` as `WARN` or `INFO` for SLURM dry-run modes. It must
   not prevent artifact generation.
 - Add focused package, unit, contract, integration, and e2e coverage for public
@@ -173,6 +208,8 @@ missing `sbatch` as warning or informational output, not a dry-run blocker.
 - No CLI-owned script rendering or manifest construction.
 - No change to generic `loom plan` semantics unless a small shared helper is
   needed to avoid duplicating config/runtime/planning code.
+- No use of `PipelineRunner.run()` or executor construction to create SLURM
+  dry-run artifacts.
 - No weakening of the v6 secret boundary: do not persist unredacted resolved
   config values, resolver outputs, environment values, or raw adapter payloads.
 - No workflow prompt, template, `AGENTS.md`, PR/merge policy, or product-unrelated
@@ -212,14 +249,35 @@ write prepared-run metadata, and invoke the Phase 4 SLURM planner. Any shared
 helper extracted from `loom.cli.plan` or `loom.cli.run` must be small and
 presentation-layer-local.
 
+The preparation flow must write only documents already allowed by existing
+store contracts: persisted `ExecutionPlan` via planning persistence and
+`PreparedRunRecord` via the prepared-run store validation. Prepared metadata
+should summarize the selected dry-run executor, continuation type, safe runtime
+facts, and plan facts needed by Phase 4; it must not add replay payloads,
+resolved config snapshots, resolver outputs, environment values, or raw adapter
+payloads.
+
 Preflight check IDs are public diagnostic contract. Add new IDs only by updating
-`STABLE_CHECK_IDS` and contract tests. Keep them stable, specific, and grouped
-under existing groups unless a new group is truly required. Prefer IDs such as
-`executor.slurm.mode`, `executor.slurm.sbatch`,
-`executor.slurm.launcher`, `resources.slurm.mapping`,
-`run_uri.slurm.local`, and `filesystem.slurm.generated_paths`, but refine exact
-names during the expanded-path refine pass if the existing diagnostics model
-points to a cleaner grouping.
+`STABLE_CHECK_IDS` and contract tests. Use these exact IDs:
+
+| Group | Check IDs |
+| --- | --- |
+| `runtime` | `runtime.slurm.options` |
+| `run` | `run_uri.slurm.local` |
+| `executor` | `executor.slurm.mode`, `executor.slurm.launcher`, `executor.slurm.sbatch` |
+| `resources` | `resources.slurm.mapping` |
+| `filesystem` | `filesystem.slurm.generated_paths` |
+
+`runtime.slurm.options` validates the `slurm` adapter-option shape after
+runtime profile merging. `executor.slurm.mode` verifies the selected executor is
+one of the two v6 dry-run modes and reports non-dry-run live behavior as
+deferred. `executor.slurm.launcher` validates structured launcher argv shape.
+`executor.slurm.sbatch` checks `shutil.which("sbatch")` only and reports a
+non-fatal warning/info when absent. `resources.slurm.mapping` validates generic
+CPU, memory, and GPU resource mapping through Phase 3 resource mappers.
+`run_uri.slurm.local` and `filesystem.slurm.generated_paths` validate local
+run-store assumptions and generated-artifact path safety through store/path
+helpers.
 
 SLURM executor names must be resolvable for dry-run diagnostics but must not
 construct live executor objects. Non-dry-run `loom run` with either SLURM mode
@@ -227,6 +285,11 @@ should fail before runner construction with a stable v7-deferred error. Dry-run
 preflight warnings should be visible in output, but warning status alone must
 not block artifact generation unless `--strict` behavior is explicitly used by
 the preflight command, not `loom run`.
+
+CLI output must use the existing `format_json_envelope` warning channel and
+plain-data normalization in `cli.results`. Add a focused SLURM dry-run result
+model and text formatter alongside existing run/plan result types instead of a
+custom JSON serializer.
 
 ## Acceptance Criteria
 
@@ -239,15 +302,19 @@ the preflight command, not `loom run`.
 - The CLI persists only artifact-safe plan/prepared-run metadata needed by the
   Phase 4 APIs and does not persist resolved secrets, resolver outputs,
   environment values, or raw adapter payloads.
+- `PipelineRunner.run()` is not used by the SLURM dry-run CLI path; the
+  implementation proves artifact generation comes from persisted plan and
+  prepared-run state consumed by public Phase 4 APIs.
 - Non-dry-run `slurm-single-job` and `slurm-afterok` fail with a clear
   v7-deferred error and a stable error code.
 - Text output reports run URI, mode, planning ID, manifest path, script count
   or directory, dependency count, and warnings without script bodies.
 - JSON output is schema-versioned and includes stable result and warning
   fields suitable for tests and future v7 extension.
-- Preflight emits stable SLURM check IDs for profile/options shape, resource
-  mapping, local run URI assumptions, generated path safety, launcher argv
-  shape, and `sbatch` availability.
+- Preflight emits the exact stable SLURM check IDs
+  `runtime.slurm.options`, `run_uri.slurm.local`, `executor.slurm.mode`,
+  `executor.slurm.launcher`, `executor.slurm.sbatch`,
+  `resources.slurm.mapping`, and `filesystem.slurm.generated_paths`.
 - Missing `sbatch` is not fatal for v6 dry-run planning.
 - CLI and diagnostics remain import-light; lower layers do not import
   `loom.cli`, diagnostics does not import heavy optional scheduler libraries,
@@ -260,9 +327,10 @@ the preflight command, not `loom run`.
 - Diagnostics gains scheduler-aware but cluster-free checks. These checks are
   public contract because their IDs and JSON payloads can be consumed by
   tooling.
-- Runtime capability registration must distinguish dry-run planning support
-  from live executor availability. This keeps v6 honest while making SLURM
-  executor names valid user-facing selections.
+- Runtime capability registration distinguishes dry-run planning support from
+  live executor availability. `slurm-single-job` and `slurm-afterok` become
+  valid dry-run names that claim the `slurm` adapter namespace and resource
+  mapping diagnostics, while non-dry-run execution remains v7-deferred.
 - The phase reinforces the source-tree boundary: CLI owns presentation,
   diagnostics owns best-effort readiness checks, runtime owns capability
   descriptors, execution/planning/stores own durable prepared state, and SLURM
@@ -285,6 +353,7 @@ the preflight command, not `loom run`.
 | Alternative | Reason rejected |
 | --- | --- |
 | Keep `loom run --dry-run` as generic plan output for SLURM executors | V6 requires durable SLURM scripts and manifests through the public CLI. |
+| Use `PipelineRunner.run()` to prepare dry-run artifacts | The runner is an execution path and rejects dry-run requests; Phase 5 must persist safe plan/prepared-run state and call Phase 4 APIs directly. |
 | Generate scripts directly in CLI code | SLURM rendering and manifest contracts belong under `loom.pipeline.executors.slurm`; CLI is only presentation. |
 | Block dry-runs when `sbatch` is missing | V6 is cluster-free dry-run planning and must work on development machines without SLURM. |
 | Treat `slurm-single-job` and `slurm-afterok` as fully supported executors | Live submission is explicitly deferred to v7; Phase 5 must fail non-dry-run selection clearly. |
@@ -313,7 +382,8 @@ the preflight command, not `loom run`.
   unit, contract, integration, and e2e suites.
 - Scope-control checks: no `sbatch` execution, no scheduler IDs or statuses,
   no `loom slurm status/cancel`, no CLI-owned script construction, no
-  resolved-secret persistence, no lower-layer `loom.cli` imports, no
+  `PipelineRunner.run()` use for SLURM dry-run, no resolved-secret persistence,
+  no lower-layer `loom.cli` imports, no
   product-unrelated docs/workflow changes, and no broad executor registry or
   plugin redesign.
 
@@ -327,8 +397,9 @@ the preflight command, not `loom run`.
   `tests/package/test_import_boundaries.py`
 - Required assertions or deferral reason: CLI remains import-light before
   command dispatch; SLURM package imports without optional scheduler
-  dependencies; runtime capability descriptors do not import diagnostics or
-  CLI; lower layers do not import `loom.cli`.
+  dependencies; dry-run-only SLURM runtime capability descriptors do not import
+  diagnostics, CLI, or scheduler modules; lower layers do not import
+  `loom.cli`.
 
 ### Unit Suite
 
@@ -337,12 +408,14 @@ the preflight command, not `loom run`.
   `tests/unit/loom/diagnostics/`, `tests/unit/loom/pipeline/runtime/`, and
   existing SLURM unit tests
 - Required assertions or deferral reason: `loom run` parser routes explicit
-  SLURM dry-run modes correctly; non-dry-run SLURM errors are stable; text and
-  JSON result formatting is concise and schema-versioned; SLURM adapter options
-  and stage adapter options parse through `SlurmOptions`; preflight check IDs,
-  statuses, and details are stable; missing `sbatch` is warning/info; resource
-  mapping diagnostics cover CPU, memory, GPU, unsupported resources, and
-  conflicts.
+  SLURM dry-run modes to the bounded preparation flow and keeps generic
+  non-SLURM `--dry-run` on plan output; non-dry-run SLURM errors are stable;
+  `PipelineRunner.run()` is not called for SLURM dry-run generation; text and
+  JSON result formatting uses existing envelope helpers and is concise and
+  schema-versioned; SLURM adapter options and stage adapter options parse
+  through `SlurmOptions`; the exact stable preflight check IDs, statuses, and
+  details are stable; missing `sbatch` is warning/info; resource mapping
+  diagnostics cover CPU, memory, GPU, unsupported resources, and conflicts.
 
 ### Contract Suite
 
@@ -354,7 +427,10 @@ the preflight command, not `loom run`.
   `tests/contracts/test_executor_capabilities_contract.py`, and existing
   `tests/contracts/test_slurm_manifest_contract.py`
 - Required assertions or deferral reason: SLURM dry-run JSON schema and warning
-  payloads are stable; stable preflight IDs include the new SLURM checks; SLURM
+  payloads are stable; `STABLE_CHECK_IDS` includes
+  `runtime.slurm.options`, `run_uri.slurm.local`, `executor.slurm.mode`,
+  `executor.slurm.launcher`, `executor.slurm.sbatch`,
+  `resources.slurm.mapping`, and `filesystem.slurm.generated_paths`; SLURM
   executor descriptors claim the `slurm` adapter namespace and expose dry-run
   capability without implying live submission; generated manifest contract
   remains unchanged.
@@ -368,10 +444,10 @@ the preflight command, not `loom run`.
   `tests/integration/pipeline/` as needed
 - Required assertions or deferral reason: CLI dry-run generation against a
   temporary local run store creates the same artifact family as the Python API;
-  persisted plan and prepared-run records are present and artifact-safe; both
-  modes report paths and warnings; preflight integrates with real composed
-  config/runtime profile data; repeated dry-runs create distinct planning
-  directories.
+  persisted plan and prepared-run records are present and artifact-safe before
+  Phase 4 planners run; both modes report paths and warnings; preflight
+  integrates with real composed config/runtime profile data; repeated dry-runs
+  create distinct planning directories.
 
 ### E2E Suite
 
@@ -406,6 +482,8 @@ the preflight command, not `loom run`.
 - Persisting prepared-run state from CLI can reopen the secret boundary; reuse
   `PreparedRunRecord` validation and add regression tests for environment
   values and resolver outputs.
+- Runtime capability support can overstate v6 readiness; descriptor details and
+  non-dry-run tests must make live submission explicitly deferred.
 
 ## Validation Commands
 
@@ -433,8 +511,9 @@ make test-summary
   environment values, or raw adapter payloads.
 - Supporting SLURM executor names requires enabling live scheduler behavior or
   weakening the non-dry-run v7-deferred error.
-- Stable preflight check IDs cannot be added without a diagnostics model
-  migration that exceeds Phase 5 scope.
+- The exact stable preflight check IDs named in this plan cannot be registered
+  in `STABLE_CHECK_IDS` without a diagnostics model migration that exceeds
+  Phase 5 scope.
 - Safe generated-artifact path validation cannot be performed through existing
   store/path helpers and would require CLI path-walking of run directories.
 - Integration or e2e coverage would need a real scheduler binary or cluster to
@@ -445,13 +524,22 @@ make test-summary
 ## Handoff Notes For `loom_phase_executor`
 
 - Start with the public behavior boundary: route explicit SLURM dry-run
-  executor names, add the v7-deferred non-dry-run error, and define the CLI
-  result schema before broadening diagnostics.
+  executor names to the bounded preparation flow, keep generic non-SLURM
+  `--dry-run` on plan output, add the v7-deferred non-dry-run error, and define
+  the CLI result schema before broadening diagnostics.
+- The bounded preparation flow is the core implementation contract: compose,
+  validate, merge runtime, resolve/allocate local run URI, preflight, create
+  run, persist plan, write artifact-safe `PreparedRunRecord`, call the selected
+  Phase 4 planner, then format with existing CLI envelope helpers.
 - Keep SLURM script and manifest work inside `loom.pipeline.executors.slurm`;
   call `plan_single_job_slurm_dry_run` and `plan_afterok_slurm_dry_run` rather
   than building artifacts in CLI code.
 - Add capability/preflight support in a way that keeps `slurm-single-job` and
   `slurm-afterok` valid dry-run selections but unmistakably non-live in v6.
+- Register and test exactly these preflight IDs:
+  `runtime.slurm.options`, `run_uri.slurm.local`, `executor.slurm.mode`,
+  `executor.slurm.launcher`, `executor.slurm.sbatch`,
+  `resources.slurm.mapping`, and `filesystem.slurm.generated_paths`.
 - Use focused tests as the behavior driver. Do not implement status/cancel,
   scheduler command runners, real cluster checks, or new broad SLURM CLI flag
   families.
@@ -461,8 +549,9 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase plan draft: used on 2026-05-08
-- Phase plan refine: unused; required before implementation handoff because
-  this is an expanded-path phase
+- Phase plan refine: used on 2026-05-08 to lock the bounded artifact-safe CLI
+  preparation flow, dry-run-only runtime/diagnostics support for SLURM executor
+  names, exact stable preflight check IDs, and existing CLI output-envelope use
 - Phase implementation refinement: unused; reserved for the implementation
   stage if expanded-path refinement, validation failure, or missing coverage
   requires it
