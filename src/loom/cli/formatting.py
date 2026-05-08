@@ -170,6 +170,7 @@ def format_slurm_dry_run_text(result: SlurmDryRunCliResult) -> str:
         f"plan: {result.plan_path}",
         f"scripts: {suffix}"
         + ("" if result.script_directory is None else f" in {result.script_directory}"),
+        f"logs: {_slurm_log_summary(result.log_paths)}",
         f"jobs: {result.job_count}",
         f"dependencies: {result.dependency_count}",
     ]
@@ -185,6 +186,18 @@ def format_slurm_dry_run_text(result: SlurmDryRunCliResult) -> str:
             message = str(warning.get("message", ""))
             lines.append(f"  {code}: {message}")
     return "\n".join(lines)
+
+
+def _slurm_log_summary(log_paths: Sequence[Mapping[str, object]]) -> str:
+    if not log_paths:
+        return "none"
+    first = log_paths[0]
+    stdout = str(first.get("stdout_relative_path", ""))
+    stderr = str(first.get("stderr_relative_path", ""))
+    if len(log_paths) == 1:
+        return f"stdout={stdout}, stderr={stderr}"
+    parent = stdout.rsplit("/", 1)[0] if "/" in stdout else stdout
+    return f"{len(log_paths)} job log pairs under {parent}"
 
 
 def format_stage_worker_text(result: object) -> str:

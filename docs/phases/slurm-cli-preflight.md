@@ -22,7 +22,8 @@
   `https://github.com/samcantrill/loom/pull/86` on 2026-05-08.
 - Stack state: root phase targeting `develop`; no stack predecessor and no
   retargeting required at PR opening.
-- GitHub checks: pending at PR creation.
+- GitHub checks: CI `checks` passed before automated review on 2026-05-08;
+  pending rerun after blocker-resolution fixes.
 - Merge eligibility: root phase; not merge-eligible until the expanded-path
   refine pass is complete, implementation remains phase-scoped, automated PR
   review passes, and validation/CI passes with the PR targeting `develop`
@@ -590,8 +591,10 @@ make test-summary
 - Phase implementation refinement: used on 2026-05-08 for the required
   expanded-path pass; refined dry-run routing for config/profile-resolved SLURM
   executor selections and added integration coverage
-- PR review: unused; reserved for the PR review stage
-- Blocker resolution: 0/3 used
+- PR review: used on 2026-05-08; automated reviewer found two blocking
+  findings around stage-level SLURM option application and default text
+  log-path output
+- Blocker resolution: 1/3 used
 
 ## Implementation Refinement Completion Notes
 
@@ -627,3 +630,23 @@ make test-summary
 - Verified PR base/head immediately after creation:
   `baseRefName=develop`, `headRefName=codex/slurm-cli-preflight`,
   `state=OPEN`.
+
+## Blocker Resolution Notes
+
+- Used blocker-resolution pass 1/3 on 2026-05-08 for the two automated review
+  blockers.
+- Fixed stage-level SLURM adapter option application by allowing afterok
+  planning to accept per-stage `SlurmOptions`; run-level SLURM options remain
+  the fallback, while stage-level options override the fields they specify.
+  Generated afterok job directives, launcher argv, and scripts now use the
+  selected per-stage options.
+- Fixed default text output by adding a concise wrapper-log-path summary to
+  `format_slurm_dry_run_text`.
+- Added/updated tests for per-stage SLURM options in afterok planning, CLI
+  integration artifact generation, and text output log-path pointers.
+- Validation after blocker resolution: focused tests passed with 21 passed and
+  CLI/diagnostics unit tests passed with 28 passed; Ruff passed; Pyright passed;
+  `make validate-pr` passed with default suite `833 passed, 15 skipped, 8
+  deselected`, config-extra suite `410 passed, 853 deselected`, and build
+  passed; `make test-summary` passed overall with 1263 passed, 11 skipped, and
+  861 deselected.

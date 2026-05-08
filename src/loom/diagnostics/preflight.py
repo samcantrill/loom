@@ -1084,10 +1084,22 @@ def _slurm_stage_options(
     stage_runtime = cast(Mapping[str, Any], getattr(options, "stage_options"))[stage_id]
     if "slurm" not in stage_runtime.adapter_options:
         return fallback
-    return _slurm_options_from_adapter(
-        stage_runtime.adapter_options,
-        path=f"RunOptions.stage_options[{stage_id!r}].adapter_options['slurm']",
-    )
+    raw = stage_runtime.adapter_options.get("slurm", {})
+    if not isinstance(raw, Mapping):
+        raise TypeError(
+            f"RunOptions.stage_options[{stage_id!r}].adapter_options['slurm'] "
+            "must be a mapping"
+        )
+    merged = dict(fallback.to_dict())
+    merged.update(raw)
+    try:
+        from loom.pipeline.executors.slurm.options import SlurmOptions
+
+        return SlurmOptions.from_dict(merged)
+    except Exception as exc:  # noqa: BLE001
+        raise type(exc)(
+            f"RunOptions.stage_options[{stage_id!r}].adapter_options['slurm']: {exc}"
+        ) from exc
 
 
 def _slurm_option_keys(options: object) -> list[str]:

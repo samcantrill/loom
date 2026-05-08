@@ -237,6 +237,21 @@ def test_run_slurm_afterok_dry_run_creates_stage_scripts(tmp_path: Path) -> None
     config_path = tmp_path / "pipeline.yaml"
     run_path = tmp_path / "runs" / "slurm-afterok"
     _write_pipeline_config(config_path)
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "runtime:\n"
+            "  adapter_options:\n"
+            "    slurm:\n"
+            "      schema_version: 1\n"
+            "      partition: shared\n"
+            "  stage_options:\n"
+            "    report:\n"
+            "      adapter_options:\n"
+            "        slurm:\n"
+            "          schema_version: 1\n"
+            "          partition: report\n"
+            "          launcher_argv: [uv, run, loom]\n"
+        )
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -268,7 +283,11 @@ def test_run_slurm_afterok_dry_run_creates_stage_scripts(tmp_path: Path) -> None
     script_paths = {item["logical_key"]: Path(item["path"]) for item in result["script_paths"]}
     assert set(script_paths) == {"stage:build", "stage:report"}
     assert all(path.is_file() for path in script_paths.values())
-    assert "stage-job" in script_paths["stage:report"].read_text(encoding="utf-8")
+    build_script = script_paths["stage:build"].read_text(encoding="utf-8")
+    report_script = script_paths["stage:report"].read_text(encoding="utf-8")
+    assert "#SBATCH --partition=shared" in build_script
+    assert "#SBATCH --partition=report" in report_script
+    assert "uv run loom stage-job run" in report_script
     assert stderr.getvalue() == ""
 
 

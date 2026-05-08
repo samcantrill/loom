@@ -397,6 +397,10 @@ def build_slurm_dry_run_result(
             run_store=store,
             run_uri=run_uri,
             options=slurm_options,
+            stage_options=_stage_slurm_options(
+                runtime_options,
+                fallback=slurm_options,
+            ),
             stage_resources=cast(Any, _stage_slurm_resources(runtime_options)),
         )
     return _slurm_dry_run_cli_result(result, warnings=warnings), warnings
@@ -688,26 +692,60 @@ def _slurm_options_from_runtime(runtime_options: "RunOptions") -> "SlurmOptions"
     from loom.pipeline.executors.slurm import SlurmOptions
 
     raw = runtime_options.adapter_options.get("slurm", {})
+    return _slurm_options_from_mapping(
+        raw,
+        path="runtime.adapter_options.slurm",
+        fallback=SlurmOptions(),
+    )
+
+
+def _slurm_options_from_mapping(
+    raw: object,
+    *,
+    path: str,
+    fallback: "SlurmOptions",
+) -> "SlurmOptions":
+    from loom.pipeline.executors.slurm import SlurmOptions
+
     if raw is None:
         raw = {}
     if not isinstance(raw, Mapping):
         raise CliError(
             "SLURM adapter options must be a mapping.",
             code="cli.run.slurm_options_invalid",
-            context={"path": "runtime.adapter_options.slurm"},
+            context={"path": path},
             exit_code=ExitCode.PIPELINE,
         )
     if not raw:
-        return SlurmOptions()
+        return fallback
+    merged = dict(fallback.to_dict())
+    merged.update(raw)
     try:
-        return SlurmOptions.from_dict(raw)
+        return SlurmOptions.from_dict(merged)
     except Exception as exc:  # noqa: BLE001
         raise CliError(
             f"SLURM adapter options are invalid: {exc}",
             code="cli.run.slurm_options_invalid",
-            context={"path": "runtime.adapter_options.slurm"},
+            context={"path": path},
             exit_code=ExitCode.PIPELINE,
         ) from exc
+
+
+def _stage_slurm_options(
+    runtime_options: "RunOptions",
+    *,
+    fallback: "SlurmOptions",
+) -> Mapping[str, "SlurmOptions"]:
+    stage_options: dict[str, SlurmOptions] = {}
+    for stage_id, runtime in cast(Mapping[str, Any], runtime_options.stage_options).items():
+        if "slurm" not in runtime.adapter_options:
+            continue
+        stage_options[stage_id] = _slurm_options_from_mapping(
+            runtime.adapter_options.get("slurm", {}),
+            path=f"runtime.stage_options.{stage_id}.adapter_options.slurm",
+            fallback=fallback,
+        )
+    return stage_options
 
 
 def _stage_slurm_resources(runtime_options: "RunOptions") -> Mapping[str, object]:

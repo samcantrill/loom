@@ -38,27 +38,29 @@ warning when `sbatch` is absent.
 
 New tests cover CLI routing and output contracts, diagnostics IDs/statuses,
 runtime descriptors, integration dry-run artifact generation, and a public CLI
-e2e path for both SLURM modes.
+e2e path for both SLURM modes. Review blocker fixes added coverage proving
+stage-level SLURM options reach generated afterok scripts and default text
+output points to wrapper log paths.
 
 ## Tests And Validation
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Ruff, Pyright, default pytest, config-extra pytest, and build passed during implementation refinement. |
-| `make test-summary` | Passed | Overall `1262 passed, 11 skipped, 860 deselected`; suite table below. |
-| GitHub checks | Pending | To be recorded after PR creation. |
+| `make validate-pr` | Passed | Ruff, Pyright, default pytest (`833 passed, 15 skipped, 8 deselected`), config-extra pytest (`410 passed, 853 deselected`), and build passed after blocker resolution. |
+| `make test-summary` | Passed | Overall `1263 passed, 11 skipped, 861 deselected`; suite table below. |
+| GitHub checks | Pending | To be rerun after pushing blocker-resolution fixes. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 52 | 0 | 0 | 1 | 0 | 53 | 7.25s | 17% |
-| unit | passed | 687 | 0 | 0 | 1 | 0 | 688 | 10.17s | 68% |
-| contract | passed | 61 | 0 | 0 | 2 | 0 | 63 | 2.56s | 45% |
-| integration | passed | 32 | 0 | 0 | 7 | 8 | 39 | 4.92s | 51% |
-| e2e | passed | 20 | 0 | 0 | 0 | 0 | 20 | 8.98s | 70% |
-| config-extra | passed | 410 | 0 | 0 | 0 | 852 | 410 | 24.09s | 76% |
-| Overall | passed | 1262 | 0 | 0 | 11 | 860 | 1273 | 57.98s | - |
+| package | passed | 52 | 0 | 0 | 1 | 0 | 53 | 6.05s | 17% |
+| unit | passed | 688 | 0 | 0 | 1 | 0 | 689 | 8.84s | 68% |
+| contract | passed | 61 | 0 | 0 | 2 | 0 | 63 | 2.20s | 45% |
+| integration | passed | 32 | 0 | 0 | 7 | 8 | 39 | 4.39s | 50% |
+| e2e | passed | 20 | 0 | 0 | 0 | 0 | 20 | 8.15s | 70% |
+| config-extra | passed | 410 | 0 | 0 | 0 | 853 | 410 | 22.08s | 76% |
+| Overall | passed | 1263 | 0 | 0 | 11 | 861 | 1274 | 51.71s | - |
 
 ## Risks / Follow-Ups
 

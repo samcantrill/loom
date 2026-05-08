@@ -117,6 +117,13 @@ def test_slurm_dry_run_text_is_path_oriented_and_omits_script_bodies() -> None:
         plan_relative_path="slurm/submissions/planning-1/plan.json",
         script_directory="/runs/demo/slurm/submissions/planning-1/scripts",
         script_count=1,
+        log_paths=(
+            {
+                "logical_key": "pipeline",
+                "stdout_relative_path": "slurm/submissions/planning-1/logs/pipeline.stdout.log",
+                "stderr_relative_path": "slurm/submissions/planning-1/logs/pipeline.stderr.log",
+            },
+        ),
         job_count=1,
         dependency_count=0,
     )
@@ -125,5 +132,7 @@ def test_slurm_dry_run_text_is_path_oriented_and_omits_script_bodies() -> None:
 
     assert "OK slurm dry-run file:///runs/demo: slurm-single-job" in text
     assert "manifest: /runs/demo/slurm/submissions/planning-1/manifest.json" in text
+    assert "logs: stdout=slurm/submissions/planning-1/logs/pipeline.stdout.log" in text
+    assert "stderr=slurm/submissions/planning-1/logs/pipeline.stderr.log" in text
     assert "#SBATCH" not in text
     assert "set -euo pipefail" not in text
