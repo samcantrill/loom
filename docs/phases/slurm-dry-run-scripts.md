@@ -487,8 +487,11 @@ make test-summary
 
 - Phase execution plan refinement: used; expanded-path refine pass completed on
   2026-05-08
-- Phase implementation refinement: not needed; fallback implementation worker
-  completed the phase and targeted validation passed
+- Phase implementation refinement: used; expanded-path implementation
+  refinement pass completed on 2026-05-08. The pass reviewed the Phase 4 SLURM
+  package implementation, touched tests, and phase artifact against the
+  finalized scope. No product or test defect was found; only this phase artifact
+  was updated to record the used pass and validation evidence.
 - PR review: unused; reserved for the later PR review gate
 - Blocker resolution: 0/3 used; no blocker-resolution pass has been consumed
   for Phase 4
@@ -522,3 +525,12 @@ make test-summary
   passed with 87 tests. Static targeted checks passed:
   `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/executors/slurm tests/unit/loom/pipeline/executors/slurm/test_slurm_scripts.py tests/unit/loom/pipeline/executors/slurm/test_slurm_planner.py tests/contracts/test_slurm_manifest_contract.py tests/integration/pipeline/test_slurm_dry_run_planning.py tests/package/test_import_boundaries.py`
   and `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/executors/slurm tests/unit/loom/pipeline/executors/slurm/test_slurm_scripts.py tests/unit/loom/pipeline/executors/slurm/test_slurm_planner.py tests/contracts/test_slurm_manifest_contract.py tests/integration/pipeline/test_slurm_dry_run_planning.py`.
+- Implementation refinement summary: completed on 2026-05-08. Reviewed the
+  current diff and commits `4316c6d`, `d50bf20`, and `b7fed75` for Phase 4
+  scope constraints: Phase 3 argv helpers and `shlex.quote` rendering,
+  store-owned generated artifact paths with atomic writes, public persisted
+  plan/prepared-run reads, logical afterok dependencies from
+  `ExecutionPlan.ordered_stage_plans` and `StagePlan.upstream_stages`,
+  dry-run-only manifests/metadata, and forbidden import/live scheduler
+  boundaries. No code or test patch was needed. Re-ran the targeted pytest
+  command above during the refinement pass; it passed with 87 tests.
