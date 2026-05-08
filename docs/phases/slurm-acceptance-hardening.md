@@ -202,10 +202,24 @@ make test-summary
 
 - Draft plan: complete
 - Final phase execution plan: complete
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
+- Implementation summary: complete. Added stable preflight IDs and checks for
+  optional SLURM status/cancel commands, active submitted work, and writable
+  generated paths; added fake-command submit/status/cancel e2e coverage with a
+  secret-safety assertion; added skipped-by-default real SLURM acceptance tests
+  for single-job success, afterok dependencies, and cancellation; updated SLURM,
+  preflight, CLI, testing, and example docs; added
+  `examples/execution/slurm-live/`.
+- Implementation validation: complete. `make validate-pr` passed on
+  2026-05-08 after Ruff, Pyright, default suite, config-extra suite, and build.
+  `make test-summary` passed on 2026-05-08 with package 52 passed / 1 skipped,
+  unit 734 passed / 1 skipped, contract 73 passed / 2 skipped, integration 45
+  passed / 7 skipped / 10 deselected, e2e 36 passed / 1 deselected, and
+  config-extra 413 passed / 943 deselected. `uv run pytest tests/slurm_acceptance
+  -m slurm` collected three tests and skipped all because
+  `LOOM_RUN_SLURM_ACCEPTANCE=1` and `LOOM_SLURM_ACCEPTANCE_ROOT` were not set.
+- Refinement summary: not needed; targeted validation and final PR validation
+  passed after updating the stable-ID contract snapshot.
 - Blocker-resolution summary: 0/3 used
-- PR preparation: TBD
+- PR preparation: in progress
 - Stack maintenance: no successor branch exists; this is the final v7 phase
 - Remaining blockers: none known
