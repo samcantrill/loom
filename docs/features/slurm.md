@@ -2,8 +2,8 @@
 
 ## 0. Implementation Status
 
-V6 implements the cluster-free SLURM dry-run planning layer only. The supported
-public commands are:
+V7 implements both the cluster-free SLURM dry-run planning layer and optional
+live SLURM submission. The dry-run commands remain:
 
 ```bash
 loom run experiment.yaml --executor slurm-single-job --dry-run
@@ -14,7 +14,24 @@ These commands create deterministic run-directory artifacts without calling
 `sbatch`: root `plan.json`, `prepared_run.json`, a
 `slurm/submissions/<planning_id>/manifest.json`, a SLURM dry-run plan, generated
 scripts, and stable wrapper stdout/stderr log paths. Missing `sbatch` is a
-warning in v6 preflight output.
+warning in dry-run preflight output.
+
+The live commands are:
+
+```bash
+loom run experiment.yaml --executor slurm-single-job
+loom run experiment.yaml --executor slurm-afterok
+loom status RUN_URI --jobs
+loom cancel RUN_URI --jobs
+```
+
+Live submission uses `sbatch --parsable`, records scheduler job IDs in the same
+`slurm/submissions/<submission_id>/manifest.json` artifact, marks submitted work
+as `SUBMITTED`, and stores command records, status snapshots, cancellation
+attempts, partial submission facts, and safe scheduler metadata. Missing
+`sbatch` is a live-submission error. Missing `squeue`, `sacct`, or `scancel`
+is a preflight warning, while the operation that needs the command fails clearly
+at use time.
 
 Generated single-job scripts call the generic whole-run continuation command:
 
@@ -28,12 +45,11 @@ Generated afterok scripts call the generic self-finalizing stage-job command:
 loom stage-job run --run-uri RUN_URI --stage STAGE --executor local
 ```
 
-V6 manifests use logical job keys such as `pipeline` and `stage:train`.
-Scheduler job IDs, submitted status, scheduler state, `squeue`, `sacct`,
-`scancel`, partial live-submission recovery, and real cluster acceptance tests
-are deferred to v7 or later opt-in suites. Sections below that discuss live
-submission, status, or cancellation are retained as v7/later design notes, not
-as implemented v6 behavior.
+Manifests use logical job keys such as `pipeline` and `stage:train`; live
+records add scheduler job IDs and backend state without replacing the generic
+run-store lifecycle. Default validation remains fake-command and cluster-free.
+The real SLURM acceptance suite is marked `slurm` and `slow` and runs only when
+the maintainer explicitly enables it.
 
 ## 1. Purpose
 
@@ -119,9 +135,20 @@ SLURM log path allocation
 SLURM-specific dry-run and option errors
 ```
 
-V7/later live submission may add `sbatch`, `squeue`, `sacct`, and `scancel`
-command execution through `subprocess`. SLURM support should not require a
-Python SLURM dependency.
+Responsibilities implemented in v7:
+
+```text
+sbatch --parsable live submission
+single-job and afterok job ID recording
+submitted-operation records
+squeue/sacct scheduler-aware status snapshots
+scancel cancellation attempts
+partial submission and partial cancellation reporting
+active submitted-work guards
+```
+
+SLURM command execution uses `subprocess` through a fakeable command-runner
+abstraction. SLURM support does not require a Python SLURM dependency.
 
 ### 3.2 `loom.pipeline.execution`
 
@@ -249,15 +276,17 @@ stdout/stderr log paths
 continuation command handoff through run-store files
 dry-run script generation without submission
 missing sbatch reported as warning/info for dry-runs
-clear errors when live SLURM execution is selected before v7
+live sbatch submission for single-job and afterok modes
+scheduler-aware status through loom status RUN_URI --jobs
+submitted-job cancellation through loom cancel RUN_URI --jobs
 ```
 
 The first implementation should assume a shared filesystem visible to the submit
 host and compute nodes. This matches common HPC usage and keeps remote artifact
 transfer out of the first design.
 
-Live `sbatch --parsable` submission, job ID parsing, submission failure
-metadata, status/cancel commands, and scheduler state are v7/later scope.
+Automatic retries, cleanup policies, exact submitted-operation selection, and
+remote artifact transfer remain later scope.
 
 ### 4.2 Should Not Support Initially
 
@@ -1336,15 +1365,10 @@ The actual pipeline execution occurs inside the SLURM job.
 
 ### 13.2 Command Inside the Job
 
-The job should invoke normal `loom run`.
-
-Recommended:
+The generated job invokes the prepared whole-run continuation command:
 
 ```bash
-loom run /runs/example/config/resolved.yaml \
-  --run-dir /runs/example \
-  --executor local \
-  --resume
+loom prepared-run continue --run-uri RUN_URI --executor local
 ```
 
 The inner executor should usually be local or subprocess, not another SLURM
@@ -1681,16 +1705,10 @@ Scheduler state does not replace `loom` stage status. It supplements it.
 
 ### 16.5 Status Command Behavior
 
-A future command:
+A scheduler-aware command:
 
 ```bash
-loom slurm status RUN_DIR
-```
-
-or:
-
-```bash
-loom status RUN_DIR --jobs
+loom status RUN_URI --jobs
 ```
 
 should show:
@@ -1749,14 +1767,14 @@ do not claim full cancellation if some jobs remain active
 
 ### 17.4 CLI
 
-Possible commands:
+Implemented command:
 
 ```bash
-loom slurm cancel RUN_DIR
-loom cancel RUN_DIR --jobs
+loom cancel RUN_URI --jobs
 ```
 
-The final CLI shape should be defined in the CLI design document.
+The command targets the latest active submitted operation by default. Exact
+submitted-operation selectors and cleanup policies are deferred.
 
 ---
 
@@ -2045,7 +2063,7 @@ The generated scripts call `loom stage-job run --run-uri RUN_URI --stage STAGE
 
 ### 21.3 V7 Submit Single Job
 
-Possible future command:
+Implemented command:
 
 ```bash
 loom run experiment.yaml \
@@ -2053,7 +2071,7 @@ loom run experiment.yaml \
   --executor slurm-single-job
 ```
 
-The future CLI may print:
+The CLI prints or serializes:
 
 ```text
 run directory
@@ -2065,7 +2083,7 @@ status command hint
 
 ### 21.4 V7 Submit Afterok DAG
 
-Possible future command:
+Implemented command:
 
 ```bash
 loom run experiment.yaml \
@@ -2073,7 +2091,7 @@ loom run experiment.yaml \
   --executor slurm-afterok
 ```
 
-The future CLI may print:
+The CLI prints or serializes:
 
 ```text
 number of jobs submitted
@@ -2085,35 +2103,27 @@ partial submission warning, if any
 
 ### 21.5 V7 Status
 
-Possible command:
+Implemented command:
 
 ```bash
 loom status runs/example --jobs
 ```
 
-or:
-
-```bash
-loom slurm status runs/example
-```
-
-It should combine run-store and scheduler state.
+It combines persisted run-store state with scheduler state from `sacct`,
+`squeue`, and the manifest. Default `loom status RUN_URI` remains
+persisted-state-only and does not query SLURM.
 
 ### 21.6 V7 Cancel
 
-Possible command:
+Implemented command:
 
 ```bash
 loom cancel runs/example --jobs
 ```
 
-or:
-
-```bash
-loom slurm cancel runs/example
-```
-
-It should use the submission manifest to find job IDs.
+It uses the latest active submitted-operation record and the submission manifest
+to find job IDs, records per-job `scancel` results, and returns nonzero for
+partial cancellation.
 
 ---
 
@@ -2284,10 +2294,9 @@ Real SLURM tests should be optional and skipped unless explicitly enabled.
 
 ## 24. Historical Live-Submission Implementation Sketch
 
-The sketch below predates the v6 dry-run-first implementation plan. Treat it as
-v7/later live-submission planning material. The implemented v6 baseline is the
-dry-run manifest/script/continuation contract described in section 0 and
-section 21.
+The sketch below predates the v6 dry-run-first implementation plan and the v7
+live-operation implementation. Treat it as historical planning context; the
+implemented behavior is described in section 0 and section 21.
 
 ### 24.1 Phase 1: Data Types and Script Builder
 

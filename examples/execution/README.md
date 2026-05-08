@@ -4,8 +4,7 @@ Execution examples cover how `loom` runs authored work: local in-process
 execution, subprocess workers, runtime profiles, normalized run options,
 artifact storage, provenance snapshots, and same-run resume behavior.
 
-Future executor examples should live here too. For example, v7 live SLURM
-examples should use `examples/execution/slurm/`, Docker examples should use
+Future executor examples should live here too. Docker examples should use
 `examples/execution/containers/docker/`, and SLURM plus Apptainer examples
 should use `examples/execution/containers/slurm-apptainer/`.
 
@@ -17,6 +16,7 @@ should use `examples/execution/containers/slurm-apptainer/`.
 | `execution.subprocess` | Running the same synthetic pipeline locally and with subprocess workers, inspecting subprocess failure diagnostics, and invoking a prepared stage through `loom stage run`. |
 | `execution.runtime-profile` | Configured runtime profile, CLI tags/notes, resource diagnostics, local run, and safe `runtime.json`. |
 | `execution.python-run-options` | Public Python construction, merge, stage validation, and capability diagnostics for `RunOptions`. |
+| `execution.slurm-live` | Manual live SLURM submit/status/cancel commands for `slurm-single-job` and `slurm-afterok` on a shared cluster filesystem. |
 
 ## Run
 

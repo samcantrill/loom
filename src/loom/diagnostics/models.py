@@ -72,7 +72,11 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
         "runtime.slurm.options",
         "runtime.stage_options",
     ),
-    PreflightGroup.RUN: ("run_uri.resolve", "run_uri.slurm.local"),
+    PreflightGroup.RUN: (
+        "run_uri.resolve",
+        "run_uri.slurm.local",
+        "run_uri.slurm.active_submission",
+    ),
     PreflightGroup.ARTIFACTS: ("artifact_store.available",),
     PreflightGroup.CODECS: ("codec_registry.available",),
     PreflightGroup.EXECUTOR: (
@@ -82,6 +86,9 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
         "executor.slurm.mode",
         "executor.slurm.launcher",
         "executor.slurm.sbatch",
+        "executor.slurm.squeue",
+        "executor.slurm.sacct",
+        "executor.slurm.scancel",
         "executor.subprocess.python",
         "executor.subprocess.worker",
     ),
@@ -89,6 +96,7 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
     PreflightGroup.FILESYSTEM: (
         "filesystem.input_exists",
         "filesystem.slurm.generated_paths",
+        "filesystem.slurm.generated_writable",
     ),
 }
 

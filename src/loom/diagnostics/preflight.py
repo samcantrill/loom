@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import shutil
 import sys
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -385,7 +386,11 @@ def _check_runtime_stage_options(context: _Context) -> tuple[PreflightCheckResul
 
 
 def _check_run_uri(context: _Context) -> tuple[PreflightCheckResult, ...]:
-    return (*_check_run_uri_resolve(context), *_check_slurm_run_uri_local(context))
+    return (
+        *_check_run_uri_resolve(context),
+        *_check_slurm_run_uri_local(context),
+        *_check_slurm_active_submission(context),
+    )
 
 
 def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...]:
@@ -421,6 +426,22 @@ def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...
                     {"run_uri": resolved.uri, "path": str(path)},
                 ),
             )
+        if _request_resume_enabled(context):
+            return (
+                _result(
+                    "run_uri.resolve",
+                    PreflightGroup.RUN,
+                    PreflightCheckStatus.PASS,
+                    PreflightSeverity.INFO,
+                    "run URI resolves to an existing local run directory for resume",
+                    {
+                        "run_uri": resolved.uri,
+                        "path": str(path),
+                        "exists": True,
+                        "resume": True,
+                    },
+                ),
+            )
         return (
             _result(
                 "run_uri.resolve",
@@ -440,6 +461,84 @@ def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...
             PreflightSeverity.INFO,
             "run URI resolves to an available local path",
             {"run_uri": resolved.uri, "path": str(path), "exists": False},
+        ),
+    )
+
+
+def _check_slurm_active_submission(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_slurm(context):
+        return ()
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "run_uri.slurm.active_submission",
+                PreflightGroup.RUN,
+                "SLURM submitted-operation probe failed",
+                exc,
+            ),
+        )
+    if run_uri is None:
+        return (
+            _missing_run_uri(
+                "run_uri.slurm.active_submission", PreflightGroup.RUN
+            ),
+        )
+    try:
+        from loom.pipeline.stores import LocalRunStore
+
+        resolved = cast(Any, context.run_uri())
+        if not resolved.path.exists():
+            return (
+                _result(
+                    "run_uri.slurm.active_submission",
+                    PreflightGroup.RUN,
+                    PreflightCheckStatus.PASS,
+                    PreflightSeverity.INFO,
+                    "no existing run directory has active submitted SLURM work",
+                    {"run_uri": resolved.uri, "run_exists": False},
+                ),
+            )
+        store = LocalRunStore(resolved.path.parent)
+        active = store.latest_active_submitted_operation(resolved.uri)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "run_uri.slurm.active_submission",
+                PreflightGroup.RUN,
+                "SLURM submitted-operation probe failed",
+                exc,
+            ),
+        )
+    if active is None:
+        return (
+            _result(
+                "run_uri.slurm.active_submission",
+                PreflightGroup.RUN,
+                PreflightCheckStatus.PASS,
+                PreflightSeverity.INFO,
+                "existing run has no active submitted SLURM work",
+                {"run_uri": resolved.uri, "active": False},
+            ),
+        )
+    return (
+        _result(
+            "run_uri.slurm.active_submission",
+            PreflightGroup.RUN,
+            PreflightCheckStatus.FAIL,
+            PreflightSeverity.ERROR,
+            "run already has active submitted scheduler work",
+            {
+                "run_uri": resolved.uri,
+                "active": True,
+                "submission_id": active.submission_id,
+                "backend": active.backend,
+                "mode": active.mode,
+                "state": active.state.value,
+            },
         ),
     )
 
@@ -814,11 +913,32 @@ def _check_slurm_executor(context: _Context) -> tuple[PreflightCheckResult, ...]
     if not _is_slurm_executor(options):
         return ()
     dry_run = bool(getattr(options, "dry_run", False))
-    return (
+    checks = [
         _check_slurm_mode(options),
         _check_slurm_launcher(options),
         _check_slurm_sbatch(live_submission=not dry_run),
-    )
+    ]
+    if not dry_run:
+        checks.extend(
+            (
+                _check_optional_slurm_command(
+                    check_id="executor.slurm.squeue",
+                    command="squeue",
+                    purpose="scheduler-aware status for active jobs",
+                ),
+                _check_optional_slurm_command(
+                    check_id="executor.slurm.sacct",
+                    command="sacct",
+                    purpose="scheduler accounting status for completed jobs",
+                ),
+                _check_optional_slurm_command(
+                    check_id="executor.slurm.scancel",
+                    command="scancel",
+                    purpose="submitted-job cancellation",
+                ),
+            )
+        )
+    return tuple(checks)
 
 
 def _check_slurm_mode(options: object) -> PreflightCheckResult:
@@ -912,6 +1032,37 @@ def _check_slurm_sbatch(*, live_submission: bool) -> PreflightCheckResult:
         PreflightSeverity.INFO,
         "sbatch is available",
         {"command": "sbatch", "available": True, "path": resolved},
+    )
+
+
+def _check_optional_slurm_command(
+    *,
+    check_id: str,
+    command: str,
+    purpose: str,
+) -> PreflightCheckResult:
+    resolved = shutil.which(command)
+    if resolved is None:
+        return _result(
+            check_id,
+            PreflightGroup.EXECUTOR,
+            PreflightCheckStatus.WARN,
+            PreflightSeverity.WARNING,
+            f"{command} is not available; {purpose} may be unavailable",
+            {
+                "command": command,
+                "available": False,
+                "required": False,
+                "purpose": purpose,
+            },
+        )
+    return _result(
+        check_id,
+        PreflightGroup.EXECUTOR,
+        PreflightCheckStatus.PASS,
+        PreflightSeverity.INFO,
+        f"{command} is available",
+        {"command": command, "available": True, "path": resolved, "purpose": purpose},
     )
 
 
@@ -1055,6 +1206,7 @@ def _check_filesystem(context: _Context) -> tuple[PreflightCheckResult, ...]:
             )
         )
     results.extend(_check_slurm_generated_paths(context))
+    results.extend(_check_slurm_generated_paths_writable(context))
     return tuple(results)
 
 
@@ -1129,6 +1281,72 @@ def _check_slurm_generated_paths(context: _Context) -> tuple[PreflightCheckResul
             ),
         ),
     )
+
+
+def _check_slurm_generated_paths_writable(
+    context: _Context,
+) -> tuple[PreflightCheckResult, ...]:
+    if not _request_selects_slurm(context):
+        return ()
+    try:
+        run_uri = _selected_run_uri(context)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "filesystem.slurm.generated_writable",
+                PreflightGroup.FILESYSTEM,
+                "SLURM generated path writability probe failed",
+                exc,
+            ),
+        )
+    if run_uri is None:
+        return (
+            _missing_run_uri(
+                "filesystem.slurm.generated_writable", PreflightGroup.FILESYSTEM
+            ),
+        )
+    try:
+        resolved = cast(Any, context.run_uri())
+        probe_parent = _nearest_existing_directory(resolved.path)
+        with tempfile.TemporaryDirectory(
+            prefix=".loom-preflight-slurm-",
+            dir=probe_parent,
+        ) as probe_dir:
+            probe_path = Path(probe_dir) / "generated-path-write-probe"
+            probe_path.write_text("ok\n", encoding="utf-8")
+            probe_path.unlink()
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "filesystem.slurm.generated_writable",
+                PreflightGroup.FILESYSTEM,
+                "SLURM generated paths are not writable",
+                exc,
+            ),
+        )
+    return (
+        _result(
+            "filesystem.slurm.generated_writable",
+            PreflightGroup.FILESYSTEM,
+            PreflightCheckStatus.PASS,
+            PreflightSeverity.INFO,
+            "SLURM generated path parent is writable",
+            {
+                "run_uri": resolved.uri,
+                "run_path": str(resolved.path),
+                "probe_parent": str(probe_parent),
+            },
+        ),
+    )
+
+
+def _nearest_existing_directory(path: Path) -> Path:
+    current = path if path.exists() else path.parent
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    if not current.is_dir():
+        raise NotADirectoryError(str(current))
+    return current
 
 
 def _coerce_selectors(value: object) -> object:
@@ -1236,6 +1454,19 @@ def _explicit_runtime_run_uri(runtime_options: object | None) -> str | None:
     if value is None:
         return None
     return cast(str, value)
+
+
+def _request_resume_enabled(context: _Context) -> bool:
+    runtime_options = context.request.runtime_options
+    if isinstance(runtime_options, Mapping):
+        resume = runtime_options.get("resume")
+        if isinstance(resume, Mapping):
+            return bool(resume.get("enabled", False))
+        return bool(resume)
+    resume = getattr(runtime_options, "resume", None)
+    if resume is None:
+        return False
+    return bool(getattr(resume, "enabled", resume))
 
 
 def _request_runtime_source(request: PreflightRequest) -> object | None:
