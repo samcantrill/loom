@@ -356,9 +356,9 @@ versions define those contracts.
 
 ### Phase 1 - Prepared-Run And Lifecycle Foundations
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-prepared-run-foundations`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/82
 
 Goal:
 
@@ -436,7 +436,18 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened on 2026-05-08 against `develop`.
+- Implemented schema-versioned prepared-run metadata as a generic
+  execution/store sibling record, local `prepared_run.json` persistence,
+  store-owned safe-relative generated artifact path resolution, and narrow
+  lifecycle helper extraction for input binding and artifact-index updates.
+- Preserved the v5 `loom stage run` handoff-only worker contract and avoided
+  Phase 2 continuation CLI, SLURM models/scripts, scheduler state, and live
+  submission behavior.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with 1170 passed, 0 failed, 0 errors.
+- Follow-up for Phase 2: build continuation commands on the prepared-run
+  metadata and lifecycle helper foundation.
 
 ### Phase 2 - Generic Continuation Commands
 
