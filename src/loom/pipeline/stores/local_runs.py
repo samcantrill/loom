@@ -337,7 +337,7 @@ class LocalRunStore:
             _require_mapping_field(
                 payload, path, field_name, label="prepared-run document"
             )
-        return payload
+        return cast(dict[str, PlainData], payload)
 
     def write_prepared_run(
         self, run_uri: str, prepared_run: Mapping[str, PlainData]
