@@ -851,6 +851,19 @@ def _write_slurm_prepared_run(
     store.write_prepared_run(run_uri, record.to_dict())
 
 
+def _write_slurm_safe_config_snapshot(
+    store: "LocalRunStore",
+    *,
+    run_uri: str,
+    config: Mapping[str, object],
+) -> None:
+    from loom.serialization import json_dumps_pretty
+
+    serialized = json_dumps_pretty(config)
+    store.write_config_snapshot(run_uri, "resolved", serialized)
+    store.write_config_snapshot(run_uri, "resolved_redacted", serialized)
+
+
 def _write_runtime_metadata(
     store: "LocalRunStore",
     *,
@@ -1025,7 +1038,7 @@ def build_slurm_live_submission_result(
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
 ) -> SlurmLiveRunCliResult:
-    """Prepare a single-job SLURM plan and submit it with ``sbatch``."""
+    """Prepare a SLURM plan and submit it with ``sbatch``."""
 
     store = _create_default_run_store()
     composed = _compose_config(
@@ -1041,9 +1054,7 @@ def build_slurm_live_submission_result(
         known_stage_ids=pipeline_result.spec.stage_names,
     )
     executor = runtime_options.executor or "local"
-    if executor == "slurm-afterok":
-        raise SlurmLiveSubmissionDeferredError(executor)
-    if executor != "slurm-single-job":
+    if executor not in _SLURM_EXECUTORS:
         raise UnsupportedExecutorError(executor)
 
     run_uri = _resolve_run_uri_for_run(
@@ -1073,14 +1084,18 @@ def build_slurm_live_submission_result(
             },
         )
 
-    artifact_safe_pipeline_result = _validate_pipeline_config(
-        _artifact_safe_config_for_plan(composed)
-    )
+    artifact_safe_config = _artifact_safe_config_for_plan(composed)
+    artifact_safe_pipeline_result = _validate_pipeline_config(artifact_safe_config)
     plan = _persist_slurm_dry_run_plan(
         artifact_safe_pipeline_result.spec,
         run_uri=run_uri,
         store=store,
         runtime_options=runtime_options,
+    )
+    _write_slurm_safe_config_snapshot(
+        store,
+        run_uri=run_uri,
+        config=artifact_safe_config,
     )
     _write_runtime_metadata(
         store,
@@ -1102,18 +1117,35 @@ def build_slurm_live_submission_result(
         SlurmActiveSubmissionError,
         SlurmCommandUnavailableError,
         SlurmSubmissionError,
+        plan_afterok_slurm_dry_run,
         plan_single_job_slurm_dry_run,
+        submit_afterok_slurm,
         submit_single_job_slurm,
     )
 
-    planning_result = plan_single_job_slurm_dry_run(
-        run_store=store,
-        run_uri=run_uri,
-        options=_slurm_options_from_runtime(runtime_options),
-        resources=None,
-    )
+    slurm_options = _slurm_options_from_runtime(runtime_options)
+    if executor == "slurm-single-job":
+        planning_result = plan_single_job_slurm_dry_run(
+            run_store=store,
+            run_uri=run_uri,
+            options=slurm_options,
+            resources=None,
+        )
+        submit = submit_single_job_slurm
+    else:
+        planning_result = plan_afterok_slurm_dry_run(
+            run_store=store,
+            run_uri=run_uri,
+            options=slurm_options,
+            stage_options=_stage_slurm_options(
+                runtime_options,
+                fallback=slurm_options,
+            ),
+            stage_resources=cast(Any, _stage_slurm_resources(runtime_options)),
+        )
+        submit = submit_afterok_slurm
     try:
-        result = submit_single_job_slurm(
+        result = submit(
             run_store=store,
             run_uri=run_uri,
             planning_result=planning_result,
@@ -1158,9 +1190,11 @@ def _slurm_live_cli_result(
         plan_path=result.plan_path,
         plan_relative_path=result.plan_relative_path,
         submitted_jobs=tuple(result.submitted_jobs),
+        failed_submissions=tuple(result.failed_submissions),
         log_paths=tuple(result.log_paths),
         job_count=result.job_count,
         submitted_job_count=result.submitted_job_count,
+        failed_submission_count=result.failed_submission_count,
         dry_run=result.dry_run,
     )
 

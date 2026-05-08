@@ -200,12 +200,13 @@ def format_slurm_live_submission_text(result: SlurmLiveRunCliResult) -> str:
         if result.submitted_job_count == 1
         else f"{result.submitted_job_count} submitted jobs"
     )
+    prefix = "OK" if result.status == "SUBMITTED" else "PARTIAL"
     lines = [
-        f"OK slurm submit {result.run_uri}: {result.mode} {result.status}",
+        f"{prefix} slurm submit {result.run_uri}: {result.mode} {result.status}",
         f"submission_id: {result.submission_id}",
         f"manifest: {result.manifest_path}",
         f"plan: {result.plan_path}",
-        f"jobs: {suffix}",
+        f"jobs: {suffix} of {result.job_count}",
     ]
     for job in result.submitted_jobs:
         cluster = job.get("scheduler_cluster")
@@ -213,8 +214,15 @@ def format_slurm_live_submission_text(result: SlurmLiveRunCliResult) -> str:
         lines.append(
             f"  {job.get('logical_key')}: {job.get('scheduler_job_id')}{cluster_suffix}"
         )
+    for failed in result.failed_submissions:
+        lines.append(f"  failed {failed.get('logical_key')}: {failed.get('reason')}")
     if result.log_paths:
         lines.append(f"logs: {_slurm_log_summary(result.log_paths)}")
+    if result.status == "PARTIAL":
+        lines.append(f"failed: {result.failed_submission_count}")
+        lines.append(
+            "cancel: loom cancel {run_uri} --jobs".format(run_uri=result.run_uri)
+        )
     lines.append(f"status: loom status {result.run_uri} --jobs")
     return "\n".join(lines)
 

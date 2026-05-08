@@ -836,22 +836,13 @@ def _check_slurm_mode(options: object) -> PreflightCheckResult:
                 {"executor": executor, "supported": sorted(_SLURM_EXECUTORS)},
             ),
         )
-    if not dry_run and executor != "slurm-single-job":
-        return _result(
-            "executor.slurm.mode",
-            PreflightGroup.EXECUTOR,
-            PreflightCheckStatus.FAIL,
-            PreflightSeverity.ERROR,
-            "SLURM live submission is deferred for this executor mode",
-            {"executor": executor, "dry_run": False, "deferred_to": "v7_phase_4"},
-        )
     if not dry_run:
         return _result(
             "executor.slurm.mode",
             PreflightGroup.EXECUTOR,
             PreflightCheckStatus.PASS,
             PreflightSeverity.INFO,
-            "SLURM live single-job executor mode is supported",
+            "SLURM live executor mode is supported",
             {"executor": executor, "dry_run": False, "live_submission": True},
         )
     return _result(
@@ -863,9 +854,7 @@ def _check_slurm_mode(options: object) -> PreflightCheckResult:
         {
             "executor": executor,
             "dry_run": True,
-            "live_submission": True
-            if executor == "slurm-single-job"
-            else "deferred_to_v7_phase_4",
+            "live_submission": True,
         },
     )
 

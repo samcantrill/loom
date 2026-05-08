@@ -99,6 +99,7 @@ from .submission import (
     SLURM_SUBMITTED_BACKEND,
     SlurmLiveSubmissionResult,
     default_slurm_command_runner,
+    submit_afterok_slurm,
     submit_single_job_slurm,
 )
 
@@ -179,6 +180,7 @@ __all__ = [
     "slurm_plan_relative_path",
     "slurm_submission_relative_path",
     "stage_job_key",
+    "submit_afterok_slurm",
     "submit_single_job_slurm",
     "validate_logical_job_key",
     "write_slurm_live_manifest",
