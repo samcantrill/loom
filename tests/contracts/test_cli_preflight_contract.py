@@ -15,6 +15,7 @@ from loom.diagnostics import (
     PreflightResult,
     PreflightSeverity,
 )
+from loom.diagnostics.models import STABLE_CHECK_IDS
 
 
 pytestmark = pytest.mark.contract
@@ -67,3 +68,15 @@ def test_preflight_json_result_envelope_contract() -> None:
             ],
         },
     }
+
+
+def test_preflight_slurm_check_ids_are_stable() -> None:
+    assert "run_uri.slurm.active_submission" in STABLE_CHECK_IDS[PreflightGroup.RUN]
+    assert "executor.slurm.sbatch" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert "executor.slurm.squeue" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert "executor.slurm.sacct" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert "executor.slurm.scancel" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert (
+        "filesystem.slurm.generated_writable"
+        in STABLE_CHECK_IDS[PreflightGroup.FILESYSTEM]
+    )

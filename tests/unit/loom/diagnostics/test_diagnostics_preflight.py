@@ -388,6 +388,117 @@ def test_slurm_single_job_live_preflight_requires_sbatch(
     assert by_id["executor.slurm.sbatch"].details["required"] is True
 
 
+def test_slurm_live_preflight_warns_for_optional_status_and_cancel_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "sbatch" else None,
+    )
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={"executor": "slurm-afterok"},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.WARN
+    assert by_id["executor.slurm.sbatch"].status is PreflightCheckStatus.PASS
+    for check_id in (
+        "executor.slurm.squeue",
+        "executor.slurm.sacct",
+        "executor.slurm.scancel",
+    ):
+        assert by_id[check_id].status is PreflightCheckStatus.WARN
+        assert by_id[check_id].details["required"] is False
+
+
+def test_slurm_run_preflight_fails_existing_active_submission(
+    tmp_path,
+) -> None:
+    from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+    from loom.pipeline.submitted import (
+        SubmittedOperationRecord,
+        SubmittedOperationState,
+    )
+
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = path_to_run_uri(tmp_path / "runs" / "active")
+    store.create_run(run_uri)
+    store.write_submitted_operation(
+        run_uri,
+        SubmittedOperationRecord(
+            run_uri=run_uri,
+            submission_id="planning-1",
+            backend="slurm",
+            mode="slurm-afterok",
+            created_at="2026-05-08T00:00:00Z",
+            updated_at="2026-05-08T00:00:01Z",
+            state=SubmittedOperationState.SUBMITTED,
+            manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+            summary_counts={"submitted": 1, "active": 1},
+        ),
+    )
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("run",),
+            run_uri=run_uri,
+            runtime_options={"executor": "slurm-afterok", "resume": {"enabled": True}},
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["run_uri.resolve"].status is PreflightCheckStatus.PASS
+    assert (
+        by_id["run_uri.slurm.active_submission"].status
+        is PreflightCheckStatus.FAIL
+    )
+    assert by_id["run_uri.slurm.active_submission"].details["submission_id"] == (
+        "planning-1"
+    )
+
+
+def test_slurm_filesystem_preflight_probes_generated_path_writability(
+    tmp_path,
+) -> None:
+    from loom.pipeline.stores import path_to_run_uri
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("pipeline: {}\n", encoding="utf-8")
+    run_uri = path_to_run_uri(tmp_path / "runs" / "writable")
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            groups=("filesystem",),
+            run_uri=run_uri,
+            runtime_options={
+                "executor": "slurm-afterok",
+                "dry_run": True,
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.PASS
+    assert by_id["filesystem.slurm.generated_paths"].status is PreflightCheckStatus.PASS
+    assert (
+        by_id["filesystem.slurm.generated_writable"].status
+        is PreflightCheckStatus.PASS
+    )
+    assert not (tmp_path / "runs" / "writable").exists()
+
+
 @dataclass(frozen=True, slots=True)
 class _FakeComposedConfig:
     resolved: dict[str, object]
