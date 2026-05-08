@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation_refined
+- Status: pr_open
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 5: CLI and Preflight Integration`
 - Branch: `codex/slurm-cli-preflight`
@@ -11,9 +11,18 @@
 - PR body path: `docs/phases/slurm-cli-preflight-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v6.md`
 - Source phase: Phase 5 - CLI And Preflight Integration
+- PR: https://github.com/samcantrill/loom/pull/86
+- PR state: open
 - Stack predecessor: none; Phases 1-4 are merged into `develop`
 - Base branch: `develop`
 - Target branch: `develop`
+- Base/head verification: `gh pr view 86 --json baseRefName,headRefName,state,url`
+  returned `baseRefName=develop`,
+  `headRefName=codex/slurm-cli-preflight`, `state=OPEN`, and URL
+  `https://github.com/samcantrill/loom/pull/86` on 2026-05-08.
+- Stack state: root phase targeting `develop`; no stack predecessor and no
+  retargeting required at PR opening.
+- GitHub checks: pending at PR creation.
 - Merge eligibility: root phase; not merge-eligible until the expanded-path
   refine pass is complete, implementation remains phase-scoped, automated PR
   review passes, and validation/CI passes with the PR targeting `develop`
@@ -56,6 +65,9 @@
   tests/integration/pipeline/test_slurm_dry_run_planning.py
   tests/e2e/test_cli_slurm_dry_run.py`; 319 passed); `make validate-pr`
   passed (Ruff, Pyright, default test harness, config-extra harness, build)
+- PR preparation: completed on 2026-05-08; PR body committed and PR opened
+  against `develop` with final suite evidence from `make test-summary`
+  (`1262 passed, 11 skipped, 860 deselected`)
 
 ## Objective
 
@@ -601,3 +613,17 @@ make test-summary
 - Validation evidence: targeted Phase 5 suite passed with 319 tests; `make
   validate-pr` passed Ruff, Pyright, default tests, config-extra tests, and
   package build.
+
+## PR Preparation Completion Notes
+
+- Wrote `docs/phases/slurm-cli-preflight-pr-body.md` with a concise
+  implementation summary, acceptance criteria, validation table, suite summary,
+  and risks/follow-ups.
+- Ran `make test-summary`; overall result passed with 1262 passed, 11 skipped,
+  and 860 deselected across package, unit, contract, integration, e2e, and
+  config-extra suites.
+- Opened PR https://github.com/samcantrill/loom/pull/86 with target
+  `develop` and head `codex/slurm-cli-preflight`.
+- Verified PR base/head immediately after creation:
+  `baseRefName=develop`, `headRefName=codex/slurm-cli-preflight`,
+  `state=OPEN`.
