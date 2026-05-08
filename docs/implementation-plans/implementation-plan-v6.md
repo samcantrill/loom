@@ -819,9 +819,9 @@ Completion summary:
 
 ### Phase 5 - CLI And Preflight Integration
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-cli-preflight`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/86
 
 Goal:
 
@@ -887,7 +887,16 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR #86 opened against `develop` on 2026-05-08 after the expanded-path
+  implementation refinement pass.
+- Implemented public SLURM dry-run CLI routing for explicit, config-resolved,
+  and profile-resolved `slurm-single-job` and `slurm-afterok` selections.
+- Added dry-run-only runtime capability descriptors, stable SLURM preflight
+  check IDs, concise text/JSON output, and v7-deferred non-dry-run SLURM
+  errors.
+- Validation before PR opening: targeted Phase 5 suite passed with 319 tests;
+  `make validate-pr` passed; `make test-summary` passed with 1262 passed, 11
+  skipped, and 860 deselected.
 
 ### Phase 6 - End-To-End Hardening And Documentation
 
