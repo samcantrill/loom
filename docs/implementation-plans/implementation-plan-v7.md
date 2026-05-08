@@ -353,9 +353,9 @@ source of submitted-job identity.
 
 ### Phase 1 - Submitted Lifecycle And Registry Foundations
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-submitted-lifecycle`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/88
 
 Goal:
 
@@ -460,7 +460,18 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan and PR body are recorded in
+  `docs/phases/slurm-submitted-lifecycle.md` and
+  `docs/phases/slurm-submitted-lifecycle-pr-body.md`.
+- Implemented shared `SUBMITTED` run/stage lifecycle, generic
+  submitted-operation registry records and local store discovery, persisted
+  submitted-operation status summaries, and guarded `SUBMITTED -> RUNNING`
+  stage-job continuation validation.
+- Validation before PR opening: `make validate-pr` passed; `make test-summary`
+  passed with package 52 passed / 1 skipped, unit 703 passed / 1 skipped,
+  contract 61 passed / 2 skipped, integration 33 passed / 7 skipped / 9
+  deselected, e2e 22 passed, and config-extra 411 passed / 871 deselected.
+- PR #88 targets `develop` from `codex/slurm-submitted-lifecycle`.
 
 ### Phase 2 - SLURM Live Command And Manifest Models
 
