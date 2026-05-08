@@ -456,7 +456,7 @@ Completion summary:
 
 ### Phase 2 - Generic Continuation Commands
 
-Status: pr_open
+Status: merged
 Branch: `codex/slurm-continuation-commands`
 PR: https://github.com/samcantrill/loom/pull/83
 
@@ -563,19 +563,33 @@ Completion summary:
   `docs/phases/slurm-continuation-commands.md`.
 - PR #83 opened against `develop` from
   `codex/slurm-continuation-commands` on 2026-05-08.
+- PR #83 merged into `develop` on 2026-05-08 with squash merge commit
+  `8386e05e8f5bb18de2ded5cd3fd8380abf6c2cfb`.
 - Implemented generic execution-owned continuation APIs for prepared-run
   validation and self-finalizing stage jobs, import-light
   `loom prepared-run continue` and `loom stage-job run` CLI groups, and narrow
   shared lifecycle helpers used by both the parent runner and stage-job runner.
+- Automated PR review found two blocking stage-job lifecycle gaps; blocker
+  resolution pass 1/3 fixed missing-run-status ordering before reconstruction
+  and self-finalization for target-construction failures.
 - Preserved `loom stage run` as the v5 handoff-only worker path and kept Phase
   3 SLURM scripts, manifests, scheduler state, and dry-run executors out of the
   diff.
 - Whole-run prepared continuation intentionally returns structured
   `execution.prepared_run.insufficient_prepared_state` before user code unless a
   future safe replay payload is added.
-- Validation before PR open: `make validate-pr` passed in the phase worktree;
-  `make test-summary` passed with overall `1188 passed, 11 skipped, 791
-  deselected`.
+- Final merge verification: before merge, `gh pr view 83 --json
+  baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/slurm-continuation-commands`,
+  `state=OPEN`, no merge commit yet, and CI check `checks` completed with
+  `SUCCESS`.
+- Final local validation: `make validate-pr` passed in the phase worktree after
+  blocker resolution; `make test-summary` passed with overall `1190 passed, 11
+  skipped, 793 deselected`.
+- Stack cleanup: no successor branches depended on
+  `codex/slurm-continuation-commands`; branch deletion was requested during
+  squash merge and remaining local worktree/branch cleanup is recorded in the
+  manager handoff.
 
 ### Phase 3 - SLURM Models, Options, Resources, And Manifest Schema
 
