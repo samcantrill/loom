@@ -593,7 +593,7 @@ Completion summary:
 
 ### Phase 3 - SLURM Models, Options, Resources, And Manifest Schema
 
-Status: pr_open
+Status: merged
 Branch: `codex/slurm-dry-run-models`
 PR: https://github.com/samcantrill/loom/pull/84
 
@@ -674,17 +674,32 @@ Completion summary:
   `docs/phases/slurm-dry-run-models.md`.
 - PR #84 opened against `develop` from `codex/slurm-dry-run-models` on
   2026-05-08.
+- PR #84 merged into `develop` on 2026-05-08 with squash merge commit
+  `01315a98967f7a85aaf4c8587fe878cfa89e2834`.
 - Implemented pure, optional-dependency-free SLURM dry-run contracts under
   `loom.pipeline.executors.slurm`, including mode/options parsing,
   `extra_sbatch` validation, continuation argv models, resource-to-SBATCH
   mapping, logical job keys, planned dependencies, planned jobs, planned
   submissions, and generated-artifact path helpers.
+- Automated PR review found two blocking Phase 3 contract gaps; blocker
+  resolution pass 1/3 fixed mutually exclusive `mem`/`mem_per_cpu` handling,
+  direct resource-mapping attribute rejection, and focused unit regressions.
 - Kept generated scripts, CLI integration, live scheduler calls, submitted
   state, job ID assignment, and Phase 4 dry-run planning APIs out of scope.
-- Local validation before PR: `make validate-pr` passed; `make test-summary`
-  passed with overall `1233 passed, 11 skipped, 836 deselected`.
-- Phase implementation refinement was used and found no code blocker; blocker
-  resolution budget remains unused at PR open.
+- Final merge verification: before merge, `gh pr view 84 --json
+  baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/slurm-dry-run-models`,
+  `state=OPEN`, no merge commit yet, and CI check `checks` completed with
+  `SUCCESS`.
+- Final local validation: after blocker resolution, `make validate-pr` passed
+  Ruff, Pyright, isolated default tests (`811 passed, 14 skipped, 8
+  deselected`), isolated config-extra tests (`405 passed, 830 deselected`),
+  and build; `make test-summary` passed with overall `1235 passed, 11
+  skipped, 838 deselected`.
+- Stack cleanup: no successor branches depended on
+  `codex/slurm-dry-run-models`; branch deletion was requested during squash
+  merge and remaining local worktree/branch cleanup is recorded in the manager
+  handoff.
 
 ### Phase 4 - SLURM Script Builders And Dry-Run Planning APIs
 
