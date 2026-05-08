@@ -259,7 +259,7 @@ Examples:
 ```text
 local executor requires no external command
 subprocess executor requires executable commands to be resolvable
-SLURM executor requires sbatch and optionally squeue/sacct
+SLURM dry-run checks warn when sbatch is missing; live squeue/sacct checks are v7/later
 Docker executor requires docker
 Apptainer executor requires apptainer or singularity
 ```
@@ -279,14 +279,17 @@ executor name.
 For SLURM runs, preflight may check:
 
 ```text
-sbatch exists
-squeue exists if monitoring is enabled
-sacct exists if accounting status is enabled
-configured partition/account/qos fields are present when required by profile
-submission directory is writable
-shared run directory path appears available from the controller host
+executor mode is a supported v6 dry-run mode
+structured SLURM options and profile shape are valid
+launcher argv is non-empty and shell-safe
+generic CPU, memory, and GPU resources can map to SBATCH directives
+generated script/log paths remain under the run directory
+shared/local run URI assumptions are satisfied
+sbatch availability, reported as warning/info for v6 dry-runs
 ```
 
+V6 SLURM dry-runs must not fail only because `sbatch` is missing. Live
+submission, `squeue`, `sacct`, and `scancel` checks are v7/later behavior.
 Preflight should not submit a test job unless explicitly requested by a future
 option.
 
@@ -339,13 +342,14 @@ missing for the selected execution mode.
 
 ## Output
 
-Human output should be compact:
+Human output should be compact. For v6 SLURM dry-runs, missing `sbatch` is a
+warning rather than a failure:
 
 ```text
 PASS config.load
 PASS pipeline.graph
 WARN disk_space.warning: only 8 GB available under runs/
-FAIL executor.slurm.commands: sbatch not found on PATH
+WARN executor.slurm.sbatch: sbatch not found on PATH
 ```
 
 JSON output should include structured fields:
@@ -355,9 +359,9 @@ JSON output should include structured fields:
   "status": "FAIL",
   "checks": [
     {
-      "check_id": "executor.slurm.commands",
-      "severity": "ERROR",
-      "status": "FAIL",
+      "check_id": "executor.slurm.sbatch",
+      "severity": "WARNING",
+      "status": "WARN",
       "message": "sbatch not found on PATH"
     }
   ]

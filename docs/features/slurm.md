@@ -1,15 +1,51 @@
 # `loom.pipeline.executors.slurm` Specification
 
+## 0. Implementation Status
+
+V6 implements the cluster-free SLURM dry-run planning layer only. The supported
+public commands are:
+
+```bash
+loom run experiment.yaml --executor slurm-single-job --dry-run
+loom run experiment.yaml --executor slurm-afterok --dry-run
+```
+
+These commands create deterministic run-directory artifacts without calling
+`sbatch`: root `plan.json`, `prepared_run.json`, a
+`slurm/submissions/<planning_id>/manifest.json`, a SLURM dry-run plan, generated
+scripts, and stable wrapper stdout/stderr log paths. Missing `sbatch` is a
+warning in v6 preflight output.
+
+Generated single-job scripts call the generic whole-run continuation command:
+
+```bash
+loom prepared-run continue --run-uri RUN_URI --executor local
+```
+
+Generated afterok scripts call the generic self-finalizing stage-job command:
+
+```bash
+loom stage-job run --run-uri RUN_URI --stage STAGE --executor local
+```
+
+V6 manifests use logical job keys such as `pipeline` and `stage:train`.
+Scheduler job IDs, submitted status, scheduler state, `squeue`, `sacct`,
+`scancel`, partial live-submission recovery, and real cluster acceptance tests
+are deferred to v7 or later opt-in suites. Sections below that discuss live
+submission, status, or cancellation are retained as v7/later design notes, not
+as implemented v6 behavior.
+
 ## 1. Purpose
 
 `loom.pipeline.executors.slurm` is the optional cluster execution layer for
 running `loom` pipelines on SLURM-managed systems.
 
-It should translate a validated pipeline plan and generic runtime/resource
-metadata into SLURM jobs, submission scripts, dependency edges, logs, and
-submission manifests. It should not change pipeline semantics. The same stage
-contracts, artifact references, run-store state, resume rules, and subprocess
-worker command should apply whether a stage runs locally or under SLURM.
+It translates a validated pipeline plan and generic runtime/resource metadata
+into SLURM-oriented scripts, dependency edges, logs, and manifests. It should
+not change pipeline semantics. The same stage contracts, artifact references,
+run-store state, resume rules, and generic execution-owned continuation
+commands should apply whether work runs locally, under subprocess execution, or
+through a future submitted backend.
 
 The design should support two practical modes first:
 
@@ -28,8 +64,9 @@ these two modes are stable.
 
 [loom.md](../loom.md) includes SLURM as execution scaffolding rather than a core
 dependency. This document keeps SLURM optional and executor-shaped: it maps
-generic plans and runtime metadata onto scheduler scripts and submissions
-without changing pipeline semantics or requiring a Python SLURM library.
+generic plans and runtime metadata onto scheduler scripts and, in v7/later,
+submissions without changing pipeline semantics or requiring a Python SLURM
+library.
 
 ---
 
@@ -56,9 +93,10 @@ Stage worker:
   runs one stage or one whole pipeline command inside the allocation
 ```
 
-The SLURM executor should not implement a separate pipeline model. It should use
-the same `loom run` and `loom stage run` entry points that local and subprocess
-execution use.
+The SLURM executor should not implement a separate pipeline model. V6 generated
+scripts use `loom prepared-run continue` for whole-run single-job scripts and
+`loom stage-job run` for afterok stage scripts. `loom stage run` remains the
+v5 parent-managed subprocess worker and is not the generated afterok command.
 
 ---
 
@@ -68,24 +106,22 @@ execution use.
 
 Owns SLURM-specific behavior.
 
-Responsibilities:
+Responsibilities implemented in v6:
 
 ```text
 SLURM executor modes
 SBATCH script generation
 generic resource to SBATCH mapping
-sbatch command construction
-sbatch --parsable job ID parsing
 dependency option construction
-submission manifest writing
+dry-run manifest writing
 script path allocation
 SLURM log path allocation
-basic job cancellation commands
-SLURM-specific error normalization
+SLURM-specific dry-run and option errors
 ```
 
-It may call `sbatch`, `squeue`, `sacct`, and `scancel` through `subprocess`.
-It should not require a Python SLURM dependency.
+V7/later live submission may add `sbatch`, `squeue`, `sacct`, and `scancel`
+command execution through `subprocess`. SLURM support should not require a
+Python SLURM dependency.
 
 ### 3.2 `loom.pipeline.execution`
 
@@ -205,23 +241,23 @@ metadata.
 single-job mode
 afterok per-stage mode
 script generation into the run directory
-submission manifest JSON
-sbatch --parsable submission
-job ID parsing
+dry-run manifest JSON
 afterok dependency construction
-generic CPU, memory, GPU, and walltime mapping
+generic CPU, memory, and GPU mapping
 optional partition/account/qos mapping
 stdout/stderr log paths
-stage result handoff through run-store files
-failure metadata for failed submissions
+continuation command handoff through run-store files
 dry-run script generation without submission
-basic scancel support for submitted jobs
-clear errors when SLURM commands are unavailable
+missing sbatch reported as warning/info for dry-runs
+clear errors when live SLURM execution is selected before v7
 ```
 
 The first implementation should assume a shared filesystem visible to the submit
 host and compute nodes. This matches common HPC usage and keeps remote artifact
 transfer out of the first design.
+
+Live `sbatch --parsable` submission, job ID parsing, submission failure
+metadata, status/cancel commands, and scheduler state are v7/later scope.
 
 ### 4.2 Should Not Support Initially
 
@@ -274,19 +310,20 @@ Example shape:
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
 
-loom stage run --run-dir runs/example --stage train --attempt 1
+loom stage-job run --run-uri file:///abs/project/runs/example --stage train --executor local
 ```
 
 ### 5.3 Submission Manifest
 
-A JSON file written by `loom` that records submitted jobs.
+A JSON file written by `loom` that records planned dry-run jobs in v6 and
+submitted jobs in v7/later.
 
 It should include:
 
 ```text
 run_id
 mode
-submitted_at
+created_at
 submit_host
 jobs
 scripts
@@ -294,8 +331,8 @@ commands
 dependencies
 ```
 
-The manifest should make a submitted run inspectable even after the submit
-process exits.
+The manifest should make a planned or submitted run inspectable even after the
+planning or submit process exits.
 
 ### 5.4 Job ID
 
@@ -326,24 +363,34 @@ This means downstream jobs run only if upstream jobs complete successfully.
 
 ### 5.6 Single-Job Mode
 
-One SLURM job runs the entire pipeline command inside one allocation.
+One SLURM job runs the entire pipeline command inside one allocation. In v6, the
+generated dry-run script plans this continuation command:
 
-The submitted script usually invokes:
+```bash
+loom prepared-run continue --run-uri RUN_URI --executor local
+```
+
+V7 live submission can submit the same script shape.
+
+Older designs used commands such as:
 
 ```bash
 loom run CONFIG --run-dir RUN_DIR --executor local
 ```
 
-or an equivalent resolved-config command.
+or an equivalent resolved-config command. V6 rejects that shape for generated
+scripts because unredacted resolved config can contain resolver outputs and
+secrets.
 
 ### 5.7 Afterok Mode
 
-One SLURM job is submitted for each stage that the plan says should run.
+One SLURM job is planned for each stage that the plan says should run. V7 can
+submit those scripts and map logical job keys to scheduler job IDs.
 
 Each stage job invokes:
 
 ```bash
-loom stage run --run-dir RUN_DIR --stage STAGE --attempt ATTEMPT
+loom stage-job run --run-uri RUN_URI --stage STAGE --executor local
 ```
 
 Downstream jobs are submitted with `--dependency=afterok:<job_id>` options.
@@ -546,22 +593,23 @@ failure metadata
 
 ### 7.2 Single-Job Mode
 
-Single-job mode submits one script that runs a whole pipeline command.
+Single-job mode plans one script that runs a whole pipeline continuation
+command. V7 can submit that script.
 
-Recommended command body:
+Implemented v6 command body:
 
 ```bash
-loom run CONFIG_PATH --run-dir RUN_DIR --executor local --resume
+loom prepared-run continue --run-uri RUN_URI --executor local
 ```
 
-Alternative once resolved configs are persisted:
+Rejected older shape:
 
 ```bash
 loom run --resolved-config RUN_DIR/config/resolved.yaml --run-dir RUN_DIR --executor local --resume
 ```
 
-The exact CLI shape should be finalized in the CLI design. The important rule is
-that the SLURM script invokes the normal `loom run` pathway.
+Generated v6 scripts should not replay unredacted resolved config. They read
+the prepared run from durable run-store state.
 
 ### 7.3 Single-Job Use Cases
 
@@ -596,15 +644,17 @@ Users should choose afterok mode when stage-level resources matter.
 
 ### 7.5 Afterok Mode
 
-Afterok mode submits one job per `RUN` stage.
+Afterok mode plans one job per `RUN` stage. V7 can submit those planned jobs in
+topological order.
 
 For each runnable stage, the script body should invoke:
 
 ```bash
-loom stage run --run-dir RUN_DIR --stage STAGE_NAME --attempt ATTEMPT
+loom stage-job run --run-uri RUN_URI --stage STAGE_NAME --executor local
 ```
 
-The submitter should pass dependencies:
+The v6 manifest records logical dependencies. The v7 submitter can translate
+those logical keys into scheduler dependencies:
 
 ```bash
 sbatch --dependency=afterok:UPSTREAM_JOB_ID script.sh
@@ -1231,13 +1281,13 @@ CLI arguments.
 Single-job command:
 
 ```bash
-loom run /runs/example/config/resolved.yaml --run-dir /runs/example --executor local --resume
+loom prepared-run continue --run-uri file:///runs/example --executor local
 ```
 
 Per-stage command:
 
 ```bash
-loom stage run --run-dir /runs/example --stage train --attempt 1
+loom stage-job run --run-uri file:///runs/example --stage train --executor local
 ```
 
 The script should record the command in comments or metadata for debugging.
@@ -1478,10 +1528,11 @@ This may require `sacct` or manifest-based explanation.
 Per-stage SLURM jobs should run:
 
 ```bash
-loom stage run --run-dir RUN_DIR --stage STAGE_NAME --attempt ATTEMPT
+loom stage-job run --run-uri RUN_URI --stage STAGE_NAME --executor local
 ```
 
-This command is the same command used by `SubprocessExecutor`.
+This command is distinct from the parent-managed `loom stage run` command used
+by `SubprocessExecutor`.
 
 ### 15.2 Worker Startup
 
@@ -1940,17 +1991,69 @@ This makes tests independent of a real cluster.
 
 ## 21. CLI Integration
 
-### 21.1 Submit Single Job
+### 21.1 V6 Dry-Run Single Job
 
-Possible command:
+Implemented command:
 
 ```bash
 loom run experiment.yaml \
-  --run-dir runs/example \
+  --run-uri file:///abs/project/runs/example \
+  --executor slurm-single-job \
+  --dry-run
+```
+
+The CLI prints or serializes:
+
+```text
+run URI
+planning ID
+manifest path
+dry-run plan path
+script path
+wrapper stdout/stderr log paths
+preflight warnings
+```
+
+The generated script calls `loom prepared-run continue --run-uri RUN_URI
+--executor local`.
+
+### 21.2 V6 Dry-Run Afterok DAG
+
+Implemented command:
+
+```bash
+loom run experiment.yaml \
+  --run-uri file:///abs/project/runs/example \
+  --executor slurm-afterok \
+  --dry-run
+```
+
+The CLI prints or serializes:
+
+```text
+number of planned jobs
+number of logical afterok dependencies
+manifest path
+script directory and per-stage script paths
+wrapper stdout/stderr log paths
+generated command argv
+preflight warnings
+```
+
+The generated scripts call `loom stage-job run --run-uri RUN_URI --stage STAGE
+--executor local`. They do not call `loom stage run`.
+
+### 21.3 V7 Submit Single Job
+
+Possible future command:
+
+```bash
+loom run experiment.yaml \
+  --run-uri file:///abs/project/runs/example \
   --executor slurm-single-job
 ```
 
-The CLI should print:
+The future CLI may print:
 
 ```text
 run directory
@@ -1960,17 +2063,17 @@ stdout/stderr paths
 status command hint
 ```
 
-### 21.2 Submit Afterok DAG
+### 21.4 V7 Submit Afterok DAG
 
-Possible command:
+Possible future command:
 
 ```bash
 loom run experiment.yaml \
-  --run-dir runs/example \
+  --run-uri file:///abs/project/runs/example \
   --executor slurm-afterok
 ```
 
-The CLI should print:
+The future CLI may print:
 
 ```text
 number of jobs submitted
@@ -1980,27 +2083,7 @@ submission manifest path
 partial submission warning, if any
 ```
 
-### 21.3 Dry Run
-
-Possible command:
-
-```bash
-loom run experiment.yaml \
-  --run-dir runs/example \
-  --executor slurm-afterok \
-  --dry-run
-```
-
-Dry run should:
-
-```text
-generate scripts
-write draft manifest
-not call sbatch
-print planned submission order
-```
-
-### 21.4 Status
+### 21.5 V7 Status
 
 Possible command:
 
@@ -2016,7 +2099,7 @@ loom slurm status runs/example
 
 It should combine run-store and scheduler state.
 
-### 21.5 Cancel
+### 21.6 V7 Cancel
 
 Possible command:
 
@@ -2199,7 +2282,12 @@ Real SLURM tests should be optional and skipped unless explicitly enabled.
 
 ---
 
-## 24. Initial Implementation Plan
+## 24. Historical Live-Submission Implementation Sketch
+
+The sketch below predates the v6 dry-run-first implementation plan. Treat it as
+v7/later live-submission planning material. The implemented v6 baseline is the
+dry-run manifest/script/continuation contract described in section 0 and
+section 21.
 
 ### 24.1 Phase 1: Data Types and Script Builder
 
@@ -2309,10 +2397,11 @@ The core contract is:
 
 ```text
 planner decides which stages need work
-SLURM executor generates scripts and submits jobs
-single-job mode runs normal loom run inside one allocation
-afterok mode runs normal loom stage run inside one job per stage
-run-store files and manifests preserve what happened
+SLURM executor generates dry-run scripts and manifests in v6
+single-job mode plans one script that calls loom prepared-run continue
+afterok mode plans one script per RUN stage that calls loom stage-job run
+logical job keys and afterok dependencies are durable dry-run records
+v7/later live submission can map logical job keys to scheduler job IDs
 project code remains unaware of scheduler mechanics
 ```
 

@@ -197,14 +197,16 @@ write status or artifact indexes manually
 
 ### 3.6 `loom.pipeline.executors.slurm`
 
-Owns SLURM submission mechanics.
+Owns SLURM dry-run planning in v6 and live submission mechanics in v7/later.
 
 CLI responsibilities:
 
 ```text
 expose executor selection flags
-print submitted job IDs and status hints
-call cancellation/status APIs when present
+call public SLURM dry-run APIs for --dry-run
+print generated manifest/script/log/command summaries
+print submitted job IDs and status hints when live APIs exist
+call cancellation/status APIs when present in a future phase
 ```
 
 CLI non-responsibilities:
@@ -228,13 +230,18 @@ loom validate CONFIG
 loom plan CONFIG
 loom run CONFIG
 loom run CONFIG --executor subprocess
+loom run CONFIG --executor slurm-single-job --dry-run
+loom run CONFIG --executor slurm-afterok --dry-run
 loom stage run --run-uri RUN_URI --stage STAGE [--attempt N]
+loom prepared-run continue --run-uri RUN_URI --executor local
+loom stage-job run --run-uri RUN_URI --stage STAGE --executor local
 basic top-level exception formatting
 non-zero exit codes for failures
 config overlays and CLI overrides
 resume selector flags shared by plan and run
 local and serial subprocess executor execution
-machine-readable JSON output for validate, plan, run, stage run, and structured errors
+machine-readable JSON output for validate, plan, run, stage run, prepared-run,
+stage-job, SLURM dry-run, and structured errors
 loom plan CONFIG --resume --explain STAGE
 ```
 
@@ -250,7 +257,7 @@ automatic config wizard
 domain-specific commands
 rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
-SLURM, Docker, or Apptainer execution
+live SLURM, Docker, or Apptainer execution
 remote run URI schemes
 status, logs, artifacts, sweep, catalog, bundle, plugin, cleanup, or reliability
 commands
@@ -572,10 +579,14 @@ V2 JSON output is always a versioned envelope with top-level `warnings`:
 {"schema_version":"loom.cli.plan.v2","ok":true,"warnings":[],"result":{}}
 ```
 
-Dry-run output from `loom run --dry-run --format json` uses the plan schema
-because no run occurred. When a command parses successfully and JSON format is
-known, structured errors are written to stdout in the error envelope. Argparse
-usage errors remain text on stderr.
+Generic dry-run output from `loom run --dry-run --format json` uses the plan
+schema because no run occurred. SLURM dry-run output from
+`loom run --executor slurm-single-job --dry-run --format json` and
+`loom run --executor slurm-afterok --dry-run --format json` uses
+`loom.cli.slurm_dry_run.v1` and reports generated manifest, plan, script, log,
+command, dependency, and warning summaries. When a command parses successfully
+and JSON format is known, structured errors are written to stdout in the error
+envelope. Argparse usage errors remain text on stderr.
 
 ### 8.3 Color
 
@@ -960,8 +971,17 @@ loom run experiment.yaml \
   --executor slurm-afterok
 ```
 
-This fails clearly because scheduler/container executors are not implemented.
-A later executor phase can make this command submit work and include:
+Without `--dry-run`, this fails clearly because live scheduler submission is
+deferred to v7. The v6 dry-run form creates scripts and manifests:
+
+```bash
+loom run experiment.yaml \
+  --run-uri file:///abs/project/runs/example \
+  --executor slurm-afterok \
+  --dry-run
+```
+
+A later executor phase can make the non-dry-run command submit work and include:
 
 ```text
 run directory
@@ -976,6 +996,9 @@ status command hint
 
 It should not fake behavior in CLI code.
 
+For SLURM dry-runs, the CLI prepares artifact-safe durable state and calls the
+SLURM dry-run planner. It must not build scripts directly.
+
 ---
 
 ## 14. `loom stage run`
@@ -984,13 +1007,11 @@ It should not fake behavior in CLI code.
 
 Run exactly one stage attempt from an existing run URI.
 
-This command is the stable worker entry point for:
+This command is the stable parent-managed worker entry point for:
 
 ```text
 SubprocessExecutor
-SLURMExecutor
-container execution
-future remote workers
+future parent-managed workers
 ```
 
 Command:
@@ -1049,6 +1070,10 @@ plan/stage request files
 ```
 
 It should not require pickled Python objects passed over the command line.
+
+Submitted afterok jobs use the separate `loom stage-job run` command so each
+job can finalize one planned stage from durable run-store state without a live
+parent process.
 
 Exit codes:
 

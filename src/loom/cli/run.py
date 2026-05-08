@@ -366,8 +366,11 @@ def build_slurm_dry_run_result(
             },
         )
 
+    artifact_safe_pipeline_result = _validate_pipeline_config(
+        _artifact_safe_config_for_plan(composed)
+    )
     plan = _persist_slurm_dry_run_plan(
-        pipeline_result.spec,
+        artifact_safe_pipeline_result.spec,
         run_uri=run_uri,
         store=store,
         runtime_options=runtime_options,
@@ -421,6 +424,13 @@ def _validate_pipeline_config(config: Mapping[str, object]) -> "PipelineValidati
     from loom.pipeline import validate_pipeline_config
 
     return validate_pipeline_config(config)
+
+
+def _artifact_safe_config_for_plan(composed: "ComposedConfig") -> Mapping[str, object]:
+    unresolved = getattr(composed, "unresolved", None)
+    if isinstance(unresolved, Mapping) and "pipeline" in unresolved:
+        return cast(Mapping[str, object], unresolved)
+    return cast(Mapping[str, object], composed.resolved)
 
 
 def _merge_runtime_options(

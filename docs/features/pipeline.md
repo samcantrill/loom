@@ -1602,7 +1602,7 @@ Post-v0.
 Runs one stage through:
 
 ```bash
-loom stage run --run-dir RUN_DIR --stage STAGE_NAME
+loom stage run --run-uri RUN_URI --stage STAGE_NAME
 ```
 
 Use cases:
@@ -1610,12 +1610,14 @@ Use cases:
 ```text
 stage isolation
 independent logs
-closer to SLURM/container execution
+closer to parent-managed worker execution
 debugging stage entry points
 ```
 
 Future subprocess executors should not require Python object sharing across
 stages. They should communicate through run store files and artifact refs.
+Submitted afterok backends use the separate `loom stage-job run` command when
+there is no live parent process to finalize the stage.
 
 ### 16.4 SLURM Executors
 
@@ -1627,15 +1629,16 @@ Initial SLURM modes:
 
 ```text
 single-job:
-  one job runs the whole pipeline
+  one dry-run script plans whole-run continuation in v6
 
 afterok:
-  one job per stage, dependencies submitted to SLURM
+  one dry-run script per RUN stage, with logical afterok dependencies in v6
 ```
 
 Detailed SLURM behavior should have a separate design document. The pipeline
 layer should expose enough structured plan information for SLURM executors to
-generate scripts and dependencies.
+generate scripts and dependencies. Live scheduler submission and job IDs are
+v7/later behavior.
 
 ---
 
@@ -1899,7 +1902,7 @@ Future CLI commands can call Python APIs:
 loom validate experiment.yaml
 loom plan experiment.yaml
 loom run experiment.yaml
-loom stage run --run-dir RUN_DIR --stage STAGE
+loom stage run --run-uri RUN_URI --stage STAGE
 loom status RUN_DIR
 loom logs RUN_DIR STAGE
 loom artifacts list RUN_DIR
@@ -1959,7 +1962,9 @@ run exactly that stage
 write status/outputs/failure metadata
 ```
 
-This command is required for post-v0 subprocess, SLURM, and container execution.
+This command is required for post-v0 parent-managed subprocess execution.
+Submitted afterok execution uses `loom stage-job run` so the stage can finalize
+itself from durable run-store state without a parent runner.
 
 ---
 
