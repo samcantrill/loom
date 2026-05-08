@@ -187,7 +187,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused
-- PR review: unused
+- PR review: used; manager review passed on 2026-05-08 with no blocking findings
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -198,6 +198,6 @@ make test-summary
 - Implementation validation: targeted unit/contract/integration slice passed; config-extra e2e live single-job smoke passed; `make validate-pr` passed; `make test-summary` passed with package 52 passed/1 skipped, unit 714 passed/1 skipped, contract 65 passed/2 skipped, integration 37 passed/7 skipped/9 deselected, e2e 23 passed, config-extra 411 passed/891 deselected.
 - Refinement summary: not needed
 - Blocker-resolution summary: none used
-- PR preparation: TBD
+- PR preparation: PR #90 opened against `develop`: https://github.com/samcantrill/loom/pull/90
 - Stack maintenance: TBD
 - Remaining blockers: none known
