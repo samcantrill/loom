@@ -258,8 +258,11 @@ make test-summary
 - Phase implementation refinement: used; expanded-path review found no
   phase-scoped code or test blocker, so this pass records a no-change rationale
   only
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used; automated review found two blocking Phase 3 contract gaps
+  in modeled memory option conflicts and direct resource-mapping attribute
+  handling
+- Blocker resolution: 1/3 used; pass 1 fixed the two automated review
+  blockers and refreshed validation evidence
 
 ## Completion Notes
 
@@ -364,4 +367,22 @@ make test-summary
   lease; the PR remains a root phase PR targeting `develop`.
 - GitHub checks: pending after PR creation; managing agent owns CI polling and
   merge decision.
-- Remaining blockers: none known.
+- Automated PR review: completed on 2026-05-08. Blocking findings were
+  `SlurmOptions` allowing both `mem` and `mem_per_cpu`, and direct
+  `map_slurm_resources()` calls silently accepting non-empty
+  `ResourceEntry.attributes`.
+- Blocker resolution pass 1/3: completed on 2026-05-08. Added
+  `SlurmOptions.mem` versus `SlurmOptions.mem_per_cpu` conflict validation,
+  rejected non-empty resource attributes in the SLURM mapper even for direct
+  mappings, and added focused unit regressions for both blockers.
+- Blocker resolution validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_options.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_resources.py` passed
+  with 26 tests. The full targeted Phase 3 suite passed with 84 tests.
+- Blocker resolution full validation: `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed Ruff, Pyright, isolated default tests (`811 passed, 14
+  skipped, 8 deselected`), isolated config-extra tests (`405 passed, 830
+  deselected`), and build.
+- Refreshed PR evidence: `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed with overall `1235 passed, 11 skipped, 838 deselected`.
+- Remaining blockers: none known after blocker resolution pass 1/3.

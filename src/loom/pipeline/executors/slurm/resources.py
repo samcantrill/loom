@@ -86,6 +86,8 @@ def map_slurm_resources(
             raise SlurmResourceMappingError(
                 f"{entry_path}.kind must match its mapping key"
             )
+        if entry.attributes:
+            raise SlurmResourceMappingError(f"{entry_path}.attributes must be empty")
         if entry.kind == "cpu":
             directive = _map_cpu(entry, options=option_values, path=entry_path)
         elif entry.kind == "memory":

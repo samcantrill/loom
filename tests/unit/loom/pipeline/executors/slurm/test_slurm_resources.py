@@ -92,6 +92,22 @@ def test_memory_mapping_rejects_non_integer_amounts() -> None:
         map_slurm_resources(resources)
 
 
+def test_direct_mapping_rejects_resource_attributes() -> None:
+    resources = {
+        "gpu": ResourceEntry(
+            kind="gpu",
+            amount=1,
+            unit="count",
+            attributes={"model": "a100"},
+        )
+    }
+
+    with pytest.raises(
+        SlurmResourceMappingError, match=r"resources.entries\['gpu'\].attributes"
+    ):
+        map_slurm_resources(resources)
+
+
 def test_build_sbatch_directives_combines_options_resources_and_extra() -> None:
     resources = ResourceRequest(
         entries={"cpu": ResourceEntry(kind="cpu", amount=4, unit="count")}

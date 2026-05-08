@@ -17,6 +17,7 @@ The phase is intentionally model-only. It does not render shell scripts, wire CL
 - Added import-light public exports under `loom.pipeline.executors.slurm`.
 - Kept SLURM-specific planning errors, options, resource mapping, manifest records, and path helpers inside the executor adapter package.
 - Reused generic `ResourceRequest` and run-store path contracts rather than widening generic runtime models or walking local run directories.
+- Resolved automated review blockers by rejecting mutually exclusive `mem`/`mem_per_cpu` options and by rejecting non-empty resource attributes in direct SLURM resource-mapper calls.
 - Preserved the v6 boundary that Phase 4 owns script rendering, Phase 5 owns CLI integration, and v7 owns live scheduler submission.
 
 New tests implemented:
@@ -30,22 +31,22 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | Refinement pass: Ruff, Pyright, default tests `809 passed, 14 skipped, 8 deselected`, config-extra `405 passed, 828 deselected`, build succeeded. |
-| Targeted Phase 3 suite | Passed | `82 passed` across package, unit, contract, and integration paths for SLURM models. |
-| `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | `build/test-summary.md`: overall `1233 passed, 11 skipped, 836 deselected`. |
-| GitHub checks | Pending | Expected to run after PR creation. |
+| `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | After blocker resolution: Ruff, Pyright, default tests `811 passed, 14 skipped, 8 deselected`, config-extra `405 passed, 830 deselected`, build succeeded. |
+| Targeted Phase 3 suite | Passed | `84 passed` across package, unit, contract, and integration paths for SLURM models. |
+| `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | `build/test-summary.md`: overall `1235 passed, 11 skipped, 838 deselected`. |
+| GitHub checks | Pending final rerun | Previous PR head passed; final blocker-resolution head will be verified before merge. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 51 | 0 | 0 | 1 | 0 | 5.75s |
-| unit | passed | 671 | 0 | 0 | 1 | 0 | 8.71s |
-| contract | passed | 58 | 0 | 0 | 2 | 0 | 2.40s |
-| integration | passed | 29 | 0 | 0 | 7 | 8 | 3.95s |
-| e2e | passed | 19 | 0 | 0 | 0 | 0 | 7.97s |
-| config-extra | passed | 405 | 0 | 0 | 0 | 828 | 21.51s |
-| Overall | passed | 1233 | 0 | 0 | 11 | 836 | 50.30s |
+| package | passed | 51 | 0 | 0 | 1 | 0 | 6.05s |
+| unit | passed | 673 | 0 | 0 | 1 | 0 | 8.71s |
+| contract | passed | 58 | 0 | 0 | 2 | 0 | 2.22s |
+| integration | passed | 29 | 0 | 0 | 7 | 8 | 4.14s |
+| e2e | passed | 19 | 0 | 0 | 0 | 0 | 7.95s |
+| config-extra | passed | 405 | 0 | 0 | 0 | 830 | 21.17s |
+| Overall | passed | 1235 | 0 | 0 | 11 | 838 | 50.25s |
 
 ## Risks / Follow-Ups
 

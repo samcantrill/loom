@@ -48,6 +48,11 @@ def test_options_reject_unknown_fields() -> None:
         SlurmOptions.from_dict({"schema_version": 1, "partition": "debug", "bad": "x"})
 
 
+def test_options_reject_mutually_exclusive_memory_directives() -> None:
+    with pytest.raises(SlurmOptionError, match="mem.*mem_per_cpu"):
+        SlurmOptions(mem="32G", mem_per_cpu="4G")
+
+
 @pytest.mark.parametrize(
     "extra, message",
     [

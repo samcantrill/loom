@@ -174,6 +174,10 @@ class SlurmOptions:
                     path=f"SlurmOptions.{field_name}",
                 ),
             )
+        if self.mem is not None and self.mem_per_cpu is not None:
+            raise SlurmOptionError(
+                "SlurmOptions.mem conflicts with SlurmOptions.mem_per_cpu"
+            )
         object.__setattr__(
             self,
             "prelude",
