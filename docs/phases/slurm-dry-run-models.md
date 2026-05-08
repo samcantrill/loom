@@ -262,7 +262,49 @@ make test-summary
 - Draft plan: completed in this draft pass and committed with `plan: add phase execution plan`
 - Refine pass: completed and ready for implementation handoff
 - Final phase execution plan: refined/final
-- Implementation summary: pending
-- Implementation validation: pending
-- PR preparation: pending
-- Remaining blockers: none known
+- Implementation summary: completed Phase 3 only. Added the optional-dependency-free
+  `loom.pipeline.executors.slurm` package with scheduler-specific planning
+  errors, `SlurmMode` wire values, `SlurmOptions`, normalized and
+  conflict-safe `extra_sbatch`, structured launcher/generated command argv
+  records, generic CPU/memory/GPU resource-to-SBATCH directive mapping, logical
+  job keys, `afterok` dependency records, planned job and planned submission
+  manifest models, and generated-artifact path helpers that call
+  `LocalRunStorePaths.local_generated_artifact_path`.
+- Scope notes: no script rendering or writing, CLI wiring, scheduler calls,
+  command runner, job ID parsing, submitted status, fake scheduler IDs,
+  continuation command changes, generic wall-time resource, or root package
+  exports were added.
+- Tests added: package import-boundary coverage in
+  `tests/package/test_import_boundaries.py`; unit coverage in
+  `tests/unit/loom/pipeline/executors/slurm/test_slurm_options.py`,
+  `test_slurm_resources.py`, `test_slurm_manifest.py`, and
+  `test_slurm_paths.py`; contract coverage in
+  `tests/contracts/test_slurm_manifest_contract.py`; integration coverage in
+  `tests/integration/pipeline/test_slurm_model_store_paths.py`.
+- Test path assumption: the finalized plan named unit files as
+  `test_options.py`, `test_resources.py`, `test_manifest.py`, and
+  `test_paths.py`; these were implemented as `test_slurm_*.py` because full
+  pytest collection imports test modules by basename and `test_options.py`
+  collided with existing CLI tests.
+- Targeted validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+  tests/package/test_import.py tests/package/test_public_api.py
+  tests/package/test_import_boundaries.py
+  tests/package/test_pipeline_execution_api.py
+  tests/package/test_pipeline_executor_api.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_options.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_resources.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_manifest.py
+  tests/unit/loom/pipeline/executors/slurm/test_slurm_paths.py
+  tests/contracts/test_slurm_manifest_contract.py
+  tests/integration/pipeline/test_slurm_model_store_paths.py` passed with 82
+  tests.
+- Full validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed Ruff,
+  Pyright, isolated default tests (`809 passed, 14 skipped, 8 deselected`),
+  isolated config-extra tests (`405 passed, 828 deselected`), and build
+  (`dist/loom-0.1.0.tar.gz`, `dist/loom-0.1.0-py3-none-any.whl`).
+- Implementation validation caveat: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff
+  format --check .` reports pre-existing formatting drift across unrelated
+  files, so only the new/modified files were formatted.
+- PR preparation: not run; phase executor stopped before PR preparation as
+  assigned.
+- Remaining blockers: none known.
