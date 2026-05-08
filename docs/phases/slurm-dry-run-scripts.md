@@ -564,3 +564,7 @@ make test-summary
   `baseRefName=develop`, `headRefName=codex/slurm-dry-run-scripts`,
   `state=OPEN`, URL `https://github.com/samcantrill/loom/pull/85`, and CI
   `checks` pending.
+- Stack maintenance: after the control checkout recorded Phase 4 as `pr_open`
+  on `develop` with commit `a1a9ae8`, rebased
+  `codex/slurm-dry-run-scripts` onto updated `develop` and force-pushed with
+  lease; the PR remains a root phase PR targeting `develop`.
