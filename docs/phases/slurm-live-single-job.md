@@ -141,7 +141,7 @@ The result and registry shapes leave room for afterok, status snapshots, and can
 ### Integration Suite
 
 - Status: required
-- Expected paths: `tests/integration/pipeline/test_slurm_live_single_job.py`
+- Expected paths: `tests/integration/pipeline/test_slurm_live_single_job.py`, `tests/integration/pipeline/test_slurm_live_models.py`
 - Required assertions or deferral reason: fake-runner live submission writes manifest, registry, and `SUBMITTED` run status.
 
 ### E2E Suite
@@ -194,10 +194,10 @@ make test-summary
 
 - Draft plan: complete
 - Final phase execution plan: complete
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
-- Blocker-resolution summary: TBD
+- Implementation summary: added live `slurm-single-job` CLI submission through the fakeable SLURM command runner; persisted live manifest, submitted-operation registry, and run `SUBMITTED` state; updated CLI text/JSON output, preflight, runtime descriptors, and success/failure coverage while keeping `slurm-afterok` live submission deferred.
+- Implementation validation: targeted unit/contract/integration slice passed; config-extra e2e live single-job smoke passed; `make validate-pr` passed; `make test-summary` passed with package 52 passed/1 skipped, unit 714 passed/1 skipped, contract 65 passed/2 skipped, integration 37 passed/7 skipped/9 deselected, e2e 23 passed, config-extra 411 passed/891 deselected.
+- Refinement summary: not needed
+- Blocker-resolution summary: none used
 - PR preparation: TBD
 - Stack maintenance: TBD
 - Remaining blockers: none known

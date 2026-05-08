@@ -25,7 +25,9 @@ def test_fake_sbatch_flow_records_live_manifest_job_identity() -> None:
         options=SlurmOptions(),
     )
     runner = FakeSlurmCommandRunner(starting_job_id=900)
-    command_result = runner.sbatch("/runs/run-1/slurm/submissions/p1/scripts/pipeline.sh")
+    command_result = runner.sbatch(
+        "/runs/run-1/slurm/submissions/p1/scripts/pipeline.sh"
+    )
     parsed = parse_sbatch_parsable_output(command_result.stdout)
     draft = live_manifest_from_planned_submission(
         planned,
@@ -68,3 +70,21 @@ def test_fake_runner_can_model_delayed_empty_status_data() -> None:
     assert runner.squeue(job_ids=("900",)).stdout == ""
     assert runner.sacct(job_ids=("900",)).stdout == ""
     assert [call[0] for call in runner.calls] == ["squeue", "sacct"]
+
+
+def test_submitting_live_manifest_counts_as_active() -> None:
+    planned = build_single_job_planned_submission(
+        run_uri="file:///runs/run-1",
+        planning_id="p1",
+        created_at="2026-05-08T00:00:00Z",
+        options=SlurmOptions(),
+    )
+
+    manifest = live_manifest_from_planned_submission(
+        planned,
+        status=SlurmLiveSubmissionStatus.SUBMITTING,
+        updated_at="2026-05-08T00:00:03Z",
+    )
+
+    assert manifest.summary_counts["submitting"] == 1
+    assert manifest.summary_counts["active"] == 1

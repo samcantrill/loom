@@ -6,8 +6,12 @@ import json
 
 import pytest
 
-from loom.cli.formatting import format_json_envelope, format_slurm_dry_run_text
-from loom.cli.results import CliWarning, SlurmDryRunCliResult
+from loom.cli.formatting import (
+    format_json_envelope,
+    format_slurm_dry_run_text,
+    format_slurm_live_submission_text,
+)
+from loom.cli.results import CliWarning, SlurmDryRunCliResult, SlurmLiveRunCliResult
 
 pytestmark = pytest.mark.contract
 
@@ -136,3 +140,106 @@ def test_slurm_dry_run_text_is_path_oriented_and_omits_script_bodies() -> None:
     assert "stderr=slurm/submissions/planning-1/logs/pipeline.stderr.log" in text
     assert "#SBATCH" not in text
     assert "set -euo pipefail" not in text
+
+
+def test_slurm_live_single_job_result_json_schema_is_stable() -> None:
+    result = SlurmLiveRunCliResult(
+        run_uri="file:///runs/demo",
+        mode="slurm-single-job",
+        submission_id="planning-1",
+        status="SUBMITTED",
+        manifest_path="/runs/demo/slurm/submissions/planning-1/manifest.json",
+        manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+        plan_path="/runs/demo/slurm/submissions/planning-1/plan.json",
+        plan_relative_path="slurm/submissions/planning-1/plan.json",
+        submitted_jobs=(
+            {
+                "logical_key": "pipeline",
+                "scheduler_job_id": "1234",
+                "scheduler_cluster": None,
+                "script_relative_path": "slurm/submissions/planning-1/scripts/pipeline.sh",
+                "stdout_relative_path": "slurm/submissions/planning-1/logs/pipeline.stdout.log",
+                "stderr_relative_path": "slurm/submissions/planning-1/logs/pipeline.stderr.log",
+            },
+        ),
+        log_paths=(
+            {
+                "logical_key": "pipeline",
+                "stdout_relative_path": "slurm/submissions/planning-1/logs/pipeline.stdout.log",
+                "stderr_relative_path": "slurm/submissions/planning-1/logs/pipeline.stderr.log",
+            },
+        ),
+        job_count=1,
+        submitted_job_count=1,
+    )
+
+    payload = json.loads(
+        format_json_envelope(
+            schema_version="loom.cli.slurm_live_run.v1",
+            ok=True,
+            warnings=(),
+            payload_name="result",
+            payload=result.to_dict(),
+        )
+    )
+
+    assert payload["schema_version"] == "loom.cli.slurm_live_run.v1"
+    assert payload["result"] == {
+        "run_uri": "file:///runs/demo",
+        "mode": "slurm-single-job",
+        "dry_run": False,
+        "submission_id": "planning-1",
+        "status": "SUBMITTED",
+        "manifest_path": "/runs/demo/slurm/submissions/planning-1/manifest.json",
+        "manifest_relative_path": "slurm/submissions/planning-1/manifest.json",
+        "plan_path": "/runs/demo/slurm/submissions/planning-1/plan.json",
+        "plan_relative_path": "slurm/submissions/planning-1/plan.json",
+        "submitted_jobs": [
+            {
+                "logical_key": "pipeline",
+                "scheduler_job_id": "1234",
+                "scheduler_cluster": None,
+                "script_relative_path": "slurm/submissions/planning-1/scripts/pipeline.sh",
+                "stdout_relative_path": "slurm/submissions/planning-1/logs/pipeline.stdout.log",
+                "stderr_relative_path": "slurm/submissions/planning-1/logs/pipeline.stderr.log",
+            }
+        ],
+        "log_paths": [
+            {
+                "logical_key": "pipeline",
+                "stdout_relative_path": "slurm/submissions/planning-1/logs/pipeline.stdout.log",
+                "stderr_relative_path": "slurm/submissions/planning-1/logs/pipeline.stderr.log",
+            }
+        ],
+        "job_count": 1,
+        "submitted_job_count": 1,
+    }
+
+
+def test_slurm_live_single_job_text_reports_scheduler_id_not_script_body() -> None:
+    result = SlurmLiveRunCliResult(
+        run_uri="file:///runs/demo",
+        mode="slurm-single-job",
+        submission_id="planning-1",
+        status="SUBMITTED",
+        manifest_path="/runs/demo/slurm/submissions/planning-1/manifest.json",
+        manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+        plan_path="/runs/demo/slurm/submissions/planning-1/plan.json",
+        plan_relative_path="slurm/submissions/planning-1/plan.json",
+        submitted_jobs=(
+            {
+                "logical_key": "pipeline",
+                "scheduler_job_id": "1234",
+                "scheduler_cluster": "alpha",
+            },
+        ),
+        job_count=1,
+        submitted_job_count=1,
+    )
+
+    text = format_slurm_live_submission_text(result)
+
+    assert "OK slurm submit file:///runs/demo: slurm-single-job SUBMITTED" in text
+    assert "pipeline: 1234;alpha" in text
+    assert "loom status file:///runs/demo --jobs" in text
+    assert "#SBATCH" not in text

@@ -12,7 +12,12 @@ from types import MappingProxyType
 from typing import cast
 
 from loom.pipeline.stores.atomic import atomic_write_json
-from loom.serialization import PlainData, freeze_plain_data, load_versioned_document, thaw_plain_data
+from loom.serialization import (
+    PlainData,
+    freeze_plain_data,
+    load_versioned_document,
+    thaw_plain_data,
+)
 from loom.serialization.errors import PlainDataError, SchemaVersionError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
@@ -177,7 +182,9 @@ class SlurmSubmittedJob:
             ),
         )
         if self.scheduler_cluster is not None:
-            _safe_text(self.scheduler_cluster, path="SlurmSubmittedJob.scheduler_cluster")
+            _safe_text(
+                self.scheduler_cluster, path="SlurmSubmittedJob.scheduler_cluster"
+            )
         for field_name in (
             "script_relative_path",
             "stdout_relative_path",
@@ -208,7 +215,9 @@ class SlurmSubmittedJob:
         }
 
     @classmethod
-    def from_dict(cls, data: object, *, path: str = "SlurmSubmittedJob") -> "SlurmSubmittedJob":
+    def from_dict(
+        cls, data: object, *, path: str = "SlurmSubmittedJob"
+    ) -> "SlurmSubmittedJob":
         mapping = _mapping(data, path=path)
         _reject_unknown(mapping, _SUBMITTED_JOB_FIELDS, path=path)
         _require_fields(
@@ -518,11 +527,15 @@ class SlurmLiveSubmissionManifest:
     options: SlurmOptions | Mapping[str, object]
     jobs: Sequence[SlurmPlannedJob | Mapping[str, object]]
     dependencies: Sequence[SlurmPlannedDependency | Mapping[str, object]] = ()
-    submission_status: SlurmLiveSubmissionStatus | str = SlurmLiveSubmissionStatus.PREPARED
+    submission_status: SlurmLiveSubmissionStatus | str = (
+        SlurmLiveSubmissionStatus.PREPARED
+    )
     submitted_jobs: Sequence[SlurmSubmittedJob | Mapping[str, object]] = ()
     failed_submissions: Sequence[SlurmFailedSubmission | Mapping[str, object]] = ()
     status_snapshots: Sequence[SlurmSchedulerStatusSnapshot | Mapping[str, object]] = ()
-    cancellation_attempts: Sequence[SlurmCancellationAttempt | Mapping[str, object]] = ()
+    cancellation_attempts: Sequence[
+        SlurmCancellationAttempt | Mapping[str, object]
+    ] = ()
     generated_command_argv: Sequence[SlurmCommandArgv | Mapping[str, object]] = ()
     resources: Mapping[str, PlainData] = field(default_factory=dict)
     submitted_at: str | None = None
@@ -538,7 +551,9 @@ class SlurmLiveSubmissionManifest:
                 f"live SLURM manifest schema_version must be {SLURM_LIVE_SUBMISSION_SCHEMA_VERSION}"
             )
         if self.dry_run is not False:
-            raise SlurmManifestError("SlurmLiveSubmissionManifest.dry_run must be false")
+            raise SlurmManifestError(
+                "SlurmLiveSubmissionManifest.dry_run must be false"
+            )
         object.__setattr__(self, "run_uri", _safe_text(self.run_uri, path="run_uri"))
         object.__setattr__(self, "mode", _coerce_mode(self.mode, path="mode"))
         object.__setattr__(
@@ -561,9 +576,7 @@ class SlurmLiveSubmissionManifest:
         object.__setattr__(
             self,
             "manifest_relative_path",
-            _relative_path(
-                self.manifest_relative_path, path="manifest_relative_path"
-            ),
+            _relative_path(self.manifest_relative_path, path="manifest_relative_path"),
         )
         object.__setattr__(
             self,
@@ -676,22 +689,30 @@ class SlurmLiveSubmissionManifest:
         failed = len(self.failed_submissions)
         cancelled = sum(
             1
-            for attempt in cast(tuple[SlurmCancellationAttempt, ...], self.cancellation_attempts)
+            for attempt in cast(
+                tuple[SlurmCancellationAttempt, ...], self.cancellation_attempts
+            )
             if attempt.outcome == "cancelled"
         )
         counts = {
-            "prepared": 1 if self.submission_status == SlurmLiveSubmissionStatus.PREPARED else 0,
+            "prepared": 1
+            if self.submission_status == SlurmLiveSubmissionStatus.PREPARED
+            else 0,
+            "submitting": 1
+            if self.submission_status == SlurmLiveSubmissionStatus.SUBMITTING
+            else 0,
             "submitted": submitted,
             "failed": failed,
             "cancelled": cancelled,
         }
         if self.submission_status in {
+            SlurmLiveSubmissionStatus.SUBMITTING,
             SlurmLiveSubmissionStatus.SUBMITTED,
             SlurmLiveSubmissionStatus.PARTIAL,
             SlurmLiveSubmissionStatus.CANCELLING,
             SlurmLiveSubmissionStatus.UNKNOWN,
         }:
-            counts["active"] = submitted
+            counts["active"] = max(1, submitted)
         return counts
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -702,8 +723,12 @@ class SlurmLiveSubmissionManifest:
         dependencies = cast(tuple[SlurmPlannedDependency, ...], self.dependencies)
         submitted_jobs = cast(tuple[SlurmSubmittedJob, ...], self.submitted_jobs)
         failed = cast(tuple[SlurmFailedSubmission, ...], self.failed_submissions)
-        snapshots = cast(tuple[SlurmSchedulerStatusSnapshot, ...], self.status_snapshots)
-        cancellations = cast(tuple[SlurmCancellationAttempt, ...], self.cancellation_attempts)
+        snapshots = cast(
+            tuple[SlurmSchedulerStatusSnapshot, ...], self.status_snapshots
+        )
+        cancellations = cast(
+            tuple[SlurmCancellationAttempt, ...], self.cancellation_attempts
+        )
         generated = cast(tuple[SlurmCommandArgv, ...], self.generated_command_argv)
         return {
             "schema_version": self.schema_version,
@@ -796,9 +821,7 @@ class SlurmLiveSubmissionManifest:
                     item, path=f"failed_submissions[{index}]"
                 )
                 for index, item in enumerate(
-                    _sequence(
-                        mapping["failed_submissions"], path="failed_submissions"
-                    )
+                    _sequence(mapping["failed_submissions"], path="failed_submissions")
                 )
             ),
             status_snapshots=tuple(
@@ -893,7 +916,9 @@ def live_manifest_from_planned_submission(
         options=cast(SlurmOptions, submission.options),
         jobs=cast(tuple[SlurmPlannedJob, ...], submission.jobs),
         dependencies=cast(tuple[SlurmPlannedDependency, ...], submission.dependencies),
-        generated_command_argv=cast(tuple[SlurmCommandArgv, ...], submission.generated_command_argv),
+        generated_command_argv=cast(
+            tuple[SlurmCommandArgv, ...], submission.generated_command_argv
+        ),
         resources=cast(Mapping[str, PlainData], submission.resources),
         submission_status=status,
         submitted_at=now if status != SlurmLiveSubmissionStatus.PREPARED else None,
@@ -902,7 +927,9 @@ def live_manifest_from_planned_submission(
     )
 
 
-def write_slurm_live_manifest(path: str | Path, manifest: SlurmLiveSubmissionManifest) -> None:
+def write_slurm_live_manifest(
+    path: str | Path, manifest: SlurmLiveSubmissionManifest
+) -> None:
     """Write a live SLURM manifest atomically."""
 
     if not isinstance(manifest, SlurmLiveSubmissionManifest):
@@ -910,7 +937,9 @@ def write_slurm_live_manifest(path: str | Path, manifest: SlurmLiveSubmissionMan
     try:
         atomic_write_json(Path(path), manifest.to_dict())
     except OSError as exc:
-        raise SlurmManifestUpdateError(f"failed to write SLURM live manifest: {path}") from exc
+        raise SlurmManifestUpdateError(
+            f"failed to write SLURM live manifest: {path}"
+        ) from exc
 
 
 def read_slurm_live_manifest(data: object) -> SlurmLiveSubmissionManifest:
@@ -937,7 +966,9 @@ def _coerce_status(value: object, *, path: str) -> SlurmLiveSubmissionStatus:
         try:
             return SlurmLiveSubmissionStatus(value)
         except ValueError as exc:
-            raise SlurmManifestError(f"{path} must be a valid live submission status") from exc
+            raise SlurmManifestError(
+                f"{path} must be a valid live submission status"
+            ) from exc
     raise SlurmManifestError(f"{path} must be a string")
 
 
@@ -994,7 +1025,9 @@ def _plain_mapping(value: object, *, path: str) -> dict[str, PlainData]:
     try:
         normalized = thaw_plain_data(value, path=path)
     except PlainDataError as exc:
-        raise SlurmManifestError(f"{path} must be plain-data-compatible: {exc}") from exc
+        raise SlurmManifestError(
+            f"{path} must be plain-data-compatible: {exc}"
+        ) from exc
     if not isinstance(normalized, Mapping):
         raise SlurmManifestError(f"{path} must be a mapping")
     frozen = freeze_plain_data(normalized, path=path)
@@ -1017,14 +1050,18 @@ def _sequence(value: object, *, path: str) -> Sequence[object]:
     return cast(Sequence[object], value)
 
 
-def _reject_unknown(mapping: Mapping[str, object], allowed: frozenset[str], *, path: str) -> None:
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: frozenset[str], *, path: str
+) -> None:
     unknown = set(mapping) - allowed
     if unknown:
         fields = ", ".join(sorted(unknown))
         raise SlurmManifestError(f"{path} contains unknown field(s): {fields}")
 
 
-def _require_fields(mapping: Mapping[str, object], fields: set[str], *, path: str) -> None:
+def _require_fields(
+    mapping: Mapping[str, object], fields: set[str], *, path: str
+) -> None:
     missing = fields - set(mapping)
     if missing:
         names = ", ".join(sorted(missing))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .errors import (
+    SlurmActiveSubmissionError,
     SlurmCapabilityUnavailableError,
     SlurmCommandExecutionError,
     SlurmCommandUnavailableError,
@@ -14,6 +15,7 @@ from .errors import (
     SlurmPathError,
     SlurmPlanningError,
     SlurmResourceMappingError,
+    SlurmSubmissionError,
 )
 from .commands import (
     MAX_PERSISTED_COMMAND_OUTPUT_CHARS,
@@ -93,6 +95,12 @@ from .resources import (
     build_sbatch_directives,
     map_slurm_resources,
 )
+from .submission import (
+    SLURM_SUBMITTED_BACKEND,
+    SlurmLiveSubmissionResult,
+    default_slurm_command_runner,
+    submit_single_job_slurm,
+)
 
 __all__ = [
     "DEFAULT_SLURM_LAUNCHER_ARGV",
@@ -105,8 +113,10 @@ __all__ = [
     "SLURM_LIVE_SUBMISSION_SCHEMA_VERSION",
     "SLURM_OPTIONS_SCHEMA_VERSION",
     "SLURM_PLANNED_SUBMISSION_SCHEMA_VERSION",
+    "SLURM_SUBMITTED_BACKEND",
     "SLURM_SUBMISSION_ROOT",
     "FakeSlurmCommandRunner",
+    "SlurmActiveSubmissionError",
     "SlurmCancellationAttempt",
     "SlurmCapabilityUnavailableError",
     "SlurmCommandArgv",
@@ -121,6 +131,7 @@ __all__ = [
     "SlurmJobIdParseError",
     "SlurmLiveOperationError",
     "SlurmLiveSubmissionManifest",
+    "SlurmLiveSubmissionResult",
     "SlurmLiveSubmissionStatus",
     "SlurmManifestError",
     "SlurmManifestUpdateError",
@@ -137,6 +148,7 @@ __all__ = [
     "SlurmSbatchDirective",
     "SlurmSchedulerStatusSnapshot",
     "SlurmSubmittedJob",
+    "SlurmSubmissionError",
     "SubprocessSlurmCommandRunner",
     "bound_scheduler_output",
     "build_sbatch_directives",
@@ -146,6 +158,7 @@ __all__ = [
     "build_stage_job_command_argv",
     "build_slurm_plan_metadata",
     "command_result_from_exception",
+    "default_slurm_command_runner",
     "live_manifest_from_planned_submission",
     "map_slurm_resources",
     "normalize_extra_sbatch",
@@ -166,6 +179,7 @@ __all__ = [
     "slurm_plan_relative_path",
     "slurm_submission_relative_path",
     "stage_job_key",
+    "submit_single_job_slurm",
     "validate_logical_job_key",
     "write_slurm_live_manifest",
     "write_slurm_dry_run_artifacts",

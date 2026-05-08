@@ -76,7 +76,9 @@ def test_executor_descriptor_strips_names_and_serializes_deterministically() -> 
     assert tuple(descriptor.resource_capabilities) == ("cpu", "memory")
     assert descriptor.adapter_namespaces == ("docker", "slurm")
     assert descriptor.to_dict()["name"] == "local"
-    assert list(cast(dict[str, object], descriptor.to_dict()["resource_capabilities"])) == [
+    assert list(
+        cast(dict[str, object], descriptor.to_dict()["resource_capabilities"])
+    ) == [
         "cpu",
         "memory",
     ]
@@ -108,11 +110,15 @@ def test_registry_lookup_serialization_and_composition_are_deterministic() -> No
     with pytest.raises(RuntimeResourceError, match="already registered"):
         registry.with_descriptor(ExecutorDescriptor(name="local"))
     with pytest.raises(RuntimeResourceError, match="already registered"):
-        ExecutorDescriptorRegistry({"local": local, " local ": ExecutorDescriptor(name="local")})
+        ExecutorDescriptorRegistry(
+            {"local": local, " local ": ExecutorDescriptor(name="local")}
+        )
 
 
 def test_default_registry_contains_import_light_builtin_descriptors() -> None:
-    descriptor = resolve_executor_descriptor(registry=DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY)
+    descriptor = resolve_executor_descriptor(
+        registry=DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY
+    )
 
     assert tuple(DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.descriptors) == (
         "local",
@@ -133,8 +139,13 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     assert subprocess_descriptor.details["serial"] is True
     slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
     assert slurm_descriptor.adapter_namespaces == ("slurm",)
-    assert slurm_descriptor.details["dry_run_only"] is True
-    assert slurm_descriptor.details["live_submission"] == "deferred_to_v7"
+    assert slurm_descriptor.details["dry_run_only"] is False
+    assert slurm_descriptor.details["live_submission"] is True
+    assert slurm_descriptor.details["scheduler_commands"] is True
+    afterok_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-afterok")
+    assert afterok_descriptor.details["dry_run_only"] is True
+    assert afterok_descriptor.details["live_submission"] == "deferred_to_v7_phase_4"
+    assert afterok_descriptor.details["scheduler_commands"] is False
     assert {
         kind: capability.to_dict()["support_level"]
         for kind, capability in cast(
@@ -164,7 +175,9 @@ def test_unknown_executor_returns_error_result_and_raise_for_errors_is_strict() 
             "details": {},
         }
     ]
-    with pytest.raises(RuntimeResourceError, match="executor.unknown at RunOptions.executor"):
+    with pytest.raises(
+        RuntimeResourceError, match="executor.unknown at RunOptions.executor"
+    ):
         result.raise_for_errors()
 
 
@@ -178,7 +191,9 @@ def test_slurm_descriptor_claims_adapter_namespace_and_resources() -> None:
                     resources=ResourceRequest(
                         entries={
                             "cpu": ResourceEntry(kind="cpu", amount=2),
-                            "memory": ResourceEntry(kind="memory", amount=4, unit="GiB"),
+                            "memory": ResourceEntry(
+                                kind="memory", amount=4, unit="GiB"
+                            ),
                             "gpu": ResourceEntry(kind="gpu", amount=1),
                         }
                     )
@@ -283,7 +298,9 @@ def test_omitted_resource_capability_uses_descriptor_fallback_policy() -> None:
 
     assert not result.ok
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
-    assert [(item["resource_kind"], item["code"], item["severity"]) for item in diagnostics] == [
+    assert [
+        (item["resource_kind"], item["code"], item["severity"]) for item in diagnostics
+    ] == [
         ("cpu", "resource.supported", "info"),
         ("memory", "resource.unsupported", "error"),
     ]
@@ -335,7 +352,9 @@ def test_fake_descriptor_can_claim_warn_ignore_or_reject_registered_kinds() -> N
 
     assert not result.ok
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
-    assert [(item["resource_kind"], item["code"], item["severity"]) for item in diagnostics] == [
+    assert [
+        (item["resource_kind"], item["code"], item["severity"]) for item in diagnostics
+    ] == [
         ("cpu", "resource.supported", "info"),
         ("gpu", "resource.ignored", "warning"),
         ("memory", "resource.advisory", "warning"),
@@ -354,7 +373,10 @@ def test_unclaimed_adapter_namespaces_warn_without_payload_inspection() -> None:
     )
     options = RunOptions(
         executor="batch",
-        adapter_options={"docker": {"image": "python"}, "slurm": {"account": "not inspected"}},
+        adapter_options={
+            "docker": {"image": "python"},
+            "slurm": {"account": "not inspected"},
+        },
         stage_options={
             "train": StageRuntimeOptions(
                 adapter_options={
@@ -382,7 +404,9 @@ def test_adapter_namespace_payloads_must_only_be_plain_data_from_run_options() -
         RunOptions(adapter_options=cast(Any, {"slurm": object()}))
 
 
-def test_capability_validation_result_sorts_diagnostics_and_raises_only_errors() -> None:
+def test_capability_validation_result_sorts_diagnostics_and_raises_only_errors() -> (
+    None
+):
     warning = CapabilityDiagnostic(
         path="RunOptions.stage_options['z'].adapter_options['slurm']",
         severity="warning",
@@ -401,9 +425,14 @@ def test_capability_validation_result_sorts_diagnostics_and_raises_only_errors()
 
     assert not CapabilityValidationResult([warning]).has_errors
     CapabilityValidationResult([warning]).raise_for_errors()
-    assert [item["path"] for item in cast(list[dict[str, object]], result.to_dict()["diagnostics"])] == [
+    assert [
+        item["path"]
+        for item in cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    ] == [
         "RunOptions.executor",
         "RunOptions.stage_options['z'].adapter_options['slurm']",
     ]
-    with pytest.raises(RuntimeResourceError, match="executor.unknown at RunOptions.executor"):
+    with pytest.raises(
+        RuntimeResourceError, match="executor.unknown at RunOptions.executor"
+    ):
         result.raise_for_errors()
