@@ -212,10 +212,26 @@ make test-summary
 
 - Draft plan: completed in the draft pass and committed with `plan: add phase execution plan`
 - Final phase execution plan: completed in expanded-path refine pass
-- Implementation summary: TBD
-- Implementation validation: TBD
+- Implementation summary: completed on 2026-05-08 by fallback implementation pass in `/home/samcantrill/work/loom-worktrees/slurm-prepared-run-foundations`. Added schema-versioned `PreparedRunRecord` and `PreparedRunPayloadError` under `loom.pipeline.execution`; exported the public prepared-run API without changing `StageWorkerRequest`; added `RunPreparedRunStore` protocol support and local `prepared_run.json` persistence; added store-owned safe-relative generated artifact path resolution; extracted generic input binding and artifact-index update helpers into `execution.lifecycle` while preserving runner semantics.
+- Implementation commits:
+  - `6880d80` - `feat: add prepared-run store foundations`
+  - `3ea69b1` - `test: cover prepared-run foundations`
+  - `58bbbac` - `fix: satisfy prepared-run store typing`
+  - `854c15e` - `fix: update store export test`
+- Scope control: implements only Phase 1 generic execution/store foundations. No SLURM package, script generation, dry-run manifest, CLI continuation command, scheduler state, scheduler job ID, `sbatch`, `loom prepared-run continue`, or `loom stage-job run` was added. The v5 `loom stage run` handoff-only worker contract remains unchanged.
+- Tests added or updated:
+  - Package: `tests/package/test_pipeline_execution_api.py`, `tests/package/test_pipeline_store_api.py`
+  - Unit: `tests/unit/loom/pipeline/execution/test_prepared_run.py`, `tests/unit/loom/pipeline/execution/test_lifecycle.py`, `tests/unit/loom/pipeline/stores/test_local_runs.py`, `tests/unit/loom/pipeline/stores/test_store_errors.py`
+  - Contract: `tests/contracts/test_store_contract.py`
+  - Integration: `tests/integration/pipeline/test_local_stores.py`
+  - E2E and opt-in: not added; deferred as planned because Phase 1 has no public continuation commands, SLURM dry-run CLI, or scheduler integration.
+- Implementation validation:
+  - `uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_prepared_run.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_subprocess_executor_integration.py` - passed: 108 passed, 1 skipped.
+  - `uv run ruff check src/loom/pipeline/execution src/loom/pipeline/stores tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/execution/test_prepared_run.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py` - passed.
+  - `make validate-pr` - passed: Ruff passed; Pyright passed with 0 errors; default harness passed 745 selected tests, 14 skipped, 8 deselected; config-extra harness passed 405 selected tests, 763 deselected; `uv build` produced source distribution and wheel.
+  - `make test-summary` - not run in this implementation pass because PR preparation was explicitly out of scope.
 - Refinement summary: tightened prepared-run sibling-record contract, lifecycle extraction scope, payload safety rules, generated-artifact path semantics, and suite obligations from manager review notes
-- Blocker-resolution summary: TBD
-- PR preparation: TBD
-- Stack maintenance: TBD
-- Remaining blockers: none known after refinement
+- Blocker-resolution summary: not used.
+- PR preparation: not started by instruction.
+- Stack maintenance: not started; no successor branch work in this implementation pass.
+- Remaining blockers: none known after implementation and initial validation.
