@@ -984,7 +984,7 @@ make test-summary
   supported-resource fingerprint coverage, updated error/store export unit
   tests, typed negative plain-data tests, and the local pipeline example using
   the supported `cpus` resource key.
-- Files changed: `examples/pipelines/local-run/pipeline.yaml`,
+- Files changed: `examples/execution/local/pipeline.yaml`,
   `tests/unit/loom/pipeline/planning/test_planning_fingerprints.py`,
   `tests/unit/loom/pipeline/stores/test_store_errors.py`,
   `tests/unit/loom/pipeline/test_events.py`,

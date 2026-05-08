@@ -76,7 +76,7 @@ Phases 1 through 4 introduced durable prepared attempts, direct `loom stage run`
 
 ## Assumptions
 
-- Synthetic example stages can live under `examples/pipelines/subprocess-run/` and be imported by adding the example directory to `sys.path`, matching existing local examples.
+- Synthetic example stages can live under `examples/execution/subprocess/` and be imported by adding the example directory to `sys.path`, matching existing local examples.
 - Direct worker examples may use public Python APIs to prepare a durable attempt, then invoke the public `loom stage run` CLI command.
 - Missing/invalid/stale worker result diagnostics can be covered with injected `process_runner` functions and direct store writes without launching real broken subprocesses.
 - Existing redaction helpers are the authority for privacy defaults; Phase 5 should assert use, not introduce a new redaction policy.
@@ -199,7 +199,7 @@ make test-summary
   invalid worker results, worker-result identity mismatches, launch errors,
   signal metadata, and redacted command metadata. Added integration evidence for
   local/subprocess success equivalence and subprocess failure status/log
-  diagnostics. Added runnable `pipelines.subprocess-run` examples for
+  diagnostics. Added runnable `execution.subprocess` examples for
   local-versus-subprocess success, subprocess failure diagnostics, and direct
   `loom stage run` execution of a prepared attempt. Updated execution and
   testing docs to state current v5 guarantees, trust boundaries, no-sandboxing

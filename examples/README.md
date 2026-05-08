@@ -5,24 +5,28 @@ projects. Project code owns concrete stages and recipes; `loom` owns
 configuration, artifact records, local execution, provenance snapshots, and
 same-run resume decisions.
 
-Examples are organized by user-facing capability. Each group has its own
-README with the runnable examples and what each one demonstrates.
+Examples are organized by user goal. Each group has its own README with the
+runnable examples and what each one demonstrates. The layout is intended to
+scale with the roadmap: authoring examples teach how to describe work,
+execution examples teach how work runs, and operations examples teach how to
+inspect, debug, and manage runs. Later roadmap items can add `experiments/`,
+`storage/`, and `extensions/` groups without making individual backends top
+level concepts.
 
 ## Example Groups
 
 | Group | Demonstrates |
 | --- | --- |
-| [Config](config/README.md) | Trusted YAML composition, overlays, includes, recipes, artifact-safe records, structured errors, and explicit `_target_` instantiation. |
-| [Diagnostics](diagnostics/README.md) | Local preflight, run status, bounded logs, and metadata-only artifact inspection. |
-| [Pipelines](pipelines/README.md) | Local pipeline execution, artifact storage, provenance snapshots, and same-run resume behavior. |
-| [Runtime](runtime/README.md) | Runtime options, runtime profiles, resource requests, capability diagnostics, and safe `runtime.json` metadata. |
+| [Authoring](authoring/README.md) | Trusted YAML composition, includes, recipes, artifact-safe records, structured errors, and explicit `_target_` instantiation. |
+| [Execution](execution/README.md) | Local execution, subprocess execution, runtime profiles, Python run options, artifact storage, provenance snapshots, and same-run resume behavior. |
+| [Operations](operations/README.md) | Preflight, run status, bounded logs, metadata-only artifact inspection, failure diagnostics, and resource warnings. |
 
 Run smoke examples from the repository root with the commands listed in each
 group README.
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT=/tmp/loom-examples` to redirect generated
-example outputs. Pipeline examples also accept `LOOM_EXAMPLE_RUN_ROOT` for run
-directories.
+example outputs. Execution and operations examples also accept
+`LOOM_EXAMPLE_RUN_ROOT` for run directories.
 
 ## Validation Tiers
 
@@ -33,4 +37,7 @@ directories.
   must document why in their manifest.
 
 The current examples stay local and synthetic. They do not require remote
-stores, distributed execution, scheduler integration, or cross-run cache reuse.
+stores, distributed execution, scheduler integration, containers, plugins, or
+cross-run cache reuse. Once roadmap support lands, new examples should be added
+under the user-goal group they teach, for example `execution/slurm/` for live
+cluster execution and `experiments/` for sweeps.

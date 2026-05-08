@@ -29,7 +29,7 @@ status/log inspection.
   `tests/integration/pipeline/test_subprocess_executor_integration.py`.
 - Added subprocess failure status/log inspection coverage in
   `tests/integration/diagnostics/test_cli_status_logs.py`.
-- Added `examples/pipelines/subprocess-run/` with three smoke entrypoints:
+- Added `examples/execution/subprocess/` with three smoke entrypoints:
   success comparison, failure diagnostics, and direct worker execution.
 - Updated execution/testing docs for v5 trust, privacy, and deferred behavior
   boundaries.

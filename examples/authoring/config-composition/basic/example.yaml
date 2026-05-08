@@ -1,0 +1,17 @@
+id: authoring.config-composition.basic
+title: Basic Config Composition
+summary: Compose base and overlay YAML with ordinary overrides and inspect config views.
+capability: authoring
+level: introductory
+introduced_in: v0
+status: runnable
+validation: smoke
+entrypoints:
+  - path: compose_basic.py
+    kind: python
+    description: Compose YAML inputs and print resolved, unresolved, and redacted views.
+tags:
+  - compose-config
+  - overlays
+  - overrides
+  - redaction

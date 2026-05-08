@@ -29,7 +29,7 @@ The only evidence gap found during this audit was validation freshness:
 | Artifact-safe defaults omit resolver outputs, raw bytes, and full resolved snapshots. | `src/loom/config/fingerprints.py`, `src/loom/config/compose.py`, and artifact metadata preserve authored facts by default. | `tests/integration/config/test_compose_fingerprints.py`, `tests/integration/config/test_compose_source_snapshots.py`, `tests/e2e/test_config_composition_public_api.py` | Covered. |
 | Raw source snapshots require explicit opt-in. | `include_raw_source_snapshots` is validated as a bool and defaults to `False`. | `tests/package/test_config_api.py`, `tests/integration/config/test_compose_source_snapshots.py` | Covered. |
 | Product-code changes remain narrow. | The Phase 16 implementation notes identify the `CompositionManifest.to_dict()` nested recipe-manifest thawing fix as the only product fix. | `tests/contracts/test_config_artifact_contract.py` | Covered. |
-| Examples remain runnable and v1-safe. | `examples/config/**` use Python APIs, trusted recipes, and explicit target instantiation. | `tests/integration/docs/test_v0_python_examples.py` | Covered for manifest shape and smoke execution. |
+| Examples remain runnable and v1-safe. | `examples/authoring/**` use Python APIs, trusted recipes, and explicit target instantiation. | `tests/integration/docs/test_v0_python_examples.py` | Covered for manifest shape and smoke execution. |
 
 ## Additional Coverage Added By This Audit
 
@@ -48,4 +48,3 @@ but were useful review hardening:
   addition occur together;
 - nested `_target_` in `_args_` with runtime injection and child-path failure
   messages.
-

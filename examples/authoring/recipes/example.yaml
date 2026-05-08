@@ -1,0 +1,17 @@
+id: authoring.recipes
+title: Config Composition And Recipes
+summary: Compose YAML with overlays, overrides, interpolation, and trusted recipe expansion.
+capability: authoring
+level: introductory
+introduced_in: v0
+status: runnable
+validation: smoke
+entrypoints:
+  - path: compose_config.py
+    kind: python
+    description: Compose the example config and print resolved, redacted, and manifest output.
+tags:
+  - compose-config
+  - recipes
+  - overlays
+  - overrides

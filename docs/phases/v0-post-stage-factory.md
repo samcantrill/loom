@@ -816,7 +816,7 @@ make test-summary
   and public docs for the factory/fingerprint contract.
 - Files changed: `src/loom/pipeline/planning/fingerprints.py`,
   `src/loom/pipeline/planning/models.py`, planning/graph/integration fixtures
-  and tests, `examples/pipelines/local-run/pipeline.yaml`,
+  and tests, `examples/execution/local/pipeline.yaml`,
   `docs/structure.md`, `docs/features/pipeline.md`,
   `docs/features/execution.md`, and `docs/features/fingerprints.md`.
 - Evidence commands:

@@ -307,7 +307,7 @@ make test-summary
     Direct `uv run pytest tests/integration/config` collected 0 tests in this
     environment, so the file-glob command was used for explicit integration
     evidence.
-  - `rg -n "cpus|memory_mb|gpus|custom" docs/features/runtime-resources.md docs/features/pipeline.md docs/features/execution.md docs/features/container-executors.md docs/features/slurm.md examples/pipelines/local-run/pipeline.yaml`
+  - `rg -n "cpus|memory_mb|gpus|custom" docs/features/runtime-resources.md docs/features/pipeline.md docs/features/execution.md docs/features/container-executors.md docs/features/slurm.md examples/execution/local/pipeline.yaml`
     returned only SLURM option names such as `--cpus-per-task` and unrelated
     prose such as `custom retry behavior`; it found no current old resource
     schema examples.

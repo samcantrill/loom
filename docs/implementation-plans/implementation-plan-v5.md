@@ -918,7 +918,7 @@ Completion summary:
   invalid worker results, worker-result identity mismatches, launch errors,
   signal metadata, and redacted command metadata. Added integration evidence
   for local/subprocess success equivalence and subprocess failure status/log
-  diagnostics. Added runnable `pipelines.subprocess-run` examples for
+  diagnostics. Added runnable `execution.subprocess` examples for
   local-versus-subprocess success, subprocess failure diagnostics, and direct
   `loom stage run` execution of a prepared attempt. Updated execution and
   testing docs to state current v5 guarantees, trust boundaries, no-sandboxing
