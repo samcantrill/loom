@@ -43,6 +43,21 @@ from .paths import (
     slurm_plan_relative_path,
     slurm_submission_relative_path,
 )
+from .artifacts import SlurmDryRunPlanningResult, write_slurm_dry_run_artifacts
+from .planning import (
+    SLURM_DRY_RUN_PLAN_METADATA_SCHEMA_VERSION,
+    build_afterok_planned_submission,
+    build_single_job_planned_submission,
+    build_slurm_plan_metadata,
+    plan_afterok_slurm_dry_run,
+    plan_single_job_slurm_dry_run,
+)
+from .rendering import (
+    render_command_argv,
+    render_dependency_value,
+    render_sbatch_directive,
+    render_slurm_script,
+)
 from .resources import (
     SlurmSbatchDirective,
     build_sbatch_directives,
@@ -54,11 +69,13 @@ __all__ = [
     "GENERATED_SBATCH_DIRECTIVES",
     "MODELED_SBATCH_DIRECTIVES",
     "RESERVED_SBATCH_DIRECTIVES",
+    "SLURM_DRY_RUN_PLAN_METADATA_SCHEMA_VERSION",
     "SLURM_OPTIONS_SCHEMA_VERSION",
     "SLURM_PLANNED_SUBMISSION_SCHEMA_VERSION",
     "SLURM_SUBMISSION_ROOT",
     "SlurmCommandArgv",
     "SlurmDependencyType",
+    "SlurmDryRunPlanningResult",
     "SlurmGeneratedArtifactPath",
     "SlurmManifestError",
     "SlurmMode",
@@ -72,11 +89,20 @@ __all__ = [
     "SlurmResourceMappingError",
     "SlurmSbatchDirective",
     "build_sbatch_directives",
+    "build_afterok_planned_submission",
     "build_single_job_command_argv",
+    "build_single_job_planned_submission",
     "build_stage_job_command_argv",
+    "build_slurm_plan_metadata",
     "map_slurm_resources",
     "normalize_extra_sbatch",
     "pipeline_job_key",
+    "plan_afterok_slurm_dry_run",
+    "plan_single_job_slurm_dry_run",
+    "render_command_argv",
+    "render_dependency_value",
+    "render_sbatch_directive",
+    "render_slurm_script",
     "resolve_slurm_generated_artifact_path",
     "resolve_slurm_manifest_path",
     "slurm_job_log_relative_path",
@@ -86,4 +112,5 @@ __all__ = [
     "slurm_submission_relative_path",
     "stage_job_key",
     "validate_logical_job_key",
+    "write_slurm_dry_run_artifacts",
 ]
