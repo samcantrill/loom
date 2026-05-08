@@ -54,10 +54,13 @@ Task:
    relevant source files before asking design-decision questions. Treat the
    confirmed functionality and behavior as the stable baseline for the design
    pass unless the user explicitly reopens it.
-10. At the start of the design decision review, draft the complete
-   design-decision review queue implied by the confirmed functionality and
-   behavior, record it in the planning notes, and get user feedback on each
-   decision before marking it confirmed.
+10. At the start of the design decision review, draft the design-decision
+   review queue implied by the confirmed functionality and behavior, limited to
+   decisions that could materially affect maintainability or extensibility.
+   Record the queue in the planning notes. Record clear repo-supported
+   recommendations without asking the user; get user feedback only for
+   high-impact decisions that do not have a strong recommendation before
+   marking them confirmed.
 11. When all stages are confirmed, mark the planning notes ready for
    implementation-plan drafting and summarize the handoff inputs.
 12. Ask for explicit confirmation before drafting the implementation plan. If
@@ -121,24 +124,36 @@ Discussion stages:
      planning notes are the source of truth.
 6. Design decision review
    - Map confirmed functionality and behavior to the current Loom architecture.
-   - Before asking the user to settle individual choices, draft the complete
+   - Before asking the user to settle individual choices, draft the
      design-decision review queue for this roadmap version from the confirmed
-     functionality and behavior. Include every decision that affects public
-     behavior, public Python APIs, CLI surface, persisted records and schemas,
-     file layout, ownership boundaries, import boundaries, optional
-     dependencies, security and trust assumptions, failure modes,
-     compatibility, extension points, flexibility boundaries, future expansion
-     paths, maintainability, extensibility, scalability, testing strategy, or
-     accepted debt.
-   - Present the drafted decision queue to the user and ask whether any
-     decision is missing, mis-scoped, or should be split before detailed review.
-   - Discuss each queued decision with the user in small batches. For each
-     decision, state what the design decision or principle means, why it
-     matters, the expected impact, implementation-relevant alternatives, the
-     recommended default, the tradeoffs and considerations, and the feedback
-     needed from the user.
-   - Do not mark a design decision confirmed until user feedback has accepted
-     the selected approach or provided enough direction to choose one.
+     functionality and behavior. Include only decisions that could materially
+     affect maintainability or extensibility, such as ownership boundaries,
+     import boundaries, extension points, durable schema or file-layout choices,
+     public API shape, optional dependencies, compatibility policy, security or
+     trust assumptions, future expansion paths, scalability, testing strategy,
+     or accepted debt.
+   - Do not include low-impact implementation details, local naming choices, or
+     straightforward applications of established repository patterns in the
+     user-facing decision queue.
+   - For each candidate decision, first classify it:
+     - `recorded recommendation`: maintainability or extensibility impact is
+       real, but repo evidence gives a clear recommendation.
+     - `needs discussion`: maintainability or extensibility impact is high and
+       there is no strong recommendation.
+     - `implementation detail`: maintainability and extensibility impact is low.
+   - Record `recorded recommendation` decisions directly in the planning notes
+     with the selected approach, rationale, alternatives rejected, debt, and
+     revisit trigger. Do not ask the user to confirm these individually.
+   - Present the `needs discussion` queue to the user and ask whether any
+     high-impact decision is missing, mis-scoped, or should be split before
+     detailed review.
+   - Discuss only the `needs discussion` decisions with the user in small
+     batches. For each decision, state what the decision means, why it matters
+     for maintainability or extensibility, the expected impact,
+     implementation-relevant alternatives, why there is no strong default, the
+     tradeoffs and considerations, and the feedback needed from the user.
+   - Do not mark a `needs discussion` decision confirmed until user feedback has
+     accepted the selected approach or provided enough direction to choose one.
    - For each confirmed decision, record the selected approach, user feedback,
      rejected alternatives, rationale, maintainability impact,
      extensibility/flexibility impact, future expansion impact, debt
@@ -175,6 +190,9 @@ Question rules:
   concise direct questions.
 - Do not ask questions whose answer is already clear from the roadmap, feature
   docs, implementation plans, source, or tests.
+- During design decision review, ask the user only about high-impact
+  maintainability/extensibility decisions that do not have a clear
+  repo-supported recommendation.
 - If a question is open-ended by nature, ask it directly and explain which
   decision it affects.
 - At the end of each user exchange, give a short readback of locked decisions,
@@ -195,9 +213,10 @@ Rules:
 - Do not begin the design decision review until functionality and behavior are
   confirmed, a checkpoint is written, and context has been compacted, or reset
   only when compaction is unavailable.
-- Do not enter phase shaping until the design-decision review queue has been
-  drafted, reviewed with the user, and either confirmed or explicitly deferred
-  with a rationale.
+- Do not enter phase shaping until maintainability/extensibility-impacting
+  design decisions have either been recorded with a clear recommendation,
+  reviewed with the user when no strong recommendation exists, or explicitly
+  deferred with a rationale.
 - Do not invent requirements not grounded in the roadmap, feature docs, current
   repository state, or confirmed user decisions.
 - Keep `loom` domain-neutral.

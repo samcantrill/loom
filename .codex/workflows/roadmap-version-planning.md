@@ -38,7 +38,7 @@ Expected flow:
 3. Feature brainstorming.
 4. Functionality and behavior confirmation.
 5. Context compaction/reset checkpoint.
-6. Design decision review.
+6. Maintainability/extensibility design decision review.
 7. Phase shaping.
 8. Final planning confirmation.
 9. Implementation-plan draft from the confirmed planning notes.
@@ -60,10 +60,23 @@ relevant considerations or tradeoffs, and a recommended default when the repo
 evidence supports one. After functionality and behavior are confirmed, record a
 complete checkpoint in the planning notes and compact or reset context before
 starting the design decision review. The resumed design pass should reload the
-planning notes, draft the full design-decision review queue implied by the
-confirmed functionality, and then discuss each decision with the user before
-marking it confirmed. Each decision discussion should cover maintainability,
-extensibility, flexibility, expansion paths, accepted debt, rejected
-alternatives, and user feedback. Do not start phase implementation from this
+planning notes and draft only the design-decision review queue needed for
+choices that could materially affect system maintainability or extensibility.
+Do not turn every behavior or implementation detail into a user question.
+
+Classify each candidate design decision before discussing it:
+
+- If the decision is low impact for maintainability and extensibility, omit it
+  from the review queue or record it as an implementation detail in the notes.
+- If the decision affects maintainability or extensibility and repo evidence
+  gives a clear recommendation, record the recommendation, rationale, rejected
+  alternatives, and revisit trigger in the notes without asking the user.
+- If the decision has high maintainability or extensibility impact and there is
+  no strong recommendation, discuss it with the user before marking it
+  confirmed.
+
+Each user-facing decision discussion should cover the maintainability impact,
+extensibility and expansion impact, accepted debt, rejected alternatives, and
+the specific user feedback needed. Do not start phase implementation from this
 entrypoint; the drafted implementation plan still needs the normal plan quality
 gate before phase work begins.
