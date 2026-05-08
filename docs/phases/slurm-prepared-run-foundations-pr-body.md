@@ -33,7 +33,7 @@ New tests implemented:
 | --- | --- | --- |
 | `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | Passed | Ruff passed; Pyright passed with 0 errors; default harness passed 747 selected tests with 14 skipped and 8 deselected; config-extra harness passed 405 selected tests with 765 deselected; build produced source distribution and wheel. |
 | `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | Passed | Wrote `build/test-summary.md`; overall 1170 passed, 0 failed, 0 errors, 11 skipped, 773 deselected in 47.36s. |
-| GitHub checks | Not run | Expanded-path draft pass only; PR creation and remote checks are left for the PR body refine pass. |
+| GitHub checks | Pending | Will run after PR creation. |
 
 ### Test Suite Summary
 
