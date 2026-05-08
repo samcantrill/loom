@@ -39,7 +39,7 @@ updates, fake-runner integration, and e2e CLI success/partial flows.
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default suite, config-extra suite, and build passed. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; all suites passed. |
-| GitHub checks | Pending | To be verified after PR creation. |
+| GitHub checks | Passed | PR #91 `checks` completed successfully. |
 
 ### Test Suite Summary
 
