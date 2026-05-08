@@ -216,7 +216,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used by manager-local fallback hardening after
+  the Spark executor hit usage limits and the fallback worker stalled with
+  uncommitted edits; fixes were limited to Phase 1 validation/type issues.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
@@ -224,9 +226,17 @@ make test-summary
 
 - Draft plan: complete in this artifact.
 - Final phase execution plan: complete in this artifact after source/test inspection.
-- Implementation summary: pending implementation.
-- Implementation validation: pending implementation.
-- Refinement summary: expanded-path planning refinement complete; implementation refinement not consumed.
+- Implementation summary: complete. Added shared `SUBMITTED` run/stage statuses,
+  submitted lifecycle writers, backend-neutral submitted-operation records and
+  active/latest predicates, `RunSubmittedOperationStore` and local persistence
+  helpers, diagnostics/status summaries for persisted submitted operations, and
+  guarded `SUBMITTED -> RUNNING` stage-job continuation validation.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_stage_job.py tests/unit/loom/diagnostics/test_diagnostics_inspection.py tests/unit/loom/cli/test_status_logs.py tests/contracts/test_store_contract.py tests/contracts/test_stage_worker_contract.py tests/integration/pipeline/test_stage_job_continuation.py tests/integration/pipeline/test_local_stores.py tests/integration/diagnostics/test_cli_status_logs.py tests/e2e/test_cli_core.py` passed, 160 tests.
+  - `make lint` passed.
+  - `make typecheck` passed.
+- Refinement summary: expanded-path planning refinement complete; manager-local
+  implementation refinement used once to resolve targeted validation/type issues.
 - Blocker-resolution summary: none used.
 - PR preparation: pending later workflow stage.
 - Stack maintenance: none required for this root phase.
