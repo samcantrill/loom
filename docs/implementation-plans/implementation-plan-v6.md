@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: ready for phase implementation
+- Status: completed; Phases 1-6 merged into `develop`
 - Related planning notes:
   `docs/implementation-plans/roadmap-v6-planning-notes.md`
 - Related source docs:
@@ -919,7 +919,7 @@ Completion summary:
 
 ### Phase 6 - End-To-End Hardening And Documentation
 
-Status: pr_open
+Status: merged
 Branch: `codex/slurm-dry-run-hardening`
 PR: https://github.com/samcantrill/loom/pull/87
 
@@ -1002,6 +1002,8 @@ Completion summary:
   `docs/phases/slurm-dry-run-hardening.md`.
 - PR #87 opened against `develop` from `codex/slurm-dry-run-hardening` on
   2026-05-08 after final local validation.
+- PR #87 merged into `develop` on 2026-05-08 with squash merge commit
+  `9f1544cc83f83d926ee74d3eb6f103dab014f5ec`.
 - Implemented final public CLI e2e hardening for both SLURM dry-run modes using
   a diamond DAG, generated manifest/script/log/command inspection, repeated
   afterok dry-run evidence, and secret-boundary scanning across persisted run
@@ -1020,8 +1022,25 @@ Completion summary:
   passed, 15 skipped, 8 deselected`), isolated config-extra tests (`410
   passed, 854 deselected`), and build; `make test-summary` passed with overall
   `1264 passed, 11 skipped, 862 deselected`.
+- Final merge-gate validation after automated review docs updates:
+  `make validate-pr` passed Ruff, Pyright, isolated default tests (`833
+  passed, 15 skipped, 8 deselected`), isolated config-extra tests (`410
+  passed, 854 deselected`), and build; GitHub CI `checks` completed with
+  `SUCCESS` on PR #87.
 - Expanded-path implementation refinement was used locally after the new e2e
   secret-boundary test exposed a resolved environment value in dry-run
   `plan.json`. No blocker-resolution pass was needed before PR opening.
-- Stack state: root phase PR targets `develop`; no predecessor branch and no
-  successor dependency at PR opening.
+- Automated PR review found one stale SLURM docs command-shape note after the
+  branch was rebased onto the Phase 6 PR-open metadata commit; it was fixed in
+  the phase branch and no blocking findings remained.
+- Final merge verification: before merge, `gh pr view 87 --json
+  baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` returned
+  `baseRefName=develop`, `headRefName=codex/slurm-dry-run-hardening`,
+  `state=OPEN`, no merge commit yet, and CI check `checks` completed with
+  `SUCCESS`.
+- Stack state: root phase PR targeted `develop`; no predecessor branch and no
+  successor dependency. The branch was rebased onto `origin/develop` at
+  `33e35c8` after PR-open metadata moved `develop`.
+- Follow-up notes: v6 is complete. V7 owns live `sbatch` submission, scheduler
+  job IDs, status/cancel, partial submission recovery, and any opt-in real
+  cluster acceptance suite.
