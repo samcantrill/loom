@@ -193,10 +193,21 @@ make test-summary
 
 - Draft plan: complete
 - Final phase execution plan: complete
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
-- Blocker-resolution summary: TBD
-- PR preparation: TBD
-- Stack maintenance: TBD
+- Implementation summary: added fakeable SLURM command runner contracts,
+  bounded command result persistence, `sbatch --parsable` parsing, live
+  manifest schema version 2 records, canonical `manifest.json` live read/write
+  helpers, package exports, and unit/contract/integration coverage.
+- Implementation validation: targeted Ruff, targeted Pyright, and targeted
+  Pytest passed; `make validate-pr` passed; `make test-summary` passed with
+  package 52 passed / 1 skipped, unit 709 passed / 1 skipped, contract 63
+  passed / 2 skipped, integration 35 passed / 7 skipped / 9 deselected, e2e 22
+  passed, and config-extra 411 passed / 881 deselected.
+- Refinement summary: manager-local import-boundary fix moved Python
+  `subprocess` import into the concrete subprocess runner method after
+  `make validate-pr` found eager SLURM package import of `subprocess`.
+- Blocker-resolution summary: 1/3 used for the import-boundary validation
+  blocker; blocker resolved and validation rerun successfully.
+- PR preparation: PR body recorded in
+  `docs/phases/slurm-live-command-models-pr-body.md`.
+- Stack maintenance: no successor branch exists yet.
 - Remaining blockers: none known
