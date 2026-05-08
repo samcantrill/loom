@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined; ready for implementation handoff
+- Status: implemented; PR not opened per assignment
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 4: SLURM Script Builders and Dry-Run APIs`
 - Branch: `codex/slurm-dry-run-scripts`
@@ -30,7 +30,7 @@
   contracts
 - Setup limitations: worktree was created from local `develop` at `434a9c1`; no
   remote synchronization or validation was run in this planning-only pass
-- Blockers: none known for implementation handoff
+- Blockers: none known after implementation
 
 ## Objective
 
@@ -487,8 +487,8 @@ make test-summary
 
 - Phase execution plan refinement: used; expanded-path refine pass completed on
   2026-05-08
-- Phase implementation refinement: unused; reserved for the later implementation
-  workflow if validation or expanded-path implementation review requires it
+- Phase implementation refinement: not needed; fallback implementation worker
+  completed the phase and targeted validation passed
 - PR review: unused; reserved for the later PR review gate
 - Blocker resolution: 0/3 used; no blocker-resolution pass has been consumed
   for Phase 4
@@ -501,5 +501,24 @@ make test-summary
   plan/prepared-run reads, store-owned generated artifact writes, dedicated
   `shlex.quote` rendering, import-boundary restrictions, and focused test
   obligations.
-- Implementation summary: not started.
-- Validation summary: not run in this planning-only refine pass.
+- Implementation summary: completed on 2026-05-08. Added SLURM-only rendering,
+  artifact writing, and dry-run planning APIs for deterministic single-job and
+  afterok script artifacts. The planner reads `RunStore.read_plan` and
+  `RunStore.read_prepared_run`, parses `ExecutionPlan.from_dict` and
+  `PreparedRunRecord.from_dict`, uses `ExecutionPlan.ordered_stage_plans`,
+  `StagePlan.action`, and `StagePlan.upstream_stages` for afterok jobs, and
+  writes scripts, manifest, and secret-safe planning metadata under
+  `slurm/submissions/<planning_id>/...` through store-owned path helpers and
+  atomic store writes. Generated commands use the Phase 3 continuation argv
+  helpers and render through `shlex.quote`; no CLI wiring, live scheduler calls,
+  scheduler IDs, or generic continuation changes were added.
+- Test summary: added package/import-boundary coverage for new SLURM dry-run
+  modules, unit coverage for script rendering and single-job/afterok planning,
+  contract coverage for planning-result serialization stability, and
+  integration coverage for local run-store artifact writing and manifest
+  round-trips.
+- Validation summary: targeted phase validation passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import.py tests/package/test_public_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/executors/slurm/test_slurm_scripts.py tests/unit/loom/pipeline/executors/slurm/test_slurm_planner.py tests/unit/loom/pipeline/executors/slurm/test_slurm_options.py tests/unit/loom/pipeline/executors/slurm/test_slurm_resources.py tests/unit/loom/pipeline/executors/slurm/test_slurm_manifest.py tests/contracts/test_slurm_manifest_contract.py tests/integration/pipeline/test_slurm_dry_run_planning.py tests/integration/pipeline/test_slurm_model_store_paths.py`
+  passed with 87 tests. Static targeted checks passed:
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/executors/slurm tests/unit/loom/pipeline/executors/slurm/test_slurm_scripts.py tests/unit/loom/pipeline/executors/slurm/test_slurm_planner.py tests/contracts/test_slurm_manifest_contract.py tests/integration/pipeline/test_slurm_dry_run_planning.py tests/package/test_import_boundaries.py`
+  and `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/executors/slurm tests/unit/loom/pipeline/executors/slurm/test_slurm_scripts.py tests/unit/loom/pipeline/executors/slurm/test_slurm_planner.py tests/contracts/test_slurm_manifest_contract.py tests/integration/pipeline/test_slurm_dry_run_planning.py`.
