@@ -8,6 +8,8 @@
 - Branch: `codex/slurm-dry-run-models`
 - Worktree: `/home/samcantrill/work/loom-worktrees/slurm-dry-run-models`
 - Phase execution plan path: `docs/phases/slurm-dry-run-models.md`
+- PR body path: `docs/phases/slurm-dry-run-models-pr-body.md`
+- PR URL: pending PR creation
 - Full plan: `docs/implementation-plans/implementation-plan-v6.md`
 - Source phase: Phase 3 - SLURM Models, Options, Resources, And Manifest Schema
 - Stack predecessor: none; Phase 2 is merged into `develop`
@@ -331,6 +333,20 @@ make test-summary
 - Implementation validation caveat: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff
   format --check .` reports pre-existing formatting drift across unrelated
   files, so only the new/modified files were formatted.
-- PR preparation: not run; phase executor stopped before PR preparation as
-  assigned.
+- PR preparation: in progress on 2026-05-08. Verified branch
+  `codex/slurm-dry-run-models`, target branch `develop`, stack predecessor
+  none, clean worktree, and final diff scope against `develop`. Drafted and
+  refined concise PR body at `docs/phases/slurm-dry-run-models-pr-body.md`.
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+  `build/test-summary.md` with overall `1233 passed, 11 skipped, 836
+  deselected`.
+- PR preparation validation: cited refinement-pass
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` evidence (`809 passed, 14
+  skipped, 8 deselected` default tests; `405 passed, 828 deselected`
+  config-extra; Ruff, Pyright, and build passed). Reran
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` during PR preparation;
+  package `51 passed, 1 skipped`, unit `671 passed, 1 skipped`, contract `58
+  passed, 2 skipped`, integration `29 passed, 7 skipped, 8 deselected`, e2e
+  `19 passed`, config-extra `405 passed, 828 deselected`, overall `1233
+  passed, 11 skipped, 836 deselected`.
 - Remaining blockers: none known.
