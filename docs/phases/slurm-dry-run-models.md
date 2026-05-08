@@ -358,6 +358,10 @@ make test-summary
   `url=https://github.com/samcantrill/loom/pull/84`.
 - Stack state: root phase PR targeting `develop`; stack predecessor none
   because Phase 2 is merged. No successor branch is recorded in this artifact.
+- Stack maintenance: after the control checkout recorded Phase 3 as `pr_open`
+  on `develop` with commit `e3e8212`, rebased
+  `codex/slurm-dry-run-models` onto updated `develop` and force-pushed with
+  lease; the PR remains a root phase PR targeting `develop`.
 - GitHub checks: pending after PR creation; managing agent owns CI polling and
   merge decision.
 - Remaining blockers: none known.
