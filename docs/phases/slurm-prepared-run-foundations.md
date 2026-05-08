@@ -267,6 +267,33 @@ make test-summary
 - Blocker-resolution summary: concrete prepared-run store persistence
   payload-safety blocker resolved during this implementation refinement pass;
   no separate blocker-resolution pass was run.
-- PR preparation: not started by instruction.
+- PR preparation draft: completed on 2026-05-08 using
+  `.codex/prompts/pr-body-draft.md`, `.codex/templates/phase-pr-body.md`, and
+  `.github/PULL_REQUEST_TEMPLATE.md`. Created
+  `docs/phases/slurm-prepared-run-foundations-pr-body.md` for the expanded-path
+  draft pass. PR body refine pass remains pending by manager instruction.
+- PR facts for refine/open pass: branch
+  `codex/slurm-prepared-run-foundations`; target branch `develop`; stack
+  predecessor none; root PR target confirmed as `develop`; PR title
+  `SLURM Script Planning - Phase 1: Prepared-Run And Lifecycle Foundations`.
+  Merge eligibility remains root phase; merge-eligible only after PR targets
+  `develop`, automated review passes, and validation/CI passes. PR not opened
+  in this draft pass because the expanded path leaves creation to
+  `.codex/prompts/pr-body-refine.md`.
+- PR body scope confirmation: final diff matches Phase 1 generic
+  execution/store foundations only. No SLURM package, script generation,
+  dry-run manifest, CLI continuation command, scheduler state, scheduler job
+  ID, `sbatch`, `loom prepared-run continue`, `loom stage-job run`, or
+  self-finalizing `loom stage run` behavior was added.
+- PR body draft validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` - passed and wrote
+    `build/test-summary.md`: package 50 passed, 1 skipped; unit 621 passed,
+    1 skipped; contract 55 passed, 2 skipped; integration 21 passed,
+    7 skipped, 8 deselected; e2e 18 passed; config-extra 405 passed,
+    765 deselected; overall 1170 passed, 0 failed, 0 errors, 11 skipped,
+    773 deselected in 47.36s.
+- PR body draft status: complete; refine status: pending; PR review budget:
+  unused; blocker-resolution budget remains 1/3 used for the prepared-run store
+  persistence payload-safety blocker resolved during implementation refinement.
 - Stack maintenance: not started; no successor branch work in this implementation pass.
 - Remaining blockers: none known after implementation refinement and validation.
