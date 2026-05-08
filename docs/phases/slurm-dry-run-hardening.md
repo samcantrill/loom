@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; validation passed; PR body prepared
+- Status: pr_open
 - Feature focus: SLURM Script Planning
 - PR title: `SLURM Script Planning - Phase 6: End-To-End Hardening and Documentation`
 - Branch: `codex/slurm-dry-run-hardening`
@@ -11,14 +11,19 @@
 - PR body path: `docs/phases/slurm-dry-run-hardening-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v6.md`
 - Source phase: Phase 6 - End-To-End Hardening And Documentation
-- PR: pending
-- PR state: pending
+- PR: https://github.com/samcantrill/loom/pull/87
+- PR state: open
 - Stack predecessor: none; Phases 1-5 are merged into `develop`
 - Base branch: `develop` at `9f4c4b2`
 - Target branch: `develop`
-- Merge eligibility: root phase; not merge-eligible until PR is open, automated
-  review passes, GitHub CI passes, PR body evidence is accurate, and the PR
-  targets `develop`
+- Base/head verification: `gh pr view 87 --json baseRefName,headRefName,state,url`
+  returned `baseRefName=develop`,
+  `headRefName=codex/slurm-dry-run-hardening`, `state=OPEN`, and URL
+  `https://github.com/samcantrill/loom/pull/87` on 2026-05-08.
+- GitHub checks: pending after PR opening
+- Merge eligibility: root phase; not merge-eligible until automated review
+  passes, GitHub CI passes, PR body evidence is accurate, and the PR targets
+  `develop`
 - Workflow path: expanded path because the phase spans e2e behavior, persisted
   secret-boundary contracts, feature documentation, and v7 handoff notes
 - Successor dependency notes: this is the final v6 phase. No successor phase
@@ -423,6 +428,8 @@ make test-summary
 - Blocker-resolution summary: pending.
 - PR preparation: PR body drafted in
   `docs/phases/slurm-dry-run-hardening-pr-body.md` using final
-  `make test-summary` evidence.
-- Stack maintenance: pending.
+  `make test-summary` evidence. PR #87 opened against `develop` and base/head
+  verification passed.
+- Stack maintenance: root phase targeting `develop`; no predecessor and no
+  retargeting required at PR opening.
 - Remaining blockers: none known.
