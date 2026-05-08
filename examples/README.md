@@ -36,6 +36,9 @@ example outputs. Execution and operations examples also accept
 - `manual`: illustrative examples that cannot run in the default environment and
   must document why in their manifest.
 
+Planned v6/v7 SLURM and submitted-operation examples are tracked in
+[`docs/features/slurm-example-coverage.md`](../docs/features/slurm-example-coverage.md).
+
 The current examples stay local and synthetic. They do not require remote
 stores, distributed execution, scheduler integration, containers, plugins, or
 cross-run cache reuse. Once roadmap support lands, new examples should be added
