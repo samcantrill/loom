@@ -23,7 +23,8 @@
   2026-05-08.
 - Stack state: root phase targeting `develop`; no stack predecessor and no
   retargeting required at PR opening.
-- GitHub checks: CI `checks` queued at PR verification on 2026-05-08.
+- GitHub checks: CI `checks` pending at final PR-prep verification on
+  2026-05-08.
 - Merge eligibility: root phase; merge-eligible only after the PR targets
   `develop`, the expanded-path refine pass is complete, implementation is
   phase-scoped, automated review passes, and validation/CI passes
@@ -562,4 +563,4 @@ make test-summary
   baseRefName,headRefName,state,url,statusCheckRollup` returned
   `baseRefName=develop`, `headRefName=codex/slurm-dry-run-scripts`,
   `state=OPEN`, URL `https://github.com/samcantrill/loom/pull/85`, and CI
-  `checks` status `QUEUED`.
+  `checks` pending.
