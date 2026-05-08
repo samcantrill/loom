@@ -88,9 +88,31 @@ def test_prepared_run_is_not_stage_worker_request_payload() -> None:
     [
         ("config", {"resolved_config": {"token": "secret"}}, "opaque_payload"),
         ("plan", {"plan_summary": {"resolver_outputs": ["secret"]}}, "unsafe_field"),
-        ("runtime", {"resource_summary": {"environment": {"TOKEN": "secret"}}}, "unsafe_field"),
-        ("runtime", {"resource_summary": {"scheduler_job_id": "123"}}, "unsafe_field"),
-        ("metadata", {"adapter": {"kind": "raw", "data": {"raw_adapter_payload": {}}}}, "unsafe_field"),
+        (
+            "runtime",
+            {"resource_summary": {"environment": {"TOKEN": "secret"}}},
+            "unsafe_field",
+        ),
+        (
+            "runtime",
+            {"resource_summary": {"scheduler_job_id": "123"}},
+            "unsafe_field",
+        ),
+        (
+            "metadata",
+            {"adapter": {"kind": "raw", "data": {"raw_adapter_payload": {}}}},
+            "unsafe_field",
+        ),
+        (
+            "metadata",
+            {
+                "facts": {
+                    "kind": "scheduler_facts",
+                    "data": {"partition": "debug"},
+                }
+            },
+            "unsafe_field",
+        ),
     ],
 )
 def test_prepared_run_rejects_unsafe_payload_categories(

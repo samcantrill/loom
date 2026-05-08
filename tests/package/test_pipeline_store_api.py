@@ -40,6 +40,7 @@ def test_pipeline_store_public_exports() -> None:
         "StoreError",
         "ArtifactStoreError",
         "RunStoreError",
+        "PreparedRunStorePayloadError",
         "RunLockError",
         "RunLockConflictError",
         "RunLockReleaseError",

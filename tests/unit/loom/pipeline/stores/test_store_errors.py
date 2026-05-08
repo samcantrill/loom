@@ -7,6 +7,7 @@ def test_store_error_inheritance() -> None:
     assert issubclass(stores.StoreError, Exception)
     assert issubclass(stores.ArtifactStoreError, stores.StoreError)
     assert issubclass(stores.RunStoreError, stores.StoreError)
+    assert issubclass(stores.PreparedRunStorePayloadError, stores.RunStoreError)
     assert issubclass(stores.UnsafeStorePathError, stores.StoreError)
     assert issubclass(stores.InvalidRunURIError, stores.RunStoreError)
     assert issubclass(stores.UnsupportedArtifactURIError, stores.ArtifactStoreError)
@@ -55,6 +56,7 @@ def test_store_error_exports() -> None:
         "StoreError",
         "ArtifactStoreError",
         "RunStoreError",
+        "PreparedRunStorePayloadError",
         "RunLockError",
         "RunLockConflictError",
         "RunLockReleaseError",

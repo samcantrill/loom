@@ -6,105 +6,23 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import cast
 
-from loom.serialization import PlainData, ensure_plain_data, load_versioned_document
-from loom.serialization.errors import PlainDataError, SchemaVersionError
+from loom.pipeline.stores.errors import PreparedRunStorePayloadError
+from loom.pipeline.stores.prepared_run import (
+    PREPARED_RUN_CONFIG_FIELDS,
+    PREPARED_RUN_CONTINUATION_WHOLE_RUN,
+    PREPARED_RUN_PLAN_FIELDS,
+    PREPARED_RUN_PROVENANCE_FIELDS,
+    PREPARED_RUN_RUNTIME_FIELDS,
+    PREPARED_RUN_SCHEMA_VERSION,
+    validate_prepared_run_summary,
+    validate_prepared_run_typed_metadata,
+)
+from loom.serialization import PlainData, load_versioned_document
+from loom.serialization.errors import SchemaVersionError
 
 from .errors import RunRequestError
 
-PREPARED_RUN_SCHEMA_VERSION = 1
-
-PREPARED_RUN_CONTINUATION_WHOLE_RUN = "whole_run"
-
 _CONTINUATION_TYPES = frozenset({PREPARED_RUN_CONTINUATION_WHOLE_RUN})
-
-_PLAN_FIELDS = frozenset(
-    {
-        "document_ref",
-        "plan_digest",
-        "plan_path",
-        "plan_summary",
-    }
-)
-_CONFIG_FIELDS = frozenset(
-    {
-        "composition_manifest_ref",
-        "raw_snapshot_ref",
-        "recipe_manifest_ref",
-        "redacted_snapshot_ref",
-        "summary",
-    }
-)
-_PROVENANCE_FIELDS = frozenset(
-    {
-        "command_ref",
-        "dependencies_ref",
-        "git_ref",
-        "summary",
-    }
-)
-_RUNTIME_FIELDS = frozenset(
-    {
-        "document_ref",
-        "executor",
-        "executor_kind",
-        "resource_summary",
-        "stage_count",
-        "stage_executor_summary",
-    }
-)
-_METADATA_ENTRY_FIELDS = frozenset({"kind", "data"})
-
-_UNSAFE_FIELD_NAMES = frozenset(
-    {
-        "adapter_payload",
-        "adapter_payloads",
-        "api_key",
-        "apikey",
-        "credential",
-        "credentials",
-        "env",
-        "env_key",
-        "env_keys",
-        "env_name",
-        "env_names",
-        "env_value",
-        "env_values",
-        "env_var",
-        "env_vars",
-        "environment",
-        "environment_key",
-        "environment_keys",
-        "environment_name",
-        "environment_names",
-        "environment_value",
-        "environment_values",
-        "environment_variable",
-        "environment_variables",
-        "job_id",
-        "job_ids",
-        "password",
-        "raw_adapter_payload",
-        "raw_adapter_payloads",
-        "resolved",
-        "resolved_config",
-        "resolved_environment",
-        "resolved_runtime",
-        "resolved_value",
-        "resolved_values",
-        "resolver_output",
-        "resolver_outputs",
-        "scheduler",
-        "scheduler_fact",
-        "scheduler_facts",
-        "scheduler_job_id",
-        "scheduler_job_ids",
-        "secret",
-        "secrets",
-        "slurm_job_id",
-        "token",
-        "tokens",
-    }
-)
 
 
 class PreparedRunPayloadError(RunRequestError):
@@ -153,24 +71,32 @@ class PreparedRunRecord:
                 "PreparedRunRecord.continuation_type must be one of: " + valid
             )
         object.__setattr__(
-            self, "plan", _safe_mapping(self.plan, field="plan", allowed=_PLAN_FIELDS)
+            self,
+            "plan",
+            _safe_mapping(self.plan, field="plan", allowed=PREPARED_RUN_PLAN_FIELDS),
         )
         object.__setattr__(
             self,
             "config",
-            _safe_mapping(self.config, field="config", allowed=_CONFIG_FIELDS),
+            _safe_mapping(
+                self.config, field="config", allowed=PREPARED_RUN_CONFIG_FIELDS
+            ),
         )
         object.__setattr__(
             self,
             "provenance",
             _safe_mapping(
-                self.provenance, field="provenance", allowed=_PROVENANCE_FIELDS
+                self.provenance,
+                field="provenance",
+                allowed=PREPARED_RUN_PROVENANCE_FIELDS,
             ),
         )
         object.__setattr__(
             self,
             "runtime",
-            _safe_mapping(self.runtime, field="runtime", allowed=_RUNTIME_FIELDS),
+            _safe_mapping(
+                self.runtime, field="runtime", allowed=PREPARED_RUN_RUNTIME_FIELDS
+            ),
         )
         object.__setattr__(
             self, "metadata", _safe_typed_metadata(self.metadata, field="metadata")
@@ -212,26 +138,11 @@ class PreparedRunRecord:
             prepared_at=_str(mapping["prepared_at"], "prepared_at"),
             executor_name=_str(mapping["executor_name"], "executor_name"),
             continuation_type=_str(mapping["continuation_type"], "continuation_type"),
-            plan=_plain_mapping(
-                cast(Mapping[str, PlainData], mapping.get("plan", {})),
-                "plan",
-            ),
-            config=_plain_mapping(
-                cast(Mapping[str, PlainData], mapping.get("config", {})),
-                "config",
-            ),
-            provenance=_plain_mapping(
-                cast(Mapping[str, PlainData], mapping.get("provenance", {})),
-                "provenance",
-            ),
-            runtime=_plain_mapping(
-                cast(Mapping[str, PlainData], mapping.get("runtime", {})),
-                "runtime",
-            ),
-            metadata=_plain_mapping(
-                cast(Mapping[str, PlainData], mapping.get("metadata", {})),
-                "metadata",
-            ),
+            plan=cast(Mapping[str, PlainData], mapping.get("plan", {})),
+            config=cast(Mapping[str, PlainData], mapping.get("config", {})),
+            provenance=cast(Mapping[str, PlainData], mapping.get("provenance", {})),
+            runtime=cast(Mapping[str, PlainData], mapping.get("runtime", {})),
+            metadata=cast(Mapping[str, PlainData], mapping.get("metadata", {})),
         )
 
 
@@ -241,16 +152,10 @@ def _safe_mapping(
     field: str,
     allowed: frozenset[str],
 ) -> dict[str, PlainData]:
-    mapping = _plain_mapping(value, field)
-    extra = set(mapping) - allowed
-    if extra:
-        raise PreparedRunPayloadError(
-            f"{field}.{sorted(extra)[0]}",
-            "field is not an allowed prepared-run summary category",
-            category="opaque_payload",
-        )
-    _reject_unsafe_payload(mapping, field=field)
-    return mapping
+    try:
+        return validate_prepared_run_summary(value, field=field, allowed=allowed)
+    except PreparedRunStorePayloadError as exc:
+        raise _payload_error(exc) from exc
 
 
 def _safe_typed_metadata(
@@ -258,76 +163,14 @@ def _safe_typed_metadata(
     *,
     field: str,
 ) -> dict[str, PlainData]:
-    mapping = _plain_mapping(value, field)
-    for name, entry in mapping.items():
-        entry_field = f"{field}.{name}"
-        if _unsafe_name(name):
-            raise PreparedRunPayloadError(
-                entry_field,
-                "metadata key is reserved for unsafe prepared-run payloads",
-                category="unsafe_field",
-            )
-        if not isinstance(entry, dict):
-            raise PreparedRunPayloadError(
-                entry_field,
-                "metadata entries must be typed mappings with a kind field",
-                category="opaque_payload",
-            )
-        extra = set(entry) - _METADATA_ENTRY_FIELDS
-        if extra:
-            raise PreparedRunPayloadError(
-                f"{entry_field}.{sorted(extra)[0]}",
-                "metadata entries may only contain kind and data",
-                category="opaque_payload",
-            )
-        kind = entry.get("kind")
-        if not isinstance(kind, str) or not kind:
-            raise PreparedRunPayloadError(
-                f"{entry_field}.kind",
-                "metadata entry kind must be a non-empty string",
-                category="opaque_payload",
-            )
-    _reject_unsafe_payload(mapping, field=field)
-    return mapping
-
-
-def _reject_unsafe_payload(value: PlainData, *, field: str) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            key_field = f"{field}.{key}"
-            if _unsafe_name(key):
-                raise PreparedRunPayloadError(
-                    key_field,
-                    "field is reserved for secret-bearing or scheduler payloads",
-                    category="unsafe_field",
-                )
-            _reject_unsafe_payload(item, field=key_field)
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            _reject_unsafe_payload(item, field=f"{field}[{index}]")
-
-
-def _unsafe_name(value: str) -> bool:
-    normalized = value.strip().lower().replace("-", "_")
-    return normalized in _UNSAFE_FIELD_NAMES
-
-
-def _plain_mapping(value: Mapping[str, PlainData], path: str) -> dict[str, PlainData]:
     try:
-        plain = ensure_plain_data(value, path=path)
-    except PlainDataError as exc:
-        raise PreparedRunPayloadError(
-            path,
-            str(exc),
-            category="plain_data",
-        ) from exc
-    if not isinstance(plain, dict):
-        raise PreparedRunPayloadError(
-            path,
-            "value must be a mapping",
-            category="plain_data",
-        )
-    return plain
+        return validate_prepared_run_typed_metadata(value, field=field)
+    except PreparedRunStorePayloadError as exc:
+        raise _payload_error(exc) from exc
+
+
+def _payload_error(exc: PreparedRunStorePayloadError) -> PreparedRunPayloadError:
+    return PreparedRunPayloadError(exc.field, exc.reason, category=exc.category)
 
 
 def _str(value: object, field: str) -> str:

@@ -15,6 +15,7 @@ from loom.pipeline.stores import (
     CorruptStoreDocumentError,
     InvalidRunURIError,
     LocalRunStore,
+    PreparedRunStorePayloadError,
     RunLockConflictError,
     RunLockReleaseError,
     RunNotFoundError,
@@ -321,6 +322,31 @@ def test_local_run_status_plan_and_artifacts(tmp_path: Path) -> None:
     )
     store.write_artifact_index(run_uri, {"stage.output": ref})
     assert store.read_artifact_index(run_uri) == {"stage.output": ref}
+
+
+def test_local_run_write_prepared_run_rejects_unsafe_nested_payload(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    prepared_run = _prepared_run_payload(run_uri)
+    prepared_run["metadata"] = {
+        "adapter": {
+            "kind": "adapter_summary",
+            "data": {"raw_adapter_payload": {"token": "secret"}},
+        }
+    }
+
+    with pytest.raises(PreparedRunStorePayloadError) as exc_info:
+        store.write_prepared_run(run_uri, prepared_run)
+
+    assert exc_info.value.category == "unsafe_field"
+    assert (
+        exc_info.value.field
+        == "prepared_run.metadata.adapter.data.raw_adapter_payload"
+    )
+    assert not (store.local_run_dir(run_uri) / "prepared_run.json").exists()
 
 
 def test_local_run_snapshots_and_provenance(tmp_path: Path) -> None:

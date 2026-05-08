@@ -204,15 +204,24 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
-- Blocker resolution: 0/3 used
+- Blocker resolution: 1/3 used (prepared-run store persistence payload-safety
+  blocker fixed during the implementation refinement pass)
 
 ## Completion Notes
 
 - Draft plan: completed in the draft pass and committed with `plan: add phase execution plan`
 - Final phase execution plan: completed in expanded-path refine pass
 - Implementation summary: completed on 2026-05-08 by fallback implementation pass in `/home/samcantrill/work/loom-worktrees/slurm-prepared-run-foundations`. Added schema-versioned `PreparedRunRecord` and `PreparedRunPayloadError` under `loom.pipeline.execution`; exported the public prepared-run API without changing `StageWorkerRequest`; added `RunPreparedRunStore` protocol support and local `prepared_run.json` persistence; added store-owned safe-relative generated artifact path resolution; extracted generic input binding and artifact-index update helpers into `execution.lifecycle` while preserving runner semantics.
+- Implementation refinement summary: completed on 2026-05-08 as the single
+  expanded-path implementation refinement pass. Reviewed the executor-reported
+  targeted pytest, focused Ruff, and `make validate-pr` evidence; confirmed no
+  Phase 2 continuation CLI, SLURM package, script generation, scheduler state,
+  or `loom stage run` self-finalization was added. Fixed the concrete Phase 1
+  blocker where `LocalRunStore.write_prepared_run` could persist unsafe nested
+  prepared-run payloads supplied as plain mappings that bypassed
+  `PreparedRunRecord`.
 - Implementation commits:
   - `6880d80` - `feat: add prepared-run store foundations`
   - `3ea69b1` - `test: cover prepared-run foundations`
@@ -225,13 +234,39 @@ make test-summary
   - Contract: `tests/contracts/test_store_contract.py`
   - Integration: `tests/integration/pipeline/test_local_stores.py`
   - E2E and opt-in: not added; deferred as planned because Phase 1 has no public continuation commands, SLURM dry-run CLI, or scheduler integration.
+- Implementation refinement fixes:
+  - Added a store-owned prepared-run payload validator and
+    `PreparedRunStorePayloadError` so public store persistence rejects unsafe
+    nested payloads without importing execution from stores.
+  - Routed `PreparedRunRecord` summary and typed metadata checks through the
+    same store-safe validation boundary to keep execution and persistence
+    semantics aligned.
+  - Tightened typed metadata so raw adapter, scheduler fact, environment,
+    resolved-value, secret, and job-ID categories cannot hide behind a safe
+    wrapper or unsafe metadata `kind`.
+  - Added regression coverage proving `LocalRunStore.write_prepared_run`
+    rejects unsafe nested raw adapter payloads before writing
+    `prepared_run.json`.
 - Implementation validation:
   - `uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_prepared_run.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_subprocess_executor_integration.py` - passed: 108 passed, 1 skipped.
   - `uv run ruff check src/loom/pipeline/execution src/loom/pipeline/stores tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/execution/test_prepared_run.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py` - passed.
   - `make validate-pr` - passed: Ruff passed; Pyright passed with 0 errors; default harness passed 745 selected tests, 14 skipped, 8 deselected; config-extra harness passed 405 selected tests, 763 deselected; `uv build` produced source distribution and wheel.
   - `make test-summary` - not run in this implementation pass because PR preparation was explicitly out of scope.
+- Implementation refinement validation:
+  - Initial `uv run pytest ...` failed before running tests because the default
+    uv cache path under `/home/samcantrill/.cache/uv` was read-only in the
+    sandbox; reruns used `UV_CACHE_DIR=/tmp/uv-cache`.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/execution/test_prepared_run.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py` - passed: 70 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/execution/test_prepared_run.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_subprocess_executor_integration.py` - passed: 116 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/execution src/loom/pipeline/stores tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/execution/test_prepared_run.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/stores/test_local_runs.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/contracts/test_store_contract.py tests/integration/pipeline/test_local_stores.py` - passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` - passed: Ruff passed;
+    Pyright passed with 0 errors; default harness passed 747 selected tests,
+    14 skipped, 8 deselected; config-extra harness passed 405 selected tests,
+    765 deselected; `uv build` produced source distribution and wheel.
 - Refinement summary: tightened prepared-run sibling-record contract, lifecycle extraction scope, payload safety rules, generated-artifact path semantics, and suite obligations from manager review notes
-- Blocker-resolution summary: not used.
+- Blocker-resolution summary: concrete prepared-run store persistence
+  payload-safety blocker resolved during this implementation refinement pass;
+  no separate blocker-resolution pass was run.
 - PR preparation: not started by instruction.
 - Stack maintenance: not started; no successor branch work in this implementation pass.
-- Remaining blockers: none known after implementation and initial validation.
+- Remaining blockers: none known after implementation refinement and validation.
