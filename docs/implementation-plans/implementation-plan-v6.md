@@ -703,9 +703,9 @@ Completion summary:
 
 ### Phase 4 - SLURM Script Builders And Dry-Run Planning APIs
 
-Status: pending
+Status: pr_open
 Branch: `codex/slurm-dry-run-scripts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/85
 
 Goal:
 
@@ -782,7 +782,24 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Phase execution plan:
+  `docs/phases/slurm-dry-run-scripts.md`.
+- PR #85 opened against `develop` from `codex/slurm-dry-run-scripts` on
+  2026-05-08.
+- Implemented SLURM-only rendering, artifact writing, and dry-run planning APIs
+  for deterministic single-job and afterok scripts. The planner reads persisted
+  execution plans and prepared-run metadata through public store protocols,
+  derives afterok dependencies from `ExecutionPlan.ordered_stage_plans` and
+  `StagePlan.upstream_stages`, renders commands through Phase 3 argv helpers
+  with shell quoting, and writes scripts, manifest, and secret-safe planning
+  metadata under `slurm/submissions/<planning_id>/...` through store-owned path
+  helpers and atomic writes.
+- Kept CLI wiring, live scheduler calls, scheduler IDs/state, submitted state,
+  and Phase 5/7 behavior out of scope.
+- Local validation before PR: `make validate-pr` passed; `make test-summary`
+  passed with overall `1249 passed, 11 skipped, 852 deselected`.
+- Expanded-path implementation refinement was used and found no code or test
+  blocker; blocker resolution budget remains unused at PR open.
 
 ### Phase 5 - CLI And Preflight Integration
 
