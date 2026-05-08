@@ -40,6 +40,7 @@ def test_store_error_exports() -> None:
         "RunLockStore",
         "RunStatusStore",
         "RunPlanStore",
+        "RunPreparedRunStore",
         "RunArtifactIndexStore",
         "RunConfigStore",
         "RunProvenanceStore",
