@@ -703,7 +703,7 @@ Completion summary:
 
 ### Phase 4 - Live Afterok DAG Submission
 
-Status: pr_open
+Status: merged
 Branch: `codex/slurm-live-afterok`
 PR: https://github.com/samcantrill/loom/pull/91
 
@@ -802,9 +802,23 @@ Notes:
 
 Completion summary:
 
-- PR #91 opened on 2026-05-08 targeting `develop` from
-  `codex/slurm-live-afterok`; local validation passed before opening with
-  `make validate-pr` and `make test-summary`.
+- Merged on 2026-05-08 via PR #91, merge commit
+  `d6c452b2109f09f2b4f77042df0803ba7cda1478`.
+- Added live `slurm-afterok` submission with scheduler-ID `afterok`
+  dependencies, incremental manifest and submitted-operation persistence,
+  accepted-stage `SUBMITTED` records, partial submission JSON/text output,
+  live afterok preflight support, and lazy submitted stage-job worker-request
+  materialization at startup.
+- Added unit, contract, integration, and e2e fake-runner coverage for afterok
+  success, dependency wiring, active guards, partial failure, CLI output, and
+  submitted stage-job startup.
+- Validation: `make validate-pr` passed before merge; `make test-summary`
+  passed with package 52 passed/1 skipped, unit 719 passed/1 skipped,
+  contract 67 passed/2 skipped, integration 40 passed/7 skipped/9 deselected,
+  e2e 25 passed, and config-extra 411 passed/903 deselected.
+- PR #91 target verified as `develop`, head verified as
+  `codex/slurm-live-afterok`, GitHub `checks` completed successfully, and
+  manager review found no blocking findings before merge.
 
 ### Phase 5 - Scheduler-Aware Status
 

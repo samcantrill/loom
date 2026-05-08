@@ -196,7 +196,7 @@ make test-summary
 - Phase implementation refinement: used for manager-local validation fixes after
   targeted tests, Pyright, and config-extra surfaced stale expectations and
   missing test type narrowing
-- PR review: unused
+- PR review: used by manager local review before merge; no blocking findings
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -220,8 +220,10 @@ make test-summary
   submitted stage-job continuation to materialize missing worker requests
   before reading them, and updated the config-extra SLURM live preflight
   expectation.
-- Blocker-resolution summary: TBD
+- Blocker-resolution summary: no blocker-resolution passes used
 - PR preparation: PR #91 opened against `develop` with
   `docs/phases/slurm-live-afterok-pr-body.md`
-- Stack maintenance: TBD
+- Stack maintenance: PR #91 was squash-merged into `develop` as
+  `d6c452b2109f09f2b4f77042df0803ba7cda1478`; no successor branch depended on
+  `codex/slurm-live-afterok`
 - Remaining blockers: none known
