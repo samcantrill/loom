@@ -2,12 +2,14 @@
 
 ## Metadata
 
-- Status: implementation refinement pass complete; ready for PR preparation.
+- Status: PR body draft pass complete; PR body refine pass pending; PR not
+  opened.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`
 - Branch: `codex/serial-write-integration`
 - Worktree: `/home/samcantrill/work/loom-worktrees/serial-write-integration`
 - Phase execution plan path: `docs/phases/serial-write-integration.md`
+- PR body path: `docs/phases/serial-write-integration-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v9.md`
 - Source phase: Phase 4 - Serial Execution Write-Path Integration
 - Stack predecessor: none; Phases 1, 2, and 3 are merged into `develop`.
@@ -28,6 +30,10 @@
   2026-05-10.
 - Phase implementation refinement budget: used on 2026-05-10 by
   `loom_phase_refiner`; no blocker remained after the bounded pass.
+- PR body draft pass: complete on 2026-05-10; public PR body written to
+  `docs/phases/serial-write-integration-pr-body.md`.
+- PR body refine pass: pending for the expanded-path PR body. PR creation was
+  intentionally skipped by user instruction.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
 - Blocker-resolution budget: 0/3 used.
@@ -541,6 +547,30 @@ make test-summary
   local registry files, and prepared-worker handoff metadata carrying backend
   attempt, lease, owner, and fencing-token facts.
 
+### PR Body Draft And Target Readiness
+
+- PR body draft pass: complete on 2026-05-10 in
+  `docs/phases/serial-write-integration-pr-body.md`.
+- PR body refine pass: pending for expanded-path Phase 4.
+- PR state: not opened by instruction; no reviewers requested and no merge
+  action attempted.
+- Prepared PR facts:
+  - Title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`.
+  - Head branch: `codex/serial-write-integration`.
+  - Target branch: `develop`.
+  - Stack predecessor: none; this is a root phase PR.
+  - Worktree:
+    `/home/samcantrill/work/loom-worktrees/serial-write-integration`.
+- Target readiness: recorded target branch is `develop`, matching the root PR
+  target for merged Phases 1-3. Local `develop` and `origin/develop` are at
+  `3b57867` (`docs: record v9 phase 3 merge`), and
+  `git merge-base HEAD develop` resolved to
+  `3b5786799e35899db9adbe5afac0fcd0ff9c1686`.
+- Scope verified against `develop`: product diff adds the internal authority
+  adapter, narrow runner/continuation failure classification, SQLite audit
+  payload thawing, and focused unit/integration coverage. The PR-body draft
+  pass added only docs artifacts and made no code changes.
+
 ### Validation Evidence
 
 - Refinement focused command:
@@ -554,25 +584,30 @@ make test-summary
   - 14 passed, 4 skipped before config extras were installed for full
     validation.
 - Targeted Ruff command for changed files passed.
-- Refinement `make validate-pr` passed:
+- Final PR-preparation `make validate-pr` passed:
   - Ruff: passed.
   - Pyright: 0 errors.
   - default harness: 1026 passed, 18 skipped, 14 deselected.
   - config-extra harness: 419 passed, 1054 deselected.
   - build: source distribution and wheel built successfully.
-- `make test-summary` passed and wrote `build/test-summary.md`:
+- Final PR-preparation `make test-summary` passed and wrote
+  `build/test-summary.md` generated at 2026-05-09T18:39:24+00:00:
   - package: 56 passed, 1 skipped.
-  - unit: 791 passed, 1 skipped.
+  - unit: 794 passed, 1 skipped.
   - contract: 92 passed, 2 skipped.
   - integration: 72 passed, 8 skipped, 10 deselected.
   - e2e: 37 passed, 1 deselected.
-  - config-extra: 419 passed, 1051 deselected.
+  - config-extra: 419 passed, 1054 deselected.
+  - overall: 1470 passed, 12 skipped, 1065 deselected.
 
 ### Budget Status
 
 - Phase implementation refinement budget: used on 2026-05-10 by
   `loom_phase_refiner`; this pass added only phase-scoped test coverage and
   documentation, with no blocker remaining.
+- PR body draft pass: used on 2026-05-10 for
+  `docs/phases/serial-write-integration-pr-body.md`.
+- PR body refine pass: pending for expanded-path Phase 4.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
 - Blocker-resolution budget: 0/3 used.
