@@ -720,42 +720,13 @@ class PipelineRunner:
             if ready is None:
                 return progressed
             stage_name = ready.stage_name
-            upstream_blocker = _first_non_successful_upstream(ready, stage_results)
-            if upstream_blocker is not None:
-                stage_results[stage_name] = self._block_stage_after_failure(
-                    run_uri=context.run_uri,
-                    stage_plan=ready,
-                    blocked_by=upstream_blocker,
-                )
-                submitted.add(stage_name)
-                progressed = True
-                continue
             submitted.add(stage_name)
             stage = context.spec.get_stage(stage_name)
             produced_outputs = {
                 upstream: dict(outputs)
                 for upstream, outputs in outputs_by_stage.items()
             }
-            if ready.action == PlanAction.RUN:
-                future = pool.submit(
-                    self._run_controller_stage_action,
-                    request=context.request,
-                    run_uri=context.run_uri,
-                    run_dir=context.run_dir,
-                    local_run_store=context.local_run_store,
-                    config_mapping=context.config_mapping,
-                    spec=context.spec,
-                    stage=stage,
-                    stage_plan=ready,
-                    resolved_runtime=context.resolved_runtime[stage_name],
-                    plan=context.plan,
-                    artifact_store=context.artifact_store,
-                    produced_outputs=produced_outputs,
-                    created_at=context.created_at,
-                    run_started_at=context.run_started_at,
-                )
-                active[future] = _ParallelTask(stage_name=stage_name)
-            else:
+            if ready.action != PlanAction.RUN:
                 result = self._run_controller_stage_action(
                     request=context.request,
                     run_uri=context.run_uri,
@@ -775,6 +746,37 @@ class PipelineRunner:
                 stage_results[stage_name] = result
                 if result.status == StageStatus.SUCCEEDED:
                     outputs_by_stage[stage_name] = dict(result.outputs)
+                progressed = True
+                if result.failure is not None and not context.policy.continue_independent:
+                    return progressed
+                continue
+            upstream_blocker = _first_non_successful_upstream(ready, stage_results)
+            if upstream_blocker is not None:
+                stage_results[stage_name] = self._block_stage_after_failure(
+                    run_uri=context.run_uri,
+                    stage_plan=ready,
+                    blocked_by=upstream_blocker,
+                )
+                progressed = True
+                continue
+            future = pool.submit(
+                self._run_controller_stage_action,
+                request=context.request,
+                run_uri=context.run_uri,
+                run_dir=context.run_dir,
+                local_run_store=context.local_run_store,
+                config_mapping=context.config_mapping,
+                spec=context.spec,
+                stage=stage,
+                stage_plan=ready,
+                resolved_runtime=context.resolved_runtime[stage_name],
+                plan=context.plan,
+                artifact_store=context.artifact_store,
+                produced_outputs=produced_outputs,
+                created_at=context.created_at,
+                run_started_at=context.run_started_at,
+            )
+            active[future] = _ParallelTask(stage_name=stage_name)
             progressed = True
         return progressed
 

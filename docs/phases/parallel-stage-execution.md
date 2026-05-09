@@ -441,9 +441,21 @@ table layout unless the implementation leaks it outside `sqlite_authority.py`.
   with `env UV_CACHE_DIR=/tmp/loom-uv-cache uv run pyright
   src/loom/pipeline/execution/runner.py
   tests/unit/loom/pipeline/execution/test_runner.py`.
-- PR review: unused; one automated PR review remains required after PR
-  preparation.
-- Blocker-resolution: unused, 0/3 scoped passes consumed.
+- PR review: manager review in progress; found a blocking scheduler edge case
+  where plan-level `BLOCKED` actions could be short-circuited as generic
+  upstream blocks and fail-fast scheduling could continue within the same
+  submission pass.
+- Blocker-resolution: pass 1/3 used on 2026-05-10 by the managing agent; fixed
+  non-RUN plan action handling in the parallel scheduler and added SQLite
+  integration coverage for skipped-upstream plan blockers under both default
+  and `continue_independent` policies. Targeted validation passed with
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check
+  src/loom/pipeline/execution/runner.py
+  tests/integration/pipeline/test_parallel_execution.py`,
+  `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright`, and
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+  tests/integration/pipeline/test_parallel_execution.py
+  tests/unit/loom/pipeline/execution/test_runner.py -q`.
 
 ## PR Preparation Evidence
 

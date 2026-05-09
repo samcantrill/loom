@@ -11,6 +11,7 @@ from loom.pipeline.execution import FailurePolicy, RunRequest
 from loom.pipeline.execution.authority_adapter import (
     create_authority_backed_serial_run_store,
 )
+from loom.pipeline.planning import PlanSelectors
 from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LeaseRecord, LocalRunStore, path_to_run_uri
@@ -225,6 +226,69 @@ def test_default_parallel_failure_policy_stops_new_independent_work(
     assert result.stage_results["after_ok"].status is StageStatus.BLOCKED
 
 
+def test_plan_blocked_stage_fails_run_and_stops_default_parallel_work(
+    tmp_path: Path,
+) -> None:
+    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
+    run_store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=authority,
+    )
+    run_uri = path_to_run_uri(tmp_path / "runs" / "plan-blocked-default")
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            pipeline=_skip_blocked_pipeline(),
+            run_uri=run_uri,
+            options=RunOptions(
+                execution={"settings": {"max_parallel_stages": 2}},
+            ),
+            selectors=PlanSelectors(skip_stages=("build",)),
+        )
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.stage_results["build"].status is StageStatus.SKIPPED
+    assert result.stage_results["report"].status is StageStatus.BLOCKED
+    assert result.stage_results["report"].failure is not None
+    assert result.stage_results["independent"].status is StageStatus.BLOCKED
+    assert "independent.data" not in run_store.read_artifact_index(run_uri)
+
+
+def test_plan_blocked_continue_independent_runs_unrelated_branch(
+    tmp_path: Path,
+) -> None:
+    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
+    run_store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=authority,
+    )
+    run_uri = path_to_run_uri(tmp_path / "runs" / "plan-blocked-continue")
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            pipeline=_skip_blocked_pipeline(),
+            run_uri=run_uri,
+            options=RunOptions(
+                execution={
+                    "settings": {
+                        "max_parallel_stages": 2,
+                        "failure_policy": "continue_independent",
+                    }
+                },
+            ),
+            selectors=PlanSelectors(skip_stages=("build",)),
+        )
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.stage_results["build"].status is StageStatus.SKIPPED
+    assert result.stage_results["report"].status is StageStatus.BLOCKED
+    assert result.stage_results["report"].failure is not None
+    assert result.stage_results["independent"].status is StageStatus.SUCCEEDED
+    assert "independent.data" in run_store.read_artifact_index(run_uri)
+
+
 def test_continue_independent_failure_policy_runs_unrelated_branch(
     tmp_path: Path,
 ) -> None:
@@ -315,6 +379,35 @@ def _failure_policy_pipeline() -> PipelineSpec:
                 ),
                 inputs={"data": "ok.data"},
                 outputs={"text": OutputSpec(artifact_type="text", codec_key="text.v1")},
+            ),
+        )
+    )
+
+
+def _skip_blocked_pipeline() -> PipelineSpec:
+    return PipelineSpec(
+        stages=(
+            StageSpec(
+                name="build",
+                factory=StageFactorySpec(
+                    target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                ),
+                outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
+            ),
+            StageSpec(
+                name="report",
+                factory=StageFactorySpec(
+                    target_path="tests.support.pipeline_execution_stages.TextConsumerStage"
+                ),
+                inputs={"data": "build.data"},
+                outputs={"text": OutputSpec(artifact_type="text", codec_key="text.v1")},
+            ),
+            StageSpec(
+                name="independent",
+                factory=StageFactorySpec(
+                    target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                ),
+                outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
             ),
         )
     )
