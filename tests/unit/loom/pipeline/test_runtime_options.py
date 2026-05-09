@@ -8,12 +8,14 @@ import pytest
 
 from loom.pipeline import (
     ExecutionOptions,
+    ParallelExecutionOptions,
     ResourceEntry,
     ResourceRequest,
     RunEnvironmentRequest,
     RunOptions,
     StageEnvironmentRequest,
     StageRuntimeOptions,
+    parallel_execution_options,
     parse_run_options,
     validate_stage_runtime_options,
 )
@@ -148,6 +150,28 @@ def test_safe_metadata_omits_environment_keys_values_and_raw_adapter_payloads() 
     }
 
 
+def test_parallel_execution_settings_are_validated_and_normalized() -> None:
+    options = RunOptions(
+        execution={
+            "settings": {
+                "max_parallel_stages": 3,
+                "failure_policy": "continue-independent",
+            }
+        }
+    )
+
+    assert options.to_dict()["execution"] == {
+        "settings": {
+            "failure_policy": "continue_independent",
+            "max_parallel_stages": 3,
+        }
+    }
+    assert parallel_execution_options(options) == ParallelExecutionOptions(
+        max_parallel_stages=3,
+        failure_policy="continue_independent",
+    )
+
+
 @pytest.mark.parametrize(
     "factory",
     [
@@ -172,6 +196,9 @@ def test_runtime_options_reject_unknown_and_invalid_fields(factory: Any) -> None
         lambda: RunOptions(profile=""),
         lambda: RunOptions(tags={"team": 1}),  # type: ignore[dict-item]
         lambda: RunOptions(notes="single note"),
+        lambda: RunOptions(execution={"settings": {"max_parallel_stages": 0}}),
+        lambda: RunOptions(execution={"settings": {"max_parallel_stages": True}}),
+        lambda: RunOptions(execution={"settings": {"failure_policy": "retry"}}),
         lambda: RunOptions(stage_options={"bad.stage": StageRuntimeOptions()}),
         lambda: RunEnvironmentRequest(unset_variables=["TOKEN", "TOKEN"]),
     ],

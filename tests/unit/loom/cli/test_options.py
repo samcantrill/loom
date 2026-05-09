@@ -50,6 +50,8 @@ def test_option_adapters_normalize_argparse_namespaces() -> None:
         runtime_executor="slurm",
         runtime_profile="cluster",
         dry_run=True,
+        max_parallel_stages=3,
+        failure_policy="continue-independent",
         tag=["team=platform", "owner=cli"],
         note=["first", "second"],
         output_format="json",
@@ -90,6 +92,8 @@ def test_option_adapters_normalize_argparse_namespaces() -> None:
         executor="local",
         resume=True,
         dry_run=True,
+        max_parallel_stages=3,
+        failure_policy="continue_independent",
         tags=(("team", "platform"), ("owner", "cli")),
         notes=("first", "second"),
     )
@@ -108,7 +112,11 @@ def test_runtime_cli_options_build_sparse_runtime_sources() -> None:
         tags=(("team", "platform"),),
         notes=("review",),
     )
-    run_options = RunCliOptions(dry_run=True)
+    run_options = RunCliOptions(
+        dry_run=True,
+        max_parallel_stages=4,
+        failure_policy="continue_independent",
+    )
 
     assert plan_options.to_runtime_source(selectors=selectors) == {
         "run_uri": "file:///runs/demo",
@@ -121,7 +129,15 @@ def test_runtime_cli_options_build_sparse_runtime_sources() -> None:
             "only_stages": ["train"],
         },
     }
-    assert run_options.to_runtime_source() == {"dry_run": True}
+    assert run_options.to_runtime_source() == {
+        "dry_run": True,
+        "execution": {
+            "settings": {
+                "failure_policy": "continue_independent",
+                "max_parallel_stages": 4,
+            }
+        },
+    }
 
 
 def test_runtime_cli_tag_and_note_validation() -> None:

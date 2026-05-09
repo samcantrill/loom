@@ -12,18 +12,31 @@ from loom.pipeline.context import StageContext
 from loom.pipeline.errors import StageContractError
 from loom.pipeline.execution import (
     ConfigSnapshotInputs,
+    ParallelExecutionUnsupportedError,
     PipelineRunner,
     RunRequest,
     RunRequestError,
     StageExecutionRequest,
     StageExecutionResult,
 )
+from loom.pipeline.execution.authority_adapter import (
+    create_authority_backed_serial_run_store,
+)
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import (
+    BackendCapability,
+    BackendCapabilityRecord,
+    BackendCapabilitySet,
+    CapabilityScope,
+    LocalRunStore,
+    path_to_run_uri,
+    run_uri_to_path,
+)
 from loom.provenance.models import ProvenanceCaptureOptions
 from loom.serialization import PlainData
+from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 
 
 class ConfigurableStage(Stage):
@@ -138,6 +151,19 @@ class PreparedWorkerExecutor:
         )
 
 
+class _LimitedParallelCapabilityAuthority(InMemoryPerRunAuthorityStore):
+    def capabilities(self) -> BackendCapabilitySet:
+        return BackendCapabilitySet(
+            backend_name="limited-authority",
+            records=(
+                BackendCapabilityRecord(
+                    capability=BackendCapability.ATOMIC_TRANSITIONS,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+            ),
+        )
+
+
 def _stage(
     *,
     target_path: str,
@@ -156,6 +182,31 @@ def _spec(
     init: Mapping[str, PlainData] | None = None,
 ) -> PipelineSpec:
     return PipelineSpec(stages=(_stage(target_path=target_path, init=init),))
+
+
+def _parallel_request() -> RunRequest:
+    return RunRequest(
+        pipeline=PipelineSpec(
+            stages=(
+                _stage(
+                    target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                ),
+            )
+        ),
+        options={
+            "execution": {
+                "settings": {
+                    "max_parallel_stages": 2,
+                }
+            }
+        },
+        provenance_options=ProvenanceCaptureOptions(
+            capture_git=False,
+            capture_environment=False,
+            capture_dependencies=False,
+            capture_command=False,
+        ),
+    )
 
 
 def test_construct_stage_delegates_to_factory_class_with_init(tmp_path: Path) -> None:
@@ -349,6 +400,60 @@ def test_runner_rejects_dry_run_execution_request(tmp_path: Path) -> None:
                 options={"dry_run": True},
             )
         )
+    assert not run_root.exists()
+
+
+def test_runner_rejects_parallel_without_authority_backend(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs"
+
+    with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
+        PipelineRunner(run_store=LocalRunStore(run_root)).run(_parallel_request())
+
+    error = exc_info.value
+    assert error.code == "pipeline.parallel.unsupported_backend"
+    assert error.diagnostics[0]["code"] == "missing_authority_backend"
+    assert not run_root.exists()
+
+
+def test_runner_rejects_parallel_with_unsafe_local_capture(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs"
+    run_store = create_authority_backed_serial_run_store(
+        run_root,
+        authority_store=InMemoryPerRunAuthorityStore(),
+    )
+
+    with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
+        PipelineRunner(
+            run_store=run_store,
+            executor=LocalExecutor(capture_stdout_stderr=True),
+        ).run(_parallel_request())
+
+    assert exc_info.value.code == "pipeline.parallel.unsupported_executor_capture"
+    assert not run_root.exists()
+
+
+def test_runner_rejects_parallel_when_backend_capabilities_are_missing(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    run_store = create_authority_backed_serial_run_store(
+        run_root,
+        authority_store=_LimitedParallelCapabilityAuthority(),
+    )
+
+    with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
+        PipelineRunner(run_store=run_store).run(_parallel_request())
+
+    error = exc_info.value
+    assert error.code == "pipeline.parallel.unsupported_backend"
+    diagnostic_codes = {str(diagnostic["code"]) for diagnostic in error.diagnostics}
+    assert diagnostic_codes == {"missing_capability"}
+    diagnostic_details: list[Mapping[str, PlainData]] = []
+    for diagnostic in error.diagnostics:
+        raw_detail = diagnostic["detail"]
+        assert isinstance(raw_detail, dict)
+        diagnostic_details.append(raw_detail)
+    assert {"capability": "stage_leases", "scope": "per_run"} in diagnostic_details
     assert not run_root.exists()
 
 

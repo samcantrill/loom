@@ -499,6 +499,47 @@ def test_cli_run_subprocess_success_smoke(tmp_path: Path) -> None:
     assert executor_metadata["executor"] == "subprocess"
 
 
+def test_cli_run_parallel_success_smoke(tmp_path: Path) -> None:
+    config_path = tmp_path / "pipeline.yaml"
+    run_uri = path_to_run_uri(tmp_path / "runs" / "parallel-success")
+    _write_pipeline_config(config_path, value=66)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--max-parallel-stages",
+                "2",
+                "--failure-policy",
+                "continue-independent",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["ok"] is True
+    assert payload["result"]["status"] == "SUCCEEDED"
+    assert payload["result"]["artifact_count"] == 2
+    assert stderr.getvalue() == ""
+    store = LocalRunStore()
+    build_status = store.read_stage_status(run_uri, "build")
+    report_status = store.read_stage_status(run_uri, "report")
+    assert build_status is not None
+    assert report_status is not None
+    assert build_status.status is StageStatus.SUCCEEDED
+    assert report_status.status is StageStatus.SUCCEEDED
+
+
 def test_cli_run_subprocess_failure_smoke(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     run_uri = path_to_run_uri(tmp_path / "runs" / "subprocess-failed")

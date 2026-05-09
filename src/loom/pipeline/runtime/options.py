@@ -18,6 +18,15 @@ if TYPE_CHECKING:
     from loom.pipeline.planning.models import PlanSelectors, ResumeOptions
 
 RUN_OPTIONS_SCHEMA_VERSION = 1
+DEFAULT_MAX_PARALLEL_STAGES = 1
+DEFAULT_FAILURE_POLICY = "stop_on_first_failure"
+CONTINUE_INDEPENDENT_FAILURE_POLICY = "continue_independent"
+_FAILURE_POLICY_ALIASES = {
+    DEFAULT_FAILURE_POLICY: DEFAULT_FAILURE_POLICY,
+    "stop-on-first-failure": DEFAULT_FAILURE_POLICY,
+    CONTINUE_INDEPENDENT_FAILURE_POLICY: CONTINUE_INDEPENDENT_FAILURE_POLICY,
+    "continue-independent": CONTINUE_INDEPENDENT_FAILURE_POLICY,
+}
 
 _RUN_OPTIONS_FIELDS = frozenset(
     {
@@ -64,7 +73,10 @@ class ExecutionOptions:
         object.__setattr__(
             self,
             "settings",
-            _freeze_plain_mapping(self.settings, path="ExecutionOptions.settings"),
+            _freeze_plain_mapping(
+                _normalize_execution_settings(self.settings),
+                path="ExecutionOptions.settings",
+            ),
         )
 
     def to_dict(self) -> dict[str, PlainData]:
@@ -78,6 +90,40 @@ class ExecutionOptions:
 
     def to_safe_metadata(self) -> dict[str, PlainData]:
         return {"setting_keys": cast(list[PlainData], sorted(self.settings))}
+
+
+@dataclass(frozen=True, slots=True)
+class ParallelExecutionOptions:
+    """Validated controller policy for local bounded stage execution."""
+
+    max_parallel_stages: int = DEFAULT_MAX_PARALLEL_STAGES
+    failure_policy: str = DEFAULT_FAILURE_POLICY
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "max_parallel_stages",
+            _positive_int(
+                self.max_parallel_stages,
+                path="ParallelExecutionOptions.max_parallel_stages",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "failure_policy",
+            _normalize_failure_policy(
+                self.failure_policy,
+                path="ParallelExecutionOptions.failure_policy",
+            ),
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return self.max_parallel_stages > 1
+
+    @property
+    def continue_independent(self) -> bool:
+        return self.failure_policy == CONTINUE_INDEPENDENT_FAILURE_POLICY
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +398,25 @@ def parse_run_options(data: object | None) -> RunOptions:
     return RunOptions.from_dict(data)
 
 
+def parallel_execution_options(options: RunOptions) -> ParallelExecutionOptions:
+    """Return typed parallel execution controls from generic run settings."""
+
+    execution = cast(ExecutionOptions, options.execution)
+    return ParallelExecutionOptions(
+        max_parallel_stages=cast(
+            int,
+            execution.settings.get(
+                "max_parallel_stages",
+                DEFAULT_MAX_PARALLEL_STAGES,
+            ),
+        ),
+        failure_policy=cast(
+            str,
+            execution.settings.get("failure_policy", DEFAULT_FAILURE_POLICY),
+        ),
+    )
+
+
 def validate_stage_runtime_options(
     options: RunOptions | Mapping[str, StageRuntimeOptions | Mapping[str, object]],
     *,
@@ -463,6 +528,42 @@ def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
     if not isinstance(normalized, Mapping):
         raise RuntimeResourceError(f"{path} must be a mapping")
     return cast(Mapping[str, PlainData], normalized)
+
+
+def _normalize_execution_settings(value: object) -> Mapping[str, PlainData]:
+    settings = dict(_plain_mapping(value, path="ExecutionOptions.settings"))
+    if "max_parallel_stages" in settings:
+        settings["max_parallel_stages"] = _positive_int(
+            settings["max_parallel_stages"],
+            path="ExecutionOptions.settings.max_parallel_stages",
+        )
+    if "failure_policy" in settings:
+        settings["failure_policy"] = _normalize_failure_policy(
+            settings["failure_policy"],
+            path="ExecutionOptions.settings.failure_policy",
+        )
+    return settings
+
+
+def _positive_int(value: object, *, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeResourceError(f"{path} must be a positive integer")
+    if value <= 0:
+        raise RuntimeResourceError(f"{path} must be a positive integer")
+    return value
+
+
+def _normalize_failure_policy(value: object, *, path: str) -> str:
+    text = _string_value(value, path=path)
+    try:
+        return _FAILURE_POLICY_ALIASES[text]
+    except KeyError as exc:
+        choices = ", ".join(
+            sorted({DEFAULT_FAILURE_POLICY, CONTINUE_INDEPENDENT_FAILURE_POLICY})
+        )
+        raise RuntimeResourceError(
+            f"{path} must be one of: {choices}"
+        ) from exc
 
 
 def _freeze_plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
@@ -577,10 +678,15 @@ def _require_schema_version(value: object, *, path: str) -> int:
 
 
 __all__ = [
+    "CONTINUE_INDEPENDENT_FAILURE_POLICY",
+    "DEFAULT_FAILURE_POLICY",
+    "DEFAULT_MAX_PARALLEL_STAGES",
     "RUN_OPTIONS_SCHEMA_VERSION",
     "ExecutionOptions",
+    "ParallelExecutionOptions",
     "RunOptions",
     "StageRuntimeOptions",
+    "parallel_execution_options",
     "parse_run_options",
     "validate_stage_runtime_options",
 ]

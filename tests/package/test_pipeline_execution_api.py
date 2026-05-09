@@ -22,6 +22,7 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
         "InsufficientPreparedStateError",
         "LifecycleError",
         "OutputValidationError",
+        "ParallelExecutionUnsupportedError",
         "PipelineExecutionError",
         "PipelineRunner",
         "PlanExecutionError",
