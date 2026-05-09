@@ -17,6 +17,58 @@ def test_pipeline_store_public_exports() -> None:
     assert set(stores.__all__) == {
         "ArtifactStore",
         "LocalArtifactStore",
+        "PerRunAuthorityStore",
+        "AuthorityStoreError",
+        "StatusTransition",
+        "AttemptAllocation",
+        "OutputCommit",
+        "BackendCapability",
+        "CapabilityScope",
+        "CapabilitySupport",
+        "DiagnosticSeverity",
+        "UnsupportedCapabilityCode",
+        "BackendCapabilityRecord",
+        "BackendCapabilitySet",
+        "UnsupportedCapability",
+        "StoreDiagnostic",
+        "AuthorityCapabilityError",
+        "AUTHORITY_SCHEMA_VERSION",
+        "AuthoritySchemaError",
+        "AuthoritySchemaFailureKind",
+        "AuthoritySchemaFailure",
+        "AuthoritySchemaCheck",
+        "check_authority_schema_version",
+        "AuthorityModelError",
+        "LeaseKind",
+        "LeaseState",
+        "MaterializedRefKind",
+        "CleanupCandidateKind",
+        "RecoveryKind",
+        "StaticOutcomeKind",
+        "ReadModelWarningCode",
+        "BackendRevision",
+        "LifecycleReason",
+        "StageAttempt",
+        "LeaseRecord",
+        "OutputCommitRecord",
+        "ArtifactFactRecord",
+        "MaterializedRef",
+        "CleanupCandidate",
+        "RecoveryRecord",
+        "StaticOutcomeRecord",
+        "ReadModelWarning",
+        "StageLifecycleSnapshot",
+        "AuthoritativeRunSnapshot",
+        "WorkspaceCoordinationStore",
+        "CoordinationStoreError",
+        "TrialState",
+        "WorkspaceIdentity",
+        "SweepIdentity",
+        "TrialReference",
+        "TrialLeaseRecord",
+        "ResourceLeaseRecord",
+        "CoordinationRecoveryRecord",
+        "ConcurrencyCounter",
         "RunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
@@ -86,6 +138,10 @@ def test_pipeline_store_public_exports() -> None:
     assert "write_stage_worker_request" in stores.StageStateStore.__dict__
     assert "read_stage_worker_result" in stores.StageStateStore.__dict__
     assert "write_stage_worker_result" in stores.StageStateStore.__dict__
+    assert "allocate_stage_attempt" in stores.PerRunAuthorityStore.__dict__
+    assert "record_output_commit" in stores.PerRunAuthorityStore.__dict__
+    assert "acquire_trial_lease" in stores.WorkspaceCoordinationStore.__dict__
+    assert "acquire_resource_lease" in stores.WorkspaceCoordinationStore.__dict__
     assert "read_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "write_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "read_run_freshness" in stores.RunFreshnessStore.__dict__
@@ -101,7 +157,7 @@ def test_pipeline_store_public_exports() -> None:
 
 @pytest.mark.parametrize(
     "forbidden",
-    ["loom.config", "loom.runs", "loom.cli"],
+    ["loom.config", "loom.runs", "loom.cli", "sqlite3"],
 )
 def test_pipeline_stores_import_does_not_import_forbidden_modules(
     forbidden: str,

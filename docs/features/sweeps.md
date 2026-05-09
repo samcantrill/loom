@@ -162,6 +162,11 @@ read trial status through run-store APIs
 
 Run stores own per-run status, artifacts, fingerprints, logs, and provenance.
 
+V9 separates future concurrent sweep coordination from per-run lifecycle truth.
+`WorkspaceCoordinationStore` may record workspace/sweep identity, trial
+references, trial leases, resource leases, counters, and `run_uri` pointers. It
+must not copy per-stage state or become a replacement run catalog.
+
 ### 3.5 `loom.pipeline.executors`
 
 Own execution backends.
