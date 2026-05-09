@@ -257,7 +257,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused
-- PR review: unused
+- PR review: used by manager pre-submit review on 2026-05-09; no blockers
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -296,7 +296,9 @@ make test-summary
   run because the Spark usage limit was exhausted, so the manager used the
   workflow's allowed non-Spark fallback implementation path without consuming a
   blocker-resolution pass.
-- PR preparation: PR body pending at
-  `docs/phases/run-catalog-models-pr-body.md`; PR not yet opened.
+- PR preparation: PR body committed at
+  `docs/phases/run-catalog-models-pr-body.md`; PR opened as
+  https://github.com/samcantrill/loom/pull/95 with base `develop` and head
+  `codex/run-catalog-models`.
 - Stack maintenance: TBD
 - Remaining blockers: none at planning time
