@@ -2,13 +2,16 @@
 
 ## Metadata
 
-- Status: PR body refine pass complete; PR prepared for opening.
+- Status: PR opened and verified against `develop`.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`
 - Branch: `codex/serial-write-integration`
 - Worktree: `/home/samcantrill/work/loom-worktrees/serial-write-integration`
 - Phase execution plan path: `docs/phases/serial-write-integration.md`
 - PR body path: `docs/phases/serial-write-integration-pr-body.md`
+- PR: https://github.com/samcantrill/loom/pull/104
+- PR verification JSON:
+  `{"baseRefName":"develop","headRefName":"codex/serial-write-integration","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/104"}`
 - Full plan: `docs/implementation-plans/implementation-plan-v9.md`
 - Source phase: Phase 4 - Serial Execution Write-Path Integration
 - Stack predecessor: none; Phases 1, 2, and 3 are merged into `develop`.
@@ -555,8 +558,11 @@ make test-summary
   the final diff, `.github/PULL_REQUEST_TEMPLATE.md`, and fresh suite
   evidence. It was lightly refined to avoid implying a cleanup-candidate writer
   exists in Phase 4 and to refresh validation timestamps.
-- PR state: prepared for opening; no reviewers requested and no merge action
-  attempted.
+- PR state: opened as https://github.com/samcantrill/loom/pull/104; no
+  reviewers requested and no merge action attempted.
+- PR verification:
+  `gh pr view 104 --json baseRefName,headRefName,state,url` returned
+  `{"baseRefName":"develop","headRefName":"codex/serial-write-integration","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/104"}`.
 - Prepared PR facts:
   - Title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`.
   - Head branch: `codex/serial-write-integration`.
@@ -564,6 +570,8 @@ make test-summary
   - Stack predecessor: none; this is a root phase PR.
   - Worktree:
     `/home/samcantrill/work/loom-worktrees/serial-write-integration`.
+  - Opened from pushed branch commit `688005d` before this phase-artifact
+    PR-opening metadata update.
 - Target readiness: recorded target branch is `develop`, matching the root PR
   target for merged Phases 1-3. Local `develop` and `origin/develop` are at
   `3b57867` (`docs: record v9 phase 3 merge`), and
