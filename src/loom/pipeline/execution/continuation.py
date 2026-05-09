@@ -21,7 +21,12 @@ from loom.pipeline.submitted import (
     SubmittedOperationRecord,
 )
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
+from loom.pipeline.stores import (
+    AuthorityStoreError,
+    LocalArtifactStore,
+    LocalRunStorePaths,
+    RunStore,
+)
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
 from loom.serialization import PlainData, ensure_plain_data, json_loads
@@ -1257,7 +1262,7 @@ def _failure_type_for_stage_job_exception(exc: Exception) -> str:
         return "target_construction"
     if isinstance(exc, PlanExecutionError):
         return "plan_execution"
-    if isinstance(exc, (StoreError, ArtifactStoreError)):
+    if isinstance(exc, (StoreError, ArtifactStoreError, AuthorityStoreError)):
         return "store_commit"
     return "executor_infrastructure"
 
