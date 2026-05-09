@@ -1327,7 +1327,7 @@ Completion summary:
 
 ### Phase 7 - Bounded Parallel Stage Execution
 
-Status: pr_open
+Status: merged
 Branch: `codex/parallel-stage-execution`
 PR: https://github.com/samcantrill/loom/pull/107
 
@@ -1440,17 +1440,27 @@ Notes:
 
 Completion summary:
 
-- PR opened against `develop`: https://github.com/samcantrill/loom/pull/107.
-- Implementation adds validated Python and CLI parallel controls, a
-  controller-owned bounded local scheduler, authoritative capability preflight,
-  stage lease renewal, deterministic failure policies, and loud unsupported
+- Merged into `develop` on 2026-05-09 at merge commit
+  `43a05aa803e0c4f59c6af265827279c3da865831`.
+- Implemented validated Python and CLI parallel controls, a controller-owned
+  bounded local scheduler, authoritative capability preflight, stage lease
+  renewal, deterministic failure policies, and loud unsupported
   backend/executor/capture errors while preserving the serial default.
-- Checks: `make validate-pr` passed after implementation refinement: Ruff,
-  Pyright, default harness (1072 passed, 18 skipped, 14 deselected),
-  config-extra harness (420 passed, 1101 deselected), and `uv build`.
-  `make test-summary` passed with 1518 passed, 0 failed, 0 errors, 12 skipped,
-  and 1112 deselected.
-- Follow-up: automated PR review and GitHub CI must pass before merge.
+- Automated review: manager review found a blocking scheduler edge case where
+  plan-level `BLOCKED` actions could be short-circuited as generic upstream
+  blocks and fail-fast scheduling could continue within the same submission
+  pass. Blocker-resolution pass 1/3 fixed the issue and added integration
+  coverage for skipped-upstream plan blockers under both default and
+  `continue_independent` policies; manager follow-up review confirmed no
+  remaining blocking findings.
+- Checks: `make validate-pr` passed after blocker resolution: Ruff, Pyright,
+  default harness (1074 passed, 18 skipped, 14 deselected), config-extra
+  harness (420 passed, 1103 deselected), and `uv build`. `make test-summary`
+  passed with 1520 passed, 0 failed, 0 errors, 12 skipped, and 1114
+  deselected. GitHub CI `checks` passed before merge.
+- Follow-up: Phase 8 should keep cross-run coordination separate from per-run
+  stage execution truth and preserve the serial/default paths introduced in
+  earlier v9 phases.
 
 ### Phase 8 - Workspace/Sweep Coordination Foundation
 
