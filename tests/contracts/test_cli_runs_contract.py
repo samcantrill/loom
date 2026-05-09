@@ -1,0 +1,175 @@
+"""Contract tests for ``loom runs`` JSON output."""
+
+from __future__ import annotations
+
+import io
+import json
+from pathlib import Path
+
+from loom.artifacts import ArtifactRef
+from loom.cli.main import main
+from loom.cli.runs import (
+    RUNS_DIFF_SCHEMA_VERSION,
+    RUNS_INDEX_SCHEMA_VERSION,
+    RUNS_LIST_SCHEMA_VERSION,
+)
+from loom.fingerprints import format_digest
+from loom.pipeline.status import (
+    RunStatus,
+    RunStatusRecord,
+    StageStatus,
+    StageStatusRecord,
+)
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+
+
+def test_runs_index_json_contract(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    store = LocalRunStore(root=root)
+    _create_run(store, root / "a", status=RunStatus.SUCCEEDED)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["runs", "index", str(root), "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == RUNS_INDEX_SCHEMA_VERSION
+    assert payload["ok"] is True
+    assert payload["warnings"] == []
+    assert payload["result"]["indexed_count"] == 1
+    assert payload["result"]["skipped_count"] == 0
+    assert stderr.getvalue() == ""
+
+
+def test_runs_list_json_contract(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    store = LocalRunStore(root=root)
+    _create_run(store, root / "a", status=RunStatus.SUCCEEDED)
+    _create_run(store, root / "b", status=RunStatus.FAILED)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "runs",
+                "list",
+                str(root),
+                "--status",
+                "SUCCEEDED",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == RUNS_LIST_SCHEMA_VERSION
+    assert payload["ok"] is True
+    assert payload["warnings"] == []
+    assert [summary["status"] for summary in payload["result"]["summaries"]] == [
+        "SUCCEEDED"
+    ]
+    assert payload["result"]["filters"] == [
+        {"kind": "run_status", "key": None, "value": "SUCCEEDED"}
+    ]
+    assert stderr.getvalue() == ""
+
+
+def test_runs_diff_json_contract(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    store = LocalRunStore(root=root)
+    left_uri = _create_run(store, root / "a", status=RunStatus.SUCCEEDED)
+    right_uri = _create_run(store, root / "b", status=RunStatus.FAILED)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "runs",
+                "diff",
+                str(root),
+                left_uri,
+                right_uri,
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == RUNS_DIFF_SCHEMA_VERSION
+    assert payload["ok"] is True
+    assert payload["warnings"] == []
+    assert payload["result"]["left_run_uri"] == left_uri
+    assert payload["result"]["right_run_uri"] == right_uri
+    assert payload["result"]["sections"][0]["entries"][0] == {
+        "key": "run.status",
+        "status": "different",
+        "left": "SUCCEEDED",
+        "right": "FAILED",
+        "details": {},
+    }
+    assert stderr.getvalue() == ""
+
+
+def _create_run(
+    store: LocalRunStore,
+    run_path: Path,
+    *,
+    status: RunStatus,
+) -> str:
+    run_uri = path_to_run_uri(run_path)
+    store.create_run(run_uri, metadata={"tags": {"project": "contract"}})
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=status,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    store.write_composition_manifest(run_uri, {"fingerprint": "config-contract"})
+    store.write_plan(run_uri, {"pipeline_fingerprint": "pipeline-contract"})
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.SUCCEEDED
+            if status is RunStatus.SUCCEEDED
+            else StageStatus.FAILED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    store.write_artifact_index(
+        run_uri,
+        {
+            "build.out": ArtifactRef(
+                artifact_id="build/out",
+                uri="file:///tmp/out.json",
+                artifact_type="json",
+                codec_key="json.v1",
+                checksum=format_digest("sha256", "a" * 64),
+                producer_stage="build",
+            )
+        },
+    )
+    return run_uri

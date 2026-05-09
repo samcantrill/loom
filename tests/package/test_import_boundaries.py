@@ -685,9 +685,11 @@ def test_import_cli_diagnostics_commands_remain_import_light() -> None:
         import loom.cli.logs
         import loom.cli.artifacts
         import loom.cli.cancel
+        import loom.cli.runs
 
         for forbidden in (
             "loom.config",
+            "loom.runs",
             "loom.pipeline",
             "loom.pipeline.stores",
             "loom.pipeline.executors",

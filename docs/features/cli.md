@@ -269,7 +269,7 @@ rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
 Docker or Apptainer execution
 remote run URI schemes
-logs, artifacts, sweep, catalog, bundle, plugin, cleanup, or reliability commands
+sweep, bundle, plugin, cleanup, or reliability commands
 --run-dir, --run-id, or --strict options
 ```
 
@@ -278,9 +278,6 @@ Domain packages can expose their own CLIs that call `loom` Python APIs.
 ### 4.3 Deferred Command Families
 
 ```text
-loom logs RUN_URI STAGE
-loom artifacts list RUN_URI
-loom artifacts show RUN_URI ARTIFACT_ID
 loom sweep plan ...
 loom sweep run ...
 loom slurm status RUN_URI
@@ -288,8 +285,8 @@ loom slurm cancel RUN_URI
 shell completion
 ```
 
-These command families require later diagnostics, executor, catalog, or
-remote-store APIs. V2 should fail clearly rather than partially implement them.
+These command families require later sweep, executor, or remote-store APIs. V2
+should fail clearly rather than partially implement them.
 
 ---
 
@@ -1264,9 +1261,88 @@ codec code, so it should be explicit.
 
 ---
 
-## 18. Scheduler-Aware Status and Cancellation
+## 18. `loom runs`
 
 ### 18.1 Purpose
+
+Inspect local run collections through the public `loom.runs` API.
+
+Implemented commands:
+
+```bash
+loom runs index COLLECTION
+loom runs list COLLECTION
+loom runs diff COLLECTION LEFT_RUN_URI RIGHT_RUN_URI
+```
+
+### 18.2 `runs index`
+
+Rebuilds the derived local catalog sidecar from authoritative run directories.
+It reports indexed and skipped counts plus warnings for invalid, unreadable, or
+partial runs.
+
+Options:
+
+```text
+--format text|json
+```
+
+### 18.3 `runs list`
+
+Lists current run summaries after refresh-on-read catalog reconciliation.
+
+Supported exact-match filters:
+
+```text
+--status STATUS
+--tag KEY=VALUE
+--config-fingerprint VALUE
+--pipeline-fingerprint VALUE
+--commit VALUE
+--stage-status [STAGE=]STATUS
+--artifact [NAME=]ARTIFACT_ID
+--artifact-checksum [NAME=]CHECKSUM
+--executor VALUE
+--backend VALUE
+```
+
+Options:
+
+```text
+--format text|json
+```
+
+### 18.4 `runs diff`
+
+Compares two runs from a local collection using persisted metadata only.
+
+```bash
+loom runs diff runs/ file:///abs/runs/a file:///abs/runs/b
+```
+
+The command formats `RunCatalog.compare()` output and does not load artifact
+payloads, import project code, or apply domain metric semantics.
+
+### 18.5 Boundary
+
+The CLI may parse filter flags and format public result models. It must not
+scan run directories directly, query the private SQLite sidecar directly,
+duplicate comparison logic, load artifact payloads, or infer a collection from
+arbitrary run selectors.
+
+JSON output uses command-specific schema versions:
+
+```text
+loom.cli.runs.index.v1
+loom.cli.runs.list.v1
+loom.cli.runs.diff.v1
+```
+
+---
+
+## 19. Scheduler-Aware Status and Cancellation
+
+### 19.1 Purpose
 
 Expose submitted-job status and cancellation without mixing scheduler parsing
 logic into CLI modules.
@@ -1278,7 +1354,7 @@ loom status RUN_URI --jobs
 loom cancel RUN_URI --jobs
 ```
 
-### 18.2 Behavior
+### 19.2 Behavior
 
 Default status reads persisted run-store state only:
 
@@ -1308,7 +1384,7 @@ cancellation attempts, and returns nonzero for partial cancellation. Exact
 submission selectors, cleanup commands, retries, and `loom slurm ...` aliases
 remain deferred.
 
-### 18.3 Boundary
+### 19.3 Boundary
 
 The CLI calls executor or generic submitted-operation APIs:
 
@@ -1325,9 +1401,9 @@ modules.
 
 ---
 
-## 19. `loom sweep`
+## 20. `loom sweep`
 
-### 19.1 Purpose
+### 20.1 Purpose
 
 Run or inspect experiment sweeps.
 
@@ -1337,7 +1413,7 @@ Command:
 loom sweep SWEEP_CONFIG
 ```
 
-### 19.2 Boundary
+### 20.2 Boundary
 
 Sweep behavior should be specified in `docs/features/sweeps.md`.
 
@@ -1353,7 +1429,7 @@ Defer sweep commands until the sweep planning API exists.
 
 ---
 
-## 20. Deferred Operational Commands
+## 21. Deferred Operational Commands
 
 Several useful operational commands should stay out of the first CLI unless the
 underlying Python APIs already exist:
@@ -1376,9 +1452,9 @@ payloads or implement file deletion policy directly.
 
 ---
 
-## 21. Error Formatting
+## 22. Error Formatting
 
-### 21.1 Known Errors
+### 22.1 Known Errors
 
 Known `loom` errors should print:
 
@@ -1398,7 +1474,7 @@ Path: pipeline.stages[1].depends_on[0]
 Error: unknown stage "load"
 ```
 
-### 21.2 Tracebacks
+### 22.2 Tracebacks
 
 Default:
 
@@ -1413,7 +1489,7 @@ With `--traceback`:
 print full traceback
 ```
 
-### 21.3 Error JSON
+### 22.3 Error JSON
 
 For `--format json`, errors should be structured where practical:
 
@@ -1433,9 +1509,9 @@ successfully. Future commands should reuse the same envelope shape.
 
 ---
 
-## 22. Result Models
+## 23. Result Models
 
-### 22.1 Purpose
+### 23.1 Purpose
 
 CLI modules should format structured result objects returned by Python APIs.
 
@@ -1453,7 +1529,7 @@ LogLocationResult
 
 The CLI should not need to inspect internal dataclasses deeply.
 
-### 22.2 Formatting Helpers
+### 23.2 Formatting Helpers
 
 Recommended modules:
 
@@ -1476,9 +1552,9 @@ Keep formatting helpers independent from business logic.
 
 ---
 
-## 23. Configuration and Environment
+## 24. Configuration and Environment
 
-### 23.1 CLI Environment Variables
+### 24.1 CLI Environment Variables
 
 V2 avoids CLI-specific environment variables.
 
@@ -1492,14 +1568,14 @@ LOOM_CONFIG_ROOT
 
 Do not add environment variables unless scripts need them.
 
-### 23.2 Working Directory
+### 24.2 Working Directory
 
 CLI commands should pass the current working directory to provenance capture
 where appropriate.
 
 Path resolution policy belongs to config/run-store APIs.
 
-### 23.3 Secrets
+### 24.3 Secrets
 
 The CLI should avoid printing:
 
@@ -1514,9 +1590,9 @@ Use redacted config/provenance views by default.
 
 ---
 
-## 24. Testing Strategy
+## 25. Testing Strategy
 
-### 24.1 Parser Tests
+### 25.1 Parser Tests
 
 Test:
 
@@ -1534,7 +1610,7 @@ repeated --force-stage and --skip-stage
 invalid command returns usage error
 ```
 
-### 24.2 Command Unit Tests
+### 25.2 Command Unit Tests
 
 Use fake APIs where possible.
 
@@ -1550,7 +1626,7 @@ logs calls run-store log path API
 artifacts list calls artifact index API
 ```
 
-### 24.3 Exit Code Tests
+### 25.3 Exit Code Tests
 
 Test:
 
@@ -1563,7 +1639,7 @@ run failure returns documented execution code
 KeyboardInterrupt returns 130
 ```
 
-### 24.4 Golden Output Tests
+### 25.4 Golden Output Tests
 
 Use small stable text snapshots for:
 
@@ -1576,7 +1652,7 @@ known error message
 
 Avoid brittle snapshots for timestamps or full paths unless normalized.
 
-### 24.5 Integration Tests
+### 25.5 Integration Tests
 
 For v2, test through the console entry point or `main(argv)`:
 
@@ -1590,7 +1666,7 @@ loom run --resume
 JSON output and JSON error envelopes
 ```
 
-### 24.6 Import Boundary Tests
+### 25.6 Import Boundary Tests
 
 Test:
 
@@ -1603,13 +1679,13 @@ loom.cli modules do not get imported by pipeline/config/stores
 
 ---
 
-## 25. Implementation Roadmap
+## 26. Implementation Roadmap
 
 V2 implements the entry point, validate, plan, and run phases. Later command
 families remain roadmap guidance and should be implemented only after their
 owning APIs are stable.
 
-### 25.1 Phase 1: Entry Point and Parser
+### 26.1 Phase 1: Entry Point and Parser
 
 Create:
 
@@ -1629,7 +1705,7 @@ top-level --traceback
 exit code constants
 ```
 
-### 25.2 Phase 2: Validate and Plan
+### 26.2 Phase 2: Validate and Plan
 
 Create:
 
@@ -1649,7 +1725,7 @@ selector option parsing
 plan table formatting
 ```
 
-### 25.3 Phase 3: Run
+### 26.3 Phase 3: Run
 
 Create:
 
@@ -1667,7 +1743,7 @@ PipelineRunner integration
 run summary formatting
 ```
 
-### 25.4 Later Phase: Stage Worker
+### 26.4 Later Phase: Stage Worker
 
 Create:
 
@@ -1684,7 +1760,7 @@ stage worker API integration
 worker result exit codes
 ```
 
-### 25.5 Later Phase: Status and Logs
+### 26.5 Later Phase: Status and Logs
 
 Create:
 
@@ -1702,7 +1778,7 @@ JSON status output
 loom logs, at least path display or simple content display
 ```
 
-### 25.6 Later Phase: Artifacts
+### 26.6 Later Phase: Artifacts
 
 Create:
 
@@ -1718,7 +1794,19 @@ loom artifacts show
 text and JSON output
 ```
 
-### 25.7 Phase 7: Submitted-Job Commands
+### 26.7 Later Phase: Run Catalog Commands
+
+Implemented:
+
+```text
+loom runs index COLLECTION
+loom runs list COLLECTION
+loom runs diff COLLECTION LEFT_RUN_URI RIGHT_RUN_URI
+```
+
+These commands are thin wrappers over `loom.runs.RunCatalog`.
+
+### 26.8 Phase 7: Submitted-Job Commands
 
 Implemented:
 
@@ -1730,7 +1818,7 @@ loom cancel RUN_URI --jobs
 Executor-specific `loom slurm ...` aliases are deferred until a diagnostic
 cannot fit the general command model.
 
-### 25.8 Phase 8: Sweep Commands
+### 26.9 Phase 8: Sweep Commands
 
 Add after sweep design and APIs exist:
 
@@ -1742,9 +1830,9 @@ loom sweep status
 
 ---
 
-## 26. Open Questions
+## 27. Open Questions
 
-### 26.1 Should the CLI Use `argparse` or `typer`?
+### 27.1 Should the CLI Use `argparse` or `typer`?
 
 Recommended answer when functional CLI behavior is added:
 
@@ -1754,7 +1842,7 @@ argparse
 
 The initial command set does not justify a new hard runtime dependency.
 
-### 26.2 Should `loom submit` Exist?
+### 27.2 Should `loom submit` Exist?
 
 Recommended answer:
 
@@ -1771,7 +1859,7 @@ loom run CONFIG --executor slurm-afterok
 Add `loom submit` later only if submission semantics diverge clearly from run
 semantics.
 
-### 26.3 Should `loom inspect` Be a Group?
+### 27.3 Should `loom inspect` Be a Group?
 
 Recommended answer:
 
@@ -1781,7 +1869,7 @@ prefer concrete commands first: status, logs, artifacts
 
 An `inspect` group can be added later if inspection commands become numerous.
 
-### 26.4 Should `loom status` Query SLURM by Default?
+### 27.4 Should `loom status` Query SLURM by Default?
 
 Recommended answer:
 
@@ -1792,7 +1880,7 @@ no
 Default status should read persisted run state. Use `--jobs` for scheduler
 state. A `loom slurm status` alias remains deferred.
 
-### 26.5 Should Artifact Commands Load Artifact Contents?
+### 27.5 Should Artifact Commands Load Artifact Contents?
 
 Recommended answer:
 
@@ -1804,7 +1892,7 @@ Inspect refs first. Loading content through project codecs should be explicit.
 
 ---
 
-## 27. Summary
+## 28. Summary
 
 `loom.cli` should be a thin, stable command-line shell over the Python APIs.
 
