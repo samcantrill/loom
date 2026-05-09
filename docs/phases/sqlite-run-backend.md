@@ -234,10 +234,15 @@ make test-summary
 
 - Draft plan: complete on 2026-05-10 by `loom_phase_planner`.
 - Final phase execution plan: refined and scope-complete on 2026-05-10; ready for `loom_phase_executor`.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: added `loom.pipeline.stores.sqlite_authority.SQLitePerRunAuthorityStore` as a backend-specific, non-root-exported stdlib-SQLite implementation of the Phase 1 `PerRunAuthorityStore` contract. The backend creates a private run-local authority database, checks loud schema policy, declares supported per-run and unsupported cross-run/materialization capabilities, uses short `BEGIN IMMEDIATE` transactions for revisions and guarded mutations, allocates monotonic stage attempts, enforces controller/stage leases with owner/fencing/expiry checks, persists submitted operations with current-run-URI reconstruction, records audit events with sequence evidence and private revision linkage, atomically commits stage output facts behind active stage leases, reconstructs revisioned snapshots, filters expired leases from active snapshots, and scans for expired leases, abandoned attempts, and active submitted-operation recovery facts. No runner integration, root store export, public backend default, CLI, workspace/sweep backend, public SQL schema, status enum change, or Phase 1 contract/model expansion was added.
+- Implementation validation:
+  - `uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py` - passed, 20 tests.
+  - `uv run ruff check src/loom/pipeline/stores/sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/integration/pipeline/test_sqlite_authority_backend.py` - passed.
+  - `uv run pyright src/loom/pipeline/stores/sqlite_authority.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/integration/pipeline/test_sqlite_authority_backend.py tests/contracts/test_authority_store_contract.py` - passed.
+  - Earlier targeted package import-boundary check confirmed importing `loom.pipeline.stores` does not import `sqlite3`.
+  - `make validate-pr` - passed; Ruff, Pyright, default harness, config-extra harness, and build completed successfully.
 - Refinement summary: confirmed against `AGENTS.md`, `.codex/prompts/phase-execution-plan-refine.md`, `.codex/templates/phase-execution-plan.md`, `docs/implementation-plans/implementation-plan-v9.md`, Phase 1 store contracts, package/contract/unit/integration test boundaries, and Phase 2 acceptance criteria. Tightened stop conditions for public contract changes, run-root portability, audit sequence/revision evidence, cleanup-candidate limits, root import boundaries, and suite-level test obligations.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: no predecessor; branch targets `develop`.
-- Remaining blockers: none recorded.
+- Remaining blockers: none recorded. `make test-summary` was not run because PR preparation is out of scope for this handoff.
