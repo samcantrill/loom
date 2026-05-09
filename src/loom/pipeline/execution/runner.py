@@ -29,7 +29,12 @@ from loom.pipeline.specs import PipelineSpec, StageSpec, parse_pipeline_config
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
+from loom.pipeline.stores import (
+    AuthorityStoreError,
+    LocalArtifactStore,
+    LocalRunStorePaths,
+    RunStore,
+)
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
 from loom.serialization import PlainData, ensure_plain_data, json_dumps_pretty
@@ -1363,7 +1368,7 @@ def _failure_type_for_exception(exc: Exception) -> str:
         return "stage_contract"
     if isinstance(exc, PlanExecutionError):
         return "plan_execution"
-    if isinstance(exc, (StoreError, ArtifactStoreError)):
+    if isinstance(exc, (StoreError, ArtifactStoreError, AuthorityStoreError)):
         return "store_commit"
     return "executor_infrastructure"
 

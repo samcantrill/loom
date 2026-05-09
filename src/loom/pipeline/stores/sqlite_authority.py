@@ -15,7 +15,7 @@ from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
@@ -810,6 +810,10 @@ class SQLitePerRunAuthorityStore:
         with self._transaction(run_uri) as conn:
             revision = self._next_revision(conn)
             timestamp = event.timestamp or self._now()
+            payload = cast(
+                Mapping[str, PlainData],
+                thaw_plain_data(event.payload, path="event.payload"),
+            )
             cursor = conn.execute(
                 """
                 INSERT INTO audit_events (
@@ -822,7 +826,7 @@ class SQLitePerRunAuthorityStore:
                     timestamp,
                     _json_dumps(event.scope.to_dict()),
                     event.event_type,
-                    _json_dumps(dict(event.payload)),
+                    _json_dumps(payload),
                     revision.sequence,
                 ),
             )
@@ -833,7 +837,7 @@ class SQLitePerRunAuthorityStore:
                 timestamp=timestamp,
                 scope=event.scope,
                 event_type=event.event_type,
-                payload=event.payload,
+                payload=payload,
             )
 
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:

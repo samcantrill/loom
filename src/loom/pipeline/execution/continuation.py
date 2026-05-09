@@ -21,7 +21,12 @@ from loom.pipeline.submitted import (
     SubmittedOperationRecord,
 )
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
+from loom.pipeline.stores import (
+    AuthorityStoreError,
+    LocalArtifactStore,
+    LocalRunStorePaths,
+    RunStore,
+)
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
 from loom.serialization import PlainData, ensure_plain_data, json_loads
@@ -31,6 +36,7 @@ from .errors import OutputValidationError, PipelineExecutionError, PlanExecution
 from .eventing import emit_run_event, emit_stage_event
 from .lifecycle import (
     commit_stage_execution_result,
+    persist_stage_failure,
     record_stage_failure_and_failed_run,
     write_run_status,
     write_stage_running,
@@ -147,6 +153,10 @@ class StageJobRunRequest:
     stage_name: str
     executor: str = "local"
     attempt: int | None = None
+    authority_attempt_id: str | None = None
+    authority_lease_id: str | None = None
+    authority_owner_id: str | None = None
+    authority_fencing_token: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_uri, str) or not self.run_uri:
@@ -173,6 +183,19 @@ class StageJobRunRequest:
                 "StageJobRunRequest.attempt must be a positive integer",
                 code="execution.stage_job.invalid_request",
             )
+        authority_values = {
+            "authority_attempt_id": self.authority_attempt_id,
+            "authority_lease_id": self.authority_lease_id,
+            "authority_owner_id": self.authority_owner_id,
+            "authority_fencing_token": self.authority_fencing_token,
+        }
+        if any(value is not None for value in authority_values.values()):
+            for field_name, value in authority_values.items():
+                if not isinstance(value, str) or not value:
+                    raise ContinuationStateError(
+                        f"StageJobRunRequest.{field_name} must be a non-empty string when authority fencing is provided",
+                        code="execution.stage_job.invalid_request",
+                    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +311,10 @@ def run_stage_job(
                 stage_name=request.stage_name,
                 executor=request.executor,
                 attempt=request.attempt,
+                authority_attempt_id=request.authority_attempt_id,
+                authority_lease_id=request.authority_lease_id,
+                authority_owner_id=request.authority_owner_id,
+                authority_fencing_token=request.authority_fencing_token,
             ),
             artifact_store_factory=artifact_store_factory or LocalArtifactStore,
             clock=clock,
@@ -386,6 +413,13 @@ def _run_stage_job_locked(
         worker_request=worker_request,
         continuation_executor=request.executor,
     )
+    allow_run_finalization = _stage_job_run_finalization_allowed(run_store)
+    _validate_stage_job_authority_if_supported(
+        run_store=run_store,
+        request=request,
+        attempt=attempt,
+        worker_request=worker_request,
+    )
     _validate_worker_runtime_environment(worker_request)
     run_status_before = _require_run_status(run_store, request.run_uri)
     stage_index = plan.stage_order.index(request.stage_name)
@@ -411,7 +445,7 @@ def _run_stage_job_locked(
             exc=exc,
             clock=clock,
         )
-        failure = record_stage_failure_and_failed_run(
+        failure, result_run_status = _record_stage_job_failure(
             run_store,
             run_uri=request.run_uri,
             stage_name=request.stage_name,
@@ -421,6 +455,7 @@ def _run_stage_job_locked(
             run_started_at=run_status_before.started_at or run_status_before.updated_at,
             failure=failure,
             executor_name=request.executor,
+            allow_run_finalization=allow_run_finalization,
             clock=clock,
         )
         return StageJobRunResult(
@@ -429,7 +464,7 @@ def _run_stage_job_locked(
             stage_name=request.stage_name,
             attempt=attempt,
             status=StageStatus.FAILED,
-            run_status=RunStatus.FAILED,
+            run_status=result_run_status,
             outputs={},
             failure=failure,
             started_at=started_at,
@@ -497,7 +532,7 @@ def _run_stage_job_locked(
             exc=exc,
             clock=clock,
         )
-        failure = record_stage_failure_and_failed_run(
+        failure, _result_run_status = _record_stage_job_failure(
             run_store,
             run_uri=request.run_uri,
             stage_name=request.stage_name,
@@ -507,6 +542,7 @@ def _run_stage_job_locked(
             run_started_at=run_status_before.started_at or run_status_before.updated_at,
             failure=failure,
             executor_name=request.executor,
+            allow_run_finalization=allow_run_finalization,
             clock=clock,
         )
         stage_result = StageRunResult(
@@ -527,6 +563,7 @@ def _run_stage_job_locked(
         stage_result=stage_result,
         created_at=run_status_before.created_at,
         started_at=run_status_before.started_at or run_status_before.updated_at,
+        allow_run_finalization=allow_run_finalization,
         clock=clock,
     )
     return StageJobRunResult(
@@ -1222,6 +1259,120 @@ def _require_run_status(run_store: RunStore, run_uri: str):
     return status
 
 
+def _validate_stage_job_authority_if_supported(
+    *,
+    run_store: RunStore,
+    request: StageJobRunRequest,
+    attempt: int,
+    worker_request: StageWorkerRequest,
+) -> None:
+    validator = getattr(run_store, "validate_stage_job_authority", None)
+    if not callable(validator):
+        return
+    authority_values = {
+        "attempt_id": request.authority_attempt_id,
+        "lease_id": request.authority_lease_id,
+        "owner_id": request.authority_owner_id,
+        "fencing_token": request.authority_fencing_token,
+    }
+    missing = tuple(key for key, value in authority_values.items() if value is None)
+    if missing:
+        raise ContinuationStateError(
+            "stage-job request is missing authority fencing facts",
+            code="execution.stage_job.missing_authority_fence",
+            context={
+                "run_uri": request.run_uri,
+                "stage": request.stage_name,
+                "attempt": attempt,
+                "missing": list(missing),
+            },
+        )
+    try:
+        validator(
+            request.run_uri,
+            request.stage_name,
+            attempt,
+            authority_attempt_id=cast(str, request.authority_attempt_id),
+            authority_lease_id=cast(str, request.authority_lease_id),
+            authority_owner_id=cast(str, request.authority_owner_id),
+            authority_fencing_token=cast(str, request.authority_fencing_token),
+            worker_metadata=worker_request.metadata,
+        )
+    except AuthorityStoreError as exc:
+        raise ContinuationStateError(
+            str(exc),
+            code="execution.stage_job.invalid_authority_fence",
+            context={
+                "run_uri": request.run_uri,
+                "stage": request.stage_name,
+                "attempt": attempt,
+            },
+        ) from exc
+
+
+def _stage_job_run_finalization_allowed(run_store: RunStore) -> bool:
+    policy = getattr(run_store, "stage_job_run_finalization_allowed", None)
+    if callable(policy):
+        return bool(policy())
+    return True
+
+
+def _record_stage_job_failure(
+    run_store: RunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    started_at: str | None,
+    created_at: str,
+    run_started_at: str,
+    failure: ExecutionFailure,
+    executor_name: str,
+    allow_run_finalization: bool,
+    clock: Clock,
+) -> tuple[ExecutionFailure, RunStatus]:
+    if allow_run_finalization:
+        return (
+            record_stage_failure_and_failed_run(
+                run_store,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                attempt=attempt,
+                started_at=started_at,
+                created_at=created_at,
+                run_started_at=run_started_at,
+                failure=failure,
+                executor_name=executor_name,
+                clock=clock,
+            ),
+            RunStatus.FAILED,
+        )
+    try:
+        persist_stage_failure(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            started_at=started_at,
+            failure=failure,
+            clock=clock,
+        )
+    except Exception as exc:
+        failure = ExecutionFailure(
+            schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            failed_at=clock(),
+            executor=executor_name,
+            failure_type="store_commit",
+            message=str(exc) or type(exc).__name__,
+            exception_type=f"{type(exc).__module__}.{type(exc).__name__}",
+        )
+    status = run_store.read_run_status(run_uri)
+    return failure, status.status if status is not None else RunStatus.RUNNING
+
+
 def _failure_from_stage_job_exception(
     *,
     run_uri: str,
@@ -1257,7 +1408,7 @@ def _failure_type_for_stage_job_exception(exc: Exception) -> str:
         return "target_construction"
     if isinstance(exc, PlanExecutionError):
         return "plan_execution"
-    if isinstance(exc, (StoreError, ArtifactStoreError)):
+    if isinstance(exc, (StoreError, ArtifactStoreError, AuthorityStoreError)):
         return "store_commit"
     return "executor_infrastructure"
 
@@ -1270,9 +1421,13 @@ def _update_stage_job_run_status(
     stage_result: StageRunResult,
     created_at: str,
     started_at: str,
+    allow_run_finalization: bool,
     clock: Clock,
 ) -> RunStatus:
     if stage_result.status == StageStatus.FAILED:
+        if not allow_run_finalization:
+            status = run_store.read_run_status(run_uri)
+            return status.status if status is not None else RunStatus.RUNNING
         emit_run_event(
             run_store,
             run_uri=run_uri,
@@ -1290,6 +1445,9 @@ def _update_stage_job_run_status(
         plan=plan,
         target_stage=stage_result.stage_name,
     ):
+        status = run_store.read_run_status(run_uri)
+        return status.status if status is not None else RunStatus.RUNNING
+    if not allow_run_finalization:
         status = run_store.read_run_status(run_uri)
         return status.status if status is not None else RunStatus.RUNNING
     finished_at = stage_result.finished_at or clock()
