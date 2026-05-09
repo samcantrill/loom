@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: PR body draft complete; PR body refine pending.
+- Status: PR open.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 5: Public Serial Backend Swap And Read Path`
 - Branch: `codex/public-backend-swap`
@@ -11,6 +11,7 @@
 - PR body artifact: `docs/phases/public-backend-swap-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v9.md`
 - Source phase: Phase 5 - Public Serial Hard Swap And Read-Path Swap
+- PR: https://github.com/samcantrill/loom/pull/105
 - Stack predecessor: none; Phases 1, 2, 3, and 4 are merged into `develop`.
 - Base branch: `develop` at `d89a8a8` (`docs: record v9 phase 4 merge`),
   matching local `origin/develop` at initial planning time. This plan refine
@@ -41,7 +42,11 @@
   scan warning conversion for malformed or unsupported authority DB schemas
   and added focused coverage.
 - PR body draft pass: complete on 2026-05-10 by `loom_pr_preparer`.
-- PR body refine/open pass: pending for the expanded-path PR-body refine pass.
+- PR body refine/open pass: complete on 2026-05-10 by expanded-path
+  assignment. The pass verified the PR body against the implementation plan,
+  phase plan, actual diff, validation evidence, scope boundaries, assumptions,
+  and risks; reran final validation; pushed the branch; opened PR #105; and
+  verified the PR target.
 - Phase PR review budget: unused.
 - Blocker-resolution budget: 0/3 used.
 - Setup limitations: no fetch, GitHub operation, broad validation, PR action,
@@ -637,9 +642,9 @@ refinement validation are recorded in the completion notes below.
   Phase 5 scope, this phase execution plan, and existing validation evidence.
   The public body keeps workflow internals in this phase plan and uses compact
   validation and suite tables.
-- PR opening status: intentionally not opened in this draft pass because the
-  expanded path is active. `.codex/prompts/pr-body-refine.md` remains pending
-  for PR body verification, PR creation, and GitHub check evidence.
+- PR opening status: opened PR #105 at
+  https://github.com/samcantrill/loom/pull/105 during the expanded-path
+  refine/open pass.
 - PR body draft validation evidence used: existing `make validate-pr` pass from
   implementation refinement, and existing `make test-summary` output in
   `build/test-summary.md` generated 2026-05-09T20:16:47Z with overall status
@@ -665,7 +670,14 @@ refinement validation are recorded in the completion notes below.
   rules, catalog/status conflict rules, old-run compatibility limits, import
   boundary risks, suite obligations, and executor handoff notes.
 - Blocker-resolution summary: none.
-- PR preparation: PR body draft complete; expanded-path refine/open pass
-  pending.
-- Stack maintenance: none needed at PR body draft time.
+- PR verification: `gh pr view 105 --json baseRefName,headRefName,state,url`
+  returned `{"baseRefName":"develop","headRefName":"codex/public-backend-swap","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/105"}`
+  at 2026-05-09T20:33:18Z. The verified base matches the recorded target
+  branch `develop`; this is a root PR, so it is merge-eligible after manager
+  automated review and CI gates pass.
+- PR preparation: complete; PR body refined, branch pushed, PR opened, and
+  target verification recorded.
+- Stack maintenance: none needed at PR open time. Stack predecessor remains
+  none, target branch is `develop`, and no known successor branch depends on
+  `codex/public-backend-swap`.
 - Remaining blockers: none.
