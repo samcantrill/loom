@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan; scope-complete and implementation-ready
 - Feature focus: Persistence And Concurrency Foundation
 - PR title: `Persistence And Concurrency Foundation - Phase 1: Authority Contracts And Compatibility Surface`
 - Branch: `codex/persistence-contracts`
@@ -19,9 +19,11 @@
 - Plan quality gate: passed on 2026-05-09 by `loom_plan_reviewer`; no blocking or non-blocking findings remained.
 - Plan quality gate loop budget: initial review used; gate refinement not needed; confirmation review not needed.
 - Draft pass: complete by `loom_phase_planner` in this artifact.
-- Refine pass: pending for expanded path.
+- Refine pass: complete on 2026-05-09 by `loom_phase_planner`; checked
+  against implementation-plan v9, `docs/structure.md`, current
+  `src/loom/pipeline` and `tests/` surfaces, and Phase 1 acceptance criteria.
 - Setup limitations: branch/worktree creation used the manager-provided local `develop` state because the assignment recorded `7010204` as pushed to `origin/develop`; no `gh auth`, fetch, product-code validation, or broad checks were run during planning. Git ref creation required approved sandbox escalation because `.git/refs` was read-only in the default sandbox view.
-- Blockers: none known for the expanded-path refine handoff.
+- Blockers: none.
 
 ## Objective
 
@@ -50,9 +52,40 @@ Later phases implement the SQLite backend, materialization/read models, serial w
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/pipeline/stores/run_store.py` currently owns file-store protocols and a `RunFreshnessRecord`; `src/loom/pipeline/stores/local_runs.py` is the local filesystem implementation and should not be mistaken for the v9 authority backend; `src/loom/pipeline/status.py` already keeps `RunStatus` and `StageStatus` coarse and includes `SUBMITTED`; `src/loom/pipeline/submitted.py` already provides a backend-neutral submitted-operation record and active/terminal predicates that should be reused or evolved compatibly; `src/loom/pipeline/locks.py` is a simple local run-lock model, not a backend-owned lease contract; `src/loom/pipeline/events.py` has audit event records with sequence but no backend revision evidence; `src/loom/serialization/schema.py` supports version checks and migrations, but v9 schema policy requires loud unsupported-schema failures rather than automatic destructive migration.
-- Existing tests or harness behavior: package tests assert store public exports and import boundaries; contract tests use dummy `RunStore` and `LocalRunStore` protocol checks; unit tests cover status records, submitted-operation records, events, local run store behavior, and serialization schema helpers; integration and e2e suites exercise current local-file runner/status/catalog behavior that this phase must not change.
-- Import-boundary or dependency constraints: `loom.pipeline.stores` must remain import-light and not import CLI, project code, or `loom.runs`; new authority contracts should sit under the pipeline store boundary unless the refine pass confirms a narrower existing boundary; execution orchestration remains in `loom.pipeline.execution`; `loom.runs` remains derived query/projection code.
+- Existing files or modules that constrain this phase:
+  `src/loom/pipeline/stores/run_store.py` currently owns the local-file
+  run-store protocols and `RunFreshnessRecord`; it should not be expanded in a
+  way that makes `LocalRunStore` appear to satisfy v9 authority semantics. Add
+  separate v9 authority contracts beside it under `src/loom/pipeline/stores/`.
+  `src/loom/pipeline/stores/local_runs.py` remains the local filesystem
+  implementation and is not the Phase 1 backend. `src/loom/pipeline/status.py`
+  already keeps `RunStatus` and `StageStatus` coarse and includes `SUBMITTED`;
+  do not add transient claim, lease, retry, commit, display, or not-selected
+  statuses. `src/loom/pipeline/submitted.py` already provides a
+  backend-neutral submitted-operation record and active/terminal predicates;
+  extend or wrap it compatibly instead of creating a second submitted-work
+  vocabulary. `src/loom/pipeline/locks.py` is a simple local run-lock record,
+  not a backend-owned lease/fencing contract. `src/loom/pipeline/events.py`
+  has audit event records with a sequence but no backend revision evidence;
+  Phase 1 may add compatible evidence fields or companion records, but events
+  remain audit-only. `src/loom/serialization/schema.py` supports version checks
+  and optional migrations; v9 active-state schema policy needs dedicated
+  loud-fail errors/results for unsupported old/new schemas and must not imply
+  automatic destructive migration.
+- Existing tests or harness behavior: package tests assert exact
+  `loom.pipeline.stores.__all__` exports and import boundaries; contract tests
+  use dummy `RunStore` and `LocalRunStore` protocol checks; unit tests cover
+  status records, submitted-operation records, events, locks, local run store
+  behavior, store errors, and serialization schema helpers; integration and e2e
+  suites exercise current local-file runner/status/catalog behavior that this
+  phase must not change.
+- Import-boundary or dependency constraints: `loom.pipeline.stores` must remain
+  import-light and not import CLI, `loom.runs`, project code, optional
+  backends, or SQLite implementation modules. Execution orchestration remains
+  in `loom.pipeline.execution`; `loom.runs` remains a derived query/projection
+  facade. `docs/structure.md` is the source-tree boundary source, but the
+  current tree is already much richer than its early skeleton, so update it
+  only where Phase 1 adds real store-boundary modules or exports.
 
 ## In-Scope Work
 
@@ -64,6 +97,8 @@ Later phases implement the SQLite backend, materialization/read models, serial w
 - Add audit event contract fields or companion records that carry backend revision or sequence evidence while preserving events as audit-only records.
 - Add fake or in-memory conformance stores sufficient for contract tests without implementing SQLite.
 - Update `docs/structure.md` and relevant feature docs when public exports or module boundaries are introduced.
+- Keep any fake or in-memory store clearly test/support scoped unless a
+  reusable source-level conformance helper is needed by later backend tests.
 
 ## Out-of-Scope Work
 
@@ -73,6 +108,9 @@ Later phases implement the SQLite backend, materialization/read models, serial w
 - No backend CLI, repair, mutation, SQL, export, import, or user-facing snapshot command.
 - No full sweep runner, adaptive sweep algorithm, scheduler queue semantics, distributed controller, or dynamic DAG mutation.
 - No changes that treat legacy status files, artifact indexes, events, or the derived run catalog as active truth for new runs.
+- No mutation of current serial runner, status CLI, run catalog, or
+  `LocalRunStore` behavior beyond import compatibility required by new
+  contracts.
 
 ## Assumptions
 
@@ -80,6 +118,10 @@ Later phases implement the SQLite backend, materialization/read models, serial w
 - Existing coarse statuses, submitted-operation records, artifact refs, run URIs, and schema helpers should be reused where they fit rather than replaced with parallel concepts.
 - Test-only fake stores may live under `tests/support` unless a source-level in-memory backend is needed to express a reusable conformance harness; either way, fake behavior must not imply a production backend.
 - Protocol names and module names may be refined during implementation, but the authority boundaries, capability semantics, and no-SQLite-public-schema rule are fixed by v9.
+- Plausible store-boundary modules are `authority`, `capabilities`,
+  `coordination`, `read_models`, and `schema_policy` under
+  `loom.pipeline.stores`; the executor may consolidate names if the public
+  exports stay small, explicit, and reviewable.
 
 ## Scope Contract
 
@@ -94,6 +136,29 @@ Schema policy for v9 is loud-fail only for unsupported active-state schemas. Unk
 `RunStatus` and `StageStatus` stay coarse. Attempts, leases, commits, recovery, reasons, owner, messages, display detail, static conditional outcomes, and submitted-operation detail belong in structured records or derived lifecycle snapshots. Do not add status enum values for transient claim, lease, retry, commit, display, or not-selected phases.
 
 Events are audit records. They can carry backend revision or sequence evidence for diagnostics and ordering, but they must not be required to reconstruct the authoritative state machine.
+
+Refined public-contract decisions:
+
+- Keep existing `RunStore` and `LocalRunStore` as the current local-file store
+  surface. New v9 authority protocols must be named so implementers cannot
+  accidentally treat the legacy local store as capability-complete.
+- Export only stable, later-phase-facing models from `loom.pipeline.stores`.
+  Private helpers for fake stores, validation, or serialization should stay out
+  of `__all__` unless a package test intentionally records them as supported.
+- Prefer machine-readable enum or string-literal codes for capabilities,
+  unsupported capability results, schema failure kinds, reason codes, and
+  warnings. Human messages are diagnostic detail, not control flow.
+- Lease and attempt records must include enough fencing identity to reject
+  renew, release, fail, or commit requests from the wrong owner or stale
+  attempt. Expiry semantics are based on backend-owned time, with fake stores
+  using deterministic injected time.
+- Output commit records must distinguish staged payload/materialization refs
+  from authoritative committed facts and must expose cleanup-candidate facts
+  for staged payloads left behind after failed backend commits.
+- Read-model snapshots are authoritative views over backend facts and may carry
+  warnings for missing materialized files, stale projections, unsupported
+  schemas, or actively changing runs. They are not a user-facing export or
+  snapshot workflow in this phase.
 
 ## Design Impact
 
@@ -138,32 +203,74 @@ Events are audit records. They can carry backend revision or sequence evidence f
 
 ## Implementation Steps
 
-1. Choose the minimal store-boundary module and export layout, then update package/export tests before adding behavior-heavy models.
-2. Add shared authority capability, schema-policy, diagnostic, reason, revision, lifecycle snapshot, recovery, cleanup, and unsupported-result models with plain-data serialization and stable validation.
-3. Add per-run authority protocols and test fakes for guarded transitions, attempt allocation, leases, submitted operations, output commits, artifact facts, audit revision evidence, snapshots, and recovery scans.
-4. Add workspace/sweep coordination protocols and test fakes for trial references, trial/resource leases, global counters, `run_uri` references, capability declarations, and recovery scans.
-5. Add or adapt conformance contract tests around fake stores, then update docs for source-tree boundaries, authority roles, schema policy, and downstream compatibility.
-6. Run targeted package, unit, and contract tests; leave integration, e2e, and opt-in suites deferred unless implementation adds a public smoke path beyond contract/import checks.
+1. Choose the minimal store-boundary module and export layout, keep legacy
+   `RunStore` semantics separate from v9 authority contracts, and update
+   package/export tests before adding behavior-heavy models.
+2. Add shared capability, schema-policy, diagnostic, reason, revision,
+   lifecycle snapshot, recovery, cleanup, warning, and unsupported-result
+   models with plain-data serialization and stable validation.
+3. Add per-run authority protocols and fake/in-memory conformance behavior for
+   guarded transitions, attempt allocation, run/controller leases, stage
+   leases, submitted operations, output commits, artifact facts, audit revision
+   evidence, snapshots, and recovery scans.
+4. Add workspace/sweep coordination protocols and fake/in-memory conformance
+   behavior for workspace/sweep identity, trial references, trial/resource
+   leases, global counters, `run_uri` references, capability declarations, and
+   recovery scans.
+5. Add or adapt conformance contract tests around fake stores, then update docs
+   for source-tree boundaries, authority roles, schema policy, and downstream
+   compatibility.
+6. Run targeted package, unit, and contract tests; leave integration, e2e, and
+   opt-in suites deferred unless implementation adds a public smoke path beyond
+   contract/import checks.
 
 ## Test Plan
 
 ### Package Suite
 
 - Status: required.
-- Expected paths: `tests/package/test_pipeline_store_api.py`, `tests/package/test_pipeline_api.py` if new models are intentionally exported from `loom.pipeline`, and existing import-boundary tests such as `tests/package/test_import_boundaries.py`.
-- Required assertions or deferral reason: new contract/model exports are explicit, cheap to import, typed, and stable; `loom.pipeline.stores` does not import CLI, `loom.runs`, project code, optional backends, or SQLite-specific implementation modules; `loom.__init__` remains cheap.
+- Expected paths: `tests/package/test_pipeline_store_api.py`,
+  `tests/package/test_pipeline_api.py` if new models are intentionally exported
+  from `loom.pipeline`, and existing import-boundary tests such as
+  `tests/package/test_import_boundaries.py`.
+- Required assertions or deferral reason: new contract/model exports are
+  explicit, cheap to import, typed, and stable; `loom.pipeline.stores` does not
+  import CLI, `loom.runs`, project code, optional backends, SQLite-specific
+  implementation modules, or test fakes; `loom.__init__` remains cheap.
 
 ### Unit Suite
 
 - Status: required.
-- Expected paths: new focused tests under `tests/unit/loom/pipeline/stores/` for authority models, capabilities, schema policy, read models, fake-store helpers, and coordination models; existing tests such as `tests/unit/loom/pipeline/test_status.py`, `tests/unit/loom/pipeline/test_submitted.py`, `tests/unit/loom/pipeline/test_events.py`, `tests/unit/loom/pipeline/stores/test_store_errors.py`, and `tests/unit/loom/serialization/test_schema.py` when touched.
-- Required assertions or deferral reason: model validation and round-trip serialization; capability records and unsupported-capability results; schema failure mapping for current, older unsupported, and newer unsupported schemas; read-model warnings; reason codes and detail payloads; attempt and lease identity/fencing fields; output commit and artifact fact validation; submitted-operation compatibility; audit revision evidence; cleanup/recovery/static-outcome records.
+- Expected paths: new focused tests under `tests/unit/loom/pipeline/stores/`
+  for authority models, capabilities, schema policy, read models, fake-store
+  helpers, and coordination models; existing tests such as
+  `tests/unit/loom/pipeline/test_status.py`,
+  `tests/unit/loom/pipeline/test_submitted.py`,
+  `tests/unit/loom/pipeline/test_events.py`,
+  `tests/unit/loom/pipeline/test_locks.py`,
+  `tests/unit/loom/pipeline/stores/test_store_errors.py`, and
+  `tests/unit/loom/serialization/test_schema.py` when touched.
+- Required assertions or deferral reason: model validation and round-trip
+  serialization; capability records and unsupported-capability results; schema
+  failure mapping for current, older unsupported, and newer unsupported active
+  schemas; read-model warnings; reason codes and detail payloads; attempt and
+  lease identity/fencing fields; output commit and artifact fact validation;
+  submitted-operation compatibility including cancellation and partial-work
+  facts; audit revision evidence; cleanup/recovery/static-outcome records.
 
 ### Contract Suite
 
 - Status: required.
 - Expected paths: `tests/contracts/test_store_contract.py` plus new or updated conformance tests such as `tests/contracts/test_authority_store_contract.py` and `tests/contracts/test_workspace_coordination_contract.py`.
-- Required assertions or deferral reason: fake or in-memory stores satisfy per-run authority protocols for guarded transitions, attempt allocation, lease acquire/renew/expire/release/fail, submitted-operation writes and summaries, output commit shape, revisioned snapshots, schema checks, recovery scan shape, unsupported capability failures, and read-model warnings; workspace/sweep fakes satisfy only cross-run trial/resource/counter contracts and never expose per-stage mutation.
+- Required assertions or deferral reason: fake or in-memory stores satisfy
+  per-run authority protocols for create/open, guarded transitions, attempt
+  allocation, lease acquire/renew/expire/release/fail with stale-token
+  rejection, submitted-operation writes/inspection/summaries, output commit
+  shape, artifact fact recording, revisioned snapshots, schema checks,
+  recovery scan shape, cleanup candidates, unsupported capability failures,
+  and read-model warnings; workspace/sweep fakes satisfy only cross-run
+  identity/trial/resource/counter contracts and never expose per-stage
+  mutation.
 
 ### Integration Suite
 
@@ -191,6 +298,9 @@ Events are audit records. They can carry backend revision or sequence evidence f
 - Schema helper reuse can accidentally imply automatic migration; mitigate with explicit unsupported-schema error tests and no migration tables in Phase 1.
 - Fake conformance stores can hide transaction semantics; mitigate by documenting the limit and requiring Phase 2 SQLite conformance and concurrent integration coverage.
 - Events or derived snapshots can be misread as authority; mitigate with model names, docs, and tests that keep transition authority on the backend contract.
+- Existing integration/e2e tests assume local-file state remains the live
+  behavior; mitigate by keeping Phase 1 contract-only and avoiding runner,
+  CLI, catalog, or `LocalRunStore` behavior changes.
 
 ## Validation Commands
 
@@ -198,7 +308,7 @@ Targeted development commands:
 
 ```sh
 UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py
-UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/stores tests/unit/loom/serialization/test_schema.py
+UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores tests/unit/loom/serialization/test_schema.py
 UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_store_contract.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py
 ```
 
@@ -211,11 +321,31 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: export layout and package tests first; shared models/capabilities/schema errors second; per-run authority protocols and fake conformance third; workspace/sweep coordination contracts fourth; docs and final contract coverage last.
-- Tests to run with each slice: package tests after export changes; unit model tests after each model group; contract tests after each fake protocol is added; targeted serialization/status/submitted/event tests whenever existing models are touched.
-- Decisions the executor must not revisit: no SQLite implementation; no runner hard swap; no active local-file fallback; no status enum widening for transient lifecycle details; events are audit-only; workspace/sweep coordination owns only cross-run facts; capability failures and unsupported schemas must be machine-readable and loud.
-- Conditions that require stopping for the manager: the contract cannot be expressed without exposing SQLite table/schema details; implementation would require CLI or `loom.runs` imports from store contracts; status enum widening appears necessary; workspace coordination needs per-stage state duplication; a real backend or runner behavior change becomes necessary to satisfy tests.
-- Expanded-path refinement notes: pending. The refine pass should review public/semi-public module names, field names, compatibility with existing `SubmittedOperationRecord`, capability vocabulary completeness, and whether any model can be private or deferred before implementation begins.
+- Safe implementation slices: export layout and package tests first; shared
+  models/capabilities/schema errors second; per-run authority protocols and
+  fake conformance third; workspace/sweep coordination contracts fourth; docs
+  and final contract coverage last.
+- Tests to run with each slice: package tests after export changes; unit model
+  tests after each model group; contract tests after each fake protocol is
+  added; targeted serialization/status/submitted/event/lock tests whenever
+  existing models are touched.
+- Decisions the executor must not revisit: no SQLite implementation; no runner
+  hard swap; no active local-file fallback; no status enum widening for
+  transient lifecycle details; existing `RunStore`/`LocalRunStore` remain
+  legacy local-file store surfaces; events are audit-only; workspace/sweep
+  coordination owns only cross-run facts; capability failures and unsupported
+  schemas must be machine-readable and loud.
+- Conditions that require stopping for the manager: the contract cannot be
+  expressed without exposing SQLite table/schema details; implementation would
+  require CLI, `loom.runs`, project-code, or SQLite-backend imports from store
+  contracts; status enum widening appears necessary; workspace coordination
+  needs per-stage state duplication; a real backend, runner behavior change, or
+  public CLI change becomes necessary to satisfy tests.
+- Expanded-path refinement notes: complete. The refined plan selects the
+  pipeline store boundary, separates v9 authority contracts from the current
+  local-file `RunStore`, keeps submitted-operation compatibility as a fixed
+  requirement, requires deterministic fake-store conformance instead of SQLite,
+  and confirms no Phase 1 blocker remains.
 
 ## Refinement And Review Budget Status
 
@@ -226,11 +356,15 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: complete in this artifact.
-- Final phase execution plan: pending expanded-path refinement.
+- Final phase execution plan: complete after expanded-path refinement on
+  2026-05-09; scope-complete and implementable for Phase 1.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: clarified current source/test constraints, store-boundary
+  module choices, compatibility with submitted/event/schema/status helpers,
+  fake-store conformance expectations, explicit edge cases, and suite-level
+  obligations while preserving branch/base/target metadata.
 - Blocker-resolution summary: pending.
 - PR preparation: pending.
 - Stack maintenance: pending.
-- Remaining blockers: none known at draft time.
+- Remaining blockers: none.
