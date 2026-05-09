@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: PR body draft complete; PR body refine pending; PR not opened
+- Status: PR body refined; PR opening pending
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 3: Materialization Boundary And Authoritative Read Models`
 - Branch: `codex/materialization-read-models`
@@ -254,10 +254,32 @@ make test-summary
 - PR review: unused
 - Blocker resolution: 0/3 used
 
+## PR Preparation Notes
+
+- PR body draft: complete on 2026-05-09 by `loom_pr_preparer`.
+- Expanded-path PR body refine/open pass: refine complete on
+  2026-05-09T17:10:10Z by `loom_pr_preparer`; PR opening pending.
+- Final PR title:
+  `Persistence And Concurrency Foundation - Phase 3: Materialization Boundary And Authoritative Read Models`
+- Target branch: `develop`
+- Head branch: `codex/materialization-read-models`
+- Stack predecessor: none; root phase PR targets `develop`.
+- `make validate-pr`: passed on 2026-05-09T17:08Z; Ruff, Pyright, default
+  harness (1016 passed, 17 skipped, 14 deselected), config-extra harness
+  (416 passed, 1044 deselected), and `uv build` passed.
+- `make test-summary`: passed on 2026-05-09T17:09:40Z; generated
+  `build/test-summary.md` with 1457 passed, 0 failed, 0 errors, 11 skipped,
+  and 1055 deselected.
+- PR URL: pending.
+- PR verification JSON: pending.
+- Blockers: none.
+
 ## Completion Notes
 
 - Draft plan: complete on 2026-05-10 by `loom_phase_planner`.
 - Expanded-path refine pass: complete on 2026-05-10 by `loom_phase_planner`.
+- PR body draft: complete on 2026-05-09 by `loom_pr_preparer`.
+- PR body refine pass: complete on 2026-05-09 by `loom_pr_preparer`.
 - Final phase execution plan: complete and ready for `loom_phase_executor`.
 - Implementation summary: complete in commits `3a7c1d8` and `21384fc`. Added
   `loom.pipeline.stores.materialization_read_models` with backend-neutral
@@ -291,26 +313,27 @@ make test-summary
   written to `docs/phases/materialization-read-models-pr-body.md` from the
   phase plan, final diff, PR template, phase PR-body template, refreshed
   `make validate-pr`, and refreshed `build/test-summary.md`.
-- PR body refine pass: pending; expanded-path phase requires a separate refine
-  pass before PR creation.
-- Final PR-preparation validation evidence: refreshed on 2026-05-10.
+- PR body refine pass: complete on 2026-05-09T17:10:10Z by
+  `loom_pr_preparer`; evidence was refreshed and the concise implementation,
+  test, validation, and risk summaries remained aligned with the diff.
+- Final PR-preparation validation evidence: refreshed on
+  2026-05-09T17:09:40Z.
   `make validate-pr` passed: Ruff, Pyright, default harness (1016 passed,
   17 skipped, 14 deselected), config-extra harness (416 passed,
   1044 deselected), and `uv build`. `make test-summary` passed and wrote
-  `build/test-summary.md` generated at 2026-05-09T17:00:57+00:00: package
+  `build/test-summary.md` generated at 2026-05-09T17:09:40+00:00: package
   56 passed/1 skipped; unit 785 passed/1 skipped; contract 92 passed/2
   skipped; integration 71 passed/7 skipped/10 deselected; e2e 37 passed/1
   deselected; config-extra 416 passed/1044 deselected; overall 1457 passed,
-  11 skipped, 1055 deselected, 130.19s.
+  11 skipped, 1055 deselected, 129.71s.
 - PR facts and target readiness: title remains `Persistence And Concurrency
   Foundation - Phase 3: Materialization Boundary And Authoritative Read
   Models`; branch is `codex/materialization-read-models`; stack predecessor is
   none; target branch is `develop`; PR body path is
   `docs/phases/materialization-read-models-pr-body.md`; local merge base with
   `develop` is `caa7190`, matching the recorded phase base. This is a root
-  phase PR ready to target `develop` after the PR-body refine pass. No PR has
-  been opened.
+  phase PR ready to target `develop`. PR opening is pending.
 - Blocker-resolution summary: no blocker-resolution passes used.
-- PR preparation: draft body prepared; refine pass and PR creation pending.
-- Stack maintenance: not needed at draft time; root phase branch targets `develop`.
+- PR preparation: body refined and ready for PR creation.
+- Stack maintenance: not needed; root phase branch targets `develop`.
 - Remaining blockers: none known.

@@ -46,20 +46,20 @@ New tests implemented:
 | Check | Result | Evidence |
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness (1016 passed, 17 skipped, 14 deselected), config-extra harness (416 passed, 1044 deselected), and `uv build` passed. |
-| `make test-summary` | Passed | Generated `build/test-summary.md` at 2026-05-09T17:00:57+00:00; overall 1457 passed, 0 failed, 0 errors, 11 skipped, 1055 deselected. |
-| GitHub checks | Pending | PR has not been opened yet. |
+| `make test-summary` | Passed | Generated `build/test-summary.md` at 2026-05-09T17:09:40+00:00; overall 1457 passed, 0 failed, 0 errors, 11 skipped, 1055 deselected. |
+| GitHub checks | Pending | Starts after PR creation. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 56 | 0 | 0 | 1 | 0 | 57 | 7.64s | 17% |
-| unit | passed | 785 | 0 | 0 | 1 | 0 | 786 | 16.94s | 71% |
-| contract | passed | 92 | 0 | 0 | 2 | 0 | 94 | 4.45s | 50% |
-| integration | passed | 71 | 0 | 0 | 7 | 10 | 78 | 52.52s | 56% |
-| e2e | passed | 37 | 0 | 0 | 0 | 1 | 37 | 16.05s | 68% |
-| config-extra | passed | 416 | 0 | 0 | 0 | 1044 | 416 | 32.60s | 70% |
-| Overall | passed | 1457 | 0 | 0 | 11 | 1055 | 1468 | 130.19s | - |
+| package | passed | 56 | 0 | 0 | 1 | 0 | 57 | 7.65s | 17% |
+| unit | passed | 785 | 0 | 0 | 1 | 0 | 786 | 16.80s | 71% |
+| contract | passed | 92 | 0 | 0 | 2 | 0 | 94 | 4.56s | 50% |
+| integration | passed | 71 | 0 | 0 | 7 | 10 | 78 | 52.81s | 56% |
+| e2e | passed | 37 | 0 | 0 | 0 | 1 | 37 | 15.53s | 68% |
+| config-extra | passed | 416 | 0 | 0 | 0 | 1044 | 416 | 32.37s | 70% |
+| Overall | passed | 1457 | 0 | 0 | 11 | 1055 | 1468 | 129.71s | - |
 
 ## Risks / Follow-Ups
 
