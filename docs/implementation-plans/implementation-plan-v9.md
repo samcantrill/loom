@@ -493,9 +493,9 @@ special-casing status files or inventing another authority.
 
 ### Phase 1 - Authority Contracts, Schema Policy, And Compatibility Surface
 
-Status: pending
+Status: merged
 Branch: `codex/persistence-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/101
 
 Goal:
 
@@ -618,7 +618,30 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged into `develop` on 2026-05-09T14:41:44Z by PR #101
+  (`6ecabf921e8d2e788c5ef748e999bd5b95b5528e`).
+- Implemented backend-neutral store contracts under `loom.pipeline.stores`:
+  per-run authority protocols and result records, capability diagnostics,
+  loud schema policy, authoritative read-model records, and workspace/sweep
+  coordination records. The existing local-file `RunStore` and
+  `LocalRunStore` remain separate from the v9 authority contracts.
+- Added deterministic in-memory conformance stores in test support plus
+  package, unit, and contract coverage for exports, import boundaries, model
+  validation and round-trip serialization, per-run transition/lease/commit
+  behavior, and cross-run workspace coordination.
+- Automated PR review found a Phase 1 contract-completeness blocker around
+  cross-run lease/recovery identity and exported record round trips. Blocker
+  resolution pass 1/3 added `TrialLeaseRecord`,
+  `ResourceLeaseRecord.workspace_id`, `CoordinationRecoveryRecord`, and
+  `from_dict` round-trip APIs/tests for exported contract records.
+- Validation: `make validate-pr` passed; final `make test-summary` passed with
+  1422 passed, 11 skipped, 1020 deselected, 0 failed, and 0 errors. GitHub CI
+  `checks` passed before merge.
+- Follow-up: Phase 2 must implement the SQLite backend behind these contracts
+  without exposing private table names or treating test fakes as production
+  backends. Phase 1 remote branch cleanup was required because the merge
+  completed even though the local `gh pr merge` checkout cleanup step hit the
+  existing `develop` worktree.
 
 ### Phase 2 - Per-Run SQLite Backend And Transaction Semantics
 
