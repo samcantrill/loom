@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 
 
 def test_backend_inspection_reports_materialization_warnings_without_mutation(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     run_store = _store(tmp_path, authority)
@@ -32,6 +32,11 @@ def test_backend_inspection_reports_materialization_warnings_without_mutation(
     config_snapshot = run_uri_to_path(run_uri) / "config" / "resolved.yaml"
     if config_snapshot.exists():
         config_snapshot.unlink()
+
+    def fail_read_bytes(self: Path) -> bytes:
+        raise AssertionError(f"diagnostics read artifact payload bytes from {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
 
     result = inspect_backend(
         run_uri,

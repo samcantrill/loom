@@ -56,6 +56,7 @@ class AuthoritativeReadOptions:
     metadata_only: bool = True
     include_materialized_refs: bool = True
     verify_materialization: bool = False
+    verify_materialization_checksums: bool = True
     strict: bool = False
     completed_run_only: bool = False
     projection_revision: BackendRevision | None = None
@@ -65,6 +66,7 @@ class AuthoritativeReadOptions:
             "metadata_only",
             "include_materialized_refs",
             "verify_materialization",
+            "verify_materialization_checksums",
             "strict",
             "completed_run_only",
         ):
@@ -198,7 +200,10 @@ def read_authoritative_run(
             _materialized_ref_warnings(
                 materialized_refs,
                 revision=snapshot.revision,
-                verify_checksum=read_options.verify_materialization,
+                verify_checksum=(
+                    read_options.verify_materialization
+                    and read_options.verify_materialization_checksums
+                ),
             )
         )
 

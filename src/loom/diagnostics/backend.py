@@ -149,6 +149,7 @@ def inspect_backend(
         options=AuthoritativeReadOptions(
             include_materialized_refs=True,
             verify_materialization=verify_materialization,
+            verify_materialization_checksums=False,
             projection_revision=_parse_projection_revision(projection_revision),
         ),
         local_paths=LocalRunStore(run_uri_to_path(resolved_run_uri).parent),

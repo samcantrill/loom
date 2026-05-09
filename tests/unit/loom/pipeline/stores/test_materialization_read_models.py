@@ -204,6 +204,38 @@ def test_corrupt_materialized_refs_warn_or_raise_in_strict_mode(
     )
 
 
+def test_authoritative_read_can_verify_existence_without_checksum_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_root = tmp_path / "run"
+    output_path = run_root / "artifacts" / "build" / "out.json"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text("actual-payload", encoding="utf-8")
+    run_uri = path_to_run_uri(run_root)
+    store = _committed_store(
+        run_uri,
+        output_path,
+        checksum=hash_text("expected-payload"),
+    )
+
+    def fail_read_bytes(self: Path) -> bytes:
+        raise AssertionError(f"payload bytes were read from {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    snapshot = read_authoritative_run(
+        store,
+        run_uri,
+        options=AuthoritativeReadOptions(
+            verify_materialization=True,
+            verify_materialization_checksums=False,
+        ),
+    )
+
+    assert snapshot.materialized_refs[0].exists is True
+    assert snapshot.warnings == ()
+
+
 def test_local_materialization_helpers_classify_expected_refs(
     tmp_path: Path,
 ) -> None:
