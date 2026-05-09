@@ -7,6 +7,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
 
+from loom.errors import FingerprintError
+from loom.fingerprints import compare_digests, hash_bytes
 from loom.io.errors import UnsupportedURIError
 from loom.io.uris import get_uri_scheme, path_to_file_uri, uri_to_path
 from loom.pipeline.status import RunStatus
@@ -180,8 +182,10 @@ def read_authoritative_run(
             verify=read_options.verify_materialization,
         )
         warnings.extend(
-            _missing_materialized_ref_warnings(
-                materialized_refs, revision=snapshot.revision
+            _materialized_ref_warnings(
+                materialized_refs,
+                revision=snapshot.revision,
+                verify_checksum=read_options.verify_materialization,
             )
         )
 
@@ -326,7 +330,7 @@ def collect_local_materialized_refs(
                     verify=verify,
                 )
             )
-    refs.extend(materialization.extra_refs)
+    refs.extend(_verified_ref(ref, verify=verify) for ref in materialization.extra_refs)
     return _deduplicate_refs(refs)
 
 
@@ -337,11 +341,22 @@ def _materialized_snapshot_refs(
     local_materialization: LocalMaterializationRequest | None,
     verify: bool,
 ) -> tuple[tuple[StageLifecycleSnapshot, ...], tuple[MaterializedRef, ...]]:
-    top_level_refs: list[MaterializedRef] = list(snapshot.materialized_refs)
+    top_level_refs: list[MaterializedRef] = [
+        _verified_ref(ref, verify=verify) for ref in snapshot.materialized_refs
+    ]
     stages: list[StageLifecycleSnapshot] = []
     for stage in snapshot.stages:
-        stage_refs = list(stage.latest_commit.materialized_refs) if stage.latest_commit else []
-        stage_refs.extend(artifact_payload_ref(fact, verify=verify) for fact in stage.artifact_facts)
+        stage_refs = (
+            [
+                _verified_ref(ref, verify=verify)
+                for ref in stage.latest_commit.materialized_refs
+            ]
+            if stage.latest_commit
+            else []
+        )
+        stage_refs.extend(
+            artifact_payload_ref(fact, verify=verify) for fact in stage.artifact_facts
+        )
         top_level_refs.extend(stage_refs)
         stages.append(_replace_commit_refs(stage, _deduplicate_refs(stage_refs)))
     if local_paths is not None:
@@ -354,7 +369,10 @@ def _materialized_snapshot_refs(
             )
         )
     elif local_materialization is not None:
-        top_level_refs.extend(local_materialization.extra_refs)
+        top_level_refs.extend(
+            _verified_ref(ref, verify=verify)
+            for ref in local_materialization.extra_refs
+        )
     return tuple(stages), _deduplicate_refs(top_level_refs)
 
 
@@ -413,6 +431,15 @@ def _safe_exists(uri: str) -> bool | None:
         return uri_to_path(uri).exists()
     except (OSError, RuntimeError, UnsupportedURIError, ValueError):
         return False
+
+
+def _verified_ref(ref: MaterializedRef, *, verify: bool) -> MaterializedRef:
+    if not verify:
+        return ref
+    exists = _safe_exists(ref.uri)
+    if exists is None:
+        return ref
+    return replace(ref, exists=exists)
 
 
 def _schema_warnings(check: AuthoritySchemaCheck) -> tuple[ReadModelWarning, ...]:
@@ -528,26 +555,69 @@ def _completed_run_warnings(
     )
 
 
-def _missing_materialized_ref_warnings(
-    refs: Iterable[MaterializedRef], *, revision: BackendRevision
+def _materialized_ref_warnings(
+    refs: Iterable[MaterializedRef],
+    *,
+    revision: BackendRevision,
+    verify_checksum: bool,
 ) -> tuple[ReadModelWarning, ...]:
     warnings: list[ReadModelWarning] = []
     for ref in refs:
-        if ref.exists is not False:
+        if ref.exists is False:
+            warnings.append(
+                ReadModelWarning(
+                    code=ReadModelWarningCode.MISSING_MATERIALIZED_REF,
+                    message="materialized reference is missing",
+                    detail={
+                        "kind": ref.kind.value,
+                        "uri": ref.uri,
+                        **dict(ref.metadata),
+                    },
+                    revision=revision,
+                )
+            )
             continue
+        checksum_result = _checksum_result(ref) if verify_checksum else None
+        if checksum_result is None:
+            continue
+        actual_checksum, reason = checksum_result
+        detail: dict[str, PlainData] = {
+            "kind": ref.kind.value,
+            "uri": ref.uri,
+            "expected_checksum": ref.checksum,
+            "reason": reason,
+            **dict(ref.metadata),
+        }
+        if actual_checksum is not None:
+            detail["actual_checksum"] = actual_checksum
         warnings.append(
             ReadModelWarning(
-                code=ReadModelWarningCode.MISSING_MATERIALIZED_REF,
-                message="materialized reference is missing",
-                detail={
-                    "kind": ref.kind.value,
-                    "uri": ref.uri,
-                    **dict(ref.metadata),
-                },
+                code=ReadModelWarningCode.CORRUPT_MATERIALIZED_REF,
+                message="materialized reference checksum could not be verified",
+                detail=detail,
                 revision=revision,
             )
         )
     return tuple(warnings)
+
+
+def _checksum_result(ref: MaterializedRef) -> tuple[str | None, str] | None:
+    if ref.checksum is None:
+        return None
+    if get_uri_scheme(ref.uri) not in {None, "file"}:
+        return None
+    try:
+        path = uri_to_path(ref.uri)
+        if not path.exists():
+            return None
+        if not path.is_file():
+            return None, "checksum_unsupported"
+        actual_checksum = hash_bytes(path.read_bytes())
+        if compare_digests(actual_checksum, ref.checksum):
+            return None
+        return actual_checksum, "checksum_mismatch"
+    except (OSError, RuntimeError, UnsupportedURIError, ValueError, FingerprintError):
+        return None, "checksum_unreadable"
 
 
 def _terminal_status(status: RunStatus) -> bool:

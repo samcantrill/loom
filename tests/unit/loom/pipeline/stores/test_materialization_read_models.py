@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.fingerprints import hash_text
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AuthoritativeReadOptions,
@@ -32,7 +33,12 @@ from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 pytestmark = pytest.mark.unit
 
 
-def _committed_store(run_uri: str, output_path: Path) -> InMemoryPerRunAuthorityStore:
+def _committed_store(
+    run_uri: str,
+    output_path: Path,
+    *,
+    checksum: str | None = None,
+) -> InMemoryPerRunAuthorityStore:
     store = InMemoryPerRunAuthorityStore()
     store.create_run(run_uri)
     allocation = store.allocate_stage_attempt(
@@ -52,7 +58,7 @@ def _committed_store(run_uri: str, output_path: Path) -> InMemoryPerRunAuthority
                 artifact_id="build/out",
                 uri=path_to_run_uri(output_path),
                 artifact_type="json",
-                checksum=None,
+                checksum=checksum,
             )
         },
     )
@@ -126,6 +132,46 @@ def test_missing_materialized_refs_warn_or_raise_in_strict_mode(
         )
 
     assert exc_info.value.warnings[0].code is ReadModelWarningCode.MISSING_MATERIALIZED_REF
+
+
+def test_corrupt_materialized_refs_warn_or_raise_in_strict_mode(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "run"
+    output_path = run_root / "artifacts" / "build" / "out.json"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text("actual-payload", encoding="utf-8")
+    run_uri = path_to_run_uri(run_root)
+    expected_checksum = hash_text("expected-payload")
+    store = _committed_store(run_uri, output_path, checksum=expected_checksum)
+
+    snapshot = read_authoritative_run(
+        store,
+        run_uri,
+        options=AuthoritativeReadOptions(verify_materialization=True),
+    )
+
+    warning = snapshot.warnings[0]
+    assert warning.code is ReadModelWarningCode.CORRUPT_MATERIALIZED_REF
+    assert warning.detail["reason"] == "checksum_mismatch"
+    assert warning.detail["expected_checksum"] == expected_checksum
+    assert warning.detail["actual_checksum"] == hash_text("actual-payload")
+    assert snapshot.materialized_refs[0].exists is True
+
+    with pytest.raises(MaterializationReadModelError) as exc_info:
+        read_authoritative_run(
+            store,
+            run_uri,
+            options=AuthoritativeReadOptions(
+                verify_materialization=True,
+                strict=True,
+            ),
+        )
+
+    assert (
+        exc_info.value.warnings[0].code
+        is ReadModelWarningCode.CORRUPT_MATERIALIZED_REF
+    )
 
 
 def test_local_materialization_helpers_classify_expected_refs(

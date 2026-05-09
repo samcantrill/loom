@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; ready for PR preparation
+- Status: implementation refinement complete; ready for PR preparation
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 3: Materialization Boundary And Authoritative Read Models`
 - Branch: `codex/materialization-read-models`
@@ -247,8 +247,10 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: not needed; targeted validation, full
-  `make validate-pr`, and suite coverage obligations passed after local fixes.
+- Phase implementation refinement: used on 2026-05-10 by
+  `loom_phase_refiner`; bounded fix added checksum/corrupt materialized-ref
+  verification and coverage, with targeted validation, full `make validate-pr`,
+  and refreshed `make test-summary` passing after the fix.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -262,29 +264,29 @@ make test-summary
   `read_authoritative_run`, strict/warning read options, local materialized-ref
   classification, artifact payload refs, completed-run bundle metadata
   projection, stale-projection warnings, partial-commit warnings,
-  non-terminal completed-run warnings, missing materialized-ref warnings, and
-  active revision-change warnings. The API consumes `PerRunAuthorityStore`
+  non-terminal completed-run warnings, missing and corrupt materialized-ref
+  warnings, and active revision-change warnings. The API consumes
+  `PerRunAuthorityStore`
   schema checks and snapshots only, preserves submitted operations as
   first-class detail, and does not query private SQLite tables, read legacy
   status/artifact-index files as truth, import project code, add CLI/export
   surfaces, or load artifact payloads.
 - Implementation validation: complete. Initial sandboxed `uv run pytest` and
   `make` invocations could not create files in `/home/samcantrill/.cache/uv`;
-  reruns with approved cache access passed. Focused evidence:
-  `uv run pytest tests/package/test_pipeline_store_api.py` passed (5 passed);
-  `uv run pytest tests/unit/loom/pipeline/stores/test_authority_models.py tests/unit/loom/pipeline/stores/test_materialization_read_models.py`
-  passed (14 passed);
-  `uv run pytest tests/contracts/test_authoritative_read_model_contract.py tests/contracts/test_authority_store_contract.py`
-  passed (10 passed);
-  `uv run pytest tests/integration/pipeline/test_materialization_read_models.py tests/integration/pipeline/test_sqlite_authority_backend.py`
-  passed (7 passed). `make validate-pr` passed: Ruff, Pyright, default harness
-  (1013 passed, 17 skipped, 14 deselected), config-extra harness (416 passed,
-  1041 deselected), and `uv build`. `make test-summary` passed and wrote
-  `build/test-summary.md`: package 56 passed/1 skipped; unit 784 passed/1
-  skipped; contract 90 passed/2 skipped; integration 71 passed/7 skipped/10
-  deselected; e2e 37 passed/1 deselected; config-extra 416 passed/1041
-  deselected.
-- Refinement summary: tightened final PR title, read-mode semantics, warning and revision obligations, suite acceptance criteria, and stop conditions while preserving the no-runner-swap, no-public-read-swap, no-CLI/export, no-workspace-coordination, no-SQLite-query-surface, no-project-code-import, no-payload-load, and no-legacy-truth boundaries.
+  reruns with approved cache access passed. Post-refinement focused evidence:
+  `uv run pytest tests/unit/loom/pipeline/stores/test_materialization_read_models.py tests/contracts/test_authoritative_read_model_contract.py`
+  passed (15 passed). Post-refinement `make validate-pr` passed: Ruff, Pyright,
+  default harness (1016 passed, 17 skipped, 14 deselected), config-extra
+  harness (416 passed, 1044 deselected), and `uv build`. Post-refinement
+  `make test-summary` passed and wrote `build/test-summary.md`: package 56
+  passed/1 skipped; unit 785 passed/1 skipped; contract 92 passed/2 skipped;
+  integration 71 passed/7 skipped/10 deselected; e2e 37 passed/1 deselected;
+  config-extra 416 passed/1044 deselected.
+- Phase-plan refinement summary: tightened final PR title, read-mode semantics, warning and revision obligations, suite acceptance criteria, and stop conditions while preserving the no-runner-swap, no-public-read-swap, no-CLI/export, no-workspace-coordination, no-SQLite-query-surface, no-project-code-import, no-payload-load, and no-legacy-truth boundaries.
+- Implementation refinement summary: verified reads now classify checksum
+  mismatches or unreadable checksum-backed local refs as
+  `CORRUPT_MATERIALIZED_REF`, preserving warning-only reads and strict
+  rejection while limiting payload access to checksum byte hashing.
 - Blocker-resolution summary: no blocker-resolution passes used.
 - PR preparation: pending.
 - Stack maintenance: not needed at draft time; root phase branch targets `develop`.

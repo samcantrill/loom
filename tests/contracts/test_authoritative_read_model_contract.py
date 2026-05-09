@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.fingerprints import hash_text
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
@@ -62,7 +63,12 @@ def _submitted_record(run_uri: str) -> SubmittedOperationRecord:
     )
 
 
-def _populate(case: ReadModelCase, *, materialize_output: bool) -> None:
+def _populate(
+    case: ReadModelCase,
+    *,
+    materialize_output: bool,
+    checksum: str | None = None,
+) -> None:
     case.store.create_run(case.run_uri)
     case.store.write_submitted_operation(case.run_uri, _submitted_record(case.run_uri))
     allocation = case.store.allocate_stage_attempt(
@@ -85,6 +91,7 @@ def _populate(case: ReadModelCase, *, materialize_output: bool) -> None:
                 artifact_id="build/out",
                 uri=path_to_run_uri(case.output_path),
                 artifact_type="json",
+                checksum=checksum,
             )
         },
     )
@@ -140,3 +147,24 @@ def test_authoritative_read_contract_warns_for_missing_materialization(
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED
     assert snapshot.materialized_refs[0].exists is False
     assert snapshot.warnings[0].code is ReadModelWarningCode.MISSING_MATERIALIZED_REF
+
+
+def test_authoritative_read_contract_warns_for_corrupt_materialization(
+    read_model_case: ReadModelCase,
+) -> None:
+    _populate(
+        read_model_case,
+        materialize_output=True,
+        checksum=hash_text("expected-payload"),
+    )
+
+    snapshot = read_authoritative_run(
+        read_model_case.store,
+        read_model_case.run_uri,
+        options=AuthoritativeReadOptions(verify_materialization=True),
+    )
+
+    assert snapshot.stages[0].status is StageStatus.SUCCEEDED
+    assert snapshot.materialized_refs[0].exists is True
+    assert snapshot.warnings[0].code is ReadModelWarningCode.CORRUPT_MATERIALIZED_REF
+    assert snapshot.warnings[0].detail["reason"] == "checksum_mismatch"
