@@ -22,7 +22,13 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.pipeline import PipelineRunner, RunRequest
+from tests.unit.loom.pipeline.execution.test_authority_adapter import (
+    _pipeline,
+    _store,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -112,6 +118,34 @@ def test_inspect_run_status_includes_submitted_operation_summaries(
         list[dict[str, object]], summary.to_dict()["submitted_operations"]
     )
     assert operations[0]["backend"] == "test-backend"
+
+
+def test_inspect_run_status_uses_authoritative_facts_over_corrupt_legacy_files(
+    tmp_path: Path,
+) -> None:
+    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
+    store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    PipelineRunner(run_store=store).run(RunRequest(pipeline=_pipeline(), run_uri=run_uri))
+    run_path = run_uri_to_path(run_uri)
+    (run_path / "status.json").write_text("not json", encoding="utf-8")
+    (run_path / "artifacts.json").write_text("not json", encoding="utf-8")
+    (run_path / "stages" / "build" / "status.json").write_text(
+        "not json", encoding="utf-8"
+    )
+
+    summary = inspect_run_status(run_uri, run_store=store)
+    artifacts = inspect_run_artifacts(run_uri, run_store=store)
+
+    assert summary.status == "SUCCEEDED"
+    assert {stage.stage_name: stage.status for stage in summary.stages} == {
+        "build": "SUCCEEDED",
+        "report": "SUCCEEDED",
+    }
+    assert {artifact.key for artifact in artifacts.artifacts} == {
+        "build.data",
+        "report.text",
+    }
 
 
 def test_inspect_stage_logs_tails_each_stream(tmp_path: Path) -> None:

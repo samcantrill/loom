@@ -33,6 +33,14 @@ from loom.pipeline.stores import LocalRunStore
 pytestmark = pytest.mark.unit
 
 
+def test_run_default_store_is_authority_backed_serial_store() -> None:
+    from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
+
+    store = run_command._create_default_run_store()
+
+    assert isinstance(store, AuthorityBackedSerialRunStore)
+
+
 @dataclass(frozen=True, slots=True)
 class FakeComposedConfig:
     resolved: dict[str, object]
