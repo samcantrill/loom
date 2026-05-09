@@ -2,10 +2,9 @@
 
 ## Metadata
 
-- Status: draft pass complete; expanded-path refine pass pending before
-  implementation.
+- Status: expanded-path refine pass complete; ready for implementation.
 - Feature focus: Persistence And Concurrency Foundation
-- Intended PR title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`
+- Final PR title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`
 - Branch: `codex/serial-write-integration`
 - Worktree: `/home/samcantrill/work/loom-worktrees/serial-write-integration`
 - Phase execution plan path: `docs/phases/serial-write-integration.md`
@@ -15,9 +14,8 @@
 - Base branch: `develop` at `3b57867` (`docs: record v9 phase 3 merge`),
   matching local `origin/develop`.
 - Target branch: `develop`
-- Merge eligibility: root phase PR; merge eligible after refine pass,
-  implementation, validation, automated review, and CI pass because it targets
-  `develop`.
+- Merge eligibility: root phase PR; merge eligible after implementation,
+  validation, automated review, and CI pass because it targets `develop`.
 - Workflow path: expanded path because this phase spans execution write paths,
   controller ownership, submitted operations, worker handoff, output commit
   semantics, and data-loss-sensitive backend authority.
@@ -26,19 +24,20 @@
 - Prerequisite phase status: Phase 1 merged by PR #101, Phase 2 merged by PR
   #102, and Phase 3 merged by PR #103.
 - Draft pass: complete by `loom_phase_planner` in this artifact.
-- Refine pass: pending; implementation must not begin until this same artifact
-  is refined and marked ready for implementation.
-- Phase implementation refinement budget: unused; expanded path reserves at
-  most one `loom_phase_refiner` pass after implementation if assigned by the
-  manager.
-- Phase PR review budget: unused.
+- Refine pass: complete by `loom_phase_planner` in this artifact on
+  2026-05-10.
+- Phase implementation refinement budget: unused; expanded path reserves one
+  bounded `loom_phase_refiner` pass after implementation only if assigned by
+  the manager.
+- Phase PR review budget: unused; one automated review pass remains available
+  after PR preparation.
 - Blocker-resolution budget: 0/3 used.
 - Setup limitations: branch/worktree creation used local `develop` matching
   `origin/develop`; no fetch, GitHub operation, full validation, or PR action
   was run during planning. Worktree creation required approved sandbox
   escalation after the default sandbox could not create the namespaced
   `codex/` branch ref.
-- Blockers: none for draft planning; refine pass remains required.
+- Blockers: none.
 
 ## Objective
 
@@ -59,12 +58,25 @@ must use those contracts for writes without making SQLite-backed runs the
 public default or converting status/catalog/read consumers broadly. Phase 5
 owns the public default and read-path hard swap.
 
+The implementation should treat this as an execution-store adapter phase, not
+as a new public storage mode. Existing execution helpers expect a `RunStore`
+plus `LocalRunStorePaths`; the SQLite-backed path may satisfy that shape through
+an internal adapter that delegates active lifecycle facts to
+`PerRunAuthorityStore` and delegates materialized files to local path helpers.
+That adapter must not make legacy state files a second source of truth.
+
 ## Current Source Findings
 
 - `src/loom/pipeline/execution/runner.py` creates or opens runs through
   `RunStore`, acquires file-backed run locks through `run_locks.py`, writes
   run/stage status through `lifecycle.py`, persists plans/runtime/config files,
   and serially executes stage plans.
+- `RunStore` is broad: planning, resume, and continuation paths currently read
+  status, outputs, worker requests, submitted-operation records, artifact
+  indexes, config snapshots, provenance documents, events, locks, and local
+  paths through the same object. Phase 4 should isolate SQLite-backed execution
+  behind a narrow internal adapter or helper layer rather than making
+  `PipelineRunner` know private SQLite details.
 - `src/loom/pipeline/execution/lifecycle.py` currently treats local store
   documents as write truth for status, failures, outputs, artifact index,
   provenance, and events. Backend success must instead depend on
@@ -81,6 +93,14 @@ owns the public default and read-path hard swap.
 - `SQLitePerRunAuthorityStore`, `PerRunAuthorityStore`, and
   `read_authoritative_run()` already exist under `loom.pipeline.stores`.
   Consumers outside the SQLite backend must not query private SQLite schema.
+- The current authority contract owns create/open, guarded run/stage
+  transitions, attempt allocation, controller/stage leases, submitted
+  operations, output commits, artifact facts, audit events, snapshots, recovery
+  scans, cleanup candidates, schema checks, and capability reporting. It does
+  not expose an open-ended writer for arbitrary status-record fields, stage
+  input/fingerprint documents, or provenance documents; those must remain
+  materialized refs, lifecycle reason detail, or audit evidence unless a
+  concrete blocker is recorded.
 - Existing tests heavily assert local files such as `status.json`,
   `outputs.json`, worker handoff files, and artifact indexes. Phase 4 needs
   additive SQLite-backed write-path tests while preserving legacy public tests
@@ -90,7 +110,16 @@ owns the public default and read-path hard swap.
 
 - Add an internal/test-selectable SQLite-backed serial-run construction path
   that pairs `SQLitePerRunAuthorityStore` with local materialization path
-  helpers, without changing the public `LocalRunStore` default.
+  helpers, without changing the public `LocalRunStore` default. The selection
+  mechanism should be private to tests or clearly internal; do not add a public
+  CLI flag, environment variable, or documented Python default switch in this
+  phase.
+- Introduce or update the smallest internal execution-store adapter needed for
+  existing serial runner, lifecycle, worker preparation, submitted-operation,
+  and continuation code to call backend authority through backend-neutral
+  methods. The adapter may expose `RunStore`/`LocalRunStorePaths` behavior to
+  existing execution code, but active truth on the selected path must come from
+  `PerRunAuthorityStore`.
 - Route SQLite-backed run creation/opening, run status transitions, stage
   status transitions, attempt allocation, controller ownership, stage leasing,
   submitted-operation writes, failures, audit events, output commits, artifact
@@ -99,16 +128,20 @@ owns the public default and read-path hard swap.
   the SQLite-backed path. Legacy public-default serial runs may keep existing
   file-lock behavior until Phase 5.
 - Keep local files for config/provenance snapshots, logs, artifact payloads,
-  worker requests/results, and other materialized handoff payloads. Those files
-  must not be treated as active state truth on the SQLite-backed path.
+  worker requests/results, stage inputs/fingerprints where they are handoff
+  evidence, and other materialized handoff payloads. Those files must not be
+  treated as active state truth on the SQLite-backed path.
 - Enforce output commit ordering: validate declared outputs and local
   existence/checksum where supported, then record backend output commit,
-  artifact facts, derived artifact-index/materialization evidence, terminal
-  stage status, revision, and event evidence together where backend
-  capabilities allow.
+  artifact facts, terminal stage status, lease release, revision, and event
+  evidence together where backend capabilities allow. Any artifact index
+  written for compatibility is derived/materialized evidence, not active truth.
 - Preserve controller-finalized local/subprocess behavior while allowing the
   submitted or stage-job continuation path to self-finalize only
   attempt-scoped facts with valid backend attempt and lease fencing tokens.
+- Preserve serial runner semantics for planning order, skip/block behavior,
+  failure propagation, provenance/config/log materialization, result objects,
+  and stage output payload availability on the public default path.
 - Update focused tests and fixtures that assumed local state files were live
   write truth when exercising the SQLite-backed path.
 - Document no old-run migration and no legacy active-state fallback for new
@@ -120,12 +153,16 @@ owns the public default and read-path hard swap.
 - No broad planning, resume, status, catalog, diagnostics, or run-catalog
   read-path swap except narrow authoritative reads needed to validate Phase 4
   writes.
+- No public status/catalog read-path swap beyond assertions that the internal
+  SQLite-backed write path produced authoritative facts.
 - No bounded parallel stage scheduling, worker pool, speculative execution, or
   multi-controller execution.
 - No workspace/sweep coordination implementation.
-- No backend repair/export/snapshot CLI and no public SQL/schema contract.
+- No backend repair/export/snapshot CLI, no `loom backend ...` command, and no
+  public SQL/schema contract.
 - No v0-v8 run migration or compatibility mode.
 - No status enum widening and no scheduler-specific lifecycle policy redesign.
+- No legacy local files as coequal truth for SQLite-backed active state.
 
 ## Scope Contract
 
@@ -134,6 +171,27 @@ authority and local files as materialization only. It may use existing local
 path helpers for payload locations, but it must not reconstruct current state
 from `status.json`, `outputs.json`, artifact-index files, event logs, or worker
 handoff files.
+
+The execution adapter boundary is allowed to translate existing execution
+operations into backend calls, including `create_run`/`open_run`,
+`transition_run`, `transition_stage`, `allocate_stage_attempt`,
+`acquire_controller_lease`, `release_lease`/`fail_lease`,
+`write_submitted_operation`, `record_output_commit`, `append_audit_event`,
+`snapshot`, and `scan_recovery`. It must not query SQLite tables, infer truth
+from materialized local files, or make `RunCatalog`, diagnostics, CLI, or
+workspace coordination part of the write path.
+
+Where legacy execution code wants data that Phase 1-3 authority contracts do
+not directly store, keep the distinction explicit:
+
+- Stage input, fingerprint, config, provenance, log, and worker handoff
+  documents are materialized evidence or reconstruction payloads.
+- Run/stage lifecycle truth, attempt identity, lease ownership, submitted
+  operation state, output commit, artifact facts, cleanup candidates, revisions,
+  and audit sequencing are backend facts.
+- Any compatibility artifact index written during Phase 4 is derived from
+  committed backend output facts and must not be read as the conflict winner on
+  the SQLite-backed path.
 
 The public default remains stable for this phase. Existing `PipelineRunner`
 construction with a plain `LocalRunStore` should keep current user-visible
@@ -145,30 +203,46 @@ Phase 5's public hard swap.
 Submitted-worker self-finalization is attempt-scoped only. Valid backend-issued
 attempt/lease fencing may allow a worker or continuation command to commit
 that attempt's outputs and facts. It must not allow run finalization, global
-coordination mutation, unfenced overwrites, or stale attempts to win.
+coordination mutation, unfenced overwrites, stale attempts to win, or a worker
+to transition unrelated stages.
 
 If current Phase 1-3 contracts cannot represent required write-path facts such
-as worker materialization refs, cleanup candidates, or commit failure detail,
-stop and record the exact contract blocker rather than adding broad public API
-surface inside Phase 4.
+as worker materialization refs, cleanup candidates, commit failure detail,
+status reason detail, or stage reconstruction metadata, stop and record the
+exact contract blocker rather than adding broad public API surface inside
+Phase 4.
 
 ## Acceptance Criteria
 
 - Internal/test SQLite-backed serial runs initialize and mutate active state
   through backend authority.
+- The internal SQLite-backed construction path is reachable from tests without
+  changing documented public Python or CLI defaults.
 - Existing public serial behavior remains unchanged until Phase 5.
 - Success, failure, cancellation/submitted-operation writes, commit failure,
   prepared-worker handoff, and stage-job continuation writes use backend truth
   on the SQLite-backed path.
 - Stage success is impossible without durable backend output commit and
-  artifact facts.
+  artifact facts, and successful commit releases the owning stage lease through
+  the backend.
+- Run/controller ownership on the SQLite-backed path is enforced by a backend
+  controller lease, not by `run.lock` as active authority.
 - Missing, invalid, expired, released, or foreign worker fencing tokens fail
   loudly and do not mutate committed state.
+- Stage-job or submitted-worker continuation can finalize only the target
+  attempt's outputs/failure facts on the SQLite-backed path. Run finalization
+  remains controller/recovery owned; if existing stage-job behavior cannot be
+  preserved without worker-owned run finalization on the backend path, stop and
+  record the authority blocker.
 - Backend commit failure after payload staging records failure and cleanup
   candidates rather than active outputs.
 - Failed or abandoned staged payloads are not committed outputs.
 - Local payload/log/config/provenance/worker files remain available as
   materialized files for existing workflows.
+- Authoritative snapshots/read models can observe run status, stage status,
+  attempts, leases, submitted operations, commits, artifact facts, cleanup
+  candidates, materialized refs, revisions, and warnings produced by the
+  SQLite-backed path without reading private SQLite tables.
 - No legacy local-file fallback or old-run migration is introduced.
 - Existing serial write-path tests pass, with SQLite-backed assertions added
   or updated only for the internal/test-selected path.
@@ -186,6 +260,9 @@ surface inside Phase 4.
 - Source-tree boundaries: orchestration stays in `loom.pipeline.execution`;
   authority contracts and SQLite stay under `loom.pipeline.stores`; CLI,
   `loom.runs`, diagnostics, and workspace coordination stay out of this phase.
+- Public contract discipline: any new helper should be internal or
+  backend-neutral. Do not expose private SQLite path/schema details or make
+  Phase 5 backend selection policy public early.
 
 ## Future Compatibility
 
@@ -208,6 +285,7 @@ surface inside Phase 4.
 | Dual-write local files and SQLite as coequal truth | This recreates split-brain state, the central v9 risk. |
 | Keep file locks as controller authority for SQLite-backed runs | Backend controller leases are the v9 ownership contract and future parallelism foundation. |
 | Query SQLite tables from runner code | SQLite schema is private; execution must consume backend contracts. |
+| Teach status/catalog readers to prefer SQLite in Phase 4 | This phase proves write correctness; Phase 5 owns broad read-path conversion and public selection. |
 | Let submitted workers finalize without fencing | Scheduler and future worker paths need attempt-scoped finalization without stale or foreign writers winning. |
 | Add migration or legacy fallback | V9 explicitly has no old-run migration or compatibility fallback for new active runs. |
 
@@ -217,14 +295,16 @@ surface inside Phase 4.
 | --- | --- | --- |
 | SQLite-backed write path remains internal/test-selectable for one phase | It keeps the write integration independently reviewable before Phase 5 changes public reads/defaults. | Phase 5 enables public SQLite-first runs and removes compatibility shims for new runs. |
 | Some legacy file writers may remain for public-default compatibility | Existing public behavior must remain stable until the hard swap. | Phase 5 retires live-state file reads/writes for new runs where backend truth is available. |
+| Stage input/fingerprint/config/provenance and worker handoff files may remain local materialized evidence where no Phase 1-3 writer exists | The current authority contract already distinguishes lifecycle authority from materialization; adding broad public protocol fields in Phase 4 would blur the phase boundary. | Phase 5 or a later roadmap needs these facts queryable as backend-native active state instead of materialized refs or lifecycle/audit detail. |
 | Submitted-operation integration may initially cover current local/SLURM paths, not all future scheduler policies | Phase 4 proves the authority write model without redesigning schedulers. | Later reliability or scheduler phases need richer retry, queue, or cancellation semantics. |
 
 ## Reviewability
 
-- Expected PR shape: moderate execution/store integration PR with narrow
-  internal construction helpers, focused lifecycle/write-path changes, local
-  materialization preservation, and package/unit/contract/integration/e2e
-  tests. It should not include public status/catalog conversion or broad CLI
+- Expected PR shape: moderate execution/store integration PR with a narrow
+  internal SQLite-backed construction/adapter path, focused
+  lifecycle/write-path changes, local materialization preservation, and
+  package/unit/contract/integration/e2e tests. It should not include public
+  status/catalog conversion, backend CLI, bounded scheduling, or broad CLI
   behavior changes.
 - Files and areas to inspect: `src/loom/pipeline/execution/runner.py`,
   `lifecycle.py`, `stage_attempts.py`, `stage_worker.py`, `continuation.py`,
@@ -236,21 +316,31 @@ surface inside Phase 4.
   `sqlite_authority.py`; no public default flip; no status enum widening; no
   legacy fallback for SQLite-backed active truth; no backend CLI; no
   workspace/sweep implementation; no project-code import from stores; no
-  artifact payload interpretation beyond validation/checksum support.
+  artifact payload interpretation beyond validation/checksum support; no
+  `RunCatalog` or diagnostics dependency in execution writes.
+- Reviewer should verify both paths: public `LocalRunStore` serial behavior
+  remains compatible, and the internal SQLite-backed path proves backend truth
+  with authoritative snapshots instead of `status.json`/`outputs.json`.
 
 ## Stop Conditions
 
-- Stop before implementation until the expanded-path refine pass marks this
-  phase plan ready.
 - Stop if a required write-path fact cannot be represented by Phase 1-3
-  contracts without broad public API changes.
+  contracts without broad public API or protocol changes.
 - Stop if the only viable implementation requires public default selection,
-  status/catalog read-path conversion, workspace coordination, or bounded
-  parallel scheduling.
+  status/catalog read-path conversion, backend CLI/export/snapshot commands,
+  workspace coordination, or bounded parallel scheduling.
+- Stop if preserving public serial behavior requires changing user-visible
+  runner semantics, status enums, result objects, planning order, skip/block
+  behavior, or resume behavior outside the internal/test-selected path.
 - Stop if controller leases or stage fencing cannot be enforced for the
   SQLite-backed path.
 - Stop if success can be observed without backend output commit and artifact
   facts, or if failed staged payloads become committed outputs.
+- Stop if any SQLite-backed code path can resolve conflicts by reading legacy
+  local state files as the source of truth.
+- Stop if submitted-worker or stage-job self-finalization requires run
+  finalization authority, global coordination mutation, unfenced writes, or
+  overwriting another attempt/stage.
 - Stop if package import boundaries would make root store imports eagerly load
   SQLite, CLI, diagnostics, `loom.runs`, project code, or optional services.
 
@@ -260,12 +350,14 @@ surface inside Phase 4.
 
 - Status: required.
 - Expected paths: `tests/package/test_pipeline_store_api.py`,
-  package import-boundary tests, and package tests for any intentional internal
-  construction exports.
+  `tests/package/test_pipeline_api.py` only if public exports intentionally
+  change, and package import-boundary tests for any internal construction
+  exports that become stable enough to import.
 - Required assertions: no import cycles between execution, stores, runs,
   diagnostics, and CLI; root `loom.pipeline.stores` remains import-light; any
   new stable exports are deliberate and typed; SQLite-specific imports stay out
-  of root package imports unless already intentionally lazy.
+  of root package imports unless already intentionally lazy; internal helpers
+  do not expose private SQLite schema/path contracts.
 
 ### Unit Suite
 
@@ -276,10 +368,12 @@ surface inside Phase 4.
   helper tests if adapter/request records are added.
 - Required assertions: SQLite-backed construction selection, controller lease
   acquisition/release/failure behavior, attempt allocation mapping, commit
-  ordering, output validation before commit, commit failure cleanup candidates,
-  submitted-operation writes, worker materialization writes, valid and invalid
-  fencing tokens, local-file no-fallback checks, and legacy public-default
-  behavior parity.
+  ordering, output validation before commit, derived artifact-index behavior,
+  commit failure cleanup candidates, submitted-operation writes and cancellation
+  updates where current code touches them, worker materialization writes, valid
+  and invalid fencing tokens, local-file no-fallback checks, worker
+  self-finalization authority limits, and legacy public-default behavior
+  parity.
 
 ### Contract Suite
 
@@ -292,7 +386,8 @@ surface inside Phase 4.
   runner integration; any new execution writer contract is backend-neutral;
   committed output facts, submitted operations, snapshots, and cleanup
   candidates remain observable through contract/read-model APIs without SQLite
-  internals.
+  internals; if the adapter introduces a backend-neutral writer facade, fake or
+  in-memory authority coverage proves it does not depend on SQLite specifics.
 
 ### Integration Suite
 
@@ -303,9 +398,11 @@ surface inside Phase 4.
   operations, and SQLite authority/read-model verification.
 - Required assertions: SQLite-backed serial success/failure/skip/block flows,
   commit failure after staged payloads, submitted-operation and cancellation
-  writes where in scope, invalid fencing-token failure, valid self-finalizing
-  worker commit, materialized logs/config/provenance/worker files still
-  present, and authoritative snapshots showing backend truth after execution.
+  writes where in scope, invalid/expired/released/foreign fencing-token
+  failure, valid self-finalizing worker attempt commit without run-finalization
+  authority, materialized logs/config/provenance/stage inputs/fingerprints/
+  worker files still present, and authoritative snapshots showing backend truth
+  after execution.
 
 ### E2E Suite
 
@@ -313,10 +410,11 @@ surface inside Phase 4.
 - Expected paths: `tests/e2e/test_local_pipeline_run.py` or a new e2e path
   that exercises the internal/test-selected SQLite-backed serial path without
   changing public CLI defaults.
-- Required assertions: local serial pipeline behavior remains user-visible
-  compatible, and the SQLite-backed path can complete a representative serial
-  run whose active state is validated through backend read models rather than
-  legacy live-state files.
+- Required assertions: public local serial pipeline behavior remains
+  user-visible compatible, including file-lock lifecycle expectations on the
+  legacy default path, and the SQLite-backed path can complete a representative
+  serial run whose active state is validated through backend read models rather
+  than legacy live-state files.
 
 ### Opt-In Suites
 
@@ -325,7 +423,9 @@ surface inside Phase 4.
 - Required assertions or deferral reason: Phase 4 should be covered by
   deterministic local package/unit/contract/integration/e2e tests. Do not add
   network, real SLURM, remote-store, hosted database, slow stress, or
-  timing-sensitive opt-in requirements.
+  timing-sensitive opt-in requirements. Existing SLURM live/acceptance suites
+  remain out of scope unless the implementation unexpectedly changes public
+  SLURM behavior, which should be treated as a scope risk.
 
 ## Validation Commands
 
@@ -338,10 +438,13 @@ uv run pytest tests/unit/loom/pipeline/execution/test_lifecycle.py
 uv run pytest tests/unit/loom/pipeline/execution/test_stage_attempts.py
 uv run pytest tests/unit/loom/pipeline/execution/test_stage_worker.py
 uv run pytest tests/unit/loom/pipeline/execution/test_stage_job.py
+uv run pytest tests/unit/loom/pipeline/executors/slurm/test_slurm_submission.py
+uv run pytest tests/unit/loom/pipeline/executors/slurm/test_slurm_cancellation.py
 uv run pytest tests/contracts/test_authority_store_contract.py
 uv run pytest tests/contracts/test_authoritative_read_model_contract.py
 uv run pytest tests/integration/pipeline/test_sqlite_authority_backend.py
 uv run pytest tests/integration/pipeline/test_materialization_read_models.py
+uv run pytest tests/integration/pipeline/test_sqlite_serial_execution.py
 uv run pytest tests/integration/pipeline/test_local_execution.py
 uv run pytest tests/integration/pipeline/test_local_execution_failures.py
 uv run pytest tests/integration/pipeline/test_subprocess_executor_integration.py
@@ -367,8 +470,14 @@ make test-summary
   before read consumers are backend-backed.
 - Local files could remain hidden state authority if helper code reads them to
   decide lifecycle truth on the SQLite-backed path.
+- A `RunStore`-shaped adapter could obscure which operations are authoritative
+  and which are materialization unless tests assert backend snapshots as the
+  conflict winner.
 - Worker self-finalization could overreach from attempt-scoped commit into run
   ownership unless fencing and scope checks are explicit.
+- Existing stage-job continuation currently updates whole-run status when all
+  stages are terminal; the SQLite-backed path must keep run finalization owned
+  by the controller/recovery model or stop on an authority blocker.
 - Commit failure handling could leave staged payloads ambiguous without cleanup
   candidates or durable failure facts.
 - Backward-compatible legacy public behavior and new backend behavior may make
