@@ -2,8 +2,7 @@
 
 ## Metadata
 
-- Status: PR body draft pass complete; PR body refine pass pending; PR not
-  opened.
+- Status: PR body refine pass complete; PR prepared for opening.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`
 - Branch: `codex/serial-write-integration`
@@ -32,8 +31,9 @@
   `loom_phase_refiner`; no blocker remained after the bounded pass.
 - PR body draft pass: complete on 2026-05-10; public PR body written to
   `docs/phases/serial-write-integration-pr-body.md`.
-- PR body refine pass: pending for the expanded-path PR body. PR creation was
-  intentionally skipped by user instruction.
+- PR body refine pass: complete on 2026-05-10; public PR body remains concise,
+  accurate to the final diff, and preserves the cleanup-candidate and
+  attempt-failure writer limitation as an explicit risk/follow-up.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
 - Blocker-resolution budget: 0/3 used.
@@ -551,9 +551,12 @@ make test-summary
 
 - PR body draft pass: complete on 2026-05-10 in
   `docs/phases/serial-write-integration-pr-body.md`.
-- PR body refine pass: pending for expanded-path Phase 4.
-- PR state: not opened by instruction; no reviewers requested and no merge
-  action attempted.
+- PR body refine pass: complete on 2026-05-10. The PR body was checked against
+  the final diff, `.github/PULL_REQUEST_TEMPLATE.md`, and fresh suite
+  evidence. It was lightly refined to avoid implying a cleanup-candidate writer
+  exists in Phase 4 and to refresh validation timestamps.
+- PR state: prepared for opening; no reviewers requested and no merge action
+  attempted.
 - Prepared PR facts:
   - Title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`.
   - Head branch: `codex/serial-write-integration`.
@@ -591,7 +594,7 @@ make test-summary
   - config-extra harness: 419 passed, 1054 deselected.
   - build: source distribution and wheel built successfully.
 - Final PR-preparation `make test-summary` passed and wrote
-  `build/test-summary.md` generated at 2026-05-09T18:39:24+00:00:
+  `build/test-summary.md` generated at 2026-05-09T18:48:34+00:00:
   - package: 56 passed, 1 skipped.
   - unit: 794 passed, 1 skipped.
   - contract: 92 passed, 2 skipped.
@@ -607,7 +610,7 @@ make test-summary
   documentation, with no blocker remaining.
 - PR body draft pass: used on 2026-05-10 for
   `docs/phases/serial-write-integration-pr-body.md`.
-- PR body refine pass: pending for expanded-path Phase 4.
+- PR body refine pass: used on 2026-05-10 for expanded-path Phase 4.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
 - Blocker-resolution budget: 0/3 used.

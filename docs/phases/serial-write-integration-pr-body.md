@@ -36,7 +36,7 @@ revisions on the internal SQLite-backed path.
   snapshots instead of local live-state files.
 - Replaced the SQLite-backed path's run-lock authority with backend controller
   leases, and used backend stage attempts plus fenced stage leases for output
-  commits and failure cleanup.
+  commits and failed-lease handling.
 - Preserved local materialization for plan/config/provenance/log/stage
   fingerprint, worker handoff, and payload files.
 - Added authority attempt metadata to prepared worker requests so future worker
@@ -63,20 +63,20 @@ SQLite mutation surface for those gaps.
 | Check | Result | Evidence |
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 1026 passed, 18 skipped, 14 deselected; config-extra passed with 419 passed, 1054 deselected; source distribution and wheel built. |
-| `make test-summary` | Passed | `build/test-summary.md` generated 2026-05-09T18:39:24+00:00; overall 1470 passed, 0 failed, 0 errors, 12 skipped, 1065 deselected. |
-| GitHub checks | Not run | PR intentionally not opened in this pass. |
+| `make test-summary` | Passed | `build/test-summary.md` generated 2026-05-09T18:48:34+00:00; overall 1470 passed, 0 failed, 0 errors, 12 skipped, 1065 deselected. |
+| GitHub checks | Pending | Checks run after PR creation. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 56 | 0 | 0 | 1 | 0 | 57 | 7.46s | 17% |
-| unit | passed | 794 | 0 | 0 | 1 | 0 | 795 | 19.44s | 72% |
-| contract | passed | 92 | 0 | 0 | 2 | 0 | 94 | 4.45s | 49% |
-| integration | passed | 72 | 0 | 0 | 8 | 10 | 80 | 53.94s | 56% |
-| e2e | passed | 37 | 0 | 0 | 0 | 1 | 37 | 15.54s | 67% |
-| config-extra | passed | 419 | 0 | 0 | 0 | 1054 | 419 | 34.85s | 72% |
-| Overall | passed | 1470 | 0 | 0 | 12 | 1065 | 1482 | 135.68s | - |
+| package | passed | 56 | 0 | 0 | 1 | 0 | 57 | 7.91s | 17% |
+| unit | passed | 794 | 0 | 0 | 1 | 0 | 795 | 18.93s | 72% |
+| contract | passed | 92 | 0 | 0 | 2 | 0 | 94 | 5.09s | 49% |
+| integration | passed | 72 | 0 | 0 | 8 | 10 | 80 | 52.60s | 56% |
+| e2e | passed | 37 | 0 | 0 | 0 | 1 | 37 | 15.46s | 67% |
+| config-extra | passed | 419 | 0 | 0 | 0 | 1054 | 419 | 34.53s | 72% |
+| Overall | passed | 1470 | 0 | 0 | 12 | 1065 | 1482 | 134.51s | - |
 
 ## Risks / Follow-Ups
 
