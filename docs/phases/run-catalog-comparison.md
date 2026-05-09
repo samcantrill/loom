@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR pending
+- Status: pr_open
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 5: Metadata Comparison API`
 - Branch: `codex/run-catalog-comparison`
@@ -13,7 +13,7 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
-- PR: pending creation
+- PR: https://github.com/samcantrill/loom/pull/99
 - Merge eligibility: merge-eligible after implementation, implementation refinement, automated PR review, local validation, and GitHub checks because Phases 1 through 4 are merged and this is a root phase targeting `develop`
 - Workflow path: expanded path because this phase introduces public comparison behavior and durable comparison semantics
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v8.md` on 2026-05-09; the plan records initial review, refinement, and confirmation review as complete.
