@@ -194,9 +194,9 @@ def test_run_catalog_list_filters_synthetic_large_collection(tmp_path: Path) -> 
     root = tmp_path / "runs"
     store = LocalRunStore(root=root)
     expected: list[str] = []
-    for index in range(120):
+    for index in range(1000):
         status = RunStatus.SUCCEEDED if index % 10 == 0 else RunStatus.FAILED
-        run_uri = _create_catalog_run(
+        run_uri = _create_minimal_catalog_run(
             store,
             root / f"run-{index:03d}",
             status=status,
@@ -270,6 +270,27 @@ def _create_catalog_run(
                 producer_stage="build",
             )
         },
+    )
+    return run_uri
+
+
+def _create_minimal_catalog_run(
+    store: LocalRunStore,
+    run_path: Path,
+    *,
+    status: RunStatus,
+    tag_value: str,
+) -> str:
+    run_uri = path_to_run_uri(run_path)
+    store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=status,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:01Z",
+        ),
     )
     return run_uri
 
