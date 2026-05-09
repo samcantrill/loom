@@ -333,9 +333,9 @@ or SQLite details.
 
 ### Phase 1 - Public Models And Run-Store Freshness
 
-Status: pending
+Status: pr_open
 Branch: `codex/run-catalog-models`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/95
 
 Goal:
 
@@ -432,7 +432,18 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened against `develop` on 2026-05-09:
+  https://github.com/samcantrill/loom/pull/95
+- Implementation summary: added import-light public `loom.runs` models and
+  placeholder facade, catalog warning/result/filter/comparison vocabulary, and
+  store-owned local freshness metadata updates for catalog-relevant run-store
+  writes.
+- Validation: `make validate-pr` passed; `make test-summary` passed with
+  package 55, unit 741, contract 73, integration 45, e2e 36, and config-extra
+  413 tests passing.
+- Follow-up notes: Phase 2 should consume `RunFreshnessRecord` through store
+  protocols and preserve the Phase 1 explicit exclusions for event logs and
+  stage log contents unless it intentionally expands summary scope.
 
 ### Phase 2 - Direct Scan And Summary Extraction
 
