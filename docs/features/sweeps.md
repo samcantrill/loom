@@ -167,6 +167,14 @@ V9 separates future concurrent sweep coordination from per-run lifecycle truth.
 references, trial leases, resource leases, counters, and `run_uri` pointers. It
 must not copy per-stage state or become a replacement run catalog.
 
+The v9 local SQLite coordination backend can support future concurrent sweep
+controllers that need fenced trial claims, named-resource limits, guarded
+counters, and abandoned-lease recovery on a local or same-host filesystem. It
+does not make sweeps database-first: v11 sequential deterministic sweeps can
+still be manifest-shaped collections of ordinary runs and may opt into
+coordination only when concurrent trial admission or resource limits require
+it.
+
 ### 3.5 `loom.pipeline.executors`
 
 Own execution backends.
