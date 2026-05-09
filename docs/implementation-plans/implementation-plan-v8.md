@@ -664,9 +664,9 @@ Completion summary:
 
 ### Phase 4 - Current Listing, Refresh, And Filters
 
-Status: pending
+Status: pr_open
 Branch: `codex/run-catalog-current-list`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/98
 
 Goal:
 
@@ -754,7 +754,24 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened against `develop` on 2026-05-09:
+  https://github.com/samcantrill/loom/pull/98
+- Implementation summary: added `RunCatalog.list(filters=...)` as a current
+  read facade, private SQLite current-list refresh/query helpers, exact-match
+  AND filter compilation for all Phase 4 filter kinds, deterministic
+  `run_uri` ordering, stale-row removal through per-list sidecar replacement,
+  warning propagation, and contract/unit/integration coverage.
+- Accepted debt: current listing refreshes by full direct scan before SQLite
+  filtering rather than targeted per-run reconciliation. This preserves the
+  current-read guarantee and keeps Phase 4 reviewable; revisit when list
+  latency becomes unacceptable or incremental refresh is planned.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with package 55, unit 751, contract 74, integration 57, e2e 36, and
+  config-extra 413 tests passing.
+- GitHub CI: pending at PR open.
+- Stack maintenance: no predecessor; Phase 5 must wait for Phase 4 merge before
+  branching from `develop` unless a GitHub-side blocker requires stacked
+  continuation.
 
 ### Phase 5 - Metadata Comparison API
 
