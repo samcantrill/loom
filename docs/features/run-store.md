@@ -182,6 +182,38 @@ owns only workspace/sweep identity, trial references, trial/resource leases,
 global counters, `run_uri` references, and coordination recovery scans. It must
 not duplicate per-stage lifecycle facts.
 
+### 3.2.2 V9 SQLite Per-Run Authority Backend
+
+`loom.pipeline.stores.sqlite_authority` implements the first concrete
+`PerRunAuthorityStore` backend using only Python's standard-library SQLite
+driver. The backend is run-local: its private database is placed inside the run
+root so ordinary local movement of the run directory preserves active authority
+state. The exact file path, table names, indexes, PRAGMAs, and SQL query shapes
+are private implementation details and are not a public inspection or
+integration contract.
+
+The SQLite backend initializes only the current v9 authority schema. Missing,
+invalid, unsupported older, and unsupported newer active-state schemas fail
+loudly through the authority schema policy; v9 does not silently migrate,
+downgrade, repair, or destructively rewrite active authority state.
+
+SQLite authority writes use short transactions for guarded run/stage status
+transitions, monotonic stage-attempt allocation, controller and stage leases,
+lease renewal/release/failure, submitted-operation records, output commits,
+artifact facts, audit events, cleanup-candidate reads, recovery scans, and
+revisioned snapshots. Stage output success is a committed backend fact: the
+attempt id, active stage lease, fencing token, output commit, artifact facts,
+terminal stage status, and backend revision are validated and recorded
+atomically by the backend.
+
+SQLite capabilities are intentionally local. The backend can coordinate one
+run on local or same-host filesystems using backend-owned local UTC lease time,
+but it does not claim safe multi-host controller behavior, remote authority,
+workspace/sweep coordination, global counters, or high write-concurrency
+service semantics. Explicit shared-filesystem, remote, cross-run, or global
+counter behavior must be capability-gated and should fail loudly until a
+stronger backend provides those guarantees.
+
 ### 3.3 `loom.pipeline.stores.local_runs`
 
 Owns the local filesystem implementation of `RunStore`.
