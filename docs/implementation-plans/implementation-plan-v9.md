@@ -645,9 +645,9 @@ Completion summary:
 
 ### Phase 2 - Per-Run SQLite Backend And Transaction Semantics
 
-Status: pending
+Status: merged
 Branch: `codex/sqlite-run-backend`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/102
 
 Goal:
 
@@ -757,7 +757,35 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged into `develop` on 2026-05-09T16:05:48Z by PR #102
+  (`2e20b289582115a12c55c07186174e3e10260c11`).
+- Implemented `loom.pipeline.stores.sqlite_authority.SQLitePerRunAuthorityStore`
+  as the first run-local stdlib-SQLite backend behind the Phase 1
+  `PerRunAuthorityStore` contract. The backend keeps its database/schema
+  private inside the run root, declares honest per-run capabilities, loudly
+  reports unsupported schemas, and leaves the root `loom.pipeline.stores`
+  import free of `sqlite3`.
+- Added short transactional revision semantics for run/stage transitions,
+  monotonic attempt allocation, controller/stage leases with owner/fencing
+  checks, submitted-operation persistence with current-`run_uri`
+  reconstruction, audit event sequence evidence with private revision linkage,
+  output commit/artifact fact transactions, cleanup candidates representable
+  from backend facts, snapshots, and recovery scans.
+- Expanded-path implementation refinement fixed incomplete-schema handling,
+  schema initialization transaction scope, expired lease release/failure,
+  active-lease bypass by unleased attempts, terminal-state output commits, and
+  stage-lease release on successful output commit.
+- Automated PR review found one blocking lifecycle regression: a new attempt
+  could be allocated after a stage output commit and regress the stage from
+  `SUCCEEDED` to `RUNNING`. Blocker resolution pass 1/3 added the transactional
+  guard against existing commits or terminal stage state plus regression
+  coverage.
+- Validation: `make validate-pr` passed; final `make test-summary` passed with
+  1439 passed, 11 skipped, 1037 deselected, 0 failed, and 0 errors. GitHub CI
+  `checks` passed before merge.
+- Follow-up: Phase 3 should consume the SQLite backend through snapshots and
+  Phase 1 read-model records only; do not expose table names or treat the
+  SQLite module as a status/catalog/export query surface.
 
 ### Phase 3 - Materialization Boundary And Authoritative Read Models
 
