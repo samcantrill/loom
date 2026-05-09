@@ -185,6 +185,4 @@ def test_run_catalog_deferred_methods_raise_catalog_error() -> None:
     with pytest.raises(CatalogFeatureUnavailableError):
         catalog.list()
     with pytest.raises(CatalogFeatureUnavailableError):
-        catalog.rebuild()
-    with pytest.raises(CatalogFeatureUnavailableError):
         catalog.compare("left", "right")

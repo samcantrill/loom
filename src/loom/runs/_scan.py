@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from loom.pipeline.stores import (
@@ -14,39 +15,59 @@ from loom.pipeline.stores import (
 )
 from loom.timestamps import utc_timestamp
 
-from ._extract import extract_current_summary_with_warning
-from .models import CatalogWarning, CatalogWarningCode, ListRunsResult, RunSummary
+from ._extract import CurrentRunSummary, extract_current_summary_with_warning_record
+from .models import CatalogWarning, CatalogWarningCode, ListRunsResult
 
 _CATALOG_SIDECAR_DIR = ".loom_catalog"
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentCatalogScan:
+    """Private direct-scan result with freshness evidence for indexed rebuilds."""
+
+    records: tuple[CurrentRunSummary, ...] = ()
+    warnings: tuple[CatalogWarning, ...] = ()
+    checked_at: str | None = None
 
 
 def scan_current_collection(collection_path: str | Path) -> ListRunsResult:
     """Directly scan a local run collection for current run summaries."""
 
+    scan = scan_current_collection_records(collection_path)
+    return ListRunsResult(
+        summaries=tuple(record.summary for record in scan.records),
+        warnings=scan.warnings,
+        checked_at=scan.checked_at,
+    )
+
+
+def scan_current_collection_records(collection_path: str | Path) -> CurrentCatalogScan:
+    """Directly scan a local run collection with private freshness evidence."""
+
     collection = Path(collection_path)
     warnings: list[CatalogWarning] = []
-    summaries: list[RunSummary] = []
+    records: list[CurrentRunSummary] = []
 
     if not collection.exists():
-        return ListRunsResult(
-            warnings=[
+        return CurrentCatalogScan(
+            warnings=(
                 _warning(
                     CatalogWarningCode.UNREADABLE_RUN,
                     "run collection does not exist",
                     path=collection,
-                )
-            ],
+                ),
+            ),
             checked_at=utc_timestamp(),
         )
     if not collection.is_dir():
-        return ListRunsResult(
-            warnings=[
+        return CurrentCatalogScan(
+            warnings=(
                 _warning(
                     CatalogWarningCode.INVALID_RUN,
                     "run collection path is not a directory",
                     path=collection,
-                )
-            ],
+                ),
+            ),
             checked_at=utc_timestamp(),
         )
 
@@ -54,26 +75,26 @@ def scan_current_collection(collection_path: str | Path) -> ListRunsResult:
     try:
         candidates = _iter_candidates(collection)
     except PermissionError as exc:
-        return ListRunsResult(
-            warnings=[
+        return CurrentCatalogScan(
+            warnings=(
                 _warning(
                     CatalogWarningCode.UNREADABLE_RUN,
                     str(exc),
                     path=collection,
-                )
-            ],
+                ),
+            ),
             checked_at=utc_timestamp(),
         )
 
     for candidate in candidates:
-        summary, warning = _scan_candidate(store, candidate)
-        if summary is not None:
-            summaries.append(summary)
+        record, warning = _scan_candidate(store, candidate)
+        if record is not None:
+            records.append(record)
         if warning is not None:
             warnings.append(warning)
 
-    return ListRunsResult(
-        summaries=tuple(sorted(summaries, key=lambda summary: summary.run_uri)),
+    return CurrentCatalogScan(
+        records=tuple(sorted(records, key=lambda record: record.summary.run_uri)),
         warnings=tuple(warnings),
         checked_at=utc_timestamp(),
     )
@@ -94,7 +115,7 @@ def _iter_candidates(collection: Path) -> tuple[Path, ...]:
 
 def _scan_candidate(
     store: LocalRunStore, candidate: Path
-) -> tuple[RunSummary | None, CatalogWarning | None]:
+) -> tuple[CurrentRunSummary | None, CatalogWarning | None]:
     if not candidate.exists():
         return None, _warning(
             CatalogWarningCode.DISAPPEARED_RUN,
@@ -142,7 +163,9 @@ def _scan_candidate(
             f"run metadata is incomplete or invalid: {message}",
             path=candidate,
         )
-    return extract_current_summary_with_warning(store, run_uri=run_uri, path=candidate)
+    return extract_current_summary_with_warning_record(
+        store, run_uri=run_uri, path=candidate
+    )
 
 
 def _warning(
@@ -158,4 +181,8 @@ def _warning(
     )
 
 
-__all__ = ["scan_current_collection"]
+__all__ = [
+    "CurrentCatalogScan",
+    "scan_current_collection",
+    "scan_current_collection_records",
+]
