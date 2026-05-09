@@ -664,7 +664,7 @@ Completion summary:
 
 ### Phase 4 - Current Listing, Refresh, And Filters
 
-Status: pr_open
+Status: merged
 Branch: `codex/run-catalog-current-list`
 PR: https://github.com/samcantrill/loom/pull/98
 
@@ -768,10 +768,14 @@ Completion summary:
 - Validation before PR: `make validate-pr` passed; `make test-summary` passed
   with package 55, unit 751, contract 74, integration 57, e2e 36, and
   config-extra 413 tests passing.
-- GitHub CI: pending at PR open.
-- Stack maintenance: no predecessor; Phase 5 must wait for Phase 4 merge before
-  branching from `develop` unless a GitHub-side blocker requires stacked
-  continuation.
+- Merged into `develop` on 2026-05-09 with squash merge
+  `f7c4487b65b793a49c0f5c47f14e828ff64d52ec`.
+- Automated review: manager review found no blocking scope, import boundary,
+  current-read, filter-semantics, or transaction issues before merge.
+- GitHub CI: `checks` passed before merge.
+- Stack maintenance: no successor branch depended on
+  `codex/run-catalog-current-list`; remote branch deletion was handled by
+  GitHub and local worktree cleanup was safe after merge.
 
 ### Phase 5 - Metadata Comparison API
 
