@@ -1,0 +1,17 @@
+id: execution.slurm.dry-run-basics
+title: SLURM Dry-Run Basics
+summary: Generate single-job and afterok SLURM dry-run artifacts without scheduler submission.
+capability: execution
+level: intermediate
+introduced_in: v6
+status: runnable
+validation: smoke
+entrypoints:
+  - path: run_dry_run_basics.py
+    kind: python
+    description: Run both SLURM dry-run modes and print generated artifact summaries.
+tags:
+  - slurm
+  - dry-run
+  - scripts
+  - manifests

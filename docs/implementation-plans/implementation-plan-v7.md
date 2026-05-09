@@ -1180,7 +1180,7 @@ Completion summary:
   and sleeping-job cancellation.
 - Updated SLURM, preflight, CLI, testing, and execution-example docs to describe
   the implemented v7 live submit/status/cancel surface and added
-  `examples/execution/slurm-live/`.
+  `examples/execution/slurm/live/`.
 - Validation before merge: `make validate-pr` passed with default 915 passed /
   17 skipped / 14 deselected, config-extra 413 passed / 943 deselected, and
   build succeeded; `make test-summary` passed with package 52 passed / 1

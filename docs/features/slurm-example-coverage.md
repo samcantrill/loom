@@ -1,9 +1,9 @@
 # SLURM Example Coverage
 
-This document lists example coverage that should demonstrate the v6 SLURM
-dry-run roadmap and the v7 live-operations roadmap. The examples should stay
-domain-neutral, use public CLI or Python APIs, and keep cluster-dependent
-behavior clearly separated from default validation.
+This document lists example coverage for the implemented v6 SLURM dry-run
+roadmap and v7 live-operations roadmap. Examples stay domain-neutral, use public
+CLI or Python APIs, and keep cluster-dependent behavior clearly separated from
+default validation.
 
 ## Current Example Layout
 
@@ -12,15 +12,15 @@ Examples are organized by user goal:
 | Group | Current role |
 | --- | --- |
 | `examples/authoring/` | Describing trusted configuration, recipes, source artifacts, and target instantiation. |
-| `examples/execution/` | Running work through local, subprocess, runtime-profile, and run-options flows. |
-| `examples/operations/` | Inspecting, debugging, and managing run state through preflight, status, logs, artifacts, and diagnostics. |
+| `examples/execution/` | Running work through local, subprocess, runtime-profile, run-options, SLURM dry-run, and manual live-SLURM flows. |
+| `examples/operations/` | Inspecting, debugging, and managing run state through preflight, status, submitted operations, logs, artifacts, diagnostics, and manual SLURM job operations. |
 
 SLURM examples should follow the same split:
 
 - execution examples show how a run is planned, submitted, or continued;
 - operations examples show how submitted run state is inspected or cancelled;
-- live-cluster examples remain manual or deferred unless they can run
-  deterministically without site-specific scheduler access.
+- live-cluster examples remain manual unless they can run deterministically
+  without site-specific scheduler access.
 
 ## Behavior To Document
 
@@ -36,16 +36,15 @@ SLURM examples should follow the same split:
 | v7 live submission | Live single-job and afterok modes submit real jobs, record scheduler job IDs, and extend the v6 manifest instead of replacing it. |
 | v7 scheduler-aware operations | `loom status RUN_URI --jobs` and `loom cancel RUN_URI --jobs` inspect or mutate submitted scheduler jobs through general Loom commands. |
 
-## Proposed Examples
+## Example Coverage
 
 | Example | Version | Status | Validation | Functionality covered | Implementation notes |
 | --- | --- | --- | --- | --- | --- |
-| `execution.slurm.dry-run-basics` | v6 | runnable | smoke | Run a small two-stage pipeline through both SLURM dry-run modes. | Print mode, planning ID, job count, manifest path, generated script paths, and the expected missing-`sbatch` preflight warning. Also show that selecting a SLURM executor without `--dry-run` fails with the v7-deferred live-submission error. |
-| `execution.slurm.afterok-diamond` | v6 | runnable | full | Generate afterok artifacts for a diamond DAG with stage-level SLURM options and resources. | Inspect the manifest and generated scripts for logical job keys, dependency edges, per-stage SBATCH directives, wrapper log paths, and absence of scheduler job IDs. Keep this cluster-free. |
-| `operations.submitted-status` | v7 | runnable | smoke | Show the Phase 1 submitted lifecycle and submitted-operation registry without scheduler access. | Create a synthetic local run with `SUBMITTED` run/stage status plus a submitted-operation record, run `loom status RUN_URI --format json`, and print submission ID, backend, mode, manifest pointer, summary counts, and latest active state. |
-| `execution.slurm.live-single-job` | v7 | deferred | manual | Submit a real single-job SLURM run after live submission lands. | Use the v6 dry-run artifact shape as the starting point, then show persisted scheduler job IDs, submitted manifest fields, and wrapper log paths. Requires a real SLURM cluster and the v7 live single-job phase. |
-| `execution.slurm.live-afterok-dag` | v7 | deferred | manual | Submit a real afterok DAG and preserve logical-job-key to scheduler-job-ID mapping. | Reuse the diamond DAG shape from `execution.slurm.afterok-diamond`; demonstrate dependency submission and partial-submission recovery notes. Requires a real SLURM cluster and the v7 live afterok phase. |
-| `operations.slurm-live-jobs` | v7 | deferred | manual | Inspect and cancel submitted jobs with scheduler-aware commands. | Demonstrate `loom status RUN_URI --jobs` and `loom cancel RUN_URI --jobs`, scheduler snapshots, cancellation attempt records, and conservative mutation of final Loom statuses. Requires the v7 status and cancellation phases. |
+| `execution.slurm.dry-run-basics` | v6 | runnable | smoke | Run a small two-stage pipeline through both SLURM dry-run modes. | Prints mode, planning ID, job count, manifest path, generated script paths, wrapper log paths, warning codes, and confirms scheduler job IDs are absent. |
+| `execution.slurm.afterok-diamond` | v6 | runnable | smoke | Generate afterok artifacts for a diamond DAG with stage-level SLURM options and resources. | Inspects logical job keys, dependency edges, per-stage SBATCH directives, wrapper log paths, generated `stage-job` commands, and absence of persisted scheduler IDs or resolved secret values. |
+| `operations.submitted-status` | v7 | runnable | smoke | Show submitted lifecycle and submitted-operation registry without scheduler access. | Creates a synthetic local run with `SUBMITTED` run/stage status plus a submitted-operation record, runs `loom status RUN_URI --format json`, and prints submission metadata. |
+| `execution.slurm.live` | v7 | illustrative | manual | Submit a real two-stage SLURM run through `slurm-single-job` or `slurm-afterok`. | Documents preflight, dry-run preview, live submission, persisted status, scheduler-aware status, cancellation, manifest inspection, wrapper logs, site options, and active-job guards. |
+| `operations.slurm-live-jobs` | v7 | illustrative | manual | Inspect and cancel live submitted SLURM jobs. | Documents `loom status RUN_URI --jobs`, manifest status snapshots, `loom cancel RUN_URI --jobs`, partial cancellation behavior, uncertainty, and cleanup guidance. |
 
 ## Example Coverage Checks
 
@@ -67,7 +66,6 @@ Dry-run examples must not:
 - persist raw resolver outputs, runtime environment values, or scheduler job
   IDs.
 
-Live examples must stay `status: deferred` or `validation: manual` until the
-corresponding v7 implementation phase exists and the example documents its
-cluster requirement.
-
+Live real-cluster examples must stay `status: illustrative` and
+`validation: manual` unless a future deterministic fake or hosted-cluster
+validation path is explicitly introduced.

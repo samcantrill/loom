@@ -1,4 +1,4 @@
-id: execution.slurm-live
+id: execution.slurm.live
 title: SLURM Live Operations
 summary: Submit a small two-stage pipeline to SLURM, inspect scheduler-aware status, and cancel active jobs explicitly.
 capability: execution
@@ -11,5 +11,6 @@ entrypoints: []
 tags:
   - slurm
   - scheduler
+  - dry-run
   - status
   - cancellation

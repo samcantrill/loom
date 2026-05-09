@@ -1,0 +1,17 @@
+id: operations.submitted-status
+title: Submitted Status
+summary: Create synthetic submitted run state and inspect it without scheduler queries.
+capability: operations
+level: intermediate
+introduced_in: v7
+status: runnable
+validation: smoke
+entrypoints:
+  - path: run_submitted_status.py
+    kind: python
+    description: Write submitted run/store records and print ordinary status output summaries.
+tags:
+  - submitted
+  - status
+  - operations
+  - scheduler-free

@@ -18,8 +18,8 @@ level concepts.
 | Group | Demonstrates |
 | --- | --- |
 | [Authoring](authoring/README.md) | Trusted YAML composition, includes, recipes, artifact-safe records, structured errors, and explicit `_target_` instantiation. |
-| [Execution](execution/README.md) | Local execution, subprocess execution, runtime profiles, Python run options, artifact storage, provenance snapshots, and same-run resume behavior. |
-| [Operations](operations/README.md) | Preflight, run status, bounded logs, metadata-only artifact inspection, failure diagnostics, and resource warnings. |
+| [Execution](execution/README.md) | Local execution, subprocess execution, runtime profiles, Python run options, artifact storage, provenance snapshots, same-run resume behavior, and SLURM dry-run/live templates. |
+| [Operations](operations/README.md) | Preflight, run status, submitted-operation status, bounded logs, metadata-only artifact inspection, failure diagnostics, resource warnings, and SLURM job operations. |
 
 Run smoke examples from the repository root with the commands listed in each
 group README.
@@ -36,11 +36,10 @@ example outputs. Execution and operations examples also accept
 - `manual`: illustrative examples that cannot run in the default environment and
   must document why in their manifest.
 
-Planned v6/v7 SLURM and submitted-operation examples are tracked in
+V6/v7 SLURM and submitted-operation example coverage is tracked in
 [`docs/features/slurm-example-coverage.md`](../docs/features/slurm-example-coverage.md).
 
-The current examples stay local and synthetic. They do not require remote
-stores, distributed execution, scheduler integration, containers, plugins, or
-cross-run cache reuse. Once roadmap support lands, new examples should be added
-under the user-goal group they teach, for example `execution/slurm/` for live
-cluster execution and `experiments/` for sweeps.
+Runnable examples stay local and synthetic. Manual SLURM examples document the
+real-cluster commands and shared-filesystem assumptions but are not executed by
+default validation. Future roadmap examples should be added under the user-goal
+group they teach, for example `experiments/` for sweeps.

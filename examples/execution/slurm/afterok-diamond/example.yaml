@@ -1,0 +1,18 @@
+id: execution.slurm.afterok-diamond
+title: SLURM Afterok Diamond Dry Run
+summary: Generate afterok dry-run artifacts for a diamond DAG with stage-level SLURM options and secret-safe records.
+capability: execution
+level: advanced
+introduced_in: v6
+status: runnable
+validation: smoke
+entrypoints:
+  - path: run_afterok_diamond.py
+    kind: python
+    description: Generate and inspect afterok SLURM dry-run artifacts for a diamond DAG.
+tags:
+  - slurm
+  - dry-run
+  - afterok
+  - resources
+  - redaction

@@ -7,6 +7,19 @@ nodes.
 Run commands from this directory so the `stages.py` module is importable by the
 submitted jobs.
 
+## Preflight
+
+Check the configuration and SLURM command availability from the submit host:
+
+```sh
+uv run loom preflight pipeline.yaml \
+  --executor slurm-afterok
+```
+
+Missing `sbatch` is a live-submission error. Missing `squeue`, `sacct`, or
+`scancel` may still allow submission, but later status or cancellation commands
+will report operation-specific failures if the required command is unavailable.
+
 ## Dry Run
 
 Generate scripts, logs, and a submission manifest without calling `sbatch`:
@@ -53,6 +66,15 @@ uv run loom status file:///shared/loom-runs/slurm-live-example --jobs
 The job view records safe scheduler snapshots under the run directory and
 reports uncertainty when `sacct` or `squeue` cannot prove a final state.
 
+The live manifest is written under:
+
+```text
+slurm/submissions/<submission_id>/manifest.json
+```
+
+Inspect it for logical job keys, scheduler job IDs, dependency job IDs, wrapper
+log paths, status snapshots, failed submissions, and cancellation attempts.
+
 ## Cancel
 
 Cancel the latest active submitted operation:
@@ -63,6 +85,9 @@ uv run loom cancel file:///shared/loom-runs/slurm-live-example --jobs
 
 Cancellation records one attempt per job ID. Partial cancellation returns a
 nonzero exit code and leaves the manifest available for inspection.
+
+Do not submit again into the same run URI while active submitted work remains.
+Cancel or choose a new run URI first.
 
 ## Site Options
 

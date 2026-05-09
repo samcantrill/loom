@@ -208,7 +208,7 @@ make test-summary
   secret-safety assertion; added skipped-by-default real SLURM acceptance tests
   for single-job success, afterok dependencies, and cancellation; updated SLURM,
   preflight, CLI, testing, and example docs; added
-  `examples/execution/slurm-live/`.
+  `examples/execution/slurm/live/`.
 - Implementation validation: complete. `make validate-pr` passed on
   2026-05-08 after Ruff, Pyright, default suite, config-extra suite, and build.
   `make test-summary` passed on 2026-05-08 with package 52 passed / 1 skipped,

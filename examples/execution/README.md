@@ -1,12 +1,13 @@
 # Execution Examples
 
 Execution examples cover how `loom` runs authored work: local in-process
-execution, subprocess workers, runtime profiles, normalized run options,
-artifact storage, provenance snapshots, and same-run resume behavior.
+execution, subprocess workers, SLURM dry-run planning, manual live SLURM
+templates, runtime profiles, normalized run options, artifact storage,
+provenance snapshots, and same-run resume behavior.
 
 Future executor examples should live here too. Docker examples should use
-`examples/execution/containers/docker/`, and SLURM plus Apptainer examples
-should use `examples/execution/containers/slurm-apptainer/`.
+`examples/execution/containers/docker/`, and containerized SLURM plus Apptainer
+examples should use `examples/execution/containers/slurm-apptainer/`.
 
 ## Catalog
 
@@ -16,7 +17,9 @@ should use `examples/execution/containers/slurm-apptainer/`.
 | `execution.subprocess` | Running the same synthetic pipeline locally and with subprocess workers, inspecting subprocess failure diagnostics, and invoking a prepared stage through `loom stage run`. |
 | `execution.runtime-profile` | Configured runtime profile, CLI tags/notes, resource diagnostics, local run, and safe `runtime.json`. |
 | `execution.python-run-options` | Public Python construction, merge, stage validation, and capability diagnostics for `RunOptions`. |
-| `execution.slurm-live` | Manual live SLURM submit/status/cancel commands for `slurm-single-job` and `slurm-afterok` on a shared cluster filesystem. |
+| `execution.slurm.dry-run-basics` | Public `slurm-single-job` and `slurm-afterok` dry-runs that generate reviewable scripts and manifests without scheduler submission. |
+| `execution.slurm.afterok-diamond` | Afterok dependency planning for a diamond DAG, stage-level SLURM options/resources, generated continuation commands, and secret-safe dry-run artifacts. |
+| `execution.slurm.live` | Manual live SLURM submit/status/cancel commands for `slurm-single-job` and `slurm-afterok` on a shared cluster filesystem. |
 
 ## Run
 
@@ -29,6 +32,8 @@ uv run python examples/execution/subprocess/run_failure_diagnostics.py
 uv run python examples/execution/subprocess/run_direct_worker.py
 uv run python examples/execution/runtime-profile/run_runtime_profile.py
 uv run python examples/execution/python-run-options/run_options_api.py
+uv run python examples/execution/slurm/dry-run-basics/run_dry_run_basics.py
+uv run python examples/execution/slurm/afterok-diamond/run_afterok_diamond.py
 ```
 
 Set `LOOM_EXAMPLE_OUTPUT_ROOT` or `LOOM_EXAMPLE_RUN_ROOT` to redirect generated

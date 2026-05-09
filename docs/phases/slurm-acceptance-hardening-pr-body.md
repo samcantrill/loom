@@ -16,7 +16,7 @@ This keeps default validation cluster-free while documenting and testing how mai
 - Added stable preflight IDs for `squeue`, `sacct`, `scancel`, active submitted-operation detection, and generated-path writability.
 - Added an e2e fake-runner flow that submits an afterok run, queries scheduler-aware status, cancels submitted jobs, and asserts a secret resolver value is not persisted in run artifacts.
 - Added `tests/slurm_acceptance/` with explicit `LOOM_RUN_SLURM_ACCEPTANCE=1` and `LOOM_SLURM_ACCEPTANCE_ROOT` gating.
-- Added `examples/execution/slurm-live/` as a manual cluster template for live submit, status, cancel, and site-specific SLURM options.
+- Added `examples/execution/slurm/live/` as a manual cluster template for live submit, status, cancel, and site-specific SLURM options.
 
 New tests implemented:
 

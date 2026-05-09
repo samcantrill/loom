@@ -1,0 +1,29 @@
+name: slurm-dry-run-basics
+schema_version: 1
+runtime:
+  adapter_options:
+    slurm:
+      schema_version: 1
+      time: "00:05:00"
+pipeline:
+  name: slurm-dry-run-basics
+  description: Two small stages for SLURM dry-run artifact generation.
+  stages:
+    - name: seed
+      factory:
+        _target_: stages:SeedNumbersStage
+      outputs:
+        numbers:
+          artifact_type: json
+          codec_key: json.v1
+
+    - name: summarize
+      depends_on: [seed]
+      factory:
+        _target_: stages:SummarizeNumbersStage
+      inputs:
+        numbers: seed.numbers
+      outputs:
+        summary:
+          artifact_type: json
+          codec_key: json.v1
