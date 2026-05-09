@@ -548,6 +548,17 @@ make test-summary
   SQLite CLI reads, project-code imports, export/snapshot/repair behavior, or
   future-phase functionality were added.
 - Blocker-resolution summary: not used; no blocker-resolution pass consumed.
-- PR preparation: pending.
+- PR preparation: prepared `docs/phases/backend-diagnostics-pr-body.md` with a
+  concise review-facing summary, implementation notes, suite-level validation
+  evidence, and risks/follow-ups. Final validation evidence used for PR
+  preparation: `make validate-pr` passed after commit `d94789c` with Ruff,
+  Pyright, default harness, config-extra harness, and build passing;
+  `make test-summary` passed and generated `build/test-summary.md` at
+  2026-05-09T21:41:12+00:00 with package 57 passed, 1 skipped; unit 818
+  passed, 1 skipped; contract 93 passed, 2 skipped; integration 74 passed, 8
+  skipped, 10 deselected; e2e 38 passed, 1 deselected; config-extra 420
+  passed, 1083 deselected; overall 1500 passed, 12 skipped, 1094 deselected,
+  0 failed, and 0 errors. PR creation is pending branch push and GitHub
+  creation.
 - Stack maintenance: none required; root branch still targets `develop`.
 - Remaining blockers: none known.
