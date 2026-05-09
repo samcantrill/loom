@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; initial validation recorded
+- Status: pr_open; local validation recorded
 - Feature focus: Persistence And Concurrency Foundation
 - PR title: `Persistence And Concurrency Foundation - Phase 1: Authority Contracts And Compatibility Surface`
 - Branch: `codex/persistence-contracts`
@@ -13,6 +13,10 @@
 - Stack predecessor: none
 - Base branch: `develop` at `7010204` (`docs: record v9 plan quality gate`)
 - Target branch: `develop`
+- PR URL: https://github.com/samcantrill/loom/pull/101
+- PR verification: `gh pr view 101 --json baseRefName,headRefName,state,url`
+  returned base `develop`, head `codex/persistence-contracts`, state `OPEN`,
+  and URL `https://github.com/samcantrill/loom/pull/101` on 2026-05-10.
 - Merge eligibility: root phase PR; merge eligible after automated review, validation, and CI pass because it targets `develop`.
 - Workflow path: expanded path because this phase defines backend-neutral public and semi-public contracts, schema policy, capability vocabulary, and read-model boundaries.
 - Successor dependency notes: Phases 2-8 depend on the contract names, value models, authority boundaries, schema failure behavior, capability vocabulary, read-model shape, and workspace/sweep separation established here. No successor should query private SQLite tables, use legacy local files as active truth, or duplicate cross-run coordination inside per-run lifecycle state.
@@ -460,9 +464,9 @@ result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 desel
   refinement pass used on 2026-05-09 to tighten capability diagnostics and
   fake-store lease/commit conformance coverage.
 - Blocker-resolution summary: unchanged; 0/3 used.
-- PR preparation: PR body refine complete; local validation complete; ready to
-  push and open against `develop`.
-- Stack maintenance: pending.
+- PR preparation: PR body refine complete; local validation complete; branch
+  pushed and PR opened against `develop`.
+- Stack maintenance: root PR targets `develop`; stack predecessor remains none.
 - Remaining blockers: none.
 - PR body draft pass: complete on 2026-05-09 by `loom_pr_preparer`.
   Created `docs/phases/persistence-contracts-pr-body.md` from
@@ -495,6 +499,19 @@ result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 desel
     skipped/10 deselected; e2e 37 passed/1 deselected; config-extra 416
     passed/1008 deselected; overall 1421 passed, 11 skipped, 1019 deselected,
     0 failed, 0 errors.
+- PR creation and verification:
+  - Branch push: `git push origin codex/persistence-contracts` succeeded on
+    2026-05-10.
+  - PR opened: https://github.com/samcantrill/loom/pull/101 with explicit base
+    `develop`, head `codex/persistence-contracts`, title
+    `Persistence And Concurrency Foundation - Phase 1: Authority Contracts And
+    Compatibility Surface`, and body file
+    `docs/phases/persistence-contracts-pr-body.md`.
+  - PR verification: `gh pr view 101 --json baseRefName,headRefName,state,url`
+    returned base `develop`, head `codex/persistence-contracts`, state `OPEN`,
+    and URL `https://github.com/samcantrill/loom/pull/101`. The PR is a root
+    phase PR and is merge-eligible after automated review, local validation,
+    GitHub CI, and manager merge gates pass.
 - PR body draft validation evidence:
   - `make test-summary` passed on 2026-05-09 and wrote
     `build/test-summary.md`: package 56 passed/1 skipped; unit 765 passed/1
