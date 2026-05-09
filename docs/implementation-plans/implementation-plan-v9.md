@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: post-review refined draft implementation plan
+- Status: plan quality gate passed; ready for phase implementation
 - Related planning notes:
   `docs/implementation-plans/roadmap-v9-planning-notes.md`
 - Related source docs:
@@ -27,12 +27,9 @@
 - Post-review decision pass: complete on 2026-05-09; submitted operations,
   Phase 4/5 public hard-swap split, fenced worker finalization, artifact
   commit semantics, and backend-owned lease time are recorded
-- Plan quality gate: pending; requires `loom_plan_reviewer` before creating a
-  Phase 1 execution plan or starting implementation
-- Blockers:
-  - Plan quality gate has not passed.
-  - No phase implementation may begin until the plan is reviewed, refined if
-    needed, and confirmed.
+- Plan quality gate: passed on 2026-05-09 by `loom_plan_reviewer`; no
+  blocking or non-blocking findings remained.
+- Blockers: none.
 
 ## Goal
 
@@ -447,12 +444,13 @@ special-casing status files or inventing another authority.
 
 ## Plan Quality Gate
 
-- Status: pending
+- Status: passed on 2026-05-09
 - Local pre-gate review findings: incorporated in the post-review decision
-  pass; this does not satisfy the required `loom_plan_reviewer` gate.
-- Required reviewer: `loom_plan_reviewer`
+  pass before the required reviewer gate.
+- Required reviewer: `loom_plan_reviewer`; completed on 2026-05-09 with no
+  blocking or non-blocking findings.
 - Required before: creating any v9 phase execution plan or starting Phase 1
-  implementation
+  implementation; satisfied.
 - Review focus:
   - whether the plan prevents split-brain truth between SQLite state, local
     files, derived catalogs, events, and workspace/sweep coordination;
@@ -485,11 +483,11 @@ special-casing status files or inventing another authority.
   - whether package, unit, contract, integration, e2e, and opt-in test
     obligations are sufficient.
 - Loop budget:
-  - Initial review: unused.
-  - Gate refinement pass: unused.
-  - Confirmation review: unused.
-- Current gate result: not passed. Phase implementation is blocked until the
-  review/refine/confirmation sequence is complete.
+  - Initial review: used on 2026-05-09 by `loom_plan_reviewer`.
+  - Gate refinement pass: not needed; no findings required refinement.
+  - Confirmation review: not needed; the initial reviewer decision found the
+    plan ready for phase implementation without blockers.
+- Current gate result: passed. Phase implementation may begin.
 
 ## Phased Implementation
 
