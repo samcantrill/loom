@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .models import CatalogIndexResult, ListRunsResult
+from .models import CatalogIndexResult, ListRunsResult, RunFilter
 from .errors import CatalogFeatureUnavailableError
 
 
@@ -45,15 +46,12 @@ class RunCatalog:
 
         return scan_current_collection(self.collection_path)
 
-    def list(self, *args: Any, **kwargs: Any) -> Any:
-        """List current run summaries.
+    def list(self, filters: Sequence[RunFilter] = ()) -> ListRunsResult:
+        """List current run summaries after refreshing the derived catalog."""
 
-        Implemented in a later v8 phase.
-        """
+        from ._sqlite import list_current_catalog
 
-        raise CatalogFeatureUnavailableError(
-            "RunCatalog.list is implemented in a later v8 phase"
-        )
+        return list_current_catalog(self.collection_path, filters=filters)
 
     def compare(self, *args: Any, **kwargs: Any) -> Any:
         """Compare two runs using persisted metadata.

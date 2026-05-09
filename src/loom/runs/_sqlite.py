@@ -13,10 +13,12 @@ from loom.timestamps import utc_timestamp
 
 from ._extract import CurrentRunSummary
 from ._scan import scan_current_collection_records
-from .errors import CatalogStorageError
+from .errors import CatalogStorageError, CatalogValidationError
 from .models import (
     ArtifactSummary,
     CatalogIndexResult,
+    ListRunsResult,
+    RunFilter,
     RunFilterKind,
     RunSummary,
     StageSummary,
@@ -27,6 +29,23 @@ CATALOG_SIDECAR_DIR = ".loom_catalog"
 CATALOG_DB_FILENAME = "catalog.sqlite"
 CATALOG_SCHEMA_VERSION = 1
 _BUSY_TIMEOUT_MS = 5000
+_RUN_LEVEL_FILTERS = frozenset(
+    {
+        RunFilterKind.RUN_STATUS,
+        RunFilterKind.CONFIG_FINGERPRINT,
+        RunFilterKind.PIPELINE_FINGERPRINT,
+        RunFilterKind.GIT_COMMIT,
+        RunFilterKind.EXECUTOR,
+        RunFilterKind.BACKEND,
+    }
+)
+_OPTIONAL_KEY_FILTERS = frozenset(
+    {
+        RunFilterKind.STAGE_STATUS,
+        RunFilterKind.ARTIFACT_IDENTITY,
+        RunFilterKind.ARTIFACT_CHECKSUM,
+    }
+)
 
 
 class _RecoverableCatalogDatabaseError(CatalogStorageError):
@@ -60,6 +79,27 @@ def rebuild_catalog(collection_path: str | Path) -> CatalogIndexResult:
     )
 
 
+def list_current_catalog(
+    collection_path: str | Path, *, filters: Sequence[RunFilter] = ()
+) -> ListRunsResult:
+    """Return current summaries after refreshing the derived SQLite catalog."""
+
+    requested_filters = tuple(filters)
+    _validate_filters(requested_filters)
+    collection = Path(collection_path)
+    scan = scan_current_collection_records(collection)
+    summaries: tuple[RunSummary, ...] = ()
+    if collection.is_dir():
+        _replace_catalog_records(collection, scan.records, checked_at=scan.checked_at)
+        summaries = _query_catalog_summaries(collection, requested_filters)
+    return ListRunsResult(
+        summaries=summaries,
+        warnings=scan.warnings,
+        filters=requested_filters,
+        checked_at=scan.checked_at,
+    )
+
+
 def read_catalog_summaries(collection_path: str | Path) -> tuple[RunSummary, ...]:
     """Return summaries from the private sidecar.
 
@@ -80,6 +120,72 @@ def read_catalog_summaries(collection_path: str | Path) -> tuple[RunSummary, ...
     except sqlite.DatabaseError as exc:
         raise CatalogStorageError(f"unable to read catalog sidecar: {exc}") from exc
     return tuple(_run_summary_from_json(row[0]) for row in rows)
+
+
+def _query_catalog_summaries(
+    collection_path: str | Path, filters: Sequence[RunFilter]
+) -> tuple[RunSummary, ...]:
+    _validate_filters(filters)
+    db_path = catalog_db_path(collection_path)
+    sqlite = _sqlite3()
+    try:
+        with _connect(db_path) as connection:
+            _ensure_schema(connection)
+            sql, params = _summary_query(filters)
+            rows = connection.execute(sql, params).fetchall()
+    except sqlite.DatabaseError as exc:
+        raise CatalogStorageError(f"unable to query catalog sidecar: {exc}") from exc
+    return tuple(_run_summary_from_json(row[0]) for row in rows)
+
+
+def _summary_query(filters: Sequence[RunFilter]) -> tuple[str, tuple[str, ...]]:
+    clauses: list[str] = []
+    params: list[str] = []
+    for index, run_filter in enumerate(filters):
+        alias = f"f{index}"
+        clause, clause_params = _filter_exists_clause(alias, run_filter)
+        clauses.append(clause)
+        params.extend(clause_params)
+
+    where = "" if not clauses else " WHERE " + " AND ".join(clauses)
+    return (
+        "SELECT summary_json FROM run_summaries"
+        f"{where}"
+        " ORDER BY run_uri",
+        tuple(params),
+    )
+
+
+def _filter_exists_clause(alias: str, run_filter: RunFilter) -> tuple[str, tuple[str, ...]]:
+    kind = RunFilterKind(run_filter.kind)
+    params = [kind.value, run_filter.value]
+    key_clause = ""
+    if run_filter.key is None and kind not in _OPTIONAL_KEY_FILTERS:
+        key_clause = f" AND {alias}.key IS NULL"
+    elif run_filter.key is not None:
+        key_clause = f" AND {alias}.key = ?"
+        params.append(run_filter.key)
+    return (
+        "EXISTS ("
+        f"SELECT 1 FROM filter_facts {alias} "
+        f"WHERE {alias}.run_uri = run_summaries.run_uri "
+        f"AND {alias}.kind = ? "
+        f"AND {alias}.value = ?"
+        f"{key_clause}"
+        ")",
+        tuple(params),
+    )
+
+
+def _validate_filters(filters: Sequence[RunFilter]) -> None:
+    for run_filter in filters:
+        kind = RunFilterKind(run_filter.kind)
+        if kind in _RUN_LEVEL_FILTERS and run_filter.key is not None:
+            raise CatalogValidationError(
+                f"{kind.value} filters do not support key selectors"
+            )
+        if kind is RunFilterKind.TAG and run_filter.key is None:
+            raise CatalogValidationError("tag filters require key")
 
 
 def _replace_catalog_records(
@@ -693,6 +799,7 @@ __all__ = [
     "CATALOG_SIDECAR_DIR",
     "catalog_db_path",
     "catalog_sidecar_dir",
+    "list_current_catalog",
     "read_catalog_summaries",
     "rebuild_catalog",
 ]
