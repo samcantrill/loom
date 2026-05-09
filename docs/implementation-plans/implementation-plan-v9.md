@@ -789,9 +789,9 @@ Completion summary:
 
 ### Phase 3 - Materialization Boundary And Authoritative Read Models
 
-Status: pending
+Status: merged
 Branch: `codex/materialization-read-models`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/103
 
 Goal:
 
@@ -888,7 +888,32 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged into `develop` on 2026-05-09T17:44:51Z by PR #103
+  (`9b37986a9d43139036ef41b930e019a5150a77f2`).
+- Added `materialization_read_models` as the backend-neutral authoritative
+  read/materialization layer over `PerRunAuthorityStore` snapshots and schema
+  checks, with request options for metadata-only reads, strict warning
+  handling, materialization verification, stale projection warnings, active-run
+  revision warnings, and completed-run bundle metadata.
+- Added local materialized-ref classification for artifact payloads, stage
+  logs, config snapshots, provenance documents, and worker handoff files while
+  preserving backend facts as authority. Missing and corrupt materialized refs
+  are reported as machine-readable warnings or strict read errors without
+  changing lifecycle truth.
+- Added package, unit, contract, and SQLite integration coverage for import
+  boundaries, materialization diagnostics, checksum corruption warnings,
+  unsupported-schema warning-only reads, strict failures, partial commits,
+  cleanup-candidate carry-through, and bundle metadata.
+- Automated PR review found one blocker around warning-only unsupported-schema
+  reads and one coverage gap for partial commits and cleanup candidates.
+  Blocker-resolution pass 1/3 fixed the schema-warning fallback and refreshed
+  PR evidence; 2/3 blocker-resolution passes remain unused.
+- Validation: `make validate-pr` passed; final `make test-summary` passed with
+  1460 passed, 0 failed, 0 errors, 11 skipped, and 1055 deselected. GitHub CI
+  `checks` passed before merge.
+- Follow-up: Phase 4 should use this read/materialization boundary for
+  serial write-path integration rather than coupling runner code to private
+  SQLite details or legacy local status/artifact files.
 
 ### Phase 4 - Serial Execution Write-Path Integration
 
