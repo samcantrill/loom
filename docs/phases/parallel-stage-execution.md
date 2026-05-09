@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation evidence recorded.
+- Status: pr_open.
 - Feature focus: Persistence And Concurrency Foundation
 - Intended PR title:
   `Persistence And Concurrency Foundation - Phase 7: Bounded Parallel Stage Execution`
@@ -19,7 +19,7 @@
   (`docs: record v9 phase 6 merge`)
 - Target branch: `develop`
 - PR body path: `docs/phases/parallel-stage-execution-pr-body.md`
-- PR URL: pending GitHub creation.
+- PR URL: https://github.com/samcantrill/loom/pull/107
 - Merge eligibility: root phase PR; merge eligible after the implementation
   stays in Phase 7 scope, required validation passes or unavailable checks are
   justified, automated review has no blocking findings, CI passes, and the PR
@@ -468,4 +468,13 @@ table layout unless the implementation leaks it outside `sqlite_authority.py`.
   - `make test-summary` passed and wrote `build/test-summary.md` at
     `2026-05-09T22:57:09+00:00` with overall `1518 passed, 0 failed,
     0 errors, 12 skipped, 1112 deselected`.
-- GitHub PR creation: pending at the time of this artifact update.
+- GitHub PR creation: completed.
+- PR facts: opened https://github.com/samcantrill/loom/pull/107 with explicit
+  base `develop`, head `codex/parallel-stage-execution`, and title
+  `Persistence And Concurrency Foundation - Phase 7: Bounded Parallel Stage Execution`.
+  Immediate verification via
+  `gh pr view 107 --json baseRefName,headRefName,state,url` returned
+  `baseRefName=develop`, `headRefName=codex/parallel-stage-execution`,
+  `state=OPEN`, and the same PR URL. This is a root phase PR, not stacked on
+  a predecessor branch, and is merge-eligible only after automated review and
+  checks against `develop`.
