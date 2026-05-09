@@ -1,5 +1,8 @@
 """Contract tests for backend-neutral per-run authority stores."""
 
+from dataclasses import dataclass
+from pathlib import Path
+
 import pytest
 
 from loom.artifacts import ArtifactRef
@@ -11,16 +14,43 @@ from loom.pipeline.stores import (
     CapabilityScope,
     LeaseState,
     PerRunAuthorityStore,
+    path_to_run_uri,
 )
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 
 
 RUN_URI = "file:///runs/r1"
 
 
-def _submitted_record() -> SubmittedOperationRecord:
+pytestmark = pytest.mark.contract
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorityStoreCase:
+    store: PerRunAuthorityStore
+    run_uri: str
+
+
+@pytest.fixture(params=["in-memory", "sqlite"])
+def authority_case(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> AuthorityStoreCase:
+    if request.param == "in-memory":
+        return AuthorityStoreCase(
+            store=InMemoryPerRunAuthorityStore(),
+            run_uri=RUN_URI,
+        )
+    run_root = tmp_path / "r1"
+    return AuthorityStoreCase(
+        store=SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z"),
+        run_uri=path_to_run_uri(run_root),
+    )
+
+
+def _submitted_record(run_uri: str) -> SubmittedOperationRecord:
     return SubmittedOperationRecord(
-        run_uri=RUN_URI,
+        run_uri=run_uri,
         submission_id="sub-1",
         backend="slurm",
         mode="batch",
@@ -42,15 +72,29 @@ def test_in_memory_store_satisfies_per_run_authority_protocol() -> None:
     )
 
 
-def test_per_run_authority_contract_records_revisioned_lifecycle_facts() -> None:
-    store = InMemoryPerRunAuthorityStore()
-    initial_revision = store.create_run(RUN_URI)
+def test_sqlite_store_satisfies_per_run_authority_protocol(tmp_path: Path) -> None:
+    store = SQLitePerRunAuthorityStore(path_to_run_uri(tmp_path / "r1"))
+
+    assert isinstance(store, PerRunAuthorityStore)
+    assert store.capabilities().supports(
+        BackendCapability.ATOMIC_OUTPUT_COMMIT,
+        scope=CapabilityScope.PER_RUN,
+    )
+
+
+def test_per_run_authority_contract_records_revisioned_lifecycle_facts(
+    authority_case: AuthorityStoreCase,
+) -> None:
+    store = authority_case.store
+    run_uri = authority_case.run_uri
+    submitted_record = _submitted_record(run_uri)
+    initial_revision = store.create_run(run_uri)
 
     assert initial_revision.sequence == 1
-    assert store.check_schema(RUN_URI).supported
+    assert store.check_schema(run_uri).supported
 
     transition = store.transition_run(
-        RUN_URI,
+        run_uri,
         from_status=RunStatus.CREATED,
         to_status=RunStatus.RUNNING,
     )
@@ -58,13 +102,13 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts() -> None
     assert transition.status is RunStatus.RUNNING
 
     store.transition_stage(
-        RUN_URI,
+        run_uri,
         "build",
         from_status=None,
         to_status=StageStatus.PENDING,
     )
     allocation = store.allocate_stage_attempt(
-        RUN_URI,
+        run_uri,
         "build",
         owner_id="worker-1",
         lease_ttl_seconds=30,
@@ -73,18 +117,18 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts() -> None
     assert allocation.lease is not None
     assert allocation.lease.fencing_token
 
-    submitted_revision = store.write_submitted_operation(RUN_URI, _submitted_record())
+    submitted_revision = store.write_submitted_operation(run_uri, submitted_record)
     assert submitted_revision.sequence > allocation.attempt.revision.sequence
-    assert store.read_submitted_operation(RUN_URI, "sub-1") == _submitted_record()
-    assert store.list_submitted_operations(RUN_URI) == (_submitted_record(),)
+    assert store.read_submitted_operation(run_uri, "sub-1") == submitted_record
+    assert store.list_submitted_operations(run_uri) == (submitted_record,)
 
     output = ArtifactRef(
         artifact_id="build/out",
-        uri="file:///runs/r1/artifacts/build/out.json",
+        uri=f"{run_uri}/artifacts/build/out.json",
         artifact_type="json",
     )
     commit = store.record_output_commit(
-        RUN_URI,
+        run_uri,
         "build",
         attempt_id=allocation.attempt.attempt_id,
         fencing_token=allocation.lease.fencing_token,
@@ -94,34 +138,37 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts() -> None
     assert commit.artifact_facts[0].artifact == output
 
     event = store.append_audit_event(
-        RUN_URI,
+        run_uri,
         PipelineEvent(scope=EventScope.stage("build"), event_type="stage.succeeded"),
     )
     assert event.sequence == 1
 
-    snapshot = store.snapshot(RUN_URI)
+    snapshot = store.snapshot(run_uri)
     assert snapshot.status is RunStatus.RUNNING
     assert snapshot.schema_version == 1
-    assert snapshot.submitted_operations == (_submitted_record(),)
+    assert snapshot.submitted_operations == (submitted_record,)
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].attempts[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].latest_commit == commit.commit
     assert snapshot.stages[0].artifact_facts == commit.artifact_facts
 
 
-def test_per_run_authority_rejects_stale_transitions_and_lease_misuse() -> None:
-    store = InMemoryPerRunAuthorityStore()
-    store.create_run(RUN_URI)
+def test_per_run_authority_rejects_stale_transitions_and_lease_misuse(
+    authority_case: AuthorityStoreCase,
+) -> None:
+    store = authority_case.store
+    run_uri = authority_case.run_uri
+    store.create_run(run_uri)
 
     with pytest.raises(ValueError, match="stale run transition"):
         store.transition_run(
-            RUN_URI,
+            run_uri,
             from_status=RunStatus.RUNNING,
             to_status=RunStatus.SUCCEEDED,
         )
 
     allocation = store.allocate_stage_attempt(
-        RUN_URI,
+        run_uri,
         "build",
         owner_id="worker-1",
         lease_ttl_seconds=1,
@@ -138,7 +185,7 @@ def test_per_run_authority_rejects_stale_transitions_and_lease_misuse() -> None:
 
     with pytest.raises(ValueError, match="active lease"):
         store.allocate_stage_attempt(
-            RUN_URI,
+            run_uri,
             "build",
             owner_id="worker-2",
             lease_ttl_seconds=1,
@@ -152,27 +199,32 @@ def test_per_run_authority_rejects_stale_transitions_and_lease_misuse() -> None:
     assert released.state is LeaseState.RELEASED
 
     retry = store.allocate_stage_attempt(
-        RUN_URI,
+        run_uri,
         "build",
         owner_id="worker-2",
         lease_ttl_seconds=1,
     )
     assert retry.lease is not None
-    store.advance_time(1)
-    recovery = store.scan_recovery(RUN_URI)
+    if isinstance(store, InMemoryPerRunAuthorityStore):
+        store.advance_time(1)
+    else:
+        store = SQLitePerRunAuthorityStore(
+            run_uri, clock=lambda: "2020-01-01T00:00:02Z"
+        )
+    recovery = store.scan_recovery(run_uri)
     assert recovery[0].kind.value == "expired_lease"
-    assert store.snapshot(RUN_URI).stages[0].active_lease is None
+    assert store.snapshot(run_uri).stages[0].active_lease is None
 
     with pytest.raises(ValueError, match="expired"):
         store.record_output_commit(
-            RUN_URI,
+            run_uri,
             "build",
             attempt_id=retry.attempt.attempt_id,
             fencing_token=retry.lease.fencing_token,
             outputs={
                 "out": ArtifactRef(
                     artifact_id="build/out",
-                    uri="file:///runs/r1/artifacts/build/out.json",
+                    uri=f"{run_uri}/artifacts/build/out.json",
                     artifact_type="json",
                 )
             },
