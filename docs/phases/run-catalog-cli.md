@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR pending
+- Status: pr_open
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 6: CLI Integration, Docs, And E2E`
 - Branch: `codex/run-catalog-cli`
@@ -13,7 +13,7 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/100
 - Merge eligibility: merge-eligible after implementation, automated review, local validation, and GitHub checks because Phases 1 through 5 are merged.
 - Workflow path: expanded path because this phase defines user-facing CLI commands, JSON envelopes, and documentation for the completed v8 feature.
 - Successor dependency notes: none; this is the final v8 phase.
@@ -294,6 +294,6 @@ Final PR validation:
 - Implementation validation: completed; focused validation, `make validate-pr`, and `make test-summary` passed.
 - Refinement summary: not needed.
 - Blocker-resolution summary: none
-- PR preparation: pending
+- PR preparation: opened https://github.com/samcantrill/loom/pull/100
 - Stack maintenance: no predecessor or successor branch
 - Remaining blockers: none
