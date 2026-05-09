@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft implementation plan; plan quality gate passed
+- Status: implemented; all phases merged
 - Related planning notes:
   `docs/implementation-plans/roadmap-v8-planning-notes.md`
 - Related source docs:
@@ -21,10 +21,7 @@
   `loom_plan_reviewer` notes
 - Plan quality gate: passed on 2026-05-09 after initial review,
   non-blocking refinement, and confirmation review
-- Blockers: none known for plan drafting. Phase implementation must verify the
-  actual v7 run-store, diagnostics, CLI, status, submitted-operation,
-  artifact-index, and provenance contracts on the implementation base before
-  phase work begins.
+- Blockers: none known; all six v8 phases have merged into `develop`.
 
 ## Goal
 
@@ -885,7 +882,7 @@ Completion summary:
 
 ### Phase 6 - CLI Integration, Docs, And End-To-End Coverage
 
-Status: pr_open
+Status: merged
 Branch: `codex/run-catalog-cli`
 PR: https://github.com/samcantrill/loom/pull/100
 
@@ -979,3 +976,14 @@ Completion summary:
 - Validation before PR: `make validate-pr` passed; `make test-summary` passed
   with package 55, unit 760, contract 78, integration 64, e2e 37, and
   config-extra 413 tests passing.
+- Merged into `develop` on 2026-05-09 with squash merge
+  `57d67df076846c4a0f34d879b8eeba08755c5a99`.
+- Automated review: manager review found no blocking CLI/API layering, warning
+  serialization, import-boundary, docs, or scope issues before merge.
+- Pre-merge target check: `gh pr view 100 --json
+  baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` confirmed
+  `baseRefName` was `develop`, state was `OPEN`, and CI `checks` passed.
+- GitHub CI: `checks` passed before merge.
+- Stack maintenance: no successor branch depended on `codex/run-catalog-cli`;
+  GitHub deleted the remote branch during merge, and the phase worktree, local
+  branch, and stale local tracking ref were removed after merge.
