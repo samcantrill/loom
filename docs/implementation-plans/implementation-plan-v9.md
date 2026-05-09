@@ -1327,9 +1327,9 @@ Completion summary:
 
 ### Phase 7 - Bounded Parallel Stage Execution
 
-Status: pending
+Status: pr_open
 Branch: `codex/parallel-stage-execution`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/107
 
 Goal:
 
@@ -1440,7 +1440,17 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- PR opened against `develop`: https://github.com/samcantrill/loom/pull/107.
+- Implementation adds validated Python and CLI parallel controls, a
+  controller-owned bounded local scheduler, authoritative capability preflight,
+  stage lease renewal, deterministic failure policies, and loud unsupported
+  backend/executor/capture errors while preserving the serial default.
+- Checks: `make validate-pr` passed after implementation refinement: Ruff,
+  Pyright, default harness (1072 passed, 18 skipped, 14 deselected),
+  config-extra harness (420 passed, 1101 deselected), and `uv build`.
+  `make test-summary` passed with 1518 passed, 0 failed, 0 errors, 12 skipped,
+  and 1112 deselected.
+- Follow-up: automated PR review and GitHub CI must pass before merge.
 
 ### Phase 8 - Workspace/Sweep Coordination Foundation
 
