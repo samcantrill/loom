@@ -51,28 +51,28 @@ New tests implemented:
   serial-path preservation.
 - Integration coverage for SQLite-backed parallel DAGs, lease renewal,
   interruption, default stop-on-first-failure behavior, and
-  `continue-independent` scheduling.
+  `continue-independent` scheduling, including plan-blocked static outcomes.
 - E2E CLI smoke coverage for bounded local parallel execution.
 
 ## Tests And Validation
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Manager-provided post-refine gate: Ruff, Pyright, default harness (`1072 passed, 18 skipped, 14 deselected`), config-extra harness (`420 passed, 1101 deselected`), and `uv build` succeeded. |
-| `make test-summary` | Passed | `build/test-summary.md` generated at `2026-05-09T22:57:09+00:00`; overall `1518 passed`, `0 failed`, `0 errors`, `12 skipped`, `1112 deselected`. |
-| GitHub checks | Pending | CI starts after the branch is pushed and the PR is opened. |
+| `make validate-pr` | Passed | Post-blocker-resolution gate: Ruff, Pyright, default harness (`1074 passed, 18 skipped, 14 deselected`), config-extra harness (`420 passed, 1103 deselected`), and `uv build` succeeded. |
+| `make test-summary` | Passed | `build/test-summary.md` generated at `2026-05-09T23:15:32+00:00`; overall `1520 passed`, `0 failed`, `0 errors`, `12 skipped`, `1114 deselected`. |
+| GitHub checks | Pending | CI reruns after the blocker-resolution branch update. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 57 | 0 | 0 | 1 | 0 | 58 | 7.83s |
-| unit | passed | 828 | 0 | 0 | 1 | 0 | 829 | 30.02s |
-| contract | passed | 93 | 0 | 0 | 2 | 0 | 95 | 4.51s |
-| integration | passed | 81 | 0 | 0 | 8 | 10 | 89 | 58.92s |
-| e2e | passed | 39 | 0 | 0 | 0 | 1 | 39 | 19.16s |
-| config-extra | passed | 420 | 0 | 0 | 0 | 1101 | 420 | 38.84s |
-| Overall | passed | 1518 | 0 | 0 | 12 | 1112 | 1530 | 159.28s |
+| package | passed | 57 | 0 | 0 | 1 | 0 | 58 | 7.64s |
+| unit | passed | 828 | 0 | 0 | 1 | 0 | 829 | 30.16s |
+| contract | passed | 93 | 0 | 0 | 2 | 0 | 95 | 4.52s |
+| integration | passed | 83 | 0 | 0 | 8 | 10 | 91 | 60.25s |
+| e2e | passed | 39 | 0 | 0 | 0 | 1 | 39 | 18.83s |
+| config-extra | passed | 420 | 0 | 0 | 0 | 1103 | 420 | 39.30s |
+| Overall | passed | 1520 | 0 | 0 | 12 | 1114 | 1532 | 160.70s |
 
 ## Risks / Follow-Ups
 

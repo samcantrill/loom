@@ -472,14 +472,13 @@ table layout unless the implementation leaks it outside `sqlite_authority.py`.
   lease renewal, unsupported-combination errors, and package/unit/contract/
   integration/e2e coverage. No Phase 8 workspace or sweep coordination was
   included.
-- Final validation evidence documented from the manager-provided post-refine
-  gate because PR preparation changed only phase artifacts:
-  - `make validate-pr` passed after refinement: Ruff, Pyright, default harness
-    `1072 passed, 18 skipped, 14 deselected`, config-extra harness
-    `420 passed, 1101 deselected`, and `uv build` succeeded.
+- Final validation evidence after blocker resolution:
+  - `make validate-pr` passed after blocker resolution: Ruff, Pyright, default
+    harness `1074 passed, 18 skipped, 14 deselected`, config-extra harness
+    `420 passed, 1103 deselected`, and `uv build` succeeded.
   - `make test-summary` passed and wrote `build/test-summary.md` at
-    `2026-05-09T22:57:09+00:00` with overall `1518 passed, 0 failed,
-    0 errors, 12 skipped, 1112 deselected`.
+    `2026-05-09T23:15:32+00:00` with overall `1520 passed, 0 failed,
+    0 errors, 12 skipped, 1114 deselected`.
 - GitHub PR creation: completed.
 - PR facts: opened https://github.com/samcantrill/loom/pull/107 with explicit
   base `develop`, head `codex/parallel-stage-execution`, and title
