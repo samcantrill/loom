@@ -12,6 +12,7 @@ from loom.pipeline.context import StageContext
 from loom.pipeline.errors import StageContractError
 from loom.pipeline.execution import (
     ConfigSnapshotInputs,
+    FailurePolicy,
     ParallelExecutionUnsupportedError,
     PipelineRunner,
     RunRequest,
@@ -412,6 +413,68 @@ def test_runner_rejects_parallel_without_authority_backend(tmp_path: Path) -> No
     error = exc_info.value
     assert error.code == "pipeline.parallel.unsupported_backend"
     assert error.diagnostics[0]["code"] == "missing_authority_backend"
+    assert not run_root.exists()
+
+
+def test_runner_rejects_continue_independent_without_bounded_parallelism(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    request = RunRequest(
+        pipeline=PipelineSpec(
+            stages=(
+                _stage(
+                    target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                ),
+            )
+        ),
+        options={"execution": {"settings": {"failure_policy": "continue_independent"}}},
+        provenance_options=ProvenanceCaptureOptions(
+            capture_git=False,
+            capture_environment=False,
+            capture_dependencies=False,
+            capture_command=False,
+        ),
+    )
+
+    with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
+        PipelineRunner(run_store=LocalRunStore(run_root)).run(request)
+
+    error = exc_info.value
+    assert error.code == "pipeline.parallel.failure_policy_requires_parallelism"
+    assert error.context == {
+        "failure_policy": "continue_independent",
+        "max_parallel_stages": 1,
+    }
+    assert not run_root.exists()
+
+
+def test_runner_rejects_legacy_continue_failure_policy_without_parallelism(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+    request = RunRequest(
+        pipeline=PipelineSpec(
+            stages=(
+                _stage(
+                    target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                ),
+            )
+        ),
+        options={"execution": {"settings": {"max_parallel_stages": 1}}},
+        failure_policy=FailurePolicy(stop_on_first_failure=False),
+        provenance_options=ProvenanceCaptureOptions(
+            capture_git=False,
+            capture_environment=False,
+            capture_dependencies=False,
+            capture_command=False,
+        ),
+    )
+
+    with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
+        PipelineRunner(run_store=LocalRunStore(run_root)).run(request)
+
+    assert exc_info.value.code == "pipeline.parallel.failure_policy_requires_parallelism"
     assert not run_root.exists()
 
 

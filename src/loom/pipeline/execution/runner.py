@@ -216,6 +216,15 @@ class PipelineRunner:
     def _preflight_parallel_execution(
         self, policy: ParallelExecutionOptions
     ) -> None:
+        if policy.continue_independent and not policy.enabled:
+            raise ParallelExecutionUnsupportedError(
+                "continue_independent failure policy requires max_parallel_stages greater than 1",
+                code="pipeline.parallel.failure_policy_requires_parallelism",
+                context={
+                    "failure_policy": policy.failure_policy,
+                    "max_parallel_stages": policy.max_parallel_stages,
+                },
+            )
         if not policy.enabled:
             return
         executor_name = str(getattr(self.executor, "name", "unknown"))

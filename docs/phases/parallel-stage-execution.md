@@ -426,7 +426,19 @@ table layout unless the implementation leaks it outside `sqlite_authority.py`.
 
 - Phase execution plan draft: used by this pass.
 - Phase execution plan refine: used by this pass.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used on 2026-05-10 by
+  `loom_phase_refiner`; fixed a public policy validation gap where
+  `continue_independent` could be supplied without bounded parallelism and then
+  be silently ignored by the serial path. Targeted validation passed with
+  `env UV_CACHE_DIR=/tmp/loom-uv-cache uv run pytest
+  tests/unit/loom/pipeline/execution/test_runner.py
+  tests/integration/pipeline/test_parallel_execution.py -q` and
+  `env UV_CACHE_DIR=/tmp/loom-uv-cache uv run ruff check
+  src/loom/pipeline/execution/runner.py
+  tests/unit/loom/pipeline/execution/test_runner.py`; targeted Pyright passed
+  with `env UV_CACHE_DIR=/tmp/loom-uv-cache uv run pyright
+  src/loom/pipeline/execution/runner.py
+  tests/unit/loom/pipeline/execution/test_runner.py`.
 - PR review: unused; one automated PR review remains required after PR
   preparation.
 - Blocker-resolution: unused, 0/3 scoped passes consumed.
