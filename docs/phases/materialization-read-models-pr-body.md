@@ -47,7 +47,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness (1016 passed, 17 skipped, 14 deselected), config-extra harness (416 passed, 1044 deselected), and `uv build` passed. |
 | `make test-summary` | Passed | Generated `build/test-summary.md` at 2026-05-09T17:09:40+00:00; overall 1457 passed, 0 failed, 0 errors, 11 skipped, 1055 deselected. |
-| GitHub checks | Pending | Starts after PR creation. |
+| GitHub checks | Pending | PR opened; GitHub checks pending. |
 
 ### Test Suite Summary
 

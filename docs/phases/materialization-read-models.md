@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: PR body refined; PR opening pending
+- Status: PR opened; PR body refined
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 3: Materialization Boundary And Authoritative Read Models`
 - Branch: `codex/materialization-read-models`
@@ -257,8 +257,8 @@ make test-summary
 ## PR Preparation Notes
 
 - PR body draft: complete on 2026-05-09 by `loom_pr_preparer`.
-- Expanded-path PR body refine/open pass: refine complete on
-  2026-05-09T17:10:10Z by `loom_pr_preparer`; PR opening pending.
+- Expanded-path PR body refine/open pass: complete on
+  2026-05-09T17:13:04Z by `loom_pr_preparer`.
 - Final PR title:
   `Persistence And Concurrency Foundation - Phase 3: Materialization Boundary And Authoritative Read Models`
 - Target branch: `develop`
@@ -270,8 +270,9 @@ make test-summary
 - `make test-summary`: passed on 2026-05-09T17:09:40Z; generated
   `build/test-summary.md` with 1457 passed, 0 failed, 0 errors, 11 skipped,
   and 1055 deselected.
-- PR URL: pending.
-- PR verification JSON: pending.
+- PR URL: https://github.com/samcantrill/loom/pull/103
+- PR verification JSON:
+  `{"baseRefName":"develop","headRefName":"codex/materialization-read-models","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/103"}`
 - Blockers: none.
 
 ## Completion Notes
@@ -316,6 +317,10 @@ make test-summary
 - PR body refine pass: complete on 2026-05-09T17:10:10Z by
   `loom_pr_preparer`; evidence was refreshed and the concise implementation,
   test, validation, and risk summaries remained aligned with the diff.
+- PR opened: complete on 2026-05-09T17:13:04Z at
+  https://github.com/samcantrill/loom/pull/103.
+- PR verification JSON:
+  `{"baseRefName":"develop","headRefName":"codex/materialization-read-models","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/103"}`.
 - Final PR-preparation validation evidence: refreshed on
   2026-05-09T17:09:40Z.
   `make validate-pr` passed: Ruff, Pyright, default harness (1016 passed,
@@ -332,8 +337,10 @@ make test-summary
   none; target branch is `develop`; PR body path is
   `docs/phases/materialization-read-models-pr-body.md`; local merge base with
   `develop` is `caa7190`, matching the recorded phase base. This is a root
-  phase PR ready to target `develop`. PR opening is pending.
+  phase PR opened against `develop` and verified by `gh pr view 103 --json
+  baseRefName,headRefName,state,url`.
 - Blocker-resolution summary: no blocker-resolution passes used.
-- PR preparation: body refined and ready for PR creation.
+- PR preparation: PR opened and verified; no reviewers requested and no merge
+  attempted.
 - Stack maintenance: not needed; root phase branch targets `develop`.
 - Remaining blockers: none known.
