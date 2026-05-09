@@ -233,8 +233,11 @@ make test-summary
 - PR body refine: complete on 2026-05-10 by `loom_pr_preparer`; verified
   against the final diff, validation evidence, acceptance criteria, scope
   boundaries, and future-phase exclusions
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used on 2026-05-10 by the single PR review that found the
+  post-commit attempt-allocation blocker; this blocker-resolution pass did not
+  reset or rerun the PR-review budget
+- Blocker resolution: 1/3 used on 2026-05-10 for the post-output-commit
+  attempt-allocation regression in `SQLitePerRunAuthorityStore`
 
 ## Completion Notes
 
@@ -248,7 +251,30 @@ make test-summary
   - Earlier targeted package import-boundary check confirmed importing `loom.pipeline.stores` does not import `sqlite3`.
   - `make validate-pr` - passed; Ruff, Pyright, default harness, config-extra harness, and build completed successfully.
 - Implementation refinement summary: one expanded-path `loom_phase_refiner` pass completed on 2026-05-10. The pass reviewed `AGENTS.md`, the v9 implementation plan, this phase plan, current commits/diff, and recorded validation evidence, then tightened only Phase 2 backend/test behavior. Fixes made: existing incomplete SQLite authority files now fail loudly instead of being silently initialized by `create_run`; schema checks validate the private schema shape without documenting it as public API; schema initialization now runs inside the write transaction used by run creation; expired leases cannot be released or failed; active stage leases block unleased attempt allocation; fenced output commits reject terminal stage states; and successful output commits release the stage lease in the same transaction so later recovery scans do not report a completed lease as expired. No runner integration, root store export, CLI, workspace/sweep backend, status enum change, public SQL contract, old-run migration, or Phase 1 protocol/model change was added.
-- Blocker-resolution summary: none used.
+- Blocker-resolution summary: pass 1/3 completed on 2026-05-10. The pass fixed
+  `SQLitePerRunAuthorityStore.allocate_stage_attempt()` so the same SQLite
+  write transaction rejects allocation when a stage already has an output
+  commit or is in a terminal stage state before inserting a new attempt or
+  upserting the stage to `RUNNING`. Focused unit coverage now proves a
+  successful output commit is followed by rejected allocation and that the
+  snapshot remains `SUCCEEDED` with the prior commit and artifact facts intact.
+  Additional unit coverage checks terminal-stage allocation rejection. No
+  runner integration, backend CLI, workspace/sweep coordination,
+  migration/fallback behavior, status enum change, or Phase 1 protocol/model
+  change was added.
+- Blocker-resolution validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_sqlite_authority.py` - passed, 10 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_authority_store_contract.py` - passed, 6 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_sqlite_authority_backend.py` - passed, 4 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py` - passed, 5 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/sqlite_authority.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py` - passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores/sqlite_authority.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py` - passed, 0 errors.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` - passed; Ruff, Pyright,
+    default harness, config-extra harness, and build completed successfully.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` - passed; generated
+    `build/test-summary.md` at `2026-05-09T16:00:25+00:00` with 1439 passed,
+    0 failed, 0 errors, 11 skipped, 1037 deselected, and 130.10s overall
+    duration.
 - PR preparation: draft pass complete on 2026-05-10 by `loom_pr_preparer`.
   Expanded-path PR body refine pass complete on 2026-05-10 by
   `loom_pr_preparer`; the PR body at
@@ -354,3 +380,75 @@ result: passed; Ruff passed, Pyright passed, default harness passed with 996 pas
 - Suite evidence still needed: none for this PR-preparation pass
 - PR opened and verified: yes; PR #102 targets `develop` from
   `codex/sqlite-run-backend`
+
+## Blocker Resolution Report
+
+### Metadata
+
+- Phase: Phase 2 - Per-Run SQLite Backend And Transaction Semantics
+- Branch: `codex/sqlite-run-backend`
+- Worktree: `/home/samcantrill/work/loom-worktrees/sqlite-run-backend`
+- Phase execution plan: `docs/phases/sqlite-run-backend.md`
+- Pass type: blocker resolution, 1/3
+- Blocker-resolution date: 2026-05-10
+- PR: https://github.com/samcantrill/loom/pull/102
+- PR review budget status: used by the single PR review that found this
+  blocker; not reset or rerun by this pass
+- Blocker-resolution budget status after this pass: 1/3 used
+
+### Blocker
+
+- `SQLitePerRunAuthorityStore.allocate_stage_attempt()` could allocate a new
+  running attempt after `record_output_commit()` had successfully committed the
+  stage. That regressed the authoritative snapshot from `SUCCEEDED` to
+  `RUNNING` while the old output commit remained recorded, violating Phase 2
+  durable commit and terminal-stage semantics.
+
+### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Post-commit allocation could overwrite the stage snapshot to `RUNNING`. | `allocate_stage_attempt()` now checks for an existing output commit inside the same `BEGIN IMMEDIATE` transaction before inserting an attempt or upserting stage state. | New unit coverage commits output, rejects later allocation, and verifies the snapshot remains `SUCCEEDED` with the original commit and artifact facts. |
+| Terminal stage state was not checked before attempt allocation. | `allocate_stage_attempt()` now rejects terminal stage states in the same transaction before inserting/upserting. | New unit coverage for terminal-stage allocation rejection. |
+
+### Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_sqlite_authority.py
+result: passed, 10 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_authority_store_contract.py
+result: passed, 6 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_sqlite_authority_backend.py
+result: passed, 4 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py
+result: passed, 5 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/sqlite_authority.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py
+result: passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores/sqlite_authority.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py
+result: passed, 0 errors
+
+command: UV_CACHE_DIR=/tmp/uv-cache make validate-pr
+result: passed; Ruff passed, Pyright passed, default harness passed with 998 passed / 17 skipped / 14 deselected, config-extra harness passed with 416 passed / 1026 deselected, and uv build succeeded
+
+command: UV_CACHE_DIR=/tmp/uv-cache make test-summary
+result: passed; generated build/test-summary.md at 2026-05-09T16:00:25+00:00 with 1439 passed, 0 failed, 0 errors, 11 skipped, 1037 deselected, and 130.10s overall duration
+```
+
+### PR State Checked
+
+- `gh pr view 102 --json baseRefName,headRefName,state,url,statusCheckRollup`
+  returned `baseRefName=develop`, `headRefName=codex/sqlite-run-backend`,
+  `state=OPEN`, and
+  `url=https://github.com/samcantrill/loom/pull/102`.
+- The previously completed GitHub CI `checks` run had conclusion `SUCCESS` and
+  completed at `2026-05-09T15:47:10Z` before this blocker-resolution commit;
+  the pushed blocker-resolution commit requires fresh GitHub checks.
+
+### Remaining Blockers
+
+- None recorded for this scoped blocker after local validation.

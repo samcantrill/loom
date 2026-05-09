@@ -78,6 +78,14 @@ _SUPPORTED_PER_RUN_CAPABILITIES = (
     BackendCapability.PER_RUN_COORDINATION,
 )
 
+_ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
+    {
+        StageStatus.PENDING,
+        StageStatus.RUNNING,
+        StageStatus.SUBMITTED,
+    }
+)
+
 _REQUIRED_SCHEMA_COLUMNS = {
     "metadata": frozenset({"key", "value"}),
     "revisions": frozenset({"sequence", "token", "created_at"}),
@@ -399,6 +407,20 @@ class SQLitePerRunAuthorityStore:
             active = _active_stage_lease_row(conn, stage_name, now)
             if active is not None:
                 raise AuthorityStoreError("stage already has an active lease")
+            existing_commit = conn.execute(
+                "SELECT 1 FROM commits WHERE stage_name = ?",
+                (stage_name,),
+            ).fetchone()
+            if existing_commit is not None:
+                raise AuthorityStoreError("stage already has an output commit")
+            stage_row = conn.execute(
+                "SELECT status FROM stages WHERE stage_name = ?",
+                (stage_name,),
+            ).fetchone()
+            if stage_row is not None:
+                stage_status = StageStatus(cast(str, stage_row["status"]))
+                if stage_status not in _ATTEMPT_ALLOCATABLE_STAGE_STATUSES:
+                    raise AuthorityStoreError("stage is already terminal")
             attempt_number = _next_attempt_number(conn, stage_name)
             revision = self._next_revision(conn)
             attempt_id = f"{stage_name}-{attempt_number}"

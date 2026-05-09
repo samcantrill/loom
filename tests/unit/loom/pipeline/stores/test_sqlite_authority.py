@@ -256,6 +256,67 @@ def test_output_commit_requires_active_stage_fence(tmp_path: Path) -> None:
     ).scan_recovery(run_uri) == ()
 
 
+def test_attempt_allocation_after_output_commit_is_rejected(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    allocation = store.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
+    output = ArtifactRef(
+        artifact_id="build/out",
+        uri=f"{run_uri}/artifacts/build/out.json",
+        artifact_type="json",
+    )
+    committed = store.record_output_commit(
+        run_uri,
+        "build",
+        attempt_id=allocation.attempt.attempt_id,
+        fencing_token=allocation.lease.fencing_token,
+        outputs={"out": output},
+    )
+
+    with pytest.raises(ValueError, match="output commit"):
+        store.allocate_stage_attempt(
+            run_uri,
+            "build",
+            owner_id="worker-2",
+        )
+
+    snapshot = store.snapshot(run_uri)
+    assert snapshot.stages[0].status is StageStatus.SUCCEEDED
+    assert snapshot.stages[0].latest_commit == committed.commit
+    assert snapshot.stages[0].artifact_facts == committed.artifact_facts
+    assert [attempt.attempt_id for attempt in snapshot.stages[0].attempts] == [
+        allocation.attempt.attempt_id
+    ]
+
+
+def test_attempt_allocation_rejects_terminal_stage_state(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    store.transition_stage(
+        run_uri,
+        "build",
+        from_status=None,
+        to_status=StageStatus.FAILED,
+    )
+
+    with pytest.raises(ValueError, match="terminal"):
+        store.allocate_stage_attempt(
+            run_uri,
+            "build",
+            owner_id="worker-1",
+        )
+
+
 def test_output_commit_rejects_terminal_stage_state(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
