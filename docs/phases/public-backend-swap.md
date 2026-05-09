@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation ready.
+- Status: implementation refinement complete; PR preparation ready.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 5: Public Serial Backend Swap And Read Path`
 - Branch: `codex/public-backend-swap`
@@ -35,8 +35,10 @@
   source/test files for public run construction, authority-backed execution,
   resume, diagnostics, catalog scan/extraction, materialization read models,
   package import boundaries, and serial execution coverage.
-- Phase implementation refinement budget: not needed; implementation passed
-  targeted validation and `make validate-pr`.
+- Phase implementation refinement budget: used on 2026-05-10 by the
+  expanded-path implementation/test refinement pass. The pass fixed catalog
+  scan warning conversion for malformed or unsupported authority DB schemas
+  and added focused coverage.
 - Phase PR review budget: unused.
 - Blocker-resolution budget: 0/3 used.
 - Setup limitations: no fetch, GitHub operation, broad validation, PR action,
@@ -514,9 +516,9 @@ make validate-pr
 make test-summary
 ```
 
-Planning/refinement intentionally did not run validation because this pass edits
-only the phase execution plan and broad checks belong to implementation/PR
-preparation.
+Initial planning/refinement intentionally did not run validation because that
+pass edited only the phase execution plan. Implementation and implementation
+refinement validation are recorded in the completion notes below.
 
 ## Risks
 
@@ -554,8 +556,9 @@ preparation.
 - Phase plan draft: complete.
 - Phase plan refine: complete; expanded-path refinement pass consumed on
   2026-05-10.
-- Phase implementation refinement: not needed; targeted validation and final
-  validation passed without a separate refinement pass.
+- Phase implementation refinement: used on 2026-05-10; the pass fixed
+  authority DB schema warning conversion during catalog direct scans and added
+  focused unit coverage for malformed and unsupported authority DB schemas.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
@@ -596,13 +599,25 @@ preparation.
     initially could not run config-driven CLI coverage in the base environment
     because optional config dependencies were absent; the final config-extra
     validation below ran those suites with `--extra config`.
-  - `make validate-pr` passed: Ruff, Pyright, default harness
-    (1034 passed, 18 skipped, 14 deselected), config-extra harness
-    (420 passed, 1062 deselected), and `uv build`.
-  - `make test-summary` passed and wrote `build/test-summary.md`: package
-    56 passed/1 skipped; unit 802 passed/1 skipped; contract 92 passed/2
-    skipped; integration 72 passed/8 skipped/10 deselected; e2e 37 passed/1
-    deselected; config-extra 420 passed/1062 deselected.
+  - After implementation refinement, `make validate-pr` passed: Ruff, Pyright,
+    default harness (1036 passed, 18 skipped, 14 deselected), config-extra
+    harness (420 passed, 1064 deselected), and `uv build`.
+  - After implementation refinement, `make test-summary` passed and wrote
+    `build/test-summary.md`: package 56 passed/1 skipped; unit 804 passed/1
+    skipped; contract 92 passed/2 skipped; integration 72 passed/8 skipped/10
+    deselected; e2e 37 passed/1 deselected; config-extra 420 passed/1064
+    deselected.
+- Implementation refinement summary: complete. `src/loom/runs/_scan.py` now
+  converts authority store schema failures discovered after the local run
+  metadata open into the same compact catalog warning path used by local store
+  failures, so malformed authority DBs produce `PARTIAL_RUN` warnings and
+  unsupported newer authority schemas produce `UNSUPPORTED_SCHEMA` warnings
+  instead of escaping the scan.
+- Implementation refinement validation:
+  - `uv run pytest tests/unit/loom/runs/test_direct_scan_helpers.py`
+    passed: 4 passed.
+  - `uv run pytest tests/unit/loom/runs/test_direct_scan_helpers.py tests/unit/loom/runs/test_current_listing.py tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_sqlite.py tests/integration/pipeline/test_run_catalog_compare.py`
+    passed: 21 passed.
 - Accepted limitations: old v0-v8 local-only run directories remain
   intentionally unsupported by the new authority read path and are not
   migrated. Local files are still materialized for logs, provenance, inputs,

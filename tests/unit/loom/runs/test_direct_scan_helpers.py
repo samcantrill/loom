@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 from loom.pipeline.stores import RunFreshnessRecord, path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import _authority_database_path
 from loom.runs import CatalogWarningCode
 from loom.runs._extract import extract_current_summary
 from loom.runs._scan import scan_current_collection
@@ -66,6 +68,22 @@ class ChangingFreshnessStore:
         return ()
 
 
+def _write_minimal_run_marker(run_path: Path) -> str:
+    run_uri = path_to_run_uri(run_path)
+    (run_path / "run.json").write_text(
+        (
+            "{"
+            '"schema_version": 1, '
+            f'"run_uri": "{run_uri}", '
+            '"created_at": "2020-01-01T00:00:00Z", '
+            '"metadata": {}'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    return run_uri
+
+
 def test_scan_current_collection_classifies_invalid_and_partial_candidates(
     tmp_path: Path,
 ) -> None:
@@ -117,6 +135,50 @@ def test_scan_current_collection_classifies_invalid_and_partial_candidates(
     assert all(
         ".loom_catalog" not in (warning.path or "") for warning in result.warnings
     )
+
+
+def test_scan_current_collection_warns_for_invalid_authority_schema(
+    tmp_path: Path,
+) -> None:
+    collection = tmp_path / "runs"
+    collection.mkdir()
+    run_path = collection / "invalid-authority"
+    run_path.mkdir()
+    run_uri = _write_minimal_run_marker(run_path)
+
+    database_path = _authority_database_path(run_uri)
+    database_path.parent.mkdir(parents=True)
+    database_path.write_text("not sqlite", encoding="utf-8")
+
+    result = scan_current_collection(collection)
+
+    assert result.summaries == ()
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == CatalogWarningCode.PARTIAL_RUN
+    assert "incomplete or invalid" in result.warnings[0].message
+
+
+def test_scan_current_collection_warns_for_unsupported_authority_schema(
+    tmp_path: Path,
+) -> None:
+    collection = tmp_path / "runs"
+    collection.mkdir()
+    run_path = collection / "future-authority"
+    run_path.mkdir()
+    run_uri = _write_minimal_run_marker(run_path)
+
+    database_path = _authority_database_path(run_uri)
+    database_path.parent.mkdir(parents=True)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO metadata VALUES ('schema_version', '999')")
+
+    result = scan_current_collection(collection)
+
+    assert result.summaries == ()
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == CatalogWarningCode.UNSUPPORTED_SCHEMA
+    assert result.warnings[0].message == "run uses an unsupported schema"
 
 
 def test_extract_current_summary_warns_when_freshness_keeps_changing(

@@ -154,19 +154,11 @@ def _scan_candidate(
             path=candidate,
         )
     except (CorruptStoreDocumentError, UnsafeStorePathError, OSError) as exc:
-        message = str(exc)
-        if "unsupported" in message.lower() and "schema" in message.lower():
-            return None, _warning(
-                CatalogWarningCode.UNSUPPORTED_SCHEMA,
-                "run uses an unsupported schema",
-                path=candidate,
-            )
-        return None, _warning(
-            CatalogWarningCode.PARTIAL_RUN,
-            f"run metadata is incomplete or invalid: {message}",
-            path=candidate,
-        )
-    authority_store = _authority_store_for_candidate(run_uri)
+        return None, _warning_for_store_exception(exc, path=candidate)
+    try:
+        authority_store = _authority_store_for_candidate(run_uri)
+    except (CorruptStoreDocumentError, OSError) as exc:
+        return None, _warning_for_store_exception(exc, path=candidate)
     if authority_store is not None:
         from loom.pipeline.execution.authority_adapter import (
             create_authority_backed_serial_run_store,
@@ -182,6 +174,30 @@ def _scan_candidate(
         )
     return extract_current_summary_with_warning_record(
         store, run_uri=run_uri, path=candidate
+    )
+
+
+def _warning_for_store_exception(
+    exc: BaseException, *, path: Path
+) -> CatalogWarning:
+    message = str(exc)
+    lowered = message.lower()
+    if isinstance(exc, PermissionError):
+        return _warning(
+            CatalogWarningCode.UNREADABLE_RUN,
+            f"run is unreadable: {message}",
+            path=path,
+        )
+    if "unsupported" in lowered and "schema" in lowered:
+        return _warning(
+            CatalogWarningCode.UNSUPPORTED_SCHEMA,
+            "run uses an unsupported schema",
+            path=path,
+        )
+    return _warning(
+        CatalogWarningCode.PARTIAL_RUN,
+        f"run metadata is incomplete or invalid: {message}",
+        path=path,
     )
 
 
