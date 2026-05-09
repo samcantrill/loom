@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Persistence And Concurrency Foundation
 - PR title: `Persistence And Concurrency Foundation - Phase 2: SQLite Run Backend And Transactions`
 - Branch: `codex/sqlite-run-backend`
@@ -19,7 +19,7 @@
 - Plan quality gate: passed on 2026-05-09 by `loom_plan_reviewer`; no blocking or non-blocking findings remained.
 - Plan quality gate loop budget: initial review used; gate refinement not needed; confirmation review not needed.
 - Draft pass: complete by `loom_phase_planner` in this artifact.
-- Refine pass: pending for the expanded path.
+- Refine pass: complete on 2026-05-10 by `loom_phase_planner`; confirmed scope-complete against Phase 1 contracts, current store boundaries, current tests, and Phase 2 acceptance criteria.
 - Setup limitations: branch/worktree creation used the manager-recorded local `develop` state at `ec8d951`; no `gh auth`, fetch, full validation, or PR operation was run during planning. Worktree creation required approved sandbox escalation after the default sandbox could not create the namespaced git branch ref.
 - Blockers: none.
 
@@ -50,16 +50,17 @@ This phase creates the private state substrate only. Existing serial runner beha
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/pipeline/stores/authority.py` defines the `PerRunAuthorityStore` protocol and result records. `read_models.py` defines attempts, leases, commits, artifact facts, cleanup candidates, recovery records, snapshots, and warnings. `capabilities.py` defines capability declarations and unsupported diagnostics. `schema_policy.py` defines `AUTHORITY_SCHEMA_VERSION` and loud schema failure records. `coordination.py` is cross-run only and must not be implemented here. `local_runs.py` and `run_store.py` remain the legacy local-file run-store surface.
-- Existing tests or harness behavior: `tests/support/authority_stores.py` has in-memory conformance stores for Phase 1. `tests/contracts/test_authority_store_contract.py` currently exercises the in-memory per-run contract and should be extended or reused for SQLite. `tests/package/test_pipeline_store_api.py` asserts exact store exports and that importing `loom.pipeline.stores` does not import `sqlite3`, `loom.runs`, CLI, or optional config/project code.
-- Import-boundary or dependency constraints: the SQLite backend may import stdlib `sqlite3`, but root `loom.pipeline.stores` must stay import-light. Prefer a backend-specific module such as `loom.pipeline.stores.sqlite_authority` for the implementation and keep schema helpers private. If a root-level export is added, it must not make `import loom.pipeline.stores` import `sqlite3`.
+- Existing files or modules that constrain this phase: `src/loom/pipeline/stores/authority.py` defines the `PerRunAuthorityStore` protocol and result records. `read_models.py` defines attempts, leases, commits, artifact facts, cleanup candidates, recovery records, snapshots, and warnings. `capabilities.py` defines capability declarations and unsupported diagnostics. `schema_policy.py` defines `AUTHORITY_SCHEMA_VERSION` and loud schema failure records. `run_uri.py` and `_paths.py` provide local `file://` path and containment helpers that should be reused rather than bypassed. `coordination.py` is cross-run only and must not be implemented here. `local_runs.py` and `run_store.py` remain the legacy local-file run-store surface.
+- Existing tests or harness behavior: `tests/support/authority_stores.py` has in-memory conformance stores for Phase 1. `tests/contracts/test_authority_store_contract.py` currently exercises the in-memory per-run contract and should be extended, parameterized, or mirrored for SQLite. `tests/package/test_pipeline_store_api.py` asserts exact store exports and that importing `loom.pipeline.stores` does not import `sqlite3`, `loom.runs`, CLI, or optional config/project code. `tests/README.md` defines package, unit, contract, integration, e2e, and opt-in suite intent.
+- Import-boundary or dependency constraints: the SQLite backend may import stdlib `sqlite3`, but root `loom.pipeline.stores` must stay import-light. Prefer a backend-specific module such as `loom.pipeline.stores.sqlite_authority` for the implementation and keep schema helpers private. If a root-level export is added, it must not make `import loom.pipeline.stores` import `sqlite3`, and the exact `__all__` package test must be updated deliberately.
+- Phase 1 contract constraints for this phase: do not change the `PerRunAuthorityStore` method set, status enums, or read-model field shapes to make the backend easier. `PipelineEventRecord` exposes sequence evidence, not a public backend-revision field; any event-to-revision link may be persisted privately but must not require a Phase 1 model change. `SubmittedOperationRecord` carries `run_uri`, so SQLite reads after ordinary run-root movement must reconstruct returned submitted records with the current supplied run URI. There is no public cleanup-candidate write API yet, so cleanup candidates may only be recorded when representable through Phase 1 backend facts already in scope.
 
 ## In-Scope Work
 
 - Add a run-local SQLite per-run authority backend implementation under the pipeline store boundary, using only standard-library `sqlite3`.
-- Add private path resolution from local `file://` run URIs to a private database location inside the run root; keep the exact path and table names private.
+- Add private path resolution from local `file://` run URIs to a private database location inside the run root; keep the exact path and table names private and avoid persisting absolute run-root paths as authoritative identity.
 - Initialize and check a private v9 authority schema with metadata tied to `AUTHORITY_SCHEMA_VERSION`; fail loudly for missing, invalid, unsupported older, and unsupported newer active-state schemas.
-- Implement short write transactions for run creation/opening, guarded run and stage transitions, monotonic attempt allocation, controller leases, stage leases, lease renewal/release/failure, submitted-operation upserts or writes, output commits, artifact facts, cleanup candidates that are identifiable from backend facts, audit rows, and revision increments.
+- Implement short write transactions for run creation/opening, guarded run and stage transitions, monotonic attempt allocation, controller leases, stage leases, lease renewal/release/failure, submitted-operation upserts or writes, output commits, artifact facts, cleanup candidates that are identifiable from backend facts, audit rows with sequence evidence and optional private revision linkage, and revision increments.
 - Implement fenced output commits so a stage can reach `SUCCEEDED` only when the active stage lease, attempt id, fencing token, output commit record, artifact facts, terminal stage status, and backend revision are committed atomically.
 - Implement deterministic recovery scans for expired leases, abandoned attempts, interrupted submissions, and partial backend facts representable by the Phase 1 models.
 - Declare SQLite per-run capabilities accurately, including local-clock lease semantics and explicit unsupported diagnostics for cross-run coordination, global counters, unsafe shared-filesystem assumptions, remote authority, and any materialization capability not actually implemented in Phase 2.
@@ -71,6 +72,7 @@ This phase creates the private state substrate only. Existing serial runner beha
 - No workspace/sweep coordination SQLite backend, trial/resource leases, global counters, or cross-run recovery.
 - No backend CLI, repair command, mutation command, SQL command, export/import command, or user-facing snapshot workflow.
 - No public SQL schema, table-name contract, migration framework, destructive migration, or old-run migration.
+- No Phase 1 protocol, read-model, submitted-operation, event-record, or status-enum changes unless the executor stops for the manager with a concrete contract blocker.
 - No dynamic DAG behavior, bounded parallel scheduling, worker pool, or multi-controller execution.
 - No new runtime dependencies and no network, SLURM, remote store, or hosted service requirement.
 - No broad refactor of `LocalRunStore`, `RunCatalog`, execution runner modules, or CLI presentation modules.
@@ -79,7 +81,8 @@ This phase creates the private state substrate only. Existing serial runner beha
 
 - The SQLite implementation surface may be importable from a backend-specific stores module, but the stable behavioral contract remains `PerRunAuthorityStore` and Phase 1 value models.
 - `create_run()` may initialize the private authority database and its parent directory inside the run root. It must fail clearly when an authority database already exists with incompatible state.
-- The run-local portability contract means the database path derives from the currently supplied run-root URI and no private schema detail should depend on an absolute database path. Returned record models should use the current `run_uri`; if preserving submitted-operation or record identity across ordinary run-root moves requires a Phase 1 contract change, stop for the manager.
+- `check_schema()` should report missing, invalid, unsupported older, and unsupported newer SQLite authority schemas through `AuthoritySchemaCheck`/`AuthoritySchemaFailure` where possible. Mutating operations and `open_run()` should fail loudly before partial mutation when schema checks fail.
+- The run-local portability contract means the database path derives from the currently supplied run-root URI and no private schema detail should depend on an absolute database path. Returned record fields whose Phase 1 models explicitly carry `run_uri` should use the current `run_uri`, including submitted-operation records after an ordinary local run-root move. `ArtifactRef.uri` values should be persisted as supplied in Phase 2; payload URI rewriting and missing-payload portability warnings are Phase 3/materialization concerns. If preserving record identity across ordinary run-root moves requires a Phase 1 contract change, stop for the manager.
 - SQLite lease time is backend-owned local UTC time. The implementation should allow deterministic tests through an injectable clock or equivalent test-only time control while using Loom UTC timestamp helpers by default.
 - Payload staging and checksum validation are future runner/materialization work. Phase 2 records authoritative commit and artifact facts for the `ArtifactRef` values it receives; it should not inspect payload files or create local materialization helpers beyond fields already present in Phase 1 records.
 
@@ -90,6 +93,10 @@ The SQLite backend must satisfy `PerRunAuthorityStore` for one run and only one 
 The database schema is private. Reviewers may inspect it for correctness, but table names, column names, indexes, PRAGMAs, and SQL queries must not become documentation, CLI, catalog, runner, or public API contracts. Later phases should consume contract methods and read models, not SQLite internals.
 
 All state-changing operations must advance a `BackendRevision` in the same transaction as the state change. Guarded transitions must compare the caller-supplied expected status with current backend state. Attempt allocation must be monotonic per stage under concurrent SQLite connections. Lease renewal, release, failure, and output commit must require matching owner and fencing token and must reject expired, released, failed, stale, or foreign leases.
+
+The Phase 1 public contract is fixed for this phase. Returned models must be Phase 1 models, with no new status values and no public SQLite-specific fields. If the implementation needs a public event revision field, a cleanup-candidate write method, a materialization API, or a workspace/sweep primitive to satisfy Phase 2 tests, that is a blocker rather than a license to expand scope.
+
+Schema policy is loud-fail only. The backend may initialize the current schema for a new run and may read the current schema, but it must not silently migrate, destructively rewrite, downgrade, or ignore unknown active-state schemas. Schema diagnostics should be machine-readable through Phase 1 schema/capability records without leaking SQL internals.
 
 SQLite capabilities must be honest. The backend can claim local per-run coordination capabilities it actually implements, but shared-filesystem, multi-host, remote authority, cross-run coordination, and global counters must be unsupported or diagnostic-limited until later phases/backends provide stronger semantics.
 
@@ -130,14 +137,14 @@ SQLite capabilities must be honest. The backend can claim local per-run coordina
 
 - Expected PR size and shape: moderate backend PR with one backend-specific stores module plus private helpers, package/unit/contract/integration tests, and focused docs updates. It should not include runner, CLI, catalog, or workspace coordination changes.
 - Files and areas to inspect: `src/loom/pipeline/stores/` backend module and any private schema/transaction helpers; `src/loom/pipeline/stores/__init__.py` only if exports change; `tests/package/test_pipeline_store_api.py`; `tests/unit/loom/pipeline/stores/`; `tests/contracts/test_authority_store_contract.py` or a SQLite conformance companion; new SQLite integration tests under `tests/integration/pipeline/`; and docs that describe backend limits.
-- Scope-control checks: no public SQL docs, no broad local-store refactor, no `loom.runs` import from stores, no root store import of `sqlite3`, no runner hard swap, no CLI, no workspace/sweep records, no old-run migration, no status enum widening, and no materialized file truth path.
+- Scope-control checks: no public SQL docs, no broad local-store refactor, no `loom.runs` import from stores, no root store import of `sqlite3`, no runner hard swap, no CLI, no workspace/sweep records, no old-run migration, no status enum widening, no Phase 1 protocol/model reshaping, and no materialized file truth path.
 
 ## Implementation Steps
 
-1. Establish the backend module boundary, private path helper, connection setup, schema metadata, schema initialization/checking, and capability declarations while preserving root store import boundaries.
+1. Establish the backend module boundary, private path helper, connection setup, schema metadata, schema initialization/checking, and capability declarations while preserving root store import boundaries and avoiding an eager root `sqlite3` import.
 2. Add transaction/revision primitives and implement create/open/snapshot plus guarded run and stage transitions against the private schema.
 3. Implement attempt allocation and controller/stage lease acquire, renew, release, fail, expiry filtering, and fencing-token checks with deterministic backend-owned time.
-4. Implement submitted-operation persistence, audit row persistence with revision/sequence evidence, recovery scans, and cleanup-candidate listing for backend-identifiable facts.
+4. Implement submitted-operation persistence, audit row persistence with public sequence evidence plus any private revision link, recovery scans, and cleanup-candidate listing for backend-identifiable facts.
 5. Implement output commit transactions that validate active stage fencing and atomically record commit, artifact facts, terminal attempt/stage state, and revision.
 6. Add package, unit, contract, and integration tests plus focused docs updates for SQLite limitations and private-schema/loud-fail policy.
 
@@ -147,25 +154,25 @@ SQLite capabilities must be honest. The backend can claim local per-run coordina
 
 - Status: required.
 - Expected paths: `tests/package/test_pipeline_store_api.py` and any existing package import-boundary tests if exports change.
-- Required assertions or deferral reason: importing `loom.pipeline.stores` remains cheap and does not import `sqlite3`, `loom.runs`, CLI, project code, or optional config dependencies; the SQLite backend module imports without optional dependencies; any intentional backend export is stable and typed.
+- Required assertions or deferral reason: importing `loom.pipeline.stores` remains cheap and does not import `sqlite3`, `loom.runs`, CLI, project code, or optional config dependencies; the SQLite backend module imports without optional dependencies; any intentional backend export is stable, typed, and covered by an exact `__all__` update.
 
 ### Unit Suite
 
 - Status: required.
 - Expected paths: new tests under `tests/unit/loom/pipeline/stores/`, for example SQLite schema policy, transaction helpers, revision helpers, capability declarations, error mapping, submitted-operation persistence, event/audit evidence, lease time/fencing, and output-commit behavior.
-- Required assertions or deferral reason: schema initialization records the current version; missing/invalid/older/newer schemas map to `AuthoritySchemaCheck`/failure diagnostics; every state mutation advances revision exactly with the transaction; stale status transitions fail; lease misuse fails; submitted records round-trip; output commits reject stale or foreign fences; SQLite-specific errors are mapped to store/authority errors without leaking raw SQL as public API.
+- Required assertions or deferral reason: schema initialization records the current version; missing/invalid/older/newer schemas map to `AuthoritySchemaCheck`/failure diagnostics; every state mutation advances revision exactly with the transaction; stale status transitions fail; lease misuse fails; submitted records round-trip through Phase 1 models; audit appends expose sequence evidence without requiring a public revision field; output commits reject stale or foreign fences; SQLite-specific errors are mapped to store/authority errors without leaking raw SQL as public API.
 
 ### Contract Suite
 
 - Status: required.
 - Expected paths: extend `tests/contracts/test_authority_store_contract.py` or add a SQLite-specific contract companion that reuses the same per-run conformance assertions.
-- Required assertions or deferral reason: SQLite satisfies `PerRunAuthorityStore`; supported per-run capabilities are present; unsupported cross-run/global/shared-unsafe capabilities are loud; create/open, transitions, attempts, leases, submitted operations, output commits, artifact facts, snapshots, recovery scans, cleanup candidates, and schema checks behave through Phase 1 models.
+- Required assertions or deferral reason: SQLite satisfies `PerRunAuthorityStore`; supported per-run capabilities are present; unsupported cross-run/global/shared-unsafe capabilities are loud; create/open, transitions, attempts, leases, submitted operations, output commits, artifact facts, snapshots, recovery scans, cleanup candidates, and schema checks behave through Phase 1 models. The contract suite should be reused or parameterized so SQLite is checked against the same behavioral assertions as the in-memory conformance store, with extra SQLite-only cases kept out of the backend-neutral contract assertions.
 
 ### Integration Suite
 
 - Status: required.
 - Expected paths: new tests under `tests/integration/pipeline/`, such as `test_sqlite_authority_backend.py` or `test_sqlite_authority_concurrency.py`.
-- Required assertions or deferral reason: multiple SQLite connections or store instances contend deterministically for attempt allocation, stage lease acquisition, renewal/release/failure, output commit, submitted-operation writes, recovery scans, schema checks, cleanup candidates, and revisioned snapshots; ordinary run-root movement keeps the run-local authority database openable through the moved run URI; tests avoid timing-sensitive stress and use deterministic clocks/TTLs.
+- Required assertions or deferral reason: multiple SQLite connections or store instances contend deterministically for attempt allocation, stage lease acquisition, renewal/release/failure, output commit, submitted-operation writes, recovery scans, schema checks, cleanup candidates representable from backend facts, and revisioned snapshots; ordinary run-root movement keeps the run-local authority database openable through the moved run URI and returns current-run-URI model fields, including submitted-operation `run_uri`; tests avoid timing-sensitive stress and use deterministic clocks/TTLs.
 
 ### E2E Suite
 
@@ -184,6 +191,7 @@ SQLite capabilities must be honest. The backend can claim local per-run coordina
 - SQLite file-locking semantics vary across filesystems; this phase must document local/same-host limits and fail loudly for shared-filesystem or remote assumptions rather than overclaim capabilities.
 - Run-root portability can be undermined if the private schema stores absolute run paths or serialized records that cannot be reconstructed with the current `run_uri`.
 - Contract gaps may appear around cleanup candidates, materialized refs, or audit revision evidence because Phase 1 intentionally kept the public surface compact.
+- Accidentally satisfying a missing Phase 1 surface by adding public fields or methods would make Phase 2 unreviewable against its assigned scope; stop instead of widening the contract.
 - Concurrency tests can become flaky if they rely on wall-clock timing instead of deterministic clocks, barriers, and bounded SQLite contention scenarios.
 - Root-level exports can accidentally import `sqlite3` through `loom.pipeline.stores` and violate package import-boundary guarantees.
 
@@ -213,8 +221,8 @@ make test-summary
 
 - Safe implementation slices: backend module/import boundary first; schema and schema-policy checks second; transaction/revision plus create/open/snapshot third; attempts/leases/fencing fourth; submitted/audit/recovery/cleanup fifth; output commits and artifact facts sixth; tests and docs alongside each slice.
 - Tests to run with each slice: package import-boundary test after module/export changes; unit tests after schema/transaction/lease/commit slices; contract tests once core methods pass; integration concurrency tests after multi-connection behavior is implemented.
-- Decisions the executor must not revisit: no public SQL schema; no runner or CLI integration; no workspace/sweep backend; no old-run migration; no legacy local-file fallback; no new status enum values; no third-party SQLite/ORM dependency; no root store import of `sqlite3`.
-- Conditions that require stopping for the manager: Phase 1 protocol or value-model changes are required; run-root portability cannot be satisfied without changing public `run_uri` semantics; deterministic SQLite concurrency tests cannot be made reliable in the default suite; accepted capabilities would be misleading; implementation needs to touch execution runner, `loom.runs`, CLI, or workspace coordination to pass acceptance criteria.
+- Decisions the executor must not revisit: no public SQL schema; no runner or CLI integration; no workspace/sweep backend; no old-run migration; no legacy local-file fallback; no new status enum values; no third-party SQLite/ORM dependency; no root store import of `sqlite3`; no Phase 1 protocol/model expansion.
+- Conditions that require stopping for the manager: Phase 1 protocol or value-model changes are required; run-root portability cannot be satisfied without changing public `run_uri` semantics; deterministic SQLite concurrency tests cannot be made reliable in the default suite; accepted capabilities would be misleading; implementation needs to touch execution runner, `loom.runs`, CLI, or workspace coordination to pass acceptance criteria; cleanup-candidate or audit-revision acceptance cannot be represented through current Phase 1 models.
 
 ## Refinement And Review Budget Status
 
@@ -224,11 +232,11 @@ make test-summary
 
 ## Completion Notes
 
-- Draft plan: complete on 2026-05-10 by `loom_phase_planner`; expanded-path refine pass remains pending.
-- Final phase execution plan: pending refine pass.
+- Draft plan: complete on 2026-05-10 by `loom_phase_planner`.
+- Final phase execution plan: refined and scope-complete on 2026-05-10; ready for `loom_phase_executor`.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: confirmed against `AGENTS.md`, `.codex/prompts/phase-execution-plan-refine.md`, `.codex/templates/phase-execution-plan.md`, `docs/implementation-plans/implementation-plan-v9.md`, Phase 1 store contracts, package/contract/unit/integration test boundaries, and Phase 2 acceptance criteria. Tightened stop conditions for public contract changes, run-root portability, audit sequence/revision evidence, cleanup-candidate limits, root import boundaries, and suite-level test obligations.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: no predecessor; branch targets `develop`.
