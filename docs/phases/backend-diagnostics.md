@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan; expanded-path refine pending.
+- Status: final phase execution plan; ready for implementation.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 6: Read-Only Backend Diagnostics CLI`
 - Branch: `codex/backend-diagnostics`
@@ -31,8 +31,13 @@
   blocking or non-blocking findings remained.
 - Plan quality gate loop budget: initial review used; gate refinement and
   confirmation review were not needed.
-- Draft pass: complete by `loom_phase_planner` in this artifact.
-- Refine pass: pending for expanded-path assignment.
+- Draft pass: complete by `loom_phase_planner` in draft-plan commit
+  `fe8c8c8`.
+- Refine pass: complete on 2026-05-10 by `loom_phase_planner`; the expanded
+  pass reread the draft plan, implementation-plan v9, phase prompt, template,
+  and current CLI/diagnostics/store/read-model/test boundaries, then tightened
+  command semantics, warning/failure behavior, no-mutation proof obligations,
+  projection evidence, and stop conditions.
 - Setup limitations: branch/worktree creation used local `develop` at the
   manager-provided current pushed Phase 5 metadata commit. No remote fetch,
   GitHub operation, broad validation, PR action, or implementation was run
@@ -113,6 +118,11 @@ reliability work owns repair or cleanup mutation semantics.
   `LocalMaterializationRequest`, projection-revision warnings, active-run
   revision-change warnings, schema warnings, and materialized-ref diagnostics.
   Reuse this boundary rather than adding a second read-model interpreter.
+- `src/loom/runs/_extract.py` and the v8/v9 catalog models still represent
+  derived projection freshness separately from authoritative backend revision.
+  Phase 6 can accept explicit projection revision evidence and report
+  staleness, but it must not rebuild or mutate catalog sidecars to create that
+  evidence.
 - `src/loom/pipeline/stores/capabilities.py` already has capability records,
   diagnostic severities, and unsupported capability codes for missing
   capability, unsafe shared filesystem, and unsafe remote coordination. Phase 6
@@ -154,6 +164,12 @@ reliability work owns repair or cleanup mutation semantics.
 - Provide explicit shared-filesystem and remote-store requirement flags whose
   unsupported diagnostics are loud. Default local inspection may report these
   as warnings or unsupported capability records without failing.
+- Normalize CLI warning and failure behavior: nonfatal diagnostics should
+  return success with warnings and `ok: true` JSON, while missing authority,
+  unreadable/unsupported schema in a requested authoritative run, malformed
+  projection revision input, or explicitly required unsupported shared/remote
+  capabilities should return an existing nonzero CLI error category with
+  machine-readable context.
 - Keep all inspection read-only: use `check_schema()`, `capabilities()`,
   `snapshot()`, `scan_recovery()`, `list_cleanup_candidates()`, and
   `read_authoritative_run()`; do not call mutating backend methods.
@@ -195,6 +211,9 @@ reliability work owns repair or cleanup mutation semantics.
 - Projection freshness diagnostics can be driven by explicit projection
   revision input or helper-provided revision evidence. Do not add catalog
   rebuild or sidecar mutation to produce that evidence in this phase.
+- Diagnostics may include recovery candidates and cleanup candidates, but they
+  must present them as facts requiring later policy, not apply recovery or
+  delete materialized files.
 
 ## Scope Contract
 
@@ -214,6 +233,18 @@ the semantics must stay intact: default inspection is read-only and local;
 explicit shared-filesystem or remote requirements produce loud diagnostics when
 the selected backend cannot prove those guarantees.
 
+`--projection-revision` is read-only comparison evidence. It should parse the
+same sequence/token shape used by `BackendRevision`; malformed input is a CLI
+usage or run-state error, and valid stale evidence produces a stale-projection
+diagnostic without updating any projection.
+
+Exit semantics are part of the public contract for this phase. A successful
+diagnostic read with warnings returns success and includes those warnings in
+text/JSON. A request that cannot be answered from authoritative backend state,
+or that explicitly requires unsupported shared-filesystem or remote guarantees,
+returns a nonzero CLI result with the same diagnostic records preserved for
+JSON callers.
+
 The JSON result must be plain-data and schema-versioned. It should include
 backend identity, run URI, schema status, current backend revision, capability
 records or capability diagnostics, warning records, summary counts, and
@@ -232,6 +263,11 @@ logs, config copies, provenance documents, or worker handoff files become
 warnings or strict diagnostics; they do not alter lifecycle truth or attempt to
 repair files.
 
+Detailed record output is allowed, but it should remain bounded and
+reviewable. `inspect` may include per-stage detail and counts by default; if a
+run has many records, the executor may add narrow selectors such as
+`--stage STAGE` rather than invent pagination, streaming, or export behavior.
+
 ## Acceptance Criteria
 
 - `loom backend ...` appears in top-level CLI help and has text/JSON smoke
@@ -247,6 +283,9 @@ repair files.
 - Unsupported schema, missing authority, stale projection, actively changing
   run, missing/corrupt materialization, and partial-commit conditions map to
   stable warning or error records.
+- Default warning-only reads preserve warnings in both text and JSON; explicit
+  unsupported shared/remote requirements and unavailable authoritative state
+  fail loudly without hiding diagnostic detail.
 - Tests prove inspection does not mutate backend revision, lifecycle facts,
   submitted operations, attempts, leases, commits, cleanup candidates, or
   materialized files.
@@ -423,6 +462,8 @@ repair files.
   with catalog rebuild behavior; keep them read-only.
 - No-mutation tests could be too weak if they only assert CLI exit codes; they
   should compare backend revision/fact evidence or use mutating-method spies.
+- Record-heavy runs could pressure text output. Keep summaries compact and add
+  targeted selectors before considering broad output-shaping features.
 
 ## Validation Commands
 
@@ -464,7 +505,12 @@ make test-summary
   read facts without broad public API changes; shared-filesystem or remote
   assumptions would need a new backend implementation; validation requires
   network, real SLURM, or non-local services.
-- Expanded-path refinement notes: pending.
+- Expanded-path refinement notes: command grammar is intentionally small;
+  default diagnostics are warning-preserving successes, explicit unsupported
+  assumptions are failures, projection evidence is read-only input, recovery
+  and cleanup records are report-only, and no-mutation tests must use backend
+  revision/fact comparisons or mutating-method spies rather than CLI exit
+  status alone.
 
 ## Refinement And Review Budget Status
 
@@ -475,7 +521,8 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed in this artifact.
-- Final phase execution plan: pending expanded-path refinement.
+- Final phase execution plan: completed by expanded-path refinement in this
+  artifact.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
