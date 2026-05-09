@@ -2,12 +2,13 @@
 
 ## Metadata
 
-- Status: implementation refinement complete; PR preparation ready.
+- Status: PR body draft complete; PR body refine pending.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 5: Public Serial Backend Swap And Read Path`
 - Branch: `codex/public-backend-swap`
 - Worktree: `/home/samcantrill/work/loom-worktrees/public-backend-swap`
 - Phase execution plan path: `docs/phases/public-backend-swap.md`
+- PR body artifact: `docs/phases/public-backend-swap-pr-body.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v9.md`
 - Source phase: Phase 5 - Public Serial Hard Swap And Read-Path Swap
 - Stack predecessor: none; Phases 1, 2, 3, and 4 are merged into `develop`.
@@ -39,6 +40,8 @@
   expanded-path implementation/test refinement pass. The pass fixed catalog
   scan warning conversion for malformed or unsupported authority DB schemas
   and added focused coverage.
+- PR body draft pass: complete on 2026-05-10 by `loom_pr_preparer`.
+- PR body refine/open pass: pending for the expanded-path PR-body refine pass.
 - Phase PR review budget: unused.
 - Blocker-resolution budget: 0/3 used.
 - Setup limitations: no fetch, GitHub operation, broad validation, PR action,
@@ -559,6 +562,9 @@ refinement validation are recorded in the completion notes below.
 - Phase implementation refinement: used on 2026-05-10; the pass fixed
   authority DB schema warning conversion during catalog direct scans and added
   focused unit coverage for malformed and unsupported authority DB schemas.
+- PR body draft: complete on 2026-05-10 in
+  `docs/phases/public-backend-swap-pr-body.md`.
+- PR body refine/open: pending for expanded-path PR preparation.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
@@ -618,6 +624,28 @@ refinement validation are recorded in the completion notes below.
     passed: 4 passed.
   - `uv run pytest tests/unit/loom/runs/test_direct_scan_helpers.py tests/unit/loom/runs/test_current_listing.py tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_sqlite.py tests/integration/pipeline/test_run_catalog_compare.py`
     passed: 21 passed.
+- PR body draft pass: complete on 2026-05-10. Confirmed the dedicated worktree
+  `/home/samcantrill/work/loom-worktrees/public-backend-swap`, branch
+  `codex/public-backend-swap`, stack predecessor `none`, target branch
+  `develop`, root merge eligibility, and final title `Persistence And
+  Concurrency Foundation - Phase 5: Public Serial Backend Swap And Read Path`.
+  Confirmed `develop` is an ancestor of the phase branch and `git diff --check`
+  passed after the draft docs update.
+- PR body artifact: drafted `docs/phases/public-backend-swap-pr-body.md` from
+  `.codex/templates/phase-pr-body.md`, checked against
+  `.github/PULL_REQUEST_TEMPLATE.md`, the final diff, implementation-plan v9
+  Phase 5 scope, this phase execution plan, and existing validation evidence.
+  The public body keeps workflow internals in this phase plan and uses compact
+  validation and suite tables.
+- PR opening status: intentionally not opened in this draft pass because the
+  expanded path is active. `.codex/prompts/pr-body-refine.md` remains pending
+  for PR body verification, PR creation, and GitHub check evidence.
+- PR body draft validation evidence used: existing `make validate-pr` pass from
+  implementation refinement, and existing `make test-summary` output in
+  `build/test-summary.md` generated 2026-05-09T20:16:47Z with overall status
+  `passed` (1481 passed, 12 skipped, 1075 deselected). Validation was not
+  rerun in the draft pass because this pass made documentation/artifact updates
+  only and the current test-summary evidence was already available.
 - Accepted limitations: old v0-v8 local-only run directories remain
   intentionally unsupported by the new authority read path and are not
   migrated. Local files are still materialized for logs, provenance, inputs,
@@ -630,6 +658,7 @@ refinement validation are recorded in the completion notes below.
   rules, catalog/status conflict rules, old-run compatibility limits, import
   boundary risks, suite obligations, and executor handoff notes.
 - Blocker-resolution summary: none.
-- PR preparation: not started.
-- Stack maintenance: none needed at refinement time.
+- PR preparation: PR body draft complete; expanded-path refine/open pass
+  pending.
+- Stack maintenance: none needed at PR body draft time.
 - Remaining blockers: none.
