@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation pending
+- Status: pr_open
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 4: Current Listing, Refresh, And Filters`
 - Branch: `codex/run-catalog-current-list`
@@ -13,7 +13,7 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/98
 - Merge eligibility: merge-eligible after implementation, automated review, local validation, and GitHub checks because Phases 1 through 3 are merged and this is a root phase targeting `develop`
 - Workflow path: expanded path because this phase spans SQLite current-read semantics, refresh/reconciliation, exact-match filters, stale-row correctness, and local concurrency behavior
 - Successor dependency notes: Phase 5 may use current summaries from `RunCatalog.list()` when comparing runs, but Phase 4 must not implement comparison behavior.
@@ -277,7 +277,7 @@ If `tests/contracts/test_run_catalog_contract.py` or `tests/integration/pipeline
 - Phase implementation refinement: not needed after targeted validation, full
   PR validation, and manager scope review passed without concrete
   current-read/filter correctness blockers.
-- PR review: unused
+- PR review: pending
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -310,6 +310,7 @@ If `tests/contracts/test_run_catalog_contract.py` or `tests/integration/pipeline
   default current-read guarantee and keeps Phase 4 reviewable; revisit when
   list latency becomes unacceptable or a stale-tolerant/incremental refresh
   mode is planned.
-- PR preparation: PR body pending at
-  `docs/phases/run-catalog-current-list-pr-body.md`; PR not yet opened.
-- PR: pending
+- PR preparation: completed; PR #98 opened at
+  https://github.com/samcantrill/loom/pull/98 and verified with base
+  `develop` and head `codex/run-catalog-current-list`.
+- PR: https://github.com/samcantrill/loom/pull/98
