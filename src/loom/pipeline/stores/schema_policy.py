@@ -36,9 +36,7 @@ class AuthoritySchemaFailure:
     detail: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "kind", _coerce_kind(self.kind, field="kind")
-        )
+        object.__setattr__(self, "kind", _coerce_kind(self.kind, field="kind"))
         object.__setattr__(self, "message", _non_empty_string(self.message, "message"))
         if self.found_version is not None:
             object.__setattr__(
@@ -47,7 +45,9 @@ class AuthoritySchemaFailure:
                 _positive_int(self.found_version, "found_version"),
             )
         object.__setattr__(
-            self, "current_version", _positive_int(self.current_version, "current_version")
+            self,
+            "current_version",
+            _positive_int(self.current_version, "current_version"),
         )
         object.__setattr__(self, "detail", _plain_mapping(self.detail, "detail"))
 
@@ -75,6 +75,27 @@ class AuthoritySchemaFailure:
             "detail": dict(self.detail),
         }
 
+    @classmethod
+    def from_dict(cls, data: object) -> "AuthoritySchemaFailure":
+        mapping = _mapping(data, "AuthoritySchemaFailure")
+        _reject_unknown(
+            mapping,
+            {"kind", "message", "found_version", "current_version", "detail"},
+            "AuthoritySchemaFailure",
+        )
+        return cls(
+            kind=_coerce_kind(_required(mapping, "kind"), field="kind"),
+            message=_non_empty_string(_required(mapping, "message"), "message"),
+            found_version=_optional_positive_int(
+                mapping.get("found_version"), "found_version"
+            ),
+            current_version=_positive_int(
+                mapping.get("current_version", AUTHORITY_SCHEMA_VERSION),
+                "current_version",
+            ),
+            detail=_plain_mapping(mapping.get("detail", {}), "detail"),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class AuthoritySchemaCheck:
@@ -84,11 +105,15 @@ class AuthoritySchemaCheck:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "current_version", _positive_int(self.current_version, "current_version")
+            self,
+            "current_version",
+            _positive_int(self.current_version, "current_version"),
         )
         if self.found_version is not None:
             object.__setattr__(
-                self, "found_version", _positive_int(self.found_version, "found_version")
+                self,
+                "found_version",
+                _positive_int(self.found_version, "found_version"),
             )
         if self.failure is not None and not isinstance(
             self.failure, AuthoritySchemaFailure
@@ -112,6 +137,31 @@ class AuthoritySchemaCheck:
             "supported": self.supported,
             "failure": None if self.failure is None else self.failure.to_dict(),
         }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "AuthoritySchemaCheck":
+        mapping = _mapping(data, "AuthoritySchemaCheck")
+        _reject_unknown(
+            mapping,
+            {"current_version", "found_version", "supported", "failure"},
+            "AuthoritySchemaCheck",
+        )
+        failure_data = mapping.get("failure")
+        check = cls(
+            current_version=_positive_int(
+                mapping.get("current_version", AUTHORITY_SCHEMA_VERSION),
+                "current_version",
+            ),
+            found_version=_optional_positive_int(
+                mapping.get("found_version"), "found_version"
+            ),
+            failure=None
+            if failure_data is None
+            else AuthoritySchemaFailure.from_dict(failure_data),
+        )
+        if "supported" in mapping and mapping["supported"] != check.supported:
+            raise AuthoritySchemaError("supported does not match failure")
+        return check
 
 
 def check_authority_schema_version(
@@ -204,10 +254,40 @@ def _positive_int(value: object, field: str) -> int:
     return value
 
 
+def _optional_positive_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    return _positive_int(value, field)
+
+
 def _non_empty_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise AuthoritySchemaError(f"{field} must be a non-empty string")
     return value
+
+
+def _mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise AuthoritySchemaError(f"{field} must be a mapping")
+    if any(not isinstance(key, str) for key in value):
+        raise AuthoritySchemaError(f"{field} must have string keys")
+    return cast(Mapping[str, object], value)
+
+
+def _required(mapping: Mapping[str, object], field: str) -> object:
+    if field not in mapping:
+        raise AuthoritySchemaError(f"{field} is required")
+    return mapping[field]
+
+
+def _reject_unknown(
+    mapping: Mapping[str, object], allowed: set[str], field: str
+) -> None:
+    unknown = set(mapping) - allowed
+    if unknown:
+        raise AuthoritySchemaError(
+            f"{field} contains unknown field(s): {', '.join(sorted(unknown))}"
+        )
 
 
 def _plain_mapping(value: object, field: str) -> Mapping[str, PlainData]:

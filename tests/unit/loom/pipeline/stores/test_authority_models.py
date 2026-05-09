@@ -7,6 +7,11 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AUTHORITY_SCHEMA_VERSION,
     ArtifactFactRecord,
+    AttemptAllocation,
+    AuthoritativeRunSnapshot,
+    AuthoritySchemaCheck,
+    AuthoritySchemaFailure,
+    AuthoritySchemaFailureKind,
     AuthorityModelError,
     BackendCapability,
     BackendCapabilityRecord,
@@ -16,23 +21,38 @@ from loom.pipeline.stores import (
     CapabilitySupport,
     CleanupCandidate,
     CleanupCandidateKind,
+    ConcurrencyCounter,
+    CoordinationRecoveryRecord,
+    CoordinationStoreError,
     LeaseKind,
     LeaseRecord,
+    LeaseState,
     LifecycleReason,
     MaterializedRef,
     MaterializedRefKind,
+    OutputCommit,
     OutputCommitRecord,
     ReadModelWarning,
     ReadModelWarningCode,
     RecoveryKind,
     RecoveryRecord,
+    ResourceLeaseRecord,
     StageAttempt,
+    StageLifecycleSnapshot,
+    StatusTransition,
     StaticOutcomeKind,
     StaticOutcomeRecord,
     StoreDiagnostic,
+    SweepIdentity,
+    TrialLeaseRecord,
+    TrialReference,
+    TrialState,
     UnsupportedCapabilityCode,
+    UnsupportedCapability,
+    WorkspaceIdentity,
     check_authority_schema_version,
 )
+from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
 def test_backend_capability_set_reports_machine_readable_unsupported_result() -> None:
@@ -88,6 +108,14 @@ def test_backend_capability_set_preserves_declared_unsupported_detail() -> None:
         "scope": "per_run",
         "backend": "legacy",
     }
+    assert (
+        BackendCapabilityRecord.from_dict(capabilities.records[0].to_dict())
+        == capabilities.records[0]
+    )
+    assert BackendCapabilitySet.from_dict(capabilities.to_dict()) == capabilities
+    assert UnsupportedCapability.from_dict(unsupported.to_dict()) == unsupported
+    diagnostic = unsupported.to_diagnostic()
+    assert StoreDiagnostic.from_dict(diagnostic.to_dict()) == diagnostic
 
 
 def test_authority_schema_policy_loudly_rejects_old_and_new_active_state() -> None:
@@ -99,9 +127,11 @@ def test_authority_schema_policy_loudly_rejects_old_and_new_active_state() -> No
 
     assert current.supported
     assert older.failure is not None
-    assert older.failure.kind.value == "unsupported_older"
+    assert older.failure.kind is AuthoritySchemaFailureKind.UNSUPPORTED_OLDER
     assert newer.failure is not None
-    assert newer.failure.kind.value == "unsupported_newer"
+    assert newer.failure.kind is AuthoritySchemaFailureKind.UNSUPPORTED_NEWER
+    assert AuthoritySchemaCheck.from_dict(current.to_dict()) == current
+    assert AuthoritySchemaFailure.from_dict(older.failure.to_dict()) == older.failure
 
 
 def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() -> None:
@@ -190,6 +220,51 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
         message="payload missing",
         revision=revision,
     )
+    submitted = SubmittedOperationRecord(
+        run_uri="file:///runs/r1",
+        submission_id="submission-1",
+        backend="local",
+        mode="batch",
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        state=SubmittedOperationState.SUBMITTED,
+        manifest_relative_path="submitted/submission-1.json",
+        summary_counts={"submitted": 1},
+    )
+    stage_snapshot = StageLifecycleSnapshot(
+        stage_name="build",
+        status=StageStatus.SUCCEEDED,
+        revision=revision,
+        attempts=(attempt,),
+        active_lease=lease,
+        latest_commit=commit,
+        artifact_facts=(fact,),
+        reason=reason,
+    )
+    run_snapshot = AuthoritativeRunSnapshot(
+        run_uri="file:///runs/r1",
+        status=RunStatus.SUCCEEDED,
+        schema_version=AUTHORITY_SCHEMA_VERSION,
+        revision=revision,
+        stages=(stage_snapshot,),
+        submitted_operations=(submitted,),
+        cleanup_candidates=(cleanup,),
+        materialized_refs=(materialized,),
+        warnings=(warning,),
+    )
+    transition = StatusTransition(
+        run_uri="file:///runs/r1",
+        status=RunStatus.RUNNING,
+        previous_status=RunStatus.CREATED,
+        revision=revision,
+        reason=LifecycleReason(code="started"),
+    )
+    allocation = AttemptAllocation(attempt=attempt, lease=lease)
+    output = OutputCommit(
+        commit=commit,
+        artifact_facts=(fact,),
+        cleanup_candidates=(cleanup,),
+    )
 
     assert attempt.to_dict()["attempt_id"] == "build-1"
     assert lease.to_dict()["fencing_token"] == "fence-1"
@@ -199,6 +274,125 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
     assert recovery.to_dict()["kind"] == "expired_lease"
     assert outcome.to_dict()["outcome"] == "not_selected"
     assert warning.to_dict()["code"] == "missing_materialized_ref"
+    assert BackendRevision.from_dict(revision.to_dict()) == revision
+    assert LifecycleReason.from_dict(reason.to_dict()) == reason
+    assert StageAttempt.from_dict(attempt.to_dict()) == attempt
+    assert LeaseRecord.from_dict(lease.to_dict()) == lease
+    assert MaterializedRef.from_dict(materialized.to_dict()) == materialized
+    assert OutputCommitRecord.from_dict(commit.to_dict()) == commit
+    assert ArtifactFactRecord.from_dict(fact.to_dict()) == fact
+    assert CleanupCandidate.from_dict(cleanup.to_dict()) == cleanup
+    assert RecoveryRecord.from_dict(recovery.to_dict()) == recovery
+    assert StaticOutcomeRecord.from_dict(outcome.to_dict()) == outcome
+    assert ReadModelWarning.from_dict(warning.to_dict()) == warning
+    assert StageLifecycleSnapshot.from_dict(stage_snapshot.to_dict()) == stage_snapshot
+    assert AuthoritativeRunSnapshot.from_dict(run_snapshot.to_dict()) == run_snapshot
+    assert StatusTransition.from_dict(transition.to_dict()) == transition
+    assert AttemptAllocation.from_dict(allocation.to_dict()) == allocation
+    assert OutputCommit.from_dict(output.to_dict()) == output
+
+
+def test_workspace_coordination_records_round_trip_with_cross_run_identity() -> None:
+    revision = BackendRevision(sequence=1, token="coord-rev-1")
+    workspace = WorkspaceIdentity(
+        workspace_id="workspace-1",
+        root_uri="file:///workspace",
+        metadata={"owner": "team"},
+    )
+    sweep = SweepIdentity(
+        sweep_id="sweep-1",
+        workspace_id="workspace-1",
+        metadata={"budget": 3},
+    )
+    trial = TrialReference(
+        trial_id="trial-1",
+        sweep_id="sweep-1",
+        run_uri="file:///runs/trial-1",
+        state=TrialState.CLAIMED,
+        revision=revision,
+        metadata={"index": 1},
+    )
+    trial_lease = LeaseRecord(
+        lease_id="trial-lease-1",
+        kind=LeaseKind.TRIAL,
+        owner_id="worker-1",
+        fencing_token="trial-fence-1",
+        acquired_at="2020-01-01T00:00:00Z",
+        renewed_at="2020-01-01T00:00:00Z",
+        expires_at="2020-01-01T00:01:00Z",
+        revision=revision,
+    )
+    resource_lease = LeaseRecord(
+        lease_id="resource-lease-1",
+        kind=LeaseKind.RESOURCE,
+        owner_id="worker-1",
+        fencing_token="resource-fence-1",
+        acquired_at="2020-01-01T00:00:00Z",
+        renewed_at="2020-01-01T00:00:00Z",
+        expires_at="2020-01-01T00:01:00Z",
+        revision=revision,
+        state=LeaseState.ACTIVE,
+    )
+    trial_record = TrialLeaseRecord(
+        workspace_id="workspace-1",
+        sweep_id="sweep-1",
+        trial_id="trial-1",
+        lease=trial_lease,
+    )
+    resource_record = ResourceLeaseRecord(
+        workspace_id="workspace-1",
+        resource_key="gpu",
+        lease=resource_lease,
+        amount=2,
+    )
+    recovery = CoordinationRecoveryRecord(
+        workspace_id="workspace-1",
+        sweep_id="sweep-1",
+        trial_id="trial-1",
+        recovery=RecoveryRecord(
+            recovery_id="expired-trial-lease-1",
+            kind=RecoveryKind.EXPIRED_LEASE,
+            reason=LifecycleReason(code="lease_expired"),
+            detected_at="2020-01-01T00:01:01Z",
+            revision=revision,
+        ),
+    )
+    resource_recovery = CoordinationRecoveryRecord(
+        workspace_id="workspace-1",
+        resource_key="gpu",
+        amount=2,
+        recovery=RecoveryRecord(
+            recovery_id="expired-resource-lease-1",
+            kind=RecoveryKind.EXPIRED_LEASE,
+            reason=LifecycleReason(code="lease_expired"),
+            detected_at="2020-01-01T00:01:01Z",
+            revision=revision,
+        ),
+    )
+    counter = ConcurrencyCounter(
+        counter_name="active_trials",
+        value=2,
+        limit=4,
+        revision=revision,
+    )
+
+    assert WorkspaceIdentity.from_dict(workspace.to_dict()) == workspace
+    assert SweepIdentity.from_dict(sweep.to_dict()) == sweep
+    assert TrialReference.from_dict(trial.to_dict()) == trial
+    assert TrialLeaseRecord.from_dict(trial_record.to_dict()) == trial_record
+    assert ResourceLeaseRecord.from_dict(resource_record.to_dict()) == resource_record
+    assert CoordinationRecoveryRecord.from_dict(recovery.to_dict()) == recovery
+    assert (
+        CoordinationRecoveryRecord.from_dict(resource_recovery.to_dict())
+        == resource_recovery
+    )
+    assert ConcurrencyCounter.from_dict(counter.to_dict()) == counter
+    with pytest.raises(CoordinationStoreError):
+        CoordinationRecoveryRecord(
+            workspace_id="workspace-1",
+            resource_key="gpu",
+            recovery=recovery.recovery,
+        )
 
 
 def test_static_not_selected_outcome_keeps_status_enum_coarse() -> None:

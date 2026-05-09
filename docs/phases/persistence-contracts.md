@@ -27,7 +27,7 @@
   against implementation-plan v9, `docs/structure.md`, current
   `src/loom/pipeline` and `tests/` surfaces, and Phase 1 acceptance criteria.
 - Setup limitations: branch/worktree creation used the manager-provided local `develop` state because the assignment recorded `7010204` as pushed to `origin/develop`; no `gh auth`, fetch, product-code validation, or broad checks were run during planning. Git ref creation required approved sandbox escalation because `.git/refs` was read-only in the default sandbox view.
-- Blockers: none.
+- Blockers: none remaining after blocker-resolution pass 1/3.
 
 ## Objective
 
@@ -354,8 +354,9 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used on 2026-05-09 by `loom_phase_refiner`
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used on 2026-05-10 by the single PR review for #101
+- Blocker resolution: 1/3 used on 2026-05-10 for the PR #101
+  cross-run coordination identity and contract round-trip blocker cluster
 
 ## Phase Refinement Report
 
@@ -427,6 +428,75 @@ result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 desel
   validation is complete.
 - Suite evidence still needed: none.
 
+## Blocker Resolution Report
+
+### Metadata
+
+- Phase: Phase 1 - Authority Contracts, Schema Policy, And Compatibility Surface
+- PR: https://github.com/samcantrill/loom/pull/101
+- Branch: `codex/persistence-contracts`
+- Worktree: `/home/samcantrill/work/loom-worktrees/persistence-contracts`
+- Phase execution plan: `docs/phases/persistence-contracts.md`
+- Resolver: `loom_phase_refiner`
+- Resolution date: 2026-05-10
+- Pass type: blocker resolution
+- Blocker-resolution budget status after this pass: 1/3 used
+- PR-review budget status after this pass: unchanged; the single PR review
+  remains used and was not reset by this pass
+
+### Blocker Scope
+
+- Validation output reviewed: PR review blocker cluster, current branch diff
+  against `develop`, phase commits, targeted package/unit/contract checks,
+  Ruff, Pyright, `make validate-pr`, and `make test-summary`.
+- Blocking issues caused by this phase: workspace coordination lease and
+  recovery facts lacked first-class cross-run identity for trial/resource
+  records; exported Phase 1 contract records lacked round-trip `from_dict`
+  coverage for later backend/read-model consumers.
+- Issues confirmed out of scope: SQLite implementation, runner integration,
+  backend CLI, parallel execution, workspace sweep runner, migration, fallback
+  behavior, status enum changes, per-stage mutation inside workspace
+  coordination, PR merge, and reviewer requests.
+
+### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Workspace coordination trial/resource lease and recovery facts could not carry cross-run identity. | Added `TrialLeaseRecord` and `CoordinationRecoveryRecord`, added `workspace_id` to `ResourceLeaseRecord`, updated `WorkspaceCoordinationStore.acquire_trial_lease()` and `scan_recovery()` return types, and updated the in-memory coordination store to preserve `workspace_id`, `sweep_id`, `trial_id`, `resource_key`, and `amount` where applicable. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_workspace_coordination_contract.py` passed: 2 tests. |
+| Exported Phase 1 contract records lacked round-trip deserialization. | Added `from_dict` APIs for exported authority result records, backend capability/schema records, authoritative read-model records, and workspace coordination records. Added unit coverage for nested snapshots, submitted-operation read models, coordination identity wrappers, and schema/capability diagnostics. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_authority_models.py` passed: 6 tests. |
+
+### Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_workspace_coordination_contract.py
+result: passed, 8 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py
+result: passed, 34 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores tests/unit/loom/serialization/test_schema.py
+result: passed, 132 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_store_contract.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py
+result: passed, 13 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/authority.py src/loom/pipeline/stores/capabilities.py src/loom/pipeline/stores/coordination.py src/loom/pipeline/stores/read_models.py src/loom/pipeline/stores/schema_policy.py src/loom/pipeline/stores/__init__.py tests/support/authority_stores.py tests/contracts/test_workspace_coordination_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/unit/loom/pipeline/stores/test_store_errors.py
+result: passed
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores tests/support/authority_stores.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py
+result: passed with 0 errors
+
+command: make validate-pr
+result: passed; Ruff, Pyright, default harness (981 passed, 17 skipped, 14 deselected), config-extra harness (416 passed, 1009 deselected), and uv build
+
+command: make test-summary
+result: passed; build/test-summary.md recorded package 56 passed/1 skipped; unit 766 passed/1 skipped; contract 83 passed/2 skipped; integration 64 passed/7 skipped/10 deselected; e2e 37 passed/1 deselected; config-extra 416 passed/1009 deselected; overall 1422 passed, 11 skipped, 1020 deselected, 0 failed, 0 errors
+```
+
+### Remaining Blockers
+
+- None.
+
 ## Completion Notes
 
 - Draft plan: complete in this artifact.
@@ -463,7 +533,11 @@ result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 desel
   obligations while preserving branch/base/target metadata. Implementation
   refinement pass used on 2026-05-09 to tighten capability diagnostics and
   fake-store lease/commit conformance coverage.
-- Blocker-resolution summary: unchanged; 0/3 used.
+- Blocker-resolution summary: pass 1/3 used on 2026-05-10 to resolve the
+  PR #101 blocker cluster. The pass added first-class cross-run
+  trial/resource lease and recovery records, added `from_dict` round-trip APIs
+  for exported Phase 1 contract records, updated in-memory conformance support,
+  refreshed package/unit/contract coverage, and left no remaining blockers.
 - PR preparation: PR body refine complete; local validation complete; branch
   pushed and PR opened against `develop`.
 - Stack maintenance: root PR targets `develop`; stack predecessor remains none.
@@ -489,15 +563,15 @@ result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 desel
   coverage, final local validation, and Phase 1 risks.
 - PR body refine validation evidence:
   - `make validate-pr` passed on 2026-05-10: Ruff passed; Pyright passed with
-    0 errors; default harness passed with 980 passed, 17 skipped, and 14
-    deselected; config-extra passed with 416 passed and 1008 deselected; `uv
+    0 errors; default harness passed with 981 passed, 17 skipped, and 14
+    deselected; config-extra passed with 416 passed and 1009 deselected; `uv
     build` produced the source distribution and wheel.
   - `make test-summary` passed on 2026-05-10 and wrote
     `build/test-summary.md` with generated timestamp
-    `2026-05-09T14:06:54+00:00`: package 56 passed/1 skipped; unit 765
+    `2026-05-09T14:35:57+00:00`: package 56 passed/1 skipped; unit 766
     passed/1 skipped; contract 83 passed/2 skipped; integration 64 passed/7
     skipped/10 deselected; e2e 37 passed/1 deselected; config-extra 416
-    passed/1008 deselected; overall 1421 passed, 11 skipped, 1019 deselected,
+    passed/1009 deselected; overall 1422 passed, 11 skipped, 1020 deselected,
     0 failed, 0 errors.
 - PR creation and verification:
   - Branch push: `git push origin codex/persistence-contracts` succeeded on

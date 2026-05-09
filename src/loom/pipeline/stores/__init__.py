@@ -30,9 +30,11 @@ from .capabilities import (
 )
 from .coordination import (
     ConcurrencyCounter,
+    CoordinationRecoveryRecord,
     CoordinationStoreError,
     ResourceLeaseRecord,
     SweepIdentity,
+    TrialLeaseRecord,
     TrialReference,
     TrialState,
     WorkspaceCoordinationStore,
@@ -185,7 +187,9 @@ __all__ = [
     "WorkspaceIdentity",
     "SweepIdentity",
     "TrialReference",
+    "TrialLeaseRecord",
     "ResourceLeaseRecord",
+    "CoordinationRecoveryRecord",
     "ConcurrencyCounter",
     "RunStore",
     "RunLifecycleStore",

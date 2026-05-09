@@ -22,6 +22,7 @@ from loom.pipeline.stores import (
     CapabilityScope,
     CleanupCandidate,
     ConcurrencyCounter,
+    CoordinationRecoveryRecord,
     LeaseKind,
     LeaseRecord,
     LeaseState,
@@ -36,6 +37,7 @@ from loom.pipeline.stores import (
     StageLifecycleSnapshot,
     StatusTransition,
     SweepIdentity,
+    TrialLeaseRecord,
     TrialReference,
     WorkspaceCoordinationStore,
     WorkspaceIdentity,
@@ -170,9 +172,10 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         lease_ttl_seconds: int | None = None,
     ) -> AttemptAllocation:
         state = self._require_run(run_uri)
-        if lease_ttl_seconds is not None and self._active_stage_lease(
-            state, stage_name
-        ) is not None:
+        if (
+            lease_ttl_seconds is not None
+            and self._active_stage_lease(state, stage_name) is not None
+        ):
             raise ValueError("stage already has an active lease")
         attempt_number = len(state.attempts.get(stage_name, ())) + 1
         revision = self._next_revision()
@@ -405,9 +408,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                 )
         return tuple(records)
 
-    def list_cleanup_candidates(
-        self, run_uri: str
-    ) -> tuple[CleanupCandidate, ...]:
+    def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
         return tuple(self._require_run(run_uri).cleanup)
 
     def advance_time(self, seconds: int) -> None:
@@ -542,7 +543,9 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         return None
 
     def _lease_expired(self, lease: LeaseRecord) -> bool:
-        return self._lease_expiry_ticks.get(lease.lease_id, self._tick + 1) <= self._tick
+        return (
+            self._lease_expiry_ticks.get(lease.lease_id, self._tick + 1) <= self._tick
+        )
 
     def _now(self) -> str:
         return self._at_tick(self._tick)
@@ -561,6 +564,9 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         self._sweeps: dict[str, SweepIdentity] = {}
         self._trials: dict[str, dict[str, TrialReference]] = {}
         self._leases: dict[str, LeaseRecord] = {}
+        self._trial_leases: dict[str, TrialLeaseRecord] = {}
+        self._resource_leases: dict[str, ResourceLeaseRecord] = {}
+        self._lease_expiry_ticks: dict[str, int] = {}
         self._counters: dict[tuple[str, str], ConcurrencyCounter] = {}
 
     def capabilities(self) -> BackendCapabilitySet:
@@ -614,14 +620,23 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         *,
         owner_id: str,
         lease_ttl_seconds: int,
-    ) -> LeaseRecord:
+    ) -> TrialLeaseRecord:
         if trial_id not in self._trials.get(sweep_id, {}):
             raise ValueError("unknown trial")
-        return self._new_lease(
+        sweep = self._sweeps[sweep_id]
+        lease = self._new_lease(
             kind=LeaseKind.TRIAL,
             owner_id=owner_id,
             lease_ttl_seconds=lease_ttl_seconds,
         )
+        record = TrialLeaseRecord(
+            workspace_id=sweep.workspace_id,
+            sweep_id=sweep_id,
+            trial_id=trial_id,
+            lease=lease,
+        )
+        self._trial_leases[lease.lease_id] = record
+        return record
 
     def acquire_resource_lease(
         self,
@@ -639,11 +654,14 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
             owner_id=owner_id,
             lease_ttl_seconds=lease_ttl_seconds,
         )
-        return ResourceLeaseRecord(
+        record = ResourceLeaseRecord(
+            workspace_id=workspace_id,
             resource_key=resource_key,
             lease=lease,
             amount=amount,
         )
+        self._resource_leases[lease.lease_id] = record
+        return record
 
     def release_lease(
         self,
@@ -669,6 +687,7 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
             reason=reason,
         )
         self._leases[lease_id] = updated
+        self._replace_coordination_lease(updated)
         return updated
 
     def increment_counter(
@@ -692,14 +711,50 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
     ) -> ConcurrencyCounter | None:
         return self._counters.get((workspace_id, counter_name))
 
-    def scan_recovery(self, workspace_id: str) -> tuple[RecoveryRecord, ...]:
+    def scan_recovery(
+        self, workspace_id: str
+    ) -> tuple[CoordinationRecoveryRecord, ...]:
         if workspace_id not in self._workspaces:
             raise ValueError("unknown workspace")
-        return ()
+        records: list[CoordinationRecoveryRecord] = []
+        for record in self._trial_leases.values():
+            if record.workspace_id != workspace_id or not self._lease_expired(
+                record.lease
+            ):
+                continue
+            records.append(
+                CoordinationRecoveryRecord(
+                    workspace_id=record.workspace_id,
+                    sweep_id=record.sweep_id,
+                    trial_id=record.trial_id,
+                    recovery=self._expired_lease_recovery(record.lease),
+                )
+            )
+        for record in self._resource_leases.values():
+            if record.workspace_id != workspace_id or not self._lease_expired(
+                record.lease
+            ):
+                continue
+            records.append(
+                CoordinationRecoveryRecord(
+                    workspace_id=record.workspace_id,
+                    resource_key=record.resource_key,
+                    amount=record.amount,
+                    recovery=self._expired_lease_recovery(record.lease),
+                )
+            )
+        return tuple(records)
+
+    def advance_time(self, seconds: int) -> None:
+        if seconds <= 0:
+            raise ValueError("seconds must be positive")
+        self._tick += seconds
 
     def _new_lease(
         self, *, kind: LeaseKind, owner_id: str, lease_ttl_seconds: int
     ) -> LeaseRecord:
+        if lease_ttl_seconds <= 0:
+            raise ValueError("lease_ttl_seconds must be positive")
         revision = self._next_revision()
         lease = LeaseRecord(
             lease_id=f"workspace-lease-{revision.sequence}",
@@ -712,7 +767,43 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
             revision=revision,
         )
         self._leases[lease.lease_id] = lease
+        self._lease_expiry_ticks[lease.lease_id] = self._tick + lease_ttl_seconds
         return lease
+
+    def _replace_coordination_lease(self, lease: LeaseRecord) -> None:
+        trial = self._trial_leases.get(lease.lease_id)
+        if trial is not None:
+            self._trial_leases[lease.lease_id] = TrialLeaseRecord(
+                workspace_id=trial.workspace_id,
+                sweep_id=trial.sweep_id,
+                trial_id=trial.trial_id,
+                lease=lease,
+            )
+            return
+        resource = self._resource_leases.get(lease.lease_id)
+        if resource is not None:
+            self._resource_leases[lease.lease_id] = ResourceLeaseRecord(
+                workspace_id=resource.workspace_id,
+                resource_key=resource.resource_key,
+                lease=lease,
+                amount=resource.amount,
+            )
+
+    def _lease_expired(self, lease: LeaseRecord) -> bool:
+        return (
+            lease.state is LeaseState.ACTIVE
+            and self._lease_expiry_ticks.get(lease.lease_id, self._tick + 1)
+            <= self._tick
+        )
+
+    def _expired_lease_recovery(self, lease: LeaseRecord) -> RecoveryRecord:
+        return RecoveryRecord(
+            recovery_id=f"expired-{lease.lease_id}",
+            kind=RecoveryKind.EXPIRED_LEASE,
+            reason=LifecycleReason(code="lease_expired"),
+            detected_at=self._now(),
+            revision=lease.revision,
+        )
 
     def _next_revision(self) -> BackendRevision:
         self._revision += 1

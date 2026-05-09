@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import cast
@@ -67,9 +67,7 @@ class StoreDiagnostic:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "code", _non_empty_string(self.code, "code"))
-        object.__setattr__(
-            self, "message", _non_empty_string(self.message, "message")
-        )
+        object.__setattr__(self, "message", _non_empty_string(self.message, "message"))
         object.__setattr__(
             self,
             "severity",
@@ -153,7 +151,9 @@ class BackendCapabilityRecord:
             "BackendCapabilityRecord",
         )
         return cls(
-            capability=_coerce_enum(_required(mapping, "capability"), BackendCapability, "capability"),
+            capability=_coerce_enum(
+                _required(mapping, "capability"), BackendCapability, "capability"
+            ),
             scope=_coerce_enum(_required(mapping, "scope"), CapabilityScope, "scope"),
             support=_coerce_enum(
                 mapping.get("support", CapabilitySupport.SUPPORTED.value),
@@ -185,9 +185,7 @@ class UnsupportedCapability:
         object.__setattr__(
             self, "scope", _coerce_enum(self.scope, CapabilityScope, "scope")
         )
-        object.__setattr__(
-            self, "message", _non_empty_string(self.message, "message")
-        )
+        object.__setattr__(self, "message", _non_empty_string(self.message, "message"))
         object.__setattr__(self, "detail", _plain_mapping(self.detail, "detail"))
 
     def to_diagnostic(self) -> StoreDiagnostic:
@@ -210,6 +208,26 @@ class UnsupportedCapability:
             "message": self.message,
             "detail": dict(self.detail),
         }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "UnsupportedCapability":
+        mapping = _mapping(data, "UnsupportedCapability")
+        _reject_unknown(
+            mapping,
+            {"code", "capability", "scope", "message", "detail"},
+            "UnsupportedCapability",
+        )
+        return cls(
+            code=_coerce_enum(
+                _required(mapping, "code"), UnsupportedCapabilityCode, "code"
+            ),
+            capability=_coerce_enum(
+                _required(mapping, "capability"), BackendCapability, "capability"
+            ),
+            scope=_coerce_enum(_required(mapping, "scope"), CapabilityScope, "scope"),
+            message=_non_empty_string(_required(mapping, "message"), "message"),
+            detail=_plain_mapping(mapping.get("detail", {}), "detail"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,11 +279,7 @@ class BackendCapabilitySet:
                 f"{wanted_scope.value} capability {wanted_capability.value!r}"
             )
         )
-        detail = (
-            explicit_unsupported.detail
-            if explicit_unsupported is not None
-            else {}
-        )
+        detail = explicit_unsupported.detail if explicit_unsupported is not None else {}
         return UnsupportedCapability(
             code=UnsupportedCapabilityCode.MISSING_CAPABILITY,
             capability=wanted_capability,
@@ -290,10 +304,22 @@ class BackendCapabilitySet:
             "records": [record.to_dict() for record in self.records],
         }
 
+    @classmethod
+    def from_dict(cls, data: object) -> "BackendCapabilitySet":
+        mapping = _mapping(data, "BackendCapabilitySet")
+        _reject_unknown(mapping, {"backend_name", "records"}, "BackendCapabilitySet")
+        return cls(
+            backend_name=_non_empty_string(
+                _required(mapping, "backend_name"), "backend_name"
+            ),
+            records=tuple(
+                BackendCapabilityRecord.from_dict(record)
+                for record in _sequence(_required(mapping, "records"), "records")
+            ),
+        )
 
-def _coerce_enum[T: StrEnum](
-    value: object, enum_type: type[T], field: str
-) -> T:
+
+def _coerce_enum[T: StrEnum](value: object, enum_type: type[T], field: str) -> T:
     if isinstance(value, enum_type):
         return value
     if not isinstance(value, str):
@@ -326,6 +352,12 @@ def _reject_unknown(
         raise AuthorityCapabilityError(
             f"{field} contains unknown field(s): {', '.join(sorted(unknown))}"
         )
+
+
+def _sequence(value: object, field: str) -> Sequence[object]:
+    if isinstance(value, str | bytes | bytearray) or not isinstance(value, Sequence):
+        raise AuthorityCapabilityError(f"{field} must be a sequence")
+    return cast(Sequence[object], value)
 
 
 def _non_empty_string(value: object, field: str) -> str:

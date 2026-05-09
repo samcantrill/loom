@@ -17,35 +17,35 @@ The phase is contract-only: it adds deterministic in-memory conformance fakes, p
 
 - Added `PerRunAuthorityStore` plus transition, attempt-allocation, and output-commit result records in `src/loom/pipeline/stores/authority.py`.
 - Added backend capability declarations, unsupported-capability diagnostics, and loud schema-version checks in `capabilities.py` and `schema_policy.py`.
-- Added authoritative read-model value records for revisions, attempts, leases, commits, artifact facts, materialized refs, cleanup, recovery, static outcomes, lifecycle reasons, warnings, and snapshots in `read_models.py`.
-- Added `WorkspaceCoordinationStore` and cross-run workspace/sweep records in `coordination.py`, deliberately excluding per-stage lifecycle mutation.
+- Added authoritative read-model value records for revisions, attempts, leases, commits, artifact facts, materialized refs, cleanup, recovery, static outcomes, lifecycle reasons, warnings, and snapshots in `read_models.py`, with round-trip `from_dict` coverage for exported contract records.
+- Added `WorkspaceCoordinationStore` and cross-run workspace/sweep records in `coordination.py`, including first-class trial lease and coordination recovery records that carry workspace/sweep/trial/resource identity while deliberately excluding per-stage lifecycle mutation.
 - Kept the public store facade import-light with explicit exports, and updated store/state/sweep/source-tree docs to describe the v9 authority boundary without exposing SQLite details.
 
 New tests implemented:
 
 - Package tests for public store exports, contract method presence, and forbidden import boundaries.
-- Unit tests for capability results, schema loud-fail policy, read-model serialization, static outcome validation, and store error exports.
-- Contract tests for in-memory per-run authority behavior and workspace coordination behavior, including lease fencing, revisioned snapshots, submitted operations, output commits, recovery scans, and cross-run-only coordination.
+- Unit tests for capability results, schema loud-fail policy, read-model and coordination record round trips, static outcome validation, and store error exports.
+- Contract tests for in-memory per-run authority behavior and workspace coordination behavior, including lease fencing, revisioned snapshots, submitted operations, output commits, recovery scans, cross-run lease identity, and cross-run-only coordination.
 
 ## Tests And Validation
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and `uv build` passed during PR-body refinement. |
-| `make test-summary` | Passed | Regenerated `build/test-summary.md` during PR-body refinement with overall status `passed`. |
+| `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and `uv build` passed during blocker-resolution pass 1/3. |
+| `make test-summary` | Passed | Regenerated `build/test-summary.md` during blocker-resolution pass 1/3 with overall status `passed`. |
 | GitHub checks | Pending | PR is opened after local validation; CI polling is owned by the managing agent. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 56 | 0 | 0 | 1 | 0 | 7.73s |
-| unit | passed | 765 | 0 | 0 | 1 | 0 | 16.68s |
-| contract | passed | 83 | 0 | 0 | 2 | 0 | 4.14s |
-| integration | passed | 64 | 0 | 0 | 7 | 10 | 53.24s |
-| e2e | passed | 37 | 0 | 0 | 0 | 1 | 16.13s |
-| config-extra | passed | 416 | 0 | 0 | 0 | 1008 | 33.02s |
-| Overall | passed | 1421 | 0 | 0 | 11 | 1019 | 130.93s |
+| package | passed | 56 | 0 | 0 | 1 | 0 | 7.66s |
+| unit | passed | 766 | 0 | 0 | 1 | 0 | 16.33s |
+| contract | passed | 83 | 0 | 0 | 2 | 0 | 4.06s |
+| integration | passed | 64 | 0 | 0 | 7 | 10 | 52.93s |
+| e2e | passed | 37 | 0 | 0 | 0 | 1 | 15.68s |
+| config-extra | passed | 416 | 0 | 0 | 0 | 1009 | 32.46s |
+| Overall | passed | 1422 | 0 | 0 | 11 | 1020 | 129.12s |
 
 ## Risks / Follow-Ups
 
