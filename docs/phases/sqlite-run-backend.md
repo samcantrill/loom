@@ -227,6 +227,9 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used on 2026-05-10 by `loom_phase_refiner`
+- PR body draft: complete on 2026-05-10 by `loom_pr_preparer`; artifact at
+  `docs/phases/sqlite-run-backend-pr-body.md`
+- PR body refine: pending because this phase is on the expanded path
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -243,9 +246,43 @@ make test-summary
   - `make validate-pr` - passed; Ruff, Pyright, default harness, config-extra harness, and build completed successfully.
 - Implementation refinement summary: one expanded-path `loom_phase_refiner` pass completed on 2026-05-10. The pass reviewed `AGENTS.md`, the v9 implementation plan, this phase plan, current commits/diff, and recorded validation evidence, then tightened only Phase 2 backend/test behavior. Fixes made: existing incomplete SQLite authority files now fail loudly instead of being silently initialized by `create_run`; schema checks validate the private schema shape without documenting it as public API; schema initialization now runs inside the write transaction used by run creation; expired leases cannot be released or failed; active stage leases block unleased attempt allocation; fenced output commits reject terminal stage states; and successful output commits release the stage lease in the same transaction so later recovery scans do not report a completed lease as expired. No runner integration, root store export, CLI, workspace/sweep backend, status enum change, public SQL contract, old-run migration, or Phase 1 protocol/model change was added.
 - Blocker-resolution summary: none used.
-- PR preparation: pending.
+- PR preparation: draft pass complete on 2026-05-10 by `loom_pr_preparer`.
+  The PR body draft is recorded at
+  `docs/phases/sqlite-run-backend-pr-body.md`; the expanded-path refine pass is
+  pending and the PR was not opened in this pass by manager instruction.
+- PR facts confirmed during draft pass: head branch
+  `codex/sqlite-run-backend`; target branch `develop`; stack predecessor none;
+  root phase PR; title
+  `Persistence And Concurrency Foundation - Phase 2: SQLite Run Backend And Transactions`;
+  merge eligibility remains target-branch, automated review, validation, and
+  CI dependent.
+- Draft-pass scope confirmation: final diff is limited to
+  `src/loom/pipeline/stores/sqlite_authority.py`,
+  `tests/contracts/test_authority_store_contract.py`,
+  `tests/unit/loom/pipeline/stores/test_sqlite_authority.py`,
+  `tests/integration/pipeline/test_sqlite_authority_backend.py`,
+  `docs/features/run-store.md`, and this phase's artifacts. The implementation
+  matches Phase 2 and does not include runner integration, public default or
+  read-path flips, CLI/catalog integration, workspace/sweep coordination,
+  public SQL schema, old-run migration, status enum changes, root store export
+  changes, or Phase 1 protocol/model expansion.
+- PR-preparation validation:
+  - `make test-summary` - passed on 2026-05-10 local time; generated
+    `build/test-summary.md` at `2026-05-09T15:30:43+00:00` with 1437 passed,
+    0 failed, 0 errors, 11 skipped, 1035 deselected, and 129.75s overall
+    duration.
+  - Suite evidence: package 56 passed / 1 skipped; unit 774 passed /
+    1 skipped; contract 86 passed / 2 skipped; integration 68 passed /
+    7 skipped / 10 deselected; e2e 37 passed / 1 deselected; config-extra
+    416 passed / 1024 deselected.
+  - `make validate-pr` was not rerun during PR-body drafting; the
+    implementation refinement notes above record the final gate passing with
+    Ruff, Pyright, default harness, config-extra harness, and build.
+  - GitHub checks were not run because the PR was not opened in this
+    expanded-path draft pass.
 - Stack maintenance: no predecessor; branch targets `develop`.
-- Remaining blockers: none recorded. `make test-summary` was not run because PR preparation is out of scope for this handoff.
+- Remaining blockers: none recorded for the draft body. PR-body refine and PR
+  creation remain pending for the next expanded-path pass.
 
 ## Phase Refinement Report
 
@@ -299,6 +336,11 @@ result: passed; Ruff passed, Pyright passed, default harness passed with 996 pas
 ### PR Preparation Handoff
 
 - Completion notes updated in phase execution plan: yes
-- Budget status updated: yes; phase implementation refinement used, blocker-resolution unchanged at 0/3 used, PR review unused
-- Final validation recommended: `make test-summary` during PR preparation
-- Suite evidence still needed: PR body suite summary from `make test-summary`
+- Budget status updated: yes; phase implementation refinement used, PR body
+  draft complete, PR body refine pending, blocker-resolution unchanged at
+  0/3 used, PR review unused
+- Final validation recommended: completed for draft evidence with
+  `make test-summary`; rerun only if implementation or tests change before PR
+  opening
+- Suite evidence still needed: none for the draft body; PR refine should verify
+  the body remains accurate before opening the PR
