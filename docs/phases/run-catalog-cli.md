@@ -204,7 +204,7 @@ The explicit collection path for `diff` can coexist with future convenience sele
 ### E2E Suite
 
 - Status: required
-- Expected paths: new `tests/e2e/test_cli_runs.py`
+- Expected paths: new `tests/e2e/test_cli_runs_e2e.py`
 - Required assertions: `main()` or `uv run loom` covers `loom runs index`, `loom runs list`, filtered list, and `loom runs diff` over synthetic run collections with JSON and representative text output.
 
 ### Opt-In Suites
@@ -225,9 +225,9 @@ The explicit collection path for `diff` can coexist with future convenience sele
 Targeted development commands:
 
 ```sh
-uv run ruff check src/loom/cli tests/unit/loom/cli tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs.py
-uv run pyright src/loom/cli tests/unit/loom/cli tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs.py
-uv run pytest tests/unit/loom/cli/test_main.py tests/unit/loom/cli/test_runs.py tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs.py tests/package/test_import_boundaries.py
+uv run ruff check src/loom/cli tests/unit/loom/cli tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs_e2e.py
+uv run pyright src/loom/cli tests/unit/loom/cli tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs_e2e.py
+uv run pytest tests/unit/loom/cli/test_main.py tests/unit/loom/cli/test_runs.py tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs_e2e.py tests/package/test_import_boundaries.py
 ```
 
 Final PR-preparation commands:

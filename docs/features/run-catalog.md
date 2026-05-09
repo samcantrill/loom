@@ -73,19 +73,19 @@ unless strict mode is requested.
 
 ## Catalog Index
 
-The initial catalog index should be a local sidecar file that can be rebuilt.
+The catalog index is a local SQLite sidecar that can be rebuilt.
 
-Possible location:
+Current location:
 
 ```text
-runs/.loom_catalog/index.json
+runs/.loom_catalog/catalog.sqlite
 ```
 
 The index should contain summaries only:
 
 ```text
-run ID
-run directory
+run_uri
+display path
 status
 created_at
 started_at
@@ -105,30 +105,23 @@ The index should not copy large state files or artifact manifests wholesale.
 
 The catalog must be rebuildable from run directories.
 
-Required command shape:
+Implemented command:
 
 ```bash
 loom runs index runs/
 ```
 
-or:
-
-```bash
-loom runs rebuild-index runs/
-```
-
-The exact command name belongs to the CLI design, but the behavior should be
-clear:
+Behavior:
 
 ```text
 scan known run directories
 read authoritative run-store metadata
-write a local sidecar index
-report unreadable or invalid runs
+rebuild the derived SQLite sidecar
+report unreadable or invalid runs as warnings
 ```
 
-If the index is missing, listing commands may scan directly or prompt the user
-to rebuild depending on performance.
+If the sidecar is missing, listing commands refresh from authoritative run
+directories and recreate enough derived state for the current read.
 
 ## Run Summary Model
 
@@ -137,8 +130,8 @@ Recommended summary shape:
 ```python
 @dataclass(frozen=True)
 class RunSummary:
-    run_id: str
-    run_dir: Path
+    run_uri: str
+    path: str | None
     status: str
     created_at: str | None
     started_at: str | None
@@ -155,37 +148,38 @@ Summaries should contain only JSON-serializable values.
 
 ## Listing Runs
 
-Potential commands:
+Implemented commands:
 
 ```bash
 loom runs list runs/
-loom runs list runs/ --status failed
+loom runs list runs/ --status FAILED
 loom runs list runs/ --tag project=demo
 loom runs list runs/ --commit abc123
-loom runs list runs/ --json
+loom runs list runs/ --artifact build.out=build/out
+loom runs list runs/ --format json
 ```
 
 Useful filters:
 
 ```text
-status
-created time range
-started time range
-finished time range
+run status
 tag
 config fingerprint
 pipeline fingerprint
 git commit
 stage status
 logical artifact identity
+artifact checksum
+executor
+backend
 ```
 
-The first implementation can support a small subset and keep the result model
-ready for the rest.
+Time-range filters, pagination, sorting controls, and a general query language
+are deferred.
 
 ## Catalog Consistency
 
-The catalog is allowed to be stale.
+Default CLI and API reads use current refresh-on-read behavior.
 
 Listing commands should make staleness visible:
 
@@ -202,10 +196,10 @@ The catalog should never silently override authoritative run-store records.
 
 Run comparison explains why two runs differ using metadata.
 
-Potential command:
+Implemented command:
 
 ```bash
-loom diff RUN_A RUN_B
+loom runs diff runs/ RUN_A RUN_B
 ```
 
 Comparison should include:
@@ -233,13 +227,13 @@ Recommended shape:
 ```python
 @dataclass(frozen=True)
 class RunComparison:
-    left_run_id: str
-    right_run_id: str
+    left_run_uri: str
+    right_run_uri: str
     sections: tuple[ComparisonSection, ...]
 
 @dataclass(frozen=True)
 class ComparisonEntry:
-    path: str
+    key: str
     left: object
     right: object
     status: str
@@ -258,7 +252,8 @@ unknown
 Path examples:
 
 ```text
-config.training.learning_rate
+run.status
+fingerprints.config
 stages.train.fingerprint
 artifacts.evaluate.metrics.checksum
 provenance.git.commit
@@ -448,6 +443,7 @@ build and rebuild local index
 filter by status
 filter by tag
 filter by fingerprint
+CLI index/list/diff text and JSON output
 compare identical metadata
 compare different stage fingerprints
 metadata-only export
@@ -462,11 +458,13 @@ Tests should use temporary directories and small fixture files.
 
 ## Implementation Plan
 
-1. Define run summary and catalog index models.
-2. Implement run directory discovery from run-store markers.
-3. Implement index rebuild and direct scan fallback.
-4. Add listing and JSON output.
-5. Implement metadata-only run comparison.
+1. Define run summary and catalog index models. Implemented in v8.
+2. Implement run directory discovery from run-store markers. Implemented in v8.
+3. Implement SQLite index rebuild and current direct scan fallback.
+   Implemented in v8.
+4. Add listing, exact-match filters, and CLI JSON output. Implemented in v8.
+5. Implement metadata-only run comparison and CLI diff output. Implemented in
+   v8.
 6. Implement safe export manifest creation.
 7. Implement inspect and import around the manifest.
 
@@ -475,7 +473,6 @@ Tests should use temporary directories and small fixture files.
 Deferred catalog features:
 
 ```text
-SQLite-backed local catalog
 remote run catalog service
 dashboard UI
 domain-specific artifact diffs
@@ -487,4 +484,3 @@ cross-machine catalog synchronization
 
 These should wait until local run-store metadata and artifact manifests are
 stable.
-

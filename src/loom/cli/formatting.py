@@ -474,6 +474,130 @@ def format_artifact_show_text(result: object) -> str:
     return "\n".join(lines)
 
 
+def format_runs_index_text(
+    result: object,
+    *,
+    collection_path: object,
+    warnings: Sequence[Mapping[str, object] | CliWarning] = (),
+) -> str:
+    """Format run-catalog index output."""
+
+    indexed_count = int(getattr(result, "indexed_count"))
+    skipped_count = int(getattr(result, "skipped_count"))
+    lines = [
+        f"runs index {collection_path}: {indexed_count} indexed, {skipped_count} skipped"
+    ]
+    checked_at = getattr(result, "checked_at")
+    if checked_at is not None:
+        lines.append(f"checked_at: {checked_at}")
+    _extend_warning_lines(lines, warnings)
+    return "\n".join(lines)
+
+
+def format_runs_list_text(
+    result: object,
+    *,
+    collection_path: object,
+    warnings: Sequence[Mapping[str, object] | CliWarning] = (),
+) -> str:
+    """Format run-catalog list output."""
+
+    summaries = tuple(getattr(result, "summaries"))
+    suffix = "1 run" if len(summaries) == 1 else f"{len(summaries)} runs"
+    lines = [f"runs list {collection_path}: {suffix}"]
+    for summary in summaries:
+        run_uri = str(getattr(summary, "run_uri"))
+        status = getattr(summary, "status")
+        status_text = "<unknown>" if status is None else str(status)
+        parts = [status_text, run_uri]
+        config = getattr(summary, "config_fingerprint")
+        pipeline = getattr(summary, "pipeline_fingerprint")
+        commit = getattr(summary, "git_commit")
+        if config is not None:
+            parts.append(f"config={config}")
+        if pipeline is not None:
+            parts.append(f"pipeline={pipeline}")
+        if commit is not None:
+            parts.append(f"commit={commit}")
+        parts.append(f"stages={len(getattr(summary, 'stages'))}")
+        parts.append(f"artifacts={len(getattr(summary, 'artifacts'))}")
+        lines.append(" ".join(parts))
+    _extend_warning_lines(lines, warnings)
+    return "\n".join(lines)
+
+
+def format_runs_diff_text(
+    result: object,
+    *,
+    warnings: Sequence[Mapping[str, object] | CliWarning] = (),
+) -> str:
+    """Format run-catalog diff output."""
+
+    left_run_uri = str(getattr(result, "left_run_uri"))
+    right_run_uri = str(getattr(result, "right_run_uri"))
+    entries = [
+        entry
+        for section in getattr(result, "sections")
+        for entry in getattr(section, "entries")
+    ]
+    status_counts: dict[str, int] = {}
+    for entry in entries:
+        status = _enum_value(getattr(entry, "status"))
+        status_counts[status] = status_counts.get(status, 0) + 1
+    lines = [
+        f"runs diff {left_run_uri} {right_run_uri}: "
+        f"{_comparison_status_summary(status_counts)}"
+    ]
+    for entry in entries:
+        status = _enum_value(getattr(entry, "status"))
+        if status == "same":
+            continue
+        left = _text_value(getattr(entry, "left"))
+        right = _text_value(getattr(entry, "right"))
+        lines.append(f"{getattr(entry, 'key')}: {status} left={left} right={right}")
+    _extend_warning_lines(lines, warnings)
+    return "\n".join(lines)
+
+
+def _comparison_status_summary(status_counts: Mapping[str, int]) -> str:
+    ordered = [
+        ("different", status_counts.get("different", 0)),
+        ("left_only", status_counts.get("left_only", 0)),
+        ("right_only", status_counts.get("right_only", 0)),
+        ("unknown", status_counts.get("unknown", 0)),
+        ("same", status_counts.get("same", 0)),
+    ]
+    return ", ".join(f"{key}={value}" for key, value in ordered if value)
+
+
+def _extend_warning_lines(
+    lines: list[str],
+    warnings: Sequence[Mapping[str, object] | CliWarning],
+) -> None:
+    if not warnings:
+        return
+    suffix = "1 warning" if len(warnings) == 1 else f"{len(warnings)} warnings"
+    lines.append(f"warnings: {suffix}")
+    for warning in warnings:
+        if isinstance(warning, CliWarning):
+            code = warning.code
+            message = warning.message
+        else:
+            code = str(warning.get("code", "warning"))
+            message = str(warning.get("message", ""))
+        lines.append(f"  {code}: {message}")
+
+
+def _text_value(value: object) -> str:
+    if value is None:
+        return "<unknown>"
+    if isinstance(value, Mapping):
+        return "{" + ",".join(sorted(str(key) for key in value)) + "}"
+    if isinstance(value, list | tuple):
+        return "[" + ",".join(str(item) for item in value) + "]"
+    return str(value)
+
+
 def _enum_value(value: object) -> str:
     enum_value = getattr(value, "value", value)
     return str(enum_value)
@@ -488,6 +612,9 @@ __all__ = [
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
+    "format_runs_diff_text",
+    "format_runs_index_text",
+    "format_runs_list_text",
     "format_slurm_live_submission_text",
     "format_slurm_dry_run_text",
     "format_stage_worker_text",
