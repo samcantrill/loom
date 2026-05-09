@@ -557,7 +557,7 @@ Completion summary:
 
 ### Phase 3 - SQLite Sidecar Storage And Rebuild
 
-Status: pr_open
+Status: merged
 Branch: `codex/run-catalog-sqlite`
 PR: https://github.com/samcantrill/loom/pull/97
 
@@ -653,10 +653,14 @@ Completion summary:
 - Validation before PR: `make validate-pr` passed; `make test-summary` passed
   with package 55, unit 748, contract 73, integration 51, e2e 36, and
   config-extra 413 tests passing.
-- GitHub CI: pending at PR open.
-- Stack maintenance: no predecessor; Phase 4 must wait for Phase 3 merge before
-  branching from `develop` unless a GitHub-side blocker requires stacked
-  continuation.
+- Merged into `develop` on 2026-05-09 with squash merge
+  `9cc848d5dace5963bd74f68e831f9f66a2decef7`.
+- Automated review: manager review found no blocking scope, transaction, import
+  boundary, or recovery issues before merge.
+- GitHub CI: `checks` passed before merge.
+- Stack maintenance: no successor branch depended on
+  `codex/run-catalog-sqlite`; remote branch deletion was handled by GitHub and
+  local worktree cleanup was safe after merge.
 
 ### Phase 4 - Current Listing, Refresh, And Filters
 
