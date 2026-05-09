@@ -205,9 +205,37 @@ class ArtifactDetailSummary:
 def inspect_run_status(
     run_uri: str, *, run_store: Any | None = None
 ) -> RunStatusSummary:
-    """Inspect persisted local run status through the store-owned facade."""
+    """Inspect run status through authoritative facts when available."""
 
-    store = _default_run_store() if run_store is None else run_store
+    authoritative = _authoritative_read(run_uri, run_store=run_store)
+    if authoritative is not None:
+        snapshot, local_store = authoritative
+        return RunStatusSummary(
+            run_uri=snapshot.run_uri,
+            status=snapshot.status.value,
+            message=None,
+            artifact_count=sum(len(stage.artifact_facts) for stage in snapshot.stages),
+            submitted_operations=tuple(
+                SubmittedOperationSummary(
+                    submission_id=record.submission_id,
+                    backend=record.backend,
+                    mode=record.mode,
+                    state=record.state.value,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                    manifest_relative_path=record.manifest_relative_path,
+                    summary_counts=record.summary_counts,
+                    active=record.active,
+                )
+                for record in snapshot.submitted_operations
+            ),
+            stages=tuple(
+                _authoritative_stage_summary(local_store, snapshot.run_uri, stage)
+                for stage in snapshot.stages
+            ),
+        )
+
+    store = _default_run_store(run_uri) if run_store is None else run_store
     state = store.inspect_run_state(run_uri)
     run_status = state.run_status
     return RunStatusSummary(
@@ -236,9 +264,27 @@ def inspect_run_status(
 def inspect_run_artifacts(
     run_uri: str, *, run_store: Any | None = None
 ) -> RunArtifactsSummary:
-    """Inspect persisted artifact metadata through public run-store APIs."""
+    """Inspect artifact metadata through authoritative facts when available."""
 
-    store = _default_run_store() if run_store is None else run_store
+    authoritative = _authoritative_read(run_uri, run_store=run_store)
+    if authoritative is not None:
+        snapshot, local_store = authoritative
+        artifacts = tuple(
+            _artifact_summary(
+                local_store,
+                run_uri=run_uri,
+                key=f"{stage.stage_name}.{fact.artifact_name}",
+                artifact_ref=fact.artifact,
+            )
+            for stage in snapshot.stages
+            for fact in stage.artifact_facts
+        )
+        return RunArtifactsSummary(
+            run_uri=snapshot.run_uri,
+            artifacts=tuple(sorted(artifacts, key=lambda artifact: artifact.key)),
+        )
+
+    store = _default_run_store(run_uri) if run_store is None else run_store
     _open_run(store, run_uri)
     artifacts = tuple(
         _artifact_summary(
@@ -283,7 +329,7 @@ def inspect_run_artifact(
         )
 
     artifact = match
-    store = _default_run_store() if run_store is None else run_store
+    store = _default_run_store(run_uri) if run_store is None else run_store
     provenance = _plain_mapping_or_none(
         store.read_stage_provenance(run_uri, artifact.stage_name)
     )
@@ -308,7 +354,7 @@ def inspect_stage_logs(
     if tail <= 0:
         raise DiagnosticsInspectionError("tail must be a positive integer")
     selected = _normalize_streams(streams)
-    store = _default_run_store() if run_store is None else run_store
+    store = _default_run_store(run_uri) if run_store is None else run_store
     stages = set(store.list_run_stages(run_uri))
     if stage_name not in stages:
         raise DiagnosticsInspectionError(
@@ -388,6 +434,41 @@ def _stage_summary(stage: object) -> StageStatusSummary:
     )
 
 
+def _authoritative_stage_summary(
+    store: Any, run_uri: str, stage: object
+) -> StageStatusSummary:
+    stage_name = str(getattr(stage, "stage_name"))
+    status = getattr(stage, "status")
+    attempts = tuple(getattr(stage, "attempts"))
+    latest_attempt = attempts[-1] if attempts else None
+    reason = getattr(stage, "reason")
+    stdout_content = _safe_read_stage_log(store, run_uri, stage_name, "stdout")
+    stderr_content = _safe_read_stage_log(store, run_uri, stage_name, "stderr")
+    return StageStatusSummary(
+        stage_name=stage_name,
+        status=None if status is None else status.value,
+        attempt=None if latest_attempt is None else latest_attempt.attempt,
+        message=None if reason is None else reason.message,
+        failure=_safe_plain_mapping(
+            lambda: store.read_stage_failure(run_uri, stage_name)
+        ),
+        input_count=len(_safe_mapping(lambda: store.read_stage_inputs(run_uri, stage_name))),
+        output_count=len(tuple(getattr(stage, "artifact_facts"))),
+        provenance_available=_safe_plain_mapping(
+            lambda: store.read_stage_provenance(run_uri, stage_name)
+        )
+        is not None,
+        log_paths={
+            "stdout": _optional_str(store.local_stage_log_path(run_uri, stage_name, "stdout")),
+            "stderr": _optional_str(store.local_stage_log_path(run_uri, stage_name, "stderr")),
+        },
+        log_available={
+            "stdout": stdout_content is not None,
+            "stderr": stderr_content is not None,
+        },
+    )
+
+
 def _stream_summary(
     store: Any,
     *,
@@ -433,10 +514,60 @@ def _normalize_streams(streams: Iterable[str]) -> tuple[str, ...]:
     return tuple(stream for stream in LOG_STREAMS if stream in selected)
 
 
-def _default_run_store() -> Any:
+def _default_run_store(run_uri: str | None = None) -> Any:
     from loom.pipeline.stores import LocalRunStore
 
-    return LocalRunStore()
+    if run_uri is None:
+        return LocalRunStore()
+    try:
+        from loom.pipeline.stores import run_uri_to_path
+
+        return LocalRunStore(run_uri_to_path(run_uri).parent)
+    except Exception:
+        return LocalRunStore()
+
+
+def _authoritative_read(
+    run_uri: str, *, run_store: Any | None
+) -> tuple[Any, Any] | None:
+    authority_store = getattr(run_store, "authority_store", None)
+    local_store = getattr(run_store, "local_store", None)
+    force_authoritative = authority_store is not None
+    if authority_store is None:
+        try:
+            from loom.pipeline.stores.schema_policy import AuthoritySchemaFailureKind
+            from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+            authority_store = SQLitePerRunAuthorityStore()
+            check = authority_store.check_schema(run_uri)
+            if (
+                check.failure is not None
+                and check.failure.kind is AuthoritySchemaFailureKind.MISSING
+            ):
+                return None
+        except Exception:
+            return None
+    if local_store is None:
+        local_store = _default_run_store(run_uri)
+    try:
+        from loom.pipeline.stores import (
+            AuthoritativeReadOptions,
+            LocalMaterializationRequest,
+            read_authoritative_run,
+        )
+
+        snapshot = read_authoritative_run(
+            authority_store,
+            run_uri,
+            options=AuthoritativeReadOptions(include_materialized_refs=True),
+            local_paths=local_store,
+            local_materialization=LocalMaterializationRequest(),
+        )
+    except Exception:
+        if force_authoritative:
+            raise
+        return None
+    return snapshot, local_store
 
 
 def _open_run(store: Any, run_uri: str) -> None:
@@ -452,6 +583,30 @@ def _plain_mapping_or_none(value: object) -> Mapping[str, PlainData] | None:
     if not isinstance(normalized, dict):
         return {"value": normalized}
     return normalized
+
+
+def _safe_mapping(read: Any) -> Mapping[str, Any]:
+    try:
+        value = read()
+    except Exception:
+        return {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _safe_plain_mapping(read: Any) -> Mapping[str, PlainData] | None:
+    try:
+        return _plain_mapping_or_none(read())
+    except Exception:
+        return None
+
+
+def _safe_read_stage_log(
+    store: Any, run_uri: str, stage_name: str, stream: str
+) -> str | None:
+    try:
+        return store.read_stage_log(run_uri, stage_name, stream)
+    except Exception:
+        return None
 
 
 def _optional_str(value: object) -> str | None:

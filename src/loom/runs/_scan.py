@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from loom.pipeline.stores import (
     CorruptStoreDocumentError,
     LocalRunStore,
     MissingStoreDocumentError,
+    PerRunAuthorityStore,
     RunNotFoundError,
     UnsafeStorePathError,
     path_to_run_uri,
 )
+from loom.pipeline.stores.schema_policy import AuthoritySchemaFailureKind
 from loom.timestamps import utc_timestamp
 
 from ._extract import CurrentRunSummary, extract_current_summary_with_warning_record
@@ -163,9 +166,35 @@ def _scan_candidate(
             f"run metadata is incomplete or invalid: {message}",
             path=candidate,
         )
+    authority_store = _authority_store_for_candidate(run_uri)
+    if authority_store is not None:
+        from loom.pipeline.execution.authority_adapter import (
+            create_authority_backed_serial_run_store,
+        )
+
+        return extract_current_summary_with_warning_record(
+            create_authority_backed_serial_run_store(
+                store.root,
+                authority_store=authority_store,
+            ),
+            run_uri=run_uri,
+            path=candidate,
+        )
     return extract_current_summary_with_warning_record(
         store, run_uri=run_uri, path=candidate
     )
+
+
+def _authority_store_for_candidate(run_uri: str) -> PerRunAuthorityStore | None:
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+    authority_store = SQLitePerRunAuthorityStore()
+    check = authority_store.check_schema(run_uri)
+    if check.failure is None:
+        return cast(PerRunAuthorityStore, authority_store)
+    if check.failure.kind is AuthoritySchemaFailureKind.MISSING:
+        return None
+    raise CorruptStoreDocumentError(check.failure.message)
 
 
 def _warning(

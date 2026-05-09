@@ -1,9 +1,4 @@
-"""Internal execution adapter for authority-backed serial runs.
-
-This module is intentionally not exported from the public pipeline package.
-Phase 4 uses it from tests to exercise the backend write path before Phase 5
-changes public backend selection.
-"""
+"""Execution adapter for SQLite-authority-backed serial runs."""
 
 from __future__ import annotations
 
@@ -111,7 +106,17 @@ class AuthorityBackedSerialRunStore:
         self.local_store.write_run_user_metadata(run_uri, metadata)
 
     def read_run_freshness(self, run_uri: str) -> RunFreshnessRecord | None:
-        return self.local_store.read_run_freshness(run_uri)
+        try:
+            revision = self.authority_store.snapshot(run_uri).revision
+        except Exception:
+            return None
+        return RunFreshnessRecord(
+            run_uri=run_uri,
+            token=revision.token,
+            updated_at=revision.created_at or utc_timestamp(),
+            revision=revision.sequence,
+            reason="authority_revision",
+        )
 
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
         try:
@@ -761,10 +766,15 @@ class AuthorityBackedSerialRunStore:
 def create_authority_backed_serial_run_store(
     root: str | Path,
     *,
-    authority_store: PerRunAuthorityStore,
+    authority_store: PerRunAuthorityStore | None = None,
     owner_id: str = "serial-controller",
 ) -> AuthorityBackedSerialRunStore:
-    """Create the internal/test-selectable Phase 4 authority-backed store."""
+    """Create the default authority-backed local serial run store."""
+
+    if authority_store is None:
+        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+        authority_store = SQLitePerRunAuthorityStore()
 
     return AuthorityBackedSerialRunStore(
         local_store=LocalRunStore(root),
