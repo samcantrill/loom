@@ -34,6 +34,15 @@ The local filesystem run store is the v0 implementation. Its files should be
 plain and human-inspectable so users can debug failed cluster jobs without
 special tooling.
 
+V9 adds separate backend-neutral authority contracts under
+`loom.pipeline.stores`. These contracts do not make `LocalRunStore` a v9
+authority backend. `PerRunAuthorityStore` is the active per-run truth contract
+for future SQLite and stronger backends, while `WorkspaceCoordinationStore` owns
+only cross-run workspace/sweep coordination facts. The SQLite schema remains
+private; status files, artifact indexes, events, and catalogs remain payload,
+audit, or projection surfaces unless a backend contract records them as
+authoritative facts.
+
 ### 1.1 V2 Run URI Migration
 
 The current runtime uses `run_uri` as the run-scoped identifier. V2 intentionally
@@ -143,6 +152,35 @@ read and write artifact indexes
 provide local log/path helpers
 provide recovery scans
 ```
+
+### 3.2.1 V9 Authority Contract Modules
+
+`loom.pipeline.stores.authority` defines `PerRunAuthorityStore`, the
+backend-neutral active-state authority for one run. It expresses run creation
+and open semantics, guarded status transitions, attempt allocation,
+controller/stage leases, submitted-operation records, output commits, artifact
+facts, audit evidence, revisions, recovery scans, cleanup candidates, and
+authoritative snapshots.
+
+`loom.pipeline.stores.read_models` defines internal authoritative read-model
+records for status, catalog, diagnostics, and future bundle/export work. These
+records distinguish backend facts from materialized payload, log, config,
+provenance, and worker handoff refs.
+
+`loom.pipeline.stores.capabilities` defines backend capability declarations and
+machine-readable unsupported-capability diagnostics. Capability declarations are
+correctness inputs for later explicit parallel, shared-filesystem, remote, or
+cross-run coordination requests.
+
+`loom.pipeline.stores.schema_policy` defines the v9 active-state schema policy:
+current schema is accepted, unsupported older and newer active-state schemas
+fail loudly, and automatic destructive migration is out of scope until a future
+roadmap phase explicitly designs it.
+
+`loom.pipeline.stores.coordination` defines `WorkspaceCoordinationStore`, which
+owns only workspace/sweep identity, trial references, trial/resource leases,
+global counters, `run_uri` references, and coordination recovery scans. It must
+not duplicate per-stage lifecycle facts.
 
 ### 3.3 `loom.pipeline.stores.local_runs`
 

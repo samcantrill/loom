@@ -734,6 +734,11 @@ Expected modules:
 ```text
 artifact_store.py  ArtifactStore protocol
 run_store.py       RunStore protocol
+authority.py       v9 per-run authority protocol
+capabilities.py    backend capability and diagnostic records
+schema_policy.py   v9 active-state schema loud-fail policy
+read_models.py     authoritative snapshot/read-model records
+coordination.py    workspace/sweep cross-run coordination protocol
 indexes.py         run-level artifact and stage indexes
 local_artifacts.py local filesystem artifact storage
 local_runs.py      local run directory state
@@ -767,6 +772,25 @@ Run-store freshness metadata is store-owned authoritative run-local metadata for
 catalog freshness checks. Stores may expose freshness records through store
 protocols, but stores, execution, and executors must not import `loom.runs` or
 write a collection catalog sidecar.
+
+V9 adds backend-neutral authority contracts beside the legacy local-file
+`RunStore` surface. `PerRunAuthorityStore` owns active per-run truth for new
+backend implementations: guarded run/stage transitions, attempts, controller and
+stage leases, submitted-operation records, output commits, artifact facts,
+audit evidence, revisions, recovery scans, cleanup candidates, and
+authoritative snapshots. It must not expose SQLite table names or treat
+human-readable local files as fallback active truth.
+
+`WorkspaceCoordinationStore` owns only cross-run coordination facts for
+workspaces and sweeps: workspace/sweep identity, trial references, trial and
+resource leases, counters, `run_uri` references, and recovery scans. It must not
+mutate per-stage lifecycle state or replace `loom.runs`.
+
+Capability declarations and schema checks are correctness inputs. Store
+contracts must be able to report unsupported parallel, shared-filesystem,
+remote, per-run, or cross-run capabilities with machine-readable diagnostics,
+and v9 active-state schema mismatches must fail loudly rather than silently
+migrating or falling back to local files.
 
 ### 6.8 Run Catalog
 

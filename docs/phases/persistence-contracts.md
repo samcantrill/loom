@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; scope-complete and implementation-ready
+- Status: implementation complete; initial validation recorded
 - Feature focus: Persistence And Concurrency Foundation
 - PR title: `Persistence And Concurrency Foundation - Phase 1: Authority Contracts And Compatibility Surface`
 - Branch: `codex/persistence-contracts`
@@ -358,8 +358,31 @@ make test-summary
 - Draft plan: complete in this artifact.
 - Final phase execution plan: complete after expanded-path refinement on
   2026-05-09; scope-complete and implementable for Phase 1.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: added backend-neutral Phase 1 store contracts under
+  `loom.pipeline.stores` for capabilities, schema policy, authoritative
+  per-run lifecycle authority, authoritative read-model records, and
+  workspace/sweep coordination. The legacy local-file `RunStore` remains
+  separate from `PerRunAuthorityStore`. Added test-support in-memory
+  conformance stores for per-run and workspace coordination contracts, package
+  export/import-boundary coverage, unit model coverage, contract tests, and
+  docs updates for store boundaries, run-store authority semantics, coarse
+  state detail, and sweep coordination separation. No SQLite backend, runner
+  hard swap, backend CLI, parallel execution, workspace sweep runner,
+  migration, or legacy fallback was implemented.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py`
+    passed: 34 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores tests/unit/loom/serialization/test_schema.py`
+    passed: 130 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_store_contract.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py`
+    passed: 13 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores tests/support/authority_stores.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py`
+    passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores tests/support/authority_stores.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py`
+    passed with 0 errors.
+  - `make validate-pr` passed: Ruff, Pyright, default harness
+    (979 passed, 17 skipped, 14 deselected), config-extra harness
+    (416 passed, 1007 deselected), and `uv build`.
 - Refinement summary: clarified current source/test constraints, store-boundary
   module choices, compatibility with submitted/event/schema/status helpers,
   fake-store conformance expectations, explicit edge cases, and suite-level

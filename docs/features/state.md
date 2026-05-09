@@ -158,6 +158,12 @@ detect corrupt state files
 report locks and stale RUNNING state
 ```
 
+V9 authority-backed runs keep `RunStatus` and `StageStatus` coarse. Attempts,
+leases, submitted operations, output commits, static branch outcomes, recovery
+facts, reasons, and display detail live in authoritative store records and
+derived lifecycle snapshots rather than new status enum values. Human-readable
+status files are not fallback active truth for new authority-backed runs.
+
 ### 3.5 `loom.cli`
 
 Owns status presentation.
