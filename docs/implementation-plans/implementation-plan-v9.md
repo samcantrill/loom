@@ -1212,9 +1212,9 @@ Completion summary:
 
 ### Phase 6 - Read-Only Backend Diagnostics CLI
 
-Status: pending
+Status: merged
 Branch: `codex/backend-diagnostics`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/106
 
 Goal:
 
@@ -1302,7 +1302,28 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged into `develop` on 2026-05-09 at merge commit
+  `f6f173af904ee0bba07c965498ab4adf141e8a04`.
+- Implemented read-only `loom backend inspect` and `loom backend
+  capabilities` plus backend-neutral diagnostics helpers under
+  `loom.diagnostics`, with text and JSON output for schema, revision,
+  lifecycle, submitted-operation, cleanup/recovery, materialization, and
+  capability diagnostics.
+- Preserved import boundaries by keeping CLI presentation out of private
+  SQLite tables and exporting diagnostics lazily from `loom.diagnostics`.
+- Automated review: initial PR review found that
+  `loom backend inspect --verify-materialization` could delegate to checksum
+  verification and read artifact payload bytes. Blocker-resolution pass 1/3
+  fixed diagnostics to use existence-only verification while preserving
+  checksum verification as the default for existing read-model callers; manager
+  follow-up review confirmed the blocker was resolved.
+- Checks: `make validate-pr` passed after blocker resolution: Ruff, Pyright,
+  default harness (1056 passed, 18 skipped, 14 deselected), config-extra
+  harness (420 passed, 1084 deselected), and `uv build`. `make test-summary`
+  passed with 1501 passed, 0 failed, 0 errors, 12 skipped, and 1095
+  deselected. GitHub CI `checks` passed before merge.
+- Follow-up: Phase 7 should reuse capability diagnostics for explicit
+  parallel-execution requirements and keep the serial default unchanged.
 
 ### Phase 7 - Bounded Parallel Stage Execution
 
