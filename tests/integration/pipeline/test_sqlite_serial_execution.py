@@ -9,6 +9,7 @@ import pytest
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution import StageJobRunRequest, run_stage_job
 from loom.pipeline.execution.authority_adapter import (
     create_authority_backed_serial_run_store,
 )
@@ -26,6 +27,11 @@ from loom.pipeline.stores.authority import OutputCommit
 from loom.pipeline.stores.read_models import LifecycleReason
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.support.pipeline_execution_configs import local_execution_config
+from tests.unit.loom.pipeline.execution.test_authority_adapter import (
+    _authority_request_kwargs,
+    _mark_authority_build_submitted,
+    _prepare_authority_stage_job,
+)
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -145,3 +151,32 @@ def test_sqlite_backed_commit_failure_does_not_publish_active_outputs(
     assert build.artifact_facts == ()
     assert build.active_lease is None
     assert authority.list_cleanup_candidates(run_uri) == ()
+
+
+def test_sqlite_backed_stage_job_commits_fenced_attempt_without_run_finalization(
+    tmp_path: Path,
+) -> None:
+    run_store, authority, run_uri, _raw = _prepare_authority_stage_job(tmp_path)
+    _mark_authority_build_submitted(run_store, run_uri)
+    raw = run_store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert raw is not None
+
+    result = run_stage_job(
+        run_store=run_store,
+        request=StageJobRunRequest(
+            run_uri=run_uri,
+            stage_name="build",
+            executor="local",
+            **_authority_request_kwargs(raw),
+        ),
+    )
+
+    snapshot = authority.snapshot(run_uri)
+    build = next(stage for stage in snapshot.stages if stage.stage_name == "build")
+    assert result.status is StageStatus.SUCCEEDED
+    assert result.run_status is RunStatus.RUNNING
+    assert snapshot.status is RunStatus.RUNNING
+    assert build.status is StageStatus.SUCCEEDED
+    assert build.latest_commit is not None
+    assert build.artifact_facts
+    assert build.active_lease is None

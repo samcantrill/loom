@@ -39,13 +39,14 @@
   attempt-failure writer limitation as an explicit risk/follow-up.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
-- Blocker-resolution budget: 0/3 used.
+- Blocker-resolution budget: 1/3 used. Pass 1 completed on 2026-05-10 for
+  the SQLite-backed stage-job authority fencing and run-finalization blocker.
 - Setup limitations: branch/worktree creation used local `develop` matching
   `origin/develop`; no fetch, GitHub operation, full validation, or PR action
   was run during planning. Worktree creation required approved sandbox
   escalation after the default sandbox could not create the namespaced
   `codex/` branch ref.
-- Blockers: none.
+- Blockers: none after blocker-resolution pass 1/3.
 
 ## Objective
 
@@ -530,10 +531,10 @@ make test-summary
   from stage failure and lease failure. Failed attempts remain represented by
   failed stage lifecycle, failed lease/audit evidence, and materialized failure
   documents on this Phase 4 path.
-- Stage-job continuation remains limited to the existing safe local behavior.
-  Full worker-owned attempt-scoped backend finalization without any run
-  finalization authority needs a narrower continuation contract pass; no broad
-  continuation redesign was included in this phase.
+- Public CLI worker-owned backend continuation remains deferred. Blocker
+  resolution pass 1/3 added internal/test-only `StageJobRunRequest` fencing
+  facts for the SQLite-backed path, but no public CLI flags or broad
+  continuation redesign were added in this phase.
 
 ### Implementation Refinement Summary
 
@@ -549,6 +550,30 @@ make test-summary
   `run.lock`, submitted-operation reads from backend authority over conflicting
   local registry files, and prepared-worker handoff metadata carrying backend
   attempt, lease, owner, and fencing-token facts.
+
+### Blocker Resolution Pass 1/3 Summary
+
+- Addressed the automated-review blocker that allowed SQLite-backed stage-job
+  continuation to rely on worker-request metadata alone and to finalize run
+  status after committing the target stage.
+- Added internal/test-only `StageJobRunRequest` authority fencing fields for
+  attempt id, lease id, owner id, and fencing token. The authority-backed
+  adapter now validates those request facts against the prepared worker
+  request's `authority_attempt` metadata, verifies the active backend attempt
+  and lease, renews the fenced stage lease before user code, and fails loudly
+  for missing, foreign, stale, or expired fencing facts.
+- Kept SQLite-backed stage-job continuation attempt-scoped: the adapter reports
+  that run finalization is not allowed, so continuation can commit the target
+  stage's outputs/failure facts but cannot transition the run to `SUCCEEDED` or
+  `FAILED`. Public `LocalRunStore` stage-job continuation keeps its existing
+  run-finalization behavior.
+- Kept controller ownership narrow. `PipelineRunner` still uses backend
+  controller leases on the SQLite-backed path; `StageJobRunner` uses only the
+  local materialization lock plus the backend stage lease fence, not a backend
+  controller lease.
+- Added focused unit and integration coverage for valid backend-fenced
+  submitted stage-job continuation, missing fencing, foreign fencing, expired
+  fencing, and no run-status finalization on the SQLite-backed path.
 
 ### PR Body Draft And Target Readiness
 
@@ -584,6 +609,15 @@ make test-summary
 
 ### Validation Evidence
 
+- Blocker-resolution focused command:
+  `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/execution/test_authority_adapter.py tests/integration/pipeline/test_sqlite_serial_execution.py -q`
+  - 15 passed.
+- Stage-job compatibility command:
+  `UV_CACHE_DIR=/tmp/loom_uv_cache uv run pytest tests/unit/loom/pipeline/execution/test_stage_job.py tests/integration/pipeline/test_stage_job_continuation.py -q`
+  - 14 passed.
+- Targeted Ruff command:
+  `UV_CACHE_DIR=/tmp/loom_uv_cache uv run ruff check src/loom/pipeline/execution/authority_adapter.py src/loom/pipeline/execution/continuation.py tests/unit/loom/pipeline/execution/test_authority_adapter.py tests/integration/pipeline/test_sqlite_serial_execution.py`
+  - Passed.
 - Refinement focused command:
   `uv run pytest tests/unit/loom/pipeline/execution/test_authority_adapter.py`
   - 7 passed.
@@ -595,21 +629,23 @@ make test-summary
   - 14 passed, 4 skipped before config extras were installed for full
     validation.
 - Targeted Ruff command for changed files passed.
-- Final PR-preparation `make validate-pr` passed:
+- Blocker-resolution `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr`
+  passed:
   - Ruff: passed.
   - Pyright: 0 errors.
-  - default harness: 1026 passed, 18 skipped, 14 deselected.
-  - config-extra harness: 419 passed, 1054 deselected.
+  - default harness: 1030 passed, 18 skipped, 14 deselected.
+  - config-extra harness: 420 passed, 1058 deselected.
   - build: source distribution and wheel built successfully.
-- Final PR-preparation `make test-summary` passed and wrote
-  `build/test-summary.md` generated at 2026-05-09T18:48:34+00:00:
+- Blocker-resolution `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary`
+  passed and wrote `build/test-summary.md` generated at
+  2026-05-09T19:24:40+00:00:
   - package: 56 passed, 1 skipped.
-  - unit: 794 passed, 1 skipped.
+  - unit: 798 passed, 1 skipped.
   - contract: 92 passed, 2 skipped.
   - integration: 72 passed, 8 skipped, 10 deselected.
   - e2e: 37 passed, 1 deselected.
-  - config-extra: 419 passed, 1054 deselected.
-  - overall: 1470 passed, 12 skipped, 1065 deselected.
+  - config-extra: 420 passed, 1058 deselected.
+  - overall: 1475 passed, 12 skipped, 1069 deselected.
 
 ### Budget Status
 
@@ -621,4 +657,5 @@ make test-summary
 - PR body refine pass: used on 2026-05-10 for expanded-path Phase 4.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
-- Blocker-resolution budget: 0/3 used.
+- Blocker-resolution budget: 1/3 used. Pass 1 resolved the stage-job
+  authority fencing and run-finalization blocker; 2/3 passes remain unused.

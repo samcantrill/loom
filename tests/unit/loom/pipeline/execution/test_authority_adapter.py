@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -17,11 +18,22 @@ from loom.pipeline import (
     StageSpec,
 )
 from loom.pipeline.execution.authority_adapter import (
+    AuthorityBackedSerialRunStore,
     create_authority_backed_serial_run_store,
 )
+from loom.pipeline.execution.continuation import (
+    ContinuationStateError,
+    StageJobRunRequest,
+    run_stage_job,
+)
+from loom.pipeline.execution.lifecycle import write_run_status, write_stage_submitted
 from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
 from loom.pipeline.planning import plan_pipeline
-from loom.pipeline.runtime import ResolvedStageRuntimeOptions
+from loom.pipeline.runtime import (
+    ResolvedStageRuntimeOptions,
+    RunOptions,
+    build_runtime_metadata,
+)
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus
 from loom.pipeline.stores import (
     AuthorityStoreError,
@@ -33,7 +45,11 @@ from loom.pipeline.stores import (
 from loom.pipeline.stores.authority import OutputCommit
 from loom.pipeline.stores.read_models import LifecycleReason
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
+from loom.pipeline.submitted import (
+    SubmittedOperationRecord,
+    SubmittedOperationState,
+    submitted_stage_metadata,
+)
 
 
 class CommitFailingAuthority(SQLitePerRunAuthorityStore):
@@ -48,6 +64,21 @@ class CommitFailingAuthority(SQLitePerRunAuthorityStore):
         reason: LifecycleReason | None = None,
     ) -> OutputCommit:
         raise AuthorityStoreError("backend output commit failed")
+
+
+class _MutableClock:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __call__(self) -> str:
+        return self.value
+
+
+class _AuthorityRequestKwargs(TypedDict):
+    authority_attempt_id: str
+    authority_lease_id: str
+    authority_owner_id: str
+    authority_fencing_token: str
 
 
 def _run_uri(tmp_path: Path, name: str = "run1") -> str:
@@ -99,6 +130,110 @@ def _pipeline() -> PipelineSpec:
                 outputs={"text": OutputSpec(artifact_type="text", codec_key="text.v1")},
             ),
         )
+    )
+
+
+def _single_stage_pipeline() -> PipelineSpec:
+    pipeline = _pipeline()
+    return PipelineSpec(stages=(pipeline.get_stage("build"),))
+
+
+def _authority_request_kwargs(
+    raw_request: Mapping[str, object],
+) -> _AuthorityRequestKwargs:
+    metadata = raw_request.get("metadata")
+    assert isinstance(metadata, Mapping)
+    authority_attempt = metadata.get("authority_attempt")
+    assert isinstance(authority_attempt, Mapping)
+    return {
+        "authority_attempt_id": str(authority_attempt["attempt_id"]),
+        "authority_lease_id": str(authority_attempt["lease_id"]),
+        "authority_owner_id": str(authority_attempt["owner_id"]),
+        "authority_fencing_token": str(authority_attempt["fencing_token"]),
+    }
+
+
+def _prepare_authority_stage_job(
+    tmp_path: Path,
+    *,
+    authority: PerRunAuthorityStore | None = None,
+):
+    authority = authority or SQLitePerRunAuthorityStore(
+        clock=lambda: "2020-01-01T00:00:00Z"
+    )
+    run_store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    spec = _single_stage_pipeline()
+    run_store.create_run(run_uri)
+    write_run_status(
+        run_store,
+        run_uri=run_uri,
+        status=RunStatus.RUNNING,
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        started_at="2020-01-01T00:00:01Z",
+    )
+    plan = plan_pipeline(
+        spec,
+        run_uri=run_uri,
+        run_store=run_store,
+        artifact_store=LocalArtifactStore(run_store.local_artifact_root(run_uri)),
+        persist=True,
+    )
+    run_store.write_runtime_metadata(
+        run_uri,
+        build_runtime_metadata(
+            RunOptions(run_uri=run_uri, executor="local"),
+            stage_ids=spec.stage_names,
+        ).to_dict(),
+    )
+    prepare_stage_attempt(
+        run_store=run_store,
+        run_uri=run_uri,
+        stage=spec.get_stage("build"),
+        stage_plan=plan.ordered_stage_plans[0],
+        resolved_runtime=ResolvedStageRuntimeOptions(
+            stage_id="build",
+            executor="local",
+        ),
+        clock=lambda: "2020-01-01T00:00:02Z",
+    )
+    raw = run_store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert raw is not None
+    return run_store, authority, run_uri, raw
+
+
+def _mark_authority_build_submitted(
+    run_store: AuthorityBackedSerialRunStore, run_uri: str
+) -> None:
+    raw_request = run_store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert isinstance(raw_request, dict)
+    existing_metadata = raw_request.get("metadata")
+    assert isinstance(existing_metadata, Mapping)
+    record = _submitted_record(run_uri)
+    submitted_metadata = submitted_stage_metadata(
+        record=record,
+        stage_name="build",
+        attempt=1,
+        continuation_executor="local",
+        stage_metadata={"job_key": "build"},
+    )
+    metadata = {**dict(existing_metadata), **dict(submitted_metadata)}
+    run_store.write_submitted_operation(run_uri, record)
+    run_store.write_stage_worker_request(
+        run_uri,
+        "build",
+        {**raw_request, "metadata": metadata},
+        attempt=1,
+    )
+    write_stage_submitted(
+        run_store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        submitted_at="2020-01-01T00:00:03Z",
+        owner={"component": "test-submitter"},
+        metadata=metadata,
     )
 
 
@@ -258,6 +393,116 @@ def test_authority_backed_worker_request_carries_attempt_fencing_metadata(
         "fencing_token": build.active_lease.fencing_token,
         "owner_id": build.active_lease.owner_id,
     }
+
+
+def test_authority_backed_stage_job_requires_request_fencing(
+    tmp_path: Path,
+) -> None:
+    run_store, authority, run_uri, _raw = _prepare_authority_stage_job(tmp_path)
+
+    with pytest.raises(
+        ContinuationStateError,
+        match="stage-job request is missing authority fencing facts",
+    ):
+        run_stage_job(
+            run_store=run_store,
+            request=StageJobRunRequest(
+                run_uri=run_uri,
+                stage_name="build",
+                executor="local",
+            ),
+        )
+
+    snapshot = authority.snapshot(run_uri)
+    build = next(stage for stage in snapshot.stages if stage.stage_name == "build")
+    assert snapshot.status is RunStatus.RUNNING
+    assert build.status is StageStatus.PENDING
+    assert build.latest_commit is None
+
+
+def test_authority_backed_stage_job_rejects_foreign_fencing(
+    tmp_path: Path,
+) -> None:
+    run_store, authority, run_uri, raw = _prepare_authority_stage_job(tmp_path)
+    request_kwargs = _authority_request_kwargs(raw)
+    request_kwargs["authority_fencing_token"] = "foreign-token"
+
+    with pytest.raises(ContinuationStateError, match="worker metadata|backend lease"):
+        run_stage_job(
+            run_store=run_store,
+            request=StageJobRunRequest(
+                run_uri=run_uri,
+                stage_name="build",
+                executor="local",
+                **request_kwargs,
+            ),
+        )
+
+    snapshot = authority.snapshot(run_uri)
+    build = next(stage for stage in snapshot.stages if stage.stage_name == "build")
+    assert snapshot.status is RunStatus.RUNNING
+    assert build.status is StageStatus.PENDING
+    assert build.latest_commit is None
+
+
+def test_authority_backed_stage_job_rejects_expired_fencing(
+    tmp_path: Path,
+) -> None:
+    clock = _MutableClock("2020-01-01T00:00:00Z")
+    authority = SQLitePerRunAuthorityStore(clock=clock)
+    run_store, _authority, run_uri, raw = _prepare_authority_stage_job(
+        tmp_path,
+        authority=authority,
+    )
+    request_kwargs = _authority_request_kwargs(raw)
+    clock.value = "2020-01-02T00:00:01Z"
+
+    with pytest.raises(ContinuationStateError, match="lease has expired"):
+        run_stage_job(
+            run_store=run_store,
+            request=StageJobRunRequest(
+                run_uri=run_uri,
+                stage_name="build",
+                executor="local",
+                **request_kwargs,
+            ),
+        )
+
+    snapshot = authority.snapshot(run_uri)
+    build = next(stage for stage in snapshot.stages if stage.stage_name == "build")
+    assert snapshot.status is RunStatus.RUNNING
+    assert build.status is StageStatus.PENDING
+    assert build.latest_commit is None
+
+
+def test_authority_backed_stage_job_commits_attempt_without_run_finalization(
+    tmp_path: Path,
+) -> None:
+    run_store, authority, run_uri, raw = _prepare_authority_stage_job(tmp_path)
+    _mark_authority_build_submitted(run_store, run_uri)
+    refreshed = run_store.read_stage_worker_request(run_uri, "build", attempt=1)
+    assert refreshed is not None
+    request_kwargs = _authority_request_kwargs(refreshed or raw)
+
+    result = run_stage_job(
+        run_store=run_store,
+        request=StageJobRunRequest(
+            run_uri=run_uri,
+            stage_name="build",
+            executor="local",
+            **request_kwargs,
+        ),
+    )
+
+    assert result.status is StageStatus.SUCCEEDED
+    assert result.run_status is RunStatus.RUNNING
+    snapshot = authority.snapshot(run_uri)
+    build = next(stage for stage in snapshot.stages if stage.stage_name == "build")
+    assert snapshot.status is RunStatus.RUNNING
+    assert build.status is StageStatus.SUCCEEDED
+    assert build.latest_commit is not None
+    assert build.artifact_facts
+    assert build.active_lease is None
 
 
 def test_authority_backed_commit_failure_leaves_no_authoritative_outputs(

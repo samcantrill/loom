@@ -25,6 +25,8 @@ revisions on the internal SQLite-backed path.
   files do not win over backend facts.
 - [x] Commit failures record failed run/stage facts and do not publish active
   outputs.
+- [x] SQLite-backed stage-job continuation requires backend-issued
+  attempt/lease fencing facts and cannot finalize run status.
 
 ## Implementation Notes
 
@@ -39,8 +41,12 @@ revisions on the internal SQLite-backed path.
   commits and failed-lease handling.
 - Preserved local materialization for plan/config/provenance/log/stage
   fingerprint, worker handoff, and payload files.
-- Added authority attempt metadata to prepared worker requests so future worker
-  finalization can use backend-issued attempt, lease, owner, and fencing facts.
+- Added authority attempt metadata to prepared worker requests and
+  internal/test-only `StageJobRunRequest` fencing fields so SQLite-backed
+  stage-job continuation validates backend-issued attempt, lease, owner, and
+  fencing facts before committing the target attempt.
+- Prevented SQLite-backed stage-job continuation from finalizing run status;
+  public local stage-job continuation keeps its existing behavior.
 - Classified `AuthorityStoreError` from runner and continuation write paths as
   `store_commit`, and thawed SQLite audit-event payloads before JSON storage.
 
@@ -48,10 +54,13 @@ New tests implemented:
 
 - Unit coverage for authoritative output commits and lease release, local
   conflict handling, controller-lease conflicts, submitted-operation authority,
-  worker fencing metadata, commit-failure behavior, and legacy public local
-  file-lock behavior.
+  worker fencing metadata, missing/foreign/expired stage-job fencing,
+  no-run-finalization behavior, commit-failure behavior, and legacy public
+  local file-lock behavior.
 - Integration coverage for SQLite-backed serial success, conflicting local
-  live-state files, and commit failure without active output publication.
+  live-state files, commit failure without active output publication, and a
+  valid fenced submitted stage-job commit that leaves the run status owned by
+  controller/recovery flow.
 
 Accepted Phase 4 limitation: cleanup-candidate and attempt-failure writers are
 not in the Phase 1-3 backend-neutral contracts. This phase records failed
@@ -62,21 +71,21 @@ SQLite mutation surface for those gaps.
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 1026 passed, 18 skipped, 14 deselected; config-extra passed with 419 passed, 1054 deselected; source distribution and wheel built. |
-| `make test-summary` | Passed | `build/test-summary.md` generated 2026-05-09T18:48:34+00:00; overall 1470 passed, 0 failed, 0 errors, 12 skipped, 1065 deselected. |
-| GitHub checks | Pending | Checks run after PR creation. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed with 1030 passed, 18 skipped, 14 deselected; config-extra passed with 420 passed, 1058 deselected; source distribution and wheel built. |
+| `UV_CACHE_DIR=/tmp/loom_uv_cache make test-summary` | Passed | `build/test-summary.md` generated 2026-05-09T19:24:40+00:00; overall 1475 passed, 0 failed, 0 errors, 12 skipped, 1069 deselected. |
+| GitHub checks | Passed | PR #104 checks completed successfully after PR creation. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 56 | 0 | 0 | 1 | 0 | 57 | 7.91s | 17% |
-| unit | passed | 794 | 0 | 0 | 1 | 0 | 795 | 18.93s | 72% |
-| contract | passed | 92 | 0 | 0 | 2 | 0 | 94 | 5.09s | 49% |
-| integration | passed | 72 | 0 | 0 | 8 | 10 | 80 | 52.60s | 56% |
-| e2e | passed | 37 | 0 | 0 | 0 | 1 | 37 | 15.46s | 67% |
-| config-extra | passed | 419 | 0 | 0 | 0 | 1054 | 419 | 34.53s | 72% |
-| Overall | passed | 1470 | 0 | 0 | 12 | 1065 | 1482 | 134.51s | - |
+| package | passed | 56 | 0 | 0 | 1 | 0 | 57 | 7.83s | 17% |
+| unit | passed | 798 | 0 | 0 | 1 | 0 | 799 | 20.81s | 72% |
+| contract | passed | 92 | 0 | 0 | 2 | 0 | 94 | 4.43s | 49% |
+| integration | passed | 72 | 0 | 0 | 8 | 10 | 80 | 52.95s | 55% |
+| e2e | passed | 37 | 0 | 0 | 0 | 1 | 37 | 15.49s | 67% |
+| config-extra | passed | 420 | 0 | 0 | 0 | 1058 | 420 | 35.20s | 74% |
+| Overall | passed | 1475 | 0 | 0 | 12 | 1069 | 1487 | 136.70s | - |
 
 ## Risks / Follow-Ups
 
@@ -85,6 +94,6 @@ SQLite mutation surface for those gaps.
 - Cleanup-candidate writes and attempt-specific failure writes need a future
   backend-neutral contract extension if they must become first-class authority
   facts.
-- Full backend worker-owned attempt finalization remains limited to future
-  continuation contract work; this phase only preserves safe local behavior and
-  records fencing metadata for handoff.
+- Public CLI worker-owned backend continuation remains future work; this phase
+  keeps the backend-fenced stage-job path internal/test-selected and does not
+  add public CLI fencing flags.

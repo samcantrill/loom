@@ -272,6 +272,8 @@ class AuthorityBackedSerialRunStore:
         *,
         owner: Mapping[str, PlainData] | None = None,
     ) -> RunLockRecord:
+        if _is_stage_job_owner(owner):
+            return self.local_store.acquire_run_lock(run_uri, owner=owner)
         owner_id = _owner_id(owner, fallback=self.owner_id)
         lease = self.authority_store.acquire_controller_lease(
             run_uri,
@@ -288,6 +290,9 @@ class AuthorityBackedSerialRunStore:
         )
 
     def read_run_lock(self, run_uri: str) -> RunLockRecord | None:
+        materialization_lock = self.local_store.read_run_lock(run_uri)
+        if materialization_lock is not None:
+            return materialization_lock
         for token, active in self._controller_leases.items():
             if active.lease.run_uri == run_uri:
                 return RunLockRecord(
@@ -299,7 +304,10 @@ class AuthorityBackedSerialRunStore:
         return None
 
     def release_run_lock(self, run_uri: str, token: str) -> None:
-        active = self._controller_leases.pop(token)
+        active = self._controller_leases.pop(token, None)
+        if active is None:
+            self.local_store.release_run_lock(run_uri, token)
+            return
         self.authority_store.release_lease(
             active.lease.lease_id,
             owner_id=active.owner_id,
@@ -477,6 +485,90 @@ class AuthorityBackedSerialRunStore:
             payload["metadata"] = metadata
         self.local_store.write_stage_worker_request(
             run_uri, stage_name, payload, attempt=attempt
+        )
+
+    def stage_job_run_finalization_allowed(self) -> bool:
+        return False
+
+    def validate_stage_job_authority(
+        self,
+        run_uri: str,
+        stage_name: str,
+        attempt: int,
+        *,
+        authority_attempt_id: str,
+        authority_lease_id: str,
+        authority_owner_id: str,
+        authority_fencing_token: str,
+        worker_metadata: Mapping[str, PlainData],
+    ) -> None:
+        provided = {
+            "attempt_id": authority_attempt_id,
+            "lease_id": authority_lease_id,
+            "owner_id": authority_owner_id,
+            "fencing_token": authority_fencing_token,
+        }
+        metadata = _authority_attempt_metadata(worker_metadata)
+        metadata_mismatches = _value_mismatches(expected=provided, actual=metadata)
+        if metadata_mismatches:
+            raise AuthorityStoreError(
+                "stage-job authority fencing does not match worker metadata"
+            )
+        stage = self._stage_snapshot(run_uri, stage_name)
+        if stage is None:
+            raise AuthorityStoreError("stage has no authoritative lifecycle state")
+        attempt_record = next(
+            (
+                stage_attempt
+                for stage_attempt in stage.attempts
+                if stage_attempt.attempt == attempt
+                and stage_attempt.attempt_id == authority_attempt_id
+            ),
+            None,
+        )
+        if attempt_record is None:
+            raise AuthorityStoreError("stage-job authority attempt is not current")
+        active_lease = stage.active_lease
+        if active_lease is None:
+            self.authority_store.renew_lease(
+                authority_lease_id,
+                owner_id=authority_owner_id,
+                fencing_token=authority_fencing_token,
+                lease_ttl_seconds=_STAGE_LEASE_TTL_SECONDS,
+            )
+            raise AuthorityStoreError("missing active stage lease")
+        lease_expected = {
+            "run_uri": run_uri,
+            "stage_name": stage_name,
+            "attempt_id": authority_attempt_id,
+            "lease_id": authority_lease_id,
+            "owner_id": authority_owner_id,
+            "fencing_token": authority_fencing_token,
+        }
+        lease_actual = {
+            "run_uri": active_lease.run_uri,
+            "stage_name": active_lease.stage_name,
+            "attempt_id": active_lease.attempt_id,
+            "lease_id": active_lease.lease_id,
+            "owner_id": active_lease.owner_id,
+            "fencing_token": active_lease.fencing_token,
+        }
+        lease_mismatches = _value_mismatches(
+            expected=lease_expected, actual=lease_actual
+        )
+        if lease_mismatches:
+            raise AuthorityStoreError(
+                "stage-job authority fencing does not match active backend lease"
+            )
+        renewed = self.authority_store.renew_lease(
+            authority_lease_id,
+            owner_id=authority_owner_id,
+            fencing_token=authority_fencing_token,
+            lease_ttl_seconds=_STAGE_LEASE_TTL_SECONDS,
+        )
+        self._attempt_leases[(run_uri, stage_name, attempt)] = _AttemptLease(
+            attempt=attempt_record,
+            lease=renewed,
         )
 
     def read_stage_worker_result(
@@ -731,6 +823,10 @@ def _stage_owner(stage: StageLifecycleSnapshot) -> Mapping[str, PlainData]:
     return {}
 
 
+def _is_stage_job_owner(owner: Mapping[str, PlainData] | None) -> bool:
+    return owner is not None and owner.get("component") == "StageJobRunner"
+
+
 def _owner_id(owner: Mapping[str, PlainData] | None, *, fallback: str) -> str:
     if owner is None:
         return fallback
@@ -750,6 +846,37 @@ def _plain_mapping(value: object, path: str) -> dict[str, PlainData]:
     if not isinstance(normalized, dict):
         raise AuthorityStoreError(f"{path} must be a mapping")
     return cast(dict[str, PlainData], normalized)
+
+
+def _authority_attempt_metadata(
+    metadata: Mapping[str, PlainData],
+) -> dict[str, str]:
+    raw = metadata.get(_AUTHORITY_METADATA_KEY)
+    if not isinstance(raw, Mapping):
+        raise AuthorityStoreError("worker request is missing authority_attempt metadata")
+    payload = _plain_mapping(raw, f"metadata.{_AUTHORITY_METADATA_KEY}")
+    required = ("attempt_id", "lease_id", "owner_id", "fencing_token")
+    values: dict[str, str] = {}
+    for key in required:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value:
+            raise AuthorityStoreError(
+                f"worker request authority_attempt.{key} must be a non-empty string"
+            )
+        values[key] = value
+    return values
+
+
+def _value_mismatches(
+    *,
+    expected: Mapping[str, object],
+    actual: Mapping[str, object],
+) -> dict[str, dict[str, object]]:
+    return {
+        key: {"expected": expected_value, "actual": actual.get(key)}
+        for key, expected_value in expected.items()
+        if actual.get(key) != expected_value
+    }
 
 
 __all__ = [
