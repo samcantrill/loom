@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: expanded-path refine pass complete; ready for implementation.
+- Status: implementation refinement pass complete; ready for PR preparation.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 4: Serial Execution Write-Path Integration`
 - Branch: `codex/serial-write-integration`
@@ -26,9 +26,8 @@
 - Draft pass: complete by `loom_phase_planner` in this artifact.
 - Refine pass: complete by `loom_phase_planner` in this artifact on
   2026-05-10.
-- Phase implementation refinement budget: unused; expanded path reserves one
-  bounded `loom_phase_refiner` pass after implementation only if assigned by
-  the manager.
+- Phase implementation refinement budget: used on 2026-05-10 by
+  `loom_phase_refiner`; no blocker remained after the bounded pass.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
 - Blocker-resolution budget: 0/3 used.
@@ -513,7 +512,11 @@ make test-summary
   backend-neutral cleanup-candidate writer. Commit failure after local output
   staging therefore records durable stage/run failure facts and fails the stage
   lease where possible, while leaving cleanup-candidate creation as a Phase 5+
-  contract gap rather than adding SQLite-specific mutation surface here.
+  contract gap rather than adding SQLite-specific mutation surface here. The
+  implementation refinement pass rechecked this point and treated it as
+  acceptable Phase 4 technical debt, not a blocker, because the small remedies
+  available would either add private SQLite mutation surface or broaden the
+  backend-neutral public protocol.
 - The authority contract does not expose an attempt-failure writer separate
   from stage failure and lease failure. Failed attempts remain represented by
   failed stage lifecycle, failed lease/audit evidence, and materialized failure
@@ -523,10 +526,26 @@ make test-summary
   finalization authority needs a narrower continuation contract pass; no broad
   continuation redesign was included in this phase.
 
+### Implementation Refinement Summary
+
+- Reviewed the Phase 4 implementation against the refined execution plan's
+  authority write semantics, public-default preservation, controller lease,
+  stage attempt/lease allocation, output commit ordering, commit-failure
+  behavior, worker handoff metadata, continuation failure classification,
+  no-legacy-local-truth boundary, and test obligations.
+- No implementation defect requiring adapter or store code changes was found in
+  this pass.
+- Added bounded unit coverage for authority-backed conflict reads over local
+  status/output/artifact-index files, controller lease conflicts without
+  `run.lock`, submitted-operation reads from backend authority over conflicting
+  local registry files, and prepared-worker handoff metadata carrying backend
+  attempt, lease, owner, and fencing-token facts.
+
 ### Validation Evidence
 
-- `uv run pytest tests/unit/loom/pipeline/execution/test_authority_adapter.py`
-  - 4 passed.
+- Refinement focused command:
+  `uv run pytest tests/unit/loom/pipeline/execution/test_authority_adapter.py`
+  - 7 passed.
 - Targeted phase command:
   `uv run pytest tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_stage_attempts.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/pipeline/execution/test_stage_job.py tests/contracts/test_authority_store_contract.py tests/contracts/test_authoritative_read_model_contract.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py`
   - 78 passed.
@@ -535,11 +554,11 @@ make test-summary
   - 14 passed, 4 skipped before config extras were installed for full
     validation.
 - Targeted Ruff command for changed files passed.
-- `make validate-pr` passed:
+- Refinement `make validate-pr` passed:
   - Ruff: passed.
   - Pyright: 0 errors.
-  - default harness: 1023 passed, 18 skipped, 14 deselected.
-  - config-extra harness: 419 passed, 1051 deselected.
+  - default harness: 1026 passed, 18 skipped, 14 deselected.
+  - config-extra harness: 419 passed, 1054 deselected.
   - build: source distribution and wheel built successfully.
 - `make test-summary` passed and wrote `build/test-summary.md`:
   - package: 56 passed, 1 skipped.
@@ -551,8 +570,9 @@ make test-summary
 
 ### Budget Status
 
-- Phase implementation refinement budget: unused; targeted and full validation
-  passed without a separate refiner pass.
+- Phase implementation refinement budget: used on 2026-05-10 by
+  `loom_phase_refiner`; this pass added only phase-scoped test coverage and
+  documentation, with no blocker remaining.
 - Phase PR review budget: unused; one automated review pass remains available
   after PR preparation.
 - Blocker-resolution budget: 0/3 used.
