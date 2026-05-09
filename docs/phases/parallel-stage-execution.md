@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan; refine pass pending.
+- Status: final phase execution plan; ready for implementation.
 - Feature focus: Persistence And Concurrency Foundation
 - Intended PR title:
   `Persistence And Concurrency Foundation - Phase 7: Bounded Parallel Stage Execution`
@@ -28,14 +28,22 @@
   blocking or non-blocking findings remained.
 - Plan quality gate loop budget: initial review used; gate refinement and
   confirmation review were not needed.
-- Draft pass: complete by `loom_phase_planner` in this artifact.
-- Refine pass: pending; required before implementation handoff.
+- Draft pass: complete by `loom_phase_planner` in draft-plan commit
+  `0ea7a51`.
+- Refine pass: complete on 2026-05-10 by `loom_phase_planner`; the expanded
+  pass reread the draft plan, implementation-plan v9, `AGENTS.md`,
+  `docs/structure.md`, runner, authority adapter, authority store contracts,
+  backend capability records, runtime/CLI option adapters, local/subprocess
+  executor boundaries, and existing SQLite/serial execution tests, then
+  tightened public-control semantics, unsupported executor behavior,
+  deterministic scheduling, lease renewal, interruption handling, and test
+  obligations.
 - Setup limitations: branch/worktree creation used local `develop` at the
   manager-provided Phase 6 metadata commit. No remote fetch, GitHub operation,
   broad validation, PR action, or implementation was run during planning.
   Worktree creation required approved sandbox escalation after the default
   sandbox could not write the namespaced `codex/` branch ref.
-- Blockers: none known in the draft pass.
+- Blockers: none.
 
 ## Objective
 
@@ -96,6 +104,57 @@ policy, and remote/service backends remain out of scope.
   fencing, serial authoritative execution, backend diagnostics, CLI run
   behavior, and runtime-profile merge behavior should be extended rather than
   duplicated.
+- `LocalExecutor` can run in-process stages and is the primary target for
+  default deterministic parallel coverage. Its optional stdout/stderr capture
+  redirects process-global streams, so the implementation must either keep that
+  mode serial, make capture scoped safely, or fail loudly for explicit
+  parallel requests when capture is enabled.
+- `SubprocessExecutor` uses prepared worker handoff files and
+  `run_stage_job()` with backend fencing. It can be considered local
+  controller-owned execution, but only if parallel controller ownership and
+  worker materialization remain deterministic. If this cannot be proven in
+  scope, explicit parallel subprocess execution should fail loudly while local
+  in-process parallelism ships.
+
+## Refined Implementation Boundaries
+
+- Preferred control surface:
+  - Python: accept `max_parallel_stages` through durable run execution
+    settings and expose a validated typed accessor or policy object used by
+    `PipelineRunner`.
+  - CLI: add `--max-parallel-stages N` to `loom run`.
+  - Failure policy: keep the default `stop-on-first-failure`; add only the
+    narrow `continue-independent` policy required by Phase 7.
+- The executor should first preserve the current serial code path for
+  `max_parallel_stages <= 1`; build the bounded scheduler as a separate
+  internal path selected only after option validation and capability preflight.
+- Capability preflight must run before stage execution for explicit
+  `max_parallel_stages > 1`. Failure should reuse
+  `StoreDiagnostic`/`UnsupportedCapability` records and produce structured API
+  or CLI errors.
+- The scheduler should use `ThreadPoolExecutor` or an equivalent stdlib local
+  primitive only as worker mechanics. Backend attempt allocation plus stage
+  lease remains the claim. Do not add a heavyweight concurrency dependency.
+- Ready state should be computed from the static plan, original graph
+  dependencies, durable upstream outcomes, and committed backend artifact
+  facts. Materialized output files alone cannot make a stage ready.
+- The implementation should isolate mutable scheduler bookkeeping inside
+  `loom.pipeline.execution`. Shared data structures such as `stage_results`,
+  `outputs_by_stage`, active futures, and failure state must be updated by the
+  controller thread or protected by narrow synchronization.
+- The parallel path may refactor stage preparation and commit helpers out of
+  the current serial loop, but those helpers must continue to use
+  `RunStore`/authority adapter APIs rather than SQLite internals.
+- A stage worker may emit local materialization files concurrently only under
+  its own stage directory. Run-level status, stage lifecycle, output commit,
+  artifact facts, submitted operations, events, and freshness remain backend
+  facts or backend-derived projections.
+- Subprocess parallelism is a secondary target. It must not delay shipping
+  correct local in-process bounded parallelism if subprocess support reveals
+  broader prepared-worker or process-runner coupling.
+- SLURM executors, dry-run planners, and live submission paths must not opt
+  into this local bounded scheduler. Explicit parallel requests with scheduler
+  executors should fail with a targeted unsupported-executor/capability error.
 
 ## In-Scope Work
 
@@ -129,7 +188,9 @@ policy, and remote/service backends remain out of scope.
   lease for the selected attempt.
 - Add lease renewal for active attempts where a stage may run longer than the
   lease TTL used by tests or defaults. Renewals must use backend-owned time and
-  fencing tokens.
+  fencing tokens. The scheduler must not depend on wall-clock sleeps for
+  default tests; use injected clocks, small TTLs, barriers, or explicit renewal
+  hooks where needed.
 - Use backend snapshots and recovery scans to handle expired or abandoned
   leases. Ambiguous work must not be marked as succeeded unless the output
   commit succeeds with a valid attempt/lease fencing token.
@@ -140,6 +201,10 @@ policy, and remote/service backends remain out of scope.
   active leases where possible, record durable interruption or
   abandonment/recovery facts, and avoid marking ambiguous active work
   succeeded.
+- Preserve current `RunResult` shape. `stage_results` should remain keyed by
+  stage name and should be populated for all planned stages before returning,
+  including skipped, reused, blocked, failed, active-at-interruption, and
+  unstarted-after-failure stages.
 - Keep CLI and Python result presentation compatible with serial behavior:
   existing serial default tests should continue to pass, while parallel runs
   expose final stage statuses, failures, and artifact indexes through the same
@@ -163,6 +228,7 @@ policy, and remote/service backends remain out of scope.
 - No old-run migration or legacy local-file active-state fallback.
 - No broad refactor of planning, stores, executor registries, or CLI
   formatting unrelated to parallel execution.
+- No new external concurrency, async, locking, or scheduling dependency.
 
 ## Scope Contract
 
@@ -186,6 +252,13 @@ existing serial local/subprocess execution remain serial. Explicit
 or fail loudly before executing stages. Silent serial fallback is a scope
 violation.
 
+Explicit parallel execution should only support executors whose safety is
+proven in this phase. At minimum this means the built-in local executor against
+the SQLite-backed authority. Subprocess support is allowed if it can preserve
+prepared-worker fencing, per-stage materialization, and deterministic tests.
+SLURM and future scheduler-backed executors are out of scope and must not
+reuse this local worker pool.
+
 The backend claim boundary is attempt allocation plus stage lease ownership.
 Threads, futures, or subprocesses are only worker mechanics; they do not own
 truth. A worker cannot publish success without a backend output commit guarded
@@ -206,6 +279,8 @@ must not run.
   results, durable lifecycle facts, and output/artifact facts.
 - Explicit bounded parallel execution runs independent stages concurrently
   against the SQLite authority backend.
+- The public API and CLI reject invalid parallel/failure-policy inputs before
+  creating or mutating run state.
 - Concurrent workers cannot double-claim the same stage or publish stale
   output commits.
 - Lease acquisition, renewal, expiry, and recovery decisions use backend-owned
@@ -225,6 +300,8 @@ must not run.
   lease, or recovery facts without marking ambiguous work as succeeded.
 - Serial read-model, diagnostics, and catalog behavior from earlier v9 phases
   remains compatible with the parallel-produced authoritative facts.
+- Unsupported executor or backend combinations for explicit parallel execution
+  fail before launching workers and include machine-readable context.
 
 ## Suite-Level Test Obligations
 
@@ -241,8 +318,9 @@ must not run.
 - Integration: SQLite-backed synthetic DAGs covering independent branches,
   dependency failures, alternate independent-branch continuation, skipped or
   not-selected branches, lease expiry, abandoned attempts, controller
-  interruption, recovery scans, and no double-claim behavior across concurrent
-  workers.
+  interruption, recovery scans, no double-claim behavior across concurrent
+  workers, local executor stdout/stderr capture behavior, and explicit
+  unsupported executor/backend combinations.
 - E2E: CLI and Python API bounded local parallel runs with deterministic
   synthetic stages, plus serial default and explicit `--max-parallel-stages 1`
   smoke checks.
@@ -270,6 +348,10 @@ must not run.
   because the backend owns correctness. If executor or project-stage
   thread-safety cannot be bounded, support may be limited to safe built-in
   executors with loud errors for unsupported executors.
+- Optional local stdout/stderr capture is process-global today. Do not ship
+  parallel capture unless the implementation proves outputs cannot bleed
+  across concurrent stages; a loud unsupported error for capture-plus-parallel
+  is acceptable.
 - SQLite lease time is local/same-host only. Explicit shared-filesystem,
   remote, or multi-host assumptions must stay loud diagnostics, not degraded
   promises.
@@ -313,6 +395,8 @@ recovery concepts.
   roadmap promotes parallel controls into a richer execution policy model.
 - Deterministic tests may use synthetic barriers and clocks that do not fully
   model real project-stage behavior under thread contention.
+- Subprocess parallel support may be deferred behind a loud error if prepared
+  worker handoff needs a separate phase to be concurrency-safe.
 
 ## Reviewability
 
@@ -341,9 +425,8 @@ table layout unless the implementation leaks it outside `sqlite_authority.py`.
 ## Refinement And Review Budget Status
 
 - Phase execution plan draft: used by this pass.
-- Phase execution plan refine: pending.
-- Phase implementation refinement: unused; expanded-path implementation will
-  normally receive one bounded `loom_phase_refiner` pass after implementation.
+- Phase execution plan refine: used by this pass.
+- Phase implementation refinement: unused.
 - PR review: unused; one automated PR review remains required after PR
   preparation.
 - Blocker-resolution: unused, 0/3 scoped passes consumed.
