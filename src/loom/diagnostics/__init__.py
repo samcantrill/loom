@@ -48,9 +48,6 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "BackendCapabilitiesResult",
-    "BackendDiagnosticsError",
-    "BackendInspectionResult",
     "PreflightStatus",
     "PreflightCheckStatus",
     "PreflightSeverity",
@@ -59,6 +56,9 @@ __all__ = [
     "PreflightResult",
     "PreflightRequest",
     "PreflightError",
+    "BackendCapabilitiesResult",
+    "BackendDiagnosticsError",
+    "BackendInspectionResult",
     "inspect_backend",
     "inspect_backend_capabilities",
     "parse_projection_revision",

@@ -47,6 +47,12 @@ def test_import_loom_diagnostics_public_api() -> None:
         "PreflightResult",
         "PreflightRequest",
         "PreflightError",
+        "BackendCapabilitiesResult",
+        "BackendDiagnosticsError",
+        "BackendInspectionResult",
+        "inspect_backend",
+        "inspect_backend_capabilities",
+        "parse_projection_revision",
         "run_preflight",
     ]
 
