@@ -1,5 +1,10 @@
 """Contract tests for workspace and sweep coordination stores."""
 
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+
 from loom.pipeline.stores import (
     BackendCapability,
     BackendRevision,
@@ -7,38 +12,82 @@ from loom.pipeline.stores import (
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
     LeaseKind,
+    LeaseState,
+    LifecycleReason,
     RecoveryKind,
-    TrialReference,
     TrialLeaseRecord,
+    TrialReference,
     TrialState,
     WorkspaceCoordinationStore,
     WorkspaceIdentity,
     SweepIdentity,
+    coordination_requirement_diagnostics,
 )
+from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
 
-def test_in_memory_store_satisfies_workspace_coordination_protocol() -> None:
-    store = InMemoryWorkspaceCoordinationStore()
+pytestmark = pytest.mark.contract
+
+
+@dataclass(slots=True)
+class FrozenClock:
+    tick: int = 0
+
+    def __call__(self) -> str:
+        return f"2020-01-01T00:00:{self.tick:02d}Z"
+
+
+@dataclass(slots=True)
+class CoordinationStoreCase:
+    name: str
+    store: WorkspaceCoordinationStore
+    clock: FrozenClock | None = None
+
+
+@pytest.fixture(params=["in-memory", "sqlite"])
+def coordination_case(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> CoordinationStoreCase:
+    if request.param == "in-memory":
+        return CoordinationStoreCase(
+            name="in-memory",
+            store=InMemoryWorkspaceCoordinationStore(),
+        )
+    clock = FrozenClock()
+    return CoordinationStoreCase(
+        name="sqlite",
+        store=SQLiteWorkspaceCoordinationStore(
+            tmp_path / "workspace" / ".loom" / "coordination.sqlite3",
+            clock=clock,
+        ),
+        clock=clock,
+    )
+
+
+def test_workspace_coordination_stores_satisfy_protocol(
+    coordination_case: CoordinationStoreCase,
+) -> None:
+    store = coordination_case.store
 
     assert isinstance(store, WorkspaceCoordinationStore)
     assert store.capabilities().supports(
         BackendCapability.CROSS_RUN_COORDINATION,
         scope=CapabilityScope.CROSS_RUN,
     )
+    assert store.capabilities().supports(
+        BackendCapability.GLOBAL_COUNTERS,
+        scope=CapabilityScope.CROSS_RUN,
+    )
     assert not hasattr(store, "transition_stage")
 
 
-def test_workspace_coordination_contract_records_cross_run_facts_only() -> None:
-    store = InMemoryWorkspaceCoordinationStore()
+def test_workspace_coordination_contract_records_cross_run_facts_only(
+    coordination_case: CoordinationStoreCase,
+) -> None:
+    store = coordination_case.store
+    _seed_workspace(store)
 
-    workspace_revision = store.create_workspace(
-        WorkspaceIdentity(workspace_id="workspace-1", root_uri="file:///workspace")
-    )
-    assert workspace_revision.sequence == 1
-    assert store.check_schema().supported
-
-    store.create_sweep(SweepIdentity(sweep_id="sweep-1", workspace_id="workspace-1"))
     trial = TrialReference(
         trial_id="trial-1",
         sweep_id="sweep-1",
@@ -82,7 +131,7 @@ def test_workspace_coordination_contract_records_cross_run_facts_only() -> None:
     assert ConcurrencyCounter.from_dict(counter.to_dict()) == counter
     assert store.scan_recovery("workspace-1") == ()
 
-    store.advance_time(31)
+    _advance(coordination_case, 31)
     recovery_records = store.scan_recovery("workspace-1")
     assert len(recovery_records) == 2
     assert all(
@@ -105,3 +154,140 @@ def test_workspace_coordination_contract_records_cross_run_facts_only() -> None:
         CoordinationRecoveryRecord.from_dict(record.to_dict())
         for record in recovery_records
     ] == list(recovery_records)
+
+
+def test_workspace_coordination_contract_fences_leases_and_counters(
+    coordination_case: CoordinationStoreCase,
+) -> None:
+    store = coordination_case.store
+    _seed_workspace(store)
+    store.record_trial(_trial_reference("trial-1"))
+
+    trial_lease = store.acquire_trial_lease(
+        "sweep-1",
+        "trial-1",
+        owner_id="worker-1",
+        lease_ttl_seconds=10,
+    )
+    with pytest.raises(ValueError, match="active lease"):
+        store.acquire_trial_lease(
+            "sweep-1",
+            "trial-1",
+            owner_id="worker-2",
+            lease_ttl_seconds=10,
+        )
+    with pytest.raises(ValueError, match="stale or foreign lease token"):
+        store.renew_lease(
+            trial_lease.lease.lease_id,
+            owner_id="worker-2",
+            fencing_token=trial_lease.lease.fencing_token,
+            lease_ttl_seconds=10,
+        )
+
+    renewed = store.renew_lease(
+        trial_lease.lease.lease_id,
+        owner_id="worker-1",
+        fencing_token=trial_lease.lease.fencing_token,
+        lease_ttl_seconds=20,
+    )
+    assert renewed.revision.sequence > trial_lease.lease.revision.sequence
+    released = store.release_lease(
+        renewed.lease_id,
+        owner_id="worker-1",
+        fencing_token=renewed.fencing_token,
+    )
+    assert released.state is LeaseState.RELEASED
+
+    replacement = store.acquire_trial_lease(
+        "sweep-1",
+        "trial-1",
+        owner_id="worker-3",
+        lease_ttl_seconds=1,
+    )
+    _advance(coordination_case, 2)
+    with pytest.raises(ValueError, match="expired"):
+        store.fail_lease(
+            replacement.lease.lease_id,
+            owner_id="worker-3",
+            fencing_token=replacement.lease.fencing_token,
+            reason=LifecycleReason(code="worker_failed"),
+        )
+
+    resource_limit = store.set_resource_limit("workspace-1", "gpu", limit=2)
+    assert resource_limit.counter_name == "resource:gpu"
+    first_resource = store.acquire_resource_lease(
+        "workspace-1",
+        "gpu",
+        owner_id="worker-1",
+        amount=2,
+        lease_ttl_seconds=1,
+    )
+    with pytest.raises(ValueError, match="resource limit"):
+        store.acquire_resource_lease(
+            "workspace-1",
+            "gpu",
+            owner_id="worker-2",
+            amount=1,
+            lease_ttl_seconds=10,
+        )
+    _advance(coordination_case, 2)
+    recovered_resource = store.acquire_resource_lease(
+        "workspace-1",
+        "gpu",
+        owner_id="worker-2",
+        amount=1,
+        lease_ttl_seconds=10,
+    )
+    assert recovered_resource.lease.lease_id != first_resource.lease.lease_id
+
+    limited = store.set_counter_limit("workspace-1", "active_trials", limit=1)
+    assert limited.value == 0
+    assert store.increment_counter("workspace-1", "active_trials").value == 1
+    with pytest.raises(ValueError, match="counter limit"):
+        store.increment_counter("workspace-1", "active_trials")
+    assert store.decrement_counter("workspace-1", "active_trials").value == 0
+    assert store.increment_counter("workspace-1", "active_trials").value == 1
+
+
+def test_workspace_coordination_contract_reports_local_safety_limits(
+    coordination_case: CoordinationStoreCase,
+) -> None:
+    diagnostics = coordination_requirement_diagnostics(
+        coordination_case.store.capabilities(),
+        require_shared_filesystem=True,
+        require_remote=True,
+    )
+
+    assert [diagnostic.code for diagnostic in diagnostics] == [
+        "unsafe_shared_filesystem",
+        "unsafe_remote_coordination",
+    ]
+    assert all(diagnostic.severity.value == "error" for diagnostic in diagnostics)
+
+
+def _seed_workspace(store: WorkspaceCoordinationStore) -> None:
+    workspace_revision = store.create_workspace(
+        WorkspaceIdentity(workspace_id="workspace-1", root_uri="file:///workspace")
+    )
+    assert workspace_revision.sequence == 1
+    assert store.check_schema().supported
+    store.create_sweep(SweepIdentity(sweep_id="sweep-1", workspace_id="workspace-1"))
+
+
+def _trial_reference(trial_id: str) -> TrialReference:
+    return TrialReference(
+        trial_id=trial_id,
+        sweep_id="sweep-1",
+        run_uri=f"file:///runs/{trial_id}",
+        state=TrialState.PENDING,
+        revision=BackendRevision(sequence=1, token=f"{trial_id}-rev"),
+    )
+
+
+def _advance(coordination_case: CoordinationStoreCase, seconds: int) -> None:
+    if coordination_case.clock is not None:
+        coordination_case.clock.tick += seconds
+        return
+    store = coordination_case.store
+    if isinstance(store, InMemoryWorkspaceCoordinationStore):
+        store.advance_time(seconds)

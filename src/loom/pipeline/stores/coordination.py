@@ -11,6 +11,13 @@ from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 
 from .capabilities import BackendCapabilitySet
+from .capabilities import (
+    BackendCapability,
+    CapabilityScope,
+    DiagnosticSeverity,
+    StoreDiagnostic,
+    UnsupportedCapabilityCode,
+)
 from .read_models import (
     BackendRevision,
     LeaseKind,
@@ -438,6 +445,15 @@ class WorkspaceCoordinationStore(Protocol):
         lease_ttl_seconds: int,
     ) -> ResourceLeaseRecord: ...
 
+    def renew_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord: ...
+
     def release_lease(
         self,
         lease_id: str,
@@ -447,7 +463,33 @@ class WorkspaceCoordinationStore(Protocol):
         reason: LifecycleReason | None = None,
     ) -> LeaseRecord: ...
 
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord: ...
+
+    def set_resource_limit(
+        self, workspace_id: str, resource_key: str, *, limit: int | None
+    ) -> ConcurrencyCounter: ...
+
+    def set_counter_limit(
+        self, workspace_id: str, counter_name: str, *, limit: int | None
+    ) -> ConcurrencyCounter: ...
+
     def increment_counter(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        amount: int = 1,
+        limit: int | None = None,
+    ) -> ConcurrencyCounter: ...
+
+    def decrement_counter(
         self, workspace_id: str, counter_name: str, *, amount: int = 1
     ) -> ConcurrencyCounter: ...
 
@@ -458,6 +500,61 @@ class WorkspaceCoordinationStore(Protocol):
     def scan_recovery(
         self, workspace_id: str
     ) -> tuple[CoordinationRecoveryRecord, ...]: ...
+
+
+def coordination_requirement_diagnostics(
+    capability_set: BackendCapabilitySet,
+    *,
+    require_shared_filesystem: bool = False,
+    require_remote: bool = False,
+) -> tuple[StoreDiagnostic, ...]:
+    """Report assumptions not proven by a local coordination capability set."""
+
+    diagnostics: list[StoreDiagnostic] = []
+    if require_shared_filesystem:
+        diagnostics.append(
+            StoreDiagnostic(
+                code=UnsupportedCapabilityCode.UNSAFE_SHARED_FILESYSTEM.value,
+                message=(
+                    f"backend {capability_set.backend_name!r} does not prove "
+                    "shared-filesystem coordination safety"
+                ),
+                severity=DiagnosticSeverity.ERROR,
+                detail={"backend_name": capability_set.backend_name},
+            )
+        )
+    if require_remote:
+        unsupported = capability_set.require(
+            BackendCapability.CROSS_RUN_COORDINATION,
+            scope=CapabilityScope.CROSS_RUN,
+        )
+        if unsupported is None:
+            message = (
+                f"backend {capability_set.backend_name!r} does not prove "
+                "remote coordination safety"
+            )
+            detail: Mapping[str, PlainData] = {
+                "backend_name": capability_set.backend_name,
+                "required_capability": BackendCapability.CROSS_RUN_COORDINATION.value,
+                "scope": CapabilityScope.CROSS_RUN.value,
+            }
+        else:
+            message = unsupported.message
+            detail = {
+                "backend_name": capability_set.backend_name,
+                "required_capability": unsupported.capability.value,
+                "scope": unsupported.scope.value,
+                **dict(unsupported.detail),
+            }
+        diagnostics.append(
+            StoreDiagnostic(
+                code=UnsupportedCapabilityCode.UNSAFE_REMOTE_COORDINATION.value,
+                message=message,
+                severity=DiagnosticSeverity.ERROR,
+                detail=detail,
+            )
+        )
+    return tuple(diagnostics)
 
 
 def _non_empty_string(value: object, field: str) -> str:
@@ -554,4 +651,5 @@ __all__ = [
     "CoordinationRecoveryRecord",
     "ConcurrencyCounter",
     "WorkspaceCoordinationStore",
+    "coordination_requirement_diagnostics",
 ]

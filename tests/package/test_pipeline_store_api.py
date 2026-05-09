@@ -69,6 +69,7 @@ def test_pipeline_store_public_exports() -> None:
         "ResourceLeaseRecord",
         "CoordinationRecoveryRecord",
         "ConcurrencyCounter",
+        "coordination_requirement_diagnostics",
         "RunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
@@ -150,6 +151,9 @@ def test_pipeline_store_public_exports() -> None:
     assert "record_output_commit" in stores.PerRunAuthorityStore.__dict__
     assert "acquire_trial_lease" in stores.WorkspaceCoordinationStore.__dict__
     assert "acquire_resource_lease" in stores.WorkspaceCoordinationStore.__dict__
+    assert "renew_lease" in stores.WorkspaceCoordinationStore.__dict__
+    assert "fail_lease" in stores.WorkspaceCoordinationStore.__dict__
+    assert "set_counter_limit" in stores.WorkspaceCoordinationStore.__dict__
     assert "read_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "write_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "read_run_freshness" in stores.RunFreshnessStore.__dict__

@@ -568,6 +568,7 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         self._resource_leases: dict[str, ResourceLeaseRecord] = {}
         self._lease_expiry_ticks: dict[str, int] = {}
         self._counters: dict[tuple[str, str], ConcurrencyCounter] = {}
+        self._resource_limits: dict[tuple[str, str], int] = {}
 
     def capabilities(self) -> BackendCapabilitySet:
         return BackendCapabilitySet(
@@ -611,6 +612,8 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         return self._next_revision()
 
     def list_trials(self, sweep_id: str) -> tuple[TrialReference, ...]:
+        if sweep_id not in self._sweeps:
+            raise ValueError("unknown sweep")
         return tuple(self._trials.get(sweep_id, {}).values())
 
     def acquire_trial_lease(
@@ -623,6 +626,8 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
     ) -> TrialLeaseRecord:
         if trial_id not in self._trials.get(sweep_id, {}):
             raise ValueError("unknown trial")
+        if self._active_trial_lease(sweep_id, trial_id) is not None:
+            raise ValueError("trial already has an active lease")
         sweep = self._sweeps[sweep_id]
         lease = self._new_lease(
             kind=LeaseKind.TRIAL,
@@ -649,6 +654,10 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
     ) -> ResourceLeaseRecord:
         if workspace_id not in self._workspaces:
             raise ValueError("unknown workspace")
+        resource_limit = self._resource_limits.get((workspace_id, resource_key))
+        active_amount = self._active_resource_amount(workspace_id, resource_key)
+        if resource_limit is not None and active_amount + amount > resource_limit:
+            raise ValueError("resource limit exceeded")
         lease = self._new_lease(
             kind=LeaseKind.RESOURCE,
             owner_id=owner_id,
@@ -663,6 +672,32 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         self._resource_leases[lease.lease_id] = record
         return record
 
+    def renew_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        lease = self._require_coordination_lease(lease_id, owner_id, fencing_token)
+        renewed = LeaseRecord(
+            lease_id=lease.lease_id,
+            kind=lease.kind,
+            owner_id=lease.owner_id,
+            fencing_token=lease.fencing_token,
+            acquired_at=lease.acquired_at,
+            renewed_at=self._now(),
+            expires_at=self._at_tick(self._tick + lease_ttl_seconds),
+            revision=self._next_revision(),
+            state=lease.state,
+            reason=lease.reason,
+        )
+        self._leases[lease_id] = renewed
+        self._lease_expiry_ticks[lease_id] = self._tick + lease_ttl_seconds
+        self._replace_coordination_lease(renewed)
+        return renewed
+
     def release_lease(
         self,
         lease_id: str,
@@ -671,9 +706,7 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         fencing_token: str,
         reason: LifecycleReason | None = None,
     ) -> LeaseRecord:
-        lease = self._leases[lease_id]
-        if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
-            raise ValueError("stale or foreign lease token")
+        lease = self._require_coordination_lease(lease_id, owner_id, fencing_token)
         updated = LeaseRecord(
             lease_id=lease.lease_id,
             kind=lease.kind,
@@ -690,17 +723,127 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         self._replace_coordination_lease(updated)
         return updated
 
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord:
+        lease = self._require_coordination_lease(lease_id, owner_id, fencing_token)
+        updated = LeaseRecord(
+            lease_id=lease.lease_id,
+            kind=lease.kind,
+            owner_id=lease.owner_id,
+            fencing_token=lease.fencing_token,
+            acquired_at=lease.acquired_at,
+            renewed_at=lease.renewed_at,
+            expires_at=lease.expires_at,
+            revision=self._next_revision(),
+            state=LeaseState.FAILED,
+            reason=reason,
+        )
+        self._leases[lease_id] = updated
+        self._replace_coordination_lease(updated)
+        return updated
+
+    def set_resource_limit(
+        self, workspace_id: str, resource_key: str, *, limit: int | None
+    ) -> ConcurrencyCounter:
+        if workspace_id not in self._workspaces:
+            raise ValueError("unknown workspace")
+        active_amount = self._active_resource_amount(workspace_id, resource_key)
+        if limit is None:
+            self._resource_limits.pop((workspace_id, resource_key), None)
+        else:
+            if limit <= 0:
+                raise ValueError("limit must be positive")
+            if active_amount > limit:
+                raise ValueError("resource limit is below active lease usage")
+            self._resource_limits[(workspace_id, resource_key)] = limit
+        return ConcurrencyCounter(
+            counter_name=f"resource:{resource_key}",
+            value=active_amount,
+            limit=limit,
+            revision=self._next_revision(),
+        )
+
+    def set_counter_limit(
+        self, workspace_id: str, counter_name: str, *, limit: int | None
+    ) -> ConcurrencyCounter:
+        if workspace_id not in self._workspaces:
+            raise ValueError("unknown workspace")
+        current = self._counters.get((workspace_id, counter_name))
+        value = 0 if current is None else current.value
+        if limit is not None:
+            if limit <= 0:
+                raise ValueError("limit must be positive")
+            if value > limit:
+                raise ValueError("counter limit is below current value")
+        counter = ConcurrencyCounter(
+            counter_name=counter_name,
+            value=value,
+            limit=limit,
+            revision=self._next_revision(),
+        )
+        self._counters[(workspace_id, counter_name)] = counter
+        return counter
+
     def increment_counter(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        amount: int = 1,
+        limit: int | None = None,
+    ) -> ConcurrencyCounter:
+        if amount <= 0:
+            raise ValueError("amount must be positive")
+        return self._change_counter(
+            workspace_id,
+            counter_name,
+            amount=amount,
+            limit=limit,
+        )
+
+    def decrement_counter(
         self, workspace_id: str, counter_name: str, *, amount: int = 1
     ) -> ConcurrencyCounter:
         if amount <= 0:
             raise ValueError("amount must be positive")
+        return self._change_counter(
+            workspace_id,
+            counter_name,
+            amount=-amount,
+            limit=None,
+        )
+
+    def _change_counter(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        amount: int,
+        limit: int | None,
+    ) -> ConcurrencyCounter:
+        if workspace_id not in self._workspaces:
+            raise ValueError("unknown workspace")
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be positive")
         current = self._counters.get((workspace_id, counter_name))
-        value = amount if current is None else current.value + amount
+        current_value = 0 if current is None else current.value
+        value = current_value + amount
+        if value < 0:
+            raise ValueError("counter value cannot become negative")
+        current_limit = None if current is None else current.limit
+        next_limit = limit if limit is not None else current_limit
+        if next_limit is not None and value > next_limit:
+            raise ValueError("counter limit exceeded")
         counter = ConcurrencyCounter(
             counter_name=counter_name,
             value=value,
-            limit=None,
+            limit=next_limit,
             revision=self._next_revision(),
         )
         self._counters[(workspace_id, counter_name)] = counter
@@ -770,6 +913,18 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         self._lease_expiry_ticks[lease.lease_id] = self._tick + lease_ttl_seconds
         return lease
 
+    def _require_coordination_lease(
+        self, lease_id: str, owner_id: str, fencing_token: str
+    ) -> LeaseRecord:
+        lease = self._leases[lease_id]
+        if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
+            raise ValueError("stale or foreign lease token")
+        if lease.state is not LeaseState.ACTIVE:
+            raise ValueError("lease is not active")
+        if self._lease_expired(lease):
+            raise ValueError("lease has expired")
+        return lease
+
     def _replace_coordination_lease(self, lease: LeaseRecord) -> None:
         trial = self._trial_leases.get(lease.lease_id)
         if trial is not None:
@@ -794,6 +949,29 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
             lease.state is LeaseState.ACTIVE
             and self._lease_expiry_ticks.get(lease.lease_id, self._tick + 1)
             <= self._tick
+        )
+
+    def _active_trial_lease(
+        self, sweep_id: str, trial_id: str
+    ) -> TrialLeaseRecord | None:
+        for record in self._trial_leases.values():
+            if (
+                record.sweep_id == sweep_id
+                and record.trial_id == trial_id
+                and not self._lease_expired(record.lease)
+                and record.lease.state is LeaseState.ACTIVE
+            ):
+                return record
+        return None
+
+    def _active_resource_amount(self, workspace_id: str, resource_key: str) -> int:
+        return sum(
+            record.amount
+            for record in self._resource_leases.values()
+            if record.workspace_id == workspace_id
+            and record.resource_key == resource_key
+            and record.lease.state is LeaseState.ACTIVE
+            and not self._lease_expired(record.lease)
         )
 
     def _expired_lease_recovery(self, lease: LeaseRecord) -> RecoveryRecord:

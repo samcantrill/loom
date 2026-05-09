@@ -85,6 +85,7 @@ def test_store_error_exports() -> None:
         "ResourceLeaseRecord",
         "CoordinationRecoveryRecord",
         "ConcurrencyCounter",
+        "coordination_requirement_diagnostics",
         "RunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
