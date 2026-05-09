@@ -2,9 +2,10 @@
 
 ## Metadata
 
-- Status: PR body refined; ready for PR creation
+- Status: pr_open; PR opened and verified against `develop`
 - Feature focus: Persistence And Concurrency Foundation
 - PR title: `Persistence And Concurrency Foundation - Phase 2: SQLite Run Backend And Transactions`
+- PR: https://github.com/samcantrill/loom/pull/102
 - Branch: `codex/sqlite-run-backend`
 - Worktree: `/home/samcantrill/work/loom-worktrees/sqlite-run-backend`
 - Phase execution plan path: `docs/phases/sqlite-run-backend.md`
@@ -253,9 +254,9 @@ make test-summary
   `loom_pr_preparer`; the PR body at
   `docs/phases/sqlite-run-backend-pr-body.md` was verified against the final
   diff, validation evidence, acceptance criteria, and Phase 2 scope boundaries.
-- PR facts confirmed during draft pass: head branch
+- PR facts confirmed during PR preparation: head branch
   `codex/sqlite-run-backend`; target branch `develop`; stack predecessor none;
-  root phase PR; title
+  root phase PR; PR https://github.com/samcantrill/loom/pull/102; title
   `Persistence And Concurrency Foundation - Phase 2: SQLite Run Backend And Transactions`;
   merge eligibility remains target-branch, automated review, validation, and
   CI dependent.
@@ -281,11 +282,16 @@ make test-summary
     1 skipped; contract 86 passed / 2 skipped; integration 68 passed /
     7 skipped / 10 deselected; e2e 37 passed / 1 deselected; config-extra
     416 passed / 1024 deselected.
-  - GitHub checks were pending before PR creation; the managing agent owns CI
+  - GitHub checks were pending at PR opening; the managing agent owns CI
     polling after this PR-preparation pass.
 - Stack maintenance: no predecessor; branch targets `develop`.
-- Remaining blockers: none recorded for PR-body refine. PR creation remains
-  pending in this pass.
+- PR opened: https://github.com/samcantrill/loom/pull/102
+- PR verification: `gh pr view 102 --json baseRefName,headRefName,state,url`
+  returned `baseRefName=develop`, `headRefName=codex/sqlite-run-backend`,
+  `state=OPEN`, and `url=https://github.com/samcantrill/loom/pull/102`. The
+  base matches the recorded target branch and this is a root phase PR with no
+  stack predecessor.
+- Remaining blockers: none recorded for PR-body refine or PR opening.
 
 ## Phase Refinement Report
 
@@ -344,5 +350,7 @@ result: passed; Ruff passed, Pyright passed, default harness passed with 996 pas
   0/3 used, PR review unused
 - Final validation recommended: completed during PR-body refine with
   `make validate-pr` and `make test-summary`; rerun only if implementation or
-  tests change before PR opening
-- Suite evidence still needed: none for PR opening
+  tests change after this PR-preparation pass
+- Suite evidence still needed: none for this PR-preparation pass
+- PR opened and verified: yes; PR #102 targets `develop` from
+  `codex/sqlite-run-backend`
