@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: implemented; PR pending
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 6: CLI Integration, Docs, And E2E`
 - Branch: `codex/run-catalog-cli`
@@ -21,7 +21,7 @@
 - Plan quality gate loop budget: initial review used; gate refinement used; confirmation review used.
 - Draft pass: completed by managing agent in this artifact.
 - Refine pass: completed in this artifact for the expanded path; no unresolved blockers remain.
-- Phase implementation refinement budget: unused; one scoped refinement pass remains available if validation or review exposes a concrete blocker.
+- Phase implementation refinement budget: not needed; no refiner pass used because targeted validation, `make validate-pr`, and `make test-summary` passed.
 - Phase PR review budget: unused; one automated review remains required before merge.
 - Blocker-resolution budget: unused, 0 of 3 scoped passes consumed.
 - Setup notes: branch and worktree were created from local `develop` at commit `0251fa7` (`docs: record v8 phase 5 merge`).
@@ -246,17 +246,53 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed
 - PR review: unused
 - Blocker resolution: 0/3 used
+
+## Implementation And Validation Summary
+
+- Added `src/loom/cli/runs.py` with `loom runs index`, `loom runs list`, and `loom runs diff` commands that delegate to `RunCatalog.rebuild()`, `RunCatalog.list()`, and `RunCatalog.compare()`.
+- Registered the `runs` command group in the import-light CLI parser.
+- Added exact-match CLI filter parsing for run status, tags, config and pipeline fingerprints, git commit, stage status, artifact identity, artifact checksum, executor, and backend.
+- Added text formatters and command-specific JSON envelopes for run catalog index/list/diff output.
+- Preserved catalog warning metadata in top-level CLI JSON warnings while leaving public API result payloads intact.
+- Updated run-catalog and CLI feature docs for the implemented command surface and boundaries.
+- Added unit, contract, integration, e2e, and package import-boundary coverage for the command group.
+
+Focused validation:
+
+- `uv run ruff check src/loom/cli tests/unit/loom/cli tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs_e2e.py tests/package/test_import_boundaries.py` passed.
+- `uv run pyright src/loom/cli tests/unit/loom/cli tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs_e2e.py tests/package/test_import_boundaries.py` passed with 0 errors, 0 warnings, 0 informations.
+- `uv run pytest tests/unit/loom/cli/test_main.py tests/unit/loom/cli/test_runs.py tests/contracts/test_cli_runs_contract.py tests/integration/pipeline/test_cli_runs.py tests/e2e/test_cli_runs_e2e.py tests/package/test_import_boundaries.py` passed: 47 passed in 6.54s.
+
+Final PR validation:
+
+- `make validate-pr` passed:
+  - Ruff: passed.
+  - Pyright with config extra: passed with 0 errors, 0 warnings, 0 informations.
+  - Default harness: 969 passed, 17 skipped, 14 deselected in 73.84s.
+  - Config-extra harness: 413 passed, 997 deselected in 26.56s.
+  - Build: source distribution and wheel built successfully.
+- `make test-summary` passed and wrote `build/test-summary.md`.
+
+| Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| package | passed | 55 | 0 | 0 | 1 | 0 | 7.63s |
+| unit | passed | 760 | 0 | 0 | 1 | 0 | 22.68s |
+| contract | passed | 78 | 0 | 0 | 2 | 0 | 4.68s |
+| integration | passed | 64 | 0 | 0 | 7 | 10 | 78.04s |
+| e2e | passed | 37 | 0 | 0 | 0 | 1 | 20.66s |
+| config-extra | passed | 413 | 0 | 0 | 0 | 997 | 39.88s |
+| Overall | passed | 1407 | 0 | 0 | 11 | 1008 | 173.56s |
 
 ## Completion Notes
 
 - Draft plan: completed on 2026-05-09.
 - Final phase execution plan: this artifact.
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Implementation summary: completed; see implementation summary above.
+- Implementation validation: completed; focused validation, `make validate-pr`, and `make test-summary` passed.
+- Refinement summary: not needed.
 - Blocker-resolution summary: none
 - PR preparation: pending
 - Stack maintenance: no predecessor or successor branch
