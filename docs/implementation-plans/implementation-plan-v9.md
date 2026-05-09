@@ -917,9 +917,9 @@ Completion summary:
 
 ### Phase 4 - Serial Execution Write-Path Integration
 
-Status: pending
+Status: merged
 Branch: `codex/serial-write-integration`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/104
 
 Goal:
 
@@ -1047,7 +1047,42 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged into `develop` on 2026-05-09T19:31:05Z by PR #104
+  (`b1b6944a1b66af56488d6b4de256ac4ce75c2cb0`).
+- Added the internal/test-selectable `AuthorityBackedSerialRunStore` adapter
+  for SQLite-backed serial execution, pairing local materialization paths with
+  `PerRunAuthorityStore` active write authority while preserving the public
+  `LocalRunStore` default.
+- Routed SQLite-backed serial run creation/opening, controller ownership,
+  run/stage transitions, stage attempts and leases, submitted-operation
+  records, output commits, artifact facts, audit events, and authoritative
+  artifact reads through backend contracts.
+- Preserved config/provenance/log/stage input/fingerprint/worker handoff and
+  output documents as local materialized evidence, not active state truth.
+  Conflicting local status/output/artifact-index files do not override
+  backend-backed reads on the internal SQLite path.
+- Added internal stage-job authority fencing checks for SQLite-backed
+  continuation. Stage-job requests must provide backend attempt id, lease id,
+  owner id, and fencing token matching worker-request metadata and the active
+  backend lease; the SQLite-backed path commits only the target attempt and
+  does not finalize run status.
+- Automated PR review found one blocking continuation issue: the initial
+  implementation allowed SQLite-backed stage-job continuation without explicit
+  backend fencing and could finalize run status. Blocker-resolution pass 1/3
+  fixed the fenced continuation path and refreshed PR evidence; 2/3
+  blocker-resolution passes remain unused.
+- Accepted debt: Phase 1-3 authority contracts expose cleanup-candidate reads
+  but no backend-neutral cleanup-candidate writer, and do not expose an
+  attempt-failure writer separate from stage/lease failure. Phase 4 records
+  failed stage/run facts and failed leases where possible instead of adding
+  private SQLite mutation surface or broadening the public protocol.
+- Validation: `make validate-pr` passed; final `make test-summary` passed with
+  1475 passed, 0 failed, 0 errors, 12 skipped, and 1065 deselected. GitHub CI
+  `checks` passed before merge.
+- Follow-up: Phase 5 should enable the public SQLite-first default and move
+  live planning/resume/status/catalog reads to backend snapshots/read models,
+  retiring Phase 4's compatibility shims for new runs where backend truth is
+  available.
 
 ### Phase 5 - Public Serial Hard Swap And Read-Path Swap
 
