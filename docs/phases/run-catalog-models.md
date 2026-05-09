@@ -280,12 +280,23 @@ make test-summary
     test.
   - `uv run ruff check ...` on touched Phase 1 files passed.
   - `uv run pyright ...` on touched Phase 1 files passed.
+  - First `make validate-pr` run exposed a pytest import-name collision from
+    the new `tests/unit/loom/runs/test_models.py`; the test was renamed to
+    `test_run_catalog_models.py`.
+  - Second `make validate-pr` run exposed an existing store export assertion
+    that needed the new freshness public exports; the assertion was updated.
+  - Final `make validate-pr` passed: Ruff, Pyright, default test harness,
+    config-extra test harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 55
+    passed, unit 741 passed, contract 73 passed, integration 45 passed, e2e 36
+    passed, config-extra 413 passed.
 - Refinement summary: Not needed; targeted validation passed and no
   implementation blocker was found.
 - Blocker-resolution summary: 0/3 used. The Spark executor assignment could not
   run because the Spark usage limit was exhausted, so the manager used the
   workflow's allowed non-Spark fallback implementation path without consuming a
   blocker-resolution pass.
-- PR preparation: TBD
+- PR preparation: PR body pending at
+  `docs/phases/run-catalog-models-pr-body.md`; PR not yet opened.
 - Stack maintenance: TBD
 - Remaining blockers: none at planning time
