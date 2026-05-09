@@ -73,6 +73,16 @@ from .indexes import (
 from .inspection import RunStageInspection, RunStateInspection
 from .local_artifacts import LocalArtifactStore
 from .local_runs import LocalRunStore
+from .materialization_read_models import (
+    AuthoritativeReadOptions,
+    CompletedRunBundleMetadata,
+    LocalMaterializationRequest,
+    MaterializationReadModelError,
+    artifact_payload_ref,
+    collect_local_materialized_refs,
+    read_authoritative_run,
+    read_completed_run_bundle_metadata,
+)
 from .read_models import (
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
@@ -215,6 +225,14 @@ __all__ = [
     "LocalRunStore",
     "RunStageInspection",
     "RunStateInspection",
+    "AuthoritativeReadOptions",
+    "CompletedRunBundleMetadata",
+    "LocalMaterializationRequest",
+    "MaterializationReadModelError",
+    "artifact_payload_ref",
+    "collect_local_materialized_refs",
+    "read_authoritative_run",
+    "read_completed_run_bundle_metadata",
     "StoreError",
     "ArtifactStoreError",
     "RunStoreError",

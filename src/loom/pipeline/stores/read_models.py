@@ -62,6 +62,7 @@ class StaticOutcomeKind(StrEnum):
 
 class ReadModelWarningCode(StrEnum):
     MISSING_MATERIALIZED_REF = "missing_materialized_ref"
+    CORRUPT_MATERIALIZED_REF = "corrupt_materialized_ref"
     STALE_PROJECTION = "stale_projection"
     UNSUPPORTED_SCHEMA = "unsupported_schema"
     ACTIVE_RUN_CHANGING = "active_run_changing"
