@@ -223,24 +223,25 @@ def test_config_snapshot_inputs_remain_explicit_user_provided_fields() -> None:
     assert not hasattr(snapshots, "resolved_redacted")
 
 
-def test_run_request_rejects_continue_on_failure() -> None:
-    with pytest.raises(RunRequestError, match="continue-on-failure"):
-        RunRequest(
-            pipeline=PipelineSpec.from_config(
-                {
-                    "stages": [
-                        {
-                            "name": "build",
-                            "factory": {
-                                "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
-                            },
-                            "outputs": {"data": {"artifact_type": "json"}},
-                        }
-                    ]
-                }
-            ),
-            failure_policy=FailurePolicy(stop_on_first_failure=False),
-        )
+def test_run_request_accepts_continue_independent_failure_policy() -> None:
+    request = RunRequest(
+        pipeline=PipelineSpec.from_config(
+            {
+                "stages": [
+                    {
+                        "name": "build",
+                        "factory": {
+                            "_target_": "tests.support.pipeline_execution_stages.JsonProducerStage"
+                        },
+                        "outputs": {"data": {"artifact_type": "json"}},
+                    }
+                ]
+            }
+        ),
+        failure_policy=FailurePolicy(stop_on_first_failure=False),
+    )
+
+    assert request.failure_policy.stop_on_first_failure is False
 
 
 def test_run_request_rejects_non_bool_failure_policy_mapping() -> None:

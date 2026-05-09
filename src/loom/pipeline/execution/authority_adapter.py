@@ -595,6 +595,24 @@ class AuthorityBackedSerialRunStore:
             run_uri, stage_name, result, attempt=attempt
         )
 
+    def renew_stage_attempt_lease(
+        self,
+        run_uri: str,
+        stage_name: str,
+        attempt: int,
+    ) -> None:
+        active = self._require_stage_lease(run_uri, stage_name, attempt)
+        renewed = self.authority_store.renew_lease(
+            active.lease.lease_id,
+            owner_id=active.lease.owner_id,
+            fencing_token=active.lease.fencing_token,
+            lease_ttl_seconds=_STAGE_LEASE_TTL_SECONDS,
+        )
+        self._attempt_leases[(run_uri, stage_name, attempt)] = _AttemptLease(
+            attempt=active.attempt,
+            lease=renewed,
+        )
+
     def read_stage_provenance(
         self, run_uri: str, stage_name: str
     ) -> dict[str, PlainData] | None:

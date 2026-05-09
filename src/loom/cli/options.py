@@ -197,6 +197,8 @@ class RunCliOptions:
     profile: str | None = None
     resume: bool = False
     dry_run: bool = False
+    max_parallel_stages: int | None = None
+    failure_policy: str | None = None
     tags: tuple[tuple[str, str], ...] = ()
     notes: tuple[str, ...] = ()
 
@@ -212,6 +214,10 @@ class RunCliOptions:
             profile=getattr(namespace, "profile", None),
             resume=bool(getattr(namespace, "resume", False)),
             dry_run=bool(getattr(namespace, "dry_run", False)),
+            max_parallel_stages=getattr(namespace, "max_parallel_stages", None),
+            failure_policy=_runtime_failure_policy(
+                getattr(namespace, "failure_policy", None)
+            ),
             tags=_tag_pairs(getattr(namespace, "tag", ()) or ()),
             notes=_notes(getattr(namespace, "note", ()) or ()),
         )
@@ -231,6 +237,8 @@ class RunCliOptions:
             profile=self.profile,
             dry_run=self.dry_run,
             resume=self.resume,
+            max_parallel_stages=self.max_parallel_stages,
+            failure_policy=self.failure_policy,
             tags=self.tags,
             notes=self.notes,
             selectors=selectors,
@@ -250,6 +258,8 @@ def _runtime_source(
     profile: str | None = None,
     dry_run: bool = False,
     resume: bool = False,
+    max_parallel_stages: int | None = None,
+    failure_policy: str | None = None,
     tags: tuple[tuple[str, str], ...] = (),
     notes: tuple[str, ...] = (),
     selectors: SelectorCliOptions | None = None,
@@ -265,6 +275,13 @@ def _runtime_source(
         source["dry_run"] = True
     if resume:
         source["resume"] = {"enabled": True}
+    execution_settings: dict[str, object] = {}
+    if max_parallel_stages is not None:
+        execution_settings["max_parallel_stages"] = max_parallel_stages
+    if failure_policy is not None:
+        execution_settings["failure_policy"] = failure_policy
+    if execution_settings:
+        source["execution"] = {"settings": execution_settings}
     if tags:
         source["tags"] = dict(tags)
     if notes:
@@ -295,6 +312,12 @@ def _notes(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
             raise ValueError(f"note[{index}] must be a non-empty string")
         notes.append(value)
     return tuple(notes)
+
+
+def _runtime_failure_policy(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace("-", "_")
 
 
 __all__ = [

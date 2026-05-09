@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from threading import Event, Thread
 from typing import cast
 
 from loom.artifacts import ArtifactRef
@@ -15,13 +18,16 @@ from loom.pipeline.planning import (
     PlanAction,
     PlanReason,
     StageFingerprintRecord,
+    StagePlan,
     build_stage_fingerprint,
     plan_pipeline,
 )
 from loom.pipeline.runtime import (
+    ParallelExecutionOptions,
     ResolvedStageRuntimeOptions,
     RunOptions,
     build_runtime_metadata,
+    parallel_execution_options,
     parse_run_options,
     resolve_run_runtime,
 )
@@ -31,9 +37,13 @@ from loom.pipeline.stage import Stage
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AuthorityStoreError,
+    BackendCapability,
+    CapabilityScope,
+    DiagnosticSeverity,
     LocalArtifactStore,
     LocalRunStorePaths,
     RunStore,
+    StoreDiagnostic,
 )
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
@@ -42,6 +52,7 @@ from loom.timestamps import utc_timestamp
 
 from .errors import (
     OutputValidationError,
+    ParallelExecutionUnsupportedError,
     PipelineExecutionError,
     PlanExecutionError,
     RunRequestError,
@@ -74,6 +85,48 @@ from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_attempts import prepare_stage_attempt
 
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
+_STAGE_LEASE_RENEWAL_INTERVAL_SECONDS = 60.0
+_REQUIRED_PARALLEL_CAPABILITIES = (
+    BackendCapability.ATOMIC_TRANSITIONS,
+    BackendCapability.ATTEMPT_ALLOCATION,
+    BackendCapability.STAGE_LEASES,
+    BackendCapability.BACKEND_LEASE_TIME,
+    BackendCapability.ATOMIC_OUTPUT_COMMIT,
+    BackendCapability.ARTIFACT_FACTS,
+    BackendCapability.REVISIONED_SNAPSHOTS,
+    BackendCapability.RECOVERY_SCANS,
+    BackendCapability.CONSISTENT_READS,
+    BackendCapability.PER_RUN_COORDINATION,
+)
+
+
+@dataclass(slots=True)
+class _ExecutionOutcome:
+    stage_results: dict[str, StageRunResult]
+    outputs_by_stage: dict[str, dict[str, ArtifactRef]]
+    failed_stage: str | None
+    failure: ExecutionFailure | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ParallelTask:
+    stage_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ParallelPlanContext:
+    request: RunRequest
+    run_uri: str
+    run_dir: Path
+    local_run_store: LocalRunStorePaths
+    config_mapping: Mapping[str, PlainData]
+    spec: PipelineSpec
+    resolved_runtime: Mapping[str, ResolvedStageRuntimeOptions]
+    plan: ExecutionPlan
+    artifact_store: ArtifactStore
+    created_at: str
+    run_started_at: str
+    policy: ParallelExecutionOptions
 
 
 class _TargetConstructionError(StageContractError):
@@ -114,6 +167,9 @@ class PipelineRunner:
             lambda root: LocalArtifactStore(root)
         )
         self.clock = clock
+        self._stage_lease_renewal_interval_seconds = (
+            _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS
+        )
 
     def run(self, request: RunRequest) -> RunResult:
         if not isinstance(request, RunRequest):
@@ -123,6 +179,8 @@ class PipelineRunner:
             raise RunRequestError(
                 "PipelineRunner.run does not execute dry-run requests; use planning APIs instead"
             )
+        parallel_policy = _parallel_policy_from_request(request, options)
+        self._preflight_parallel_execution(parallel_policy)
 
         started_at = self.clock()
         local_run_store = self._require_local_run_store()
@@ -154,6 +212,69 @@ class PipelineRunner:
             )
         finally:
             release_run_lock(self.run_store, lock)
+
+    def _preflight_parallel_execution(
+        self, policy: ParallelExecutionOptions
+    ) -> None:
+        if policy.continue_independent and not policy.enabled:
+            raise ParallelExecutionUnsupportedError(
+                "continue_independent failure policy requires max_parallel_stages greater than 1",
+                code="pipeline.parallel.failure_policy_requires_parallelism",
+                context={
+                    "failure_policy": policy.failure_policy,
+                    "max_parallel_stages": policy.max_parallel_stages,
+                },
+            )
+        if not policy.enabled:
+            return
+        executor_name = str(getattr(self.executor, "name", "unknown"))
+        if executor_name != "local":
+            raise ParallelExecutionUnsupportedError(
+                f"executor {executor_name!r} does not support bounded local parallel execution",
+                code="pipeline.parallel.unsupported_executor",
+                context={
+                    "executor": executor_name,
+                    "max_parallel_stages": policy.max_parallel_stages,
+                },
+            )
+        if bool(getattr(self.executor, "capture_stdout_stderr", False)):
+            raise ParallelExecutionUnsupportedError(
+                "local stdout/stderr capture is not safe with bounded parallel execution",
+                code="pipeline.parallel.unsupported_executor_capture",
+                context={
+                    "executor": executor_name,
+                    "max_parallel_stages": policy.max_parallel_stages,
+                },
+            )
+        authority_store = getattr(self.run_store, "authority_store", None)
+        if authority_store is None:
+            diagnostic = StoreDiagnostic(
+                code="missing_authority_backend",
+                message="explicit parallel execution requires an authoritative backend",
+                severity=DiagnosticSeverity.ERROR,
+                detail={"required_backend": "PerRunAuthorityStore"},
+            )
+            raise ParallelExecutionUnsupportedError(
+                "explicit parallel execution requires an authoritative backend",
+                code="pipeline.parallel.unsupported_backend",
+                context={"max_parallel_stages": policy.max_parallel_stages},
+                diagnostics=(diagnostic.to_dict(),),
+            )
+        capability_set = authority_store.capabilities()
+        diagnostics = capability_set.diagnostics_for(
+            _REQUIRED_PARALLEL_CAPABILITIES,
+            scope=CapabilityScope.PER_RUN,
+        )
+        if diagnostics:
+            raise ParallelExecutionUnsupportedError(
+                "backend does not support explicit bounded parallel execution",
+                code="pipeline.parallel.unsupported_backend",
+                context={
+                    "backend_name": capability_set.backend_name,
+                    "max_parallel_stages": policy.max_parallel_stages,
+                },
+                diagnostics=tuple(diagnostic.to_dict() for diagnostic in diagnostics),
+            )
 
     def _run_locked(
         self,
@@ -246,110 +367,41 @@ class PipelineRunner:
             payload={"stage_count": len(plan.ordered_stage_plans)},
         )
 
-        stage_results: dict[str, StageRunResult] = {}
-        outputs_by_stage: dict[str, dict[str, ArtifactRef]] = {}
-        failed_stage: str | None = None
-        failure: ExecutionFailure | None = None
-        for stage_plan in plan.ordered_stage_plans:
-            stage = spec.get_stage(stage_plan.stage_name)
-            if failed_stage is not None:
-                stage_results[stage.name] = self._block_stage_after_failure(
+        parallel_policy = _parallel_policy_from_request(request, options)
+        if parallel_policy.enabled:
+            outcome = self._run_parallel_plan(
+                _ParallelPlanContext(
+                    request=request,
                     run_uri=run_uri,
-                    stage_plan=stage_plan,
-                    blocked_by=failed_stage,
-                )
-                continue
-            if stage_plan.action == PlanAction.REUSE:
-                result = self._reuse_stage(
-                    run_uri, stage_plan, created_at=created_at, started_at=started_at
-                )
-                stage_results[stage.name] = result
-                if result.failure is not None:
-                    failed_stage = stage.name
-                    failure = result.failure
-                else:
-                    outputs_by_stage[stage.name] = dict(result.outputs)
-                continue
-            if stage_plan.action == PlanAction.SKIP:
-                result = self._skip_stage(
-                    run_uri,
-                    stage_plan,
-                    created_at=created_at,
-                    started_at=started_at,
-                )
-                stage_results[stage.name] = result
-                if result.failure is not None:
-                    failed_stage = stage.name
-                    failure = result.failure
-                continue
-            if stage_plan.action == PlanAction.BLOCKED:
-                failed_stage = stage.name
-                failure = self._plan_failure(
-                    run_uri, stage, stage_plan.action, stage_plan.reasons
-                )
-                stage_results[stage.name] = self._block_plan_stage(
-                    run_uri=run_uri,
-                    stage_plan=stage_plan,
-                    failure=failure,
-                )
-                self._write_failed_run(run_uri, created_at, started_at, failure)
-                continue
-            if stage_plan.action == PlanAction.STALE:
-                failed_stage = stage.name
-                failure = self._plan_failure(
-                    run_uri, stage, stage_plan.action, stage_plan.reasons
-                )
-                attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
-                failure = self._record_stage_failure_and_failed_run(
-                    run_uri=run_uri,
-                    stage_name=stage.name,
-                    attempt=attempt,
-                    started_at=None,
+                    run_dir=run_dir,
+                    local_run_store=local_run_store,
+                    config_mapping=config_mapping,
+                    spec=spec,
+                    resolved_runtime=resolved_runtime,
+                    plan=plan,
+                    artifact_store=artifact_store,
                     created_at=created_at,
                     run_started_at=started_at,
-                    failure=failure,
+                    policy=parallel_policy,
                 )
-                stage_results[stage.name] = StageRunResult(
-                    stage_name=stage.name,
-                    action=PlanAction.BLOCKED,
-                    status=StageStatus.FAILED,
-                    attempt=attempt,
-                    outputs={},
-                    failure=failure,
-                    reasons=stage_plan.reasons,
-                    finished_at=failure.failed_at,
-                )
-                continue
-            result = self._run_stage(
+            )
+        else:
+            outcome = self._run_serial_plan(
                 request=request,
                 run_uri=run_uri,
                 run_dir=run_dir,
-                local_output_dir=local_run_store.local_stage_artifact_dir(
-                    run_uri, stage.name
-                ),
-                local_workspace_dir=local_run_store.local_stage_workspace_dir(
-                    run_uri, stage.name
-                ),
+                local_run_store=local_run_store,
                 config_mapping=config_mapping,
                 spec=spec,
-                stage=stage,
-                stage_plan=stage_plan,
-                resolved_runtime=resolved_runtime[stage.name],
+                resolved_runtime=resolved_runtime,
                 plan=plan,
                 artifact_store=artifact_store,
-                produced_outputs=outputs_by_stage,
                 created_at=created_at,
                 run_started_at=started_at,
             )
-            stage_results[stage.name] = result
-            if result.status == StageStatus.SUCCEEDED:
-                outputs_by_stage[stage.name] = dict(result.outputs)
-            else:
-                failed_stage = stage.name
-                failure = result.failure
 
         finished_at = self.clock()
-        if failure is None:
+        if outcome.failure is None:
             write_run_status(
                 self.run_store,
                 run_uri=run_uri,
@@ -367,40 +419,443 @@ class PipelineRunner:
             )
             run_status = RunStatus.SUCCEEDED
         else:
-            self._write_failed_run(run_uri, created_at, started_at, failure)
+            self._write_failed_run(run_uri, created_at, started_at, outcome.failure)
             self._emit_run_event(
                 run_uri,
                 "run.failed",
                 timestamp=self.clock(),
                 payload={
                     "status": RunStatus.FAILED.value,
-                    "failed_stage": failed_stage,
-                    "failure_type": failure.failure_type,
+                    "failed_stage": outcome.failed_stage,
+                    "failure_type": outcome.failure.failure_type,
                 },
             )
             run_status = RunStatus.FAILED
             for stage_plan in plan.ordered_stage_plans:
-                if stage_plan.stage_name not in stage_results:
-                    stage_results[stage_plan.stage_name] = (
+                if stage_plan.stage_name not in outcome.stage_results:
+                    outcome.stage_results[stage_plan.stage_name] = (
                         self._block_stage_after_failure(
                             run_uri=run_uri,
                             stage_plan=stage_plan,
-                            blocked_by=failed_stage or failure.stage_name,
+                            blocked_by=outcome.failed_stage or outcome.failure.stage_name,
                         )
                     )
         artifact_index = self.run_store.read_artifact_index(run_uri)
+        ordered_stage_results = {
+            stage_plan.stage_name: outcome.stage_results[stage_plan.stage_name]
+            for stage_plan in plan.ordered_stage_plans
+        }
         return RunResult(
             run_uri=run_uri,
             status=run_status,
             started_at=started_at,
             finished_at=finished_at,
             plan=plan,
-            stage_results=stage_results,
-            failed_stage=failed_stage,
-            failure=failure,
+            stage_results=ordered_stage_results,
+            failed_stage=outcome.failed_stage,
+            failure=outcome.failure,
             artifact_index=artifact_index,
             metadata=request.metadata,
         )
+
+    def _run_serial_plan(
+        self,
+        *,
+        request: RunRequest,
+        run_uri: str,
+        run_dir: Path,
+        config_mapping: Mapping[str, PlainData],
+        spec: PipelineSpec,
+        resolved_runtime: Mapping[str, ResolvedStageRuntimeOptions],
+        plan: ExecutionPlan,
+        artifact_store: ArtifactStore,
+        local_run_store: LocalRunStorePaths,
+        created_at: str,
+        run_started_at: str,
+    ) -> _ExecutionOutcome:
+        stage_results: dict[str, StageRunResult] = {}
+        outputs_by_stage: dict[str, dict[str, ArtifactRef]] = {}
+        failed_stage: str | None = None
+        failure: ExecutionFailure | None = None
+        for stage_plan in plan.ordered_stage_plans:
+            stage = spec.get_stage(stage_plan.stage_name)
+            if failed_stage is not None:
+                stage_results[stage.name] = self._block_stage_after_failure(
+                    run_uri=run_uri,
+                    stage_plan=stage_plan,
+                    blocked_by=failed_stage,
+                )
+                continue
+            result = self._run_controller_stage_action(
+                request=request,
+                run_uri=run_uri,
+                run_dir=run_dir,
+                local_run_store=local_run_store,
+                config_mapping=config_mapping,
+                spec=spec,
+                stage=stage,
+                stage_plan=stage_plan,
+                resolved_runtime=resolved_runtime[stage.name],
+                plan=plan,
+                artifact_store=artifact_store,
+                produced_outputs=outputs_by_stage,
+                created_at=created_at,
+                run_started_at=run_started_at,
+            )
+            stage_results[stage.name] = result
+            if result.status == StageStatus.SUCCEEDED:
+                outputs_by_stage[stage.name] = dict(result.outputs)
+            elif result.failure is not None:
+                failed_stage = stage.name
+                failure = result.failure
+        return _ExecutionOutcome(
+            stage_results=stage_results,
+            outputs_by_stage=outputs_by_stage,
+            failed_stage=failed_stage,
+            failure=failure,
+        )
+
+    def _run_parallel_plan(self, context: _ParallelPlanContext) -> _ExecutionOutcome:
+        plan_by_stage = {plan.stage_name: plan for plan in context.plan.stage_plans}
+        stage_order = tuple(context.plan.stage_order)
+        stage_results: dict[str, StageRunResult] = {}
+        outputs_by_stage: dict[str, dict[str, ArtifactRef]] = {}
+        submitted: set[str] = set()
+        stopped = False
+        failed_stage: str | None = None
+        failure: ExecutionFailure | None = None
+        active: dict[Future[StageRunResult], _ParallelTask] = {}
+        with ThreadPoolExecutor(
+            max_workers=context.policy.max_parallel_stages,
+            thread_name_prefix="loom-stage",
+        ) as pool:
+            while len(stage_results) < len(stage_order):
+                progressed = False
+                if not stopped:
+                    progressed = self._submit_parallel_ready_stages(
+                        context,
+                        pool=pool,
+                        plan_by_stage=plan_by_stage,
+                        stage_order=stage_order,
+                        stage_results=stage_results,
+                        outputs_by_stage=outputs_by_stage,
+                        submitted=submitted,
+                        active=active,
+                    )
+                    if failure is None:
+                        failed_stage, failure = _first_stage_failure(stage_results)
+                        if failure is not None and not context.policy.continue_independent:
+                            stopped = True
+                if len(stage_results) >= len(stage_order):
+                    break
+                if not active:
+                    if stopped:
+                        break
+                    blocked_stage = self._block_first_unresolved_stage(
+                        context,
+                        plan_by_stage=plan_by_stage,
+                        stage_order=stage_order,
+                        stage_results=stage_results,
+                        submitted=submitted,
+                        blocked_by=failed_stage,
+                    )
+                    if blocked_stage is None and not progressed:
+                        raise PlanExecutionError(
+                            "parallel scheduler made no progress; static plan is not executable"
+                        )
+                    continue
+                done, _pending = wait(active, return_when=FIRST_COMPLETED)
+                for future in done:
+                    task = active.pop(future)
+                    result = future.result()
+                    stage_results[task.stage_name] = result
+                    if result.status == StageStatus.SUCCEEDED:
+                        outputs_by_stage[task.stage_name] = dict(result.outputs)
+                        continue
+                    if result.failure is not None and failure is None:
+                        failed_stage = task.stage_name
+                        failure = result.failure
+                        if not context.policy.continue_independent:
+                            stopped = True
+                if failure is not None and context.policy.continue_independent:
+                    self._block_failed_downstream_ready_stages(
+                        context,
+                        plan_by_stage=plan_by_stage,
+                        stage_order=stage_order,
+                        stage_results=stage_results,
+                        submitted=submitted,
+                        failed_stage=failed_stage or failure.stage_name,
+                    )
+            if stopped:
+                wait(active)
+                for future, task in list(active.items()):
+                    result = future.result()
+                    stage_results[task.stage_name] = result
+                    if result.status == StageStatus.SUCCEEDED:
+                        outputs_by_stage[task.stage_name] = dict(result.outputs)
+                    elif result.failure is not None and failure is None:
+                        failed_stage = task.stage_name
+                        failure = result.failure
+                    active.pop(future, None)
+        if failure is not None:
+            for stage_name in stage_order:
+                if stage_name not in stage_results:
+                    stage_results[stage_name] = self._block_stage_after_failure(
+                        run_uri=context.run_uri,
+                        stage_plan=plan_by_stage[stage_name],
+                        blocked_by=failed_stage or failure.stage_name,
+                    )
+        return _ExecutionOutcome(
+            stage_results=stage_results,
+            outputs_by_stage=outputs_by_stage,
+            failed_stage=failed_stage,
+            failure=failure,
+        )
+
+    def _run_controller_stage_action(
+        self,
+        *,
+        request: RunRequest,
+        run_uri: str,
+        run_dir: Path,
+        config_mapping: Mapping[str, PlainData],
+        spec: PipelineSpec,
+        stage: StageSpec,
+        stage_plan,
+        resolved_runtime: ResolvedStageRuntimeOptions,
+        plan: ExecutionPlan,
+        artifact_store: ArtifactStore,
+        local_run_store: LocalRunStorePaths,
+        produced_outputs: Mapping[str, Mapping[str, ArtifactRef]],
+        created_at: str,
+        run_started_at: str,
+    ) -> StageRunResult:
+        if stage_plan.action == PlanAction.REUSE:
+            return self._reuse_stage(
+                run_uri, stage_plan, created_at=created_at, started_at=run_started_at
+            )
+        if stage_plan.action == PlanAction.SKIP:
+            return self._skip_stage(
+                run_uri,
+                stage_plan,
+                created_at=created_at,
+                started_at=run_started_at,
+            )
+        if stage_plan.action == PlanAction.BLOCKED:
+            failure = self._plan_failure(
+                run_uri, stage, stage_plan.action, stage_plan.reasons
+            )
+            self._write_failed_run(run_uri, created_at, run_started_at, failure)
+            return self._block_plan_stage(
+                run_uri=run_uri,
+                stage_plan=stage_plan,
+                failure=failure,
+            )
+        if stage_plan.action == PlanAction.STALE:
+            failure = self._plan_failure(
+                run_uri, stage, stage_plan.action, stage_plan.reasons
+            )
+            attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
+            failure = self._record_stage_failure_and_failed_run(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                started_at=None,
+                created_at=created_at,
+                run_started_at=run_started_at,
+                failure=failure,
+            )
+            return StageRunResult(
+                stage_name=stage.name,
+                action=PlanAction.BLOCKED,
+                status=StageStatus.FAILED,
+                attempt=attempt,
+                outputs={},
+                failure=failure,
+                reasons=stage_plan.reasons,
+                finished_at=failure.failed_at,
+            )
+        return self._run_stage(
+            request=request,
+            run_uri=run_uri,
+            run_dir=run_dir,
+            local_output_dir=local_run_store.local_stage_artifact_dir(
+                run_uri, stage.name
+            ),
+            local_workspace_dir=local_run_store.local_stage_workspace_dir(
+                run_uri, stage.name
+            ),
+            config_mapping=config_mapping,
+            spec=spec,
+            stage=stage,
+            stage_plan=stage_plan,
+            resolved_runtime=resolved_runtime,
+            plan=plan,
+            artifact_store=artifact_store,
+            produced_outputs=produced_outputs,
+            created_at=created_at,
+            run_started_at=run_started_at,
+        )
+
+    def _submit_parallel_ready_stages(
+        self,
+        context: _ParallelPlanContext,
+        *,
+        pool: ThreadPoolExecutor,
+        plan_by_stage: Mapping[str, StagePlan],
+        stage_order: Sequence[str],
+        stage_results: dict[str, StageRunResult],
+        outputs_by_stage: dict[str, dict[str, ArtifactRef]],
+        submitted: set[str],
+        active: dict[Future[StageRunResult], _ParallelTask],
+    ) -> bool:
+        progressed = False
+        while len(active) < context.policy.max_parallel_stages:
+            ready = self._next_ready_stage(
+                plan_by_stage=plan_by_stage,
+                stage_order=stage_order,
+                stage_results=stage_results,
+                submitted=submitted,
+            )
+            if ready is None:
+                return progressed
+            stage_name = ready.stage_name
+            submitted.add(stage_name)
+            stage = context.spec.get_stage(stage_name)
+            produced_outputs = {
+                upstream: dict(outputs)
+                for upstream, outputs in outputs_by_stage.items()
+            }
+            if ready.action != PlanAction.RUN:
+                result = self._run_controller_stage_action(
+                    request=context.request,
+                    run_uri=context.run_uri,
+                    run_dir=context.run_dir,
+                    local_run_store=context.local_run_store,
+                    config_mapping=context.config_mapping,
+                    spec=context.spec,
+                    stage=stage,
+                    stage_plan=ready,
+                    resolved_runtime=context.resolved_runtime[stage_name],
+                    plan=context.plan,
+                    artifact_store=context.artifact_store,
+                    produced_outputs=produced_outputs,
+                    created_at=context.created_at,
+                    run_started_at=context.run_started_at,
+                )
+                stage_results[stage_name] = result
+                if result.status == StageStatus.SUCCEEDED:
+                    outputs_by_stage[stage_name] = dict(result.outputs)
+                progressed = True
+                if result.failure is not None and not context.policy.continue_independent:
+                    return progressed
+                continue
+            upstream_blocker = _first_non_successful_upstream(ready, stage_results)
+            if upstream_blocker is not None:
+                stage_results[stage_name] = self._block_stage_after_failure(
+                    run_uri=context.run_uri,
+                    stage_plan=ready,
+                    blocked_by=upstream_blocker,
+                )
+                progressed = True
+                continue
+            future = pool.submit(
+                self._run_controller_stage_action,
+                request=context.request,
+                run_uri=context.run_uri,
+                run_dir=context.run_dir,
+                local_run_store=context.local_run_store,
+                config_mapping=context.config_mapping,
+                spec=context.spec,
+                stage=stage,
+                stage_plan=ready,
+                resolved_runtime=context.resolved_runtime[stage_name],
+                plan=context.plan,
+                artifact_store=context.artifact_store,
+                produced_outputs=produced_outputs,
+                created_at=context.created_at,
+                run_started_at=context.run_started_at,
+            )
+            active[future] = _ParallelTask(stage_name=stage_name)
+            progressed = True
+        return progressed
+
+    def _next_ready_stage(
+        self,
+        *,
+        plan_by_stage: Mapping[str, StagePlan],
+        stage_order: Sequence[str],
+        stage_results: Mapping[str, StageRunResult],
+        submitted: set[str],
+    ):
+        for stage_name in stage_order:
+            if stage_name in submitted or stage_name in stage_results:
+                continue
+            stage_plan = plan_by_stage[stage_name]
+            if all(upstream in stage_results for upstream in stage_plan.upstream_stages):
+                return stage_plan
+        return None
+
+    def _block_first_unresolved_stage(
+        self,
+        context: _ParallelPlanContext,
+        *,
+        plan_by_stage: Mapping[str, StagePlan],
+        stage_order: Sequence[str],
+        stage_results: dict[str, StageRunResult],
+        submitted: set[str],
+        blocked_by: str | None,
+    ) -> str | None:
+        for stage_name in stage_order:
+            if stage_name in stage_results or stage_name in submitted:
+                continue
+            stage_plan = plan_by_stage[stage_name]
+            if blocked_by is None:
+                blocker = _first_completed_upstream(stage_plan, stage_results)
+                if blocker is None:
+                    continue
+            else:
+                blocker = blocked_by
+            stage_results[stage_name] = self._block_stage_after_failure(
+                run_uri=context.run_uri,
+                stage_plan=stage_plan,
+                blocked_by=blocker,
+            )
+            submitted.add(stage_name)
+            return stage_name
+        return None
+
+    def _block_failed_downstream_ready_stages(
+        self,
+        context: _ParallelPlanContext,
+        *,
+        plan_by_stage: Mapping[str, StagePlan],
+        stage_order: Sequence[str],
+        stage_results: dict[str, StageRunResult],
+        submitted: set[str],
+        failed_stage: str,
+    ) -> None:
+        changed = True
+        while changed:
+            changed = False
+            for stage_name in stage_order:
+                if stage_name in stage_results or stage_name in submitted:
+                    continue
+                stage_plan = plan_by_stage[stage_name]
+                if not all(
+                    upstream in stage_results for upstream in stage_plan.upstream_stages
+                ):
+                    continue
+                blocker = _first_non_successful_upstream(stage_plan, stage_results)
+                if blocker is None:
+                    continue
+                stage_results[stage_name] = self._block_stage_after_failure(
+                    run_uri=context.run_uri,
+                    stage_plan=stage_plan,
+                    blocked_by=blocker or failed_stage,
+                )
+                submitted.add(stage_name)
+                changed = True
 
     def _run_stage(
         self,
@@ -509,7 +964,12 @@ class PipelineRunner:
                 ),
                 resolved_runtime=resolved_runtime,
             )
-            execution_result = self.executor.execute(exec_request)
+            execution_result = self._execute_stage_request_with_lease_renewal(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                request=exec_request,
+            )
             stage_started_at = execution_result.started_at
             return self._commit_stage_execution_result(
                 run_uri=run_uri,
@@ -523,7 +983,7 @@ class PipelineRunner:
                 run_started_at=run_started_at,
                 execution_result=execution_result,
             )
-        except Exception as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             failure = (
                 exc
                 if isinstance(exc, ExecutionFailure)
@@ -650,7 +1110,12 @@ class PipelineRunner:
                 metadata={"worker_request": True},
                 resolved_runtime=resolved_runtime,
             )
-            execution_result = self.executor.execute(exec_request)
+            execution_result = self._execute_stage_request_with_lease_renewal(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                request=exec_request,
+            )
             stage_started_at = execution_result.started_at
             return self._commit_stage_execution_result(
                 run_uri=run_uri,
@@ -664,7 +1129,7 @@ class PipelineRunner:
                 run_started_at=run_started_at,
                 execution_result=execution_result,
             )
-        except Exception as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             failure = (
                 exc
                 if isinstance(exc, ExecutionFailure)
@@ -726,6 +1191,61 @@ class PipelineRunner:
             executor_name=str(getattr(self.executor, "name", "unknown")),
             clock=self.clock,
         )
+
+    def _execute_stage_request_with_lease_renewal(
+        self,
+        *,
+        run_uri: str,
+        stage_name: str,
+        attempt: int,
+        request: StageExecutionRequest,
+    ) -> StageExecutionResult:
+        renew_stage_attempt_lease = getattr(
+            self.run_store,
+            "renew_stage_attempt_lease",
+            None,
+        )
+        if not callable(renew_stage_attempt_lease):
+            return self.executor.execute(request)
+        renew = cast(
+            Callable[[str, str, int], None],
+            renew_stage_attempt_lease,
+        )
+        stop_event = Event()
+        renewal_errors: list[BaseException] = []
+        interval_seconds = max(
+            0.001,
+            float(self._stage_lease_renewal_interval_seconds),
+        )
+
+        def renew_until_finished() -> None:
+            while not stop_event.wait(interval_seconds):
+                try:
+                    renew(run_uri, stage_name, attempt)
+                except BaseException as exc:
+                    renewal_errors.append(exc)
+                    stop_event.set()
+                    return
+
+        renewal_thread = Thread(
+            target=renew_until_finished,
+            name=f"loom-stage-lease-{stage_name}",
+            daemon=True,
+        )
+        renewal_thread.start()
+        try:
+            execution_result = self.executor.execute(request)
+        finally:
+            stop_event.set()
+            renewal_thread.join()
+        if renewal_errors:
+            error = renewal_errors[0]
+            if isinstance(error, Exception):
+                raise error
+            raise PipelineExecutionError(
+                f"stage lease renewal failed: {type(error).__name__}"
+            ) from error
+        return execution_result
 
     def _require_local_run_store(self) -> LocalRunStorePaths:
         if not isinstance(self.run_store, LocalRunStorePaths):
@@ -1295,7 +1815,7 @@ class PipelineRunner:
         stage_name: str,
         attempt: int,
         failure_type: str,
-        exc: Exception,
+        exc: BaseException,
     ) -> ExecutionFailure:
         return self._failure(
             run_uri=run_uri,
@@ -1341,6 +1861,22 @@ def _options_with_resolved_run_uri(options: RunOptions, run_uri: str) -> RunOpti
     return RunOptions.from_dict(data)
 
 
+def _parallel_policy_from_request(
+    request: RunRequest,
+    options: RunOptions,
+) -> ParallelExecutionOptions:
+    policy = parallel_execution_options(options)
+    if (
+        policy.failure_policy == "stop_on_first_failure"
+        and not request.failure_policy.stop_on_first_failure
+    ):
+        return ParallelExecutionOptions(
+            max_parallel_stages=policy.max_parallel_stages,
+            failure_policy="continue_independent",
+        )
+    return policy
+
+
 def run_pipeline(
     request: RunRequest,
     *,
@@ -1359,7 +1895,37 @@ def _reason_codes(reasons: tuple[PlanReason, ...]) -> list[PlainData]:
     return [reason.code.value for reason in reasons]
 
 
-def _failure_type_for_exception(exc: Exception) -> str:
+def _first_non_successful_upstream(
+    stage_plan: StagePlan,
+    stage_results: Mapping[str, StageRunResult],
+) -> str | None:
+    for upstream in stage_plan.upstream_stages:
+        result = stage_results.get(upstream)
+        if result is not None and result.status is not StageStatus.SUCCEEDED:
+            return upstream
+    return None
+
+
+def _first_completed_upstream(
+    stage_plan: StagePlan,
+    stage_results: Mapping[str, StageRunResult],
+) -> str | None:
+    for upstream in stage_plan.upstream_stages:
+        if upstream in stage_results:
+            return upstream
+    return None
+
+
+def _first_stage_failure(
+    stage_results: Mapping[str, StageRunResult],
+) -> tuple[str | None, ExecutionFailure | None]:
+    for stage_name, result in stage_results.items():
+        if result.failure is not None:
+            return stage_name, result.failure
+    return None, None
+
+
+def _failure_type_for_exception(exc: BaseException) -> str:
     if isinstance(exc, OutputValidationError):
         return "output_validation"
     if isinstance(exc, _TargetConstructionError):

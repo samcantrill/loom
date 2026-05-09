@@ -114,6 +114,17 @@ def register_subparser(
     parser.add_argument("--resume", action="store_true", help="resume an existing run")
     parser.add_argument("--dry-run", action="store_true", help="plan without executing")
     parser.add_argument(
+        "--max-parallel-stages",
+        type=int,
+        metavar="N",
+        help="maximum local stages to run concurrently; default is serial",
+    )
+    parser.add_argument(
+        "--failure-policy",
+        choices=["stop-on-first-failure", "continue-independent"],
+        help="parallel failure policy",
+    )
+    parser.add_argument(
         "--tag",
         action="append",
         default=None,

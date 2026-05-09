@@ -89,8 +89,6 @@ class FailurePolicy:
     def __post_init__(self) -> None:
         if not isinstance(self.stop_on_first_failure, bool):
             raise RunRequestError("FailurePolicy.stop_on_first_failure must be a bool")
-        if not self.stop_on_first_failure:
-            raise RunRequestError("continue-on-failure is deferred beyond Phase 9")
 
 
 @dataclass(frozen=True, slots=True)

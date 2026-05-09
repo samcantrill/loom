@@ -382,6 +382,9 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
         assert pipeline_parse_runtime_request is parse_runtime_request
         assert set(runtime.__all__) == {
             "DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY",
+            "CONTINUE_INDEPENDENT_FAILURE_POLICY",
+            "DEFAULT_FAILURE_POLICY",
+            "DEFAULT_MAX_PARALLEL_STAGES",
             "RUNTIME_CONFIG_SECTION",
             "RUNTIME_METADATA_SCHEMA_VERSION",
             "RUNTIME_PROFILES_CONFIG_SECTION",
@@ -393,6 +396,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "ExecutionOptions",
             "ExecutorDescriptor",
             "ExecutorDescriptorRegistry",
+            "ParallelExecutionOptions",
             "RunEnvironmentRequest",
             "RunOptions",
             "ResolvedStageRuntimeOptions",
@@ -410,6 +414,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "build_runtime_metadata",
             "merge_config_run_options",
             "merge_run_options",
+            "parallel_execution_options",
             "parse_run_options",
             "parse_runtime_config_sections",
             "parse_runtime_profile",

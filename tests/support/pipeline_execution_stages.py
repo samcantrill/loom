@@ -85,6 +85,16 @@ class FailingStage:
         raise RuntimeError("stage failed intentionally")
 
 
+class KeyboardInterruptStage:
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = context, inputs
+        raise KeyboardInterrupt("stage interrupted intentionally")
+
+
 class SleepStage:
     def run(
         self,
@@ -103,6 +113,44 @@ class SleepStage:
             "data": context.save_artifact(
                 "data",
                 {"slept": seconds},
+                artifact_type="json",
+                codec_key="json.v1",
+            )
+        }
+
+
+class CoordinatedStage:
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        marker_dir = Path(str(context.stage_config["marker_dir"]))
+        raw_wait_for = context.stage_config.get("wait_for", 1)
+        wait_for = (
+            int(raw_wait_for) if isinstance(raw_wait_for, int | str) else 1
+        )
+        raw_timeout_seconds = context.stage_config.get("timeout_seconds", 5)
+        timeout_seconds = (
+            float(raw_timeout_seconds)
+            if isinstance(raw_timeout_seconds, int | float | str)
+            else 5.0
+        )
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        (marker_dir / f"{context.stage_name}.started").write_text(
+            context.stage_name,
+            encoding="utf-8",
+        )
+        deadline = time.monotonic() + timeout_seconds
+        while len(list(marker_dir.glob("*.started"))) < wait_for:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("coordinated stage timed out")
+            time.sleep(0.01)
+        return {
+            "data": context.save_artifact(
+                "data",
+                {"stage": context.stage_name},
                 artifact_type="json",
                 codec_key="json.v1",
             )
