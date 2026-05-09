@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implementation complete; PR preparation pending
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 2: Direct Scan And Summary Extraction`
 - Branch: `codex/run-catalog-direct-scan`
@@ -235,8 +235,26 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-09
 - Final phase execution plan: pending implementation handoff
-- Implementation summary: TBD
-- Implementation validation: TBD
+- Implementation summary: Added `RunCatalog.scan_current()` with lazy private
+  direct-scan loading, private collection discovery in `loom.runs._scan`, and
+  private metadata extraction/freshness validation in `loom.runs._extract`.
+  Direct scans ignore `.loom_catalog`, classify invalid/partial/unsupported
+  candidates as warnings, retry unstable freshness once, and return
+  `ListRunsResult` summaries populated from run-store status, metadata, config
+  manifest, plan fingerprints, runtime metadata, git provenance, stage status
+  and fingerprints, artifact index records, and submitted-operation records.
+- Implementation validation:
+  - `uv run pytest tests/package/test_runs_api.py tests/package/test_import_boundaries.py`
+    passed.
+  - `uv run pytest tests/unit/loom/runs` passed.
+  - `uv run pytest tests/contracts/test_store_contract.py` passed.
+  - `uv run pytest tests/integration/pipeline/test_run_catalog_direct_scan.py`
+    passed.
+  - Combined targeted run passed: 46 tests.
+  - `uv run ruff check src/loom/runs tests/unit/loom/runs tests/integration/pipeline/test_run_catalog_direct_scan.py`
+    passed.
+  - `uv run pyright src/loom/runs tests/unit/loom/runs/test_direct_scan_helpers.py tests/integration/pipeline/test_run_catalog_direct_scan.py`
+    passed.
 - Refinement summary: unused
 - Blocker-resolution summary: 0/3 used
 - PR preparation: TBD
