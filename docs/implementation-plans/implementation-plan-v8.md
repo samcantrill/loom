@@ -779,9 +779,9 @@ Completion summary:
 
 ### Phase 5 - Metadata Comparison API
 
-Status: pending
+Status: pr_open
 Branch: `codex/run-catalog-comparison`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/99
 
 Goal:
 
@@ -859,7 +859,17 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Opened PR #99 on 2026-05-09 targeting `develop`.
+- Phase execution plan: `docs/phases/run-catalog-comparison.md`.
+- Implemented the public metadata-only `RunCatalog.compare(left, right)` API
+  through current catalog reads, with private comparison helpers for run facts,
+  fingerprints, stages, artifacts, execution/submitted-operation summaries, and
+  selected provenance.
+- Added missing-side warnings for absent comparison inputs and preserved
+  current-list warnings in comparison results.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with package 55, unit 755, contract 75, integration 61, e2e 36, and
+  config-extra 413 tests passing.
 
 ### Phase 6 - CLI Integration, Docs, And End-To-End Coverage
 
