@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: PR opened; PR body refined
+- Status: PR opened; blocker-resolution pass 1/3 complete
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 3: Materialization Boundary And Authoritative Read Models`
 - Branch: `codex/materialization-read-models`
@@ -21,7 +21,7 @@
 - Draft pass: complete by `loom_phase_planner` in this artifact.
 - Refine pass: complete on 2026-05-10 by `loom_phase_planner`; expanded-path refinement tightened read-mode semantics, warning obligations, suite coverage, stop conditions, and scope boundaries.
 - Setup limitations: branch/worktree creation used the manager-recorded local `develop` state matching `origin/develop` at `caa7190`; no `gh auth`, fetch, full validation, or PR operation was run during planning. Worktree creation required approved sandbox escalation after the default sandbox could not create the namespaced `codex/` branch ref.
-- Blockers: none.
+- Blockers: none after blocker-resolution pass 1/3.
 
 ## Objective
 
@@ -251,8 +251,14 @@ make test-summary
   `loom_phase_refiner`; bounded fix added checksum/corrupt materialized-ref
   verification and coverage, with targeted validation, full `make validate-pr`,
   and refreshed `make test-summary` passing after the fix.
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used on 2026-05-10 by automated review; findings were routed to
+  blocker-resolution pass 1/3.
+- Blocker resolution: 1/3 used on 2026-05-10. Pass 1 fixed
+  unsupported-schema warning-only reads so they preserve
+  `UNSUPPORTED_SCHEMA` records without exposing SQLite internals, added focused
+  `PARTIAL_COMMIT` and cleanup-candidate carry-through coverage for read and
+  bundle paths, removed stale PR-body CI placeholder language, and refreshed
+  validation evidence. Remaining blocker-resolution budget: 2/3.
 
 ## PR Preparation Notes
 
@@ -264,16 +270,17 @@ make test-summary
 - Target branch: `develop`
 - Head branch: `codex/materialization-read-models`
 - Stack predecessor: none; root phase PR targets `develop`.
-- `make validate-pr`: passed on 2026-05-09T17:08Z; Ruff, Pyright, default
-  harness (1016 passed, 17 skipped, 14 deselected), config-extra harness
-  (416 passed, 1044 deselected), and `uv build` passed.
-- `make test-summary`: passed on 2026-05-09T17:09:40Z; generated
-  `build/test-summary.md` with 1457 passed, 0 failed, 0 errors, 11 skipped,
-  and 1055 deselected.
+- `make validate-pr`: refreshed after blocker-resolution pass 1/3 on
+  2026-05-09T17:37Z; Ruff, Pyright, default harness (1019 passed, 17 skipped,
+  14 deselected), config-extra harness (416 passed, 1047 deselected), and
+  `uv build` passed.
+- `make test-summary`: refreshed after blocker-resolution pass 1/3 on
+  2026-05-09T17:39:49Z; generated `build/test-summary.md` with 1460 passed,
+  0 failed, 0 errors, 11 skipped, and 1058 deselected.
 - PR URL: https://github.com/samcantrill/loom/pull/103
 - PR verification JSON:
   `{"baseRefName":"develop","headRefName":"codex/materialization-read-models","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/103"}`
-- Blockers: none.
+- Blockers: none after blocker-resolution pass 1/3.
 
 ## Completion Notes
 
@@ -288,23 +295,31 @@ make test-summary
   classification, artifact payload refs, completed-run bundle metadata
   projection, stale-projection warnings, partial-commit warnings,
   non-terminal completed-run warnings, missing and corrupt materialized-ref
-  warnings, and active revision-change warnings. The API consumes
-  `PerRunAuthorityStore`
-  schema checks and snapshots only, preserves submitted operations as
-  first-class detail, and does not query private SQLite tables, read legacy
-  status/artifact-index files as truth, import project code, add CLI/export
-  surfaces, or load artifact payloads.
+  warnings, and active revision-change warnings. Blocker-resolution pass 1/3
+  refined unsupported-schema warning-only reads so they return machine-readable
+  `UNSUPPORTED_SCHEMA` warnings without calling unreadable backend snapshots,
+  while strict reads raise `MaterializationReadModelError` with those warnings.
+  The API consumes `PerRunAuthorityStore` schema checks and snapshots only when
+  schema policy says authoritative facts are readable, preserves submitted
+  operations as first-class detail, and does not query private SQLite tables,
+  read legacy status/artifact-index files as truth, import project code, add
+  CLI/export surfaces, or load artifact payloads.
 - Implementation validation: complete. Initial sandboxed `uv run pytest` and
   `make` invocations could not create files in `/home/samcantrill/.cache/uv`;
-  reruns with approved cache access passed. Post-refinement focused evidence:
-  `uv run pytest tests/unit/loom/pipeline/stores/test_materialization_read_models.py tests/contracts/test_authoritative_read_model_contract.py`
-  passed (15 passed). Post-refinement `make validate-pr` passed: Ruff, Pyright,
-  default harness (1016 passed, 17 skipped, 14 deselected), config-extra
-  harness (416 passed, 1044 deselected), and `uv build`. Post-refinement
+  reruns with `UV_CACHE_DIR=/tmp/uv-cache` passed. Post-refinement focused
+  evidence:
+  `env UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_materialization_read_models.py`
+  passed (11 passed);
+  `env UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_materialization_read_models.py`
+  passed (4 passed); and
+  `env UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_authoritative_read_model_contract.py`
+  passed (6 passed). Post-refinement `make validate-pr` passed: Ruff, Pyright,
+  default harness (1019 passed, 17 skipped, 14 deselected), config-extra
+  harness (416 passed, 1047 deselected), and `uv build`. Post-refinement
   `make test-summary` passed and wrote `build/test-summary.md`: package 56
-  passed/1 skipped; unit 785 passed/1 skipped; contract 92 passed/2 skipped;
-  integration 71 passed/7 skipped/10 deselected; e2e 37 passed/1 deselected;
-  config-extra 416 passed/1044 deselected.
+  passed/1 skipped; unit 787 passed/1 skipped; contract 92 passed/2 skipped;
+  integration 72 passed/7 skipped/10 deselected; e2e 37 passed/1 deselected;
+  config-extra 416 passed/1047 deselected.
 - Phase-plan refinement summary: tightened final PR title, read-mode semantics, warning and revision obligations, suite acceptance criteria, and stop conditions while preserving the no-runner-swap, no-public-read-swap, no-CLI/export, no-workspace-coordination, no-SQLite-query-surface, no-project-code-import, no-payload-load, and no-legacy-truth boundaries.
 - Implementation refinement summary: verified reads now classify checksum
   mismatches or unreadable checksum-backed local refs as
@@ -322,15 +337,15 @@ make test-summary
 - PR verification JSON:
   `{"baseRefName":"develop","headRefName":"codex/materialization-read-models","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/103"}`.
 - Final PR-preparation validation evidence: refreshed on
-  2026-05-09T17:09:40Z.
-  `make validate-pr` passed: Ruff, Pyright, default harness (1016 passed,
+  2026-05-09T17:39:49Z after blocker-resolution pass 1/3.
+  `make validate-pr` passed: Ruff, Pyright, default harness (1019 passed,
   17 skipped, 14 deselected), config-extra harness (416 passed,
-  1044 deselected), and `uv build`. `make test-summary` passed and wrote
-  `build/test-summary.md` generated at 2026-05-09T17:09:40+00:00: package
-  56 passed/1 skipped; unit 785 passed/1 skipped; contract 92 passed/2
-  skipped; integration 71 passed/7 skipped/10 deselected; e2e 37 passed/1
-  deselected; config-extra 416 passed/1044 deselected; overall 1457 passed,
-  11 skipped, 1055 deselected, 129.71s.
+  1047 deselected), and `uv build`. `make test-summary` passed and wrote
+  `build/test-summary.md` generated at 2026-05-09T17:39:49+00:00: package
+  56 passed/1 skipped; unit 787 passed/1 skipped; contract 92 passed/2
+  skipped; integration 72 passed/7 skipped/10 deselected; e2e 37 passed/1
+  deselected; config-extra 416 passed/1047 deselected; overall 1460 passed,
+  11 skipped, 1058 deselected, 129.35s.
 - PR facts and target readiness: title remains `Persistence And Concurrency
   Foundation - Phase 3: Materialization Boundary And Authoritative Read
   Models`; branch is `codex/materialization-read-models`; stack predecessor is
@@ -339,8 +354,12 @@ make test-summary
   `develop` is `caa7190`, matching the recorded phase base. This is a root
   phase PR opened against `develop` and verified by `gh pr view 103 --json
   baseRefName,headRefName,state,url`.
-- Blocker-resolution summary: no blocker-resolution passes used.
+- Blocker-resolution summary: pass 1/3 complete on 2026-05-10. Fixed
+  unsupported-schema warning-only reads, added focused `PARTIAL_COMMIT` and
+  cleanup-candidate read/bundle coverage, refreshed validation evidence, and
+  removed stale PR-body CI placeholder language. Remaining blocker-resolution
+  budget: 2/3.
 - PR preparation: PR opened and verified; no reviewers requested and no merge
   attempted.
 - Stack maintenance: not needed; root phase branch targets `develop`.
-- Remaining blockers: none known.
+- Remaining blockers: none known after blocker-resolution pass 1/3.

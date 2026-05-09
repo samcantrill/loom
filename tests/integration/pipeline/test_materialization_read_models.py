@@ -13,6 +13,7 @@ from loom.pipeline.stores import (
     AuthoritativeReadOptions,
     LocalMaterializationRequest,
     LocalRunStore,
+    MaterializationReadModelError,
     MaterializedRefKind,
     ReadModelWarningCode,
     path_to_run_uri,
@@ -140,6 +141,33 @@ def test_sqlite_completed_bundle_metadata_uses_backend_revision_not_files(
     assert bundle.status is RunStatus.SUCCEEDED
     assert bundle.materialized_refs[0].exists is True
     assert bundle.warnings == ()
+
+
+def test_sqlite_schema_failure_read_preserves_warning_contract(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "run"
+    run_uri = path_to_run_uri(run_root)
+
+    snapshot = read_authoritative_run(
+        SQLitePerRunAuthorityStore(run_uri),
+        run_uri,
+    )
+
+    assert snapshot.schema_version == 1
+    assert snapshot.stages == ()
+    assert snapshot.warnings[0].code is ReadModelWarningCode.UNSUPPORTED_SCHEMA
+    assert snapshot.warnings[0].detail["kind"] == "missing"
+    assert snapshot.warnings[0].detail["authoritative_snapshot_available"] is False
+
+    with pytest.raises(MaterializationReadModelError) as exc_info:
+        read_authoritative_run(
+            SQLitePerRunAuthorityStore(run_uri),
+            run_uri,
+            options=AuthoritativeReadOptions(strict=True),
+        )
+
+    assert exc_info.value.warnings[0].code is ReadModelWarningCode.UNSUPPORTED_SCHEMA
 
 
 def test_revision_change_during_verified_read_reports_active_run_warning(

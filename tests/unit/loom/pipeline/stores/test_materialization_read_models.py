@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -10,14 +11,22 @@ from loom.artifacts import ArtifactRef
 from loom.fingerprints import hash_text
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
+    ArtifactFactRecord,
     AuthoritativeReadOptions,
+    AuthoritativeRunSnapshot,
     BackendRevision,
+    CleanupCandidate,
+    CleanupCandidateKind,
+    LifecycleReason,
     LocalMaterializationRequest,
     LocalRunStore,
     MaterializationReadModelError,
     MaterializedRef,
     MaterializedRefKind,
+    OutputCommitRecord,
+    PerRunAuthorityStore,
     ReadModelWarningCode,
+    StageLifecycleSnapshot,
     path_to_run_uri,
     read_authoritative_run,
     read_completed_run_bundle_metadata,
@@ -31,6 +40,27 @@ from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 
 
 pytestmark = pytest.mark.unit
+
+
+class _SnapshotStore:
+    def __init__(
+        self,
+        snapshot: AuthoritativeRunSnapshot,
+        *,
+        schema_check: AuthoritySchemaCheck | None = None,
+    ) -> None:
+        self._snapshot = snapshot
+        self._schema_check = schema_check or AuthoritySchemaCheck()
+        self.snapshot_calls = 0
+
+    def check_schema(self, run_uri: str) -> AuthoritySchemaCheck:
+        assert run_uri == self._snapshot.run_uri
+        return self._schema_check
+
+    def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        assert run_uri == self._snapshot.run_uri
+        self.snapshot_calls += 1
+        return self._snapshot
 
 
 def _committed_store(
@@ -276,6 +306,120 @@ def test_schema_failure_can_be_reported_without_becoming_state_truth(
     snapshot = read_authoritative_run(warning_store, run_uri)
 
     assert snapshot.warnings[0].code is ReadModelWarningCode.UNSUPPORTED_SCHEMA
+    assert snapshot.warnings[0].detail["authoritative_snapshot_available"] is False
+
+
+def test_schema_failure_preserves_warning_without_calling_snapshot(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    snapshot = AuthoritativeRunSnapshot(
+        run_uri=run_uri,
+        status=RunStatus.SUCCEEDED,
+        schema_version=1,
+        revision=BackendRevision(sequence=3, token="rev-3"),
+    )
+    schema_check = AuthoritySchemaCheck(
+        found_version=2,
+        failure=AuthoritySchemaFailure(
+            kind=AuthoritySchemaFailureKind.UNSUPPORTED_NEWER,
+            message="newer schema",
+            found_version=2,
+        ),
+    )
+    store = _SnapshotStore(snapshot, schema_check=schema_check)
+
+    warning_snapshot = read_authoritative_run(
+        cast(PerRunAuthorityStore, store),
+        run_uri,
+    )
+
+    assert store.snapshot_calls == 0
+    assert warning_snapshot.schema_version == 2
+    assert warning_snapshot.stages == ()
+    assert warning_snapshot.warnings[0].code is ReadModelWarningCode.UNSUPPORTED_SCHEMA
+
+    with pytest.raises(MaterializationReadModelError) as exc_info:
+        read_authoritative_run(
+            cast(PerRunAuthorityStore, store),
+            run_uri,
+            options=AuthoritativeReadOptions(strict=True),
+        )
+
+    assert exc_info.value.warnings[0].code is ReadModelWarningCode.UNSUPPORTED_SCHEMA
+
+
+def test_partial_commit_warning_and_cleanup_candidates_carry_to_read_and_bundle(
+    tmp_path: Path,
+) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    output_path = tmp_path / "run" / "artifacts" / "build" / "out.json"
+    revision = BackendRevision(sequence=4, token="rev-4")
+    commit = OutputCommitRecord(
+        commit_id="build-attempt-1-commit",
+        run_uri=run_uri,
+        stage_name="build",
+        attempt_id="attempt-1",
+        committed_at="2020-01-01T00:00:00Z",
+        revision=revision,
+        output_names=("out", "missing"),
+    )
+    cleanup = CleanupCandidate(
+        candidate_id="cleanup-1",
+        kind=CleanupCandidateKind.STAGED_PAYLOAD,
+        uri=path_to_run_uri(tmp_path / "run" / "staged" / "old.json"),
+        reason=LifecycleReason(code="superseded_payload"),
+        recorded_at="2020-01-01T00:00:01Z",
+        revision=revision,
+    )
+    snapshot = AuthoritativeRunSnapshot(
+        run_uri=run_uri,
+        status=RunStatus.SUCCEEDED,
+        schema_version=1,
+        revision=revision,
+        stages=(
+            StageLifecycleSnapshot(
+                stage_name="build",
+                status=StageStatus.SUCCEEDED,
+                revision=revision,
+                latest_commit=commit,
+                artifact_facts=(
+                    ArtifactFactRecord(
+                        artifact_name="out",
+                        artifact=ArtifactRef(
+                            artifact_id="build/out",
+                            uri=path_to_run_uri(output_path),
+                            artifact_type="json",
+                        ),
+                        commit_id=commit.commit_id,
+                        revision=revision,
+                    ),
+                ),
+            ),
+        ),
+        cleanup_candidates=(cleanup,),
+    )
+    store = _SnapshotStore(snapshot)
+
+    read_snapshot = read_authoritative_run(cast(PerRunAuthorityStore, store), run_uri)
+
+    partial_warnings = [
+        warning
+        for warning in read_snapshot.warnings
+        if warning.code is ReadModelWarningCode.PARTIAL_COMMIT
+    ]
+    assert read_snapshot.cleanup_candidates == (cleanup,)
+    assert partial_warnings[0].detail["missing_outputs"] == ["missing"]
+
+    bundle = read_completed_run_bundle_metadata(
+        cast(PerRunAuthorityStore, _SnapshotStore(snapshot)),
+        run_uri,
+    )
+
+    assert bundle.cleanup_candidates == (cleanup,)
+    assert ReadModelWarningCode.PARTIAL_COMMIT in {
+        warning.code for warning in bundle.warnings
+    }
 
 
 def test_legacy_status_files_do_not_override_backend_truth(tmp_path: Path) -> None:

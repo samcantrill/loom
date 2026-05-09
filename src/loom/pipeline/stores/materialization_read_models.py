@@ -31,7 +31,12 @@ from .read_models import (
     StageLifecycleSnapshot,
 )
 from .run_store import LocalRunStorePaths
-from .schema_policy import AuthoritySchemaCheck, AuthoritySchemaFailure
+from .schema_policy import (
+    AuthoritySchemaCheck,
+    AuthoritySchemaError,
+    AuthoritySchemaFailure,
+    AuthoritySchemaFailureKind,
+)
 
 
 class MaterializationReadModelError(ValueError):
@@ -165,8 +170,16 @@ def read_authoritative_run(
     schema_warnings = _schema_warnings(schema_check)
     if read_options.strict and schema_warnings:
         _raise_strict(schema_warnings)
+    if schema_warnings:
+        return _schema_unavailable_snapshot(run_uri, schema_check, schema_warnings)
 
-    snapshot = store.snapshot(run_uri)
+    try:
+        snapshot = store.snapshot(run_uri)
+    except AuthoritySchemaError as exc:
+        schema_warnings = _schema_error_warnings(exc, schema_check)
+        if read_options.strict:
+            _raise_strict(schema_warnings)
+        return _schema_unavailable_snapshot(run_uri, schema_check, schema_warnings)
     warnings = [*snapshot.warnings, *schema_warnings]
     warnings.extend(_projection_warnings(snapshot, read_options.projection_revision))
     warnings.extend(_partial_commit_warnings(snapshot))
@@ -455,15 +468,54 @@ def _schema_warnings(check: AuthoritySchemaCheck) -> tuple[ReadModelWarning, ...
     )
 
 
+def _schema_error_warnings(
+    error: AuthoritySchemaError, check: AuthoritySchemaCheck
+) -> tuple[ReadModelWarning, ...]:
+    message = str(error) or "authoritative schema could not be read"
+    detail: dict[str, PlainData] = {
+        "kind": AuthoritySchemaFailureKind.INVALID.value,
+        "current_version": check.current_version,
+        "authoritative_snapshot_available": False,
+    }
+    if check.found_version is not None:
+        detail["found_version"] = check.found_version
+    return (
+        ReadModelWarning(
+            code=ReadModelWarningCode.UNSUPPORTED_SCHEMA,
+            message=message,
+            detail=detail,
+        ),
+    )
+
+
 def _schema_warning_detail(failure: AuthoritySchemaFailure) -> Mapping[str, PlainData]:
     detail: dict[str, PlainData] = {
         "kind": failure.kind.value,
         "current_version": failure.current_version,
+        "authoritative_snapshot_available": False,
         **dict(failure.detail),
     }
     if failure.found_version is not None:
         detail["found_version"] = failure.found_version
     return detail
+
+
+def _schema_unavailable_snapshot(
+    run_uri: str,
+    check: AuthoritySchemaCheck,
+    warnings: Sequence[ReadModelWarning],
+) -> AuthoritativeRunSnapshot:
+    schema_version = check.found_version or check.current_version
+    return AuthoritativeRunSnapshot(
+        run_uri=run_uri,
+        status=RunStatus.CREATED,
+        schema_version=schema_version,
+        revision=BackendRevision(
+            sequence=1,
+            token=f"schema-unavailable-{schema_version}",
+        ),
+        warnings=tuple(warnings),
+    )
 
 
 def _projection_warnings(
