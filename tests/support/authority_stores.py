@@ -170,6 +170,10 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         lease_ttl_seconds: int | None = None,
     ) -> AttemptAllocation:
         state = self._require_run(run_uri)
+        if lease_ttl_seconds is not None and self._active_stage_lease(
+            state, stage_name
+        ) is not None:
+            raise ValueError("stage already has an active lease")
         attempt_number = len(state.attempts.get(stage_name, ())) + 1
         revision = self._next_revision()
         attempt = StageAttempt(
@@ -315,6 +319,24 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         )
         state.commits[stage_name] = commit
         state.facts[stage_name] = list(facts)
+        state.attempts[stage_name] = [
+            StageAttempt(
+                run_uri=attempt.run_uri,
+                stage_name=attempt.stage_name,
+                attempt=attempt.attempt,
+                attempt_id=attempt.attempt_id,
+                status=StageStatus.SUCCEEDED
+                if attempt.attempt_id == attempt_id
+                else attempt.status,
+                revision=revision
+                if attempt.attempt_id == attempt_id
+                else attempt.revision,
+                created_at=attempt.created_at,
+                owner=attempt.owner,
+                reason=reason if attempt.attempt_id == attempt_id else attempt.reason,
+            )
+            for attempt in state.attempts.get(stage_name, ())
+        ]
         state.stage_statuses[stage_name] = StageStatus.SUCCEEDED
         state.revision = revision
         return OutputCommit(commit=commit, artifact_facts=facts)
@@ -450,6 +472,8 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                 raise ValueError("stale or foreign lease token")
             if lease.state is not LeaseState.ACTIVE:
                 raise ValueError("lease is not active")
+            if self._lease_expired(lease):
+                raise ValueError("lease has expired")
             return state, lease
         raise ValueError(f"unknown lease: {lease_id}")
 
@@ -496,8 +520,11 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                 and lease.stage_name == stage_name
                 and lease.attempt_id == attempt_id
                 and lease.fencing_token == fencing_token
-                and lease.state is LeaseState.ACTIVE
             ):
+                if self._lease_expired(lease):
+                    raise ValueError("stage lease has expired")
+                if lease.state is not LeaseState.ACTIVE:
+                    raise ValueError("stage lease is not active")
                 return
         raise ValueError("missing active stage lease for output commit")
 
@@ -509,9 +536,13 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                 lease.kind is LeaseKind.STAGE
                 and lease.stage_name == stage_name
                 and lease.state is LeaseState.ACTIVE
+                and not self._lease_expired(lease)
             ):
                 return lease
         return None
+
+    def _lease_expired(self, lease: LeaseRecord) -> bool:
+        return self._lease_expiry_ticks.get(lease.lease_id, self._tick + 1) <= self._tick
 
     def _now(self) -> str:
         return self._at_tick(self._tick)

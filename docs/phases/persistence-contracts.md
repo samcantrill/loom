@@ -349,9 +349,80 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-09 by `loom_phase_refiner`
 - PR review: unused
 - Blocker resolution: 0/3 used
+
+## Phase Refinement Report
+
+### Metadata
+
+- Phase: Phase 1 - Authority Contracts, Schema Policy, And Compatibility Surface
+- Branch: `codex/persistence-contracts`
+- Worktree: `/home/samcantrill/work/loom-worktrees/persistence-contracts`
+- Phase execution plan: `docs/phases/persistence-contracts.md`
+- Refiner: `loom_phase_refiner`
+- Refinement date: 2026-05-09
+- Pass type: implementation refinement
+- Phase implementation refinement budget status after this pass: used
+- Blocker-resolution budget status after this pass: unchanged; 0/3 used
+
+### Refinement Scope
+
+- Validation output reviewed: implementation evidence recorded in this plan,
+  current branch diff against `develop`, phase commits, and rerun targeted
+  package/unit/contract/Ruff/Pyright checks.
+- Blocking issues caused by this phase: two phase-scoped contract coverage
+  gaps were found. The in-memory per-run authority conformance store did not
+  reject overlapping active stage leases or expired stage lease tokens for
+  output commit fencing. Capability requirement diagnostics dropped detail
+  from explicit unsupported capability declarations.
+- Issues confirmed out of scope: SQLite implementation, runner integration,
+  backend CLI, parallel execution, workspace sweep runner, migration, fallback
+  behavior, public status enum changes, and PR preparation.
+
+### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Expired or overlapping stage leases could remain usable in the per-run conformance fake. | Updated `InMemoryPerRunAuthorityStore` to reject overlapping active stage leases, treat expired leases as inactive for renewal/commit/snapshot checks, and record the committed attempt as `SUCCEEDED`. Added contract assertions for active-lease rejection, expired-token commit rejection, inactive snapshot lease detail, and terminal attempt status. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_authority_store_contract.py` passed: 3 tests. |
+| Explicit unsupported capability records lost their declared diagnostic message/detail through `BackendCapabilitySet.require`. | Preserved unsupported capability record message/detail in the returned `UnsupportedCapability`, while retaining the machine-readable unsupported code and capability/scope detail. Added unit coverage for the declared-detail path. | `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_authority_models.py` passed: 5 tests. |
+
+### Tests Or Validation Re-Run
+
+```text
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py
+result: passed, 34 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores tests/unit/loom/serialization/test_schema.py
+result: passed, 131 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_store_contract.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py
+result: passed, 13 tests
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores tests/support/authority_stores.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py
+result: passed with 0 errors
+
+command: UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/capabilities.py tests/support/authority_stores.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_authority_store_contract.py
+result: passed
+
+command: make validate-pr
+result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 deselected), config-extra harness (416 passed, 1008 deselected), and uv build
+```
+
+### Remaining Blockers
+
+- None.
+
+### PR Preparation Handoff
+
+- Completion notes updated in phase execution plan: yes.
+- Budget status updated: phase implementation refinement used;
+  blocker-resolution unchanged at 0/3 used; PR review unused.
+- Final validation recommended: `make test-summary` during PR preparation for
+  suite evidence, plus CI after PR creation.
+- Suite evidence still needed: PR-preparation summary table from
+  `make test-summary`.
 
 ## Completion Notes
 
@@ -373,21 +444,23 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py`
     passed: 34 tests.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/test_status.py tests/unit/loom/pipeline/test_submitted.py tests/unit/loom/pipeline/test_events.py tests/unit/loom/pipeline/test_locks.py tests/unit/loom/pipeline/stores tests/unit/loom/serialization/test_schema.py`
-    passed: 130 tests.
+    passed: 131 tests after the refinement coverage addition.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_store_contract.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py`
     passed: 13 tests.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores tests/support/authority_stores.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py`
     passed.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores tests/support/authority_stores.py tests/unit/loom/pipeline/stores/test_authority_models.py tests/contracts/test_authority_store_contract.py tests/contracts/test_workspace_coordination_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py`
     passed with 0 errors.
-  - `make validate-pr` passed: Ruff, Pyright, default harness
-    (979 passed, 17 skipped, 14 deselected), config-extra harness
-    (416 passed, 1007 deselected), and `uv build`.
+  - `make validate-pr` passed after the refinement: Ruff, Pyright, default
+    harness (980 passed, 17 skipped, 14 deselected), config-extra harness
+    (416 passed, 1008 deselected), and `uv build`.
 - Refinement summary: clarified current source/test constraints, store-boundary
   module choices, compatibility with submitted/event/schema/status helpers,
   fake-store conformance expectations, explicit edge cases, and suite-level
-  obligations while preserving branch/base/target metadata.
-- Blocker-resolution summary: pending.
+  obligations while preserving branch/base/target metadata. Implementation
+  refinement pass used on 2026-05-09 to tighten capability diagnostics and
+  fake-store lease/commit conformance coverage.
+- Blocker-resolution summary: unchanged; 0/3 used.
 - PR preparation: pending.
 - Stack maintenance: pending.
 - Remaining blockers: none.

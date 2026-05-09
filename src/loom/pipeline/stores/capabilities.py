@@ -243,18 +243,35 @@ class BackendCapabilitySet:
     def require(
         self, capability: BackendCapability, *, scope: CapabilityScope
     ) -> UnsupportedCapability | None:
-        if self.supports(capability, scope=scope):
-            return None
         wanted_capability = _coerce_enum(capability, BackendCapability, "capability")
         wanted_scope = _coerce_enum(scope, CapabilityScope, "scope")
+        explicit_unsupported: BackendCapabilityRecord | None = None
+        for record in self.records:
+            if record.capability is wanted_capability and record.scope is wanted_scope:
+                if record.supported:
+                    return None
+                explicit_unsupported = record
+                break
+        message = (
+            explicit_unsupported.message
+            if explicit_unsupported is not None
+            and explicit_unsupported.message is not None
+            else (
+                f"backend {self.backend_name!r} does not support "
+                f"{wanted_scope.value} capability {wanted_capability.value!r}"
+            )
+        )
+        detail = (
+            explicit_unsupported.detail
+            if explicit_unsupported is not None
+            else {}
+        )
         return UnsupportedCapability(
             code=UnsupportedCapabilityCode.MISSING_CAPABILITY,
             capability=wanted_capability,
             scope=wanted_scope,
-            message=(
-                f"backend {self.backend_name!r} does not support "
-                f"{wanted_scope.value} capability {wanted_capability.value!r}"
-            ),
+            message=message,
+            detail=detail,
         )
 
     def diagnostics_for(

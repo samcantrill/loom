@@ -13,6 +13,7 @@ from loom.pipeline.stores import (
     BackendCapabilitySet,
     BackendRevision,
     CapabilityScope,
+    CapabilitySupport,
     CleanupCandidate,
     CleanupCandidateKind,
     LeaseKind,
@@ -57,6 +58,35 @@ def test_backend_capability_set_reports_machine_readable_unsupported_result() ->
     assert diagnostic.to_dict()["detail"] == {
         "capability": "cross_run_coordination",
         "scope": "cross_run",
+    }
+
+
+def test_backend_capability_set_preserves_declared_unsupported_detail() -> None:
+    capabilities = BackendCapabilitySet(
+        backend_name="legacy",
+        records=(
+            BackendCapabilityRecord(
+                capability=BackendCapability.STAGE_LEASES,
+                scope=CapabilityScope.PER_RUN,
+                support=CapabilitySupport.UNSUPPORTED,
+                message="stage leases are unavailable",
+                detail={"backend": "legacy"},
+            ),
+        ),
+    )
+
+    unsupported = capabilities.require(
+        BackendCapability.STAGE_LEASES,
+        scope=CapabilityScope.PER_RUN,
+    )
+
+    assert unsupported is not None
+    assert unsupported.message == "stage leases are unavailable"
+    assert unsupported.detail == {"backend": "legacy"}
+    assert unsupported.to_diagnostic().to_dict()["detail"] == {
+        "capability": "stage_leases",
+        "scope": "per_run",
+        "backend": "legacy",
     }
 
 

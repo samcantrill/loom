@@ -104,11 +104,12 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts() -> None
     assert snapshot.schema_version == 1
     assert snapshot.submitted_operations == (_submitted_record(),)
     assert snapshot.stages[0].status is StageStatus.SUCCEEDED
+    assert snapshot.stages[0].attempts[0].status is StageStatus.SUCCEEDED
     assert snapshot.stages[0].latest_commit == commit.commit
     assert snapshot.stages[0].artifact_facts == commit.artifact_facts
 
 
-def test_per_run_authority_rejects_stale_transitions_and_foreign_lease_tokens() -> None:
+def test_per_run_authority_rejects_stale_transitions_and_lease_misuse() -> None:
     store = InMemoryPerRunAuthorityStore()
     store.create_run(RUN_URI)
 
@@ -135,9 +136,13 @@ def test_per_run_authority_rejects_stale_transitions_and_foreign_lease_tokens() 
             lease_ttl_seconds=1,
         )
 
-    store.advance_time(1)
-    recovery = store.scan_recovery(RUN_URI)
-    assert recovery[0].kind.value == "expired_lease"
+    with pytest.raises(ValueError, match="active lease"):
+        store.allocate_stage_attempt(
+            RUN_URI,
+            "build",
+            owner_id="worker-2",
+            lease_ttl_seconds=1,
+        )
 
     released = store.release_lease(
         allocation.lease.lease_id,
@@ -145,3 +150,30 @@ def test_per_run_authority_rejects_stale_transitions_and_foreign_lease_tokens() 
         fencing_token=allocation.lease.fencing_token,
     )
     assert released.state is LeaseState.RELEASED
+
+    retry = store.allocate_stage_attempt(
+        RUN_URI,
+        "build",
+        owner_id="worker-2",
+        lease_ttl_seconds=1,
+    )
+    assert retry.lease is not None
+    store.advance_time(1)
+    recovery = store.scan_recovery(RUN_URI)
+    assert recovery[0].kind.value == "expired_lease"
+    assert store.snapshot(RUN_URI).stages[0].active_lease is None
+
+    with pytest.raises(ValueError, match="expired"):
+        store.record_output_commit(
+            RUN_URI,
+            "build",
+            attempt_id=retry.attempt.attempt_id,
+            fencing_token=retry.lease.fencing_token,
+            outputs={
+                "out": ArtifactRef(
+                    artifact_id="build/out",
+                    uri="file:///runs/r1/artifacts/build/out.json",
+                    artifact_type="json",
+                )
+            },
+        )
