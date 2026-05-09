@@ -338,6 +338,16 @@ src/loom/
       runner.py
       errors.py
 
+  runs/
+    __init__.py
+    catalog.py
+    models.py
+    errors.py
+
+    _scan.py
+    _extract.py
+    _sqlite.py
+
   diagnostics/
     __init__.py
     models.py
@@ -742,6 +752,7 @@ run.json
 status.json
 artifacts.json
 plan.json
+freshness.json
 events.jsonl
 lock.json
 ```
@@ -752,7 +763,48 @@ The runner owns lifecycle transitions. Stores persist those transitions.
 state. `LocalRunStorePaths` provides explicit local path helpers separately for
 explicit local path consumers.
 
-### 6.8 Provenance and Resume
+Run-store freshness metadata is store-owned authoritative run-local metadata for
+catalog freshness checks. Stores may expose freshness records through store
+protocols, but stores, execution, and executors must not import `loom.runs` or
+write a collection catalog sidecar.
+
+### 6.8 Run Catalog
+
+Detailed specifications: [run-catalog.md](features/run-catalog.md),
+[run-store.md](features/run-store.md), [cli.md](features/cli.md)
+
+`loom.runs` owns the public Python run-catalog facade, immutable value models,
+warning/result envelopes, exact-match filter vocabulary, and metadata-only
+comparison shapes. It sits above run-store inspection APIs and below CLI
+presentation.
+
+Expected modules:
+
+```text
+__init__.py    import-light public facade exports
+catalog.py     RunCatalog facade and user-facing catalog entrypoint
+models.py      summaries, filters, warnings, results, and comparison shapes
+errors.py      catalog-specific public errors
+_scan.py       private direct-scan discovery and extraction helpers
+_extract.py    private run-store summary extraction helpers
+_sqlite.py     private derived SQLite sidecar storage
+```
+
+Public catalog models use `run_uri` as the canonical identity. Display names and
+local paths are presentation fields only. `loom.runs` may depend on public
+foundation models, serialization helpers, and run-store inspection APIs. It must
+not import CLI modules, execution runners, concrete executors, optional config
+dependencies, project packages, or artifact payload codecs for list/compare
+behavior.
+
+Private catalog storage and extraction modules may read authoritative run-store
+metadata and build derived catalog state. They must not make SQLite rows
+authoritative, mutate run-store truth to repair catalog problems, or expose the
+private SQLite schema as a public API. Lower layers, including
+`loom.pipeline.stores`, `loom.pipeline.execution`, and executors, must not
+import `loom.runs`; execution writes authoritative run-store metadata only.
+
+### 6.9 Provenance and Resume
 
 Detailed specifications: [provenance.md](features/provenance.md),
 [resume.md](features/resume.md), [fingerprints.md](features/fingerprints.md),
@@ -766,7 +818,7 @@ Resume uses stage fingerprints and persisted artifacts to decide whether to run,
 reuse, skip, or fail a stage. V0 resume should be conservative and limited to the
 same run directory.
 
-### 6.9 Diagnostics
+### 6.10 Diagnostics
 
 Detailed specifications: [preflight.md](features/preflight.md),
 [cli.md](features/cli.md), [run-store.md](features/run-store.md),
@@ -798,7 +850,7 @@ check IDs, statuses, severities, messages, and plain-data details suitable for
 later CLI JSON envelopes, but it must not allocate run URIs, create run
 directories, write run-store documents, or replace execution-time validation.
 
-### 6.10 Sweeps
+### 6.11 Sweeps
 
 Detailed specification: [sweeps.md](features/sweeps.md)
 
@@ -809,7 +861,7 @@ the same config, planning, execution, and store APIs as normal runs.
 Sweeps should remain generic when implemented. They should not become a
 hyperparameter optimizer, experiment database, or scheduler replacement.
 
-### 6.11 Plugins
+### 6.12 Plugins
 
 Detailed specification: [plugins.md](features/plugins.md)
 
@@ -823,7 +875,7 @@ sinks, or CLI extensions through documented APIs. Runtime event semantics belong
 to the reliability and execution layers; plugin discovery only loads and
 registers event sink implementations.
 
-### 6.12 CLI
+### 6.13 CLI
 
 Detailed specifications: [cli.md](features/cli.md),
 [preflight.md](features/preflight.md), [run-catalog.md](features/run-catalog.md)

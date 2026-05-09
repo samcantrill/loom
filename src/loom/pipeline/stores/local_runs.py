@@ -57,6 +57,7 @@ from .errors import (
 from .indexes import artifact_index_from_dict, artifact_index_to_dict
 from .inspection import RunStageInspection, RunStateInspection, ensure_failure_payload
 from .prepared_run import validate_prepared_run_document
+from .run_store import RunFreshnessError, RunFreshnessRecord
 from .run_uri import allocate_local_run_uri, run_uri_to_path, validate_run_uri
 
 _SCHEMA_VERSION = 1
@@ -77,6 +78,9 @@ _RECIPE_MANIFEST_WRAPPER_FIELDS = frozenset(
 )
 _PROVENANCE_WRAPPER_FIELDS = frozenset(
     {"schema_version", "run_uri", "kind", "created_at", "provenance"}
+)
+_FRESHNESS_WRAPPER_FIELDS = frozenset(
+    {"schema_version", "run_uri", "token", "updated_at", "revision", "reason"}
 )
 
 
@@ -223,6 +227,10 @@ class LocalRunStore:
         run_dir = self.local_run_dir(run_uri_text)
         return ensure_subpath(run_dir.joinpath(*relative.parts), run_dir)
 
+    def local_run_freshness_path(self, run_uri: str) -> Path:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        return self.local_run_dir(run_uri_text) / "freshness.json"
+
     def prepare_stage_workspace(self, run_uri: str, stage_name: str) -> None:
         self.local_stage_workspace_dir(run_uri, stage_name).mkdir(
             parents=True, exist_ok=True
@@ -265,6 +273,30 @@ class LocalRunStore:
             "metadata": normalized_metadata,
         }
         atomic_write_json(run_dir / "run.json", payload)
+        self._touch_run_freshness(run_uri_text, reason="run_metadata")
+
+    def read_run_freshness(self, run_uri: str) -> RunFreshnessRecord | None:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_run_freshness_path(run_uri_text)
+        data = self._read_optional_json(path)
+        if data is None:
+            return None
+        payload = _require_document_object(data, path, label="freshness document")
+        _validate_exact_document_fields(
+            payload,
+            path,
+            label="freshness document",
+            fields=_FRESHNESS_WRAPPER_FIELDS,
+        )
+        _require_run_uri_field(
+            payload, path, expected=run_uri_text, label="freshness document"
+        )
+        try:
+            return RunFreshnessRecord.from_dict(payload)
+        except RunFreshnessError as exc:
+            raise CorruptStoreDocumentError(
+                f"Malformed freshness document at {path}: {exc}"
+            ) from exc
 
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
         run_dir = self.local_run_dir(run_uri)
@@ -284,6 +316,7 @@ class LocalRunStore:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         payload = status.to_dict()
         atomic_write_json(self.local_run_dir(run_uri_text) / "status.json", payload)
+        self._touch_run_freshness(run_uri_text, reason="run_status")
 
     def read_plan(self, run_uri: str) -> dict[str, PlainData] | None:
         run_dir = self.local_run_dir(run_uri)
@@ -309,6 +342,7 @@ class LocalRunStore:
             "plan": ensure_plain_data(plan, path="plan"),
         }
         atomic_write_json(self.local_run_dir(run_uri_text) / "plan.json", payload)
+        self._touch_run_freshness(run_uri_text, reason="plan")
 
     def read_prepared_run(self, run_uri: str) -> dict[str, PlainData] | None:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
@@ -334,6 +368,7 @@ class LocalRunStore:
             prepared_run, expected_run_uri=run_uri_text, field="prepared_run"
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri_text, reason="prepared_run")
 
     def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
@@ -378,6 +413,7 @@ class LocalRunStore:
             "runtime": normalized,
         }
         atomic_write_json(self.local_run_dir(run_uri_text) / "runtime.json", payload)
+        self._touch_run_freshness(run_uri_text, reason="runtime_metadata")
 
     def write_submitted_operation(
         self, run_uri: str, record: SubmittedOperationRecord
@@ -394,6 +430,7 @@ class LocalRunStore:
             run_uri_text, submission_id, create_parent=True
         )
         atomic_write_json(path, record.to_dict())
+        self._touch_run_freshness(run_uri_text, reason="submitted_operation")
 
     def read_submitted_operation(
         self, run_uri: str, submission_id: str
@@ -483,6 +520,7 @@ class LocalRunStore:
             "artifacts": artifact_index_to_dict(index),
         }
         atomic_write_json(self.local_run_dir(run_uri_text) / "artifacts.json", payload)
+        self._touch_run_freshness(run_uri_text, reason="artifact_index")
 
     def read_config_snapshot(self, run_uri: str, name: str) -> str | None:
         path = self.local_config_path(run_uri, name)
@@ -499,6 +537,7 @@ class LocalRunStore:
                 f"config snapshot content must be string, got {type(content)!r}"
             )
         atomic_write_text(self.local_config_path(run_uri, name), content)
+        self._touch_run_freshness(run_uri, reason="config_snapshot")
 
     def read_composition_manifest(self, run_uri: str) -> dict[str, PlainData] | None:
         run_dir = self.local_run_dir(run_uri)
@@ -543,6 +582,7 @@ class LocalRunStore:
             self.local_run_dir(run_uri_text) / "config" / "composition_manifest.json",
             payload,
         )
+        self._touch_run_freshness(run_uri_text, reason="composition_manifest")
 
     def read_recipe_manifest(
         self, run_uri: str
@@ -593,6 +633,7 @@ class LocalRunStore:
             self.local_run_dir(run_uri_text) / "config" / "recipe_manifest.json",
             payload,
         )
+        self._touch_run_freshness(run_uri_text, reason="recipe_manifest")
 
     def read_provenance_document(
         self, run_uri: str, name: str
@@ -639,6 +680,7 @@ class LocalRunStore:
         atomic_write_json(
             self.local_provenance_path(run_uri_text, validated_name), payload
         )
+        self._touch_run_freshness(run_uri_text, reason="provenance_document")
 
     def append_event(self, run_uri: str, event: PipelineEvent) -> PipelineEventRecord:
         if not isinstance(event, PipelineEvent):
@@ -669,6 +711,7 @@ class LocalRunStore:
             raise CorruptStoreDocumentError(
                 f"Could not append event at {path}: {exc}"
             ) from exc
+        # Catalog summaries do not derive facts from event logs in v8.
         return record
 
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
@@ -818,6 +861,7 @@ class LocalRunStore:
         atomic_write_json(
             self._stage_file_path(run_uri, stage_name, "status.json"), status.to_dict()
         )
+        self._touch_run_freshness(run_uri, reason="stage_status")
 
     def read_stage_inputs(
         self, run_uri: str, stage_name: str
@@ -849,6 +893,7 @@ class LocalRunStore:
             field_value=_serialize_stage_artifact_index(inputs),
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri, reason="stage_inputs")
 
     def read_stage_outputs(
         self, run_uri: str, stage_name: str
@@ -880,6 +925,7 @@ class LocalRunStore:
             field_value=_serialize_stage_artifact_index(outputs),
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri, reason="stage_outputs")
 
     def read_stage_fingerprint(
         self, run_uri: str, stage_name: str
@@ -912,6 +958,7 @@ class LocalRunStore:
             field_value=ensure_plain_data(fingerprint, path="fingerprint"),
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri, reason="stage_fingerprint")
 
     def read_stage_failure(
         self, run_uri: str, stage_name: str
@@ -943,6 +990,7 @@ class LocalRunStore:
             failure_timestamp_field=True,
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri, reason="stage_failure")
 
     def read_stage_worker_request(
         self, run_uri: str, stage_name: str, *, attempt: int
@@ -980,6 +1028,7 @@ class LocalRunStore:
             field_value=ensure_plain_data(request, path="worker_request"),
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri, reason="stage_worker_request")
 
     def read_stage_worker_result(
         self, run_uri: str, stage_name: str, *, attempt: int
@@ -1017,6 +1066,7 @@ class LocalRunStore:
             field_value=ensure_plain_data(result, path="worker_result"),
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri, reason="stage_worker_result")
 
     def read_stage_provenance(
         self, run_uri: str, stage_name: str
@@ -1049,6 +1099,7 @@ class LocalRunStore:
             field_value=ensure_plain_data(provenance, path="provenance"),
         )
         atomic_write_json(path, payload)
+        self._touch_run_freshness(run_uri, reason="stage_provenance")
 
     def read_stage_log(self, run_uri: str, stage_name: str, stream: str) -> str | None:
         validated_stream = validate_log_stream(stream)
@@ -1070,6 +1121,7 @@ class LocalRunStore:
         atomic_write_text(
             self.local_stage_log_path(run_uri, stage_name, validated_stream), content
         )
+        # Catalog summaries intentionally exclude log contents and log availability.
 
     def _read_lock_record(self, run_uri: str, lock_path: Path) -> RunLockRecord:
         if not lock_path.is_file():
@@ -1147,6 +1199,26 @@ class LocalRunStore:
                 f"Store JSON at {path} must be an object or array"
             )
         return value
+
+    def _touch_run_freshness(self, run_uri: str, *, reason: str) -> RunFreshnessRecord:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_run_freshness_path(run_uri_text)
+        revision = 1
+        try:
+            current = self.read_run_freshness(run_uri_text)
+        except CorruptStoreDocumentError:
+            current = None
+        if current is not None:
+            revision = current.revision + 1
+        record = RunFreshnessRecord(
+            run_uri=run_uri_text,
+            token=uuid.uuid4().hex,
+            updated_at=utc_timestamp(),
+            revision=revision,
+            reason=reason,
+        )
+        atomic_write_json(path, record.to_dict())
+        return record
 
     def _read_run_wrapper(self, run_uri: str) -> dict[str, PlainData]:
         path = self.local_run_dir(run_uri) / "run.json"
