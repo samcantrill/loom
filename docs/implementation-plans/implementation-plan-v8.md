@@ -451,9 +451,9 @@ Completion summary:
 
 ### Phase 2 - Direct Scan And Summary Extraction
 
-Status: pending
+Status: pr_open
 Branch: `codex/run-catalog-direct-scan`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/96
 
 Goal:
 
@@ -537,7 +537,19 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened against `develop` on 2026-05-09:
+  https://github.com/samcantrill/loom/pull/96
+- Implementation summary: added `RunCatalog.scan_current()` with private local
+  discovery, metadata-only run summary extraction, freshness retry validation,
+  and warning-returning direct-scan results for invalid, partial, unsupported,
+  disappeared, unreadable, and actively-changing candidates.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with package 55, unit 743, contract 73, integration 47, e2e 36, and
+  config-extra 413 tests passing.
+- GitHub CI: pending at PR open.
+- Stack maintenance: no predecessor; Phase 3 must wait for Phase 2 merge before
+  branching from `develop` unless a GitHub-side blocker requires stacked
+  continuation.
 
 ### Phase 3 - SQLite Sidecar Storage And Rebuild
 
