@@ -885,9 +885,9 @@ Completion summary:
 
 ### Phase 6 - CLI Integration, Docs, And End-To-End Coverage
 
-Status: pending
+Status: pr_open
 Branch: `codex/run-catalog-cli`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/100
 
 Goal:
 
@@ -966,4 +966,16 @@ Notes:
 
 Completion summary:
 
-- TBD
+- Opened PR #100 on 2026-05-09 targeting `develop`.
+- Phase execution plan: `docs/phases/run-catalog-cli.md`.
+- Implemented `loom runs index`, `loom runs list`, and `loom runs diff` as
+  thin wrappers over `RunCatalog.rebuild()`, `RunCatalog.list()`, and
+  `RunCatalog.compare()`.
+- Added exact-match CLI filter parsing, compact text output, command-specific
+  JSON envelopes, and catalog warning conversion that preserves run URI/path
+  details.
+- Updated `docs/features/run-catalog.md` and `docs/features/cli.md` for the
+  implemented command surface and boundaries.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with package 55, unit 760, contract 78, integration 64, e2e 37, and
+  config-extra 413 tests passing.
