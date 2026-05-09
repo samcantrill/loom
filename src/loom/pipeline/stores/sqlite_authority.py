@@ -78,6 +78,94 @@ _SUPPORTED_PER_RUN_CAPABILITIES = (
     BackendCapability.PER_RUN_COORDINATION,
 )
 
+_REQUIRED_SCHEMA_COLUMNS = {
+    "metadata": frozenset({"key", "value"}),
+    "revisions": frozenset({"sequence", "token", "created_at"}),
+    "run_state": frozenset(
+        {
+            "id",
+            "status",
+            "metadata_json",
+            "created_revision_sequence",
+            "updated_revision_sequence",
+            "reason_json",
+        }
+    ),
+    "stages": frozenset({"stage_name", "status", "revision_sequence", "reason_json"}),
+    "attempts": frozenset(
+        {
+            "attempt_id",
+            "stage_name",
+            "attempt_number",
+            "status",
+            "owner_id",
+            "created_at",
+            "revision_sequence",
+            "reason_json",
+        }
+    ),
+    "leases": frozenset(
+        {
+            "lease_id",
+            "kind",
+            "owner_id",
+            "fencing_token",
+            "acquired_at",
+            "renewed_at",
+            "expires_at",
+            "state",
+            "stage_name",
+            "attempt_id",
+            "revision_sequence",
+            "reason_json",
+        }
+    ),
+    "submitted_operations": frozenset(
+        {"submission_id", "record_json", "revision_sequence"}
+    ),
+    "commits": frozenset(
+        {
+            "commit_id",
+            "stage_name",
+            "attempt_id",
+            "committed_at",
+            "revision_sequence",
+            "output_names_json",
+            "materialized_refs_json",
+        }
+    ),
+    "artifact_facts": frozenset(
+        {
+            "id",
+            "stage_name",
+            "artifact_name",
+            "artifact_json",
+            "commit_id",
+            "revision_sequence",
+        }
+    ),
+    "cleanup_candidates": frozenset(
+        {
+            "candidate_id",
+            "kind",
+            "uri",
+            "reason_json",
+            "recorded_at",
+            "revision_sequence",
+        }
+    ),
+    "audit_events": frozenset(
+        {
+            "sequence",
+            "timestamp",
+            "scope_json",
+            "event_type",
+            "payload_json",
+            "revision_sequence",
+        }
+    ),
+}
+
 
 class SQLitePerRunAuthorityStore:
     """SQLite-backed per-run authority store.
@@ -171,8 +259,9 @@ class SQLitePerRunAuthorityStore:
     ) -> BackendRevision:
         self._bind_run_uri(run_uri)
         database_path = _authority_database_path(run_uri)
+        database_exists = database_path.exists()
         database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._write_connection(database_path, initialize=True) as conn:
+        with self._write_connection(database_path, initialize=not database_exists) as conn:
             _raise_for_schema(conn)
             existing = conn.execute("SELECT 1 FROM run_state WHERE id = 1").fetchone()
             if existing is not None:
@@ -307,10 +396,9 @@ class SQLitePerRunAuthorityStore:
             _positive_seconds(lease_ttl_seconds)
         with self._transaction(run_uri) as conn:
             now = self._now()
-            if lease_ttl_seconds is not None:
-                active = _active_stage_lease_row(conn, stage_name, now)
-                if active is not None:
-                    raise AuthorityStoreError("stage already has an active lease")
+            active = _active_stage_lease_row(conn, stage_name, now)
+            if active is not None:
+                raise AuthorityStoreError("stage already has an active lease")
             attempt_number = _next_attempt_number(conn, stage_name)
             revision = self._next_revision(conn)
             attempt_id = f"{stage_name}-{attempt_number}"
@@ -584,6 +672,15 @@ class SQLitePerRunAuthorityStore:
                 raise AuthorityStoreError("unknown stage attempt")
             if StageStatus(cast(str, attempt_row["status"])) is not StageStatus.RUNNING:
                 raise AuthorityStoreError("stage attempt is not running")
+            stage_row = conn.execute(
+                "SELECT status FROM stages WHERE stage_name = ?",
+                (stage_name,),
+            ).fetchone()
+            if stage_row is None or StageStatus(cast(str, stage_row["status"])) not in {
+                StageStatus.RUNNING,
+                StageStatus.SUBMITTED,
+            }:
+                raise AuthorityStoreError("stage is not running")
             existing_commit = conn.execute(
                 "SELECT 1 FROM commits WHERE stage_name = ?",
                 (stage_name,),
@@ -647,6 +744,19 @@ class SQLitePerRunAuthorityStore:
                 status=StageStatus.SUCCEEDED,
                 revision=revision,
                 reason=reason,
+            )
+            conn.execute(
+                """
+                UPDATE leases
+                SET state = ?, revision_sequence = ?, reason_json = ?
+                WHERE lease_id = ?
+                """,
+                (
+                    LeaseState.RELEASED.value,
+                    revision.sequence,
+                    _json_dumps_or_none(reason),
+                    cast(str, lease_row["lease_id"]),
+                ),
             )
             _touch_run(conn, revision)
             commit = OutputCommitRecord(
@@ -818,12 +928,15 @@ class SQLitePerRunAuthorityStore:
     ) -> LeaseRecord:
         run_uri = self._run_uri_for_lease(lease_id)
         with self._transaction(run_uri) as conn:
-            self._require_active_lease_row(
+            row = self._require_active_lease_row(
                 conn,
                 lease_id,
                 owner_id=owner_id,
                 fencing_token=fencing_token,
             )
+            now = self._now()
+            if _timestamp_expired(cast(str, row["expires_at"]), now):
+                raise AuthorityStoreError("lease has expired")
             revision = self._next_revision(conn)
             conn.execute(
                 """
@@ -973,10 +1086,10 @@ class SQLitePerRunAuthorityStore:
         self, database_path: Path, *, initialize: bool
     ) -> Iterator[sqlite3.Connection]:
         with self._connect(database_path) as conn:
-            if initialize:
-                _initialize_schema(conn)
             conn.execute("BEGIN IMMEDIATE")
             try:
+                if initialize:
+                    _initialize_schema(conn)
                 yield conn
             except Exception:
                 conn.rollback()
@@ -1030,20 +1143,21 @@ def _authority_database_path(run_uri: str) -> Path:
 
 
 def _initialize_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+    schema_statements = (
         """
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
-        );
-        INSERT INTO metadata(key, value)
-        VALUES ('schema_version', '1')
-        ON CONFLICT(key) DO NOTHING;
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS revisions (
             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
             token TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS run_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             status TEXT NOT NULL,
@@ -1051,13 +1165,17 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             created_revision_sequence INTEGER NOT NULL,
             updated_revision_sequence INTEGER NOT NULL,
             reason_json TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS stages (
             stage_name TEXT PRIMARY KEY,
             status TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS attempts (
             attempt_id TEXT PRIMARY KEY,
             stage_name TEXT NOT NULL,
@@ -1068,7 +1186,9 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT,
             UNIQUE(stage_name, attempt_number)
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS leases (
             lease_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -1082,12 +1202,16 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             attempt_id TEXT,
             revision_sequence INTEGER NOT NULL,
             reason_json TEXT
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS submitted_operations (
             submission_id TEXT PRIMARY KEY,
             record_json TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS commits (
             commit_id TEXT PRIMARY KEY,
             stage_name TEXT NOT NULL UNIQUE,
@@ -1096,7 +1220,9 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             revision_sequence INTEGER NOT NULL,
             output_names_json TEXT NOT NULL,
             materialized_refs_json TEXT NOT NULL
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS artifact_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             stage_name TEXT NOT NULL,
@@ -1105,7 +1231,9 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             commit_id TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL,
             UNIQUE(commit_id, artifact_name)
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS cleanup_candidates (
             candidate_id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
@@ -1113,7 +1241,9 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             reason_json TEXT NOT NULL,
             recorded_at TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL
-        );
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS audit_events (
             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
@@ -1121,16 +1251,34 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             event_type TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_attempts_stage
-            ON attempts(stage_name, attempt_number);
-        CREATE INDEX IF NOT EXISTS idx_leases_stage
-            ON leases(stage_name, state, expires_at);
-        CREATE INDEX IF NOT EXISTS idx_leases_attempt
-            ON leases(attempt_id);
-        CREATE INDEX IF NOT EXISTS idx_artifact_facts_stage
-            ON artifact_facts(stage_name);
+        )
+        """,
         """
+        CREATE INDEX IF NOT EXISTS idx_attempts_stage
+            ON attempts(stage_name, attempt_number)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_leases_stage
+            ON leases(stage_name, state, expires_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_leases_attempt
+            ON leases(attempt_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_artifact_facts_stage
+            ON artifact_facts(stage_name)
+        """,
+    )
+    for statement in schema_statements:
+        conn.execute(statement)
+    conn.execute(
+        """
+        INSERT INTO metadata(key, value)
+        VALUES ('schema_version', ?)
+        ON CONFLICT(key) DO NOTHING
+        """,
+        (str(AUTHORITY_SCHEMA_VERSION),),
     )
 
 
@@ -1210,9 +1358,48 @@ def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:
                 current_version=AUTHORITY_SCHEMA_VERSION,
             ),
         )
+    shape_failure = _schema_shape_failure(conn)
+    if shape_failure is not None:
+        return AuthoritySchemaCheck(
+            current_version=AUTHORITY_SCHEMA_VERSION,
+            found_version=version,
+            failure=shape_failure,
+        )
     return AuthoritySchemaCheck(
         current_version=AUTHORITY_SCHEMA_VERSION,
         found_version=version,
+    )
+
+
+def _schema_shape_failure(conn: sqlite3.Connection) -> AuthoritySchemaFailure | None:
+    try:
+        rows = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_schema
+            WHERE type = 'table'
+            """
+        ).fetchall()
+        existing_tables = {cast(str, row["name"]) for row in rows}
+        if set(_REQUIRED_SCHEMA_COLUMNS) - existing_tables:
+            return _invalid_schema_shape_failure()
+        for table_name, expected_columns in _REQUIRED_SCHEMA_COLUMNS.items():
+            columns = {
+                cast(str, row["name"])
+                for row in conn.execute(f"PRAGMA table_info({table_name})")
+            }
+            if not expected_columns.issubset(columns):
+                return _invalid_schema_shape_failure()
+    except sqlite3.DatabaseError:
+        return _invalid_schema_shape_failure()
+    return None
+
+
+def _invalid_schema_shape_failure() -> AuthoritySchemaFailure:
+    return AuthoritySchemaFailure(
+        kind=AuthoritySchemaFailureKind.INVALID,
+        message="SQLite authority schema is incomplete or invalid",
+        current_version=AUTHORITY_SCHEMA_VERSION,
     )
 
 

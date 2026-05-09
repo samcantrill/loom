@@ -226,7 +226,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-10 by `loom_phase_refiner`
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -236,13 +236,69 @@ make test-summary
 - Final phase execution plan: refined and scope-complete on 2026-05-10; ready for `loom_phase_executor`.
 - Implementation summary: added `loom.pipeline.stores.sqlite_authority.SQLitePerRunAuthorityStore` as a backend-specific, non-root-exported stdlib-SQLite implementation of the Phase 1 `PerRunAuthorityStore` contract. The backend creates a private run-local authority database, checks loud schema policy, declares supported per-run and unsupported cross-run/materialization capabilities, uses short `BEGIN IMMEDIATE` transactions for revisions and guarded mutations, allocates monotonic stage attempts, enforces controller/stage leases with owner/fencing/expiry checks, persists submitted operations with current-run-URI reconstruction, records audit events with sequence evidence and private revision linkage, atomically commits stage output facts behind active stage leases, reconstructs revisioned snapshots, filters expired leases from active snapshots, and scans for expired leases, abandoned attempts, and active submitted-operation recovery facts. No runner integration, root store export, public backend default, CLI, workspace/sweep backend, public SQL schema, status enum change, or Phase 1 contract/model expansion was added.
 - Implementation validation:
-  - `uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py` - passed, 20 tests.
+  - `uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py` - passed, 23 tests after the implementation refinement.
   - `uv run ruff check src/loom/pipeline/stores/sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/integration/pipeline/test_sqlite_authority_backend.py` - passed.
   - `uv run pyright src/loom/pipeline/stores/sqlite_authority.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/integration/pipeline/test_sqlite_authority_backend.py tests/contracts/test_authority_store_contract.py` - passed.
   - Earlier targeted package import-boundary check confirmed importing `loom.pipeline.stores` does not import `sqlite3`.
   - `make validate-pr` - passed; Ruff, Pyright, default harness, config-extra harness, and build completed successfully.
-- Refinement summary: confirmed against `AGENTS.md`, `.codex/prompts/phase-execution-plan-refine.md`, `.codex/templates/phase-execution-plan.md`, `docs/implementation-plans/implementation-plan-v9.md`, Phase 1 store contracts, package/contract/unit/integration test boundaries, and Phase 2 acceptance criteria. Tightened stop conditions for public contract changes, run-root portability, audit sequence/revision evidence, cleanup-candidate limits, root import boundaries, and suite-level test obligations.
+- Implementation refinement summary: one expanded-path `loom_phase_refiner` pass completed on 2026-05-10. The pass reviewed `AGENTS.md`, the v9 implementation plan, this phase plan, current commits/diff, and recorded validation evidence, then tightened only Phase 2 backend/test behavior. Fixes made: existing incomplete SQLite authority files now fail loudly instead of being silently initialized by `create_run`; schema checks validate the private schema shape without documenting it as public API; schema initialization now runs inside the write transaction used by run creation; expired leases cannot be released or failed; active stage leases block unleased attempt allocation; fenced output commits reject terminal stage states; and successful output commits release the stage lease in the same transaction so later recovery scans do not report a completed lease as expired. No runner integration, root store export, CLI, workspace/sweep backend, status enum change, public SQL contract, old-run migration, or Phase 1 protocol/model change was added.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: no predecessor; branch targets `develop`.
 - Remaining blockers: none recorded. `make test-summary` was not run because PR preparation is out of scope for this handoff.
+
+## Phase Refinement Report
+
+### Metadata
+
+- Phase: Phase 2 - Per-Run SQLite Backend And Transaction Semantics
+- Branch: `codex/sqlite-run-backend`
+- Worktree: `/home/samcantrill/work/loom-worktrees/sqlite-run-backend`
+- Phase execution plan: `docs/phases/sqlite-run-backend.md`
+- Refiner: `loom_phase_refiner`
+- Refinement date: 2026-05-10
+- Pass type: implementation refinement
+- Phase implementation refinement budget status after this pass: used
+- Blocker-resolution budget status after this pass: unchanged; 0/3 used
+
+### Refinement Scope
+
+- Validation output reviewed: executor-recorded targeted pytest/Ruff/Pyright and `make validate-pr` evidence; current refinement reran targeted package/unit/contract/integration pytest, targeted Ruff, targeted Pyright, and `make validate-pr`.
+- Blocking issues caused by this phase: incomplete existing SQLite schemas could be silently initialized; expired leases could be released/failed; an active stage lease did not block unleased attempt allocation; output commit could override terminal stage state; successful output commit left the lease active and later recoverable as expired.
+- Issues confirmed out of scope: runner integration, public backend hard swap, backend CLI, workspace/sweep coordination backend, migration/fallback behavior, status enum changes, and Phase 1 protocol/model changes.
+
+### Fixes Made
+
+| Issue | Change | Evidence |
+| --- | --- | --- |
+| Existing partial SQLite authority files could be accepted during `create_run`. | Distinguish missing databases from existing databases, validate private schema shape, and run initialization inside the create-run write transaction. | New unit coverage for incomplete existing schema; targeted pytest and `make validate-pr` passed. |
+| Expired leases could be released or failed. | Added expiry rejection to lease finish paths. | Contract/unit coverage for expired release/fail; targeted pytest and `make validate-pr` passed. |
+| Active leases could be bypassed by allocating an unleased attempt. | Stage attempt allocation now rejects any active non-expired stage lease. | Integration coverage across store instances; targeted pytest and `make validate-pr` passed. |
+| Output commit could override terminal stage state and leave a completed lease active. | Output commit now requires a running/submitted stage and releases the stage lease in the same transaction as commit, artifact facts, terminal attempt/stage status, and revision. | Unit coverage for terminal-state rejection, lease release, and clean recovery after commit; targeted pytest and `make validate-pr` passed. |
+
+### Tests Or Validation Re-Run
+
+```text
+command: uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_sqlite_authority_backend.py
+result: passed, 23 tests
+
+command: uv run ruff check src/loom/pipeline/stores/sqlite_authority.py tests/contracts/test_authority_store_contract.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/integration/pipeline/test_sqlite_authority_backend.py
+result: passed
+
+command: uv run pyright src/loom/pipeline/stores/sqlite_authority.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py tests/integration/pipeline/test_sqlite_authority_backend.py tests/contracts/test_authority_store_contract.py
+result: passed, 0 errors
+
+command: make validate-pr
+result: passed; Ruff passed, Pyright passed, default harness passed with 996 passed / 17 skipped / 14 deselected, config-extra harness passed with 416 passed / 1024 deselected, and uv build succeeded
+```
+
+### Remaining Blockers
+
+- None recorded.
+
+### PR Preparation Handoff
+
+- Completion notes updated in phase execution plan: yes
+- Budget status updated: yes; phase implementation refinement used, blocker-resolution unchanged at 0/3 used, PR review unused
+- Final validation recommended: `make test-summary` during PR preparation
+- Suite evidence still needed: PR body suite summary from `make test-summary`

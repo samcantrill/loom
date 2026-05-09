@@ -216,6 +216,12 @@ def test_per_run_authority_rejects_stale_transitions_and_lease_misuse(
     assert store.snapshot(run_uri).stages[0].active_lease is None
 
     with pytest.raises(ValueError, match="expired"):
+        store.release_lease(
+            retry.lease.lease_id,
+            owner_id="worker-2",
+            fencing_token=retry.lease.fencing_token,
+        )
+    with pytest.raises(ValueError, match="expired"):
         store.record_output_commit(
             run_uri,
             "build",

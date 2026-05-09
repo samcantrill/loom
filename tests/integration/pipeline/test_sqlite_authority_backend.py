@@ -89,6 +89,12 @@ def test_stage_lease_fencing_across_store_instances(tmp_path: Path) -> None:
             owner_id="worker-2",
             lease_ttl_seconds=30,
         )
+    with pytest.raises(ValueError, match="active lease"):
+        second.allocate_stage_attempt(
+            run_uri,
+            "build",
+            owner_id="worker-2",
+        )
 
     clock.value = "2020-01-01T00:00:05Z"
     renewed = second.renew_lease(
