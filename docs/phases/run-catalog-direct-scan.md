@@ -255,8 +255,14 @@ make test-summary
     passed.
   - `uv run pyright src/loom/runs tests/unit/loom/runs/test_direct_scan_helpers.py tests/integration/pipeline/test_run_catalog_direct_scan.py`
     passed.
+  - `make validate-pr` passed: Ruff, Pyright, default test harness,
+    config-extra test harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 55
+    passed, unit 743 passed, contract 73 passed, integration 47 passed, e2e 36
+    passed, config-extra 413 passed.
 - Refinement summary: unused
 - Blocker-resolution summary: 0/3 used
-- PR preparation: TBD
+- PR preparation: PR body pending at
+  `docs/phases/run-catalog-direct-scan-pr-body.md`; PR not yet opened.
 - Stack maintenance: no predecessor; successor handling TBD after PR state
 - Remaining blockers: none known
