@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation pending
+- Status: pr_open
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 2: Direct Scan And Summary Extraction`
 - Branch: `codex/run-catalog-direct-scan`
@@ -13,6 +13,7 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/96
 - Merge eligibility: merge-eligible after automated review, local validation, and GitHub checks because Phase 1 is merged and this is a root phase targeting `develop`
 - Workflow path: fast path
 - Successor dependency notes: Phase 3 should reuse the private direct-scan and extraction helpers as the SQLite rebuild source instead of reimplementing store traversal.
@@ -228,7 +229,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused
-- PR review: unused
+- PR review: pending
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -262,7 +263,8 @@ make test-summary
     passed, config-extra 413 passed.
 - Refinement summary: unused
 - Blocker-resolution summary: 0/3 used
-- PR preparation: PR body pending at
-  `docs/phases/run-catalog-direct-scan-pr-body.md`; PR not yet opened.
+- PR preparation: completed; PR #96 opened at
+  https://github.com/samcantrill/loom/pull/96 and verified with base
+  `develop` and head `codex/run-catalog-direct-scan`.
 - Stack maintenance: no predecessor; successor handling TBD after PR state
 - Remaining blockers: none known
