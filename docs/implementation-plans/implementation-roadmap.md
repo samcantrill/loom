@@ -72,6 +72,11 @@ written.
   they expose are stable.
 - Prefer generic contracts plus optional adapters over hard dependencies on
   cloud, cluster, container, dashboard, or domain frameworks.
+- Treat external systems such as Hydra, MLflow, Prefect, DVC, W&B,
+  OpenTelemetry, and cloud stores as optional integration adapters around
+  `loom` contracts. `loom` remains the source of truth for pipeline semantics,
+  run directories, artifact references, fingerprints, resume decisions, and
+  provenance.
 - Keep every version useful on its own and reviewable as a coherent product
   increment.
 
@@ -88,14 +93,14 @@ written.
 | v6 | SLURM script planning | Scheduler-neutral resource mapping, SLURM models, script builders, and dry-run manifests. |
 | v7 | SLURM operations | Optional live `sbatch` submission, status, cancellation, and submission recovery. |
 | v8 | Run catalog and comparison | Rebuildable local run index, run listing, filtering, and metadata comparison. |
-| v9 | Run bundles | Safe run export, inspect, and import with portable manifests. |
+| v9 | Run bundles and exporters | Safe run export, inspect, import, and compatibility exporter contracts with portable manifests. |
 | v10 | Deterministic sweeps | Grid/manual sweep expansion, manifests, sequential execution, status, and collection. |
-| v11 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, and provenance. |
+| v11 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, artifact stores, run exporters, event sinks, and provenance. |
 | v12 | Remote store contract | Backend-neutral artifact-store capabilities, fake remote store, and remote preflight surface. |
 | v13 | Remote store operations | Explicit remote payload operations and at most one optional backend adapter family, if selected. |
 | v14 | Docker container executor | Docker CLI executor using the stage-worker and artifact/run-store contracts. |
 | v15 | HPC container execution | Apptainer/Singularity executor and SLURM-container composition. |
-| v16 | Reliability policies | Retry, timeout, failure-category, and runtime event policies across executors. |
+| v16 | Reliability policies and event sinks | Retry, timeout, failure-category, runtime event, and observe-only event sink policies across executors. |
 | v17 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 
 ## v0 - Local Runtime Kernel
@@ -560,17 +565,21 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v9 - Run Bundles
+## v9 - Run Bundles And Exporters
 
 Goal:
 
 - Provide a safe archive and transfer path for local run metadata and selected
-  payloads.
+  payloads, plus a small compatibility-export surface for projecting completed
+  runs into external tools without making those tools authoritative.
 
 Implement:
 
 - Run bundle manifest model with format version, entry records, checksums, and
   payload selection metadata.
+- Run exporter result models and a minimal `RunExporter` protocol for
+  post-run, explicit export operations over completed run metadata, bundle
+  manifests, and selected payload references.
 - Metadata-only export by default using standard-library archive support.
 - Explicit artifact/log inclusion flags and size/path reporting.
 - Path traversal, symlink, partially written run, and missing-payload safety
@@ -578,10 +587,13 @@ Implement:
 - Bundle inspection without extraction.
 - Import into a local run collection with manifest validation, checksum
   verification when requested, safe path handling, and catalog stale marking.
+- Compatibility exporter hooks that can be reused by later plugins such as
+  MLflow, DVC, W&B, HTML/static reports, or archival manifest writers without
+  requiring those integrations in core.
 - CLI commands for export, inspect, and import.
-- Tests for manifest creation, metadata-only bundles, payload selection, unsafe
-  path rejection, inspect without extraction, and import into a temporary run
-  collection.
+- Tests for manifest creation, metadata-only bundles, exporter result
+  serialization, payload selection, unsafe path rejection, inspect without
+  extraction, and import into a temporary run collection.
 
 Exit criteria:
 
@@ -589,13 +601,16 @@ Exit criteria:
   code.
 - The default export path is conservative and does not unexpectedly include
   large payloads.
+- Exporter contracts operate on persisted run metadata and artifact references,
+  not project-specific metric semantics or artifact payload interpretation.
 - Bundle safety checks are covered by focused tests.
 
 Defer:
 
 - Remote payload download, signed bundles, large payload deduplication,
-  cross-machine catalog synchronization, bundle encryption, and domain-specific
-  comparison reports.
+  cross-machine catalog synchronization, bundle encryption, service-specific
+  exporter implementations, automatic post-run exporter dispatch, and
+  domain-specific comparison reports.
 
 Primary feature docs:
 
@@ -670,7 +685,7 @@ Goal:
 Implement:
 
 - Known entry point group constants for recipes, codecs, sources, executors,
-  and artifact store backends.
+  artifact store backends, run exporters, and event sinks.
 - `PluginRecord`, `PluginLoadResult`, plugin errors, duplicate handling, and
   structured failure reporting.
 - Generic entry point listing and loading through `importlib.metadata`.
@@ -678,6 +693,9 @@ Implement:
 - Codec plugin loading into supplied codec registries.
 - Source, executor, and store backend loading after corresponding registries
   exist.
+- Run exporter plugin loading after the v9 exporter protocol exists.
+- Event sink plugin listing, with registration deferred until the v16
+  `RuntimeEvent` and `EventSinkRegistry` contracts are stable.
 - Plugin provenance summaries for plugin names, packages, versions, groups, and
   load results.
 - `loom plugins list` and `loom plugins check`.
@@ -697,6 +715,9 @@ Defer:
 - Plugin marketplace behavior, automatic installation, dependency resolution,
   version solving, remote indexes, sandboxing, and third-party command
   injection into the core CLI.
+- Concrete Prefect, MLflow, DVC, W&B, OpenTelemetry, cloud, or notification
+  integrations. This version should make those integrations discoverable later,
+  not ship service-specific behavior.
 
 Primary feature docs:
 
@@ -715,7 +736,8 @@ Primary feature docs:
 Goal:
 
 - Define backend-neutral artifact-store capabilities and tests before selecting
-  or shipping real remote backends.
+  or shipping real remote backends, including future external-system-backed
+  stores such as MLflow or DVC.
 
 Implement:
 
@@ -730,6 +752,8 @@ Implement:
 - Preflight checks for backend plugin availability, URI validity, credentials
   when cheaply checkable, read/write capability, and unsupported operations.
 - Run catalog and bundle awareness for metadata-only remote refs.
+- Compatibility notes for MLflow-backed and DVC-backed artifact stores as
+  candidate adapters, constrained by the same capability model as cloud stores.
 
 Exit criteria:
 
@@ -742,7 +766,8 @@ Defer:
 
 - Real cloud backend adapters, remote payload export/import, credential refresh
   management, distributed caches, remote garbage collection, cross-region
-  replication, signed manifests, and remote run catalog services.
+  replication, signed manifests, remote run catalog services, and first-party
+  MLflow or DVC store implementations.
 
 Primary feature docs:
 
@@ -789,7 +814,7 @@ Exit criteria:
 
 Defer:
 
-- Broad S3/GCS/Azure/MLflow parity, remote tracking services, distributed
+- Broad S3/GCS/Azure/MLflow/DVC parity, remote tracking services, distributed
   locking, global content-addressed caches, credential lifecycle management,
   signed manifests, and remote run catalog services.
 
@@ -900,28 +925,61 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v16 - Reliability Policies
+## v16 - Reliability Policies And Event Sinks
 
 Goal:
 
-- Make retry, timeout, failure classification, and runtime events explicit and
-  inspectable across executors.
+- Make retry, timeout, failure classification, runtime events, and event sink
+  delivery explicit and inspectable across executors.
 
 Implement:
 
-- Shared retry, timeout, failure-category, and runtime event models.
+- Shared retry, timeout, failure-category, runtime event, and event sink policy
+  models.
+- Status detail records that keep the machine policy status stable while adding
+  human/debug fields such as lifecycle phase, reason code, and message. This
+  should improve CLI, catalog, audit, retry, and cancellation diagnostics
+  without expanding core status enums for every backend-specific situation.
 - Retry planning around safe output transactions and explicit idempotency
   assumptions.
 - Retry decision records persisted in run stores.
 - Timeout support where executors can enforce it, with warnings and metadata
   when they cannot.
+- Explicit stage-attempt transaction records for begin, stage, commit, rollback
+  or failure, and cleanup outcomes. These records define when staged artifacts
+  become authoritative and when retry is safe.
 - Event records for run and stage lifecycle events, submission events, retry
-  decisions, timeout outcomes, and plugin callback hooks.
-- Preflight warnings for unsupported retry, timeout, and event policies.
+  decisions, timeout outcomes, stage-attempt transaction transitions, and
+  plugin callback hooks.
+- A structured event grammar for audit logs and event sinks: event id,
+  sequence, occurred timestamp, event name, primary resource, related
+  resources, payload, and optional causal predecessor. Local `events.jsonl`
+  should remain append-only and machine-readable.
+- `EventSink` and `EventSinkRegistry` contracts for observe-only callbacks over
+  committed runtime facts. Event sinks may write external side effects or links
+  back into run metadata through explicit store APIs, but they must not mutate
+  plans, configs, artifacts, stage outputs, status transitions, retry
+  decisions, or core store records.
+- Callback failure records and default best-effort failure policy. A later
+  strict mode may fail runs for audit-heavy deployments, but the default must
+  not let observer failures change run correctness.
+- Event payload shapes that include enough stable metadata for external
+  tracking projections: run URI, stage name, status, timestamps, executor,
+  artifact refs, fingerprints, submitted-operation IDs, and selected
+  provenance facts.
+- Global concurrency lease models for future sweeps and shared-resource
+  environments, including named keys, slot counts, lease duration, renewal
+  records, and explicit behavior when lease renewal fails.
+- Programmatic event sink registration first, with plugin-discovered event sink
+  loading integrated after the v11 plugin surfaces and this version's event
+  sink registry are both stable.
+- Preflight warnings for unsupported retry, timeout, event, transaction, and
+  concurrency-lease policies.
 - CLI inspection for event records where useful.
 - Tests for retry boundaries, retry-disabled behavior, non-retryable validation
-  failures, timeout metadata, unsupported timeout warnings, event record
-  serialization, and callback failure behavior.
+  failures, timeout metadata, unsupported timeout warnings, transaction
+  transition records, status detail records, event record serialization, event
+  sink dispatch, lease renewal behavior, and callback failure behavior.
 
 Exit criteria:
 
@@ -931,13 +989,28 @@ Exit criteria:
   safe output transaction semantics.
 - Timeout behavior is capability-aware across local, subprocess, SLURM, and
   container executors.
+- Status detail and reason records explain state without replacing the stable
+  run and stage status vocabulary used by planning and resume.
+- Stage-attempt transaction records make committed outputs, failed attempts,
+  retry eligibility, and cleanup candidates unambiguous.
+- Event records are suitable as an audit log: ordered, typed, resource-linked,
+  and useful without importing project code.
+- Event sinks are observer-only and cannot become an alternate execution,
+  planning, artifact, retry, or metric semantics layer.
+- Global concurrency leases can be consumed by later bounded sweeps or external
+  adapters without making v10 sweeps concurrent by default.
 
 Defer:
 
 - Cleanup and deletion operations, artifact retention policy, full
-  run-collection garbage collection, service-specific notifications,
-  distributed event streaming, advanced exponential backoff, retry budgets
-  across runs, and resource-aware retry escalation.
+  run-collection garbage collection, service-specific notifications and
+  tracking sinks such as MLflow or W&B, distributed event streaming, advanced
+  exponential backoff, retry budgets across runs, and resource-aware retry
+  escalation.
+- Work-pool, queue, worker-daemon, prefetch, scheduling, and worker-health
+  abstractions. Those may be revisited for future orchestration adapters, but
+  v16 should stay focused on the durable runtime records and policies that such
+  adapters would consume.
 
 Primary feature docs:
 
@@ -998,6 +1071,52 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
+## Deferred Integration Candidates
+
+The items below are intentionally deferred until their owning contracts exist
+and a downstream need justifies a design review. They should be treated as
+future roadmap candidates, not as implicit scope for the versions above.
+
+- MLflow event sink and run exporter plugins. A future adapter may create or
+  attach to MLflow runs, log loom run URI, config and pipeline fingerprints,
+  stage lifecycle facts, artifact references, and links to exported run
+  bundles. Loom remains authoritative for stage status, artifacts,
+  fingerprints, resume, and provenance. Core Loom should not become an MLflow
+  tracking client or model registry.
+- Prefect executor or orchestration adapter. The safest first candidate is a
+  whole-run adapter where Prefect schedules or deploys `loom run` and Loom owns
+  planning, resume, artifacts, and final run state. A later per-stage Prefect
+  executor would need a separate design for attempt numbering, retries,
+  cancellation, concurrency, and finalization before it can reuse the
+  stage-worker contract safely.
+- Work-pool and work-queue style orchestration. SLURM already owns its native
+  partitions, queues, accounts, and QoS behavior, so Loom should not duplicate
+  those near-term. A future Loom abstraction may still be useful as a
+  backend-neutral routing layer for selecting between local, subprocess, SLURM,
+  Docker, Prefect, or other execution environments, especially when combined
+  with priorities and concurrency limits.
+- Worker-daemon, prefetch, and health-check orchestration. A future optional
+  controller could poll queued runs, pre-submit infrastructure before scheduled
+  start time, heartbeat executor availability, refresh submitted-job status,
+  and centralize cancellation. This should remain deferred until Loom has a
+  concrete scheduling or multi-run orchestration need.
+- MLflow-backed and DVC-backed artifact stores. These should be optional
+  plugin backends after the v12 remote-store capability model exists. They must
+  advertise read/write/list/checksum/delete and transaction semantics like any
+  other backend, and they must not become special cases inside core Loom.
+- Hydra configuration or launcher bridges. Existing Hydra projects may benefit
+  from a config frontend or launcher adapter, but any bridge must preserve
+  authored-source provenance, fingerprints, and path-aware error behavior well
+  enough for Loom resume decisions to stay trustworthy.
+- OpenTelemetry, W&B, JSONL audit, webhook, or notification event sinks. These
+  should be service-specific plugins over the v16 event sink model. Core Loom
+  should provide the event contract and failure policy, not service delivery.
+- No `MetricExtractor` layer. Loom may track a metrics file as an ordinary
+  artifact reference because project code produced it, but core Loom should not
+  parse metrics, define metric names, optimize metrics, query metrics, or infer
+  experiment semantics. Project-owned code or external adapters may choose how
+  to interpret artifacts outside Loom's core contract.
+
 ## Detailed Plan Drafting Checklist
 
 Before turning any roadmap version into a full implementation plan:
@@ -1034,7 +1153,7 @@ Before turning any roadmap version into a full implementation plan:
 | `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
 | `io.md` | v0, v1, v11, v12, v13 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v11; remote hooks and operations in v12/v13. |
-| `artifacts.md` | v0, v3, v9, v12, v13, v17 | Local artifact refs/stores in v0; inspection in v3; bundles in v9; remote capabilities in v12/v13; retention in v17. |
+| `artifacts.md` | v0, v3, v9, v12, v13, v17 | Local artifact refs/stores in v0; inspection in v3; bundles/exporters in v9; remote capabilities in v12/v13; retention in v17. |
 | `config.md` | v0, v1, v2, v10, v11 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v10; recipe plugins in v11. |
 | `pipeline.md` | v0, v2, v10 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI and sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
@@ -1042,16 +1161,16 @@ Before turning any roadmap version into a full implementation plan:
 | `execution.md` | v0, v4, v5, v6, v7, v14, v15, v16 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; reliability in v16. |
 | `run-store.md` | v0, v3, v5, v8, v9, v16, v17 | Local layout in v0; inspection/failures/catalog/bundles/reliability/cleanup build on it. |
 | `state.md` | v0, v5, v7, v16 | Basic statuses in v0; attempts/failures, scheduler state, and reliability records mature later. |
-| `provenance.md` | v0, v1, v6, v7, v11, v14, v15, v16 | Generic provenance in v0; config composition provenance in v1; submission, plugin, container, and event facts added with those capabilities. |
+| `provenance.md` | v0, v1, v6, v7, v11, v14, v15, v16 | Generic provenance in v0; config composition provenance in v1; submission, plugin, container, event, and event-sink facts added with those capabilities. |
 | `resume.md` | v0, v2, v3, v10, v16 | Same-run-directory resume in v0; CLI/preflight/sweeps expose it; retry policies remain later. |
 | `preflight.md` | v3, v4, v5, v6, v7, v11, v12, v13, v14, v15, v16, v17 | Core check runner in v3; new checks arrive with each operational feature. |
-| `run-catalog.md` | v8, v9, v10, v13, v17 | Catalog/comparison in v8; bundles in v9; sweeps integrate in v10; remote refs and cleanup later. |
+| `run-catalog.md` | v8, v9, v10, v13, v17 | Catalog/comparison in v8; bundles and exporters in v9; sweeps integrate in v10; remote refs and cleanup later. |
 | `sweeps.md` | v10 | Sweeps are many ordinary runs, so they follow local execution, CLI basics, and run catalog foundations. |
 | `slurm.md` | v6, v7, v15 | Script/dry-run support first; live operations second; container composition after both are stable. |
 | `container-executors.md` | v14, v15 | Docker first; Apptainer and SLURM-container composition second. |
 | `remote-stores.md` | v12, v13 | Contract and fake backend first; payload operations and optional real backends second. |
-| `reliability.md` | v5, v16, v17 | Baseline failure metadata starts with subprocess; richer policies and cleanup land later. |
-| `plugins.md` | v11, v12, v13, v16 | Explicit discovery in v11; remote backend and callback integration later. |
+| `reliability.md` | v5, v16, v17 | Baseline failure metadata starts with subprocess; retry, timeout, runtime events, event sinks, and cleanup land later. |
+| `plugins.md` | v11, v12, v13, v16 | Explicit discovery in v11; remote backend, exporter, and event sink integration later. |
 | `cli.md` | v2, v3, v5, v6, v7, v8, v9, v10, v11, v13, v14, v15, v16, v17 | Core CLI lands in v2; commands grow only with their owning feature. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
 
@@ -1062,7 +1181,7 @@ this roadmap does not assign them to a version. They should remain out of scope
 until there is a specific downstream need and a separate design review.
 
 - Domain-specific stages, codecs, artifact schemas, datasets, models, metrics,
-  reports, analysis logic, recipes, or comparison semantics.
+  metric extractors, reports, analysis logic, recipes, or comparison semantics.
 - Untrusted config sandboxing, import allow lists, plugin sandboxing, or
   treating containers as a security boundary.
 - Hydra-compatible defaults, arbitrary config expression languages, advanced
@@ -1075,15 +1194,17 @@ until there is a specific downstream need and a separate design review.
   partial stage reuse, and domain-specific checkpoint continuation in core
   `loom`.
 - Database-backed orchestration, remote tracking servers, web dashboards,
-  authorization systems, and hosted run catalog services.
+  authorization systems, and hosted run catalog services as core Loom features.
+  External systems such as Prefect or MLflow may be reconsidered only as
+  optional adapters.
 - Controller-mode SLURM, job arrays, multi-node MPI orchestration, cloud batch
   backends, Kubernetes, and workflow submission across unrelated clusters.
 - Built-in Bayesian optimization, random search as a core feature,
   population-based training, adaptive trial generation, early stopping across
   trials, and metric query languages.
-- Broad first-party parity across S3, GCS, Azure, MLflow, fsspec, and similar
-  backends. v13 should select at most one optional adapter family if a concrete
-  need exists.
+- Broad first-party parity across S3, GCS, Azure, MLflow, DVC, fsspec, and
+  similar backends. v13 should select at most one optional adapter family if a
+  concrete need exists.
 - Full SBOM generation, cryptographic attestation, signed artifact manifests,
   distributed tracing, and remote telemetry.
 - Service-specific notification delivery such as Slack, email, Teams,
@@ -1109,3 +1230,6 @@ Revisit this roadmap when any of the following become true:
 - Multiple downstream packages implement similar plugins, codecs, stores, or
   executor adapters outside `loom`.
 - Operational failures show that reliability policy work should move earlier.
+- External integration pressure repeats around the same adapter category, such
+  as MLflow sinks/exporters, Prefect orchestration, DVC-backed artifacts, or
+  Hydra config bridges.
