@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; ready for implementation
+- Status: PR body refined; ready for PR creation
 - Feature focus: Persistence And Concurrency Foundation
 - PR title: `Persistence And Concurrency Foundation - Phase 2: SQLite Run Backend And Transactions`
 - Branch: `codex/sqlite-run-backend`
@@ -229,7 +229,9 @@ make test-summary
 - Phase implementation refinement: used on 2026-05-10 by `loom_phase_refiner`
 - PR body draft: complete on 2026-05-10 by `loom_pr_preparer`; artifact at
   `docs/phases/sqlite-run-backend-pr-body.md`
-- PR body refine: pending because this phase is on the expanded path
+- PR body refine: complete on 2026-05-10 by `loom_pr_preparer`; verified
+  against the final diff, validation evidence, acceptance criteria, scope
+  boundaries, and future-phase exclusions
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -247,9 +249,10 @@ make test-summary
 - Implementation refinement summary: one expanded-path `loom_phase_refiner` pass completed on 2026-05-10. The pass reviewed `AGENTS.md`, the v9 implementation plan, this phase plan, current commits/diff, and recorded validation evidence, then tightened only Phase 2 backend/test behavior. Fixes made: existing incomplete SQLite authority files now fail loudly instead of being silently initialized by `create_run`; schema checks validate the private schema shape without documenting it as public API; schema initialization now runs inside the write transaction used by run creation; expired leases cannot be released or failed; active stage leases block unleased attempt allocation; fenced output commits reject terminal stage states; and successful output commits release the stage lease in the same transaction so later recovery scans do not report a completed lease as expired. No runner integration, root store export, CLI, workspace/sweep backend, status enum change, public SQL contract, old-run migration, or Phase 1 protocol/model change was added.
 - Blocker-resolution summary: none used.
 - PR preparation: draft pass complete on 2026-05-10 by `loom_pr_preparer`.
-  The PR body draft is recorded at
-  `docs/phases/sqlite-run-backend-pr-body.md`; the expanded-path refine pass is
-  pending and the PR was not opened in this pass by manager instruction.
+  Expanded-path PR body refine pass complete on 2026-05-10 by
+  `loom_pr_preparer`; the PR body at
+  `docs/phases/sqlite-run-backend-pr-body.md` was verified against the final
+  diff, validation evidence, acceptance criteria, and Phase 2 scope boundaries.
 - PR facts confirmed during draft pass: head branch
   `codex/sqlite-run-backend`; target branch `develop`; stack predecessor none;
   root phase PR; title
@@ -267,22 +270,22 @@ make test-summary
   public SQL schema, old-run migration, status enum changes, root store export
   changes, or Phase 1 protocol/model expansion.
 - PR-preparation validation:
-  - `make test-summary` - passed on 2026-05-10 local time; generated
-    `build/test-summary.md` at `2026-05-09T15:30:43+00:00` with 1437 passed,
-    0 failed, 0 errors, 11 skipped, 1035 deselected, and 129.75s overall
-    duration.
+  - `make validate-pr` - passed on 2026-05-10 local time during PR-body
+    refine; Ruff, Pyright, default harness, config-extra harness, and build
+    completed successfully.
+  - `make test-summary` - passed on 2026-05-10 local time during PR-body
+    refine; generated `build/test-summary.md` at
+    `2026-05-09T15:41:06+00:00` with 1437 passed, 0 failed, 0 errors,
+    11 skipped, 1035 deselected, and 129.86s overall duration.
   - Suite evidence: package 56 passed / 1 skipped; unit 774 passed /
     1 skipped; contract 86 passed / 2 skipped; integration 68 passed /
     7 skipped / 10 deselected; e2e 37 passed / 1 deselected; config-extra
     416 passed / 1024 deselected.
-  - `make validate-pr` was not rerun during PR-body drafting; the
-    implementation refinement notes above record the final gate passing with
-    Ruff, Pyright, default harness, config-extra harness, and build.
-  - GitHub checks were not run because the PR was not opened in this
-    expanded-path draft pass.
+  - GitHub checks were pending before PR creation; the managing agent owns CI
+    polling after this PR-preparation pass.
 - Stack maintenance: no predecessor; branch targets `develop`.
-- Remaining blockers: none recorded for the draft body. PR-body refine and PR
-  creation remain pending for the next expanded-path pass.
+- Remaining blockers: none recorded for PR-body refine. PR creation remains
+  pending in this pass.
 
 ## Phase Refinement Report
 
@@ -337,10 +340,9 @@ result: passed; Ruff passed, Pyright passed, default harness passed with 996 pas
 
 - Completion notes updated in phase execution plan: yes
 - Budget status updated: yes; phase implementation refinement used, PR body
-  draft complete, PR body refine pending, blocker-resolution unchanged at
+  draft complete, PR body refine complete, blocker-resolution unchanged at
   0/3 used, PR review unused
-- Final validation recommended: completed for draft evidence with
-  `make test-summary`; rerun only if implementation or tests change before PR
-  opening
-- Suite evidence still needed: none for the draft body; PR refine should verify
-  the body remains accurate before opening the PR
+- Final validation recommended: completed during PR-body refine with
+  `make validate-pr` and `make test-summary`; rerun only if implementation or
+  tests change before PR opening
+- Suite evidence still needed: none for PR opening
