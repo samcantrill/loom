@@ -4,15 +4,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
+from loom.artifacts import ArtifactRef
+from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
+from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
+    AuthoritativeReadOptions,
     CorruptStoreDocumentError,
+    LocalMaterializationRequest,
     LocalRunStore,
     MissingStoreDocumentError,
+    PerRunAuthorityStore,
     RunNotFoundError,
+    RunFreshnessRecord,
     UnsafeStorePathError,
+    format_artifact_key,
     path_to_run_uri,
+    read_authoritative_run,
 )
+from loom.pipeline.stores.read_models import (
+    AuthoritativeRunSnapshot,
+    StageLifecycleSnapshot,
+)
+from loom.pipeline.stores.schema_policy import AuthoritySchemaFailureKind
+from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
 from ._extract import CurrentRunSummary, extract_current_summary_with_warning_record
@@ -151,21 +167,225 @@ def _scan_candidate(
             path=candidate,
         )
     except (CorruptStoreDocumentError, UnsafeStorePathError, OSError) as exc:
-        message = str(exc)
-        if "unsupported" in message.lower() and "schema" in message.lower():
-            return None, _warning(
-                CatalogWarningCode.UNSUPPORTED_SCHEMA,
-                "run uses an unsupported schema",
-                path=candidate,
-            )
-        return None, _warning(
-            CatalogWarningCode.PARTIAL_RUN,
-            f"run metadata is incomplete or invalid: {message}",
+        return None, _warning_for_store_exception(exc, path=candidate)
+    try:
+        authority_store, authority_warning = _authority_store_for_candidate(
+            run_uri, candidate
+        )
+    except (CorruptStoreDocumentError, OSError) as exc:
+        return None, _warning_for_store_exception(exc, path=candidate)
+    if authority_warning is not None:
+        return None, authority_warning
+    if authority_store is not None:
+        return extract_current_summary_with_warning_record(
+            _AuthoritativeSummaryStore(
+                local_store=store,
+                authority_store=authority_store,
+            ),
+            run_uri=run_uri,
             path=candidate,
         )
     return extract_current_summary_with_warning_record(
         store, run_uri=run_uri, path=candidate
     )
+
+
+class _AuthoritativeSummaryStore:
+    """Run summary reader that uses backend snapshots for live state."""
+
+    def __init__(
+        self, *, local_store: LocalRunStore, authority_store: PerRunAuthorityStore
+    ) -> None:
+        self._local_store = local_store
+        self._authority_store = authority_store
+
+    def read_run_freshness(self, run_uri: str) -> RunFreshnessRecord | None:
+        revision = self._snapshot(run_uri).revision
+        return RunFreshnessRecord(
+            run_uri=run_uri,
+            token=revision.token,
+            updated_at=revision.created_at or utc_timestamp(),
+            revision=revision.sequence,
+            reason="authority_revision",
+        )
+
+    def read_run_document(self, run_uri: str) -> dict[str, PlainData]:
+        return self._local_store.read_run_document(run_uri)
+
+    def read_run_user_metadata(self, run_uri: str) -> dict[str, PlainData]:
+        return self._local_store.read_run_user_metadata(run_uri)
+
+    def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
+        snapshot = self._snapshot(run_uri)
+        created_at = _run_created_at(
+            self._local_store, run_uri, snapshot.revision.created_at
+        )
+        updated_at = snapshot.revision.created_at or created_at
+        return RunStatusRecord(
+            run_uri=run_uri,
+            status=snapshot.status,
+            created_at=created_at,
+            updated_at=updated_at,
+            started_at=created_at if snapshot.status is not RunStatus.CREATED else None,
+            finished_at=updated_at
+            if snapshot.status
+            in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
+            else None,
+        )
+
+    def read_runtime_metadata(self, run_uri: str) -> dict[str, PlainData] | None:
+        return self._local_store.read_runtime_metadata(run_uri)
+
+    def read_composition_manifest(
+        self, run_uri: str
+    ) -> dict[str, PlainData] | None:
+        return self._local_store.read_composition_manifest(run_uri)
+
+    def read_plan(self, run_uri: str) -> dict[str, PlainData] | None:
+        return self._local_store.read_plan(run_uri)
+
+    def read_provenance_document(
+        self, run_uri: str, name: str
+    ) -> dict[str, PlainData] | None:
+        return self._local_store.read_provenance_document(run_uri, name)
+
+    def list_run_stages(self, run_uri: str) -> tuple[str, ...]:
+        return tuple(stage.stage_name for stage in self._snapshot(run_uri).stages)
+
+    def read_stage_status(
+        self, run_uri: str, stage_name: str
+    ) -> StageStatusRecord | None:
+        stage = self._stage_snapshot(run_uri, stage_name)
+        if stage is None:
+            return None
+        attempt = stage.attempts[-1].attempt if stage.attempts else 1
+        updated_at = stage.revision.created_at or utc_timestamp()
+        reason = stage.reason
+        return StageStatusRecord(
+            run_uri=run_uri,
+            stage_name=stage.stage_name,
+            status=stage.status,
+            attempt=attempt,
+            updated_at=updated_at,
+            started_at=_stage_started_at(stage),
+            finished_at=_stage_finished_at(stage, updated_at),
+            message=None if reason is None else reason.message,
+            metadata={} if reason is None else dict(reason.detail),
+        )
+
+    def read_stage_fingerprint(
+        self, run_uri: str, stage_name: str
+    ) -> dict[str, PlainData] | None:
+        return self._local_store.read_stage_fingerprint(run_uri, stage_name)
+
+    def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
+        index: dict[str, ArtifactRef] = {}
+        for stage in self._snapshot(run_uri).stages:
+            for fact in stage.artifact_facts:
+                index[format_artifact_key(stage.stage_name, fact.artifact_name)] = (
+                    fact.artifact
+                )
+        return index
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[SubmittedOperationRecord, ...]:
+        return self._snapshot(run_uri).submitted_operations
+
+    def _snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        return read_authoritative_run(
+            self._authority_store,
+            run_uri,
+            options=AuthoritativeReadOptions(include_materialized_refs=True),
+            local_paths=self._local_store,
+            local_materialization=LocalMaterializationRequest(),
+        )
+
+    def _stage_snapshot(
+        self, run_uri: str, stage_name: str
+    ) -> StageLifecycleSnapshot | None:
+        for stage in self._snapshot(run_uri).stages:
+            if stage.stage_name == stage_name:
+                return stage
+        return None
+
+
+def _run_created_at(
+    local_store: LocalRunStore, run_uri: str, fallback: str | None
+) -> str:
+    try:
+        document = local_store.read_run_document(run_uri)
+    except Exception:
+        return fallback or utc_timestamp()
+    created_at = document.get("created_at")
+    return created_at if isinstance(created_at, str) else fallback or utc_timestamp()
+
+
+def _stage_started_at(stage: StageLifecycleSnapshot) -> str | None:
+    if not stage.attempts:
+        return None
+    return stage.attempts[-1].created_at
+
+
+def _stage_finished_at(stage: StageLifecycleSnapshot, updated_at: str) -> str | None:
+    if stage.status is StageStatus.SUCCEEDED and stage.latest_commit is not None:
+        return stage.latest_commit.committed_at
+    if stage.status in {
+        StageStatus.FAILED,
+        StageStatus.BLOCKED,
+        StageStatus.SKIPPED,
+        StageStatus.CANCELLED,
+    }:
+        return updated_at
+    return None
+
+
+def _warning_for_store_exception(
+    exc: BaseException, *, path: Path
+) -> CatalogWarning:
+    message = str(exc)
+    lowered = message.lower()
+    if isinstance(exc, PermissionError):
+        return _warning(
+            CatalogWarningCode.UNREADABLE_RUN,
+            f"run is unreadable: {message}",
+            path=path,
+        )
+    if "unsupported" in lowered and "schema" in lowered:
+        return _warning(
+            CatalogWarningCode.UNSUPPORTED_SCHEMA,
+            "run uses an unsupported schema",
+            path=path,
+        )
+    return _warning(
+        CatalogWarningCode.PARTIAL_RUN,
+        f"run metadata is incomplete or invalid: {message}",
+        path=path,
+    )
+
+
+def _authority_store_for_candidate(
+    run_uri: str, candidate: Path
+) -> tuple[PerRunAuthorityStore | None, CatalogWarning | None]:
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+    authority_store = SQLitePerRunAuthorityStore()
+    check = authority_store.check_schema(run_uri)
+    if check.failure is None:
+        return cast(PerRunAuthorityStore, authority_store), None
+    if check.failure.kind is AuthoritySchemaFailureKind.MISSING:
+        if _authority_marker_exists(candidate):
+            return None, _warning(
+                CatalogWarningCode.PARTIAL_RUN,
+                "run authoritative backend is missing",
+                path=candidate,
+            )
+        return None, None
+    raise CorruptStoreDocumentError(check.failure.message)
+
+
+def _authority_marker_exists(candidate: Path) -> bool:
+    return (candidate / ".loom").exists()
 
 
 def _warning(

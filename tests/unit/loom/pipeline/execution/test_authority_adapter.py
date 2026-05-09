@@ -41,6 +41,7 @@ from loom.pipeline.stores import (
     LocalRunStore,
     PerRunAuthorityStore,
     path_to_run_uri,
+    run_uri_to_path,
 )
 from loom.pipeline.stores.authority import OutputCommit
 from loom.pipeline.stores.read_models import LifecycleReason
@@ -299,6 +300,31 @@ def test_authority_backed_reads_ignore_conflicting_local_live_state(
     assert outputs["data"] != fake_ref
 
 
+def test_authority_backed_reads_ignore_deleted_and_corrupt_legacy_documents(
+    tmp_path: Path,
+) -> None:
+    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
+    run_store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    PipelineRunner(run_store=run_store).run(
+        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
+    )
+    run_path = run_uri_to_path(run_uri)
+    (run_path / "status.json").unlink()
+    (run_path / "artifacts.json").write_text("not json", encoding="utf-8")
+    (run_path / "stages" / "build" / "outputs.json").write_text(
+        "not json", encoding="utf-8"
+    )
+
+    run_status = run_store.read_run_status(run_uri)
+    assert run_status is not None
+    assert run_status.status is RunStatus.SUCCEEDED
+    assert set(run_store.read_artifact_index(run_uri)) == {"build.data", "report.text"}
+    outputs = run_store.read_stage_outputs(run_uri, "build")
+    assert outputs is not None
+    assert set(outputs) == {"data"}
+
+
 def test_authority_backed_run_lock_uses_controller_lease(
     tmp_path: Path,
 ) -> None:
@@ -348,6 +374,21 @@ def test_authority_backed_submitted_operations_ignore_conflicting_local_registry
     assert run_store.read_submitted_operation(run_uri, "sub-1") == submitted
     assert run_store.latest_active_submitted_operation(run_uri) == submitted
     assert authority.snapshot(run_uri).submitted_operations == (submitted,)
+
+
+def test_authority_backed_submitted_operations_ignore_deleted_local_registry(
+    tmp_path: Path,
+) -> None:
+    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
+    run_store = _store(tmp_path, authority)
+    run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri)
+    submitted = _submitted_record(run_uri)
+    run_store.write_submitted_operation(run_uri, submitted)
+    (run_uri_to_path(run_uri) / "submitted_operations" / "sub-1.json").unlink()
+
+    assert run_store.read_submitted_operation(run_uri, "sub-1") == submitted
+    assert run_store.list_submitted_operations(run_uri) == (submitted,)
 
 
 def test_authority_backed_worker_request_carries_attempt_fencing_metadata(

@@ -390,7 +390,7 @@ def build_slurm_dry_run_result(
 ) -> tuple[SlurmDryRunCliResult, tuple[CliWarning, ...]]:
     """Prepare persisted state and invoke the public SLURM dry-run planners."""
 
-    store = _create_default_run_store()
+    store = _create_default_local_run_store()
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -533,7 +533,15 @@ def _with_resolved_run_uri(options: "RunOptions", run_uri: str | None) -> "RunOp
     return RunOptions.from_dict(data)
 
 
-def _create_default_run_store() -> "LocalRunStore":
+def _create_default_run_store() -> Any:
+    from loom.pipeline.execution.authority_adapter import (
+        create_authority_backed_serial_run_store,
+    )
+
+    return create_authority_backed_serial_run_store("runs")
+
+
+def _create_default_local_run_store() -> "LocalRunStore":
     from loom.pipeline.stores import LocalRunStore
 
     return LocalRunStore()
@@ -1040,7 +1048,7 @@ def build_slurm_live_submission_result(
 ) -> SlurmLiveRunCliResult:
     """Prepare a SLURM plan and submit it with ``sbatch``."""
 
-    store = _create_default_run_store()
+    store = _create_default_local_run_store()
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,

@@ -150,7 +150,7 @@ def extract_current_summary_with_warning(
 
 
 def extract_current_summary_with_warning_record(
-    store: LocalRunStore,
+    store: _SummaryStore,
     *,
     run_uri: str,
     path: Path,
