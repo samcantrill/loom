@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .models import ListRunsResult
 from .errors import CatalogFeatureUnavailableError
 
 
@@ -39,6 +40,13 @@ class RunCatalog:
         raise CatalogFeatureUnavailableError(
             "RunCatalog.rebuild is implemented in a later v8 phase"
         )
+
+    def scan_current(self) -> ListRunsResult:
+        """Directly scan the local collection for current run summaries."""
+
+        from ._scan import scan_current_collection
+
+        return scan_current_collection(self.collection_path)
 
     def list(self, *args: Any, **kwargs: Any) -> Any:
         """List current run summaries.
