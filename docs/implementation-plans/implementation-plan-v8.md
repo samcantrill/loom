@@ -451,7 +451,7 @@ Completion summary:
 
 ### Phase 2 - Direct Scan And Summary Extraction
 
-Status: pr_open
+Status: merged
 Branch: `codex/run-catalog-direct-scan`
 PR: https://github.com/samcantrill/loom/pull/96
 
@@ -546,10 +546,14 @@ Completion summary:
 - Validation before PR: `make validate-pr` passed; `make test-summary` passed
   with package 55, unit 743, contract 73, integration 47, e2e 36, and
   config-extra 413 tests passing.
-- GitHub CI: pending at PR open.
-- Stack maintenance: no predecessor; Phase 3 must wait for Phase 2 merge before
-  branching from `develop` unless a GitHub-side blocker requires stacked
-  continuation.
+- Merged into `develop` on 2026-05-09 with squash merge
+  `8c76c696ccba5b663744d1632d06d6d5927f489a`.
+- Automated review: manager review found no blocking scope or correctness
+  issues before merge.
+- GitHub CI: `checks` passed before merge.
+- Stack maintenance: no successor branch depended on
+  `codex/run-catalog-direct-scan`; remote branch deletion was handled by
+  GitHub and local worktree cleanup was safe after merge.
 
 ### Phase 3 - SQLite Sidecar Storage And Rebuild
 
