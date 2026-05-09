@@ -646,6 +646,13 @@ refinement validation are recorded in the completion notes below.
   `passed` (1481 passed, 12 skipped, 1075 deselected). Validation was not
   rerun in the draft pass because this pass made documentation/artifact updates
   only and the current test-summary evidence was already available.
+- PR body refine validation evidence: reran `make validate-pr` on
+  2026-05-09 during the expanded-path refine/open pass; Ruff, Pyright, the
+  default harness (1036 passed, 18 skipped, 14 deselected), the config-extra
+  harness (420 passed, 1064 deselected), and `uv build` passed. Reran
+  `make test-summary`; `build/test-summary.md` generated
+  2026-05-09T20:30:35Z with overall status `passed` (1481 passed,
+  12 skipped, 1075 deselected).
 - Accepted limitations: old v0-v8 local-only run directories remain
   intentionally unsupported by the new authority read path and are not
   migrated. Local files are still materialized for logs, provenance, inputs,

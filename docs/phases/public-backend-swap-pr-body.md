@@ -64,9 +64,9 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Phase completion notes record Ruff, Pyright, default harness, config-extra harness, and `uv build` passing after implementation refinement. |
-| `make test-summary` | Passed | `build/test-summary.md` generated 2026-05-09T20:16:47Z with overall status `passed`: 1481 passed, 12 skipped, 1075 deselected. |
-| GitHub checks | Pending | PR intentionally not opened during the expanded-path draft pass; the refine/open pass owns PR creation and CI evidence. |
+| `make validate-pr` | Passed | Reran during PR-body refine/open pass: Ruff, Pyright, default harness (1036 passed, 18 skipped, 14 deselected), config-extra harness (420 passed, 1064 deselected), and `uv build` passed. |
+| `make test-summary` | Passed | `build/test-summary.md` generated 2026-05-09T20:30:35Z with overall status `passed`: 1481 passed, 12 skipped, 1075 deselected. |
+| GitHub checks | Pending | PR creation in this refine/open pass starts GitHub checks; manager owns CI polling. |
 
 ### Test Suite Summary
 
@@ -89,5 +89,3 @@ New tests implemented:
   facts are backend-owned.
 - Multi-host, remote authority, backend diagnostics CLI, export/snapshot/repair,
   bounded parallelism, and workspace/sweep coordination remain later-phase work.
-- GitHub checks are not available until the expanded-path refine/open pass
-  creates the PR.
