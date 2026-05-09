@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft/refined phase execution plan complete; implementation pending
+- Status: implementation complete; PR preparation pending
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 3: SQLite Sidecar Storage And Rebuild`
 - Branch: `codex/run-catalog-sqlite`
@@ -247,7 +247,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded path makes one refiner pass available after implementation if targeted validation fails, suite coverage is missing, or a concrete storage/concurrency issue remains.
+- Phase implementation refinement: not needed after targeted validation, full
+  PR validation, and manager scope review passed without concrete
+  storage/concurrency blockers.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -255,7 +257,26 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-09
 - Refined plan: completed by `loom_phase_planner` on 2026-05-09
-- Final phase execution plan: ready for implementation handoff
-- Implementation summary: pending
-- Validation evidence: not run; planning-only phase
+- Final phase execution plan: implemented
+- Implementation summary: Added private `_sqlite.py` sidecar storage under
+  `.loom_catalog/catalog.sqlite`, schema metadata, summary/stage/artifact/
+  submitted-operation/filter-fact tables, freshness evidence persistence,
+  recoverable corrupt/incompatible DB rebuild, private summary readback helpers,
+  and `RunCatalog.rebuild()` facade wiring. Extended private scan/extract
+  helpers to return freshness evidence for rebuild while keeping public
+  `scan_current()` unchanged.
+- Validation evidence:
+  - `uv run ruff check src/loom/runs tests/unit/loom/runs tests/integration/pipeline/test_run_catalog_sqlite.py`
+    passed.
+  - `uv run pyright src/loom/runs tests/unit/loom/runs tests/integration/pipeline/test_run_catalog_sqlite.py`
+    passed.
+  - `uv run pytest tests/package/test_runs_api.py tests/package/test_import_boundaries.py tests/unit/loom/runs tests/integration/pipeline/test_run_catalog_sqlite.py`
+    passed with 45 tests.
+  - `make validate-pr` passed: Ruff, Pyright, default test harness,
+    config-extra test harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 55
+    passed, unit 748 passed, contract 73 passed, integration 51 passed, e2e 36
+    passed, config-extra 413 passed.
+- PR preparation: PR body pending at
+  `docs/phases/run-catalog-sqlite-pr-body.md`; PR not yet opened.
 - PR: pending
