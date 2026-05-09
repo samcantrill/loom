@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .models import ListRunsResult
+from .models import CatalogIndexResult, ListRunsResult
 from .errors import CatalogFeatureUnavailableError
 
 
@@ -31,15 +31,12 @@ class RunCatalog:
 
         return cls(path)
 
-    def rebuild(self) -> Any:
-        """Rebuild the derived catalog.
+    def rebuild(self) -> CatalogIndexResult:
+        """Rebuild the derived catalog from authoritative run-store metadata."""
 
-        Implemented in a later v8 phase.
-        """
+        from ._sqlite import rebuild_catalog
 
-        raise CatalogFeatureUnavailableError(
-            "RunCatalog.rebuild is implemented in a later v8 phase"
-        )
+        return rebuild_catalog(self.collection_path)
 
     def scan_current(self) -> ListRunsResult:
         """Directly scan the local collection for current run summaries."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -29,6 +30,14 @@ from .models import (
 )
 
 _MAX_FRESHNESS_RETRIES = 1
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentRunSummary:
+    """Private current summary paired with the freshness evidence it validated."""
+
+    summary: RunSummary
+    freshness: RunFreshnessRecord
 
 
 class _SummaryStore(Protocol):
@@ -78,6 +87,23 @@ def extract_current_summary(
 ) -> tuple[RunSummary | None, CatalogWarning | None]:
     """Extract one summary only when run-store freshness is stable."""
 
+    record, warning = extract_current_summary_record(
+        store, run_uri=run_uri, path=path, max_retries=max_retries
+    )
+    if record is None:
+        return None, warning
+    return record.summary, warning
+
+
+def extract_current_summary_record(
+    store: _SummaryStore,
+    *,
+    run_uri: str,
+    path: Path,
+    max_retries: int = _MAX_FRESHNESS_RETRIES,
+) -> tuple[CurrentRunSummary | None, CatalogWarning | None]:
+    """Extract one private summary record only when run-store freshness is stable."""
+
     for _ in range(max_retries + 1):
         before = store.read_run_freshness(run_uri)
         if before is None:
@@ -97,7 +123,7 @@ def extract_current_summary(
                 path=path,
             )
         if before.token == after.token and before.revision == after.revision:
-            return summary, None
+            return CurrentRunSummary(summary=summary, freshness=after), None
 
     return None, _warning(
         CatalogWarningCode.ACTIVELY_CHANGING_RUN,
@@ -115,8 +141,24 @@ def extract_current_summary_with_warning(
 ) -> tuple[RunSummary | None, CatalogWarning | None]:
     """Extract one local run summary and convert ordinary store errors to warnings."""
 
+    record, warning = extract_current_summary_with_warning_record(
+        store, run_uri=run_uri, path=path
+    )
+    if record is None:
+        return None, warning
+    return record.summary, warning
+
+
+def extract_current_summary_with_warning_record(
+    store: LocalRunStore,
+    *,
+    run_uri: str,
+    path: Path,
+) -> tuple[CurrentRunSummary | None, CatalogWarning | None]:
+    """Extract one private local summary record and convert store errors to warnings."""
+
     try:
-        return extract_current_summary(store, run_uri=run_uri, path=path)
+        return extract_current_summary_record(store, run_uri=run_uri, path=path)
     except FileNotFoundError:
         return None, _warning(
             CatalogWarningCode.DISAPPEARED_RUN,
@@ -304,4 +346,10 @@ def _warning(
     )
 
 
-__all__ = ["extract_current_summary", "extract_current_summary_with_warning"]
+__all__ = [
+    "CurrentRunSummary",
+    "extract_current_summary",
+    "extract_current_summary_record",
+    "extract_current_summary_with_warning",
+    "extract_current_summary_with_warning_record",
+]
