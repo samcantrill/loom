@@ -419,10 +419,9 @@ result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 desel
 - Completion notes updated in phase execution plan: yes.
 - Budget status updated: phase implementation refinement used;
   blocker-resolution unchanged at 0/3 used; PR review unused.
-- Final validation recommended: `make test-summary` during PR preparation for
-  suite evidence, plus CI after PR creation.
-- Suite evidence still needed: PR-preparation summary table from
-  `make test-summary`.
+- Final validation recommended: CI after PR creation; local PR-preparation
+  validation is complete.
+- Suite evidence still needed: none.
 
 ## Completion Notes
 
@@ -461,6 +460,46 @@ result: passed; Ruff, Pyright, default harness (980 passed, 17 skipped, 14 desel
   refinement pass used on 2026-05-09 to tighten capability diagnostics and
   fake-store lease/commit conformance coverage.
 - Blocker-resolution summary: unchanged; 0/3 used.
-- PR preparation: pending.
+- PR preparation: PR body refine complete; local validation complete; ready to
+  push and open against `develop`.
 - Stack maintenance: pending.
 - Remaining blockers: none.
+- PR body draft pass: complete on 2026-05-09 by `loom_pr_preparer`.
+  Created `docs/phases/persistence-contracts-pr-body.md` from
+  `.codex/templates/phase-pr-body.md` and
+  `.github/PULL_REQUEST_TEMPLATE.md` for the expanded-path draft pass. The
+  draft confirms the branch/worktree, root target `develop`, no stack
+  predecessor, contract-only Phase 1 scope, no future-phase implementation, and
+  required package/unit/contract coverage. PR creation was intentionally
+  deferred because the manager selected the expanded path.
+- PR body refine pass: complete on 2026-05-10 by `loom_pr_preparer`.
+  Verified `docs/phases/persistence-contracts-pr-body.md` against
+  implementation-plan v9, this phase execution plan, the branch diff against
+  `develop`, `.github/PULL_REQUEST_TEMPLATE.md`, and
+  `.codex/templates/phase-pr-body.md`. Confirmed the branch remains
+  `codex/persistence-contracts`, target branch remains `develop`, stack
+  predecessor remains none, and Phase 1 remains contract-only with no SQLite
+  backend, runner hard swap, backend CLI, parallel scheduler, sweep runner,
+  migration, or legacy fallback implementation. The PR body summarizes only the
+  implemented store contract surface, conformance fakes, package/unit/contract
+  coverage, final local validation, and Phase 1 risks.
+- PR body refine validation evidence:
+  - `make validate-pr` passed on 2026-05-10: Ruff passed; Pyright passed with
+    0 errors; default harness passed with 980 passed, 17 skipped, and 14
+    deselected; config-extra passed with 416 passed and 1008 deselected; `uv
+    build` produced the source distribution and wheel.
+  - `make test-summary` passed on 2026-05-10 and wrote
+    `build/test-summary.md` with generated timestamp
+    `2026-05-09T14:06:54+00:00`: package 56 passed/1 skipped; unit 765
+    passed/1 skipped; contract 83 passed/2 skipped; integration 64 passed/7
+    skipped/10 deselected; e2e 37 passed/1 deselected; config-extra 416
+    passed/1008 deselected; overall 1421 passed, 11 skipped, 1019 deselected,
+    0 failed, 0 errors.
+- PR body draft validation evidence:
+  - `make test-summary` passed on 2026-05-09 and wrote
+    `build/test-summary.md`: package 56 passed/1 skipped; unit 765 passed/1
+    skipped; contract 83 passed/2 skipped; integration 64 passed/7 skipped/10
+    deselected; e2e 37 passed/1 deselected; config-extra 416 passed/1008
+    deselected; overall 1421 passed, 11 skipped, 1019 deselected, 0 failed, 0
+    errors.
+  - `git diff --check develop...HEAD` passed during PR-body draft.
