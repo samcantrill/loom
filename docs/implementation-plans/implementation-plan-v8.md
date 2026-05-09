@@ -557,9 +557,9 @@ Completion summary:
 
 ### Phase 3 - SQLite Sidecar Storage And Rebuild
 
-Status: pending
+Status: pr_open
 Branch: `codex/run-catalog-sqlite`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/97
 
 Goal:
 
@@ -642,7 +642,21 @@ Notes:
 
 Completion summary:
 
-- TBD
+- PR opened against `develop` on 2026-05-09:
+  https://github.com/samcantrill/loom/pull/97
+- Implementation summary: added private SQLite sidecar storage under
+  `.loom_catalog/catalog.sqlite`, schema metadata, rebuild persistence for run
+  summaries, stage/artifact/submitted-operation rows, normalized filter facts,
+  and freshness evidence, plus `RunCatalog.rebuild()` facade wiring.
+- Recovery summary: corrupt or incompatible sidecar files are treated as
+  derived catalog state and rebuilt without mutating run-store truth.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with package 55, unit 748, contract 73, integration 51, e2e 36, and
+  config-extra 413 tests passing.
+- GitHub CI: pending at PR open.
+- Stack maintenance: no predecessor; Phase 4 must wait for Phase 3 merge before
+  branching from `develop` unless a GitHub-side blocker requires stacked
+  continuation.
 
 ### Phase 4 - Current Listing, Refresh, And Filters
 
