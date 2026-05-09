@@ -483,3 +483,76 @@ make test-summary
 - Backward-compatible legacy public behavior and new backend behavior may make
   tests hard to read unless fixtures clearly name which authority path they
   exercise.
+
+## Completion Notes
+
+### Implementation Summary
+
+- Added `loom.pipeline.execution.authority_adapter`, an internal/test-selected
+  `RunStore`-shaped serial adapter that pairs `LocalRunStore` materialization
+  paths with `PerRunAuthorityStore` active write authority.
+- Routed SQLite-backed serial run creation/opening, controller ownership,
+  run/stage transitions, stage attempt allocation, stage leases, submitted
+  operation records, backend output commits, artifact facts, audit events, and
+  authoritative artifact reads through backend contracts.
+- Preserved local files for config/provenance/logs/stage inputs/fingerprints/
+  worker handoff/output documents as materialized evidence. The adapter's
+  active reads for status, artifact index, submitted operations, stage outputs,
+  and committed facts come from the authority store.
+- Kept public `LocalRunStore` serial behavior unchanged; public runner
+  construction still uses file-backed local state and file locks unless tests
+  explicitly instantiate the internal authority-backed adapter.
+- Tightened execution failure classification so `AuthorityStoreError` raised by
+  backend writes is reported as `store_commit`.
+- Updated SQLite audit-event persistence to thaw nested plain-data payloads
+  before JSON storage, preserving backend audit writes for frozen event payloads.
+
+### Accepted Limitations
+
+- Phase 1-3 authority contracts expose cleanup-candidate reads but no
+  backend-neutral cleanup-candidate writer. Commit failure after local output
+  staging therefore records durable stage/run failure facts and fails the stage
+  lease where possible, while leaving cleanup-candidate creation as a Phase 5+
+  contract gap rather than adding SQLite-specific mutation surface here.
+- The authority contract does not expose an attempt-failure writer separate
+  from stage failure and lease failure. Failed attempts remain represented by
+  failed stage lifecycle, failed lease/audit evidence, and materialized failure
+  documents on this Phase 4 path.
+- Stage-job continuation remains limited to the existing safe local behavior.
+  Full worker-owned attempt-scoped backend finalization without any run
+  finalization authority needs a narrower continuation contract pass; no broad
+  continuation redesign was included in this phase.
+
+### Validation Evidence
+
+- `uv run pytest tests/unit/loom/pipeline/execution/test_authority_adapter.py`
+  - 4 passed.
+- Targeted phase command:
+  `uv run pytest tests/unit/loom/pipeline/execution/test_runner.py tests/unit/loom/pipeline/execution/test_lifecycle.py tests/unit/loom/pipeline/execution/test_stage_attempts.py tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/pipeline/execution/test_stage_job.py tests/contracts/test_authority_store_contract.py tests/contracts/test_authoritative_read_model_contract.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py`
+  - 78 passed.
+- Targeted integration/e2e command:
+  `uv run pytest tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_failures.py tests/integration/pipeline/test_subprocess_executor_integration.py tests/integration/pipeline/test_stage_job_continuation.py tests/integration/pipeline/test_sqlite_authority_backend.py tests/integration/pipeline/test_materialization_read_models.py tests/integration/pipeline/test_sqlite_serial_execution.py tests/e2e/test_local_pipeline_run.py`
+  - 14 passed, 4 skipped before config extras were installed for full
+    validation.
+- Targeted Ruff command for changed files passed.
+- `make validate-pr` passed:
+  - Ruff: passed.
+  - Pyright: 0 errors.
+  - default harness: 1023 passed, 18 skipped, 14 deselected.
+  - config-extra harness: 419 passed, 1051 deselected.
+  - build: source distribution and wheel built successfully.
+- `make test-summary` passed and wrote `build/test-summary.md`:
+  - package: 56 passed, 1 skipped.
+  - unit: 791 passed, 1 skipped.
+  - contract: 92 passed, 2 skipped.
+  - integration: 72 passed, 8 skipped, 10 deselected.
+  - e2e: 37 passed, 1 deselected.
+  - config-extra: 419 passed, 1051 deselected.
+
+### Budget Status
+
+- Phase implementation refinement budget: unused; targeted and full validation
+  passed without a separate refiner pass.
+- Phase PR review budget: unused; one automated review pass remains available
+  after PR preparation.
+- Blocker-resolution budget: 0/3 used.
