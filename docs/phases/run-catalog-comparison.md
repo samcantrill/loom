@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: implemented; PR pending
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 5: Metadata Comparison API`
 - Branch: `codex/run-catalog-comparison`
@@ -13,14 +13,14 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
-- PR: pending
+- PR: pending creation
 - Merge eligibility: merge-eligible after implementation, implementation refinement, automated PR review, local validation, and GitHub checks because Phases 1 through 4 are merged and this is a root phase targeting `develop`
 - Workflow path: expanded path because this phase introduces public comparison behavior and durable comparison semantics
 - Plan quality gate: passed in `docs/implementation-plans/implementation-plan-v8.md` on 2026-05-09; the plan records initial review, refinement, and confirmation review as complete.
 - Plan quality gate loop budget: initial review used; gate refinement used; confirmation review used.
 - Draft pass: completed by `loom_phase_planner`
 - Refine pass: completed in this planning artifact for the expanded path; no unresolved blockers remain.
-- Phase implementation refinement budget: unused; expanded path reserves one `loom_phase_refiner` pass after implementation if targeted validation, semantic review, or coverage obligations expose issues.
+- Phase implementation refinement budget: not needed; no refiner pass used because focused validation, `make validate-pr`, and `make test-summary` passed.
 - Phase PR review budget: unused; one automated `loom_phase_reviewer` or equivalent manager review remains required before merge.
 - Blocker-resolution budget: unused, 0 of 3 scoped passes consumed.
 - Setup notes: branch and worktree were created from local `develop` at commit `62174a0` (`docs: record v8 phase 4 merge`). Creating the branch/worktree required approved local Git metadata writes after sandboxed Git ref creation failed.
@@ -192,6 +192,43 @@ If future remote catalogs or imported bundles provide equivalent summaries, comp
 6. Update package and deferred-method tests to assert real compare behavior and cheap public imports.
 
 These are implementation checkpoints, not a file-by-file recipe. The executor should follow existing local patterns if source shape changes before implementation begins.
+
+## Implementation Summary
+
+- Replaced the deferred `RunCatalog.compare()` placeholder with a typed public method that refreshes through current `RunCatalog.list()` behavior and delegates comparison semantics to private helpers.
+- Added `src/loom/runs/_compare.py` to build deterministic metadata-only `RunComparison` sections for run facts, fingerprints, keyed stages, keyed artifacts, execution/submitted-operation summaries, and selected provenance.
+- Preserved current-read warnings in comparison results and added missing-side `DISAPPEARED_RUN` warnings when requested run URIs are absent from current summaries.
+- Kept comparison scoped to persisted summary metadata. The implementation does not read artifact payloads, import project code, add CLI behavior, expose SQL, or add plugin hooks.
+- Added package-adjacent unit coverage, a public serialization contract test, and integration coverage for identical runs, metadata differences, one-sided stages/artifacts, missing inputs, and partial-run warning propagation.
+
+## Validation Evidence
+
+Focused validation:
+
+- `uv run ruff check src/loom/runs tests/unit/loom/runs tests/contracts/test_run_catalog_comparison_contract.py tests/integration/pipeline/test_run_catalog_compare.py` passed.
+- `uv run pyright src/loom/runs tests/unit/loom/runs tests/contracts/test_run_catalog_comparison_contract.py tests/integration/pipeline/test_run_catalog_compare.py` passed with 0 errors, 0 warnings, 0 informations.
+- `uv run pytest tests/package/test_runs_api.py tests/package/test_import_boundaries.py tests/unit/loom/runs tests/contracts/test_run_catalog_comparison_contract.py tests/integration/pipeline/test_run_catalog_compare.py tests/integration/pipeline/test_run_catalog_current_list.py` passed: 58 passed in 41.76s.
+- `uv run pytest tests/unit/loom/runs/test_comparison.py tests/unit/loom/runs/test_run_catalog_models.py` passed: 9 passed in 0.14s.
+
+Final PR validation:
+
+- `make validate-pr` passed:
+  - Ruff: passed.
+  - Pyright with config extra: passed with 0 errors, 0 warnings, 0 informations.
+  - Default harness: 957 passed, 17 skipped, 14 deselected in 67.45s.
+  - Config-extra harness: 413 passed, 985 deselected in 23.72s.
+  - Build: source distribution and wheel built successfully.
+- `make test-summary` passed and wrote `build/test-summary.md`.
+
+| Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| package | passed | 55 | 0 | 0 | 1 | 0 | 7.41s |
+| unit | passed | 755 | 0 | 0 | 1 | 0 | 16.58s |
+| contract | passed | 75 | 0 | 0 | 2 | 0 | 3.25s |
+| integration | passed | 61 | 0 | 0 | 7 | 10 | 53.17s |
+| e2e | passed | 36 | 0 | 0 | 0 | 1 | 15.63s |
+| config-extra | passed | 413 | 0 | 0 | 0 | 985 | 32.36s |
+| Overall | passed | 1395 | 0 | 0 | 11 | 996 | 128.39s |
 
 ## Suite Obligations
 
