@@ -2,9 +2,9 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan; ready for implementation
 - Feature focus: Persistence And Concurrency Foundation
-- PR title: `Persistence And Concurrency Foundation - Phase 3: Materialization And Read Models`
+- Final PR title: `Persistence And Concurrency Foundation - Phase 3: Materialization Boundary And Authoritative Read Models`
 - Branch: `codex/materialization-read-models`
 - Worktree: `/home/samcantrill/work/loom-worktrees/materialization-read-models`
 - Phase execution plan path: `docs/phases/materialization-read-models.md`
@@ -19,7 +19,7 @@
 - Plan quality gate: passed on 2026-05-09 by `loom_plan_reviewer`; no blocking or non-blocking findings remained.
 - Plan quality gate loop budget: initial review used; gate refinement not needed; confirmation review not needed.
 - Draft pass: complete by `loom_phase_planner` in this artifact.
-- Refine pass: pending for expanded path.
+- Refine pass: complete on 2026-05-10 by `loom_phase_planner`; expanded-path refinement tightened read-mode semantics, warning obligations, suite coverage, stop conditions, and scope boundaries.
 - Setup limitations: branch/worktree creation used the manager-recorded local `develop` state matching `origin/develop` at `caa7190`; no `gh auth`, fetch, full validation, or PR operation was run during planning. Worktree creation required approved sandbox escalation after the default sandbox could not create the namespaced `codex/` branch ref.
 - Blockers: none.
 
@@ -50,17 +50,18 @@ Later phases remain out of scope. Phase 4 owns serial runner write-path integrat
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: `src/loom/pipeline/stores/read_models.py` already defines `AuthoritativeRunSnapshot`, `StageLifecycleSnapshot`, `MaterializedRef`, `ReadModelWarning`, cleanup candidates, committed artifact facts, leases, attempts, revisions, and warning codes. `src/loom/pipeline/stores/authority.py` exposes `PerRunAuthorityStore.snapshot()` and schema/capability methods that consumers should use instead of backend-specific queries. `src/loom/pipeline/stores/sqlite_authority.py` implements the Phase 2 backend and currently keeps SQLite private; its root package is intentionally not exported from `loom.pipeline.stores`. `SQLitePerRunAuthorityStore` declares `MATERIALIZATION_REFS` unsupported after Phase 2, and snapshot construction currently returns backend facts but not top-level materialized refs or warnings. `src/loom/pipeline/stores/local_runs.py`, `run_store.py`, and `_paths.py` provide safe local path helpers for logs, config/provenance files, artifacts, worker request/result files, and generated paths; those helpers can be used for materialized references but not for active truth. `src/loom/pipeline/stores/local_artifacts.py` can check artifact existence and checksums for local file refs without loading project code, but checksum verification must remain a materialization diagnostic, not a state transition.
+- Existing files or modules that constrain this phase: `src/loom/pipeline/stores/read_models.py` already defines `AuthoritativeRunSnapshot`, `StageLifecycleSnapshot`, `MaterializedRef`, `ReadModelWarning`, cleanup candidates, committed artifact facts, leases, attempts, revisions, and warning codes. `src/loom/pipeline/stores/authority.py` exposes `PerRunAuthorityStore.snapshot()` and schema/capability methods that consumers should use instead of backend-specific queries. `src/loom/pipeline/stores/sqlite_authority.py` implements the Phase 2 backend and currently keeps SQLite private; its root package is intentionally not exported from `loom.pipeline.stores`. `SQLitePerRunAuthorityStore` declares `MATERIALIZATION_REFS` unsupported after Phase 2, and snapshot construction currently returns backend facts but not top-level materialized refs or warnings. Keep this capability declaration honest: either the backend remains unsupported while the new read layer supplies local classification, or the implementation updates the declaration only if materialized-ref support is actually satisfied through the backend-neutral contract. `src/loom/pipeline/stores/local_runs.py`, `run_store.py`, and `_paths.py` provide safe local path helpers for logs, config/provenance files, artifacts, worker request/result files, and generated paths; those helpers can be used for materialized references but not for active truth. `src/loom/pipeline/stores/local_artifacts.py` can check artifact existence and checksums for local file refs without loading project code, but checksum verification must remain a materialization diagnostic, not a state transition.
 - Existing tests or harness behavior: `tests/package/test_pipeline_store_api.py` asserts exact store exports and forbids importing `sqlite3`, `loom.runs`, CLI, or config through `loom.pipeline.stores`. `tests/unit/loom/pipeline/stores/test_authority_models.py` already covers read-model serialization and warning records. `tests/contracts/test_authority_store_contract.py` runs both the in-memory and SQLite authority stores through shared contract behavior. `tests/support/authority_stores.py` has an in-memory store whose snapshot shape is useful for new read-model contract tests. `tests/integration/pipeline/test_sqlite_authority_backend.py` already proves Phase 2 SQLite transaction and portability behavior.
 - Import-boundary or dependency constraints: read-model and materialization helpers should live under the pipeline store boundary or a narrowly justified adjacent module. They must not import CLI modules, `loom.runs`, project stage packages, optional services, network clients, or non-stdlib dependencies. If stable public exports are added to `loom.pipeline.stores`, update exact package tests deliberately and preserve the root import-light guarantee.
 
 ## In-Scope Work
 
-- Add a backend-neutral authoritative read API over `PerRunAuthorityStore` snapshots and schema/capability checks, with request options for metadata-only reads, materialization verification, and strict versus warning-only handling.
+- Add a narrow backend-neutral authoritative read API over `PerRunAuthorityStore` snapshots and schema/capability checks, with request options for metadata-only reads, completed-run metadata reads, materialization verification, and strict versus warning-only handling.
 - Populate or derive authoritative read-model fields for run status, stage statuses, attempts, leases, submitted operations, output commits, artifact facts, cleanup candidates, schema version, backend revision, materialized refs, and warnings.
 - Add local materialization helpers for artifact payload refs, stage logs, config snapshots, provenance documents, worker request/result handoff files, and safe path/URI classification while keeping files as materialized references, not state authority.
 - Define warning behavior for unsupported schema, missing materialized refs, stale projections, partial commits or inconsistent commit facts, and actively changing runs.
 - Add bundle-ready metadata read behavior for completed runs using authoritative snapshots and materialized refs without creating an export command, reading artifact payloads, or importing project code.
+- Keep additions small and store-boundary-local. Any stable export from `loom.pipeline.stores` must preserve exact package API tests and the root import-light guarantee.
 - Update SQLite and in-memory contract coverage only through backend-neutral methods or helper APIs; consumers must not query SQLite tables directly.
 - Update focused docs if the read/materialization boundary or internal compatibility surface needs explanation for later phases.
 
@@ -88,11 +89,24 @@ The authoritative read API must consume backend authority through `PerRunAuthori
 
 Materialized files are references with diagnostics. Artifact payloads, logs, config/provenance copies, and worker handoff files may be listed, classified, and checked for existence or checksum where safe, but their presence cannot promote a stage to success and their absence cannot roll back a committed backend fact.
 
-Warning semantics are part of the contract. Unsupported schema, missing materialized refs, stale projection evidence, partial commit indicators, and active-run revision instability must be represented with machine-readable warning codes and safe detail payloads. The executor should avoid introducing consumer-specific warning strings that later status, catalog, diagnostics, or bundle code cannot share.
+Read modes are part of the contract. Metadata-only reads are the default for bundle-ready behavior. Materialization verification is opt-in and may check local existence/checksum metadata, but it must not read artifact payload contents. Strict reads may raise for missing/corrupt materialized refs or unsupported schema only when explicitly requested; warning-only reads must preserve machine-readable warning records.
+
+Warning semantics are part of the contract. Unsupported schema, missing materialized refs, stale projection evidence, partial commit indicators, and active-run revision instability must be represented with machine-readable warning codes and safe detail payloads. The executor should avoid introducing consumer-specific warning strings that later status, catalog, diagnostics, or bundle code cannot share. If a needed warning code is missing, add the smallest compatible `ReadModelWarningCode` value and cover serialization and consumer-neutral detail fields.
 
 Submitted-operation detail remains separate from coarse run or stage statuses. `SUBMITTED` status summaries must not be treated as the scheduler truth when submitted-operation records are present.
 
-Bundle-ready metadata reads must be payload-free and project-code-free. They may include artifact refs, checksums, materialized refs, warnings, cleanup candidates, revision evidence, schema information, and submitted-operation detail, but they must not load artifacts, import stage factories, write files, or create export manifests.
+Bundle-ready metadata reads must be completed-run, payload-free, and project-code-free. They may include artifact refs, checksums, materialized refs, warnings, cleanup candidates, revision evidence, schema information, and submitted-operation detail, but they must not load artifacts, import stage factories, write files, or create export manifests. Non-terminal or actively changing runs should produce a warning or strict error according to the read request instead of inventing an export snapshot.
+
+If materialization verification spans more than one backend read, capture revision evidence before and after the verification window and report `ACTIVE_RUN_CHANGING` when the backend revision changes. Do not hold long transactions or locks merely to suppress conservative active-run warnings.
+
+## Acceptance Criteria
+
+- One backend-neutral read path can serve later status, catalog, diagnostics, and bundle code without SQLite table access or legacy local-file truth.
+- The read result carries run/stage lifecycle facts, attempts, leases, submitted operations, commits, artifact facts, cleanup candidates, materialized refs, schema version, backend revision, and warnings where supported.
+- Submitted-operation records remain visible as first-class detail separate from coarse `SUBMITTED` statuses.
+- Materialized refs distinguish payload/log/config/provenance/worker files from authoritative backend facts, and missing or corrupt refs become warnings or explicit strict failures without changing lifecycle truth.
+- Bundle-ready completed-run reads are metadata-only, do not import project code, do not load payloads, and do not create a backend CLI/export/snapshot surface.
+- Package, unit, contract, and integration tests cover the read model over fake/in-memory and SQLite stores; e2e and opt-in suites are intentionally deferred because no public read path changes in this phase.
 
 ## Design Impact
 
@@ -137,10 +151,10 @@ Bundle-ready metadata reads must be payload-free and project-code-free. They may
 
 ## Implementation Steps
 
-1. Establish the minimal read/materialization module boundary and request/result shape, preserving root import boundaries and using Phase 1 read-model records wherever possible.
-2. Add materialized-ref classification helpers for artifact payloads, logs, config/provenance documents, and worker handoff paths, with existence/checksum checks that produce warnings rather than lifecycle truth.
-3. Add authoritative read helpers that combine `PerRunAuthorityStore` schema checks, capabilities, snapshots, cleanup candidates, submitted operations, revisions, materialized refs, and warning records without backend-specific queries.
-4. Update SQLite and in-memory behavior only as needed so backend-neutral snapshot/read-model contract tests cover materialized refs, warnings, cleanup candidates, submitted operations, and revisioned reads.
+1. Establish the minimal read/materialization boundary and request/result shape, preserving root import boundaries and using Phase 1 read-model records wherever possible.
+2. Add materialized-ref classification helpers for artifact payloads, logs, config/provenance documents, and worker handoff paths, with optional existence/checksum verification that produces warnings rather than lifecycle truth.
+3. Add authoritative read helpers that combine schema checks, capabilities, snapshots, cleanup candidates, submitted operations, revisions, materialized refs, and warning records without backend-specific queries.
+4. Update SQLite and in-memory behavior only as needed so backend-neutral snapshot/read-model contract tests cover materialized refs, warnings, cleanup candidates, submitted operations, and revisioned reads. Do not expose private SQLite schema or table names.
 5. Add bundle-ready completed-run metadata reads as internal payload-free, project-code-free projections over the authoritative read model.
 6. Add focused tests and docs, then run targeted package, unit, contract, and integration commands.
 
@@ -216,6 +230,14 @@ make validate-pr
 make test-summary
 ```
 
+## Stop Conditions
+
+- Stop before implementation if satisfying the plan requires a runner hard swap, public catalog/status read-path swap, backend CLI/export command, workspace/sweep coordination, SQLite table query surface, project-code imports, artifact payload loading, or legacy local files as truth.
+- Stop if the `PerRunAuthorityStore` protocol, status enums, submitted-operation public schema, or event model needs more than a strictly additive, reviewable change.
+- Stop if bundle-ready metadata cannot remain completed-run-only, payload-free, and project-code-free.
+- Stop if materialization semantics would make committed backend facts ambiguous or would require payload presence to decide lifecycle truth.
+- Stop if package import-boundary tests require importing `sqlite3`, `loom.runs`, CLI, config composition, project code, or optional dependencies through `loom.pipeline.stores`.
+
 ## Handoff Notes For `loom_phase_executor`
 
 - Safe implementation slices: module/API boundary first; materialized-ref helpers second; authoritative read/warning assembly third; SQLite/in-memory snapshot support fourth; bundle-ready metadata projection fifth; tests and docs alongside each slice.
@@ -232,10 +254,11 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: complete on 2026-05-10 by `loom_phase_planner`.
-- Final phase execution plan: pending expanded-path refine pass.
+- Expanded-path refine pass: complete on 2026-05-10 by `loom_phase_planner`.
+- Final phase execution plan: complete and ready for `loom_phase_executor`.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: tightened final PR title, read-mode semantics, warning and revision obligations, suite acceptance criteria, and stop conditions while preserving the no-runner-swap, no-public-read-swap, no-CLI/export, no-workspace-coordination, no-SQLite-query-surface, no-project-code-import, no-payload-load, and no-legacy-truth boundaries.
 - Blocker-resolution summary: pending.
 - PR preparation: pending.
 - Stack maintenance: not needed at draft time; root phase branch targets `develop`.
