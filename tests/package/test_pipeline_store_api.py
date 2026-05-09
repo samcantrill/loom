@@ -20,6 +20,9 @@ def test_pipeline_store_public_exports() -> None:
         "RunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
+        "RunFreshnessStore",
+        "RunFreshnessRecord",
+        "RunFreshnessError",
         "RunEventStore",
         "RunInspectionStore",
         "RunLockStore",
@@ -85,9 +88,11 @@ def test_pipeline_store_public_exports() -> None:
     assert "write_stage_worker_result" in stores.StageStateStore.__dict__
     assert "read_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "write_prepared_run" in stores.RunPreparedRunStore.__dict__
+    assert "read_run_freshness" in stores.RunFreshnessStore.__dict__
     assert "local_stage_worker_request_path" in stores.LocalRunStorePaths.__dict__
     assert "local_stage_worker_result_path" in stores.LocalRunStorePaths.__dict__
     assert "local_generated_artifact_path" in stores.LocalRunStorePaths.__dict__
+    assert "local_run_freshness_path" in stores.LocalRunStorePaths.__dict__
     write_signature = inspect.signature(
         stores.RunConfigStore.write_composition_manifest
     )
@@ -96,7 +101,7 @@ def test_pipeline_store_public_exports() -> None:
 
 @pytest.mark.parametrize(
     "forbidden",
-    ["loom.config", "loom.cli"],
+    ["loom.config", "loom.runs", "loom.cli"],
 )
 def test_pipeline_stores_import_does_not_import_forbidden_modules(
     forbidden: str,

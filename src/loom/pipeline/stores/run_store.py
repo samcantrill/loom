@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
@@ -13,6 +14,133 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores.inspection import RunStateInspection
 from loom.serialization import PlainData
+from loom.timestamps import parse_timestamp
+
+
+RUN_FRESHNESS_SCHEMA_VERSION = 1
+
+
+class RunFreshnessError(ValueError):
+    """Raised when run-store freshness metadata is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class RunFreshnessRecord:
+    """Run-local mutation signal for catalog-relevant metadata."""
+
+    run_uri: str
+    token: str
+    updated_at: str
+    revision: int
+    reason: str | None = None
+    schema_version: int = RUN_FRESHNESS_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _validate_non_empty_string(self.run_uri, "run_uri")
+        _validate_non_empty_string(self.token, "token")
+        _validate_timestamp(self.updated_at, "updated_at")
+        if not isinstance(self.revision, int) or isinstance(self.revision, bool):
+            raise RunFreshnessError("revision must be a positive integer")
+        if self.revision <= 0:
+            raise RunFreshnessError("revision must be a positive integer")
+        if self.reason is not None:
+            _validate_non_empty_string(self.reason, "reason")
+        if self.schema_version != RUN_FRESHNESS_SCHEMA_VERSION:
+            raise RunFreshnessError(
+                f"unsupported schema_version '{self.schema_version}', expected "
+                f"{RUN_FRESHNESS_SCHEMA_VERSION}"
+            )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "run_uri": self.run_uri,
+            "token": self.token,
+            "updated_at": self.updated_at,
+            "revision": self.revision,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "RunFreshnessRecord":
+        if not isinstance(data, Mapping):
+            raise RunFreshnessError("RunFreshnessRecord.from_dict expects mapping")
+        allowed = {
+            "schema_version",
+            "run_uri",
+            "token",
+            "updated_at",
+            "revision",
+            "reason",
+        }
+        unknown = set(data) - allowed
+        if unknown:
+            raise RunFreshnessError(
+                "RunFreshnessRecord.from_dict received unknown fields: "
+                f"{', '.join(sorted(unknown))}"
+            )
+        missing = {
+            "schema_version",
+            "run_uri",
+            "token",
+            "updated_at",
+            "revision",
+        } - set(data)
+        if missing:
+            raise RunFreshnessError(
+                "RunFreshnessRecord.from_dict missing required field(s): "
+                f"{', '.join(sorted(missing))}"
+            )
+        return cls(
+            schema_version=_validate_schema_version(data["schema_version"]),
+            run_uri=_require_string(data["run_uri"], "run_uri"),
+            token=_require_string(data["token"], "token"),
+            updated_at=_require_string(data["updated_at"], "updated_at"),
+            revision=_require_int(data["revision"], "revision"),
+            reason=_optional_string(data.get("reason"), "reason"),
+        )
+
+
+def _validate_schema_version(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RunFreshnessError("schema_version must be a positive integer")
+    if value != RUN_FRESHNESS_SCHEMA_VERSION:
+        raise RunFreshnessError(
+            f"unsupported schema_version '{value}', expected "
+            f"{RUN_FRESHNESS_SCHEMA_VERSION}"
+        )
+    return value
+
+
+def _require_string(value: object, field: str) -> str:
+    _validate_non_empty_string(value, field)
+    return cast(str, value)
+
+
+def _optional_string(value: object, field: str) -> str | None:
+    if value is None:
+        return None
+    return _require_string(value, field)
+
+
+def _require_int(value: object, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RunFreshnessError(f"{field} must be a positive integer")
+    return value
+
+
+def _validate_non_empty_string(value: object, field: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise RunFreshnessError(f"{field} must be a non-empty string")
+
+
+def _validate_timestamp(value: object, field: str) -> None:
+    if not isinstance(value, str):
+        raise RunFreshnessError(f"{field} must be a string")
+    try:
+        parse_timestamp(value)
+    except ValueError as exc:
+        raise RunFreshnessError(f"{field} must be a valid loom timestamp") from exc
 
 
 @runtime_checkable
@@ -37,6 +165,11 @@ class RunDocumentStore(Protocol):
     def write_run_user_metadata(
         self, run_uri: str, metadata: Mapping[str, PlainData]
     ) -> None: ...
+
+
+@runtime_checkable
+class RunFreshnessStore(Protocol):
+    def read_run_freshness(self, run_uri: str) -> RunFreshnessRecord | None: ...
 
 
 @runtime_checkable
@@ -319,11 +452,14 @@ class LocalRunStorePaths(Protocol):
         self, run_uri: str, relative_path: str
     ) -> Path: ...
 
+    def local_run_freshness_path(self, run_uri: str) -> Path: ...
+
 
 @runtime_checkable
 class RunStore(
     RunLifecycleStore,
     RunDocumentStore,
+    RunFreshnessStore,
     RunStatusStore,
     RunPlanStore,
     RunPreparedRunStore,

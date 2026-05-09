@@ -18,6 +18,8 @@ from loom.pipeline.stores import (
     RunConfigStore,
     RunDocumentStore,
     RunEventStore,
+    RunFreshnessRecord,
+    RunFreshnessStore,
     RunInspectionStore,
     RunLockStore,
     RunLifecycleStore,
@@ -112,6 +114,14 @@ class DummyRunStore:
         self, run_uri: str, metadata: Mapping[str, PlainData]
     ) -> None:
         return None
+
+    def read_run_freshness(self, run_uri: str) -> RunFreshnessRecord | None:
+        return RunFreshnessRecord(
+            run_uri=run_uri,
+            token="token",
+            updated_at="2020-01-01T00:00:00Z",
+            revision=1,
+        )
 
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
         return None
@@ -427,6 +437,9 @@ class DummyRunStorePaths:
     def local_generated_artifact_path(self, run_uri: str, relative_path: str) -> Path:
         return Path(run_uri) / relative_path
 
+    def local_run_freshness_path(self, run_uri: str) -> Path:
+        return Path(run_uri) / "freshness.json"
+
 
 class TrackingArtifactDiagnosticsStore:
     def __init__(self) -> None:
@@ -471,6 +484,7 @@ def test_fake_artifact_store_matches_protocol() -> None:
 def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunLifecycleStore)
     assert isinstance(DummyRunStore(), RunDocumentStore)
+    assert isinstance(DummyRunStore(), RunFreshnessStore)
     assert isinstance(DummyRunStore(), RunStatusStore)
     assert isinstance(DummyRunStore(), RunPlanStore)
     assert isinstance(DummyRunStore(), RunPreparedRunStore)
@@ -497,6 +511,16 @@ def test_fake_run_store_matches_protocol() -> None:
     assert DummyRunStore().read_runtime_metadata("file:///tmp/run1") == {
         "schema_version": 1
     }
+    freshness = DummyRunStore().read_run_freshness("file:///tmp/run1")
+    assert freshness is not None
+    assert freshness.to_dict() == {
+        "schema_version": 1,
+        "run_uri": "file:///tmp/run1",
+        "token": "token",
+        "updated_at": "2020-01-01T00:00:00Z",
+        "revision": 1,
+        "reason": None,
+    }
 
 
 def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
@@ -504,6 +528,7 @@ def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
 
     assert isinstance(store, RunEventStore)
+    assert isinstance(store, RunFreshnessStore)
     assert isinstance(store, RunInspectionStore)
     assert isinstance(store, RunLockStore)
     assert isinstance(store, RunStore)

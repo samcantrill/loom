@@ -201,7 +201,7 @@ def test_import_stores_does_not_import_config_or_cli_layers() -> None:
 
         import loom.pipeline.stores
 
-        for forbidden in ("loom.config", "loom.pipeline.execution", "loom.pipeline.executors", "loom.cli", "project"):
+        for forbidden in ("loom.config", "loom.pipeline.execution", "loom.pipeline.executors", "loom.runs", "loom.cli", "project"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline.stores")
         print("ok")

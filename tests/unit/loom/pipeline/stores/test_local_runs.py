@@ -144,6 +144,9 @@ def test_local_run_creation_writes_layout(tmp_path: Path) -> None:
     assert (run_dir / "stages").is_dir()
     assert (run_dir / "artifacts").is_dir()
     assert (run_dir / "run.json").is_file()
+    freshness = store.read_run_freshness(run_uri)
+    assert freshness is not None
+    assert freshness.reason == "run_metadata"
 
 
 def test_open_run_validates_required_run_metadata(tmp_path: Path) -> None:
@@ -163,6 +166,156 @@ def test_local_run_metadata_optional_reads(tmp_path: Path) -> None:
     assert store.read_plan(run_uri) is None
     assert store.read_artifact_index(run_uri) == {}
     assert store.read_events(run_uri) == ()
+
+
+def test_local_run_freshness_changes_for_catalog_relevant_writes(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+
+    def token() -> tuple[str, int, str | None]:
+        record = store.read_run_freshness(run_uri)
+        assert record is not None
+        return record.token, record.revision, record.reason
+
+    previous = token()
+    operations: list[tuple[str, Callable[[], None]]] = [
+        (
+            "run_status",
+            lambda: store.write_run_status(
+                run_uri,
+                RunStatusRecord(
+                    run_uri=run_uri,
+                    status=RunStatus.RUNNING,
+                    created_at="2020-01-01T00:00:00Z",
+                    updated_at="2020-01-01T00:00:01Z",
+                ),
+            ),
+        ),
+        ("plan", lambda: store.write_plan(run_uri, {"stages": []})),
+        (
+            "prepared_run",
+            lambda: store.write_prepared_run(run_uri, _prepared_run_payload(run_uri)),
+        ),
+        (
+            "runtime_metadata",
+            lambda: store.write_runtime_metadata(run_uri, {"executor": "local"}),
+        ),
+        (
+            "artifact_index",
+            lambda: store.write_artifact_index(run_uri, {"build.out": _artifact_ref()}),
+        ),
+        (
+            "config_snapshot",
+            lambda: store.write_config_snapshot(run_uri, "resolved", "stages: []\n"),
+        ),
+        (
+            "composition_manifest",
+            lambda: store.write_composition_manifest(
+                run_uri, {"fingerprint": "sha256:abc"}
+            ),
+        ),
+        (
+            "recipe_manifest",
+            lambda: store.write_recipe_manifest(run_uri, [{"name": "base"}]),
+        ),
+        (
+            "provenance_document",
+            lambda: store.write_provenance_document(run_uri, "git", {"commit": "abc"}),
+        ),
+        (
+            "submitted_operation",
+            lambda: store.write_submitted_operation(
+                run_uri, _submitted_operation(run_uri, "sub-1")
+            ),
+        ),
+        (
+            "stage_status",
+            lambda: store.write_stage_status(
+                run_uri,
+                "build",
+                StageStatusRecord(
+                    run_uri=run_uri,
+                    stage_name="build",
+                    status=StageStatus.RUNNING,
+                    attempt=1,
+                    updated_at="2020-01-01T00:00:02Z",
+                ),
+            ),
+        ),
+        (
+            "stage_inputs",
+            lambda: store.write_stage_inputs(
+                run_uri,
+                "build",
+                {"input": _artifact_ref(artifact_id="up/out")},
+                attempt=1,
+            ),
+        ),
+        (
+            "stage_outputs",
+            lambda: store.write_stage_outputs(
+                run_uri, "build", {"out": _artifact_ref()}, attempt=1
+            ),
+        ),
+        (
+            "stage_fingerprint",
+            lambda: store.write_stage_fingerprint(
+                run_uri, "build", {"digest": "sha256:stage"}, attempt=1
+            ),
+        ),
+        (
+            "stage_failure",
+            lambda: store.write_stage_failure(
+                run_uri, "build", {"message": "failed"}, attempt=1
+            ),
+        ),
+        (
+            "stage_worker_request",
+            lambda: store.write_stage_worker_request(
+                run_uri, "build", {"executor": "local"}, attempt=1
+            ),
+        ),
+        (
+            "stage_worker_result",
+            lambda: store.write_stage_worker_result(
+                run_uri, "build", {"status": "ok"}, attempt=1
+            ),
+        ),
+        (
+            "stage_provenance",
+            lambda: store.write_stage_provenance(
+                run_uri, "build", {"tool": "loom"}, attempt=1
+            ),
+        ),
+    ]
+
+    for reason, operation in operations:
+        operation()
+        current = token()
+        assert current[0] != previous[0]
+        assert current[1] == previous[1] + 1
+        assert current[2] == reason
+        previous = current
+
+
+def test_local_run_freshness_excludes_events_and_logs(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    before_event = store.read_run_freshness(run_uri)
+    assert before_event is not None
+
+    store.append_event(run_uri, PipelineEvent(scope=EventScope.run(), event_type="x"))
+
+    after_event = store.read_run_freshness(run_uri)
+    assert after_event == before_event
+
+    store.write_stage_log(run_uri, "build", "stdout", "hello")
+
+    assert store.read_run_freshness(run_uri) == before_event
 
 
 def test_local_run_appends_and_reads_events(tmp_path: Path) -> None:
@@ -408,9 +561,7 @@ def test_local_run_inspection_includes_submitted_operation_summaries(
     state = store.inspect_run_state(run_uri)
 
     assert state.submitted_operations == (record,)
-    operations = cast(
-        list[dict[str, object]], state.to_dict()["submitted_operations"]
-    )
+    operations = cast(list[dict[str, object]], state.to_dict()["submitted_operations"])
     assert operations[0]["submission_id"] == "sub-a"
 
 
