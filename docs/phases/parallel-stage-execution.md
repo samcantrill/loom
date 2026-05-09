@@ -441,10 +441,12 @@ table layout unless the implementation leaks it outside `sqlite_authority.py`.
   with `env UV_CACHE_DIR=/tmp/loom-uv-cache uv run pyright
   src/loom/pipeline/execution/runner.py
   tests/unit/loom/pipeline/execution/test_runner.py`.
-- PR review: manager review in progress; found a blocking scheduler edge case
-  where plan-level `BLOCKED` actions could be short-circuited as generic
-  upstream blocks and fail-fast scheduling could continue within the same
-  submission pass.
+- PR review: used on 2026-05-10 by the managing agent. The review found a
+  blocking scheduler edge case where plan-level `BLOCKED` actions could be
+  short-circuited as generic upstream blocks and fail-fast scheduling could
+  continue within the same submission pass. Blocker-resolution pass 1 fixed
+  the issue; post-resolution manager review found no remaining blocking
+  findings.
 - Blocker-resolution: pass 1/3 used on 2026-05-10 by the managing agent; fixed
   non-RUN plan action handling in the parallel scheduler and added SQLite
   integration coverage for skipped-upstream plan blockers under both default
