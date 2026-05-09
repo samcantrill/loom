@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implementation complete; PR preparation pending
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 1: Public Models And Freshness`
 - Branch: `codex/run-catalog-models`
@@ -264,10 +264,28 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` in this commit.
 - Final phase execution plan: fast path; refine pass not needed unless later implementation finds a blocking public-contract ambiguity.
-- Implementation summary: TBD
-- Implementation validation: TBD
-- Refinement summary: TBD
-- Blocker-resolution summary: TBD
+- Implementation summary: Added import-light public `loom.runs` facade,
+  catalog errors, immutable summary/filter/warning/result/comparison models,
+  the stable initial warning-code taxonomy, store-owned
+  `RunFreshnessRecord`/`RunFreshnessStore`, local freshness marker updates for
+  catalog-relevant writes, explicit exclusions for event logs and stage log
+  contents, and `docs/structure.md` package-boundary documentation.
+- Implementation validation:
+  - `uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py tests/package/test_pipeline_store_api.py tests/package/test_runs_api.py`
+    passed, 39 tests.
+  - `uv run pytest tests/unit/loom/runs tests/unit/loom/pipeline/stores/test_local_runs.py`
+    passed, 53 tests.
+  - `uv run pytest tests/contracts/test_store_contract.py` passed, 8 tests.
+  - `uv run pytest tests/integration/pipeline/test_local_stores.py` passed, 1
+    test.
+  - `uv run ruff check ...` on touched Phase 1 files passed.
+  - `uv run pyright ...` on touched Phase 1 files passed.
+- Refinement summary: Not needed; targeted validation passed and no
+  implementation blocker was found.
+- Blocker-resolution summary: 0/3 used. The Spark executor assignment could not
+  run because the Spark usage limit was exhausted, so the manager used the
+  workflow's allowed non-Spark fallback implementation path without consuming a
+  blocker-resolution pass.
 - PR preparation: TBD
 - Stack maintenance: TBD
 - Remaining blockers: none at planning time
