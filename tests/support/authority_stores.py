@@ -595,12 +595,16 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         )
 
     def create_workspace(self, identity: WorkspaceIdentity) -> BackendRevision:
+        if identity.workspace_id in self._workspaces:
+            raise ValueError(f"workspace already exists: {identity.workspace_id}")
         self._workspaces[identity.workspace_id] = identity
         return self._next_revision()
 
     def create_sweep(self, identity: SweepIdentity) -> BackendRevision:
         if identity.workspace_id not in self._workspaces:
             raise ValueError("unknown workspace")
+        if identity.sweep_id in self._sweeps:
+            raise ValueError(f"sweep already exists: {identity.sweep_id}")
         self._sweeps[identity.sweep_id] = identity
         self._trials.setdefault(identity.sweep_id, {})
         return self._next_revision()

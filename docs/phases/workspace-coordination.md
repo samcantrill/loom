@@ -445,7 +445,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: used on 2026-05-10 by
+  `loom_phase_refiner`; fixed a fake/SQLite conformance gap for duplicate
+  workspace and sweep identity failures and added contract coverage.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
@@ -456,11 +458,20 @@ make test-summary
   pass; locks the separate cross-run coordination authority, local SQLite-only
   implementation boundary, minimal protocol tightening, counter recovery
   limits, suite obligations, and stop conditions.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: expanded-path refinement completed; no product code,
-  tests, PR body, or implementation validation were changed in this planning
-  pass.
+- Implementation summary: complete. Added the cross-run coordination protocol
+  extensions, local SQLite workspace coordination backend, in-memory
+  conformance support, package/contract/unit/integration coverage, and docs
+  for local or same-host coordination limits without adding sweep runner,
+  scheduler, CLI mutation, distributed controller, or per-run lifecycle
+  duplication.
+- Implementation validation: focused Phase 8 package/import, unit, contract,
+  and integration pytest validation passed on 2026-05-10: 55 passed. The
+  sandboxed command could not write the shared uv cache, so it was rerun with
+  approved access.
+- Refinement summary: expanded-path implementation refinement completed. The
+  in-memory workspace coordination conformance store now rejects duplicate
+  workspace and sweep identities like the SQLite backend, and contract tests
+  cover duplicate identity and unknown-parent failures across both backends.
 - Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: no predecessor; rebase onto updated `develop` if needed

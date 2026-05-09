@@ -156,6 +156,24 @@ def test_workspace_coordination_contract_records_cross_run_facts_only(
     ] == list(recovery_records)
 
 
+def test_workspace_coordination_contract_rejects_duplicate_identities(
+    coordination_case: CoordinationStoreCase,
+) -> None:
+    store = coordination_case.store
+    _seed_workspace(store)
+
+    with pytest.raises(ValueError, match="workspace already exists"):
+        store.create_workspace(WorkspaceIdentity(workspace_id="workspace-1"))
+    with pytest.raises(ValueError, match="sweep already exists"):
+        store.create_sweep(
+            SweepIdentity(sweep_id="sweep-1", workspace_id="workspace-1")
+        )
+    with pytest.raises(ValueError, match="unknown workspace"):
+        store.create_sweep(
+            SweepIdentity(sweep_id="orphan-sweep", workspace_id="missing-workspace")
+        )
+
+
 def test_workspace_coordination_contract_fences_leases_and_counters(
     coordination_case: CoordinationStoreCase,
 ) -> None:
