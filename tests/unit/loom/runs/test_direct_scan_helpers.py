@@ -158,6 +158,24 @@ def test_scan_current_collection_warns_for_invalid_authority_schema(
     assert "incomplete or invalid" in result.warnings[0].message
 
 
+def test_scan_current_collection_warns_for_missing_authority_backend(
+    tmp_path: Path,
+) -> None:
+    collection = tmp_path / "runs"
+    collection.mkdir()
+    run_path = collection / "missing-authority"
+    run_path.mkdir()
+    _write_minimal_run_marker(run_path)
+    (run_path / ".loom").mkdir()
+
+    result = scan_current_collection(collection)
+
+    assert result.summaries == ()
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == CatalogWarningCode.PARTIAL_RUN
+    assert result.warnings[0].message == "run authoritative backend is missing"
+
+
 def test_scan_current_collection_warns_for_unsupported_authority_schema(
     tmp_path: Path,
 ) -> None:

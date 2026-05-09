@@ -544,8 +544,23 @@ def _authoritative_read(
                 check.failure is not None
                 and check.failure.kind is AuthoritySchemaFailureKind.MISSING
             ):
+                if _authority_marker_exists(run_uri):
+                    raise DiagnosticsInspectionError(
+                        f"authoritative backend is missing for run {run_uri}"
+                    )
                 return None
-        except Exception:
+            if check.failure is not None:
+                raise DiagnosticsInspectionError(
+                    f"authoritative backend is unavailable for run {run_uri}: "
+                    f"{check.failure.message}"
+                )
+        except DiagnosticsInspectionError:
+            raise
+        except Exception as exc:
+            if _authority_marker_exists(run_uri):
+                raise DiagnosticsInspectionError(
+                    f"authoritative backend is unavailable for run {run_uri}: {exc}"
+                ) from exc
             return None
     if local_store is None:
         local_store = _default_run_store(run_uri)
@@ -566,8 +581,25 @@ def _authoritative_read(
     except Exception:
         if force_authoritative:
             raise
+        if _authority_marker_exists(run_uri):
+            raise DiagnosticsInspectionError(
+                f"authoritative backend is unavailable for run {run_uri}"
+            )
         return None
+    if snapshot.warnings:
+        raise DiagnosticsInspectionError(
+            f"authoritative backend is unavailable for run {run_uri}"
+        )
     return snapshot, local_store
+
+
+def _authority_marker_exists(run_uri: str) -> bool:
+    try:
+        from loom.pipeline.stores import run_uri_to_path
+
+        return (run_uri_to_path(run_uri) / ".loom").exists()
+    except Exception:
+        return False
 
 
 def _open_run(store: Any, run_uri: str) -> None:

@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: PR open.
+- Status: blocker-resolution update ready.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 5: Public Serial Backend Swap And Read Path`
 - Branch: `codex/public-backend-swap`
@@ -47,8 +47,14 @@
   phase plan, actual diff, validation evidence, scope boundaries, assumptions,
   and risks; reran final validation; pushed the branch; opened PR #105; and
   verified the PR target.
-- Phase PR review budget: unused.
-- Blocker-resolution budget: 0/3 used.
+- Phase PR review budget: used on 2026-05-10. Automated review found
+  blocking missing-authority fallback issues in diagnostics/catalog reads and
+  a non-blocking import-boundary issue in catalog extraction.
+- Blocker-resolution budget: 1/3 used. Pass 1 fixed the review blockers by
+  rejecting missing/unavailable authority reads for authority-marked runs,
+  preserving catalog warnings for missing authority databases, and replacing
+  the catalog execution-adapter dependency with direct backend read-model
+  extraction.
 - Setup limitations: no fetch, GitHub operation, broad validation, PR action,
   or implementation was run during planning/refinement. Initial branch and
   worktree creation required approved sandbox escalation after the default
@@ -569,9 +575,9 @@ refinement validation are recorded in the completion notes below.
   focused unit coverage for malformed and unsupported authority DB schemas.
 - PR body draft: complete on 2026-05-10 in
   `docs/phases/public-backend-swap-pr-body.md`.
-- PR body refine/open: pending for expanded-path PR preparation.
-- PR review: unused.
-- Blocker resolution: 0/3 used.
+- PR body refine/open: complete for expanded-path PR preparation.
+- PR review: used; automated review found blockers before merge.
+- Blocker resolution: 1/3 used; pass 1 complete.
 
 ## Completion Notes
 
@@ -629,6 +635,26 @@ refinement validation are recorded in the completion notes below.
     passed: 4 passed.
   - `uv run pytest tests/unit/loom/runs/test_direct_scan_helpers.py tests/unit/loom/runs/test_current_listing.py tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_sqlite.py tests/integration/pipeline/test_run_catalog_compare.py`
     passed: 21 passed.
+- PR review blocker-resolution summary: complete. Automated review found that
+  default diagnostics and catalog scans could still fall back to legacy local
+  status/artifact truth when an authority-marked run lost its
+  `.loom/authority.sqlite3` database, and that catalog extraction depended on
+  `loom.pipeline.execution.authority_adapter`. Pass 1 changed diagnostics to
+  raise `DiagnosticsInspectionError` for missing or unavailable authority
+  backends when an authority marker exists, changed catalog scans to return a
+  `PARTIAL_RUN` warning for authority-marked runs with a missing authority
+  backend, and replaced the execution-adapter dependency with a read-only
+  summary adapter over `read_authoritative_run()`.
+- PR review blocker-resolution validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/runs/test_direct_scan_helpers.py tests/unit/loom/diagnostics/test_diagnostics_inspection.py`
+    passed: 17 passed.
+  - `make validate-pr` passed: Ruff, Pyright, default harness (1038 passed,
+    18 skipped, 14 deselected), config-extra harness (420 passed, 1066
+    deselected), and `uv build`.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 56
+    passed/1 skipped; unit 806 passed/1 skipped; contract 92 passed/2
+    skipped; integration 72 passed/8 skipped/10 deselected; e2e 37 passed/1
+    deselected; config-extra 420 passed/1066 deselected.
 - PR body draft pass: complete on 2026-05-10. Confirmed the dedicated worktree
   `/home/samcantrill/work/loom-worktrees/public-backend-swap`, branch
   `codex/public-backend-swap`, stack predecessor `none`, target branch
@@ -658,6 +684,10 @@ refinement validation are recorded in the completion notes below.
   `make test-summary`; `build/test-summary.md` generated
   2026-05-09T20:30:35Z with overall status `passed` (1481 passed,
   12 skipped, 1075 deselected).
+- PR body blocker-resolution evidence: updated after pass 1 with
+  `make validate-pr` and `make test-summary` evidence from the blocker fix.
+  The refreshed summary passed with 1483 passed, 12 skipped, and 1077
+  deselected.
 - Accepted limitations: old v0-v8 local-only run directories remain
   intentionally unsupported by the new authority read path and are not
   migrated. Local files are still materialized for logs, provenance, inputs,
@@ -669,7 +699,7 @@ refinement validation are recorded in the completion notes below.
 - Refinement summary: tightened public default behavior, live read fallback
   rules, catalog/status conflict rules, old-run compatibility limits, import
   boundary risks, suite obligations, and executor handoff notes.
-- Blocker-resolution summary: none.
+- Blocker-resolution summary: pass 1/3 used for automated-review blockers.
 - PR verification: `gh pr view 105 --json baseRefName,headRefName,state,url`
   returned `{"baseRefName":"develop","headRefName":"codex/public-backend-swap","state":"OPEN","url":"https://github.com/samcantrill/loom/pull/105"}`
   at 2026-05-09T20:33:18Z. The verified base matches the recorded target

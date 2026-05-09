@@ -27,6 +27,9 @@ authoritative runs.
 - [x] Catalog direct scans preserve compact warnings for missing, corrupt,
   unsupported, partial, or changing authoritative runs without querying private
   SQLite tables.
+- [x] Missing or unavailable authority databases on authority-marked runs are
+  reported as errors or catalog warnings, not interpreted from legacy local
+  status or artifact files.
 - [x] Old v0-v8 migration, backend CLI commands, parallel execution,
   workspace/sweep coordination, export/snapshot/repair workflows, and public
   SQLite schema/path contracts remain out of scope.
@@ -45,10 +48,12 @@ authoritative runs.
 - Updated diagnostics inspection to prefer `read_authoritative_run()` snapshots
   for run status, stage status, submitted-operation summaries, and artifact
   summaries while preserving local logs, provenance, failures, and inputs as
-  materialized refs.
+  materialized refs. Authority-marked runs with missing or unreadable authority
+  state now raise diagnostics errors rather than falling back to local live
+  files.
 - Updated `RunCatalog` direct scan to detect authoritative run candidates,
-  extract summaries through the authority-backed store, and convert malformed
-  or unsupported authority schema failures into catalog warnings.
+  extract summaries through backend-neutral read models, and convert missing,
+  malformed, or unsupported authority schema failures into catalog warnings.
 
 New tests implemented:
 
@@ -58,27 +63,29 @@ New tests implemented:
   documents.
 - Diagnostics coverage proving status and artifact summaries use authoritative
   facts when legacy local files are corrupt.
+- Diagnostics and catalog coverage proving missing authority databases do not
+  fall back to legacy local truth.
 - Catalog scan coverage for malformed and unsupported authority DB schemas.
 
 ## Tests And Validation
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Reran during PR-body refine/open pass: Ruff, Pyright, default harness (1036 passed, 18 skipped, 14 deselected), config-extra harness (420 passed, 1064 deselected), and `uv build` passed. |
-| `make test-summary` | Passed | `build/test-summary.md` generated 2026-05-09T20:30:35Z with overall status `passed`: 1481 passed, 12 skipped, 1075 deselected. |
-| GitHub checks | Pending | PR creation in this refine/open pass starts GitHub checks; manager owns CI polling. |
+| `make validate-pr` | Passed | Reran after blocker-resolution pass 1: Ruff, Pyright, default harness (1038 passed, 18 skipped, 14 deselected), config-extra harness (420 passed, 1066 deselected), and `uv build` passed. |
+| `make test-summary` | Passed | Refreshed after blocker-resolution pass 1: overall status `passed`: 1483 passed, 12 skipped, 1077 deselected. |
+| GitHub checks | Pending | The manager will poll CI after the blocker-resolution update is pushed. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | package | passed | 56 | 0 | 0 | 1 | 0 | 57 |
-| unit | passed | 804 | 0 | 0 | 1 | 0 | 805 |
+| unit | passed | 806 | 0 | 0 | 1 | 0 | 807 |
 | contract | passed | 92 | 0 | 0 | 2 | 0 | 94 |
 | integration | passed | 72 | 0 | 0 | 8 | 10 | 80 |
 | e2e | passed | 37 | 0 | 0 | 0 | 1 | 37 |
-| config-extra | passed | 420 | 0 | 0 | 0 | 1064 | 420 |
-| Overall | passed | 1481 | 0 | 0 | 12 | 1075 | 1493 |
+| config-extra | passed | 420 | 0 | 0 | 0 | 1066 | 420 |
+| Overall | passed | 1483 | 0 | 0 | 12 | 1077 | 1495 |
 
 ## Risks / Follow-Ups
 
