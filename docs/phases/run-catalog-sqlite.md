@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation pending
+- Status: pr_open
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 3: SQLite Sidecar Storage And Rebuild`
 - Branch: `codex/run-catalog-sqlite`
@@ -13,6 +13,7 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/97
 - Merge eligibility: merge-eligible after automated review, local validation, and GitHub checks because Phases 1 and 2 are merged and this is a root phase targeting `develop`
 - Workflow path: expanded path because this phase introduces private SQLite schema, persistence, recovery, and local concurrency behavior
 - Successor dependency notes: Phase 4 depends on the private sidecar storage and rebuild APIs for current listing, refresh, filters, and stale-row reconciliation.
@@ -250,7 +251,7 @@ make test-summary
 - Phase implementation refinement: not needed after targeted validation, full
   PR validation, and manager scope review passed without concrete
   storage/concurrency blockers.
-- PR review: unused
+- PR review: pending
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -277,6 +278,7 @@ make test-summary
   - `make test-summary` passed and wrote `build/test-summary.md`: package 55
     passed, unit 748 passed, contract 73 passed, integration 51 passed, e2e 36
     passed, config-extra 413 passed.
-- PR preparation: PR body pending at
-  `docs/phases/run-catalog-sqlite-pr-body.md`; PR not yet opened.
-- PR: pending
+- PR preparation: completed; PR #97 opened at
+  https://github.com/samcantrill/loom/pull/97 and verified with base
+  `develop` and head `codex/run-catalog-sqlite`.
+- PR: https://github.com/samcantrill/loom/pull/97
