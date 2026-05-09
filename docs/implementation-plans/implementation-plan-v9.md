@@ -1086,9 +1086,9 @@ Completion summary:
 
 ### Phase 5 - Public Serial Hard Swap And Read-Path Swap
 
-Status: pending
+Status: merged
 Branch: `codex/public-backend-swap`
-PR: pending
+PR: #105 - https://github.com/samcantrill/loom/pull/105
 
 Goal:
 
@@ -1187,7 +1187,28 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- Merged on 2026-05-09 into `develop` by PR #105 at merge commit
+  `62b390f756a3f3bb5428e58eb36691aaa7b86334`.
+- Implementation: public local/subprocess serial `loom run` defaults now
+  create an authority-backed serial run store with run-local SQLite authority;
+  SLURM preparation remains on explicit local materialization stores. Status,
+  artifact, submitted-operation, and catalog current-summary reads use backend
+  snapshots, authority revisions, or backend-neutral read models for
+  authoritative runs. Catalog scans report missing, malformed, or unsupported
+  authority stores as warnings and no longer depend on the execution adapter
+  for summary extraction.
+- Automated review: initial PR review found missing-authority fallback
+  blockers in diagnostics/catalog reads and a catalog import-boundary issue.
+  Blocker-resolution pass 1/3 fixed those issues; manager follow-up review
+  confirmed no remaining blocking findings.
+- Checks: `make validate-pr` passed after blocker resolution: Ruff, Pyright,
+  default harness (1038 passed, 18 skipped, 14 deselected), config-extra
+  harness (420 passed, 1066 deselected), and `uv build`. `make test-summary`
+  passed with 1483 passed, 0 failed, 0 errors, 12 skipped, and 1077
+  deselected. GitHub CI `checks` passed before merge.
+- Follow-up: Phase 6 should add the read-only backend diagnostics CLI and
+  API-level diagnostic models on top of the authoritative read paths introduced
+  here, without adding mutation, repair, export, SQL, or snapshot behavior.
 
 ### Phase 6 - Read-Only Backend Diagnostics CLI
 
