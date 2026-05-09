@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
-from .models import CatalogIndexResult, ListRunsResult, RunFilter
-from .errors import CatalogFeatureUnavailableError
+from .models import CatalogIndexResult, ListRunsResult, RunComparison, RunFilter
 
 
 class RunCatalog:
@@ -53,14 +51,17 @@ class RunCatalog:
 
         return list_current_catalog(self.collection_path, filters=filters)
 
-    def compare(self, *args: Any, **kwargs: Any) -> Any:
-        """Compare two runs using persisted metadata.
+    def compare(self, left: str, right: str) -> RunComparison:
+        """Compare two current runs using persisted metadata only."""
 
-        Implemented in a later v8 phase.
-        """
+        from ._compare import compare_current_runs
 
-        raise CatalogFeatureUnavailableError(
-            "RunCatalog.compare is implemented in a later v8 phase"
+        current = self.list()
+        return compare_current_runs(
+            current.summaries,
+            left_run_uri=left,
+            right_run_uri=right,
+            warnings=current.warnings,
         )
 
 

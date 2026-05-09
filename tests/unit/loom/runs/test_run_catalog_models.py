@@ -10,7 +10,6 @@ import pytest
 from loom.runs import (
     CATALOG_WARNING_CODES,
     ArtifactSummary,
-    CatalogFeatureUnavailableError,
     CatalogIndexResult,
     CatalogValidationError,
     CatalogWarning,
@@ -179,8 +178,9 @@ def test_result_and_comparison_models_serialize() -> None:
     }
 
 
-def test_run_catalog_deferred_methods_raise_catalog_error() -> None:
+def test_run_catalog_compare_returns_missing_run_warnings() -> None:
     catalog = RunCatalog.open("runs")
 
-    with pytest.raises(CatalogFeatureUnavailableError):
-        catalog.compare("left", "right")
+    comparison = catalog.compare("file:///runs/left", "file:///runs/right")
+    assert comparison.left_run_uri == "file:///runs/left"
+    assert comparison.right_run_uri == "file:///runs/right"
