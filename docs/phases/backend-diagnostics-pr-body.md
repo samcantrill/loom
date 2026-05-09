@@ -11,8 +11,10 @@ The implementation stays diagnostic-only. CLI presentation calls the
 diagnostics API, the diagnostics API reads through existing backend contracts
 and read-model helpers, and inspection does not mutate backend state,
 materialized files, derived catalogs, leases, attempts, commits, or submitted
-operations. Repair, cleanup, SQL, export, snapshot, parallel execution, and
-workspace coordination remain out of scope.
+operations. Materialization verification is existence-only for this diagnostic
+surface and does not checksum artifact payload bytes. Repair, cleanup, SQL,
+export, snapshot, parallel execution, and workspace coordination remain out of
+scope.
 
 ## Acceptance Criteria
 
@@ -38,6 +40,9 @@ workspace coordination remain out of scope.
   kept recovery and cleanup records report-only.
 - Exposed backend diagnostics lazily from `loom.diagnostics` so the root
   diagnostics import remains lightweight.
+- Added a read-model option that allows diagnostics to verify materialized-ref
+  existence without checksum-reading payload files, while preserving checksum
+  verification as the default behavior for existing read-model callers.
 
 New tests implemented:
 
@@ -49,7 +54,8 @@ New tests implemented:
 - Contract coverage proving diagnostics consume `PerRunAuthorityStore`
   behavior rather than SQLite-specific internals.
 - Integration coverage over SQLite-backed runs for materialization warnings,
-  stale projection evidence, capability requirements, and no-mutation checks.
+  stale projection evidence, capability requirements, no-mutation checks, and a
+  payload-read trap for backend diagnostics materialization verification.
 - E2E smoke coverage for `loom backend inspect` and `loom backend
   capabilities`.
 
@@ -57,21 +63,21 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Latest recorded validation after commit `d94789c`: Ruff, Pyright, default harness, config-extra harness, and build passed. PR preparation changed docs artifacts only. |
-| `make test-summary` | Passed | Generated `build/test-summary.md` at 2026-05-09T21:41:12+00:00; overall 1500 passed, 0 failed, 0 errors, 12 skipped, and 1094 deselected. |
-| GitHub checks | Pending | The PR will start CI after branch push and PR creation. |
+| `make validate-pr` | Passed | Latest recorded validation after commit `b7921d7`: Ruff, Pyright, default harness, config-extra harness, and build passed. |
+| `make test-summary` | Passed | Generated `build/test-summary.md` at 2026-05-09T22:02:15+00:00; overall 1501 passed, 0 failed, 0 errors, 12 skipped, and 1095 deselected. |
+| GitHub checks | Pending after latest branch update | The merge manager verifies CI after the branch update is pushed. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | package | passed | 57 | 0 | 0 | 1 | 0 | 58 | 7.64s |
-| unit | passed | 818 | 0 | 0 | 1 | 0 | 819 | 29.81s |
+| unit | passed | 819 | 0 | 0 | 1 | 0 | 820 | 30.46s |
 | contract | passed | 93 | 0 | 0 | 2 | 0 | 95 | 4.46s |
 | integration | passed | 74 | 0 | 0 | 8 | 10 | 82 | 54.54s |
 | e2e | passed | 38 | 0 | 0 | 0 | 1 | 38 | 18.27s |
-| config-extra | passed | 420 | 0 | 0 | 0 | 1083 | 420 | 39.21s |
-| Overall | passed | 1500 | 0 | 0 | 12 | 1094 | 1512 | 153.93s |
+| config-extra | passed | 420 | 0 | 0 | 0 | 1084 | 420 | 39.24s |
+| Overall | passed | 1501 | 0 | 0 | 12 | 1095 | 1513 | 154.32s |
 
 ## Risks / Follow-Ups
 

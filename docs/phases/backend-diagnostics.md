@@ -516,8 +516,11 @@ make test-summary
 
 - Phase implementation refinement: used on 2026-05-10 by
   `loom_phase_refiner`; bounded implementation/test refinement completed.
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used on 2026-05-10 by `loom_phase_reviewer`; one blocking
+  materialization payload-read finding was resolved by blocker-resolution pass
+  1/3 and verified locally by the managing agent.
+- Blocker resolution: 1/3 used on 2026-05-10 for payload-free
+  materialization verification.
 
 ## Completion Notes
 
@@ -533,11 +536,15 @@ make test-summary
 - Implementation validation: executor-reported validation after commit
   `0c1938a` passed `make validate-pr` and `make test-summary`. Refinement
   reran targeted API/CLI tests, phase-scoped package/contract/integration/e2e
-  tests, full `make validate-pr`, and refreshed `make test-summary`.
-  Refreshed summary: package 57 passed, 1 skipped; unit 818 passed, 1 skipped;
+  tests, full `make validate-pr`, and refreshed `make test-summary`. After
+  PR review blocker resolution commit `b7921d7`, targeted read-model,
+  diagnostics, CLI, contract, and integration tests passed; Ruff and Pyright
+  passed; full `make validate-pr` passed; and `make test-summary` passed.
+  Final summary: package 57 passed, 1 skipped; unit 819 passed, 1 skipped;
   contract 93 passed, 2 skipped; integration 74 passed, 8 skipped,
   10 deselected; e2e 38 passed, 1 deselected; config-extra 420 passed,
-  1083 deselected.
+  1084 deselected; overall 1501 passed, 12 skipped, 1095 deselected,
+  0 failed, and 0 errors.
 - Refinement summary: reviewed the Phase 6 implementation against read-only
   semantics, authority/schema failure behavior, capability requirements,
   projection/materialization diagnostics, import boundaries, export surface,
@@ -547,17 +554,22 @@ make test-summary
   unsupported schema and text-error detail coverage. No mutation paths, direct
   SQLite CLI reads, project-code imports, export/snapshot/repair behavior, or
   future-phase functionality were added.
-- Blocker-resolution summary: not used; no blocker-resolution pass consumed.
+- Blocker-resolution summary: pass 1/3 resolved the automated PR review
+  blocker that `loom backend inspect --verify-materialization` could delegate
+  to checksum verification and read artifact payload bytes. The fix adds
+  checksum-skipping materialization verification for diagnostics while
+  preserving default checksum verification for existing read-model callers, and
+  adds payload-read trap coverage for backend diagnostics.
 - PR preparation: prepared `docs/phases/backend-diagnostics-pr-body.md` with a
   concise review-facing summary, implementation notes, suite-level validation
-  evidence, and risks/follow-ups. Final validation evidence used for PR
-  preparation: `make validate-pr` passed after commit `d94789c` with Ruff,
+  evidence, and risks/follow-ups. Final validation evidence after blocker
+  resolution: `make validate-pr` passed after commit `b7921d7` with Ruff,
   Pyright, default harness, config-extra harness, and build passing;
   `make test-summary` passed and generated `build/test-summary.md` at
-  2026-05-09T21:41:12+00:00 with package 57 passed, 1 skipped; unit 818
+  2026-05-09T22:02:15+00:00 with package 57 passed, 1 skipped; unit 819
   passed, 1 skipped; contract 93 passed, 2 skipped; integration 74 passed, 8
   skipped, 10 deselected; e2e 38 passed, 1 deselected; config-extra 420
-  passed, 1083 deselected; overall 1500 passed, 12 skipped, 1094 deselected,
+  passed, 1084 deselected; overall 1501 passed, 12 skipped, 1095 deselected,
   0 failed, and 0 errors.
 - PR opening: branch `codex/backend-diagnostics` pushed to `origin`; PR #106
   opened at https://github.com/samcantrill/loom/pull/106 with base `develop`,
