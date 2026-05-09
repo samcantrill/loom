@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan; implementation ready.
+- Status: implementation complete; PR preparation ready.
 - Feature focus: Persistence And Concurrency Foundation
 - Final PR title: `Persistence And Concurrency Foundation - Phase 5: Public Serial Backend Swap And Read Path`
 - Branch: `codex/public-backend-swap`
@@ -35,7 +35,8 @@
   source/test files for public run construction, authority-backed execution,
   resume, diagnostics, catalog scan/extraction, materialization read models,
   package import boundaries, and serial execution coverage.
-- Phase implementation refinement budget: unused.
+- Phase implementation refinement budget: not needed; implementation passed
+  targeted validation and `make validate-pr`.
 - Phase PR review budget: unused.
 - Blocker-resolution budget: 0/3 used.
 - Setup limitations: no fetch, GitHub operation, broad validation, PR action,
@@ -553,7 +554,8 @@ preparation.
 - Phase plan draft: complete.
 - Phase plan refine: complete; expanded-path refinement pass consumed on
   2026-05-10.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: not needed; targeted validation and final
+  validation passed without a separate refinement pass.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
@@ -563,8 +565,52 @@ preparation.
   Phase 4-merged source context.
 - Final phase execution plan: refined in this artifact from implementation
   plan v9, current source/test seams, and expanded-path stop-condition review.
-- Implementation summary: not started.
-- Implementation validation: not run.
+- Implementation summary: complete. Public `loom run` local/subprocess serial
+  construction now creates an `AuthorityBackedSerialRunStore` with the
+  run-local SQLite authority by default, while SLURM dry-run/live preparation
+  keeps the explicit local materialization store path. The authority-backed
+  store now exposes backend revision evidence for catalog freshness. Status and
+  artifact diagnostics prefer `read_authoritative_run()`/backend snapshots for
+  authoritative runs and keep local logs, provenance, inputs, and failure
+  documents as materialized evidence only. `RunCatalog` direct scans open the
+  authority-backed store when a run has valid SQLite authority, so status,
+  stage, submitted-operation, artifact, and freshness extraction come from
+  backend facts without querying private SQLite tables.
+- Implementation validation:
+  - `uv run pytest tests/unit/loom/cli/test_run.py tests/unit/loom/diagnostics/test_diagnostics_inspection.py tests/unit/loom/runs/test_direct_scan_helpers.py`
+    passed: 27 passed.
+  - `uv run pytest tests/unit/loom/cli/test_run.py tests/unit/loom/diagnostics/test_diagnostics_inspection.py tests/unit/loom/pipeline/execution/test_authority_adapter.py tests/unit/loom/pipeline/planning/test_resume.py tests/unit/loom/runs/test_direct_scan_helpers.py tests/unit/loom/runs/test_current_listing.py`
+    passed: 58 passed.
+  - `uv run pytest tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/package/test_runs_api.py tests/package/test_import_boundaries.py`
+    passed: 37 passed.
+  - `uv run pytest tests/contracts/test_authority_store_contract.py tests/contracts/test_authoritative_read_model_contract.py tests/contracts/test_run_catalog_contract.py tests/contracts/test_run_catalog_comparison_contract.py`
+    passed: 14 passed.
+  - `uv run pytest tests/integration/pipeline/test_local_execution.py tests/integration/pipeline/test_local_execution_resume.py tests/integration/pipeline/test_subprocess_executor_integration.py`
+    passed: 3 passed, 2 skipped.
+  - `uv run pytest tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_sqlite.py tests/integration/pipeline/test_run_catalog_compare.py`
+    passed: 14 passed.
+  - `uv run pytest tests/e2e/test_local_pipeline_run.py` collected 0 items and
+    skipped 1 because the suite is gated by optional dependencies in this
+    environment.
+  - `uv run pytest tests/integration/pipeline/test_sqlite_serial_execution.py tests/integration/diagnostics/test_cli_status_logs.py`
+    initially could not run config-driven CLI coverage in the base environment
+    because optional config dependencies were absent; the final config-extra
+    validation below ran those suites with `--extra config`.
+  - `make validate-pr` passed: Ruff, Pyright, default harness
+    (1034 passed, 18 skipped, 14 deselected), config-extra harness
+    (420 passed, 1062 deselected), and `uv build`.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package
+    56 passed/1 skipped; unit 802 passed/1 skipped; contract 92 passed/2
+    skipped; integration 72 passed/8 skipped/10 deselected; e2e 37 passed/1
+    deselected; config-extra 420 passed/1062 deselected.
+- Accepted limitations: old v0-v8 local-only run directories remain
+  intentionally unsupported by the new authority read path and are not
+  migrated. Local files are still materialized for logs, provenance, inputs,
+  fingerprints, worker handoff, staged payloads, and old explicit
+  `LocalRunStore` tests. This phase did not add backend CLI commands,
+  bounded parallel execution, workspace/sweep coordination, export/snapshot/
+  repair/migration behavior, public SQL/schema/database-path contracts, or
+  SLURM policy redesign.
 - Refinement summary: tightened public default behavior, live read fallback
   rules, catalog/status conflict rules, old-run compatibility limits, import
   boundary risks, suite obligations, and executor handoff notes.
