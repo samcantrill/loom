@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: implementation complete; PR preparation pending
 - Feature focus: Run Catalog And Comparison
 - PR title: `Run Catalog And Comparison - Phase 4: Current Listing, Refresh, And Filters`
 - Branch: `codex/run-catalog-current-list`
@@ -274,7 +274,9 @@ If `tests/contracts/test_run_catalog_contract.py` or `tests/integration/pipeline
 
 - Phase execution plan draft: completed
 - Phase execution plan refinement: completed for expanded path
-- Phase implementation refinement: unused; available only for one bounded refinement pass if targeted validation fails, suite coverage is missing, or the expanded-path implementation needs correction after review
+- Phase implementation refinement: not needed after targeted validation, full
+  PR validation, and manager scope review passed without concrete
+  current-read/filter correctness blockers.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -282,3 +284,32 @@ If `tests/contracts/test_run_catalog_contract.py` or `tests/integration/pipeline
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-09
 - Refined plan: completed by `loom_phase_planner` on 2026-05-09
+- Final phase execution plan: implemented
+- Implementation summary: Added `RunCatalog.list(filters=...)` as a public
+  current-read facade returning `ListRunsResult`, private SQLite current-list
+  refresh/query helpers, exact-match AND filter compilation for all Phase 4
+  filter kinds, deterministic `run_uri` ordering, warning propagation from
+  authoritative direct scan, and stale-row removal through per-list sidecar
+  replacement before querying. The implementation uses a correctness-first full
+  direct scan for each current list call, then queries the refreshed private
+  SQLite sidecar.
+- Validation evidence:
+  - `uv run ruff check src/loom/runs tests/unit/loom/runs tests/contracts/test_run_catalog_contract.py tests/integration/pipeline/test_run_catalog_current_list.py`
+    passed.
+  - `uv run pyright src/loom/runs tests/unit/loom/runs tests/contracts/test_run_catalog_contract.py tests/integration/pipeline/test_run_catalog_current_list.py`
+    passed.
+  - `uv run pytest tests/package/test_runs_api.py tests/package/test_import_boundaries.py tests/unit/loom/runs tests/contracts/test_run_catalog_contract.py tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_sqlite.py`
+    passed with 55 tests.
+  - `make validate-pr` passed: Ruff, Pyright, default test harness,
+    config-extra test harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 55
+    passed, unit 751 passed, contract 74 passed, integration 57 passed, e2e 36
+    passed, config-extra 413 passed.
+- Accepted debt: current listing refreshes by full direct scan before SQLite
+  filtering instead of targeted per-run reconciliation. This preserves the
+  default current-read guarantee and keeps Phase 4 reviewable; revisit when
+  list latency becomes unacceptable or a stale-tolerant/incremental refresh
+  mode is planned.
+- PR preparation: PR body pending at
+  `docs/phases/run-catalog-current-list-pr-body.md`; PR not yet opened.
+- PR: pending
