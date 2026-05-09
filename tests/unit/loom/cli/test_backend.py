@@ -119,6 +119,32 @@ def test_backend_capabilities_explicit_remote_requirement_fails_json(
     assert diagnostics[0]["code"] == "unsafe_remote_coordination"
 
 
+def test_backend_capabilities_explicit_requirements_fail_text_with_detail(
+    tmp_path: Path,
+) -> None:
+    run_uri = _authority_run(tmp_path)
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "backend",
+                "capabilities",
+                run_uri,
+                "--require-shared-filesystem",
+                "--require-remote",
+            ],
+            stderr=stderr,
+        )
+        == int(ExitCode.RUN_STATE)
+    )
+
+    error = stderr.getvalue()
+    assert "unsafe_shared_filesystem" in error
+    assert "unsafe_remote_coordination" in error
+    assert "workspace or sweep coordination" in error
+
+
 def _authority_run(tmp_path: Path) -> str:
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     run_store = _store(tmp_path, authority)

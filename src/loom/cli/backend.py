@@ -123,7 +123,7 @@ def handle_capabilities(namespace: argparse.Namespace) -> int:
         raise _backend_error(exc) from exc
     if result.has_error_diagnostics:
         raise CliError(
-            "backend capabilities do not satisfy requested requirements",
+            _capability_failure_message(result),
             code="cli.backend.unsupported_capability",
             context={"result": result.to_dict()},
             exit_code=ExitCode.RUN_STATE,
@@ -225,6 +225,18 @@ def _format_capabilities_text(result: "BackendCapabilitiesResult") -> str:
         )
     _extend_warning_lines(lines, result.diagnostics)
     return "\n".join(lines)
+
+
+def _capability_failure_message(result: "BackendCapabilitiesResult") -> str:
+    diagnostics = [
+        f"{diagnostic.get('code')}: {diagnostic.get('message')}"
+        for diagnostic in result.diagnostics
+        if diagnostic.get("severity") == "error"
+    ]
+    message = "backend capabilities do not satisfy requested requirements"
+    if diagnostics:
+        message = f"{message}: {'; '.join(diagnostics)}"
+    return message
 
 
 def _extend_warning_lines(

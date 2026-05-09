@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +109,22 @@ def test_inspect_backend_rejects_missing_authority_backend(tmp_path: Path) -> No
         inspect_backend(run_uri)
 
 
+def test_inspect_backend_rejects_unsupported_authority_schema(
+    tmp_path: Path,
+) -> None:
+    authority, run_uri = _authority_run(tmp_path)
+    with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+        conn.execute("UPDATE metadata SET value = '999' WHERE key = 'schema_version'")
+
+    with pytest.raises(BackendDiagnosticsError) as exc_info:
+        inspect_backend(run_uri, authority_store=authority)
+
+    error = exc_info.value
+    assert error.code == "backend_diagnostics.schema_unsupported_newer"
+    assert error.diagnostics[0].code == "authority_schema_unsupported_newer"
+    assert error.diagnostics[0].detail["found_version"] == 999
+
+
 def test_capabilities_report_explicit_remote_requirement(tmp_path: Path) -> None:
     authority, run_uri = _authority_run(tmp_path)
 
@@ -119,6 +136,10 @@ def test_capabilities_report_explicit_remote_requirement(tmp_path: Path) -> None
 
     assert result.has_error_diagnostics is True
     assert result.diagnostics[0]["code"] == "unsafe_remote_coordination"
+    assert "workspace or sweep coordination" in str(result.diagnostics[0]["message"])
+    detail = result.diagnostics[0]["detail"]
+    assert isinstance(detail, dict)
+    assert detail["required_capability"] == "cross_run_coordination"
     assert result.requirements == {"shared_filesystem": False, "remote": True}
 
 

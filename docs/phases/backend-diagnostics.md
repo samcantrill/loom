@@ -514,7 +514,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-10 by
+  `loom_phase_refiner`; bounded implementation/test refinement completed.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -523,10 +524,30 @@ make test-summary
 - Draft plan: completed in this artifact.
 - Final phase execution plan: completed by expanded-path refinement in this
   artifact.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added read-only `loom backend inspect` and
+  `loom backend capabilities` commands plus backend-neutral diagnostics API
+  helpers under `loom.diagnostics`; CLI presentation stays out of SQLite
+  internals, exposes schema/revision/lifecycle/capability/materialization
+  diagnostics in text and JSON, preserves missing-authority loud failures, and
+  keeps recovery and cleanup records report-only.
+- Implementation validation: executor-reported validation after commit
+  `0c1938a` passed `make validate-pr` and `make test-summary`. Refinement
+  reran targeted API/CLI tests, phase-scoped package/contract/integration/e2e
+  tests, full `make validate-pr`, and refreshed `make test-summary`.
+  Refreshed summary: package 57 passed, 1 skipped; unit 818 passed, 1 skipped;
+  contract 93 passed, 2 skipped; integration 74 passed, 8 skipped,
+  10 deselected; e2e 38 passed, 1 deselected; config-extra 420 passed,
+  1083 deselected.
+- Refinement summary: reviewed the Phase 6 implementation against read-only
+  semantics, authority/schema failure behavior, capability requirements,
+  projection/materialization diagnostics, import boundaries, export surface,
+  and suite coverage. Applied one small correction so explicit shared-filesystem
+  or remote capability failures preserve diagnostic codes/messages in text-mode
+  errors and remote requirements reuse backend capability-record detail; added
+  unsupported schema and text-error detail coverage. No mutation paths, direct
+  SQLite CLI reads, project-code imports, export/snapshot/repair behavior, or
+  future-phase functionality were added.
+- Blocker-resolution summary: not used; no blocker-resolution pass consumed.
+- PR preparation: pending.
+- Stack maintenance: none required; root branch still targets `develop`.
+- Remaining blockers: none known.

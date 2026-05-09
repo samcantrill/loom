@@ -16,6 +16,7 @@ from loom.pipeline.stores import (
     LocalRunStore,
     PerRunAuthorityStore,
     StoreDiagnostic,
+    UnsupportedCapabilityCode,
     read_authoritative_run,
     run_uri_to_path,
 )
@@ -351,7 +352,7 @@ def _requirement_diagnostics(
     if require_shared_filesystem:
         diagnostics.append(
             StoreDiagnostic(
-                code="unsafe_shared_filesystem",
+                code=UnsupportedCapabilityCode.UNSAFE_SHARED_FILESYSTEM.value,
                 message=(
                     f"backend {capability_set.backend_name!r} does not prove "
                     "shared-filesystem safety"
@@ -361,21 +362,24 @@ def _requirement_diagnostics(
             )
         )
     if require_remote:
-        diagnostics.append(
-            StoreDiagnostic(
-                code="unsafe_remote_coordination",
-                message=(
-                    f"backend {capability_set.backend_name!r} does not support "
-                    "remote coordination"
-                ),
-                severity=DiagnosticSeverity.ERROR,
-                detail={
-                    "backend_name": capability_set.backend_name,
-                    "required_capability": BackendCapability.CROSS_RUN_COORDINATION.value,
-                    "scope": CapabilityScope.CROSS_RUN.value,
-                },
-            )
+        unsupported = capability_set.require(
+            BackendCapability.CROSS_RUN_COORDINATION,
+            scope=CapabilityScope.CROSS_RUN,
         )
+        if unsupported is not None:
+            diagnostics.append(
+                StoreDiagnostic(
+                    code=UnsupportedCapabilityCode.UNSAFE_REMOTE_COORDINATION.value,
+                    message=unsupported.message,
+                    severity=DiagnosticSeverity.ERROR,
+                    detail={
+                        "backend_name": capability_set.backend_name,
+                        "required_capability": unsupported.capability.value,
+                        "scope": unsupported.scope.value,
+                        **dict(unsupported.detail),
+                    },
+                )
+            )
     return tuple(diagnostics)
 
 
