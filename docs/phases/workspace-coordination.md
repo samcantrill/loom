@@ -2,9 +2,9 @@
 
 ## Metadata
 
-- Status: draft phase execution plan.
+- Status: final phase execution plan; ready for implementation.
 - Feature focus: Persistence And Concurrency Foundation
-- Intended PR title:
+- PR title:
   `Persistence And Concurrency Foundation - Phase 8: Workspace/Sweep Coordination Foundation`
 - Branch: `codex/workspace-coordination`
 - Worktree:
@@ -33,9 +33,15 @@
   blocking or non-blocking findings remained.
 - Plan quality gate loop budget: initial review used; gate refinement and
   confirmation review were not needed.
-- Draft pass: complete by `loom_phase_planner`; draft commit to be recorded
-  after commit.
-- Refine pass: pending because expanded-path triggers apply.
+- Draft pass: complete by `loom_phase_planner` in draft-plan commit
+  `f49de63`.
+- Refine pass: complete on 2026-05-10 by `loom_phase_planner`; the expanded
+  pass reread the draft plan, implementation-plan v9, `AGENTS.md`,
+  `docs/structure.md`, `.codex` phase prompts/template, current coordination
+  contracts, capability records, SQLite authority boundaries, in-memory
+  conformance support, coordination contract tests, and sweep/run-store docs,
+  then tightened minimal protocol-extension scope, counter recovery limits,
+  local SQLite safety diagnostics, suite obligations, and stop conditions.
 - Setup limitations: GitHub auth and `origin/develop` were verified with
   approved network access; branch/worktree creation required approved sandbox
   escalation after the default sandbox could not write namespaced git refs.
@@ -107,6 +113,9 @@ generation remain future work.
   current in-memory contract records cross-run facts only. Phase 8 should
   broaden these contract tests to run against both fake and SQLite/local
   coordination implementations.
+- No concrete SQLite workspace coordination module exists yet. The new
+  implementation should follow the private-schema pattern from
+  `sqlite_authority.py` without exposing SQL layout as a public contract.
 - `src/loom/pipeline/stores/sqlite_authority.py` is intentionally per-run and
   declares `CROSS_RUN_COORDINATION` and `GLOBAL_COUNTERS` unsupported. Phase 8
   should add a separate coordination backend instead of extending the per-run
@@ -379,6 +388,26 @@ policy.
 - Recovery ambiguity: expired leases should be detectable without silently
   marking trial work succeeded, failed, or retried.
 
+## Stop Conditions
+
+- Stop if implementation requires a non-stdlib runtime dependency, a service
+  process, Postgres, remote storage, a hosted scheduler, or network services.
+- Stop if satisfying the phase requires copying per-run stage lifecycle,
+  attempt, submitted-operation, commit, artifact, event, or snapshot facts into
+  workspace/sweep tables.
+- Stop if the local SQLite backend would need to claim multi-host,
+  shared-filesystem, or remote coordination safety beyond local or same-host
+  guarantees.
+- Stop if the counter design cannot recover abandoned lease capacity
+  deterministically without implementing scheduler fairness or sweep admission
+  policy.
+- Stop if the executor finds that `WorkspaceCoordinationStore` needs a broad
+  redesign rather than the minimal renew/fail/counter tightening identified in
+  this plan.
+- Stop if a proposed CLI surface becomes a sweep runner, mutation/repair
+  command, export/snapshot workflow, or supported SQL inspection path instead
+  of a diagnostic-only surface.
+
 ## Validation Commands
 
 Targeted development commands:
@@ -422,11 +451,16 @@ make test-summary
 
 ## Completion Notes
 
-- Draft plan: completed by `loom_phase_planner`; commit pending.
-- Final phase execution plan: pending expanded-path refinement.
+- Draft plan: completed by `loom_phase_planner` in commit `f49de63`.
+- Final phase execution plan: refined to final/scope-complete status in this
+  pass; locks the separate cross-run coordination authority, local SQLite-only
+  implementation boundary, minimal protocol tightening, counter recovery
+  limits, suite obligations, and stop conditions.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: expanded-path refinement completed; no product code,
+  tests, PR body, or implementation validation were changed in this planning
+  pass.
 - Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: no predecessor; rebase onto updated `develop` if needed
