@@ -558,7 +558,12 @@ make test-summary
   passed, 1 skipped; contract 93 passed, 2 skipped; integration 74 passed, 8
   skipped, 10 deselected; e2e 38 passed, 1 deselected; config-extra 420
   passed, 1083 deselected; overall 1500 passed, 12 skipped, 1094 deselected,
-  0 failed, and 0 errors. PR creation is pending branch push and GitHub
-  creation.
+  0 failed, and 0 errors.
+- PR opening: branch `codex/backend-diagnostics` pushed to `origin`; PR #106
+  opened at https://github.com/samcantrill/loom/pull/106 with base `develop`,
+  head `codex/backend-diagnostics`, and state `OPEN`. Immediate verification
+  used `gh pr view 106 --json baseRefName,headRefName,state,url` and confirmed
+  `baseRefName=develop`, `headRefName=codex/backend-diagnostics`,
+  `state=OPEN`.
 - Stack maintenance: none required; root branch still targets `develop`.
 - Remaining blockers: none known.
