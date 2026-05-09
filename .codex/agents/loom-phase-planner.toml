@@ -1,7 +1,7 @@
 name = "loom_phase_planner"
 description = "Creates the branch/worktree and drafts or refines one Loom phase execution plan."
 model = "gpt-5.5"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Phase Planner", "Execution Planner", "Worktree Planner"]
 developer_instructions = """

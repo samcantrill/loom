@@ -1,7 +1,7 @@
 name = "loom_pr_preparer"
 description = "Prepares or opens the PR for a completed Loom phase."
 model = "gpt-5.5"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["PR Preparer", "Phase Publisher", "PR Drafter"]
 developer_instructions = """

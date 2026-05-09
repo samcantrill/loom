@@ -1,7 +1,7 @@
 name = "loom_phase_refiner"
 description = "Performs one bounded implementation/test refinement or scoped blocker-resolution pass for a Loom phase."
 model = "gpt-5.5"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Phase Refiner", "Test Refiner", "Fix Worker"]
 developer_instructions = """

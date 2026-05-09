@@ -31,6 +31,9 @@ splits oversized steps:
 - SLURM is split into script planning/dry-run and live submission/operations.
 - Many-run workflows are split into run catalog, bundle export/import, and
   deterministic sweeps.
+- A persistence and concurrency foundation is inserted after the run catalog so
+  concurrent DAG execution, large sweeps, shared filesystems, and remote-capable
+  stores do not inherit single-writer local-run assumptions.
 - Remote stores are split into the backend-neutral contract and optional
   operational backend work.
 - Container execution is split into Docker and Apptainer/SLURM composition.
@@ -77,6 +80,11 @@ written.
   `loom` contracts. `loom` remains the source of truth for pipeline semantics,
   run directories, artifact references, fingerprints, resume decisions, and
   provenance.
+- Treat the post-v9 authoritative persistence backend as the source of truth
+  for active run state. Human-readable local files may remain useful for
+  payloads, logs, config/provenance materialization, or later export workflows,
+  but active state readers should use backend-neutral store contracts and
+  capabilities rather than legacy local-file state.
 - Keep every version useful on its own and reviewable as a coherent product
   increment.
 
@@ -93,15 +101,16 @@ written.
 | v6 | SLURM script planning | Scheduler-neutral resource mapping, SLURM models, script builders, and dry-run manifests. |
 | v7 | SLURM operations | Optional live `sbatch` submission, status, cancellation, and submission recovery. |
 | v8 | Run catalog and comparison | Rebuildable local run index, run listing, filtering, and metadata comparison. |
-| v9 | Run bundles and exporters | Safe run export, inspect, import, and compatibility exporter contracts with portable manifests. |
-| v10 | Deterministic sweeps | Grid/manual sweep expansion, manifests, sequential execution, status, and collection. |
-| v11 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, artifact stores, run exporters, event sinks, and provenance. |
-| v12 | Remote store contract | Backend-neutral artifact-store capabilities, fake remote store, and remote preflight surface. |
-| v13 | Remote store operations | Explicit remote payload operations and at most one optional backend adapter family, if selected. |
-| v14 | Docker container executor | Docker CLI executor using the stage-worker and artifact/run-store contracts. |
-| v15 | HPC container execution | Apptainer/Singularity executor and SLURM-container composition. |
-| v16 | Reliability policies and event sinks | Retry, timeout, failure-category, runtime event, and observe-only event sink policies across executors. |
-| v17 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
+| v9 | Persistence and concurrency foundation | Authoritative run/sweep store contracts, backend capabilities, stage attempts, leases, and commit semantics for future concurrent execution. |
+| v10 | Run bundles and exporters | Safe run export, inspect, import, and compatibility exporter contracts with portable manifests. |
+| v11 | Deterministic sweeps | Grid/manual sweep expansion, manifests, sequential execution, status, and collection. |
+| v12 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, artifact stores, run exporters, event sinks, and provenance. |
+| v13 | Remote store contract | Backend-neutral artifact-store capabilities, fake remote store, and remote preflight surface. |
+| v14 | Remote store operations | Explicit remote payload operations and at most one optional backend adapter family, if selected. |
+| v15 | Docker container executor | Docker CLI executor using the stage-worker and artifact/run-store contracts. |
+| v16 | HPC container execution | Apptainer/Singularity executor and SLURM-container composition. |
+| v17 | Reliability policies and event sinks | Retry, timeout, failure-category, runtime event, and observe-only event sink policies across executors. |
+| v18 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 
 ## v0 - Local Runtime Kernel
 
@@ -524,8 +533,8 @@ Primary feature docs:
 
 Goal:
 
-- Make many local runs discoverable, searchable, and comparable without adding
-  a database or tracking server.
+- Make many local runs discoverable, searchable, and comparable through a
+  rebuildable derived catalog while keeping the run store authoritative.
 
 Implement:
 
@@ -553,8 +562,8 @@ Exit criteria:
 
 Defer:
 
-- Export/import bundles, sweeps, SQLite-backed catalogs, dashboard UI, remote
-  catalog services, domain-specific artifact diffs, and incremental watchers.
+- Export/import bundles, sweeps, dashboard UI, remote catalog services,
+  domain-specific artifact diffs, and incremental watchers.
 
 Primary feature docs:
 
@@ -565,7 +574,111 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v9 - Run Bundles And Exporters
+## v9 - Persistence And Concurrency Foundation
+
+Goal:
+
+- Revisit and strengthen Loom's authoritative persistence, lifecycle, and
+  backend capability contracts before large concurrent execution, distributed
+  sweeps, shared filesystems, and remote-capable stores depend on the current
+  single-writer local-run assumptions.
+
+Implement:
+
+- A detailed implementation plan quality gate for the run-store, state,
+  execution, reliability, sweep, remote-store, and run-catalog implications of
+  concurrency.
+- Backend capability models for authoritative run-state stores, including
+  atomic status transitions, stage attempt allocation, stage/run leases,
+  output commit semantics, consistent snapshot reads, collection listing, and
+  freshness or revision evidence for query projections.
+- A SQLite-first authoritative coordination backend and hard swap-over for
+  active run state, keeping the public contract backend-neutral so stronger
+  backends can replace SQLite later.
+- Explicit stage-attempt and output-commit records that make committed outputs,
+  failed attempts, interrupted attempts, retries, and cleanup candidates
+  unambiguous.
+- A clarified run lifecycle for concurrent DAG execution where the run status is
+  a materialized lifecycle summary over stage, attempt, lease, and commit facts.
+- A clarified stage lifecycle for `READY`, claimed/leased, running/submitted,
+  committing, succeeded, failed, cancelled, interrupted, and retryable states
+  without widening core status enums before the state model is reviewed.
+- Artifact-index concurrency rules, likely by making per-stage committed
+  artifact facts authoritative and treating run-level artifact indexes as
+  materialized views unless a backend can update them transactionally.
+- Active-query rules for `RunCatalog` and CLI/status consumers so derived
+  SQLite catalog rows, status summaries, and future sweep tables validate
+  against authoritative freshness or revision evidence.
+- A bounded user-facing parallel stage execution policy over independent ready
+  DAG stages, exposed through both Python API and CLI, and gated on backend
+  capabilities. Parallel execution is opt-in, serial execution remains the
+  default, and failure behavior is configurable between stopping new leases
+  after a terminal stage failure and continuing independent non-dependent DAG
+  branches. Explicit parallel requests fail loudly when required backend
+  capabilities are unavailable.
+- A minimal backend inspection/debugging CLI that reads authoritative backend
+  state under `loom backend ...` and does not mutate, repair, export, or
+  snapshot backend state.
+- Sweep coordination requirements for future large sweeps: trial manifests,
+  trial claim/lease records, trial retry attempts, global concurrency leases,
+  named resource slot leases, status snapshots, and abandoned-lease recovery.
+- Backend capability assessment that identifies which guarantees are safe for
+  the SQLite-first backend, which assumptions are unsafe on shared filesystems
+  or remote-capable stores, and which capabilities require a stronger future
+  backend.
+- Contract tests using synthetic local and fake/conformance backends for
+  supported and unsupported capability behavior.
+
+Exit criteria:
+
+- Loom has a reviewed authoritative persistence contract that can support
+  concurrent stage writers without making v8 catalog SQLite or any external
+  tracker a second source of truth.
+- New active runs use the SQLite-first authoritative backend for live state;
+  legacy local state files are not live truth or fallback truth, and no user
+  setup is required to select the new backend.
+- Future parallel DAG execution can be capability-gated on atomic stage claim,
+  attempt allocation, output commit, and recovery behavior.
+- Bounded user-facing parallel stage execution is available through Python API
+  and CLI for capability-supported local execution.
+- Future large concurrent sweeps can build on explicit trial and resource lease
+  semantics instead of ad hoc directory scans.
+- Active run and sweep queries have a documented current-read guarantee or a
+  documented warning path when the selected backend cannot provide it.
+
+Defer:
+
+- Full distributed workflow-engine behavior, hosted tracking services, remote
+  catalog services, dynamic DAG mutation, adaptive sweep algorithms, concrete
+  cloud backends, service-specific telemetry sinks, and domain-specific metric
+  stores.
+- Distributed or scheduler-backed parallel execution policy, full arbitrary
+  shared-filesystem support, full remote backend or object-store authority, and
+  Postgres/service backend implementation.
+- Old-run migration, legacy local-file state fallback, and derived state
+  export/snapshot commands. Derived export/snapshot behavior belongs in later
+  bundle/export work if needed.
+- Backend repair or mutation commands outside normal execution APIs.
+
+Primary feature docs:
+
+- `run-store.md`
+- `state.md`
+- `execution.md`
+- `reliability.md`
+- `run-catalog.md`
+- `sweeps.md`
+- `remote-stores.md`
+- `artifacts.md`
+- `runtime-resources.md`
+- `slurm.md`
+- `testing.md`
+
+Planning notes:
+
+- `roadmap-v9-planning-notes.md`
+
+## v10 - Run Bundles And Exporters
 
 Goal:
 
@@ -621,7 +734,7 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v10 - Deterministic Sweeps
+## v11 - Deterministic Sweeps
 
 Goal:
 
@@ -651,7 +764,8 @@ Exit criteria:
 
 - A user can define a grid or manual sweep, inspect the planned trials, run
   them sequentially, and see trial statuses.
-- Every trial remains an ordinary run that v8 and v9 tools can inspect.
+- Every trial remains an ordinary run that v8 catalog and v10 bundle tools can
+  inspect.
 - Sweep logic does not implement its own config merge, stage execution, or
   scheduler submission behavior.
 
@@ -675,7 +789,7 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v11 - Plugin Discovery
+## v12 - Plugin Discovery
 
 Goal:
 
@@ -693,8 +807,8 @@ Implement:
 - Codec plugin loading into supplied codec registries.
 - Source, executor, and store backend loading after corresponding registries
   exist.
-- Run exporter plugin loading after the v9 exporter protocol exists.
-- Event sink plugin listing, with registration deferred until the v16
+- Run exporter plugin loading after the v10 exporter protocol exists.
+- Event sink plugin listing, with registration deferred until the v17
   `RuntimeEvent` and `EventSinkRegistry` contracts are stable.
 - Plugin provenance summaries for plugin names, packages, versions, groups, and
   load results.
@@ -731,7 +845,7 @@ Primary feature docs:
 - `provenance.md`
 - `testing.md`
 
-## v12 - Remote Store Contract
+## v13 - Remote Store Contract
 
 Goal:
 
@@ -744,7 +858,7 @@ Implement:
 - Artifact-store capability model: readable, writable, listable,
   atomic-commit support, checksum verification, and delete support.
 - Backend-neutral URI/config validation hooks and redaction helpers.
-- Store registry hooks compatible with v11 plugin loading.
+- Store registry hooks compatible with v12 plugin loading.
 - Fake remote artifact store for contract and preflight tests.
 - Manifest-last commit expectations and metadata shapes for remote-like stores.
 - Read-only store behavior for reference artifacts.
@@ -780,7 +894,7 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v13 - Remote Store Operations
+## v14 - Remote Store Operations
 
 Goal:
 
@@ -828,7 +942,7 @@ Primary feature docs:
 - `preflight.md`
 - `testing.md`
 
-## v14 - Docker Container Executor
+## v15 - Docker Container Executor
 
 Goal:
 
@@ -876,7 +990,7 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v15 - HPC Container Execution
+## v16 - HPC Container Execution
 
 Goal:
 
@@ -925,7 +1039,7 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v16 - Reliability Policies And Event Sinks
+## v17 - Reliability Policies And Event Sinks
 
 Goal:
 
@@ -971,7 +1085,7 @@ Implement:
   environments, including named keys, slot counts, lease duration, renewal
   records, and explicit behavior when lease renewal fails.
 - Programmatic event sink registration first, with plugin-discovered event sink
-  loading integrated after the v11 plugin surfaces and this version's event
+  loading integrated after the v12 plugin surfaces and this version's event
   sink registry are both stable.
 - Preflight warnings for unsupported retry, timeout, event, transaction, and
   concurrency-lease policies.
@@ -998,7 +1112,7 @@ Exit criteria:
 - Event sinks are observer-only and cannot become an alternate execution,
   planning, artifact, retry, or metric semantics layer.
 - Global concurrency leases can be consumed by later bounded sweeps or external
-  adapters without making v10 sweeps concurrent by default.
+  adapters without making v11 sweeps concurrent by default.
 
 Defer:
 
@@ -1009,7 +1123,7 @@ Defer:
   escalation.
 - Work-pool, queue, worker-daemon, prefetch, scheduling, and worker-health
   abstractions. Those may be revisited for future orchestration adapters, but
-  v16 should stay focused on the durable runtime records and policies that such
+  v17 should stay focused on the durable runtime records and policies that such
   adapters would consume.
 
 Primary feature docs:
@@ -1024,7 +1138,7 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v17 - Cleanup And Retention
+## v18 - Cleanup And Retention
 
 Goal:
 
@@ -1101,7 +1215,7 @@ future roadmap candidates, not as implicit scope for the versions above.
   and centralize cancellation. This should remain deferred until Loom has a
   concrete scheduling or multi-run orchestration need.
 - MLflow-backed and DVC-backed artifact stores. These should be optional
-  plugin backends after the v12 remote-store capability model exists. They must
+  plugin backends after the v13 remote-store capability model exists. They must
   advertise read/write/list/checksum/delete and transaction semantics like any
   other backend, and they must not become special cases inside core Loom.
 - Hydra configuration or launcher bridges. Existing Hydra projects may benefit
@@ -1109,7 +1223,7 @@ future roadmap candidates, not as implicit scope for the versions above.
   authored-source provenance, fingerprints, and path-aware error behavior well
   enough for Loom resume decisions to stay trustworthy.
 - OpenTelemetry, W&B, JSONL audit, webhook, or notification event sinks. These
-  should be service-specific plugins over the v16 event sink model. Core Loom
+  should be service-specific plugins over the v17 event sink model. Core Loom
   should provide the event contract and failure policy, not service delivery.
 - No `MetricExtractor` layer. Loom may track a metrics file as an ordinary
   artifact reference because project code produced it, but core Loom should not
@@ -1152,26 +1266,26 @@ Before turning any roadmap version into a full implementation plan:
 | `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
 | `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
-| `io.md` | v0, v1, v11, v12, v13 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v11; remote hooks and operations in v12/v13. |
-| `artifacts.md` | v0, v3, v9, v12, v13, v17 | Local artifact refs/stores in v0; inspection in v3; bundles/exporters in v9; remote capabilities in v12/v13; retention in v17. |
-| `config.md` | v0, v1, v2, v10, v11 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v10; recipe plugins in v11. |
-| `pipeline.md` | v0, v2, v10 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI and sweeps expose them later. |
+| `io.md` | v0, v1, v12, v13, v14 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v12; remote hooks and operations in v13/v14. |
+| `artifacts.md` | v0, v3, v9, v10, v13, v14, v18 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; bundles/exporters in v10; remote capabilities in v13/v14; retention in v18. |
+| `config.md` | v0, v1, v2, v11, v12 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v11; recipe plugins in v12. |
+| `pipeline.md` | v0, v2, v9, v11 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
-| `runtime-resources.md` | v4, v6, v7, v14, v15 | Shared runtime/resource objects arrive before executor-specific mapping. |
-| `execution.md` | v0, v4, v5, v6, v7, v14, v15, v16 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; reliability in v16. |
-| `run-store.md` | v0, v3, v5, v8, v9, v16, v17 | Local layout in v0; inspection/failures/catalog/bundles/reliability/cleanup build on it. |
-| `state.md` | v0, v5, v7, v16 | Basic statuses in v0; attempts/failures, scheduler state, and reliability records mature later. |
-| `provenance.md` | v0, v1, v6, v7, v11, v14, v15, v16 | Generic provenance in v0; config composition provenance in v1; submission, plugin, container, event, and event-sink facts added with those capabilities. |
-| `resume.md` | v0, v2, v3, v10, v16 | Same-run-directory resume in v0; CLI/preflight/sweeps expose it; retry policies remain later. |
-| `preflight.md` | v3, v4, v5, v6, v7, v11, v12, v13, v14, v15, v16, v17 | Core check runner in v3; new checks arrive with each operational feature. |
-| `run-catalog.md` | v8, v9, v10, v13, v17 | Catalog/comparison in v8; bundles and exporters in v9; sweeps integrate in v10; remote refs and cleanup later. |
-| `sweeps.md` | v10 | Sweeps are many ordinary runs, so they follow local execution, CLI basics, and run catalog foundations. |
-| `slurm.md` | v6, v7, v15 | Script/dry-run support first; live operations second; container composition after both are stable. |
-| `container-executors.md` | v14, v15 | Docker first; Apptainer and SLURM-container composition second. |
-| `remote-stores.md` | v12, v13 | Contract and fake backend first; payload operations and optional real backends second. |
-| `reliability.md` | v5, v16, v17 | Baseline failure metadata starts with subprocess; retry, timeout, runtime events, event sinks, and cleanup land later. |
-| `plugins.md` | v11, v12, v13, v16 | Explicit discovery in v11; remote backend, exporter, and event sink integration later. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v9, v10, v11, v13, v14, v15, v16, v17 | Core CLI lands in v2; commands grow only with their owning feature. |
+| `runtime-resources.md` | v4, v6, v7, v15, v16 | Shared runtime/resource objects arrive before executor-specific mapping. |
+| `execution.md` | v0, v4, v5, v6, v7, v9, v15, v16, v17 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; reliability in v17. |
+| `run-store.md` | v0, v3, v5, v8, v9, v10, v17, v18 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; bundles/reliability/cleanup build later. |
+| `state.md` | v0, v5, v7, v9, v17 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, and reliability records mature later. |
+| `provenance.md` | v0, v1, v6, v7, v12, v15, v16, v17 | Generic provenance in v0; config composition provenance in v1; submission, plugin, container, event, and event-sink facts added with those capabilities. |
+| `resume.md` | v0, v2, v3, v9, v11, v17 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; sweeps and retry policies build later. |
+| `preflight.md` | v3, v4, v5, v6, v7, v9, v12, v13, v14, v15, v16, v17, v18 | Core check runner in v3; new checks arrive with each operational feature. |
+| `run-catalog.md` | v8, v9, v10, v11, v14, v18 | Catalog/comparison in v8; active-query guarantees and projections in v9; bundles and exporters in v10; sweeps integrate in v11; remote refs and cleanup later. |
+| `sweeps.md` | v9, v11 | V9 defines coordination primitives for large sweeps; v11 implements deterministic sweeps as many ordinary runs. |
+| `slurm.md` | v6, v7, v16 | Script/dry-run support first; live operations second; container composition after both are stable. |
+| `container-executors.md` | v15, v16 | Docker first; Apptainer and SLURM-container composition second. |
+| `remote-stores.md` | v9, v13, v14 | V9 shapes backend capability expectations; contract and fake backend first; payload operations and optional real backends second. |
+| `reliability.md` | v5, v9, v17, v18 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; retry, timeout, runtime events, event sinks, and cleanup land later. |
+| `plugins.md` | v12, v13, v14, v17 | Explicit discovery in v12; remote backend, exporter, and event sink integration later. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v10, v11, v12, v14, v15, v16, v17, v18 | Core CLI lands in v2; commands grow only with their owning feature. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
 
 ## Functionality Not Encompassed By This Roadmap
@@ -1193,17 +1307,18 @@ until there is a specific downstream need and a separate design review.
 - Cross-run cache reuse as a default behavior, global content-addressed cache,
   partial stage reuse, and domain-specific checkpoint continuation in core
   `loom`.
-- Database-backed orchestration, remote tracking servers, web dashboards,
+- Hosted workflow orchestration, remote tracking servers, web dashboards,
   authorization systems, and hosted run catalog services as core Loom features.
-  External systems such as Prefect or MLflow may be reconsidered only as
-  optional adapters.
+  V9 may consider database-backed authoritative store implementations for
+  Loom's own persistence contract, but external systems such as Prefect or
+  MLflow remain optional adapters.
 - Controller-mode SLURM, job arrays, multi-node MPI orchestration, cloud batch
   backends, Kubernetes, and workflow submission across unrelated clusters.
 - Built-in Bayesian optimization, random search as a core feature,
   population-based training, adaptive trial generation, early stopping across
   trials, and metric query languages.
 - Broad first-party parity across S3, GCS, Azure, MLflow, DVC, fsspec, and
-  similar backends. v13 should select at most one optional adapter family if a
+  similar backends. v14 should select at most one optional adapter family if a
   concrete need exists.
 - Full SBOM generation, cryptographic attestation, signed artifact manifests,
   distributed tracing, and remote telemetry.
@@ -1227,6 +1342,9 @@ Revisit this roadmap when any of the following become true:
   runtime dependencies.
 - The local run layout changes in a way that would affect catalogs, export,
   SLURM workers, containers, or remote stores.
+- Concurrent stage execution, large sweeps, shared filesystems, or remote
+  stores require stronger run-state guarantees than the current local
+  filesystem backend can safely provide.
 - Multiple downstream packages implement similar plugins, codecs, stores, or
   executor adapters outside `loom`.
 - Operational failures show that reliability policy work should move earlier.
