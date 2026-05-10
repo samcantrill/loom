@@ -910,7 +910,7 @@ Accepted risks to watch during phase execution:
 
 ### Phase 1 - Exhaustive Inventory And Lifecycle Contracts
 
-Status: approved
+Status: merged
 Branch: `codex/authority-inventory-contracts`
 PR: https://github.com/samcantrill/loom/pull/109
 
@@ -978,7 +978,8 @@ Reviewability:
 Completion summary:
 
 - PR #109 opened on 2026-05-10 against `develop`; automated PR review found
-  no blocking findings and GitHub CI `checks` passed.
+  no blocking findings, GitHub CI `checks` passed, and the PR was squash-merged
+  into `develop` as `7d3df7fd395036fa86b4365baa2e57755f8680f0`.
 - Added `docs/phases/authority-inventory-contracts.md` with refreshed
   `LocalRunStore`, `LocalRunStorePaths`, path-shaped `RunStore`, and local
   helper inventory evidence; a migration map with future-phase ownership; and
@@ -988,6 +989,8 @@ Completion summary:
   overall 1534 passed, 12 skipped, 1128 deselected, and 0 failed/errors.
 - Follow-up: Phase 2 can use the inventory and contracts to define the public
   authority interfaces and conformance harness.
+- Stack maintenance: no successor branch existed at merge time, and the Phase
+  1 remote branch was requested for deletion by the merge command.
 
 ### Phase 2 - Generic RunStore/StageStore Interfaces And Conformance Harness
 
