@@ -1624,9 +1624,9 @@ Completion summary:
 
 ### Phase 8 - HPC Deployment Modes And Fallback Capabilities
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/hpc-authority-deployment`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/116
 
 Goal:
 
@@ -1728,8 +1728,12 @@ Reviewability:
 Completion summary:
 
 - Phase execution plan drafted and refined on 2026-05-10 in
-  `docs/phases/hpc-authority-deployment.md`; implementation in progress on
-  branch `codex/hpc-authority-deployment` from updated `develop`.
+  `docs/phases/hpc-authority-deployment.md`.
+- PR #116 opened against `develop` on 2026-05-10 from branch
+  `codex/hpc-authority-deployment`.
+- Implementation adds backend-neutral authority deployment diagnostics,
+  deterministic live-worker preflight, deferred result envelopes, guarded
+  authority reconciliation, and SLURM handoff documentation.
 
 ### Phase 9 - System-Wide Service Backend Adoption
 

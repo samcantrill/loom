@@ -5,13 +5,13 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 8 - HPC Deployment Modes And Fallback Capabilities
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/hpc-authority-deployment`
 - Worktree: `/home/samcantrill/work/loom-worktrees/hpc-authority-deployment`
 - Stack predecessor: none; Phase 7 merged before branch creation.
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/116
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
   `Authority Runtime Unification - Phase 8: HPC Authority Deployment`
