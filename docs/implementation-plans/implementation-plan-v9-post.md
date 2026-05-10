@@ -1420,7 +1420,7 @@ Completion summary:
 
 ### Phase 6 - Authority Read Models For Status, Catalog, Plan, And Diagnostics
 
-Status: pending
+Status: in_progress
 Branch: `codex/authority-read-models`
 PR: pending
 
@@ -1489,7 +1489,9 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- Phase execution plan drafted and refined on 2026-05-10 in
+  `docs/phases/authority-read-models.md`; implementation in progress on
+  branch `codex/authority-read-models` from updated `develop`.
 
 ### Phase 7 - Concrete Service/Database Backend
 
