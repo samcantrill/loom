@@ -19,7 +19,9 @@
 - Refine pass: complete on 2026-05-10 because this phase spans operational
   entrypoints, worker handoff, submitted jobs, cancellation, and scheduler
   observation.
-- Phase implementation refinement budget: unused
+- Phase implementation refinement budget: used locally on 2026-05-10 to align
+  stale SLURM live/dry-run e2e expectations and public examples after
+  validation surfaced Phase 5 authority-admission behavior.
 - Phase PR review budget: unused
 - Blocker-resolution budget: 0/3 used
 
@@ -120,11 +122,42 @@ default to local-only lifecycle files.
 
 ## Implementation Summary
 
-- Pending.
+- Routed `loom stage run`, `loom stage-job run`, `loom prepared-run continue`,
+  SLURM dry-run/live preparation, SLURM cancellation, and SLURM scheduler
+  status helpers through authority-backed run-store construction.
+- Added SLURM live authority admission so the transitional SQLite-backed
+  runtime fails before scheduler submission when the selected authority cannot
+  prove live submitted-worker semantics.
+- Threaded authority attempt, lease, owner, and fencing metadata through
+  stage-job and stage-worker paths, including fallback validation from worker
+  request metadata for submitted jobs.
+- Tightened worker finalization so supported authority-backed stage workers
+  validate leases/fencing before execution and fail closed when authority
+  metadata is absent or stale.
+- Updated config, integration, e2e, support fixtures, and public examples to
+  treat local files as materialization only while using authority-backed stores
+  for runtime mutation.
 
 ## Validation Evidence
 
-- Pending.
+- Focused validation passed:
+  - `uv run ruff check` on the Phase 5 CLI, worker, SLURM helper, example, and
+    test files.
+  - `uv run --extra config pytest` on the Phase 5 CLI, worker, authority
+    adapter, SLURM unit, integration, e2e, and docs-example slices.
+- `make validate-pr` passed on 2026-05-10:
+  - Ruff: passed.
+  - Pyright: passed with 0 errors.
+  - Default test harness: 1105 passed, 18 skipped, 14 deselected.
+  - Config-extra harness: 420 passed, 1134 deselected.
+  - Build: source distribution and wheel built successfully.
+- `make test-summary` passed on 2026-05-10:
+  - package: 57 passed, 1 skipped.
+  - unit: 837 passed, 1 skipped.
+  - contract: 108 passed, 2 skipped.
+  - integration: 90 passed, 8 skipped, 10 deselected.
+  - e2e: 39 passed, 1 deselected.
+  - config-extra: 420 passed, 1134 deselected.
 
 ## Stop Conditions
 

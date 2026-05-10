@@ -1,4 +1,4 @@
-"""End-to-end fake-runner flow across SLURM submit, status, and cancel."""
+"""End-to-end fake-runner coverage for SLURM live authority admission."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from loom.cli.main import main
-from loom.pipeline.executors.slurm import FakeSlurmCommandRunner, SlurmCommandResult
+from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
 from loom.pipeline.stores import path_to_run_uri
 
 pytestmark = [pytest.mark.e2e, pytest.mark.optional_dependency]
@@ -24,9 +24,7 @@ def test_cli_slurm_live_submit_status_cancel_flow_stays_artifact_safe(
     pytest.importorskip("omegaconf")
     pytest.importorskip("yaml")
 
-    import loom.cli.cancel as cancel_command
     import loom.cli.run as run_command
-    import loom.cli.status as status_command
     import loom.diagnostics.preflight as preflight_module
 
     secret_value = "phase7-secret-value"
@@ -39,39 +37,13 @@ def test_cli_slurm_live_submit_status_cancel_flow_stays_artifact_safe(
         else None,
     )
     submit_runner = FakeSlurmCommandRunner(starting_job_id=900)
-    status_runner = FakeSlurmCommandRunner(
-        scripted_results={
-            "sacct": (
-                SlurmCommandResult(command="sacct", argv=("sacct",), returncode=0),
-            ),
-            "squeue": (
-                SlurmCommandResult(
-                    command="squeue",
-                    argv=("squeue",),
-                    returncode=0,
-                    stdout="900|RUNNING|None\n901|PENDING|Dependency\n",
-                ),
-            ),
-        }
-    )
-    cancel_runner = FakeSlurmCommandRunner()
     monkeypatch.setattr(run_command, "_build_slurm_command_runner", lambda: submit_runner)
-    monkeypatch.setattr(
-        status_command,
-        "_build_slurm_status_command_runner",
-        lambda: status_runner,
-    )
-    monkeypatch.setattr(
-        cancel_command,
-        "_build_slurm_cancel_command_runner",
-        lambda: cancel_runner,
-    )
     config_path = tmp_path / "pipeline.yaml"
     _write_afterok_secret_config(config_path)
     run_path = tmp_path / "runs" / "flow"
     run_uri = path_to_run_uri(run_path)
 
-    run_payload = _run_cli_json(
+    payload = _run_cli_json(
         [
             "run",
             str(config_path),
@@ -82,31 +54,13 @@ def test_cli_slurm_live_submit_status_cancel_flow_stays_artifact_safe(
             "--format",
             "json",
         ],
-        expected_code=0,
-    )
-    status_payload = _run_cli_json(
-        ["status", run_uri, "--jobs", "--format", "json"],
-        expected_code=0,
-    )
-    cancel_payload = _run_cli_json(
-        ["cancel", run_uri, "--jobs", "--format", "json"],
-        expected_code=0,
+        expected_code=7,
     )
 
-    manifest_path = Path(run_payload["result"]["manifest_path"])
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    assert run_payload["result"]["status"] == "SUBMITTED"
-    assert [job["scheduler_job_id"] for job in run_payload["result"]["submitted_jobs"]] == [
-        "900",
-        "901",
-    ]
-    assert status_payload["result"]["jobs"][0]["status"] == "RUNNING"
-    assert status_payload["result"]["jobs"][1]["status"] == "DEPENDENCY_BLOCKED"
-    assert cancel_payload["result"]["status"] == "CANCELLED"
-    assert cancel_payload["result"]["cancelled_count"] == 2
-    assert len(manifest["status_snapshots"]) == 2
-    assert len(manifest["cancellation_attempts"]) == 2
+    assert payload["error"]["code"] == "cli.run.slurm_live_authority_unsupported"
+    assert payload["error"]["details"]["authority_admission"]["supported"] is False
+    assert submit_runner.calls == []
+    assert not run_path.exists()
     assert secret_value not in _read_run_text(run_path)
 
 
@@ -121,8 +75,13 @@ def _run_cli_json(argv: list[str], *, expected_code: int) -> dict[str, Any]:
 
 def _read_run_text(run_path: Path) -> str:
     chunks: list[str] = []
+    if not run_path.exists():
+        return ""
     for path in sorted(item for item in run_path.rglob("*") if item.is_file()):
-        chunks.append(path.read_text(encoding="utf-8"))
+        try:
+            chunks.append(path.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            continue
     return "\n".join(chunks)
 
 

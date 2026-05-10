@@ -1,15 +1,16 @@
-"""End-to-end SLURM afterok live submission through the public CLI."""
+"""End-to-end SLURM afterok live authority admission through the public CLI."""
 
 from __future__ import annotations
 
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from loom.cli.main import main
-from loom.pipeline.executors.slurm import FakeSlurmCommandRunner, SlurmCommandResult
+from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
 from loom.pipeline.stores import path_to_run_uri
 
 pytest.importorskip("pydantic")
@@ -19,7 +20,7 @@ pytest.importorskip("yaml")
 pytestmark = pytest.mark.e2e
 
 
-def test_cli_slurm_live_afterok_submits_dependency_dag_with_fake_sbatch(
+def test_cli_slurm_live_afterok_rejects_default_authority_before_sbatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -55,30 +56,17 @@ def test_cli_slurm_live_afterok_submits_dependency_dag_with_fake_sbatch(
             stdout=stdout,
             stderr=stderr,
         )
-        == 0
+        == 7
     )
 
     payload = json.loads(stdout.getvalue())
-    result = payload["result"]
-    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
-
+    _assert_slurm_live_authority_rejected(payload)
     assert stderr.getvalue() == ""
-    assert payload["schema_version"] == "loom.cli.slurm_live_run.v1"
-    assert payload["ok"] is True
-    assert result["mode"] == "slurm-afterok"
-    assert result["status"] == "SUBMITTED"
-    assert [job["scheduler_job_id"] for job in result["submitted_jobs"]] == [
-        "200",
-        "201",
-        "202",
-    ]
-    assert result["submitted_jobs"][2]["dependency_job_ids"] == ["201"]
-    assert "--dependency=afterok:201" in runner.calls[2][1]
-    assert manifest["submission_status"] == "SUBMITTED"
-    assert manifest["submitted_jobs"][2]["dependency_job_ids"] == ["201"]
+    assert runner.calls == []
+    assert not run_path.exists()
 
 
-def test_cli_slurm_live_afterok_partial_submission_returns_run_failed(
+def test_cli_slurm_live_afterok_rejects_before_partial_scheduler_submission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -90,28 +78,12 @@ def test_cli_slurm_live_afterok_partial_submission_returns_run_failed(
         "which",
         lambda name: "/usr/bin/sbatch" if name == "sbatch" else None,
     )
-    runner = FakeSlurmCommandRunner(
-        scripted_results={
-            "sbatch": (
-                SlurmCommandResult(
-                    command="sbatch",
-                    argv=("sbatch", "--parsable", "extract.sh"),
-                    returncode=0,
-                    stdout="300\n",
-                ),
-                SlurmCommandResult(
-                    command="sbatch",
-                    argv=("sbatch", "--parsable", "transform.sh"),
-                    returncode=1,
-                    stderr="partition closed",
-                ),
-            )
-        }
-    )
+    runner = FakeSlurmCommandRunner()
     monkeypatch.setattr(run_command, "_build_slurm_command_runner", lambda: runner)
     config_path = tmp_path / "pipeline.yaml"
     _write_afterok_config(config_path)
-    run_uri = path_to_run_uri(tmp_path / "runs" / "partial-afterok")
+    run_path = tmp_path / "runs" / "partial-afterok"
+    run_uri = path_to_run_uri(run_path)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -130,21 +102,22 @@ def test_cli_slurm_live_afterok_partial_submission_returns_run_failed(
             stdout=stdout,
             stderr=stderr,
         )
-        == 5
+        == 7
     )
 
     payload = json.loads(stdout.getvalue())
-    result = payload["result"]
-    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
-
+    _assert_slurm_live_authority_rejected(payload)
     assert stderr.getvalue() == ""
+    assert runner.calls == []
+    assert not run_path.exists()
+
+
+def _assert_slurm_live_authority_rejected(payload: dict[str, Any]) -> None:
     assert payload["ok"] is False
-    assert result["status"] == "PARTIAL"
-    assert result["submitted_jobs"][0]["scheduler_job_id"] == "300"
-    assert result["failed_submissions"][0]["logical_key"] == "stage:transform"
-    assert result["failed_submissions"][0]["reason"] == "partition closed"
-    assert manifest["submission_status"] == "PARTIAL"
-    assert manifest["failed_submissions"][0]["dependency_job_ids"] == ["300"]
+    assert payload["error"]["code"] == "cli.run.slurm_live_authority_unsupported"
+    admission = payload["error"]["details"]["authority_admission"]
+    assert admission["supported"] is False
+    assert "slurm_live_worker" in admission["required"]
 
 
 def _write_afterok_config(path: Path) -> None:

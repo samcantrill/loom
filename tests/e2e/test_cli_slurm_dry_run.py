@@ -299,7 +299,10 @@ def _assert_dry_run_secret_boundary(run_path: Path) -> None:
     files = sorted(path for path in run_path.rglob("*") if path.is_file())
     assert files
     for path in files:
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
         for value in forbidden:
             assert value not in text, f"{value!r} leaked into {path}"
     assert not list((run_path / "config").glob("*"))

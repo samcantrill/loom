@@ -12,10 +12,13 @@ from uuid import uuid4
 from loom.cli.main import main as loom_main
 from loom.config import compose_config
 from loom.pipeline import validate_pipeline_config
-from loom.pipeline.execution import prepare_stage_attempt
+from loom.pipeline.execution import (
+    create_authority_backed_serial_run_store,
+    prepare_stage_attempt,
+)
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
 
 
 HERE = Path(__file__).resolve().parent
@@ -27,7 +30,7 @@ def main() -> None:
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_uri = path_to_run_uri(run_root / f"direct-worker-{uuid4().hex[:8]}")
     config_path = HERE / "pipeline.yaml"
-    store = LocalRunStore(run_root)
+    store = create_authority_backed_serial_run_store(run_root)
     store.create_run(run_uri)
     validation = validate_pipeline_config(compose_config(config_path).resolved)
     artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
