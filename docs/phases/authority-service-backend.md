@@ -121,11 +121,47 @@ database-backed service without changing `RunStore`/`StageStore` callers.
 
 ## Implementation Summary
 
-- Pending.
+- Added a stdlib local authority service backend with explicit
+  start/connect/health/stop lifecycle and service-bound endpoint/authkey
+  configuration.
+- Added a `ServiceAuthorityStore` client selected by `create_run_store()` for
+  `co_located_service`, `managed_service`, and `allocation_scoped_service`
+  backend kinds without changing the transitional SQLite default.
+- Implemented run admission, run/stage transitions, attempts, leases, fencing,
+  submitted operations, output commits, artifact facts, snapshots, recovery
+  scans, cleanup candidates, audit events, monotonic revisions, and backend
+  clock state behind the service boundary.
+- Declared service capabilities and unsupported topology claims explicitly,
+  including unsupported direct shared-file authority, production multi-host
+  claims, deferred finalization, cross-run coordination, and global counters.
+- Added conformance, factory, diagnostics, service lifecycle, unavailable
+  service, direct-path rejection, and concurrent service-client integration
+  coverage.
 
 ## Validation Evidence
 
-- Pending.
+- Targeted service backend suite:
+  `uv run --extra config pytest tests/unit/loom/pipeline/stores/test_service_authority.py tests/integration/pipeline/test_authority_factory.py tests/integration/pipeline/test_service_authority_backend.py tests/integration/pipeline/test_backend_diagnostics.py tests/contracts/test_run_store_authority_contract.py -q`
+  passed with 22 tests.
+- Import-boundary and service subset:
+  `uv run --extra config pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_execution_api.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/unit/loom/pipeline/stores/test_service_authority.py tests/integration/pipeline/test_service_authority_backend.py tests/integration/pipeline/test_authority_factory.py tests/contracts/test_run_store_authority_contract.py -q`
+  passed with 57 tests.
+- `uv run --extra config pytest tests/integration/pipeline/test_parallel_execution.py::test_continue_independent_failure_policy_runs_unrelated_branch -q`
+  passed after one transient `make test-summary` integration failure in an
+  unrelated parallel execution test.
+- `make test-summary` passed on the final run:
+
+  | Suite | Result |
+  | --- | --- |
+  | package | 57 passed, 1 skipped |
+  | unit | 843 passed, 1 skipped |
+  | contract | 110 passed, 2 skipped |
+  | integration | 95 passed, 8 skipped, 10 deselected |
+  | e2e | 39 passed, 1 deselected |
+  | config-extra | 420 passed, 1147 deselected |
+
+- `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
+  and build.
 
 ## Stop Conditions
 
