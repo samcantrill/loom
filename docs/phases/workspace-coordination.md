@@ -452,7 +452,10 @@ make test-summary
   Phase 8 SQLite coordination backend, protocol extensions, fake conformance,
   contract/integration coverage, docs, target branch, and validation evidence,
   and found no blocking findings.
-- Blocker resolution: 0/3 used.
+- Blocker resolution: 1/3 used on 2026-05-10 by the managing agent; fixed a
+  GitHub CI-only race in the existing parallel failure-policy integration test
+  by making the failing support stage wait until the independent branch has
+  started before failing.
 
 ## Completion Notes
 
@@ -479,7 +482,9 @@ make test-summary
   in-memory workspace coordination conformance store now rejects duplicate
   workspace and sweep identities like the SQLite backend, and contract tests
   cover duplicate identity and unknown-parent failures across both backends.
-- Blocker-resolution summary: none.
+- Blocker-resolution summary: pass 1/3 fixed the CI failure in
+  `tests/integration/pipeline/test_parallel_execution.py` by making the
+  failure-policy fixture deterministic about already-running independent work.
 - PR preparation: PR #108 opened against `develop`:
   https://github.com/samcantrill/loom/pull/108.
 - Stack maintenance: no predecessor; rebase onto updated `develop` if needed
