@@ -81,6 +81,16 @@ visible only when authority reconciliation validates the recorded submission and
 attempt, rejects stale/cancelled/superseded evidence, and commits through the
 authority store with reconciler-held fencing material.
 
+V9-post command generation carries authority selection explicitly. `loom run`,
+`loom prepared-run continue`, `loom stage run`, `loom stage-job run`,
+`loom status --jobs`, `loom cancel --jobs`, preflight, and backend diagnostics
+all accept the shared authority flags used by the runtime store adapter. Dry-run
+manifests and generated worker commands include redacted authority summaries so
+reviewers can confirm which backend/profile will be used without exposing
+service credentials. Live SLURM still requires backend capability admission:
+development co-located service authority is suitable for local and subprocess
+proof paths, but it is not advertised as a multi-host SLURM authority.
+
 ## 1. Purpose
 
 `loom.pipeline.executors.slurm` is the optional cluster execution layer for
