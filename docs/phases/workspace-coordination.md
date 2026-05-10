@@ -465,15 +465,20 @@ make test-summary
   scheduler, CLI mutation, distributed controller, or per-run lifecycle
   duplication.
 - Implementation validation: focused Phase 8 package/import, unit, contract,
-  and integration pytest validation passed on 2026-05-10: 55 passed. The
-  sandboxed command could not write the shared uv cache, so it was rerun with
-  approved access.
+  and integration pytest validation passed on 2026-05-10: 55 passed. Final
+  `make validate-pr` passed after refinement: Ruff, Pyright, default harness
+  (1088 passed, 18 skipped, 14 deselected), config-extra harness (420 passed,
+  1117 deselected), and `uv build`. Final `make test-summary` passed with
+  1534 passed, 0 failed, 0 errors, 12 skipped, and 1128 deselected. The
+  sandboxed focused command could not write the shared uv cache, so it was
+  rerun with approved access.
 - Refinement summary: expanded-path implementation refinement completed. The
   in-memory workspace coordination conformance store now rejects duplicate
   workspace and sweep identities like the SQLite backend, and contract tests
   cover duplicate identity and unknown-parent failures across both backends.
 - Blocker-resolution summary: none.
-- PR preparation: pending.
+- PR preparation: PR body drafted in
+  `docs/phases/workspace-coordination-pr-body.md`; PR creation pending.
 - Stack maintenance: no predecessor; rebase onto updated `develop` if needed
   before PR preparation.
 - Remaining blockers: none.
