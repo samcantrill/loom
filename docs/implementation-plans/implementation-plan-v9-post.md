@@ -1309,7 +1309,7 @@ Completion summary:
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 
-Status: pr_open
+Status: merged
 Branch: `codex/cli-worker-authority`
 PR: https://github.com/samcantrill/loom/pull/113
 
@@ -1407,6 +1407,16 @@ Completion summary:
 - PR #113 opened on 2026-05-10 against `develop`; initial verification
   confirmed base `develop`, head `codex/cli-worker-authority`, and state
   `OPEN`.
+- Automated review on 2026-05-10 found no blocking findings; local validation
+  remained the merge evidence.
+- GitHub CI initially failed the known
+  `test_bounded_parallel_runs_independent_stages_concurrently` flake, then the
+  failed job was rerun and `checks` passed.
+- Final merge verification on 2026-05-10 confirmed PR #113 still targeted
+  `develop`, head `codex/cli-worker-authority`, merge state `CLEAN`, and CI
+  `checks` succeeded.
+- PR #113 was squash-merged into `develop` on 2026-05-10 as
+  `5bd4a8c376df35e4186e10942dca9acf403b1d10`.
 
 ### Phase 6 - Authority Read Models For Status, Catalog, Plan, And Diagnostics
 

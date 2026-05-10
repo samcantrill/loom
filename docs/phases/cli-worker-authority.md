@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 5 - CLI, Worker, Submitted Job, And SLURM Migration
-- Status: pr_open
+- Status: merged
 - Branch: `codex/cli-worker-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/cli-worker-authority`
 - Stack predecessor: none; Phase 4 merged before PR opening.
@@ -22,7 +22,8 @@
 - Phase implementation refinement budget: used locally on 2026-05-10 to align
   stale SLURM live/dry-run e2e expectations and public examples after
   validation surfaced Phase 5 authority-admission behavior.
-- Phase PR review budget: unused
+- Phase PR review budget: used locally on 2026-05-10; automated review found
+  no blocking findings before merge.
 - Blocker-resolution budget: 0/3 used
 
 ## Stack Maintenance Notes
@@ -34,6 +35,9 @@
   Phase 4 merged and `docs: record phase 4 merge` was pushed to `develop`.
 - Removed the obsolete Phase 4 worktrees and deleted
   `codex/python-runner-authority` locally and on GitHub after the rebase.
+- PR #113 was verified against `develop`, passed CI after rerunning the known
+  bounded-parallel flake, and was squash-merged into `develop` on 2026-05-10
+  as `5bd4a8c376df35e4186e10942dca9acf403b1d10`.
 
 ## Scope
 
