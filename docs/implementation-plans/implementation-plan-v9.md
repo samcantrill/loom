@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: plan quality gate passed; ready for phase implementation
+- Status: complete; all phases merged
 - Related planning notes:
   `docs/implementation-plans/roadmap-v9-planning-notes.md`
 - Related source docs:
@@ -1464,7 +1464,7 @@ Completion summary:
 
 ### Phase 8 - Workspace/Sweep Coordination Foundation
 
-Status: pr_open
+Status: merged
 Branch: `codex/workspace-coordination`
 PR: https://github.com/samcantrill/loom/pull/108
 
@@ -1574,7 +1574,9 @@ Notes:
 
 Completion summary:
 
-- PR opened against `develop`: https://github.com/samcantrill/loom/pull/108.
+- Merged into `develop` on 2026-05-10 at merge commit
+  `40f9c1f760a9c96136ab235b915fecae0c06b060` by PR #108:
+  https://github.com/samcantrill/loom/pull/108.
 - Implementation adds cross-run coordination protocol extensions, a private
   local SQLite workspace coordination backend, in-memory conformance support,
   and package/unit/contract/integration coverage for workspace/sweep identity,
@@ -1585,10 +1587,17 @@ Completion summary:
   remain manifest-shaped and opt into coordination only for concurrent trial
   admission or resource limits.
 - Expanded-path refinement found and fixed a fake/SQLite conformance gap for
-  duplicate workspace/sweep identity failures; no blocker-resolution passes
-  were used.
-- Checks: `make validate-pr` passed after refinement: Ruff, Pyright, default
-  harness (1088 passed, 18 skipped, 14 deselected), config-extra harness
-  (420 passed, 1117 deselected), and `uv build`. `make test-summary` passed
-  with 1534 passed, 0 failed, 0 errors, 12 skipped, and 1128 deselected.
-- Follow-up: automated PR review and GitHub CI must pass before merge.
+  duplicate workspace/sweep identity failures.
+- Automated PR review found no blocking findings. Blocker-resolution passes
+  1/3, 2/3, and 3/3 stabilized existing parallel integration fixtures so
+  GitHub and isolated summary runs deterministically exercise already-running
+  independent work.
+- Checks: final `make validate-pr` passed after blocker resolution: Ruff,
+  Pyright, default harness (1088 passed, 18 skipped, 14 deselected),
+  config-extra harness (420 passed, 1117 deselected), and `uv build`. Final
+  `make test-summary` passed and generated `build/test-summary.md` at
+  `2026-05-10T00:41:39+00:00` with 1534 passed, 0 failed, 0 errors, 12
+  skipped, and 1128 deselected. GitHub CI `checks` passed for head `2803fc9`
+  before merge.
+- Follow-up: no remaining v9 phase follow-up; later sweep execution work can
+  build on the coordination foundation.
