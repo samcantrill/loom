@@ -1741,7 +1741,7 @@ Completion summary:
 
 ### Phase 9 - System-Wide Service Backend Adoption
 
-Status: pr_open
+Status: merged
 Branch: `codex/service-backend-adoption`
 PR: https://github.com/samcantrill/loom/pull/117
 
@@ -1841,6 +1841,11 @@ Completion summary:
   and SLURM command propagation, service-safe audit serialization, catalog scan
   support, docs/examples, and focused coverage.
 - Validation: `make validate-pr` and `make test-summary` passed on 2026-05-10.
+- Manager review: passed on PR #117 with target `develop`, head
+  `codex/service-backend-adoption`, scope limited to Phase 9, GitHub CI
+  `checks` success, and no Phase 10 default switch or SQLite removal.
+- Merge: PR #117 squash-merged into `develop` at
+  `3884ec26488c4dbea08c9927d1a1e4f017c7a248` on 2026-05-10.
 
 ### Phase 10 - Service Default And SQLite Authority Removal
 
