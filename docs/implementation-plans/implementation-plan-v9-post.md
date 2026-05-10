@@ -1849,7 +1849,7 @@ Completion summary:
 
 ### Phase 10 - Service Default And SQLite Authority Removal
 
-Status: pending
+Status: in_progress
 Branch: `codex/service-default-sqlite-removal`
 PR: pending
 
