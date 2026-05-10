@@ -5,13 +5,13 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 6 - Authority Read Models For Status, Catalog, Plan, And Diagnostics
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/authority-read-models`
 - Worktree: `/home/samcantrill/work/loom-worktrees/authority-read-models`
 - Stack predecessor: none; Phase 5 merged before branch creation.
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/114
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
   `Authority Runtime Unification - Phase 6: Authority Read Models`
