@@ -1,6 +1,7 @@
 """Contract tests for public authority RunStore and StageStore surfaces."""
 
 from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from loom.pipeline.stores import (
     create_run_store,
     path_to_run_uri,
 )
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.support.authority_conformance import (
     PublicAuthorityCase,
@@ -23,17 +25,18 @@ from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 pytestmark = pytest.mark.contract
 
 
-@pytest.fixture(params=["in-memory", "sqlite"])
+@pytest.fixture(params=["in-memory", "sqlite", "service"])
 def authority_case(
     request: pytest.FixtureRequest, tmp_path: Path
-) -> PublicAuthorityCase:
+) -> Iterator[PublicAuthorityCase]:
     if request.param == "in-memory":
         authority_store = InMemoryPerRunAuthorityStore()
-        return PublicAuthorityCase(
+        yield PublicAuthorityCase(
             store=create_run_store(authority_store=authority_store),
             run_uri="file:///runs/r1",
             advance_time=authority_store.advance_time,
         )
+        return
 
     tick = {"seconds": 0}
 
@@ -44,7 +47,16 @@ def authority_case(
         tick["seconds"] += seconds
 
     run_uri = path_to_run_uri(tmp_path / "r1")
-    return PublicAuthorityCase(
+    if request.param == "service":
+        with LocalAuthorityService.start() as service:
+            yield PublicAuthorityCase(
+                store=create_run_store(service.config()),
+                run_uri=run_uri,
+                advance_time=service.advance_time,
+            )
+        return
+
+    yield PublicAuthorityCase(
         store=create_run_store(
             authority_store=SQLitePerRunAuthorityStore(clock=now),
         ),
