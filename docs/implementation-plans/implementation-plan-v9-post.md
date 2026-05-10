@@ -1741,9 +1741,9 @@ Completion summary:
 
 ### Phase 9 - System-Wide Service Backend Adoption
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/service-backend-adoption`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/117
 
 Goal:
 
@@ -1835,7 +1835,12 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- Added authority configuration/env/CLI helper paths, service-aware
+  authority-backed runtime construction, worker/submitted authority handoff,
+  CLI/preflight/status/cancel/plan/stage/prepared-run propagation, subprocess
+  and SLURM command propagation, service-safe audit serialization, catalog scan
+  support, docs/examples, and focused coverage.
+- Validation: `make validate-pr` and `make test-summary` passed on 2026-05-10.
 
 ### Phase 10 - Service Default And SQLite Authority Removal
 

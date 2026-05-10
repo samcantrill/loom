@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: `Authority Runtime Unification`
 - PR title:
   `Authority Runtime Unification - Phase 9: Service Backend Adoption`
@@ -16,6 +16,7 @@
 - Stack predecessor: none; Phase 8 merged before branch creation.
 - Base branch: `develop`
 - Target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/117
 - Merge eligibility: root phase PR; merge eligible after local validation,
   automated review, and GitHub checks pass.
 - Workflow path: expanded path because this phase spans runtime construction,
@@ -311,7 +312,7 @@ make test-summary
 - Refinement summary: local fixups preserved CLI import boundaries, updated
   authority-aware test doubles, and aligned runner admission diagnostics.
 - Blocker-resolution summary: none used.
-- PR preparation: PR body drafted in
-  `docs/phases/service-backend-adoption-pr-body.md`; PR open pending.
+- PR preparation: PR #117 opened against `develop` and verified with
+  `gh pr view 117 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: pending.
 - Remaining blockers: none.
