@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 8 - HPC Deployment Modes And Fallback Capabilities
-- Status: pr_open
+- Status: merged
 - Branch: `codex/hpc-authority-deployment`
 - Worktree: `/home/samcantrill/work/loom-worktrees/hpc-authority-deployment`
 - Stack predecessor: none; Phase 7 merged before branch creation.
@@ -22,6 +22,8 @@
 - Phase PR review budget: used on 2026-05-10 by local managing-agent review;
   no blocking findings.
 - Blocker-resolution budget: 0/3 used
+- Merge: squash-merged into `develop` on 2026-05-10 as
+  `29f7f0767c14931c6dc26402050424eb1a6ee46b`.
 
 ## Scope
 
@@ -142,6 +144,9 @@ site.
   informations.
 - `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
   and build.
+- GitHub CI `checks` passed on PR #116; final pre-merge verification confirmed
+  base `develop`, head `codex/hpc-authority-deployment`, state `OPEN`, and
+  merge state `CLEAN`.
 - `make test-summary` passed:
 
   | Suite | Result |

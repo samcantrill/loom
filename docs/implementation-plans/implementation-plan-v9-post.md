@@ -1624,7 +1624,7 @@ Completion summary:
 
 ### Phase 8 - HPC Deployment Modes And Fallback Capabilities
 
-Status: pr_open
+Status: merged
 Branch: `codex/hpc-authority-deployment`
 PR: https://github.com/samcantrill/loom/pull/116
 
@@ -1734,6 +1734,10 @@ Completion summary:
 - Implementation adds backend-neutral authority deployment diagnostics,
   deterministic live-worker preflight, deferred result envelopes, guarded
   authority reconciliation, and SLURM handoff documentation.
+- Local validation passed with `make validate-pr` and `make test-summary`.
+  GitHub CI `checks` passed on PR #116.
+- PR #116 was squash-merged into `develop` on 2026-05-10 as
+  `29f7f0767c14931c6dc26402050424eb1a6ee46b`.
 
 ### Phase 9 - System-Wide Service Backend Adoption
 
