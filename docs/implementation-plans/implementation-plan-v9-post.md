@@ -1265,7 +1265,11 @@ Alternatives rejected:
 
 Debt introduced:
 
-- None intended beyond temporary compatibility aliases from Phase 3.
+- `create_authority_backed_serial_run_store` remains a transitional bridge
+  that combines authority lifecycle writes with local materialization paths.
+  Changed-config same-run re-execution remains failure-closed when the
+  transitional SQLite authority already has a stage output commit, rather than
+  overwriting authoritative commits without explicit supersede semantics.
 
 Reviewability:
 
@@ -1278,6 +1282,18 @@ Completion summary:
 - Initially started from `codex/artifact-store-split`; after Phase 3 merged,
   branch `codex/python-runner-authority` was rebased onto updated `develop`
   and the PR target was reset to `develop`.
+- Implemented a `PipelineRunner` guard that rejects bare `LocalRunStore`
+  instances before mutation and routes public Python examples to
+  `create_authority_backed_serial_run_store(...)`.
+- Exposed the authority-backed serial factory from `loom.pipeline.execution`
+  without adding eager optional imports.
+- Updated package, unit, integration, docs-example, and e2e coverage so
+  mutating Python execution uses authority-backed stores, while direct
+  `LocalRunStore` tests remain scoped to local file behavior.
+- Validation before PR opening: `make validate-pr` passed Ruff, Pyright,
+  default tests, config-extra tests, and build; `make test-summary` passed
+  with package 57 passed, unit 837 passed, contract 108 passed, integration
+  90 passed, e2e 39 passed, config-extra 420 passed, and 0 failures/errors.
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 

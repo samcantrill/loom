@@ -83,6 +83,10 @@ with service-backed authority.
 - `create_authority_backed_serial_run_store` remains transitional and still
   delegates materialization paths to the local layout while later phases finish
   caller migration.
+- Changed-config same-run re-execution remains failure-closed when the
+  transitional SQLite authority already has a stage output commit. This avoids
+  silently overwriting authoritative commits; explicit rerun/supersede
+  semantics need a later authority-model decision.
 
 ## Acceptance Criteria
 
@@ -108,6 +112,39 @@ with service-backed authority.
   stores.
 - E2E: Python example coverage where existing docs tests exercise it.
 - Opt-in: not required.
+
+## Implementation Summary
+
+- Added an explicit `PipelineRunner` guard that rejects bare `LocalRunStore`
+  instances before run-directory mutation and points callers to
+  `create_authority_backed_serial_run_store(...)`.
+- Exposed `create_authority_backed_serial_run_store` from
+  `loom.pipeline.execution` through the lazy public execution API.
+- Migrated README, execution docs, and direct Python examples away from
+  `PipelineRunner(run_store=LocalRunStore(...))`.
+- Updated runner, import-boundary, integration, docs-example, and e2e tests to
+  use authority-backed serial stores for mutating execution while preserving
+  direct local-file lock coverage on `LocalRunStore`.
+- Added regression coverage for both `PipelineRunner(...)` and
+  `run_pipeline(...)` rejecting local-only runtime stores.
+
+## Validation Evidence
+
+- Focused checks:
+  - `uv run ruff check ...` passed for changed Phase 4 source, tests, and
+    examples.
+  - `uv run --extra config pytest ...` passed with 92 focused tests.
+  - `uv run --extra config pyright` passed with 0 errors.
+  - Focused stale-test fix regression passed with 3 tests.
+- `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
+  and build.
+- `make test-summary` wrote `build/test-summary.md` with:
+  - package: 57 passed, 1 skipped.
+  - unit: 837 passed, 1 skipped.
+  - contract: 108 passed, 2 skipped.
+  - integration: 90 passed, 8 skipped, 10 deselected.
+  - e2e: 39 passed, 1 deselected.
+  - config-extra: 420 passed, 1134 deselected.
 
 ## Stop Conditions
 
