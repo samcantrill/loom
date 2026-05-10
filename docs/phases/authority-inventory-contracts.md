@@ -634,7 +634,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-10
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -661,7 +661,19 @@ make test-summary
 - Refinement summary: inventory output rules tightened for `LocalRunStore`,
   `LocalRunStorePaths`, current path-shaped `RunStore`, and local helper calls;
   suite decisions and documentation-only stop conditions confirmed.
-- Blocker-resolution summary: none used.
+- Implementation refinement report: completed on 2026-05-10 for the single
+  expanded-path implementation refinement pass. Reviewed the current
+  documentation-only diff, source Phase 1 scope and acceptance criteria,
+  recorded validation evidence, and this artifact's lifecycle contract
+  coverage. The only phase-scoped fix was budget/completion-note bookkeeping:
+  mark implementation refinement used and record this no-blocker refinement
+  summary. No product source, tests, examples, workflow prompts/templates, or
+  unrelated docs were changed.
+- Implementation refinement validation: `git diff --check` was rerun after
+  this artifact update and passed. Broad `make validate-pr` and
+  `make test-summary` remain deferred to PR preparation as already recorded
+  for this documentation-only phase.
+- Blocker-resolution summary: none used; budget remains 0/3.
 - PR preparation: pending.
 - Stack maintenance: not applicable yet.
 - Remaining blockers: none known.
