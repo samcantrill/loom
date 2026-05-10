@@ -5,13 +5,13 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 7 - Concrete Service/Database Backend
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/authority-service-backend`
 - Worktree: `/home/samcantrill/work/loom-worktrees/authority-service-backend`
 - Stack predecessor: none; Phase 6 merged before branch creation.
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/115
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
   `Authority Runtime Unification - Phase 7: Authority Service Backend`

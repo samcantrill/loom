@@ -1503,9 +1503,9 @@ Completion summary:
 
 ### Phase 7 - Concrete Service/Database Backend
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/authority-service-backend`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/115
 
 Goal:
 
@@ -1610,8 +1610,12 @@ Reviewability:
 Completion summary:
 
 - Phase execution plan drafted and refined on 2026-05-10 in
-  `docs/phases/authority-service-backend.md`; implementation in progress on
-  branch `codex/authority-service-backend` from updated `develop`.
+  `docs/phases/authority-service-backend.md`.
+- PR #115 opened against `develop` on 2026-05-10 from branch
+  `codex/authority-service-backend`.
+- Implementation adds the stdlib local authority service backend, public
+  factory selection for service backend kinds, honest capability diagnostics,
+  and conformance/integration coverage for concurrent clients.
 
 ### Phase 8 - HPC Deployment Modes And Fallback Capabilities
 
