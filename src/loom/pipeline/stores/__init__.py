@@ -6,7 +6,16 @@ from .authority import (
     AuthorityStoreError,
     OutputCommit,
     PerRunAuthorityStore,
+    RunStore,
+    StageStore,
     StatusTransition,
+)
+from .admission import (
+    AuthorityAdmissionError,
+    CapabilityAdmissionError,
+    CapabilityAdmissionResult,
+    RequiredAuthorityCapability,
+    admit_authority_capabilities,
 )
 from .atomic import (
     atomic_write_bytes,
@@ -28,6 +37,13 @@ from .capabilities import (
     UnsupportedCapability,
     UnsupportedCapabilityCode,
 )
+from .config import (
+    AuthorityBackendKind,
+    AuthorityConfig,
+    AuthorityConfigError,
+    AuthorityDeploymentProfile,
+    AuthorityReference,
+)
 from .coordination import (
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
@@ -41,6 +57,7 @@ from .coordination import (
     WorkspaceIdentity,
     coordination_requirement_diagnostics,
 )
+from .factory import create_run_store
 from .errors import (
     ArtifactStoreError,
     ArtifactChecksumMismatchError,
@@ -116,6 +133,7 @@ from .run_uri import (
     validate_run_uri,
 )
 from .run_store import (
+    LegacyRunStore,
     LocalRunStorePaths,
     RunArtifactIndexStore,
     RunConfigStore,
@@ -131,7 +149,6 @@ from .run_store import (
     RunProvenanceStore,
     RunPlanStore,
     RunRuntimeMetadataStore,
-    RunStore,
     RunStatusStore,
     RunSubmittedOperationStore,
     StageLogStore,
@@ -151,6 +168,8 @@ __all__ = [
     "ArtifactStore",
     "LocalArtifactStore",
     "PerRunAuthorityStore",
+    "RunStore",
+    "StageStore",
     "AuthorityStoreError",
     "StatusTransition",
     "AttemptAllocation",
@@ -165,6 +184,17 @@ __all__ = [
     "UnsupportedCapability",
     "StoreDiagnostic",
     "AuthorityCapabilityError",
+    "AuthorityBackendKind",
+    "AuthorityDeploymentProfile",
+    "AuthorityReference",
+    "AuthorityConfig",
+    "AuthorityConfigError",
+    "RequiredAuthorityCapability",
+    "CapabilityAdmissionResult",
+    "CapabilityAdmissionError",
+    "AuthorityAdmissionError",
+    "admit_authority_capabilities",
+    "create_run_store",
     "AUTHORITY_SCHEMA_VERSION",
     "AuthoritySchemaError",
     "AuthoritySchemaFailureKind",
@@ -203,7 +233,7 @@ __all__ = [
     "CoordinationRecoveryRecord",
     "ConcurrencyCounter",
     "coordination_requirement_diagnostics",
-    "RunStore",
+    "LegacyRunStore",
     "RunLifecycleStore",
     "RunDocumentStore",
     "RunFreshnessStore",

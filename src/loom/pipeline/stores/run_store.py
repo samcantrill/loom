@@ -456,7 +456,7 @@ class LocalRunStorePaths(Protocol):
 
 
 @runtime_checkable
-class RunStore(
+class LegacyRunStore(
     RunLifecycleStore,
     RunDocumentStore,
     RunFreshnessStore,
@@ -475,4 +475,11 @@ class RunStore(
     StageLogStore,
     StageWorkspaceStore,
     Protocol,
-): ...
+):
+    """Transitional path-shaped runtime store aggregate.
+
+    V9-post reclaims the root public ``RunStore`` export for authority-backed
+    lifecycle semantics. Existing runtime modules still use this legacy
+    aggregate until the later caller-migration phases split lifecycle authority
+    from local artifact/materialization access.
+    """

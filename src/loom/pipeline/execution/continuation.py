@@ -23,9 +23,9 @@ from loom.pipeline.submitted import (
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AuthorityStoreError,
+    LegacyRunStore as RunStore,
     LocalArtifactStore,
     LocalRunStorePaths,
-    RunStore,
 )
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError

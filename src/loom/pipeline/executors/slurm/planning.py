@@ -9,7 +9,7 @@ from typing import cast
 from loom.pipeline.execution import PreparedRunRecord
 from loom.pipeline.planning import ExecutionPlan, PlanAction
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
-from loom.pipeline.stores.run_store import LocalRunStorePaths, RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
 from loom.serialization import PlainData
 from loom.timestamps import safe_timestamp_for_path, utc_timestamp
 

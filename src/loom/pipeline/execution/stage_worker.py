@@ -22,7 +22,11 @@ from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.specs import OutputSpec, StageFactorySpec, StageSpec
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStorePaths, RunStore
+from loom.pipeline.stores import (
+    LegacyRunStore as RunStore,
+    LocalArtifactStore,
+    LocalRunStorePaths,
+)
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.serialization import PlainData, json_loads
 from loom.serialization.errors import DeserializationError

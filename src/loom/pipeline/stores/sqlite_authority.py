@@ -63,19 +63,26 @@ _AUTHORITY_DB_NAME = "authority.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
 
 _SUPPORTED_PER_RUN_CAPABILITIES = (
+    BackendCapability.RUN_ADMISSION,
     BackendCapability.ATOMIC_TRANSITIONS,
     BackendCapability.ATTEMPT_ALLOCATION,
     BackendCapability.RUN_LEASES,
     BackendCapability.STAGE_LEASES,
+    BackendCapability.LEASE_TTL,
+    BackendCapability.FENCING_TOKENS,
     BackendCapability.BACKEND_LEASE_TIME,
     BackendCapability.ATOMIC_OUTPUT_COMMIT,
     BackendCapability.ARTIFACT_FACTS,
     BackendCapability.SUBMITTED_OPERATIONS,
     BackendCapability.REVISIONED_SNAPSHOTS,
+    BackendCapability.MONOTONIC_REVISIONS,
     BackendCapability.RECOVERY_SCANS,
     BackendCapability.CONSISTENT_READS,
+    BackendCapability.TRANSACTION_ISOLATION,
+    BackendCapability.CLOCK_SEMANTICS,
     BackendCapability.AUDIT_EVENTS,
     BackendCapability.PER_RUN_COORDINATION,
+    BackendCapability.SINGLE_HOST_AUTHORITY,
 )
 
 _ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
@@ -213,8 +220,13 @@ class SQLitePerRunAuthorityStore:
             )
         )
         for capability in (
+            BackendCapability.RUN_ADMISSION,
             BackendCapability.CROSS_RUN_COORDINATION,
             BackendCapability.GLOBAL_COUNTERS,
+            BackendCapability.MULTI_HOST_AUTHORITY,
+            BackendCapability.SERVICE_ENDPOINT,
+            BackendCapability.SHARED_FILESYSTEM_SAFE,
+            BackendCapability.DEFERRED_FINALIZATION,
         ):
             records.append(
                 BackendCapabilityRecord(
@@ -269,7 +281,9 @@ class SQLitePerRunAuthorityStore:
         database_path = _authority_database_path(run_uri)
         database_exists = database_path.exists()
         database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._write_connection(database_path, initialize=not database_exists) as conn:
+        with self._write_connection(
+            database_path, initialize=not database_exists
+        ) as conn:
             _raise_for_schema(conn)
             existing = conn.execute("SELECT 1 FROM run_state WHERE id = 1").fetchone()
             if existing is not None:

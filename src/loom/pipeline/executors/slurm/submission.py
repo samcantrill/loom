@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from loom.pipeline.execution.lifecycle import write_run_submitted, write_stage_submitted
-from loom.pipeline.stores.run_store import LocalRunStorePaths, RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
 from loom.pipeline.submitted import (
     SubmittedOperationRecord,
     SubmittedOperationState,

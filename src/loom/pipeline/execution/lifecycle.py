@@ -13,7 +13,7 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import RunStore
+from loom.pipeline.stores import LegacyRunStore as RunStore
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.indexes import format_artifact_key, merge_artifact_index
 from loom.serialization import PlainData, ensure_plain_data

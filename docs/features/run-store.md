@@ -43,6 +43,16 @@ private; status files, artifact indexes, events, and catalogs remain payload,
 audit, or projection surfaces unless a backend contract records them as
 authoritative facts.
 
+V9-post starts the public naming transition. The root
+`loom.pipeline.stores.RunStore` export now means the authority-backed run
+lifecycle surface produced by `create_run_store(...)`, with scoped
+`StageStore` handles for stage lifecycle, attempts, leases, submitted
+operations, fenced output commits, snapshots, recovery, and cleanup facts. The
+older path-shaped aggregate in `loom.pipeline.stores.run_store` is named
+`LegacyRunStore` while runtime callers are migrated in later phases. Local run
+files remain useful for materialization and projections, but they must not
+satisfy the public authority `RunStore` contract.
+
 ### 1.1 V2 Run URI Migration
 
 The current runtime uses `run_uri` as the run-scoped identifier. V2 intentionally

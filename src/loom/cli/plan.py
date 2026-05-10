@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.stores import LocalRunStore
     from loom.pipeline.stores.artifact_store import ArtifactStore
-    from loom.pipeline.stores.run_store import RunStore
+    from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
     from loom.pipeline.validation import PipelineValidationResult
 
 

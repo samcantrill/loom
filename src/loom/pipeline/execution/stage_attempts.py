@@ -14,7 +14,7 @@ from loom.pipeline.planning import (
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.specs import StageSpec
 from loom.pipeline.status import StageStatus, StageStatusRecord
-from loom.pipeline.stores import LocalRunStorePaths, RunStore
+from loom.pipeline.stores import LegacyRunStore as RunStore, LocalRunStorePaths
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
