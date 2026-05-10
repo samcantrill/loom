@@ -432,6 +432,8 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
             raise AuthorityServiceUnavailable(
                 "authority service is unavailable"
             ) from exc
+        except ValueError as exc:
+            raise AuthorityStoreError(str(exc)) from exc
 
 
 def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityStore:
@@ -690,6 +692,8 @@ class _ServiceAuthorityCore:
     ) -> AttemptAllocation:
         with self._lock:
             state = self._require_run(run_uri)
+            if stage_name in state.commits:
+                raise ValueError("stage already has an output commit")
             if (
                 lease_ttl_seconds is not None
                 and self._active_stage_lease(state, stage_name) is not None
@@ -831,7 +835,11 @@ class _ServiceAuthorityCore:
     ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
-            self._require_stage_fence(state, stage_name, attempt_id, fencing_token)
+            if stage_name in state.commits:
+                raise ValueError("stage already has an output commit")
+            lease = self._require_stage_fence(
+                state, stage_name, attempt_id, fencing_token
+            )
             revision = self._next_revision()
             commit = OutputCommitRecord(
                 commit_id=f"{stage_name}-{attempt_id}-commit",
@@ -853,6 +861,13 @@ class _ServiceAuthorityCore:
             )
             state.commits[stage_name] = commit
             state.facts[stage_name] = list(facts)
+            self._replace_lease(
+                state,
+                lease,
+                revision=revision,
+                state_value=LeaseState.RELEASED,
+                reason=_reason_from_wire(reason),
+            )
             state.attempts[stage_name] = [
                 StageAttempt(
                     run_uri=attempt.run_uri,
@@ -1055,7 +1070,7 @@ class _ServiceAuthorityCore:
         stage_name: str,
         attempt_id: str,
         fencing_token: str,
-    ) -> None:
+    ) -> LeaseRecord:
         for lease in state.leases.values():
             if (
                 lease.kind is LeaseKind.STAGE
@@ -1067,7 +1082,7 @@ class _ServiceAuthorityCore:
                     raise ValueError("stage lease has expired")
                 if lease.state is not LeaseState.ACTIVE:
                     raise ValueError("stage lease is not active")
-                return
+                return lease
         raise ValueError("missing active stage lease for output commit")
 
     def _active_stage_lease(
