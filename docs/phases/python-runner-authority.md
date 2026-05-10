@@ -5,13 +5,13 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 4 - Python Runner And Public Example Migration
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/python-runner-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/python-runner-authority`
 - Stack predecessor: none; Phase 3 merged before PR opening.
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/112
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
   `Authority Runtime Unification - Phase 4: Python Runner Authority`
@@ -26,6 +26,13 @@
 
 - Rebased `codex/python-runner-authority` onto updated `origin/develop` after
   Phase 3 merged and `docs: record phase 3 merge` was pushed to `develop`.
+
+## PR Preparation Notes
+
+- PR #112 opened on 2026-05-10 against `develop` from
+  `codex/python-runner-authority`.
+- Verified immediately after creation: base `develop`, head
+  `codex/python-runner-authority`, state `OPEN`, CI `checks` in progress.
 
 ## Scope
 

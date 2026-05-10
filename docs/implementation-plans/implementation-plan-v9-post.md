@@ -1208,9 +1208,9 @@ Completion summary:
 
 ### Phase 4 - Python Runner And Public Example Migration
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/python-runner-authority`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/112
 
 Goal:
 
@@ -1294,6 +1294,9 @@ Completion summary:
   default tests, config-extra tests, and build; `make test-summary` passed
   with package 57 passed, unit 837 passed, contract 108 passed, integration
   90 passed, e2e 39 passed, config-extra 420 passed, and 0 failures/errors.
+- PR #112 opened on 2026-05-10 against `develop`; initial verification
+  confirmed base `develop`, head `codex/python-runner-authority`, state
+  `OPEN`, and CI `checks` in progress.
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 
