@@ -1208,7 +1208,7 @@ Completion summary:
 
 ### Phase 4 - Python Runner And Public Example Migration
 
-Status: pending
+Status: in_progress
 Branch: `codex/python-runner-authority`
 PR: pending
 
@@ -1273,7 +1273,11 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- Phase execution plan drafted and refined on 2026-05-10 in
+  `docs/phases/python-runner-authority.md`.
+- Stack base recorded as `codex/artifact-store-split` while Phase 3 awaits
+  merge; PR target will be retargeted to `develop` after stack maintenance if
+  Phase 3 lands first.
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 
