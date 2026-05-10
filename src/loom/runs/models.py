@@ -21,6 +21,7 @@ class CatalogWarningCode(StrEnum):
     PARTIAL_RUN = "partial_run"
     ACTIVELY_CHANGING_RUN = "actively_changing_run"
     DISAPPEARED_RUN = "disappeared_run"
+    LOCAL_LIFECYCLE_UNSUPPORTED = "local_lifecycle_unsupported"
     UNSUPPORTED_SCHEMA = "unsupported_schema"
     STALE_OR_CORRUPT_CATALOG = "stale_or_corrupt_catalog"
     UNRECOVERABLE_CATALOG_ERROR = "unrecoverable_catalog_error"

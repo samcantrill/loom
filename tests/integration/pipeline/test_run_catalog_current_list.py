@@ -7,13 +7,14 @@ from pathlib import Path
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 from loom.runs import CatalogWarningCode, RunCatalog, RunFilter, RunFilterKind
 from loom.runs._sqlite import catalog_db_path, read_catalog_summaries
 
@@ -22,9 +23,8 @@ def test_run_catalog_list_creates_current_sidecar_and_returns_warnings(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     run_uri = _create_catalog_run(
-        store,
+        root,
         root / "run-1",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
@@ -46,28 +46,27 @@ def test_run_catalog_list_creates_current_sidecar_and_returns_warnings(
     result = RunCatalog.open(root).list()
 
     assert [summary.run_uri for summary in result.summaries] == [run_uri]
-    assert [warning.code for warning in result.warnings] == [
-        CatalogWarningCode.PARTIAL_RUN
-    ]
     assert result.filters == ()
     assert result.checked_at is not None
     assert catalog_db_path(root).exists()
+    assert [warning.code for warning in result.warnings] == [
+        CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED
+    ]
 
 
 def test_run_catalog_list_reconciles_new_changed_deleted_and_stale_rows(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     first_uri = _create_catalog_run(
-        store,
+        root,
         root / "run-1",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
     )
     second_path = root / "run-2"
     second_uri = _create_catalog_run(
-        store,
+        root,
         second_path,
         status=RunStatus.FAILED,
         tag_value="other",
@@ -81,12 +80,14 @@ def test_run_catalog_list_reconciles_new_changed_deleted_and_stale_rows(
     _insert_stale_row(root, "file:///stale/run")
     _remove_run_dir(second_path)
     third_uri = _create_catalog_run(
-        store,
+        root,
         root / "run-3",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
     )
-    store.write_run_status(
+    first_store = create_authority_backed_serial_run_store(root)
+    first_store.open_run(first_uri)
+    first_store.write_run_status(
         first_uri,
         RunStatusRecord(
             run_uri=first_uri,
@@ -107,16 +108,15 @@ def test_run_catalog_list_reconciles_new_changed_deleted_and_stale_rows(
 
 def test_run_catalog_list_filters_all_supported_kinds(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     run_uri = _create_catalog_run(
-        store,
+        root,
         root / "run-1",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
         checksum=format_digest("sha256", "1" * 64),
     )
     _create_catalog_run(
-        store,
+        root,
         root / "run-2",
         status=RunStatus.FAILED,
         tag_value="other",
@@ -157,9 +157,8 @@ def test_run_catalog_list_filters_all_supported_kinds(tmp_path: Path) -> None:
 
 def test_run_catalog_list_recovers_missing_and_corrupt_sidecar(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     run_uri = _create_catalog_run(
-        store,
+        root,
         root / "run-1",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
@@ -175,9 +174,8 @@ def test_run_catalog_list_recovers_missing_and_corrupt_sidecar(tmp_path: Path) -
 
 def test_multiple_catalog_instances_can_list_and_rebuild(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     run_uri = _create_catalog_run(
-        store,
+        root,
         root / "run-1",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
@@ -192,12 +190,11 @@ def test_multiple_catalog_instances_can_list_and_rebuild(tmp_path: Path) -> None
 
 def test_run_catalog_list_filters_synthetic_large_collection(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     expected: list[str] = []
     for index in range(1000):
         status = RunStatus.SUCCEEDED if index % 10 == 0 else RunStatus.FAILED
         run_uri = _create_minimal_catalog_run(
-            store,
+            root,
             root / f"run-{index:03d}",
             status=status,
             tag_value="bulk",
@@ -216,7 +213,7 @@ def test_run_catalog_list_filters_synthetic_large_collection(tmp_path: Path) -> 
 
 
 def _create_catalog_run(
-    store: LocalRunStore,
+    root: Path,
     run_path: Path,
     *,
     status: RunStatus,
@@ -229,6 +226,7 @@ def _create_catalog_run(
     backend: str = "local",
     artifact_id: str = "build/out",
 ) -> str:
+    store = create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     checksum = checksum or format_digest("sha256", "a" * 64)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
@@ -275,12 +273,13 @@ def _create_catalog_run(
 
 
 def _create_minimal_catalog_run(
-    store: LocalRunStore,
+    root: Path,
     run_path: Path,
     *,
     status: RunStatus,
     tag_value: str,
 ) -> str:
+    store = create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
     store.write_run_status(

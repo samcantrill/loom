@@ -9,27 +9,27 @@ from pathlib import Path
 from loom.artifacts import ArtifactRef
 from loom.cli.main import main
 from loom.fingerprints import format_digest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 
 
 def test_cli_runs_list_filters_current_catalog(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     match_uri = _create_run(
-        store,
+        root,
         root / "match",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
         checksum=format_digest("sha256", "1" * 64),
     )
     _create_run(
-        store,
+        root,
         root / "other",
         status=RunStatus.FAILED,
         tag_value="other",
@@ -70,16 +70,15 @@ def test_cli_runs_list_filters_current_catalog(tmp_path: Path) -> None:
 
 def test_cli_runs_diff_formats_metadata_comparison(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     left_uri = _create_run(
-        store,
+        root,
         root / "left",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
         config_fingerprint="config-left",
     )
     right_uri = _create_run(
-        store,
+        root,
         root / "right",
         status=RunStatus.FAILED,
         tag_value="demo",
@@ -109,9 +108,8 @@ def test_cli_runs_diff_formats_metadata_comparison(tmp_path: Path) -> None:
 
 def test_cli_runs_list_reports_partial_run_warnings(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     _create_run(
-        store,
+        root,
         root / "healthy",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
@@ -143,14 +141,14 @@ def test_cli_runs_list_reports_partial_run_warnings(tmp_path: Path) -> None:
     )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["warnings"][0]["code"] == "partial_run"
-    assert payload["warnings"][0]["details"]["run_uri"] == partial_uri
-    assert payload["result"]["warnings"][0]["run_uri"] == partial_uri
+    assert payload["warnings"][0]["code"] == "local_lifecycle_unsupported"
+    assert payload["warnings"][0]["details"]["path"] == str(partial_path)
+    assert payload["result"]["warnings"][0]["path"] == str(partial_path)
     assert stderr.getvalue() == ""
 
 
 def _create_run(
-    store: LocalRunStore,
+    root: Path,
     run_path: Path,
     *,
     status: RunStatus,
@@ -158,6 +156,7 @@ def _create_run(
     config_fingerprint: str = "config-demo",
     checksum: str | None = None,
 ) -> str:
+    store = create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
     store.write_run_status(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -22,6 +22,7 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
 from loom.pipeline.stores.sqlite_authority import (
     SQLitePerRunAuthorityStore,
@@ -68,6 +69,33 @@ def _store_with_stage(tmp_path: Path) -> tuple[LocalRunStore, str]:
     return store, run_uri
 
 
+def _authority_store_with_stage(tmp_path: Path) -> tuple[Any, str]:
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    store.write_run_status(
+        run_uri,
+        RunStatusRecord(
+            run_uri=run_uri,
+            status=RunStatus.SUCCEEDED,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:02Z",
+        ),
+    )
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.SUCCEEDED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:02Z",
+        ),
+    )
+    return store, run_uri
+
+
 def _artifact_ref(
     *,
     artifact_id: str = "build/data",
@@ -85,7 +113,7 @@ def _artifact_ref(
 
 
 def test_inspect_run_status_uses_store_scan(tmp_path: Path) -> None:
-    store, run_uri = _store_with_stage(tmp_path)
+    store, run_uri = _authority_store_with_stage(tmp_path)
 
     summary = inspect_run_status(run_uri, run_store=store)
 
@@ -99,7 +127,7 @@ def test_inspect_run_status_uses_store_scan(tmp_path: Path) -> None:
 def test_inspect_run_status_includes_submitted_operation_summaries(
     tmp_path: Path,
 ) -> None:
-    store, run_uri = _store_with_stage(tmp_path)
+    store, run_uri = _authority_store_with_stage(tmp_path)
     record = SubmittedOperationRecord(
         run_uri=run_uri,
         submission_id="sub-1",
@@ -121,6 +149,15 @@ def test_inspect_run_status_includes_submitted_operation_summaries(
         list[dict[str, object]], summary.to_dict()["submitted_operations"]
     )
     assert operations[0]["backend"] == "test-backend"
+
+
+def test_inspect_run_status_rejects_local_only_lifecycle_state(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _store_with_stage(tmp_path)
+
+    with pytest.raises(DiagnosticsInspectionError, match="local-only lifecycle"):
+        inspect_run_status(run_uri, run_store=store)
 
 
 def test_inspect_run_status_uses_authoritative_facts_over_corrupt_legacy_files(

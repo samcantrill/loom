@@ -488,7 +488,7 @@ def _check_slurm_active_submission(
             ),
         )
     try:
-        from loom.pipeline.stores import LocalRunStore
+        from loom.pipeline.execution import create_authority_backed_serial_run_store
 
         resolved = cast(Any, context.run_uri())
         if not resolved.path.exists():
@@ -502,7 +502,11 @@ def _check_slurm_active_submission(
                     {"run_uri": resolved.uri, "run_exists": False},
                 ),
             )
-        store = LocalRunStore(resolved.path.parent)
+        store = create_authority_backed_serial_run_store(
+            resolved.path.parent,
+            owner_id="preflight",
+        )
+        store.open_run(resolved.uri)
         active = store.latest_active_submitted_operation(resolved.uri)
     except Exception as exc:  # noqa: BLE001
         return (

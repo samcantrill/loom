@@ -6,13 +6,14 @@ from pathlib import Path
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.runs import (
     CatalogWarningCode,
@@ -27,15 +28,14 @@ def test_run_catalog_compare_identical_runs_reports_same_metadata(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     left_uri = _create_run(
-        store,
+        root,
         root / "left",
         config="config",
         checksum=format_digest("sha256", "a" * 64),
     )
     right_uri = _create_run(
-        store,
+        root,
         root / "right",
         config="config",
         checksum=format_digest("sha256", "a" * 64),
@@ -56,9 +56,8 @@ def test_run_catalog_compare_reports_differences_and_one_sided_children(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     left_uri = _create_run(
-        store,
+        root,
         root / "left",
         status=RunStatus.SUCCEEDED,
         config="config-left",
@@ -69,7 +68,7 @@ def test_run_catalog_compare_reports_differences_and_one_sided_children(
         git_commit="abc123",
     )
     right_uri = _create_run(
-        store,
+        root,
         root / "right",
         status=RunStatus.FAILED,
         config="config-right",
@@ -95,9 +94,8 @@ def test_run_catalog_compare_reports_differences_and_one_sided_children(
 
 def test_run_catalog_compare_warns_for_missing_run(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     left_uri = _create_run(
-        store,
+        root,
         root / "left",
         config="config",
         checksum=format_digest("sha256", "a" * 64),
@@ -118,9 +116,8 @@ def test_run_catalog_compare_propagates_partial_run_warnings(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     left_uri = _create_run(
-        store,
+        root,
         root / "left",
         config="config",
         checksum=format_digest("sha256", "a" * 64),
@@ -143,13 +140,13 @@ def test_run_catalog_compare_propagates_partial_run_warnings(
     result = RunCatalog.open(root).compare(left_uri, right_uri)
 
     assert [warning.code for warning in result.warnings] == [
-        CatalogWarningCode.PARTIAL_RUN,
+        CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
         CatalogWarningCode.DISAPPEARED_RUN,
     ]
 
 
 def _create_run(
-    store: LocalRunStore,
+    root: Path,
     run_path: Path,
     *,
     status: RunStatus = RunStatus.SUCCEEDED,
@@ -160,6 +157,7 @@ def _create_run(
     artifact_logical_name: str = "build.out",
     git_commit: str = "abc123",
 ) -> str:
+    store = create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri)
     store.write_run_status(

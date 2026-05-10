@@ -35,6 +35,7 @@ def test_warning_codes_are_public_compatibility_values() -> None:
         "partial_run",
         "actively_changing_run",
         "disappeared_run",
+        "local_lifecycle_unsupported",
         "unsupported_schema",
         "stale_or_corrupt_catalog",
         "unrecoverable_catalog_error",

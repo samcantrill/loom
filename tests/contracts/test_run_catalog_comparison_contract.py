@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import RunStatus, RunStatusRecord
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 from loom.runs import ComparisonStatus, RunCatalog, RunComparison
 
 
@@ -14,9 +15,8 @@ def test_run_catalog_compare_returns_serializable_public_result(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
-    left_uri = _create_run(store, root / "left", RunStatus.SUCCEEDED)
-    right_uri = _create_run(store, root / "right", RunStatus.FAILED)
+    left_uri = _create_run(root, root / "left", RunStatus.SUCCEEDED)
+    right_uri = _create_run(root, root / "right", RunStatus.FAILED)
 
     result = RunCatalog.open(root).compare(left_uri, right_uri)
 
@@ -39,7 +39,8 @@ def test_run_catalog_compare_returns_serializable_public_result(
     assert data["checked_at"] is not None
 
 
-def _create_run(store: LocalRunStore, run_path: Path, status: RunStatus) -> str:
+def _create_run(root: Path, run_path: Path, status: RunStatus) -> str:
+    store = create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri)
     store.write_run_status(

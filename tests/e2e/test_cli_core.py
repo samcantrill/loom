@@ -14,6 +14,7 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.cli.main import main
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
@@ -411,7 +412,7 @@ def test_cli_run_default_and_explicit_run_uri(
 
 def test_cli_status_submitted_state_smoke(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "submitted")
-    store = LocalRunStore(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
     store.create_run(run_uri)
     store.write_run_status(
         run_uri,
