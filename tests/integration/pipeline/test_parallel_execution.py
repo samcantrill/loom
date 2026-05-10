@@ -212,7 +212,7 @@ def test_default_parallel_failure_policy_stops_new_independent_work(
 
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
-            pipeline=_failure_policy_pipeline(),
+            pipeline=_failure_policy_pipeline(tmp_path),
             run_uri=run_uri,
             options=RunOptions(
                 execution={"settings": {"max_parallel_stages": 2}},
@@ -301,7 +301,7 @@ def test_continue_independent_failure_policy_runs_unrelated_branch(
 
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
-            pipeline=_failure_policy_pipeline(),
+            pipeline=_failure_policy_pipeline(tmp_path),
             run_uri=run_uri,
             options=RunOptions(
                 execution={
@@ -331,7 +331,7 @@ def test_run_request_failure_policy_can_continue_independent_branch(
 
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
-            pipeline=_failure_policy_pipeline(),
+            pipeline=_failure_policy_pipeline(tmp_path),
             run_uri=path_to_run_uri(tmp_path / "runs" / "request-policy"),
             options=RunOptions(
                 execution={"settings": {"max_parallel_stages": 2}},
@@ -349,27 +349,40 @@ def _coordinated_stage(name: str, *, marker_dir: Path) -> StageSpec:
         factory=StageFactorySpec(
             target_path="tests.support.pipeline_execution_stages.CoordinatedStage"
         ),
-        stage_config={"marker_dir": str(marker_dir), "wait_for": 2},
+        stage_config={
+            "marker_dir": str(marker_dir),
+            "wait_for": 2,
+            "timeout_seconds": 30,
+        },
         outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
     )
 
 
-def _failure_policy_pipeline() -> PipelineSpec:
+def _failure_policy_pipeline(tmp_path: Path) -> PipelineSpec:
+    ok_started_marker = tmp_path / "markers" / "ok.started"
+    ok_started_marker.parent.mkdir(parents=True, exist_ok=True)
     return PipelineSpec(
         stages=(
-            StageSpec(
-                name="fail",
-                factory=StageFactorySpec(
-                    target_path="tests.support.pipeline_execution_stages.FailingStage"
-                ),
-                outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
-            ),
             StageSpec(
                 name="ok",
                 factory=StageFactorySpec(
                     target_path="tests.support.pipeline_execution_stages.SleepStage"
                 ),
-                stage_config={"seconds": 0.1},
+                stage_config={
+                    "seconds": 0.1,
+                    "started_marker": str(ok_started_marker),
+                },
+                outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
+            ),
+            StageSpec(
+                name="fail",
+                factory=StageFactorySpec(
+                    target_path="tests.support.pipeline_execution_stages.FailingStage"
+                ),
+                stage_config={
+                    "wait_for_marker": str(ok_started_marker),
+                    "timeout_seconds": 30,
+                },
                 outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
             ),
             StageSpec(

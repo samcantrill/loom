@@ -182,6 +182,13 @@ owns only workspace/sweep identity, trial references, trial/resource leases,
 global counters, `run_uri` references, and coordination recovery scans. It must
 not duplicate per-stage lifecycle facts.
 
+`loom.pipeline.stores.sqlite_coordination` implements the first concrete local
+`WorkspaceCoordinationStore` backend using only Python's standard-library
+SQLite driver. Its schema is private. It records workspace and sweep identity,
+trial references, fenced trial/resource leases, optional named-resource limits,
+guarded counters, backend revisions, and recovery records without opening
+per-run authority databases or copying run/stage lifecycle facts.
+
 ### 3.2.2 V9 SQLite Per-Run Authority Backend
 
 `loom.pipeline.stores.sqlite_authority` implements the first concrete
@@ -213,6 +220,35 @@ workspace/sweep coordination, global counters, or high write-concurrency
 service semantics. Explicit shared-filesystem, remote, cross-run, or global
 counter behavior must be capability-gated and should fail loudly until a
 stronger backend provides those guarantees.
+
+### 3.2.3 V9 SQLite Workspace Coordination Backend
+
+`SQLiteWorkspaceCoordinationStore` is separate from
+`SQLitePerRunAuthorityStore`. It may coordinate trial claims and named-resource
+leases across ordinary `run_uri` references, but each run's lifecycle remains
+owned by that run's authoritative backend.
+
+SQLite workspace coordination uses short transactions for identity creation,
+trial-reference writes, trial lease acquire/renew/release/failure, resource
+lease acquire/renew/release/failure, guarded counter updates, and recovery
+scans. Trial and resource leases use owner ids, fencing tokens, backend-owned
+local UTC timestamps, expiry, and revision evidence. Expired leases are not
+valid write authority and remain visible to recovery scans until a future
+policy reconciles them.
+
+Resource limits and counters are coordination facts, not scheduling policy.
+Named-resource limits can make expired lease capacity available again when the
+backend can prove the lease has expired. Generic counters are guarded by backend
+state and optional limits, but fairness, trial ordering, retry policy, and
+scheduler admission remain future sweep or scheduler behavior.
+
+The local SQLite coordination backend declares `CROSS_RUN_COORDINATION`,
+`GLOBAL_COUNTERS`, `BACKEND_LEASE_TIME`, `REVISIONED_SNAPSHOTS`,
+`RECOVERY_SCANS`, and `CONSISTENT_READS` for cross-run scope with local or
+same-host safety only. It explicitly does not own per-run coordination. Remote,
+multi-host, or shared-filesystem assumptions must produce loud diagnostics and
+should use a stronger future service backend instead of relying on this local
+store.
 
 ### 3.3 `loom.pipeline.stores.local_runs`
 

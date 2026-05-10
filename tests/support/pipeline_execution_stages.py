@@ -81,7 +81,21 @@ class FailingStage:
         context: StageContext,
         inputs: Mapping[str, ArtifactRef],
     ) -> Mapping[str, ArtifactRef]:
-        _ = context, inputs
+        _ = inputs
+        marker_path = context.stage_config.get("wait_for_marker")
+        if isinstance(marker_path, str):
+            raw_timeout_seconds = context.stage_config.get("timeout_seconds", 5)
+            timeout_seconds = (
+                float(raw_timeout_seconds)
+                if isinstance(raw_timeout_seconds, int | float | str)
+                else 5.0
+            )
+            deadline = time.monotonic() + timeout_seconds
+            path = Path(marker_path)
+            while not path.exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("failing stage timed out waiting for marker")
+                time.sleep(0.01)
         raise RuntimeError("stage failed intentionally")
 
 
@@ -108,6 +122,9 @@ class SleepStage:
             if isinstance(raw_seconds, int | float | str)
             else 30.0
         )
+        marker_path = context.stage_config.get("started_marker")
+        if isinstance(marker_path, str):
+            Path(marker_path).write_text(context.stage_name, encoding="utf-8")
         time.sleep(seconds)
         return {
             "data": context.save_artifact(

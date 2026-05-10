@@ -739,6 +739,7 @@ capabilities.py    backend capability and diagnostic records
 schema_policy.py   v9 active-state schema loud-fail policy
 read_models.py     authoritative snapshot/read-model records
 coordination.py    workspace/sweep cross-run coordination protocol
+sqlite_coordination.py private local SQLite workspace coordination backend
 indexes.py         run-level artifact and stage indexes
 local_artifacts.py local filesystem artifact storage
 local_runs.py      local run directory state
@@ -783,8 +784,10 @@ human-readable local files as fallback active truth.
 
 `WorkspaceCoordinationStore` owns only cross-run coordination facts for
 workspaces and sweeps: workspace/sweep identity, trial references, trial and
-resource leases, counters, `run_uri` references, and recovery scans. It must not
-mutate per-stage lifecycle state or replace `loom.runs`.
+resource leases, counters, `run_uri` references, and recovery scans. The local
+SQLite implementation lives behind that protocol with a private schema and
+local or same-host safety only. It must not mutate per-stage lifecycle state or
+replace `loom.runs`.
 
 Capability declarations and schema checks are correctness inputs. Store
 contracts must be able to report unsupported parallel, shared-filesystem,

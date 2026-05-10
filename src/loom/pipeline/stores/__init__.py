@@ -39,6 +39,7 @@ from .coordination import (
     TrialState,
     WorkspaceCoordinationStore,
     WorkspaceIdentity,
+    coordination_requirement_diagnostics,
 )
 from .errors import (
     ArtifactStoreError,
@@ -201,6 +202,7 @@ __all__ = [
     "ResourceLeaseRecord",
     "CoordinationRecoveryRecord",
     "ConcurrencyCounter",
+    "coordination_requirement_diagnostics",
     "RunStore",
     "RunLifecycleStore",
     "RunDocumentStore",
