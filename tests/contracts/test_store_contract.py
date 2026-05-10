@@ -13,8 +13,11 @@ from loom.pipeline.stores import (
     ArtifactStore,
     LegacyRunStore,
     LocalArtifactStore,
+    LocalRunArtifactStore,
     LocalRunStore,
     LocalRunStorePaths,
+    LocalStageArtifactStore,
+    RunArtifactStore,
     RunArtifactIndexStore,
     RunConfigStore,
     RunDocumentStore,
@@ -33,6 +36,7 @@ from loom.pipeline.stores import (
     RunStatusStore,
     RunSubmittedOperationStore,
     StageLogStore,
+    StageArtifactStore,
     StageStateStore,
     StageWorkspaceStore,
     path_to_run_uri,
@@ -476,6 +480,29 @@ def test_local_artifact_store_satisfies_protocol() -> None:
 
     with tempfile.TemporaryDirectory() as run_root:
         assert isinstance(LocalArtifactStore(root=Path(run_root)), ArtifactStore)
+
+
+def test_local_artifact_wrappers_match_materialization_protocols(
+    tmp_path: Path,
+) -> None:
+    local_store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
+    local_store.create_run(run_uri)
+
+    run_artifacts = LocalRunArtifactStore(local_store=local_store)
+    stage_artifacts = run_artifacts.stage_artifacts(run_uri, "build")
+
+    assert isinstance(run_artifacts, RunArtifactStore)
+    assert isinstance(stage_artifacts, StageArtifactStore)
+    assert isinstance(stage_artifacts, LocalStageArtifactStore)
+    assert not isinstance(local_store, RunArtifactStore)
+    assert not isinstance(run_artifacts, LegacyRunStore)
+    assert not isinstance(run_artifacts, RunStore)
+    assert not isinstance(run_artifacts, RunStatusStore)
+    assert not isinstance(stage_artifacts, StageStateStore)
+    assert not hasattr(run_artifacts, "read_run_status")
+    assert not hasattr(stage_artifacts, "write_stage_status")
+    assert not hasattr(stage_artifacts, "record_output_commit")
 
 
 def test_fake_artifact_store_matches_protocol() -> None:

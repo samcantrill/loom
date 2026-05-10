@@ -32,7 +32,11 @@ def test_store_error_inheritance() -> None:
 def test_store_error_exports() -> None:
     assert stores.__all__ == [
         "ArtifactStore",
+        "RunArtifactStore",
+        "StageArtifactStore",
         "LocalArtifactStore",
+        "LocalRunArtifactStore",
+        "LocalStageArtifactStore",
         "PerRunAuthorityStore",
         "RunStore",
         "StageStore",

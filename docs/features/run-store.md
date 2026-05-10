@@ -53,6 +53,13 @@ older path-shaped aggregate in `loom.pipeline.stores.run_store` is named
 files remain useful for materialization and projections, but they must not
 satisfy the public authority `RunStore` contract.
 
+V9-post also splits local file/materialization access behind
+`RunArtifactStore` and `StageArtifactStore`. These surfaces expose paths,
+config snapshots, provenance documents, logs, worker handoff files, generated
+files, workspaces, and artifact payload roots only. They intentionally do not
+expose run or stage status, attempts, leases, submitted operations, output
+commits, snapshots, recovery records, or behavior summaries.
+
 ### 1.1 V2 Run URI Migration
 
 The current runtime uses `run_uri` as the run-scoped identifier. V2 intentionally

@@ -1,6 +1,6 @@
 """Pipeline store protocols, implementations, and filesystem helpers."""
 
-from .artifact_store import ArtifactStore
+from .artifact_store import ArtifactStore, RunArtifactStore, StageArtifactStore
 from .authority import (
     AttemptAllocation,
     AuthorityStoreError,
@@ -89,7 +89,11 @@ from .indexes import (
     parse_artifact_key,
 )
 from .inspection import RunStageInspection, RunStateInspection
-from .local_artifacts import LocalArtifactStore
+from .local_artifacts import (
+    LocalArtifactStore,
+    LocalRunArtifactStore,
+    LocalStageArtifactStore,
+)
 from .local_runs import LocalRunStore
 from .materialization_read_models import (
     AuthoritativeReadOptions,
@@ -166,7 +170,11 @@ from .schema_policy import (
 
 __all__ = [
     "ArtifactStore",
+    "RunArtifactStore",
+    "StageArtifactStore",
     "LocalArtifactStore",
+    "LocalRunArtifactStore",
+    "LocalStageArtifactStore",
     "PerRunAuthorityStore",
     "RunStore",
     "StageStore",
