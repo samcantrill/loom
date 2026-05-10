@@ -18,7 +18,9 @@
 - Draft pass: complete on 2026-05-10
 - Refine pass: not planned; this execution plan is scope-complete and the
   expanded-path design choices are bounded below.
-- Phase implementation refinement budget: unused
+- Phase implementation refinement budget: used locally on 2026-05-10 to update
+  the mirrored `loom.pipeline.stores.__all__` unit expectation after
+  `make validate-pr` exposed the missing Phase 2 exports.
 - Phase PR review budget: unused
 - Blocker-resolution budget: 0/3 used
 
@@ -125,6 +127,50 @@ time with structured diagnostics.
   backend.
 - E2E: not required for this interface-only phase.
 - Opt-in: not required.
+
+## Implementation Summary
+
+- Added public authority `RunStore` and scoped `StageStore` protocols that sit
+  above the existing per-run authority contract.
+- Renamed the current path-shaped aggregate to `LegacyRunStore` and updated
+  existing runtime call sites to import that transitional name explicitly.
+- Added `AuthorityConfig`, `AuthorityReference`, backend-kind/deployment
+  profile records, redaction helpers, `create_run_store(...)`, and
+  capability-admission records.
+- Added a public `RunStore` adapter over `PerRunAuthorityStore`, with support
+  for explicit in-memory/test stores and transitional SQLite authority.
+- Expanded backend capability declarations with run admission, lease TTL,
+  fencing, monotonic revisions, transaction/clock semantics, topology, service,
+  shared-filesystem, and deferred-finalization vocabulary.
+- Added reusable public authority conformance checks plus package, unit,
+  contract, and integration coverage.
+- Documented the v9-post public naming transition in
+  `docs/features/run-store.md`.
+
+## Validation Evidence
+
+- Focused checks before full validation:
+  - `uv run ruff check ...` passed for changed Phase 2 source and tests.
+  - `uv run pytest tests/package/test_pipeline_store_api.py
+    tests/unit/loom/pipeline/stores/test_authority_config_admission.py
+    tests/contracts/test_store_contract.py
+    tests/contracts/test_run_store_authority_contract.py
+    tests/contracts/test_authority_store_contract.py
+    tests/integration/pipeline/test_authority_factory.py` passed with
+    31 passed.
+  - `uv run --extra config pyright` passed with 0 errors.
+- First `make validate-pr` run passed Ruff, Pyright, and 1099 default tests
+  before failing one mirrored export expectation in
+  `tests/unit/loom/pipeline/stores/test_store_errors.py`.
+- Final `make validate-pr` passed Ruff, Pyright, default tests, config-extra
+  tests, and build.
+- `make test-summary` wrote `build/test-summary.md` with:
+  - package: 57 passed, 1 skipped.
+  - unit: 834 passed, 1 skipped.
+  - contract: 107 passed, 2 skipped.
+  - integration: 89 passed, 8 skipped, 10 deselected.
+  - e2e: 39 passed, 1 deselected.
+  - config-extra: 420 passed, 1129 deselected.
 
 ## Stop Conditions
 
