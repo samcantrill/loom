@@ -1420,7 +1420,7 @@ Completion summary:
 
 ### Phase 6 - Authority Read Models For Status, Catalog, Plan, And Diagnostics
 
-Status: pr_open
+Status: merged
 Branch: `codex/authority-read-models`
 PR: https://github.com/samcantrill/loom/pull/114
 
@@ -1495,6 +1495,11 @@ Completion summary:
   `codex/authority-read-models`.
 - Local automated review on 2026-05-10 found no blocking findings.
 - `make validate-pr` and `make test-summary` passed before PR review.
+- Final merge verification on 2026-05-10 confirmed PR #114 targeted
+  `develop`, head `codex/authority-read-models`, merge state `CLEAN`, and CI
+  `checks` succeeded.
+- PR #114 was squash-merged into `develop` on 2026-05-10 as
+  `ce79059ef4921e9e356d8ca0b05f9c45deb644ba`.
 
 ### Phase 7 - Concrete Service/Database Backend
 

@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 6 - Authority Read Models For Status, Catalog, Plan, And Diagnostics
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-read-models`
 - Worktree: `/home/samcantrill/work/loom-worktrees/authority-read-models`
 - Stack predecessor: none; Phase 5 merged before branch creation.
@@ -22,6 +22,8 @@
 - Phase PR review budget: used on 2026-05-10 by local managing-agent review;
   no blocking findings.
 - Blocker-resolution budget: 0/3 used
+- Merge: squash-merged into `develop` on 2026-05-10 as
+  `ce79059ef4921e9e356d8ca0b05f9c45deb644ba`.
 
 ## Scope
 
@@ -146,6 +148,9 @@ local lifecycle fallback.
 
 - `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
   and build on the final run.
+- GitHub CI `checks` passed on PR #114; final pre-merge verification confirmed
+  base `develop`, head `codex/authority-read-models`, state `OPEN`, and merge
+  state `CLEAN`.
 
 ## Stop Conditions
 
