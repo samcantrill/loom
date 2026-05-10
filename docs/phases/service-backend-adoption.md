@@ -291,7 +291,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted and full validation
+  passed after local fixups.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -299,10 +300,18 @@ make test-summary
 
 - Draft plan: completed on 2026-05-10.
 - Final phase execution plan: completed on 2026-05-10.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
-- Blocker-resolution summary: pending.
-- PR preparation: pending.
+- Implementation summary: added shared authority config/env/CLI helpers,
+  service-aware runtime store construction, worker/submitted authority handoff,
+  CLI/preflight/status/cancel/plan/stage/prepared-run propagation, subprocess
+  and SLURM command propagation, service-safe audit serialization, authority
+  catalog scan support, docs/examples, and focused tests.
+- Implementation validation: `make validate-pr` passed on 2026-05-10; `make
+  test-summary` passed on 2026-05-10 with package 57, unit 855, contract 112,
+  integration 100, e2e 39, and config-extra 420 passing.
+- Refinement summary: local fixups preserved CLI import boundaries, updated
+  authority-aware test doubles, and aligned runner admission diagnostics.
+- Blocker-resolution summary: none used.
+- PR preparation: PR body drafted in
+  `docs/phases/service-backend-adoption-pr-body.md`; PR open pending.
 - Stack maintenance: pending.
 - Remaining blockers: none.
