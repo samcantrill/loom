@@ -2,10 +2,12 @@
 
 ## Metadata
 
-- Status: final phase execution plan
+- Status: pr_open
 - Feature focus: Authority Runtime Unification
 - PR title: `Authority Runtime Unification - Phase 1: Inventory and Lifecycle Contracts`
 - Branch: `codex/authority-inventory-contracts`
+- PR URL: https://github.com/samcantrill/loom/pull/109
+- PR state: OPEN; verified on 2026-05-10.
 - Worktree: `/home/samcantrill/work/loom-worktrees/authority-inventory-contracts`
 - Phase execution plan path: `docs/phases/authority-inventory-contracts.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v9-post.md`
@@ -30,7 +32,7 @@
   because the required v9-post plan commit is local-only in this checkout.
   `develop` is one commit ahead of `origin/develop`; do not drop or rebase away
   the local plan commit while preparing this phase.
-- Blockers: none; ready for documentation-only implementation.
+- Blockers: none.
 
 ## Objective
 
@@ -682,6 +684,10 @@ make test-summary
   deselected, and 0 failed/errors. Pre-submit blocker gate completed locally
   against the source plan, phase plan, diff, PR body, validation evidence,
   scope boundaries, and future-phase exclusions; no blockers found. PR body
-  refine/open pass remains pending until branch push and explicit PR creation.
+  refine/open pass completed on 2026-05-10: pushed
+  `codex/authority-inventory-contracts`, opened PR #109 against `develop`,
+  and verified `baseRefName=develop`, `headRefName=codex/authority-inventory-contracts`,
+  `state=OPEN`, URL `https://github.com/samcantrill/loom/pull/109`. GitHub CI
+  check `checks` was queued at PR verification time.
 - Stack maintenance: not applicable yet.
 - Remaining blockers: none known.

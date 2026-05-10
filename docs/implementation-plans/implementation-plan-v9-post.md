@@ -910,9 +910,9 @@ Accepted risks to watch during phase execution:
 
 ### Phase 1 - Exhaustive Inventory And Lifecycle Contracts
 
-Status: pending
+Status: pr_open
 Branch: `codex/authority-inventory-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/109
 
 Goal:
 
@@ -977,7 +977,16 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- PR #109 opened on 2026-05-10 against `develop`.
+- Added `docs/phases/authority-inventory-contracts.md` with refreshed
+  `LocalRunStore`, `LocalRunStorePaths`, path-shaped `RunStore`, and local
+  helper inventory evidence; a migration map with future-phase ownership; and
+  run, stage, submitted-operation, and failure-closed authority contracts.
+- Validation before PR opening: `make validate-pr` passed Ruff, Pyright,
+  default harness, config-extra, and build; `make test-summary` passed with
+  overall 1534 passed, 12 skipped, 1128 deselected, and 0 failed/errors.
+- Follow-up: Phase 2 can use the inventory and contracts to define the public
+  authority interfaces and conformance harness.
 
 ### Phase 2 - Generic RunStore/StageStore Interfaces And Conformance Harness
 
