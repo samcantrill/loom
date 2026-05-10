@@ -235,30 +235,7 @@ def inspect_run_status(
             ),
         )
 
-    store = _default_run_store(run_uri) if run_store is None else run_store
-    state = store.inspect_run_state(run_uri)
-    run_status = state.run_status
-    return RunStatusSummary(
-        run_uri=state.run_uri,
-        status=None if run_status is None else run_status.status.value,
-        message=None if run_status is None else run_status.message,
-        artifact_count=state.artifact_count,
-        submitted_operations=tuple(
-            SubmittedOperationSummary(
-                submission_id=record.submission_id,
-                backend=record.backend,
-                mode=record.mode,
-                state=record.state.value,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-                manifest_relative_path=record.manifest_relative_path,
-                summary_counts=record.summary_counts,
-                active=record.active,
-            )
-            for record in state.submitted_operations
-        ),
-        stages=tuple(_stage_summary(stage) for stage in state.stage_inspections),
-    )
+    raise _local_lifecycle_unsupported(run_uri)
 
 
 def inspect_run_artifacts(
@@ -409,28 +386,6 @@ def _artifact_summary(
         created_at=artifact_ref.created_at,
         metadata=artifact_ref.metadata,
         provenance_available=provenance is not None,
-    )
-
-
-def _stage_summary(stage: object) -> StageStatusSummary:
-    status = getattr(stage, "status")
-    return StageStatusSummary(
-        stage_name=str(getattr(stage, "stage_name")),
-        status=None if status is None else status.status.value,
-        attempt=None if status is None else status.attempt,
-        message=None if status is None else status.message,
-        failure=_plain_mapping_or_none(getattr(stage, "failure")),
-        input_count=int(getattr(stage, "input_count")),
-        output_count=int(getattr(stage, "output_count")),
-        provenance_available=bool(getattr(stage, "provenance_available")),
-        log_paths={
-            "stdout": _optional_str(getattr(stage, "stdout_path")),
-            "stderr": _optional_str(getattr(stage, "stderr_path")),
-        },
-        log_available={
-            "stdout": bool(getattr(stage, "stdout_available")),
-            "stderr": bool(getattr(stage, "stderr_available")),
-        },
     )
 
 
@@ -600,6 +555,13 @@ def _authority_marker_exists(run_uri: str) -> bool:
         return (run_uri_to_path(run_uri) / ".loom").exists()
     except Exception:
         return False
+
+
+def _local_lifecycle_unsupported(run_uri: str) -> DiagnosticsInspectionError:
+    return DiagnosticsInspectionError(
+        "local-only lifecycle state is not supported for status inspection; "
+        f"run {run_uri} has no authoritative lifecycle backend"
+    )
 
 
 def _open_run(store: Any, run_uri: str) -> None:

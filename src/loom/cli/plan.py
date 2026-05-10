@@ -6,7 +6,7 @@ import argparse
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope, format_plan_text
@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from loom.pipeline.planning import ExecutionPlan, PlanSelectors, StageExplanation
     from loom.pipeline.runtime import RunOptions
     from loom.pipeline.specs import PipelineSpec
-    from loom.pipeline.stores import LocalRunStore
     from loom.pipeline.stores.artifact_store import ArtifactStore
     from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
     from loom.pipeline.validation import PipelineValidationResult
@@ -259,14 +258,14 @@ def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":
     )
 
 
-def _create_default_run_store() -> "LocalRunStore":
-    from loom.pipeline.stores import LocalRunStore
+def _create_default_run_store() -> Any:
+    from loom.pipeline.execution import create_authority_backed_serial_run_store
 
-    return LocalRunStore()
+    return create_authority_backed_serial_run_store("runs", owner_id="plan")
 
 
 def _resolve_run_uri_for_plan(
-    store: "LocalRunStore",
+    store: Any,
     run_uri: str | None,
     *,
     open_existing: bool,
@@ -294,7 +293,7 @@ def _resolve_run_uri_for_plan(
 
 
 def _stores_for_plan(
-    store: "LocalRunStore", run_uri: str | None
+    store: Any, run_uri: str | None
 ) -> tuple["RunStore", "ArtifactStore", str]:
     if run_uri is None:
         return (

@@ -279,7 +279,10 @@ class _AuthoritativeSummaryStore:
         return self._local_store.read_stage_fingerprint(run_uri, stage_name)
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
-        index: dict[str, ArtifactRef] = {}
+        try:
+            index = dict(self._local_store.read_artifact_index(run_uri))
+        except Exception:
+            index = {}
         for stage in self._snapshot(run_uri).stages:
             for fact in stage.artifact_facts:
                 index[format_artifact_key(stage.stage_name, fact.artifact_name)] = (
@@ -380,7 +383,11 @@ def _authority_store_for_candidate(
                 "run authoritative backend is missing",
                 path=candidate,
             )
-        return None, None
+        return None, _warning(
+            CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
+            "run has local-only lifecycle state; authority-backed lifecycle state is required",
+            path=candidate,
+        )
     raise CorruptStoreDocumentError(check.failure.message)
 
 

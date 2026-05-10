@@ -10,8 +10,9 @@ from typing import Any
 from uuid import uuid4
 
 from loom.cli.main import main as loom_main
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
@@ -23,7 +24,7 @@ UPDATED_AT = "2026-05-08T00:00:03Z"
 def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    store = LocalRunStore(run_root)
+    store = create_authority_backed_serial_run_store(run_root)
     run_uri = path_to_run_uri(run_root / f"submitted-status-{uuid4().hex[:8]}")
     submission_id = "example-submitted"
     manifest_relative_path = f"slurm/submissions/{submission_id}/manifest.json"
