@@ -113,6 +113,45 @@ site.
 - E2E: not required until Phase 9 call-site adoption.
 - Opt-in: real HPC topology tests only.
 
+## Implementation Summary
+
+- Added backend-neutral deployment profile summaries and preflight diagnostics
+  for co-located, managed-service, allocation-scoped-service, direct-database,
+  and deferred-finalization authority profiles.
+- Added deterministic live-worker checks for endpoint presence, service health,
+  compute-to-authority reachability, capability admission, and profile
+  mismatch.
+- Added deferred result envelopes that round-trip as plain data and reject live
+  fencing material in worker-produced payloads.
+- Added guarded deferred reconciliation through `PerRunAuthorityStore`, with
+  stale, cancelled, superseded, terminal-submission, missing-fence, and
+  authority-rejected outcomes.
+- Documented SLURM authority handoff profiles and separated live authority
+  worker fields from deferred result envelopes.
+- Added package, unit, contract, and integration coverage for profile
+  diagnostics, service-unreachable preflight, local service downgrade
+  diagnostics, envelope validation, and authority-mediated reconciliation.
+
+## Validation Evidence
+
+- Targeted Phase 8 suite:
+  `uv run --extra config pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_authority_deployment.py tests/unit/loom/pipeline/stores/test_deferred_finalization.py tests/contracts/test_deferred_finalization_contract.py tests/integration/pipeline/test_authority_deployment_profiles.py -q`
+  passed with 47 tests.
+- `uv run --extra config pyright` passed with 0 errors, 0 warnings, and 0
+  informations.
+- `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
+  and build.
+- `make test-summary` passed:
+
+  | Suite | Result |
+  | --- | --- |
+  | package | 57 passed, 1 skipped |
+  | unit | 852 passed, 1 skipped |
+  | contract | 112 passed, 2 skipped |
+  | integration | 98 passed, 8 skipped, 10 deselected |
+  | e2e | 39 passed, 1 deselected |
+  | config-extra | 420 passed, 1161 deselected |
+
 ## Stop Conditions
 
 - The phase requires changing every SLURM or worker call site to express the
