@@ -146,18 +146,25 @@ def inspect_backend(
     store = authority_store or _default_authority_store(authority_config)
     schema = _require_supported_schema(store, resolved_run_uri)
     capability_set = store.capabilities()
-    snapshot = read_authoritative_run(
-        store,
-        resolved_run_uri,
-        options=AuthoritativeReadOptions(
-            include_materialized_refs=True,
-            verify_materialization=verify_materialization,
-            verify_materialization_checksums=False,
-            projection_revision=_parse_projection_revision(projection_revision),
-        ),
-        local_paths=LocalRunStore(run_uri_to_path(resolved_run_uri).parent),
-        local_materialization=LocalMaterializationRequest(),
-    )
+    try:
+        snapshot = read_authoritative_run(
+            store,
+            resolved_run_uri,
+            options=AuthoritativeReadOptions(
+                include_materialized_refs=True,
+                verify_materialization=verify_materialization,
+                verify_materialization_checksums=False,
+                projection_revision=_parse_projection_revision(projection_revision),
+            ),
+            local_paths=LocalRunStore(run_uri_to_path(resolved_run_uri).parent),
+            local_materialization=LocalMaterializationRequest(),
+        )
+    except Exception as exc:
+        raise BackendDiagnosticsError(
+            f"authoritative backend is unavailable for run {resolved_run_uri}: {exc}",
+            code="backend_diagnostics.authority_unavailable",
+            context={"run_uri": resolved_run_uri},
+        ) from exc
     stages = tuple(
         stage for stage in snapshot.stages
         if stage_name is None or stage.stage_name == stage_name
@@ -265,9 +272,12 @@ def _default_authority_store(
     else:
         config = authority_config
     if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
-        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-        return SQLitePerRunAuthorityStore()
+        raise BackendDiagnosticsError(
+            "transitional SQLite authority is no longer a supported runtime backend; "
+            "use service authority diagnostics instead",
+            code="backend_diagnostics.removed_backend",
+            context={"backend_kind": config.backend_kind.value},
+        )
     if config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
         AuthorityBackendKind.MANAGED_SERVICE,

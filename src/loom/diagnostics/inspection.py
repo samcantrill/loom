@@ -490,10 +490,29 @@ def _authoritative_read(
     force_authoritative = authority_store is not None
     if authority_store is None:
         try:
+            from loom.pipeline.stores import (
+                AuthorityBackendKind,
+                authority_config_from_env,
+            )
             from loom.pipeline.stores.schema_policy import AuthoritySchemaFailureKind
-            from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
-            authority_store = SQLitePerRunAuthorityStore()
+            config = authority_config_from_env()
+            if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
+                raise DiagnosticsInspectionError(
+                    "transitional SQLite authority is no longer a supported "
+                    "runtime backend"
+                )
+            if config.backend_kind not in {
+                AuthorityBackendKind.CO_LOCATED_SERVICE,
+                AuthorityBackendKind.MANAGED_SERVICE,
+                AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+            }:
+                return None
+            from loom.pipeline.stores.service_authority import (
+                create_service_authority_store,
+            )
+
+            authority_store = create_service_authority_store(config)
             check = authority_store.check_schema(run_uri)
             if (
                 check.failure is not None

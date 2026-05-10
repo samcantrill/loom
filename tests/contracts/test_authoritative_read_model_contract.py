@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +21,10 @@ from loom.pipeline.stores import (
     read_authoritative_run,
     read_completed_run_bundle_metadata,
 )
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.pipeline.stores.service_authority import (
+    LocalAuthorityService,
+    create_service_authority_store,
+)
 from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 
 
@@ -34,19 +38,26 @@ class ReadModelCase:
     output_path: Path
 
 
-@pytest.fixture(params=["in-memory", "sqlite"])
-def read_model_case(request: pytest.FixtureRequest, tmp_path: Path) -> ReadModelCase:
+@pytest.fixture(params=["in-memory", "service"])
+def read_model_case(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[ReadModelCase]:
     run_root = tmp_path / request.param / "run"
     run_uri = path_to_run_uri(run_root)
     output_path = run_root / "artifacts" / "build" / "out.json"
     if request.param == "in-memory":
-        store: PerRunAuthorityStore = InMemoryPerRunAuthorityStore()
-    else:
-        store = SQLitePerRunAuthorityStore(
-            run_uri,
-            clock=lambda: "2020-01-01T00:00:00Z",
+        yield ReadModelCase(
+            store=InMemoryPerRunAuthorityStore(),
+            run_uri=run_uri,
+            output_path=output_path,
         )
-    return ReadModelCase(store=store, run_uri=run_uri, output_path=output_path)
+        return
+    with LocalAuthorityService.start() as service:
+        yield ReadModelCase(
+            store=create_service_authority_store(service.config()),
+            run_uri=run_uri,
+            output_path=output_path,
+        )
 
 
 def _submitted_record(run_uri: str) -> SubmittedOperationRecord:

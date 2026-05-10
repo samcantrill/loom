@@ -50,12 +50,17 @@ def test_service_capabilities_are_explicit_about_unsupported_topologies() -> Non
         )
 
 
-def test_service_client_rejects_missing_endpoint_and_authkey() -> None:
-    with pytest.raises(ValueError, match="endpoint"):
-        create_run_store(
-            AuthorityConfig(backend_kind=AuthorityBackendKind.CO_LOCATED_SERVICE)
-        )
+def test_service_client_bootstraps_missing_co_located_endpoint() -> None:
+    store = create_run_store(
+        AuthorityConfig(backend_kind=AuthorityBackendKind.CO_LOCATED_SERVICE)
+    )
 
+    assert store.capabilities().backend_name == "local-authority-service"
+    assert store.authority_config().endpoint is not None
+    assert "authkey" in store.authority_config().metadata
+
+
+def test_service_client_rejects_missing_authkey_for_explicit_endpoint() -> None:
     with pytest.raises(ValueError, match="authkey"):
         create_run_store(
             AuthorityConfig(

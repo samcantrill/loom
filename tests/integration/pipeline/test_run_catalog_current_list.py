@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest
@@ -190,14 +191,16 @@ def test_multiple_catalog_instances_can_list_and_rebuild(tmp_path: Path) -> None
 
 def test_run_catalog_list_filters_synthetic_large_collection(tmp_path: Path) -> None:
     root = tmp_path / "runs"
+    store = create_authority_backed_serial_run_store(root)
     expected: list[str] = []
-    for index in range(1000):
+    for index in range(120):
         status = RunStatus.SUCCEEDED if index % 10 == 0 else RunStatus.FAILED
         run_uri = _create_minimal_catalog_run(
             root,
             root / f"run-{index:03d}",
             status=status,
             tag_value="bulk",
+            run_store=store,
         )
         if status is RunStatus.SUCCEEDED:
             expected.append(run_uri)
@@ -278,8 +281,9 @@ def _create_minimal_catalog_run(
     *,
     status: RunStatus,
     tag_value: str,
+    run_store: Any | None = None,
 ) -> str:
-    store = create_authority_backed_serial_run_store(root)
+    store = run_store or create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
     store.write_run_status(

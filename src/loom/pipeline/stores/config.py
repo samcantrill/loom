@@ -148,7 +148,7 @@ class AuthorityReference:
 class AuthorityConfig:
     """Plain-data authority selection for factories and worker handoff."""
 
-    backend_kind: AuthorityBackendKind = AuthorityBackendKind.TRANSITIONAL_SQLITE
+    backend_kind: AuthorityBackendKind = AuthorityBackendKind.CO_LOCATED_SERVICE
     deployment_profile: AuthorityDeploymentProfile = (
         AuthorityDeploymentProfile.CO_LOCATED
     )
@@ -243,7 +243,7 @@ class AuthorityConfig:
         return cls(
             backend_kind=_enum(
                 mapping.get(
-                    "backend_kind", AuthorityBackendKind.TRANSITIONAL_SQLITE.value
+                    "backend_kind", AuthorityBackendKind.CO_LOCATED_SERVICE.value
                 ),
                 AuthorityBackendKind,
                 "backend_kind",

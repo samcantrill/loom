@@ -61,6 +61,16 @@ def test_authority_config_rejects_unknown_fields() -> None:
         AuthorityConfig.from_dict({"backend_kind": "test_fake", "extra": True})
 
 
+def test_authority_config_defaults_to_co_located_service() -> None:
+    config = AuthorityConfig()
+    restored = AuthorityConfig.from_dict({})
+
+    assert config.backend_kind is AuthorityBackendKind.CO_LOCATED_SERVICE
+    assert config.deployment_profile is AuthorityDeploymentProfile.CO_LOCATED
+    assert restored.backend_kind is AuthorityBackendKind.CO_LOCATED_SERVICE
+    assert restored.deployment_profile is AuthorityDeploymentProfile.CO_LOCATED
+
+
 def test_authority_config_round_trips_through_environment_shape() -> None:
     config = AuthorityConfig(
         backend_kind=AuthorityBackendKind.CO_LOCATED_SERVICE,

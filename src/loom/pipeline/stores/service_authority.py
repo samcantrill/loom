@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import base64
 import secrets
 import threading
@@ -162,6 +163,11 @@ class LocalAuthorityService:
 
     def _proxy(self) -> Any:
         return self._manager.authority()  # type: ignore[attr-defined]
+
+
+_SHARED_SERVICE_LOCK = threading.Lock()
+_SHARED_CO_LOCATED_SERVICE: LocalAuthorityService | None = None
+_SHARED_SERVICE_ATEXIT_REGISTERED = False
 
 
 class ServiceAuthorityStore(PerRunAuthorityStore):
@@ -440,6 +446,16 @@ def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityS
         raise AuthorityStoreError(
             "service authority clients must not use a direct state_path"
         )
+    if config.endpoint is None:
+        if config.backend_kind is not AuthorityBackendKind.CO_LOCATED_SERVICE:
+            raise AuthorityStoreError(
+                f"{config.backend_kind.value} authority requires endpoint"
+            )
+        service = _shared_co_located_service()
+        return ServiceAuthorityStore(
+            service._proxy(),
+            _config_for_local_service(config, service),
+        )
     host, port = _parse_endpoint(config.endpoint)
     authkey = _decode_authkey(config.metadata.get(_AUTHKEY_METADATA_KEY))
     manager_type = _client_manager_type()
@@ -453,6 +469,44 @@ def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityS
             f"authority service is unavailable at {config.endpoint}"
         ) from exc
     return ServiceAuthorityStore(proxy, config)
+
+
+def _shared_co_located_service() -> LocalAuthorityService:
+    global _SHARED_CO_LOCATED_SERVICE, _SHARED_SERVICE_ATEXIT_REGISTERED
+    with _SHARED_SERVICE_LOCK:
+        if _SHARED_CO_LOCATED_SERVICE is None:
+            _SHARED_CO_LOCATED_SERVICE = LocalAuthorityService.start()
+        if not _SHARED_SERVICE_ATEXIT_REGISTERED:
+            atexit.register(_stop_shared_co_located_service)
+            _SHARED_SERVICE_ATEXIT_REGISTERED = True
+        return _SHARED_CO_LOCATED_SERVICE
+
+
+def _stop_shared_co_located_service() -> None:
+    global _SHARED_CO_LOCATED_SERVICE
+    with _SHARED_SERVICE_LOCK:
+        service = _SHARED_CO_LOCATED_SERVICE
+        _SHARED_CO_LOCATED_SERVICE = None
+    if service is not None:
+        service.stop()
+
+
+def _config_for_local_service(
+    config: AuthorityConfig,
+    service: LocalAuthorityService,
+) -> AuthorityConfig:
+    metadata = dict(config.metadata)
+    metadata[_AUTHKEY_METADATA_KEY] = _encode_authkey(service.authkey)
+    return AuthorityConfig(
+        backend_kind=config.backend_kind,
+        deployment_profile=config.deployment_profile,
+        endpoint=service.endpoint,
+        workspace_id=config.workspace_id,
+        state_path=None,
+        reference_id=config.reference_id,
+        redaction_keys=config.redaction_keys,
+        metadata=metadata,
+    )
 
 
 class _RunState:

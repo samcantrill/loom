@@ -18,7 +18,6 @@ _AUTHORITY_BACKEND_CHOICES = (
     "allocation_scoped_service",
     "direct_database",
     "deferred_finalization",
-    "transitional_sqlite",
     "test_fake",
 )
 _AUTHORITY_PROFILE_CHOICES = (

@@ -137,7 +137,7 @@ def test_scan_current_collection_classifies_invalid_and_partial_candidates(
     )
 
 
-def test_scan_current_collection_warns_for_invalid_authority_schema(
+def test_scan_current_collection_treats_invalid_legacy_sqlite_authority_as_missing(
     tmp_path: Path,
 ) -> None:
     collection = tmp_path / "runs"
@@ -155,7 +155,7 @@ def test_scan_current_collection_warns_for_invalid_authority_schema(
     assert result.summaries == ()
     assert len(result.warnings) == 1
     assert result.warnings[0].code == CatalogWarningCode.PARTIAL_RUN
-    assert "incomplete or invalid" in result.warnings[0].message
+    assert result.warnings[0].message == "run authoritative backend is missing"
 
 
 def test_scan_current_collection_warns_for_missing_authority_backend(
@@ -176,7 +176,7 @@ def test_scan_current_collection_warns_for_missing_authority_backend(
     assert result.warnings[0].message == "run authoritative backend is missing"
 
 
-def test_scan_current_collection_warns_for_unsupported_authority_schema(
+def test_scan_current_collection_treats_future_legacy_sqlite_authority_as_missing(
     tmp_path: Path,
 ) -> None:
     collection = tmp_path / "runs"
@@ -195,8 +195,8 @@ def test_scan_current_collection_warns_for_unsupported_authority_schema(
 
     assert result.summaries == ()
     assert len(result.warnings) == 1
-    assert result.warnings[0].code == CatalogWarningCode.UNSUPPORTED_SCHEMA
-    assert result.warnings[0].message == "run uses an unsupported schema"
+    assert result.warnings[0].code == CatalogWarningCode.PARTIAL_RUN
+    assert result.warnings[0].message == "run authoritative backend is missing"
 
 
 def test_extract_current_summary_warns_when_freshness_keeps_changing(
