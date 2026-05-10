@@ -1275,9 +1275,9 @@ Completion summary:
 
 - Phase execution plan drafted and refined on 2026-05-10 in
   `docs/phases/python-runner-authority.md`.
-- Stack base recorded as `codex/artifact-store-split` while Phase 3 awaits
-  merge; PR target will be retargeted to `develop` after stack maintenance if
-  Phase 3 lands first.
+- Initially started from `codex/artifact-store-split`; after Phase 3 merged,
+  branch `codex/python-runner-authority` was rebased onto updated `develop`
+  and the PR target was reset to `develop`.
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 

@@ -8,10 +8,9 @@
 - Status: in_progress
 - Branch: `codex/python-runner-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/python-runner-authority`
-- Stack predecessor: `codex/artifact-store-split`
-- Base branch: `codex/artifact-store-split`
-- PR target branch: `codex/artifact-store-split` until Phase 3 merges; retarget
-  to `develop` after stack maintenance.
+- Stack predecessor: none; Phase 3 merged before PR opening.
+- Base branch: `develop`
+- PR target branch: `develop`
 - PR: pending
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
@@ -22,6 +21,11 @@
 - Phase implementation refinement budget: unused
 - Phase PR review budget: unused
 - Blocker-resolution budget: 0/3 used
+
+## Stack Maintenance Notes
+
+- Rebased `codex/python-runner-authority` onto updated `origin/develop` after
+  Phase 3 merged and `docs: record phase 3 merge` was pushed to `develop`.
 
 ## Scope
 
