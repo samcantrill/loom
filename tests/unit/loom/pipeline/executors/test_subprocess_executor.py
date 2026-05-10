@@ -33,6 +33,11 @@ from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.planning import FingerprintContext, build_stage_fingerprint, plan_pipeline
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityConfig,
+    AuthorityDeploymentProfile,
+)
 from loom.serialization import PlainData
 from tests.support.pipeline_execution_stages import JsonProducerStage
 
@@ -172,6 +177,26 @@ def test_build_stage_worker_command_uses_current_worker_cli() -> None:
         "--format",
         "json",
     )
+
+
+def test_build_stage_worker_command_propagates_authority_config() -> None:
+    command = build_stage_worker_command(
+        python_executable="/usr/bin/python",
+        run_uri="file:///runs/demo",
+        stage_name="build",
+        attempt=3,
+        authority_config=AuthorityConfig(
+            backend_kind=AuthorityBackendKind.CO_LOCATED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.CO_LOCATED,
+            endpoint="tcp://127.0.0.1:12345",
+            metadata={"authkey": "secret"},
+        ),
+    )
+
+    assert "--authority-backend" in command
+    assert "--authority-endpoint" in command
+    assert "--authority-metadata-json" in command
+    assert command[-2:] == ("--format", "json")
 
 
 def test_subprocess_executor_reads_successful_worker_result(tmp_path: Path) -> None:
