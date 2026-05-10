@@ -51,6 +51,36 @@ run-store lifecycle. Default validation remains fake-command and cluster-free.
 The real SLURM acceptance suite is marked `slurm` and `slow` and runs only when
 the maintainer explicitly enables it.
 
+### 0.1 Authority Deployment Profiles
+
+Post-v9 SLURM support must treat authority deployment as an explicit selected
+profile instead of assuming a long-running login-node service is always
+available.
+
+Supported authority handoff profiles:
+
+- Managed service authority: jobs receive an authority reference, endpoint,
+  run URI, stage name, attempt id, owner id, lease id, and fencing token.
+  Preflight must prove service health and compute-to-authority reachability
+  before live jobs are submitted.
+- Allocation-scoped service authority: the scheduler allocation owns service
+  start, health check, endpoint distribution, shutdown, and recovery notes.
+  Live workers use the same authority reference, endpoint, lease, and fencing
+  handoff fields, but the service lifetime is tied to the allocation.
+- Direct transactional database authority: jobs receive a redacted authority
+  reference and database endpoint only when the backend proves the transaction,
+  server-time, lease, and fencing capabilities required for live commits.
+- Co-located authority: development/test authority for one process or host. It
+  must not be advertised as live multi-host SLURM authority.
+- Deferred finalization: workers do not receive live fencing material. They
+  write a sealed result envelope plus materialized outputs; a controller or
+  reconciler later accepts or rejects that evidence through authority.
+
+Deferred result envelopes are not lifecycle state. A successful envelope becomes
+visible only when authority reconciliation validates the recorded submission and
+attempt, rejects stale/cancelled/superseded evidence, and commits through the
+authority store with reconciler-held fencing material.
+
 ## 1. Purpose
 
 `loom.pipeline.executors.slurm` is the optional cluster execution layer for
