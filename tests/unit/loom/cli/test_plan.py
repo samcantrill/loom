@@ -130,7 +130,11 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
 
     monkeypatch.setattr(plan_command, "_compose_config", compose)
     monkeypatch.setattr(plan_command, "_validate_pipeline_config", lambda _config: FakePipelineResult())
-    monkeypatch.setattr(plan_command, "_create_default_run_store", lambda: fake_store)
+    monkeypatch.setattr(
+        plan_command,
+        "_create_default_run_store",
+        lambda *, authority_config=None: fake_store,
+    )
     monkeypatch.setattr(plan_command, "_plan_pipeline", plan_pipeline)
     return calls
 

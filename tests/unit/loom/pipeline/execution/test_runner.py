@@ -171,7 +171,39 @@ class _LimitedParallelCapabilityAuthority(InMemoryPerRunAuthorityStore):
             backend_name="limited-authority",
             records=(
                 BackendCapabilityRecord(
+                    capability=BackendCapability.RUN_ADMISSION,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
                     capability=BackendCapability.ATOMIC_TRANSITIONS,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
+                    capability=BackendCapability.REVISIONED_SNAPSHOTS,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
+                    capability=BackendCapability.MONOTONIC_REVISIONS,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
+                    capability=BackendCapability.ATTEMPT_ALLOCATION,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
+                    capability=BackendCapability.LEASE_TTL,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
+                    capability=BackendCapability.FENCING_TOKENS,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
+                    capability=BackendCapability.ATOMIC_OUTPUT_COMMIT,
+                    scope=CapabilityScope.PER_RUN,
+                ),
+                BackendCapabilityRecord(
+                    capability=BackendCapability.RECOVERY_SCANS,
                     scope=CapabilityScope.PER_RUN,
                 ),
             ),
@@ -545,13 +577,13 @@ def test_runner_rejects_parallel_when_backend_capabilities_are_missing(
     error = exc_info.value
     assert error.code == "pipeline.parallel.unsupported_backend"
     diagnostic_codes = {str(diagnostic["code"]) for diagnostic in error.diagnostics}
-    assert diagnostic_codes == {"missing_capability"}
+    assert diagnostic_codes == {"authority.unsupported_capability"}
     diagnostic_details: list[Mapping[str, PlainData]] = []
     for diagnostic in error.diagnostics:
         raw_detail = diagnostic["detail"]
         assert isinstance(raw_detail, dict)
         diagnostic_details.append(raw_detail)
-    assert {"capability": "stage_leases", "scope": "per_run"} in diagnostic_details
+    assert {"missing_capability": "stage_leases", "scope": "per_run"} in diagnostic_details
     assert not run_root.exists()
 
 

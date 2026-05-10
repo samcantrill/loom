@@ -3,18 +3,31 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from loom.pipeline.stores import (
-    AuthorityBackendKind,
-    AuthorityConfig,
-    AuthorityConfigError,
-    AuthorityDeploymentProfile,
-    authority_config_from_mapping,
-    authority_config_to_cli_args,
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from loom.pipeline.stores import AuthorityConfig
+    from loom.serialization import PlainData
+
+
+_AUTHORITY_BACKEND_CHOICES = (
+    "co_located_service",
+    "managed_service",
+    "allocation_scoped_service",
+    "direct_database",
+    "deferred_finalization",
+    "transitional_sqlite",
+    "test_fake",
 )
-from loom.serialization import PlainData
+_AUTHORITY_PROFILE_CHOICES = (
+    "co_located",
+    "managed_service",
+    "allocation_scoped",
+    "direct_database",
+    "deferred_finalization",
+)
 
 
 def add_authority_options(parser: argparse.ArgumentParser) -> None:
@@ -22,12 +35,12 @@ def add_authority_options(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument(
         "--authority-backend",
-        choices=[kind.value for kind in AuthorityBackendKind],
+        choices=_AUTHORITY_BACKEND_CHOICES,
         help="authority backend kind",
     )
     parser.add_argument(
         "--authority-profile",
-        choices=[profile.value for profile in AuthorityDeploymentProfile],
+        choices=_AUTHORITY_PROFILE_CHOICES,
         help="authority deployment profile",
     )
     parser.add_argument(
@@ -57,8 +70,10 @@ def add_authority_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def authority_config_from_namespace(namespace: Any) -> AuthorityConfig:
+def authority_config_from_namespace(namespace: Any) -> "AuthorityConfig":
     """Resolve authority config from CLI options and environment."""
+
+    from loom.pipeline.stores import AuthorityConfigError, authority_config_from_mapping
 
     try:
         return authority_config_from_mapping(
@@ -81,13 +96,15 @@ def authority_config_from_namespace(namespace: Any) -> AuthorityConfig:
         ) from exc
 
 
-def authority_config_to_worker_args(config: AuthorityConfig) -> tuple[str, ...]:
+def authority_config_to_worker_args(config: "AuthorityConfig") -> tuple[str, ...]:
     """Return CLI args for worker/submitted-job handoff commands."""
+
+    from loom.pipeline.stores import authority_config_to_cli_args
 
     return authority_config_to_cli_args(config)
 
 
-def authority_metadata_summary(config: AuthorityConfig) -> Mapping[str, PlainData]:
+def authority_metadata_summary(config: "AuthorityConfig") -> "Mapping[str, PlainData]":
     """Return a redacted metadata summary for CLI result contexts."""
 
     return config.redacted_dict()

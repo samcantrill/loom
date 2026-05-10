@@ -56,7 +56,14 @@ def _worker_result(status: StageStatus = StageStatus.SUCCEEDED) -> StageWorkerRe
 def test_stage_run_success_json(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: dict[str, object] = {}
 
-    def run_worker(*, run_uri: str, stage_name: str, attempt: int | None) -> StageWorkerResult:
+    def run_worker(
+        *,
+        run_uri: str,
+        stage_name: str,
+        attempt: int | None,
+        authority_config: object | None = None,
+    ) -> StageWorkerResult:
+        _ = authority_config
         calls["run_uri"] = run_uri
         calls["stage_name"] = stage_name
         calls["attempt"] = attempt
