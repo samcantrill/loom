@@ -8,10 +8,9 @@
 - Status: in_progress
 - Branch: `codex/cli-worker-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/cli-worker-authority`
-- Stack predecessor: `codex/python-runner-authority` until Phase 4 merges.
-- Base branch: `codex/python-runner-authority`
-- PR target branch: `codex/python-runner-authority` until Phase 4 merges; rebase
-  onto `develop` and target `develop` after Phase 4 is merged.
+- Stack predecessor: none; Phase 4 merged before PR opening.
+- Base branch: `develop`
+- PR target branch: `develop`
 - PR: pending
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
@@ -29,8 +28,10 @@
 - Created `codex/cli-worker-authority` from
   `codex/python-runner-authority` while Phase 4 PR #112 was open and waiting
   on final CI after approval metadata.
-- The branch must be rebased onto updated `develop` after Phase 4 merges before
-  the Phase 5 PR targets `develop`.
+- Rebased `codex/cli-worker-authority` onto updated `origin/develop` after
+  Phase 4 merged and `docs: record phase 4 merge` was pushed to `develop`.
+- Removed the obsolete Phase 4 worktrees and deleted
+  `codex/python-runner-authority` locally and on GitHub after the rebase.
 
 ## Scope
 

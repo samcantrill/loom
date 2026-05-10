@@ -1316,17 +1316,20 @@ def _authority_values_from_worker_request(
         raise ContinuationStateError(
             "stage-job request is missing authority fencing facts",
             code="execution.stage_job.missing_authority_fence",
-            context={
-                "run_uri": request.run_uri,
-                "stage": request.stage_name,
-                "attempt": attempt,
-                "missing": [
-                    "authority_attempt_id",
-                    "authority_lease_id",
-                    "authority_owner_id",
-                    "authority_fencing_token",
-                ],
-            },
+            context=cast(
+                Mapping[str, PlainData],
+                {
+                    "run_uri": request.run_uri,
+                    "stage": request.stage_name,
+                    "attempt": attempt,
+                    "missing": [
+                        "authority_attempt_id",
+                        "authority_lease_id",
+                        "authority_owner_id",
+                        "authority_fencing_token",
+                    ],
+                },
+            ),
         )
     values: dict[str, str] = {}
     missing: list[str] = []
@@ -1345,12 +1348,15 @@ def _authority_values_from_worker_request(
         raise ContinuationStateError(
             "stage-job request is missing authority fencing facts",
             code="execution.stage_job.missing_authority_fence",
-            context={
-                "run_uri": request.run_uri,
-                "stage": request.stage_name,
-                "attempt": attempt,
-                "missing": missing,
-            },
+            context=cast(
+                Mapping[str, PlainData],
+                {
+                    "run_uri": request.run_uri,
+                    "stage": request.stage_name,
+                    "attempt": attempt,
+                    "missing": missing,
+                },
+            ),
         )
     return values
 

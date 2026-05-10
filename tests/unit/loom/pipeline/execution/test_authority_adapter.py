@@ -51,6 +51,7 @@ from loom.pipeline.submitted import (
     SubmittedOperationState,
     submitted_stage_metadata,
 )
+from loom.serialization import PlainData
 
 
 class CommitFailingAuthority(SQLitePerRunAuthorityStore):
@@ -441,9 +442,9 @@ def test_authority_backed_stage_job_requires_worker_request_fencing(
 ) -> None:
     run_store, authority, run_uri, raw = _prepare_authority_stage_job(tmp_path)
     unsafe = dict(raw)
-    unsafe_metadata = dict(cast(Mapping[str, object], unsafe.get("metadata", {})))
+    unsafe_metadata = dict(cast(Mapping[str, PlainData], unsafe.get("metadata", {})))
     unsafe_metadata.pop("authority_attempt", None)
-    unsafe["metadata"] = unsafe_metadata
+    unsafe["metadata"] = cast(PlainData, unsafe_metadata)
     run_store.local_store.write_stage_worker_request(
         run_uri,
         "build",
