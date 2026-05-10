@@ -1309,7 +1309,7 @@ Completion summary:
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 
-Status: pending
+Status: in_progress
 Branch: `codex/cli-worker-authority`
 PR: pending
 
@@ -1389,7 +1389,9 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- Phase execution plan drafted on 2026-05-10 in
+  `docs/phases/cli-worker-authority.md`; implementation in progress on stacked
+  branch `codex/cli-worker-authority` from Phase 4.
 
 ### Phase 6 - Authority Read Models For Status, Catalog, Plan, And Diagnostics
 
