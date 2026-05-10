@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 7 - Concrete Service/Database Backend
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-service-backend`
 - Worktree: `/home/samcantrill/work/loom-worktrees/authority-service-backend`
 - Stack predecessor: none; Phase 6 merged before branch creation.
@@ -22,6 +22,8 @@
 - Phase PR review budget: used on 2026-05-10 by local managing-agent review;
   no blocking findings.
 - Blocker-resolution budget: 0/3 used
+- Merge: squash-merged into `develop` on 2026-05-10 as
+  `590e8ba56cc371c6e8ccee0ce354248b99cc36a4`.
 
 ## Scope
 
@@ -163,6 +165,10 @@ database-backed service without changing `RunStore`/`StageStore` callers.
 
 - `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
   and build.
+- GitHub CI `checks` passed on PR #115 after rerunning a transient unrelated
+  parallel execution test failure; final pre-merge verification confirmed base
+  `develop`, head `codex/authority-service-backend`, state `OPEN`, and merge
+  state `CLEAN`.
 
 ## Stop Conditions
 

@@ -1503,7 +1503,7 @@ Completion summary:
 
 ### Phase 7 - Concrete Service/Database Backend
 
-Status: pr_open
+Status: merged
 Branch: `codex/authority-service-backend`
 PR: https://github.com/samcantrill/loom/pull/115
 
@@ -1616,6 +1616,11 @@ Completion summary:
 - Implementation adds the stdlib local authority service backend, public
   factory selection for service backend kinds, honest capability diagnostics,
   and conformance/integration coverage for concurrent clients.
+- Local validation passed with `make validate-pr` and `make test-summary`.
+  GitHub CI `checks` passed after rerunning a transient unrelated parallel
+  execution test failure.
+- PR #115 was squash-merged into `develop` on 2026-05-10 as
+  `590e8ba56cc371c6e8ccee0ce354248b99cc36a4`.
 
 ### Phase 8 - HPC Deployment Modes And Fallback Capabilities
 
