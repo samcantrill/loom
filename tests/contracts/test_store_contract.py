@@ -11,6 +11,7 @@ from loom.pipeline import RunStatusRecord, StageStatusRecord
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     ArtifactStore,
+    LegacyRunStore,
     LocalArtifactStore,
     LocalRunStore,
     LocalRunStorePaths,
@@ -499,7 +500,8 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), StageStateStore)
     assert isinstance(DummyRunStore(), StageLogStore)
     assert isinstance(DummyRunStore(), StageWorkspaceStore)
-    assert isinstance(DummyRunStore(), RunStore)
+    assert isinstance(DummyRunStore(), LegacyRunStore)
+    assert not isinstance(DummyRunStore(), RunStore)
     assert DummyRunStore().read_composition_manifest("file:///tmp/run1") == {
         "schema_version": 1
     }
@@ -531,7 +533,8 @@ def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
     assert isinstance(store, RunFreshnessStore)
     assert isinstance(store, RunInspectionStore)
     assert isinstance(store, RunLockStore)
-    assert isinstance(store, RunStore)
+    assert isinstance(store, LegacyRunStore)
+    assert not isinstance(store, RunStore)
     assert store.resolve_run_uri(run_uri) == run_uri
 
 
@@ -574,4 +577,4 @@ def test_artifact_diagnostics_use_public_run_store_readers() -> None:
 
 def test_structural_protocol_rejects_incomplete_implementations() -> None:
     assert not isinstance(IncompleteArtifactStore(), ArtifactStore)
-    assert not isinstance(IncompleteRunStore(), RunStore)
+    assert not isinstance(IncompleteRunStore(), LegacyRunStore)

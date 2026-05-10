@@ -10,7 +10,7 @@ from typing import cast
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.stores.inspection import RunStateInspection, RunStageInspection
-from loom.pipeline.stores.run_store import LocalRunStorePaths, RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, json_loads
 from loom.serialization.errors import PlainDataError

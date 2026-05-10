@@ -42,7 +42,7 @@ from loom.pipeline.stores import (
     DiagnosticSeverity,
     LocalArtifactStore,
     LocalRunStorePaths,
-    RunStore,
+    LegacyRunStore as RunStore,
     StoreDiagnostic,
 )
 from loom.pipeline.stores.artifact_store import ArtifactStore

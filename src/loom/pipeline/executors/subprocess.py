@@ -17,7 +17,7 @@ from loom.pipeline.execution.models import (
     redact_executor_metadata,
 )
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import RunStore
+from loom.pipeline.stores import LegacyRunStore as RunStore
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 

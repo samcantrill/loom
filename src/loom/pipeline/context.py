@@ -12,7 +12,7 @@ from loom.pipeline.errors import PipelineValidationError
 from loom.pipeline.specs import OutputSpec
 from loom.pipeline.stores._paths import validate_output_name
 from loom.pipeline.stores.artifact_store import ArtifactStore
-from loom.pipeline.stores.run_store import RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
 from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 

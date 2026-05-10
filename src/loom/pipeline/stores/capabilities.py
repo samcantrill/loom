@@ -16,22 +16,33 @@ class AuthorityCapabilityError(ValueError):
 
 
 class BackendCapability(StrEnum):
+    RUN_ADMISSION = "run_admission"
     ATOMIC_TRANSITIONS = "atomic_transitions"
     ATTEMPT_ALLOCATION = "attempt_allocation"
     RUN_LEASES = "run_leases"
     STAGE_LEASES = "stage_leases"
+    LEASE_TTL = "lease_ttl"
+    FENCING_TOKENS = "fencing_tokens"
     BACKEND_LEASE_TIME = "backend_lease_time"
     ATOMIC_OUTPUT_COMMIT = "atomic_output_commit"
     ARTIFACT_FACTS = "artifact_facts"
     SUBMITTED_OPERATIONS = "submitted_operations"
     REVISIONED_SNAPSHOTS = "revisioned_snapshots"
+    MONOTONIC_REVISIONS = "monotonic_revisions"
     RECOVERY_SCANS = "recovery_scans"
     CONSISTENT_READS = "consistent_reads"
+    TRANSACTION_ISOLATION = "transaction_isolation"
+    CLOCK_SEMANTICS = "clock_semantics"
     MATERIALIZATION_REFS = "materialization_refs"
     AUDIT_EVENTS = "audit_events"
     PER_RUN_COORDINATION = "per_run_coordination"
     CROSS_RUN_COORDINATION = "cross_run_coordination"
     GLOBAL_COUNTERS = "global_counters"
+    SINGLE_HOST_AUTHORITY = "single_host_authority"
+    MULTI_HOST_AUTHORITY = "multi_host_authority"
+    SERVICE_ENDPOINT = "service_endpoint"
+    SHARED_FILESYSTEM_SAFE = "shared_filesystem_safe"
+    DEFERRED_FINALIZATION = "deferred_finalization"
 
 
 class CapabilityScope(StrEnum):

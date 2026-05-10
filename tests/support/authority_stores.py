@@ -77,20 +77,27 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                     scope=CapabilityScope.PER_RUN,
                 )
                 for capability in (
+                    BackendCapability.RUN_ADMISSION,
                     BackendCapability.ATOMIC_TRANSITIONS,
                     BackendCapability.ATTEMPT_ALLOCATION,
                     BackendCapability.RUN_LEASES,
                     BackendCapability.STAGE_LEASES,
+                    BackendCapability.LEASE_TTL,
+                    BackendCapability.FENCING_TOKENS,
                     BackendCapability.BACKEND_LEASE_TIME,
                     BackendCapability.ATOMIC_OUTPUT_COMMIT,
                     BackendCapability.ARTIFACT_FACTS,
                     BackendCapability.SUBMITTED_OPERATIONS,
                     BackendCapability.REVISIONED_SNAPSHOTS,
+                    BackendCapability.MONOTONIC_REVISIONS,
                     BackendCapability.RECOVERY_SCANS,
                     BackendCapability.CONSISTENT_READS,
+                    BackendCapability.TRANSACTION_ISOLATION,
+                    BackendCapability.CLOCK_SEMANTICS,
                     BackendCapability.MATERIALIZATION_REFS,
                     BackendCapability.AUDIT_EVENTS,
                     BackendCapability.PER_RUN_COORDINATION,
+                    BackendCapability.SINGLE_HOST_AUTHORITY,
                 )
             ),
         )

@@ -14,6 +14,7 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData
 
 from .capabilities import BackendCapabilitySet
+from .config import AuthorityConfig
 from .read_models import (
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
@@ -24,6 +25,7 @@ from .read_models import (
     OutputCommitRecord,
     RecoveryRecord,
     StageAttempt,
+    StageLifecycleSnapshot,
 )
 from .schema_policy import AuthoritySchemaCheck
 
@@ -305,6 +307,171 @@ class PerRunAuthorityStore(Protocol):
     def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]: ...
 
 
+@runtime_checkable
+class StageStore(Protocol):
+    """Scoped authority surface for one stage inside a run."""
+
+    @property
+    def run_uri(self) -> str: ...
+
+    @property
+    def stage_name(self) -> str: ...
+
+    def capabilities(self) -> BackendCapabilitySet: ...
+
+    def transition(
+        self,
+        *,
+        from_status: StageStatus | None,
+        to_status: StageStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition: ...
+
+    def allocate_attempt(
+        self,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int | None = None,
+    ) -> AttemptAllocation: ...
+
+    def renew_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord: ...
+
+    def release_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord: ...
+
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord: ...
+
+    def write_submitted_operation(
+        self, record: SubmittedOperationRecord
+    ) -> BackendRevision: ...
+
+    def read_submitted_operation(
+        self, submission_id: str
+    ) -> SubmittedOperationRecord | None: ...
+
+    def list_submitted_operations(self) -> tuple[SubmittedOperationRecord, ...]: ...
+
+    def record_output_commit(
+        self,
+        *,
+        attempt_id: str,
+        fencing_token: str,
+        outputs: Mapping[str, ArtifactRef],
+        reason: LifecycleReason | None = None,
+    ) -> OutputCommit: ...
+
+    def snapshot(self) -> StageLifecycleSnapshot: ...
+
+    def scan_recovery(self) -> tuple[RecoveryRecord, ...]: ...
+
+    def list_cleanup_candidates(self) -> tuple[CleanupCandidate, ...]: ...
+
+
+@runtime_checkable
+class RunStore(Protocol):
+    """Public authority-backed run lifecycle surface."""
+
+    def authority_config(self) -> AuthorityConfig: ...
+
+    def capabilities(self) -> BackendCapabilitySet: ...
+
+    def check_schema(self, run_uri: str) -> AuthoritySchemaCheck: ...
+
+    def admit_run(
+        self,
+        run_uri: str,
+        *,
+        status: RunStatus = RunStatus.CREATED,
+        metadata: Mapping[str, PlainData] | None = None,
+    ) -> BackendRevision: ...
+
+    def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
+
+    def transition_run(
+        self,
+        run_uri: str,
+        *,
+        from_status: RunStatus,
+        to_status: RunStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition: ...
+
+    def acquire_run_lease(
+        self,
+        run_uri: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord: ...
+
+    def renew_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord: ...
+
+    def release_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord: ...
+
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord: ...
+
+    def write_submitted_operation(
+        self, run_uri: str, record: SubmittedOperationRecord
+    ) -> BackendRevision: ...
+
+    def read_submitted_operation(
+        self, run_uri: str, submission_id: str
+    ) -> SubmittedOperationRecord | None: ...
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[SubmittedOperationRecord, ...]: ...
+
+    def stage_store(self, run_uri: str, stage_name: str) -> StageStore: ...
+
+    def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
+
+    def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]: ...
+
+    def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]: ...
+
+
 def _non_empty(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise AuthorityStoreError(f"{field} must be a non-empty string")
@@ -394,4 +561,6 @@ __all__ = [
     "AttemptAllocation",
     "OutputCommit",
     "PerRunAuthorityStore",
+    "RunStore",
+    "StageStore",
 ]

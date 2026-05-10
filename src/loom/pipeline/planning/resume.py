@@ -19,7 +19,7 @@ from loom.pipeline.stores.errors import (
     StoreError,
 )
 from loom.pipeline.stores.indexes import format_artifact_key
-from loom.pipeline.stores.run_store import RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
 from loom.serialization import PlainData
 
 from .errors import ResumeStateError

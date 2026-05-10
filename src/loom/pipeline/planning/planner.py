@@ -10,7 +10,7 @@ from loom.pipeline.graph.bindings import ResolvedInputBinding, resolve_input_bin
 from loom.pipeline.specs import OutputSpec, PipelineSpec, StageSpec
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import StoreError
-from loom.pipeline.stores.run_store import RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
 from loom.serialization import PlainData
 
 from .actions import decide_stage_action

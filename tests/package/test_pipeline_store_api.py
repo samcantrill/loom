@@ -18,6 +18,8 @@ def test_pipeline_store_public_exports() -> None:
         "ArtifactStore",
         "LocalArtifactStore",
         "PerRunAuthorityStore",
+        "RunStore",
+        "StageStore",
         "AuthorityStoreError",
         "StatusTransition",
         "AttemptAllocation",
@@ -32,6 +34,17 @@ def test_pipeline_store_public_exports() -> None:
         "UnsupportedCapability",
         "StoreDiagnostic",
         "AuthorityCapabilityError",
+        "AuthorityBackendKind",
+        "AuthorityDeploymentProfile",
+        "AuthorityReference",
+        "AuthorityConfig",
+        "AuthorityConfigError",
+        "RequiredAuthorityCapability",
+        "CapabilityAdmissionResult",
+        "CapabilityAdmissionError",
+        "AuthorityAdmissionError",
+        "admit_authority_capabilities",
+        "create_run_store",
         "AUTHORITY_SCHEMA_VERSION",
         "AuthoritySchemaError",
         "AuthoritySchemaFailureKind",
@@ -70,7 +83,7 @@ def test_pipeline_store_public_exports() -> None:
         "CoordinationRecoveryRecord",
         "ConcurrencyCounter",
         "coordination_requirement_diagnostics",
-        "RunStore",
+        "LegacyRunStore",
         "RunLifecycleStore",
         "RunDocumentStore",
         "RunFreshnessStore",
@@ -149,6 +162,10 @@ def test_pipeline_store_public_exports() -> None:
     assert "write_stage_worker_result" in stores.StageStateStore.__dict__
     assert "allocate_stage_attempt" in stores.PerRunAuthorityStore.__dict__
     assert "record_output_commit" in stores.PerRunAuthorityStore.__dict__
+    assert "admit_run" in stores.RunStore.__dict__
+    assert "stage_store" in stores.RunStore.__dict__
+    assert "allocate_attempt" in stores.StageStore.__dict__
+    assert "record_output_commit" in stores.StageStore.__dict__
     assert "acquire_trial_lease" in stores.WorkspaceCoordinationStore.__dict__
     assert "acquire_resource_lease" in stores.WorkspaceCoordinationStore.__dict__
     assert "renew_lease" in stores.WorkspaceCoordinationStore.__dict__
