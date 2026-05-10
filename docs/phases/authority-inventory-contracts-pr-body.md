@@ -42,7 +42,7 @@ New tests implemented:
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff passed; Pyright reported 0 errors; default harness passed 1088/1088 selected tests; config-extra passed 420/420 selected tests; `uv build` built sdist and wheel. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; overall 1534 passed, 12 skipped, 1128 deselected, 0 failed/errors. |
-| GitHub checks | Pending | To be run after PR creation. |
+| GitHub checks | Passed | CI `checks` completed successfully for PR #109. |
 
 ### Test Suite Summary
 

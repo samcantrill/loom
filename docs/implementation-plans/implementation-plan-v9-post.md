@@ -910,7 +910,7 @@ Accepted risks to watch during phase execution:
 
 ### Phase 1 - Exhaustive Inventory And Lifecycle Contracts
 
-Status: pr_open
+Status: approved
 Branch: `codex/authority-inventory-contracts`
 PR: https://github.com/samcantrill/loom/pull/109
 
@@ -977,7 +977,8 @@ Reviewability:
 
 Completion summary:
 
-- PR #109 opened on 2026-05-10 against `develop`.
+- PR #109 opened on 2026-05-10 against `develop`; automated PR review found
+  no blocking findings and GitHub CI `checks` passed.
 - Added `docs/phases/authority-inventory-contracts.md` with refreshed
   `LocalRunStore`, `LocalRunStorePaths`, path-shaped `RunStore`, and local
   helper inventory evidence; a migration map with future-phase ownership; and
