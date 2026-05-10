@@ -1624,7 +1624,7 @@ Completion summary:
 
 ### Phase 8 - HPC Deployment Modes And Fallback Capabilities
 
-Status: pending
+Status: in_progress
 Branch: `codex/hpc-authority-deployment`
 PR: pending
 
@@ -1727,7 +1727,9 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- Phase execution plan drafted and refined on 2026-05-10 in
+  `docs/phases/hpc-authority-deployment.md`; implementation in progress on
+  branch `codex/hpc-authority-deployment` from updated `develop`.
 
 ### Phase 9 - System-Wide Service Backend Adoption
 
