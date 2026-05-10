@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: final phase execution plan
 - Feature focus: Authority Runtime Unification
 - PR title: `Authority Runtime Unification - Phase 1: Inventory and Lifecycle Contracts`
 - Branch: `codex/authority-inventory-contracts`
@@ -25,12 +25,12 @@
 - Plan quality gate loop budget: initial review used; refinement pass not
   needed; confirmation review not needed.
 - Draft pass: completed by `loom_phase_planner` on 2026-05-10.
-- Refine pass: pending for the expanded-path planner refinement pass.
+- Refine pass: completed by `loom_phase_planner` on 2026-05-10.
 - Setup limitations: branch and worktree were created from local `develop`
   because the required v9-post plan commit is local-only in this checkout.
   `develop` is one commit ahead of `origin/develop`; do not drop or rebase away
   the local plan commit while preparing this phase.
-- Blockers: none for the draft plan.
+- Blockers: none; ready for documentation-only implementation.
 
 ## Objective
 
@@ -89,6 +89,13 @@ that implementation work is in scope here.
   aggregate for local-file documents, statuses, logs, submitted operations,
   locks, stage state, runtime metadata, and inspection. It also defines
   `LocalRunStorePaths` for explicit local path helpers.
+- The current `LocalRunStorePaths` protocol includes `resolve_run_uri`,
+  `allocate_run_uri`, `local_run_dir`, `local_stage_dir`,
+  `local_artifact_root`, `local_stage_artifact_dir`, `local_config_path`,
+  `local_provenance_path`, `local_stage_log_path`,
+  `local_stage_worker_request_path`, `local_stage_worker_result_path`,
+  `local_stage_workspace_dir`, `local_generated_artifact_path`, and
+  `local_run_freshness_path`.
 - `src/loom/pipeline/stores/local_runs.py` implements `LocalRunStore` as the
   local filesystem reader/writer for run layout and still satisfies both
   `RunStore` and `LocalRunStorePaths`.
@@ -122,10 +129,9 @@ that implementation work is in scope here.
 - Classify every hit as exactly one primary role: runtime mutation, authority
   read, artifact/materialized file access, test helper, docs/example, or
   historical artifact. Add a secondary note when a hit combines roles.
-- Add the line-item migration map to this phase artifact unless the refine pass
-  chooses a narrower linked artifact. Each line must identify file, line,
-  symbol or call shape, current role, target role/action, owning future phase,
-  and notes.
+- Add the line-item migration map to this phase artifact. Each line must
+  identify file, line, symbol or call shape, current role, target role/action,
+  owning future phase, and notes.
 - Document run lifecycle, stage lifecycle, submitted-operation lifecycle, and
   failure-closed authority behavior as contracts for later phases.
 - State the local-file rule plainly: local run/stage files, directory scans,
@@ -144,6 +150,9 @@ that implementation work is in scope here.
   capability admission, service/database backend work, or SQLite authority
   removal.
 - Editing behavior tests to use new stores or fakes.
+- Any source or test behavior changes. If the inventory cannot be completed
+  without touching product behavior, stop for the manager instead of widening
+  Phase 1.
 - Changing public imports, dependency footprints, schemas, status enums, run
   directory layout, or backend behavior.
 - Rewriting historical phase docs except to classify them as historical
@@ -151,7 +160,7 @@ that implementation work is in scope here.
 
 ## Assumptions
 
-- The complete migration map may live in this phase artifact and count as the
+- The complete migration map lives in this phase artifact and counts as the
   linked artifact required by the source plan.
 - Historical phase docs and PR-body docs should be inventoried and classified,
   but they should not drive runtime migration ownership unless they describe
@@ -164,8 +173,9 @@ that implementation work is in scope here.
 
 ## Scope Contract
 
-No new public runtime behavior is introduced in this phase. The phase produces
-documentation that later implementation phases must treat as a contract.
+No new public runtime behavior is introduced in this phase. The implementation
+is documentation-only and produces contract text that later implementation
+phases must treat as authoritative.
 
 The contract decisions are:
 
@@ -194,19 +204,42 @@ The implementation pass must add an inventory section with this line-item shape:
 
 | ID | File:line | Symbol or call shape | Classification | Current role | Target role/action | Owner phase | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | runtime mutation / authority read / artifact access / test helper / docs-example / historical artifact | TBD | TBD | Phase 2-10 or none | TBD |
+| `LRS-001` | `path:line` | `LocalRunStore(...)` or helper call | one allowed classification | concise current role | concrete follow-up or no-op | `Phase 2`-`Phase 10` or `none` | evidence and secondary-role notes |
 
 Rules:
 
+- The final inventory must be generated from these searches, run immediately
+  before the implementation commit:
+  `rg -n "LocalRunStore|LocalRunStorePaths" src tests examples docs/features docs/implementation-plans docs/phases README.md`,
+  `rg -n "\\bRunStore\\b" src tests examples docs/features docs/implementation-plans docs/phases README.md`,
+  and the helper search in `Validation Commands`.
 - Every `LocalRunStore` and `LocalRunStorePaths` hit from the required search
-  scope gets a row.
-- Every current `RunStore` hit that participates in path-shaped local lifecycle
-  behavior, local behavior reads, or runtime mutation gets a row. Pure feature
-  docs or historical references may be grouped only when the row names the
-  exact files and explains why they are non-runtime.
+  scope gets a row. Do not group live source, test, example, feature-doc, or
+  README hits.
+- Every current `RunStore` hit gets a row when it is a type annotation,
+  import/export, runtime construction requirement, protocol assertion,
+  lifecycle/read call, contract-test target, or docs/example statement about
+  store responsibilities. Historical implementation-plan or phase-plan hits may
+  be marked historical artifact, but they still need an explicit row unless the
+  row names the exact file and heading range covered.
+- Every call or definition for `resolve_run_uri`, `allocate_run_uri`,
+  `local_run_dir`, `local_stage_dir`, `local_artifact_root`,
+  `local_stage_artifact_dir`, `local_config_path`, `local_provenance_path`,
+  `local_stage_log_path`, `local_stage_worker_request_path`,
+  `local_stage_worker_result_path`, `local_stage_workspace_dir`,
+  `local_generated_artifact_path`, and `local_run_freshness_path` gets a row
+  when it is reached through `LocalRunStore`, `LocalRunStorePaths`, a
+  `RunStore` typed value, or a cast/check that depends on the current
+  path-shaped store contract.
+- Classification is exactly one of: `runtime mutation`, `authority read`,
+  `artifact/materialized file access`, `test helper`, `docs/example`, or
+  `historical artifact`. Use the notes field for secondary roles instead of
+  creating new classifications.
 - Rows must be dispositioned to a future phase or marked `none` for historical
   artifacts that require no migration.
-- Do not use "TBD" in the final implementation inventory.
+- The inventory must preserve enough `rg` evidence in notes or adjacent prose
+  for reviewers to reproduce coverage without reading hidden logs.
+- Do not leave placeholder values in the final implementation inventory.
 
 ## Authority Lifecycle Contract Output
 
@@ -287,8 +320,7 @@ The implementation pass must add or complete contract text covering:
    and path-shaped `RunStore` usage across the required source, test, example,
    feature-doc, implementation-doc, phase-doc, and README scopes.
 2. Convert the evidence into the line-item migration map in this phase
-   artifact, grouping only historical/docs rows where grouping cannot hide a
-   live runtime or test helper.
+   artifact using the fixed inventory output contract above.
 3. Add the lifecycle contract text for runs, stages, submitted operations, and
    failure-closed behavior, reusing the source plan vocabulary and existing v9
    authority record names where they constrain later behavior.
@@ -307,10 +339,10 @@ The implementation pass must add or complete contract text covering:
 - Status: deferred.
 - Expected paths: `tests/package/test_pipeline_store_api.py`,
   `tests/package/test_import_boundaries.py`.
-- Required assertions or deferral reason: Phase 1 does not change exports,
-  imports, or product code. Package checks become required only if the
-  implementation accidentally edits package or source files, which should stop
-  the phase for manager review.
+- Required assertions or deferral reason: package test execution is deferred
+  because Phase 1 does not change exports, imports, or product code. A manual
+  import-boundary review is required in the phase artifact; any package/source
+  edit should stop the phase for manager review before tests are added.
 
 ### Unit Suite
 
@@ -318,7 +350,8 @@ The implementation pass must add or complete contract text covering:
 - Expected paths: `tests/unit/loom/pipeline/stores`,
   `tests/unit/loom/pipeline/execution`, `tests/unit/loom/diagnostics`.
 - Required assertions or deferral reason: no contract constants, diagnostics,
-  source logic, or test helpers are introduced in this phase.
+  source logic, or test helpers are introduced in this phase; unit tests begin
+  when later phases change those behaviors.
 
 ### Contract Suite
 
@@ -327,8 +360,8 @@ The implementation pass must add or complete contract text covering:
   `tests/contracts/test_authority_store_contract.py`,
   `tests/contracts/test_stage_worker_contract.py`.
 - Required assertions or deferral reason: Phase 1 documents the contract but
-  does not implement interface or conformance changes. Contract tests begin in
-  Phase 2.
+  does not implement interface or conformance changes. Contract test execution
+  and new contract assertions begin in Phase 2.
 
 ### Integration Suite
 
@@ -336,14 +369,14 @@ The implementation pass must add or complete contract text covering:
 - Expected paths: integration tests for local execution, planning/resume,
   stage workers, SLURM, run catalog, and diagnostics.
 - Required assertions or deferral reason: no runtime/read behavior changes are
-  allowed in this phase.
+  allowed in this phase, so integration execution is deferred.
 
 ### E2E Suite
 
 - Status: deferred.
 - Expected paths: CLI and local pipeline e2e tests.
 - Required assertions or deferral reason: no executable workflows change in
-  this documentation-only phase.
+  this documentation-only phase, so e2e execution is deferred.
 
 ### Opt-In Suites
 
@@ -351,7 +384,8 @@ The implementation pass must add or complete contract text covering:
 - Markers affected: real SLURM/HPC and any future external service/database
   suites.
 - Required assertions or deferral reason: Phase 1 has no external runtime,
-  service, database, or HPC behavior.
+  service, database, or HPC behavior; opt-in suites remain intentionally
+  deferred.
 
 ## Risks
 
@@ -372,7 +406,7 @@ Targeted development commands:
 ```sh
 rg -n "LocalRunStore|LocalRunStorePaths" src tests examples docs/features docs/implementation-plans docs/phases README.md
 rg -n "\\bRunStore\\b" src tests examples docs/features docs/implementation-plans docs/phases README.md
-rg -n "local_run_dir|local_stage_dir|local_artifact_root|local_stage_artifact_dir|local_stage_log_path|local_stage_worker_request_path|local_stage_worker_result_path|local_stage_workspace_dir|local_generated_artifact_path|local_run_freshness_path" src tests examples docs/features docs/implementation-plans docs/phases README.md
+rg -n "resolve_run_uri|allocate_run_uri|local_run_dir|local_stage_dir|local_artifact_root|local_stage_artifact_dir|local_config_path|local_provenance_path|local_stage_log_path|local_stage_worker_request_path|local_stage_worker_result_path|local_stage_workspace_dir|local_generated_artifact_path|local_run_freshness_path" src tests examples docs/features docs/implementation-plans docs/phases README.md
 git diff --check
 ```
 
@@ -398,10 +432,9 @@ make test-summary
   complete inventory, discovery that Phase 1 must edit source behavior to make
   the contract true, missing source plan content because the local base commit
   was dropped, or any need to change the assigned branch/target/base.
-- Expanded-path refinement notes: the next planner pass should verify the
-  inventory output contract, tighten any under-specified contract language, and
-  confirm that the implementation pass has enough detail without turning this
-  document into a Phase 2 code recipe.
+- Expanded-path refinement notes: completed on 2026-05-10. The plan is
+  implementable as a documentation-only phase; do not run another planning
+  refine pass without explicit manager instruction.
 
 ## Refinement And Review Budget Status
 
@@ -413,10 +446,13 @@ make test-summary
 
 - Draft plan: completed on 2026-05-10 by `loom_phase_planner` in branch
   `codex/authority-inventory-contracts`.
-- Final phase execution plan: pending expanded-path refinement.
+- Final phase execution plan: completed on 2026-05-10 by expanded-path
+  refinement in branch `codex/authority-inventory-contracts`.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: inventory output rules tightened for `LocalRunStore`,
+  `LocalRunStorePaths`, current path-shaped `RunStore`, and local helper calls;
+  suite decisions and documentation-only stop conditions confirmed.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not applicable yet.
