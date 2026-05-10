@@ -994,9 +994,9 @@ Completion summary:
 
 ### Phase 2 - Generic RunStore/StageStore Interfaces And Conformance Harness
 
-Status: pending
+Status: pr_open
 Branch: `codex/run-stage-store-contracts`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/110
 
 Goal:
 
@@ -1081,7 +1081,20 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- PR #110 opened on 2026-05-10 against `develop`; branch
+  `codex/run-stage-store-contracts`.
+- Implemented public authority `RunStore` and scoped `StageStore` protocols,
+  `AuthorityConfig`/`AuthorityReference`, backend-kind and deployment-profile
+  vocabulary, capability-admission diagnostics, `create_run_store(...)`, and a
+  public authority adapter over existing per-run authority stores.
+- Renamed the current path-shaped aggregate to `LegacyRunStore` and moved
+  existing runtime call sites to the explicit transitional import.
+- Added reusable public authority conformance coverage for in-memory and
+  transitional SQLite adapters, plus package/unit/contract/integration tests.
+- Validation before PR opening: `make validate-pr` passed Ruff, Pyright,
+  default tests, config-extra tests, and build; `make test-summary` passed
+  with package 57 passed, unit 834 passed, contract 107 passed, integration
+  89 passed, e2e 39 passed, config-extra 420 passed, and 0 failures/errors.
 
 ### Phase 3 - RunArtifactStore And StageArtifactStore Split
 

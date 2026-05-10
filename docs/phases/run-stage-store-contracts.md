@@ -5,13 +5,14 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 2 - Generic RunStore/StageStore Interfaces And Conformance Harness
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/run-stage-store-contracts`
 - Worktree:
   `/home/samcantrill/work/loom-worktrees/run-stage-store-contracts`
 - Stack predecessor: none
 - Base branch: `develop`
 - PR target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/110
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
   `Authority Runtime Unification - Phase 2: Run and Stage Store Contracts`
@@ -23,6 +24,13 @@
   `make validate-pr` exposed the missing Phase 2 exports.
 - Phase PR review budget: unused
 - Blocker-resolution budget: 0/3 used
+
+## PR Preparation Notes
+
+- PR #110 opened on 2026-05-10 against `develop` from
+  `codex/run-stage-store-contracts`.
+- Verified immediately after creation: base `develop`, head
+  `codex/run-stage-store-contracts`, state `OPEN`, CI `checks` in progress.
 
 ## Scope
 
