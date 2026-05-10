@@ -103,6 +103,42 @@ wrapper protocols structurally.
 - E2E: not required.
 - Opt-in: not required.
 
+## Implementation Summary
+
+- Added `RunArtifactStore` and `StageArtifactStore` protocols to
+  `src/loom/pipeline/stores/artifact_store.py`.
+- Added `LocalRunArtifactStore` and `LocalStageArtifactStore` wrappers that
+  delegate to the existing local layout while exposing only
+  artifact/materialization methods.
+- Kept payload `ArtifactStore` and `LocalArtifactStore` behavior unchanged.
+- Exported the new protocols and wrappers from `loom.pipeline.stores`.
+- Added package, unit, contract, and integration tests proving wrapper
+  behavior and absence of lifecycle methods.
+- Updated `docs/features/run-store.md` to describe
+  `RunArtifactStore`/`StageArtifactStore` as non-authoritative
+  materialization surfaces.
+
+## Validation Evidence
+
+- Focused checks before full validation:
+  - `uv run ruff check ...` passed for changed Phase 3 source and tests.
+  - `uv run pytest tests/package/test_pipeline_store_api.py
+    tests/unit/loom/pipeline/stores/test_store_errors.py
+    tests/unit/loom/pipeline/stores/test_local_artifacts.py
+    tests/contracts/test_store_contract.py
+    tests/integration/pipeline/test_artifact_store_split.py` passed with
+    26 passed.
+  - `uv run --extra config pyright` passed with 0 errors.
+- `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
+  and build.
+- `make test-summary` wrote `build/test-summary.md` with:
+  - package: 57 passed, 1 skipped.
+  - unit: 836 passed, 1 skipped.
+  - contract: 108 passed, 2 skipped.
+  - integration: 90 passed, 8 skipped, 10 deselected.
+  - e2e: 39 passed, 1 deselected.
+  - config-extra: 420 passed, 1133 deselected.
+
 ## Stop Conditions
 
 - A runtime migration is required to keep existing behavior working.
