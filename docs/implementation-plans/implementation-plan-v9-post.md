@@ -1111,9 +1111,9 @@ Completion summary:
 
 ### Phase 3 - RunArtifactStore And StageArtifactStore Split
 
-Status: pending
+Status: pr_open
 Branch: `codex/artifact-store-split`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/111
 
 Goal:
 
@@ -1183,7 +1183,19 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- PR #111 opened on 2026-05-10 against `develop`; branch
+  `codex/artifact-store-split`.
+- Implemented `RunArtifactStore` and `StageArtifactStore` protocols plus
+  local wrappers that expose materialization paths, config/provenance, logs,
+  worker handoff files, workspaces, and generated files without lifecycle
+  methods.
+- Added package, unit, contract, and integration tests proving the
+  artifact/materialization boundary and preserving payload `ArtifactStore`
+  behavior.
+- Validation before PR opening: `make validate-pr` passed Ruff, Pyright,
+  default tests, config-extra tests, and build; `make test-summary` passed
+  with package 57 passed, unit 836 passed, contract 108 passed, integration
+  90 passed, e2e 39 passed, config-extra 420 passed, and 0 failures/errors.
 
 ### Phase 4 - Python Runner And Public Example Migration
 

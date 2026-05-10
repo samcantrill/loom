@@ -5,12 +5,13 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 3 - RunArtifactStore And StageArtifactStore Split
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/artifact-store-split`
 - Worktree: `/home/samcantrill/work/loom-worktrees/artifact-store-split`
 - Stack predecessor: none
 - Base branch: `develop`
 - PR target branch: `develop`
+- PR: https://github.com/samcantrill/loom/pull/111
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
   `Authority Runtime Unification - Phase 3: Artifact Store Split`
@@ -20,6 +21,13 @@
 - Phase implementation refinement budget: unused
 - Phase PR review budget: unused
 - Blocker-resolution budget: 0/3 used
+
+## PR Preparation Notes
+
+- PR #111 opened on 2026-05-10 against `develop` from
+  `codex/artifact-store-split`.
+- Verified immediately after creation: base `develop`, head
+  `codex/artifact-store-split`, state `OPEN`, CI `checks` in progress.
 
 ## Scope
 
