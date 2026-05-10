@@ -5,13 +5,13 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 5 - CLI, Worker, Submitted Job, And SLURM Migration
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/cli-worker-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/cli-worker-authority`
 - Stack predecessor: none; Phase 4 merged before PR opening.
 - Base branch: `develop`
 - PR target branch: `develop`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/113
 - PR feature focus: `Authority Runtime Unification`
 - Intended PR title:
   `Authority Runtime Unification - Phase 5: CLI and Worker Authority`
