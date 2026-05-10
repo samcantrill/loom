@@ -199,7 +199,7 @@ class DeferredResultEnvelope:
             owner_id=cast(str, payload["owner_id"]),
             produced_at=cast(str, payload["produced_at"]),
             producer_id=cast(str, payload["producer_id"]),
-            status=StageStatus(cast(str, payload["status"])),
+            status=_terminal_status(payload["status"]),
             output_refs={
                 name: ArtifactRef.from_dict(artifact)
                 for name, artifact in output_refs.items()
@@ -465,7 +465,12 @@ def _submitted(
 
 
 def _terminal_status(value: object) -> StageStatus:
-    status = value if isinstance(value, StageStatus) else StageStatus(value)
+    try:
+        status = value if isinstance(value, StageStatus) else StageStatus(value)
+    except ValueError as exc:
+        raise DeferredFinalizationError(
+            f"invalid deferred envelope status {value!r}"
+        ) from exc
     if status not in _TERMINAL_ENVELOPE_STATUSES:
         raise DeferredFinalizationError(
             "deferred envelope status must be SUCCEEDED, FAILED, or CANCELLED"
