@@ -1464,9 +1464,9 @@ Completion summary:
 
 ### Phase 8 - Workspace/Sweep Coordination Foundation
 
-Status: pending
+Status: pr_open
 Branch: `codex/workspace-coordination`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/108
 
 Goal:
 
@@ -1574,4 +1574,21 @@ Notes:
 
 Completion summary:
 
-- Pending.
+- PR opened against `develop`: https://github.com/samcantrill/loom/pull/108.
+- Implementation adds cross-run coordination protocol extensions, a private
+  local SQLite workspace coordination backend, in-memory conformance support,
+  and package/unit/contract/integration coverage for workspace/sweep identity,
+  trial references, fenced trial/resource leases, guarded counters, resource
+  limits, local/same-host capability diagnostics, recovery scans, and ordinary
+  `run_uri` references without per-run lifecycle duplication.
+- Documentation updates clarify that v11 sequential deterministic sweeps can
+  remain manifest-shaped and opt into coordination only for concurrent trial
+  admission or resource limits.
+- Expanded-path refinement found and fixed a fake/SQLite conformance gap for
+  duplicate workspace/sweep identity failures; no blocker-resolution passes
+  were used.
+- Checks: `make validate-pr` passed after refinement: Ruff, Pyright, default
+  harness (1088 passed, 18 skipped, 14 deselected), config-extra harness
+  (420 passed, 1117 deselected), and `uv build`. `make test-summary` passed
+  with 1534 passed, 0 failed, 0 errors, 12 skipped, and 1128 deselected.
+- Follow-up: automated PR review and GitHub CI must pass before merge.
