@@ -47,11 +47,7 @@ def test_bounded_parallel_runs_independent_stages_concurrently(
     tmp_path: Path,
 ) -> None:
     marker_dir = tmp_path / "markers"
-    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
-    run_store = create_authority_backed_serial_run_store(
-        tmp_path / "runs",
-        authority_store=authority,
-    )
+    run_store = create_authority_backed_serial_run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "parallel")
 
     result = PipelineRunner(run_store=run_store).run(
@@ -69,11 +65,14 @@ def test_bounded_parallel_runs_independent_stages_concurrently(
         )
     )
 
-    assert result.status is RunStatus.SUCCEEDED
+    assert result.status is RunStatus.SUCCEEDED, {
+        name: None if stage.failure is None else stage.failure.to_dict()
+        for name, stage in result.stage_results.items()
+    }
     assert result.stage_results["left"].status is StageStatus.SUCCEEDED
     assert result.stage_results["right"].status is StageStatus.SUCCEEDED
     assert set(run_store.read_artifact_index(run_uri)) == {"left.data", "right.data"}
-    snapshot = authority.snapshot(run_uri)
+    snapshot = run_store.authority_store.snapshot(run_uri)
     assert {stage.stage_name: stage.status for stage in snapshot.stages} == {
         "left": StageStatus.SUCCEEDED,
         "right": StageStatus.SUCCEEDED,

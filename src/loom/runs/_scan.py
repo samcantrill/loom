@@ -12,6 +12,7 @@ from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     AuthoritativeReadOptions,
     AuthorityBackendKind,
+    AuthorityConfig,
     CorruptStoreDocumentError,
     LocalMaterializationRequest,
     LocalRunStore,
@@ -20,16 +21,15 @@ from loom.pipeline.stores import (
     RunNotFoundError,
     RunFreshnessRecord,
     UnsafeStorePathError,
+    authority_config_from_env,
     format_artifact_key,
     path_to_run_uri,
     read_authoritative_run,
-    authority_config_from_env,
 )
 from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
     StageLifecycleSnapshot,
 )
-from loom.pipeline.stores.schema_policy import AuthoritySchemaFailureKind
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
@@ -46,6 +46,12 @@ class CurrentCatalogScan:
     records: tuple[CurrentRunSummary, ...] = ()
     warnings: tuple[CatalogWarning, ...] = ()
     checked_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthorityScanContext:
+    config: AuthorityConfig
+    authority_store: PerRunAuthorityStore | None
 
 
 def scan_current_collection(collection_path: str | Path) -> ListRunsResult:
@@ -90,6 +96,7 @@ def scan_current_collection_records(collection_path: str | Path) -> CurrentCatal
         )
 
     store = LocalRunStore(root=collection)
+    authority_context = _authority_scan_context()
     try:
         candidates = _iter_candidates(collection)
     except PermissionError as exc:
@@ -105,7 +112,7 @@ def scan_current_collection_records(collection_path: str | Path) -> CurrentCatal
         )
 
     for candidate in candidates:
-        record, warning = _scan_candidate(store, candidate)
+        record, warning = _scan_candidate(store, candidate, authority_context)
         if record is not None:
             records.append(record)
         if warning is not None:
@@ -132,7 +139,9 @@ def _iter_candidates(collection: Path) -> tuple[Path, ...]:
 
 
 def _scan_candidate(
-    store: LocalRunStore, candidate: Path
+    store: LocalRunStore,
+    candidate: Path,
+    authority_context: _AuthorityScanContext,
 ) -> tuple[CurrentRunSummary | None, CatalogWarning | None]:
     if not candidate.exists():
         return None, _warning(
@@ -172,7 +181,9 @@ def _scan_candidate(
         return None, _warning_for_store_exception(exc, path=candidate)
     try:
         authority_store, authority_warning = _authority_store_for_candidate(
-            run_uri, candidate
+            run_uri,
+            candidate,
+            authority_context,
         )
     except (CorruptStoreDocumentError, OSError) as exc:
         return None, _warning_for_store_exception(exc, path=candidate)
@@ -370,8 +381,61 @@ def _warning_for_store_exception(
 
 
 def _authority_store_for_candidate(
-    run_uri: str, candidate: Path
+    run_uri: str,
+    candidate: Path,
+    authority_context: _AuthorityScanContext,
 ) -> tuple[PerRunAuthorityStore | None, CatalogWarning | None]:
+    config = authority_context.config
+    if config.backend_kind in {
+        AuthorityBackendKind.CO_LOCATED_SERVICE,
+        AuthorityBackendKind.MANAGED_SERVICE,
+        AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+    }:
+        authority_store = authority_context.authority_store
+        if authority_store is None:
+            raise CorruptStoreDocumentError("configured authority service is missing")
+        check = authority_store.check_schema(run_uri)
+        if check.failure is None:
+            try:
+                authority_store.open_run(run_uri)
+            except Exception:
+                if _authority_marker_exists(candidate):
+                    return None, _warning(
+                        CatalogWarningCode.PARTIAL_RUN,
+                        "run authoritative backend is missing",
+                        path=candidate,
+                    )
+                return None, _warning(
+                    CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
+                    (
+                        "run has local-only lifecycle state; service "
+                        "authority-backed lifecycle state is required"
+                    ),
+                    path=candidate,
+                )
+            return cast(PerRunAuthorityStore, authority_store), None
+        raise CorruptStoreDocumentError(check.failure.message)
+
+    if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
+        return None, _warning(
+            CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
+            "run-local SQLite authority is no longer a supported runtime backend",
+            path=candidate,
+        )
+    if _authority_marker_exists(candidate):
+        return None, _warning(
+            CatalogWarningCode.PARTIAL_RUN,
+            "run authoritative backend is missing",
+            path=candidate,
+        )
+    return None, _warning(
+        CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
+        "run has local-only lifecycle state; service authority-backed lifecycle state is required",
+        path=candidate,
+    )
+
+
+def _authority_scan_context() -> _AuthorityScanContext:
     config = authority_config_from_env()
     if config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
@@ -380,31 +444,11 @@ def _authority_store_for_candidate(
     }:
         from loom.pipeline.stores.service_authority import create_service_authority_store
 
-        authority_store = create_service_authority_store(config)
-        check = authority_store.check_schema(run_uri)
-        if check.failure is None:
-            return cast(PerRunAuthorityStore, authority_store), None
-        raise CorruptStoreDocumentError(check.failure.message)
-
-    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-    authority_store = SQLitePerRunAuthorityStore()
-    check = authority_store.check_schema(run_uri)
-    if check.failure is None:
-        return cast(PerRunAuthorityStore, authority_store), None
-    if check.failure.kind is AuthoritySchemaFailureKind.MISSING:
-        if _authority_marker_exists(candidate):
-            return None, _warning(
-                CatalogWarningCode.PARTIAL_RUN,
-                "run authoritative backend is missing",
-                path=candidate,
-            )
-        return None, _warning(
-            CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
-            "run has local-only lifecycle state; authority-backed lifecycle state is required",
-            path=candidate,
+        return _AuthorityScanContext(
+            config=config,
+            authority_store=create_service_authority_store(config),
         )
-    raise CorruptStoreDocumentError(check.failure.message)
+    return _AuthorityScanContext(config=config, authority_store=None)
 
 
 def _authority_marker_exists(candidate: Path) -> bool:

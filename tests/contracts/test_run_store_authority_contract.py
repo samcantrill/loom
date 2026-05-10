@@ -1,6 +1,5 @@
 """Contract tests for public authority RunStore and StageStore surfaces."""
 
-from datetime import UTC, datetime, timedelta
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -14,7 +13,6 @@ from loom.pipeline.stores import (
     path_to_run_uri,
 )
 from loom.pipeline.stores.service_authority import LocalAuthorityService
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.support.authority_conformance import (
     PublicAuthorityCase,
     assert_public_authority_lifecycle,
@@ -25,7 +23,7 @@ from tests.support.authority_stores import InMemoryPerRunAuthorityStore
 pytestmark = pytest.mark.contract
 
 
-@pytest.fixture(params=["in-memory", "sqlite", "service"])
+@pytest.fixture(params=["in-memory", "service"])
 def authority_case(
     request: pytest.FixtureRequest, tmp_path: Path
 ) -> Iterator[PublicAuthorityCase]:
@@ -38,31 +36,13 @@ def authority_case(
         )
         return
 
-    tick = {"seconds": 0}
-
-    def now() -> datetime:
-        return datetime(2020, 1, 1, tzinfo=UTC) + timedelta(seconds=tick["seconds"])
-
-    def advance_time(seconds: int) -> None:
-        tick["seconds"] += seconds
-
     run_uri = path_to_run_uri(tmp_path / "r1")
-    if request.param == "service":
-        with LocalAuthorityService.start() as service:
-            yield PublicAuthorityCase(
-                store=create_run_store(service.config()),
-                run_uri=run_uri,
-                advance_time=service.advance_time,
-            )
-        return
-
-    yield PublicAuthorityCase(
-        store=create_run_store(
-            authority_store=SQLitePerRunAuthorityStore(clock=now),
-        ),
-        run_uri=run_uri,
-        advance_time=advance_time,
-    )
+    with LocalAuthorityService.start() as service:
+        yield PublicAuthorityCase(
+            store=create_run_store(service.config()),
+            run_uri=run_uri,
+            advance_time=service.advance_time,
+        )
 
 
 def test_public_factory_returns_authority_run_store() -> None:

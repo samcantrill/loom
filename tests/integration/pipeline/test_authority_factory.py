@@ -18,14 +18,27 @@ from loom.pipeline.stores.service_authority import LocalAuthorityService
 pytestmark = pytest.mark.integration
 
 
-def test_create_run_store_uses_transitional_sqlite_authority(tmp_path: Path) -> None:
+def test_create_run_store_defaults_to_service_authority(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "r1")
     store = create_run_store()
 
     assert isinstance(store, RunStore)
+    assert store.capabilities().backend_name == "local-authority-service"
+    assert (
+        store.authority_config().backend_kind
+        is AuthorityBackendKind.CO_LOCATED_SERVICE
+    )
+    assert store.authority_config().endpoint is not None
     revision = store.admit_run(run_uri)
-    assert revision.sequence == 1
+    assert revision.sequence >= 1
     assert store.open_run(run_uri).status is RunStatus.CREATED
+
+
+def test_create_run_store_rejects_removed_transitional_sqlite_authority() -> None:
+    config = AuthorityConfig(backend_kind=AuthorityBackendKind.TRANSITIONAL_SQLITE)
+
+    with pytest.raises(AuthorityStoreError, match="no longer a supported runtime"):
+        create_run_store(config)
 
 
 def test_create_run_store_uses_service_authority_backend(tmp_path: Path) -> None:

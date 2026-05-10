@@ -1,5 +1,6 @@
 """Contract tests for backend-neutral per-run authority stores."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,10 @@ from loom.pipeline.stores import (
     LeaseState,
     PerRunAuthorityStore,
     path_to_run_uri,
+)
+from loom.pipeline.stores.service_authority import (
+    LocalAuthorityService,
+    create_service_authority_store,
 )
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.support.authority_stores import InMemoryPerRunAuthorityStore
@@ -32,20 +37,21 @@ class AuthorityStoreCase:
     run_uri: str
 
 
-@pytest.fixture(params=["in-memory", "sqlite"])
+@pytest.fixture(params=["in-memory", "service"])
 def authority_case(
     request: pytest.FixtureRequest, tmp_path: Path
-) -> AuthorityStoreCase:
+) -> Iterator[AuthorityStoreCase]:
     if request.param == "in-memory":
-        return AuthorityStoreCase(
+        yield AuthorityStoreCase(
             store=InMemoryPerRunAuthorityStore(),
             run_uri=RUN_URI,
         )
-    run_root = tmp_path / "r1"
-    return AuthorityStoreCase(
-        store=SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z"),
-        run_uri=path_to_run_uri(run_root),
-    )
+        return
+    with LocalAuthorityService.start() as service:
+        yield AuthorityStoreCase(
+            store=create_service_authority_store(service.config()),
+            run_uri=path_to_run_uri(tmp_path / "r1"),
+        )
 
 
 def _submitted_record(run_uri: str) -> SubmittedOperationRecord:
@@ -205,12 +211,15 @@ def test_per_run_authority_rejects_stale_transitions_and_lease_misuse(
         lease_ttl_seconds=1,
     )
     assert retry.lease is not None
-    if isinstance(store, InMemoryPerRunAuthorityStore):
-        store.advance_time(1)
-    else:
+    advance_time = getattr(store, "advance_time", None)
+    if callable(advance_time):
+        advance_time(1)
+    elif isinstance(store, SQLitePerRunAuthorityStore):
         store = SQLitePerRunAuthorityStore(
             run_uri, clock=lambda: "2020-01-01T00:00:02Z"
         )
+    else:
+        raise AssertionError("authority contract case cannot advance backend time")
     recovery = store.scan_recovery(run_uri)
     assert recovery[0].kind.value == "expired_lease"
     assert store.snapshot(run_uri).stages[0].active_lease is None

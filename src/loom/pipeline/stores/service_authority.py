@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import base64
 import secrets
 import threading
@@ -164,12 +165,18 @@ class LocalAuthorityService:
         return self._manager.authority()  # type: ignore[attr-defined]
 
 
+_SHARED_SERVICE_LOCK = threading.Lock()
+_SHARED_CO_LOCATED_SERVICE: LocalAuthorityService | None = None
+_SHARED_SERVICE_ATEXIT_REGISTERED = False
+
+
 class ServiceAuthorityStore(PerRunAuthorityStore):
     """Per-run authority client that communicates only through a service proxy."""
 
     def __init__(self, proxy: Any, config: AuthorityConfig) -> None:
         self._proxy = proxy
         self._config = config
+        self._call_lock = threading.Lock()
 
     @property
     def authority_config(self) -> AuthorityConfig:
@@ -420,12 +427,15 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
 
     def _call(self, method_name: str, *args: object, **kwargs: object) -> object:
         try:
-            method = getattr(self._proxy, method_name)
-            return method(*args, **kwargs)
+            with self._call_lock:
+                method = getattr(self._proxy, method_name)
+                return method(*args, **kwargs)
         except (ConnectionError, EOFError, OSError) as exc:
             raise AuthorityServiceUnavailable(
                 "authority service is unavailable"
             ) from exc
+        except ValueError as exc:
+            raise AuthorityStoreError(str(exc)) from exc
 
 
 def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityStore:
@@ -440,6 +450,16 @@ def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityS
         raise AuthorityStoreError(
             "service authority clients must not use a direct state_path"
         )
+    if config.endpoint is None:
+        if config.backend_kind is not AuthorityBackendKind.CO_LOCATED_SERVICE:
+            raise AuthorityStoreError(
+                f"{config.backend_kind.value} authority requires endpoint"
+            )
+        service = _shared_co_located_service()
+        return ServiceAuthorityStore(
+            service._proxy(),
+            _config_for_local_service(config, service),
+        )
     host, port = _parse_endpoint(config.endpoint)
     authkey = _decode_authkey(config.metadata.get(_AUTHKEY_METADATA_KEY))
     manager_type = _client_manager_type()
@@ -453,6 +473,44 @@ def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityS
             f"authority service is unavailable at {config.endpoint}"
         ) from exc
     return ServiceAuthorityStore(proxy, config)
+
+
+def _shared_co_located_service() -> LocalAuthorityService:
+    global _SHARED_CO_LOCATED_SERVICE, _SHARED_SERVICE_ATEXIT_REGISTERED
+    with _SHARED_SERVICE_LOCK:
+        if _SHARED_CO_LOCATED_SERVICE is None:
+            _SHARED_CO_LOCATED_SERVICE = LocalAuthorityService.start()
+        if not _SHARED_SERVICE_ATEXIT_REGISTERED:
+            atexit.register(_stop_shared_co_located_service)
+            _SHARED_SERVICE_ATEXIT_REGISTERED = True
+        return _SHARED_CO_LOCATED_SERVICE
+
+
+def _stop_shared_co_located_service() -> None:
+    global _SHARED_CO_LOCATED_SERVICE
+    with _SHARED_SERVICE_LOCK:
+        service = _SHARED_CO_LOCATED_SERVICE
+        _SHARED_CO_LOCATED_SERVICE = None
+    if service is not None:
+        service.stop()
+
+
+def _config_for_local_service(
+    config: AuthorityConfig,
+    service: LocalAuthorityService,
+) -> AuthorityConfig:
+    metadata = dict(config.metadata)
+    metadata[_AUTHKEY_METADATA_KEY] = _encode_authkey(service.authkey)
+    return AuthorityConfig(
+        backend_kind=config.backend_kind,
+        deployment_profile=config.deployment_profile,
+        endpoint=service.endpoint,
+        workspace_id=config.workspace_id,
+        state_path=None,
+        reference_id=config.reference_id,
+        redaction_keys=config.redaction_keys,
+        metadata=metadata,
+    )
 
 
 class _RunState:
@@ -636,6 +694,8 @@ class _ServiceAuthorityCore:
     ) -> AttemptAllocation:
         with self._lock:
             state = self._require_run(run_uri)
+            if stage_name in state.commits:
+                raise ValueError("stage already has an output commit")
             if (
                 lease_ttl_seconds is not None
                 and self._active_stage_lease(state, stage_name) is not None
@@ -777,7 +837,11 @@ class _ServiceAuthorityCore:
     ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
-            self._require_stage_fence(state, stage_name, attempt_id, fencing_token)
+            if stage_name in state.commits:
+                raise ValueError("stage already has an output commit")
+            lease = self._require_stage_fence(
+                state, stage_name, attempt_id, fencing_token
+            )
             revision = self._next_revision()
             commit = OutputCommitRecord(
                 commit_id=f"{stage_name}-{attempt_id}-commit",
@@ -799,6 +863,13 @@ class _ServiceAuthorityCore:
             )
             state.commits[stage_name] = commit
             state.facts[stage_name] = list(facts)
+            self._replace_lease(
+                state,
+                lease,
+                revision=revision,
+                state_value=LeaseState.RELEASED,
+                reason=_reason_from_wire(reason),
+            )
             state.attempts[stage_name] = [
                 StageAttempt(
                     run_uri=attempt.run_uri,
@@ -1001,7 +1072,7 @@ class _ServiceAuthorityCore:
         stage_name: str,
         attempt_id: str,
         fencing_token: str,
-    ) -> None:
+    ) -> LeaseRecord:
         for lease in state.leases.values():
             if (
                 lease.kind is LeaseKind.STAGE
@@ -1013,7 +1084,7 @@ class _ServiceAuthorityCore:
                     raise ValueError("stage lease has expired")
                 if lease.state is not LeaseState.ACTIVE:
                     raise ValueError("stage lease is not active")
-                return
+                return lease
         raise ValueError("missing active stage lease for output commit")
 
     def _active_stage_lease(

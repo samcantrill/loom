@@ -60,24 +60,27 @@ files, workspaces, and artifact payload roots only. They intentionally do not
 expose run or stage status, attempts, leases, submitted operations, output
 commits, snapshots, recovery records, or behavior summaries.
 
-Phase 9 wires that authority selection into runtime entry points. Commands that
+Phase 10 makes service-backed authority the default runtime path. Commands that
 create, continue, inspect, or manage runs accept the same authority flags:
 `--authority-backend`, `--authority-profile`, `--authority-endpoint`,
 `--authority-workspace`, `--authority-state`, and `--authority-reference`.
 Subprocess workers and generated SLURM continuation commands carry the selected
-authority reference forward instead of silently reconnecting to a run-local
-SQLite authority. Sensitive reference metadata is available only in trusted
+authority reference forward instead of silently reconnecting to local files.
+Sensitive reference metadata is available only in trusted
 handoff/config channels; diagnostics and manifests use redacted authority
 summaries.
 
-Python callers can pass an `AuthorityConfig` to the runtime store adapter:
+Python callers can use the default co-located service authority or pass an
+explicit `AuthorityConfig` to the runtime store adapter:
 
 ```python
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores.service_authority import LocalAuthorityService
 
+run_store = create_authority_backed_serial_run_store("runs")
+
 with LocalAuthorityService.start() as service:
-    run_store = create_authority_backed_serial_run_store(
+    service_run_store = create_authority_backed_serial_run_store(
         "runs",
         authority_config=service.config(),
     )
@@ -229,44 +232,36 @@ trial references, fenced trial/resource leases, optional named-resource limits,
 guarded counters, backend revisions, and recovery records without opening
 per-run authority databases or copying run/stage lifecycle facts.
 
-### 3.2.2 V9 SQLite Per-Run Authority Backend
+### 3.2.2 V9 Service Runtime Authority Backend
 
-`loom.pipeline.stores.sqlite_authority` implements the first concrete
-`PerRunAuthorityStore` backend using only Python's standard-library SQLite
-driver. The backend is run-local: its private database is placed inside the run
-root so ordinary local movement of the run directory preserves active authority
-state. The exact file path, table names, indexes, PRAGMAs, and SQL query shapes
-are private implementation details and are not a public inspection or
-integration contract.
+Runtime lifecycle authority is service-backed. `AuthorityConfig()` defaults to
+`co_located_service`, and endpoint-less co-located configs bootstrap a local
+stdlib service process for ordinary local runs. Managed and allocation-scoped
+service configs connect through their configured endpoint and metadata. Worker
+handoffs carry the concrete endpoint reference so subprocess and scheduler
+continuations use the same authority boundary as the parent run.
 
-The SQLite backend initializes only the current v9 authority schema. Missing,
-invalid, unsupported older, and unsupported newer active-state schemas fail
-loudly through the authority schema policy; v9 does not silently migrate,
-downgrade, repair, or destructively rewrite active authority state.
+Run-local SQLite authority is no longer a supported runtime backend. Stale
+`transitional_sqlite` configuration is retained only as a recognizable value so
+factories and diagnostics can fail with an explicit removal message. If a future
+or private service implementation stores data in SQLite internally, only the
+service process may open that database; clients and workers must still
+coordinate through the service API.
 
-SQLite authority writes use short transactions for guarded run/stage status
-transitions, monotonic stage-attempt allocation, controller and stage leases,
-lease renewal/release/failure, submitted-operation records, output commits,
-artifact facts, audit events, cleanup-candidate reads, recovery scans, and
-revisioned snapshots. Stage output success is a committed backend fact: the
-attempt id, active stage lease, fencing token, output commit, artifact facts,
-terminal stage status, and backend revision are validated and recorded
-atomically by the backend.
-
-SQLite capabilities are intentionally local. The backend can coordinate one
-run on local or same-host filesystems using backend-owned local UTC lease time,
-but it does not claim safe multi-host controller behavior, remote authority,
-workspace/sweep coordination, global counters, or high write-concurrency
-service semantics. Explicit shared-filesystem, remote, cross-run, or global
-counter behavior must be capability-gated and should fail loudly until a
-stronger backend provides those guarantees.
+Service authority declares guarded run/stage status transitions, monotonic
+stage-attempt allocation, controller and stage leases, lease
+renewal/release/failure, submitted-operation records, output commits, artifact
+facts, audit events, cleanup-candidate reads, recovery scans, and revisioned
+snapshots through capability records. Explicit shared-filesystem, remote,
+cross-run, or global-counter behavior remains capability-gated and must fail
+loudly until a backend provides those guarantees.
 
 ### 3.2.3 V9 SQLite Workspace Coordination Backend
 
-`SQLiteWorkspaceCoordinationStore` is separate from
-`SQLitePerRunAuthorityStore`. It may coordinate trial claims and named-resource
-leases across ordinary `run_uri` references, but each run's lifecycle remains
-owned by that run's authoritative backend.
+`SQLiteWorkspaceCoordinationStore` is separate from runtime service authority
+and from the private legacy per-run SQLite implementation. It may coordinate
+trial claims and named-resource leases across ordinary `run_uri` references,
+but each run's lifecycle remains owned by that run's authoritative backend.
 
 SQLite workspace coordination uses short transactions for identity creation,
 trial-reference writes, trial lease acquire/renew/release/failure, resource

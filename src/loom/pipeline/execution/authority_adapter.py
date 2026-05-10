@@ -1,4 +1,4 @@
-"""Execution adapter for SQLite-authority-backed serial runs."""
+"""Execution adapter for authority-backed serial runs."""
 
 from __future__ import annotations
 
@@ -75,7 +75,8 @@ class AuthorityBackedSerialRunStore:
         self.local_store = local_store
         self.authority_store = authority_store
         self._authority_config = authority_config or _config_from_authority_store(
-            authority_store
+            authority_store,
+            fallback=AuthorityConfig(backend_kind=AuthorityBackendKind.TEST_FAKE),
         )
         self.owner_id = owner_id
         self._attempt_leases: dict[tuple[str, str, int], _AttemptLease] = {}
@@ -821,6 +822,10 @@ def create_authority_backed_serial_run_store(
     resolved_config = _resolve_authority_config(authority_config, authority_store)
     if authority_store is None:
         authority_store = _authority_store_from_config(resolved_config)
+        resolved_config = _config_from_authority_store(
+            authority_store,
+            fallback=resolved_config,
+        )
 
     return AuthorityBackedSerialRunStore(
         local_store=LocalRunStore(root),
@@ -839,11 +844,18 @@ def _resolve_authority_config(
             return config
         return AuthorityConfig.from_dict(config)
     if authority_store is not None:
-        return _config_from_authority_store(authority_store)
+        return _config_from_authority_store(
+            authority_store,
+            fallback=AuthorityConfig(backend_kind=AuthorityBackendKind.TEST_FAKE),
+        )
     return AuthorityConfig()
 
 
-def _config_from_authority_store(authority_store: PerRunAuthorityStore) -> AuthorityConfig:
+def _config_from_authority_store(
+    authority_store: PerRunAuthorityStore,
+    *,
+    fallback: AuthorityConfig,
+) -> AuthorityConfig:
     raw_config = getattr(authority_store, "authority_config", None)
     if isinstance(raw_config, AuthorityConfig):
         return raw_config
@@ -851,19 +863,12 @@ def _config_from_authority_store(authority_store: PerRunAuthorityStore) -> Autho
         value = raw_config()
         if isinstance(value, AuthorityConfig):
             return value
-    try:
-        if authority_store.capabilities().backend_name == "sqlite-per-run-authority":
-            return AuthorityConfig()
-    except Exception:
-        pass
-    return AuthorityConfig(backend_kind=AuthorityBackendKind.TEST_FAKE)
+    return fallback
 
 
 def _authority_store_from_config(config: AuthorityConfig) -> PerRunAuthorityStore:
     if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
-        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-        return SQLitePerRunAuthorityStore()
+        raise AuthorityStoreError(_removed_sqlite_authority_message())
     if config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
         AuthorityBackendKind.MANAGED_SERVICE,
@@ -875,6 +880,14 @@ def _authority_store_from_config(config: AuthorityConfig) -> PerRunAuthorityStor
     raise AuthorityStoreError(
         "authority-backed serial store does not support backend "
         f"{config.backend_kind.value}"
+    )
+
+
+def _removed_sqlite_authority_message() -> str:
+    return (
+        "transitional SQLite authority is no longer a supported runtime backend; "
+        "use co_located_service, managed_service, or allocation_scoped_service "
+        "authority"
     )
 
 

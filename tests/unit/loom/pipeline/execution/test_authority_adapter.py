@@ -36,6 +36,8 @@ from loom.pipeline.runtime import (
 )
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus
 from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityConfig,
     AuthorityStoreError,
     LocalArtifactStore,
     LocalRunStore,
@@ -133,6 +135,26 @@ def _pipeline() -> PipelineSpec:
             ),
         )
     )
+
+
+def test_authority_backed_store_defaults_to_service_authority(tmp_path: Path) -> None:
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+
+    assert store.authority_config().backend_kind is AuthorityBackendKind.CO_LOCATED_SERVICE
+    assert store.authority_config().endpoint is not None
+    assert store.authority_store.capabilities().backend_name == "local-authority-service"
+
+
+def test_authority_backed_store_rejects_removed_transitional_sqlite_config(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AuthorityStoreError, match="no longer a supported runtime"):
+        create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=AuthorityConfig(
+                backend_kind=AuthorityBackendKind.TRANSITIONAL_SQLITE,
+            ),
+        )
 
 
 def _single_stage_pipeline() -> PipelineSpec:

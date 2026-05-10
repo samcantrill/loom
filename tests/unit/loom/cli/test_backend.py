@@ -15,12 +15,9 @@ from loom.cli.backend import (
 from loom.cli.errors import ExitCode
 from loom.cli.main import build_parser, main
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import path_to_run_uri
-from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-from tests.unit.loom.pipeline.execution.test_authority_adapter import (
-    _pipeline,
-    _store,
-)
+from tests.unit.loom.pipeline.execution.test_authority_adapter import _pipeline
 
 
 pytestmark = pytest.mark.unit
@@ -86,7 +83,7 @@ def test_backend_capabilities_json_reports_backend_records(tmp_path: Path) -> No
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == BACKEND_CAPABILITIES_SCHEMA_VERSION
     assert payload["ok"] is True
-    assert payload["result"]["backend_name"] == "sqlite-per-run-authority"
+    assert payload["result"]["backend_name"] == "local-authority-service"
     assert payload["result"]["capabilities"]
     assert stderr.getvalue() == ""
 
@@ -142,12 +139,11 @@ def test_backend_capabilities_explicit_requirements_fail_text_with_detail(
     error = stderr.getvalue()
     assert "unsafe_shared_filesystem" in error
     assert "unsafe_remote_coordination" in error
-    assert "workspace or sweep coordination" in error
+    assert "workspace-level coordination" in error
 
 
 def _authority_run(tmp_path: Path) -> str:
-    authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
-    run_store = _store(tmp_path, authority)
+    run_store = create_authority_backed_serial_run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
     PipelineRunner(run_store=run_store).run(
         RunRequest(pipeline=_pipeline(), run_uri=run_uri)

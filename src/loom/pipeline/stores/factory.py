@@ -39,9 +39,8 @@ def create_run_store(
 ) -> RunStore:
     """Create the public authority-backed run-store surface.
 
-    Phase 2 supports explicit per-run authority stores and the transitional
-    SQLite authority backend. Later phases add service/database implementations
-    behind this same factory path.
+    The default runtime authority is service-backed. Explicit per-run authority
+    store injection remains available for tests and custom integrations.
     """
 
     resolved_config = _resolve_config(config, authority_store=authority_store)
@@ -49,12 +48,7 @@ def create_run_store(
         _validate_authority_store(authority_store)
         return _PerRunAuthorityRunStore(authority_store, resolved_config)
     if resolved_config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
-        from .sqlite_authority import SQLitePerRunAuthorityStore
-
-        return _PerRunAuthorityRunStore(
-            SQLitePerRunAuthorityStore(),
-            resolved_config,
-        )
+        raise AuthorityStoreError(_removed_sqlite_authority_message())
     if resolved_config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
         AuthorityBackendKind.MANAGED_SERVICE,
@@ -62,9 +56,10 @@ def create_run_store(
     }:
         from .service_authority import create_service_authority_store
 
+        authority_store = create_service_authority_store(resolved_config)
         return _PerRunAuthorityRunStore(
-            create_service_authority_store(resolved_config),
-            resolved_config,
+            authority_store,
+            _config_from_authority_store(authority_store, fallback=resolved_config),
         )
     raise AuthorityStoreError(
         "authority backend is not implemented in this phase: "
@@ -361,16 +356,42 @@ def _resolve_config(
 ) -> AuthorityConfig:
     if config is None:
         if authority_store is not None:
-            return AuthorityConfig(backend_kind=AuthorityBackendKind.TEST_FAKE)
+            return _config_from_authority_store(
+                authority_store,
+                fallback=AuthorityConfig(backend_kind=AuthorityBackendKind.TEST_FAKE),
+            )
         return AuthorityConfig()
     if isinstance(config, AuthorityConfig):
         return config
     return AuthorityConfig.from_dict(config)
 
 
+def _config_from_authority_store(
+    authority_store: PerRunAuthorityStore,
+    *,
+    fallback: AuthorityConfig,
+) -> AuthorityConfig:
+    raw_config = getattr(authority_store, "authority_config", None)
+    if isinstance(raw_config, AuthorityConfig):
+        return raw_config
+    if callable(raw_config):
+        value = raw_config()
+        if isinstance(value, AuthorityConfig):
+            return value
+    return fallback
+
+
 def _validate_authority_store(authority_store: PerRunAuthorityStore) -> None:
     if not isinstance(authority_store, PerRunAuthorityStore):
         raise TypeError("authority_store must satisfy PerRunAuthorityStore")
+
+
+def _removed_sqlite_authority_message() -> str:
+    return (
+        "transitional SQLite authority is no longer a supported runtime backend; "
+        "use co_located_service, managed_service, or allocation_scoped_service "
+        "authority"
+    )
 
 
 def _non_empty(value: object, field: str) -> str:
