@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import pytest
 
@@ -51,6 +51,7 @@ from loom.pipeline.submitted import (
     SubmittedOperationState,
     submitted_stage_metadata,
 )
+from loom.serialization import PlainData
 
 
 class CommitFailingAuthority(SQLitePerRunAuthorityStore):
@@ -436,10 +437,20 @@ def test_authority_backed_worker_request_carries_attempt_fencing_metadata(
     }
 
 
-def test_authority_backed_stage_job_requires_request_fencing(
+def test_authority_backed_stage_job_requires_worker_request_fencing(
     tmp_path: Path,
 ) -> None:
-    run_store, authority, run_uri, _raw = _prepare_authority_stage_job(tmp_path)
+    run_store, authority, run_uri, raw = _prepare_authority_stage_job(tmp_path)
+    unsafe = dict(raw)
+    unsafe_metadata = dict(cast(Mapping[str, PlainData], unsafe.get("metadata", {})))
+    unsafe_metadata.pop("authority_attempt", None)
+    unsafe["metadata"] = cast(PlainData, unsafe_metadata)
+    run_store.local_store.write_stage_worker_request(
+        run_uri,
+        "build",
+        unsafe,
+        attempt=1,
+    )
 
     with pytest.raises(
         ContinuationStateError,

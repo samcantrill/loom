@@ -105,7 +105,11 @@ def format_dependencies(dependencies: dict[str, list[str]]) -> str:
 
 def contains_text(root: Path, needle: str) -> bool:
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
-        if needle in path.read_text(encoding="utf-8"):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if needle in content:
             return True
     return False
 

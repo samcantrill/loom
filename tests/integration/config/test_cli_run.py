@@ -410,7 +410,7 @@ def test_run_profile_resolved_slurm_dry_run_uses_slurm_artifact_path(
     assert stderr.getvalue() == ""
 
 
-def test_run_configured_slurm_without_dry_run_requires_sbatch(
+def test_run_configured_slurm_without_dry_run_requires_live_authority(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "pipeline.yaml"
@@ -424,16 +424,14 @@ def test_run_configured_slurm_without_dry_run_requires_sbatch(
         main(
             ["run", str(config_path), "--format", "json"], stdout=stdout, stderr=stderr
         )
-        == 4
+        == 7
     )
 
     payload = json.loads(stdout.getvalue())
-    assert payload["error"]["code"] == "cli.run.slurm_live_preflight_failed"
-    assert payload["error"]["details"]["preflight"]["status"] == "FAIL"
-    assert any(
-        check["check_id"] == "executor.slurm.sbatch" and check["status"] == "FAIL"
-        for check in payload["error"]["details"]["preflight"]["checks"]
-    )
+    assert payload["error"]["code"] == "cli.run.slurm_live_authority_unsupported"
+    admission = payload["error"]["details"]["authority_admission"]
+    assert admission["supported"] is False
+    assert any(error["required"] == "slurm_live_worker" for error in admission["errors"])
     assert stderr.getvalue() == ""
 
 

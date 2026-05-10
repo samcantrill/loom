@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import cast
 
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.stores.inspection import RunStateInspection, RunStageInspection
 from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
 from loom.pipeline.submitted import SubmittedOperationRecord
@@ -232,7 +231,7 @@ def inspect_slurm_job_status(
 ) -> SlurmJobsStatusReport:
     """Inspect scheduler job status for the latest submitted SLURM operation."""
 
-    store = LocalRunStore() if run_store is None else run_store
+    store = _default_authority_run_store() if run_store is None else run_store
     if not isinstance(store, RunStore):
         raise SlurmStatusInspectionError(
             "scheduler status requires a run store",
@@ -816,6 +815,17 @@ def _plain_mapping(value: object, *, path: str) -> dict[str, PlainData]:
             code="executor.slurm.status.invalid_plain_data",
         )
     return normalized
+
+
+def _default_authority_run_store() -> RunStore:
+    from loom.pipeline.execution.authority_adapter import (
+        create_authority_backed_serial_run_store,
+    )
+
+    return create_authority_backed_serial_run_store(
+        "runs",
+        owner_id="slurm-status",
+    )
 
 
 __all__ = [

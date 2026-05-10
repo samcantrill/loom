@@ -1,4 +1,4 @@
-"""End-to-end SLURM single-job live submission through the public CLI."""
+"""End-to-end SLURM single-job live authority admission through the public CLI."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 from loom.cli.main import main
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -19,7 +19,7 @@ pytest.importorskip("yaml")
 pytestmark = pytest.mark.e2e
 
 
-def test_cli_slurm_live_single_job_submits_with_fake_sbatch(
+def test_cli_slurm_live_single_job_rejects_default_authority_before_sbatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -67,34 +67,15 @@ def test_cli_slurm_live_single_job_submits_with_fake_sbatch(
             stdout=stdout,
             stderr=stderr,
         )
-        == 0
+        == 7
     )
 
     payload = json.loads(stdout.getvalue())
-    result = payload["result"]
-    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
-    registry = json.loads(
-        (
-            run_path / "submitted_operations" / f"{result['submission_id']}.json"
-        ).read_text(encoding="utf-8")
-    )
-    store = LocalRunStore()
-    status = store.read_run_status(run_uri)
-
     assert stderr.getvalue() == ""
-    assert payload["schema_version"] == "loom.cli.slurm_live_run.v1"
-    assert payload["ok"] is True
-    assert result["mode"] == "slurm-single-job"
-    assert result["dry_run"] is False
-    assert result["status"] == "SUBMITTED"
-    assert result["submitted_jobs"][0]["scheduler_job_id"] == "1234"
-    assert Path(result["plan_path"]).is_file()
-    assert Path(result["manifest_path"]).is_file()
-    assert manifest["dry_run"] is False
-    assert manifest["submission_status"] == "SUBMITTED"
-    assert manifest["submitted_jobs"][0]["scheduler_job_id"] == "1234"
-    assert registry["state"] == "SUBMITTED"
-    assert registry["summary_counts"]["active"] == 1
-    assert status is not None
-    assert status.status.value == "SUBMITTED"
-    assert runner.calls[0][0] == "sbatch"
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "cli.run.slurm_live_authority_unsupported"
+    admission = payload["error"]["details"]["authority_admission"]
+    assert admission["supported"] is False
+    assert "slurm_live_worker" in admission["required"]
+    assert runner.calls == []
+    assert not run_path.exists()
