@@ -7,11 +7,13 @@ import sys
 from typing import TYPE_CHECKING
 
 from loom.cli.errors import CliError, ExitCode
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.formatting import format_json_envelope, format_stage_worker_text
 from loom.cli.options import OutputFormat, output_format_from_namespace
 
 if TYPE_CHECKING:
     from loom.pipeline.execution import StageWorkerResult
+    from loom.pipeline.stores import AuthorityConfig
 
 STAGE_WORKER_RESULT_SCHEMA_VERSION = "loom.cli.stage.run.v1"
 
@@ -58,6 +60,7 @@ def register_subparser(
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(run_parser)
     run_parser.add_argument(
         "--traceback",
         action="store_true",
@@ -79,6 +82,7 @@ def handle_run(namespace: argparse.Namespace) -> int:
             run_uri=str(namespace.run_uri),
             stage_name=str(namespace.stage),
             attempt=namespace.attempt,
+            authority_config=authority_config_from_namespace(namespace),
         )
     except StageWorkerStateError as exc:
         raise StageWorkerCliError(
@@ -111,6 +115,7 @@ def _run_stage_worker(
     run_uri: str,
     stage_name: str,
     attempt: int | None,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> "StageWorkerResult":
     from loom.pipeline.execution import (
         StageWorkerRunRequest,
@@ -121,6 +126,7 @@ def _run_stage_worker(
     return run_stage_worker(
         run_store=create_authority_backed_serial_run_store(
             "runs",
+            authority_config=authority_config,
             owner_id="stage-worker",
         ),
         request=StageWorkerRunRequest(

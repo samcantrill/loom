@@ -12,6 +12,9 @@ from loom.pipeline.stores import (
     BackendCapabilitySet,
     CapabilityScope,
     RequiredAuthorityCapability,
+    authority_config_from_env,
+    authority_config_to_cli_args,
+    authority_config_to_env,
     admit_authority_capabilities,
 )
 
@@ -56,6 +59,46 @@ def test_authority_config_round_trips_and_redacts_endpoint() -> None:
 def test_authority_config_rejects_unknown_fields() -> None:
     with pytest.raises(AuthorityConfigError, match="unknown field"):
         AuthorityConfig.from_dict({"backend_kind": "test_fake", "extra": True})
+
+
+def test_authority_config_round_trips_through_environment_shape() -> None:
+    config = AuthorityConfig(
+        backend_kind=AuthorityBackendKind.CO_LOCATED_SERVICE,
+        deployment_profile=AuthorityDeploymentProfile.CO_LOCATED,
+        endpoint="tcp://127.0.0.1:12345",
+        reference_id="service-fixture",
+        metadata={"authkey": "secret", "label": "fixture"},
+    )
+
+    env = authority_config_to_env(config)
+    restored = authority_config_from_env(env)
+
+    assert restored == config
+    assert env["LOOM_AUTHORITY_METADATA_JSON"] == (
+        '{"authkey":"secret","label":"fixture"}'
+    )
+
+
+def test_authority_config_cli_args_use_public_worker_flags() -> None:
+    config = AuthorityConfig(
+        backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+        deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+        endpoint="tcp://127.0.0.1:12345",
+        reference_id="managed",
+        metadata={"authkey": "secret"},
+    )
+
+    args = authority_config_to_cli_args(config)
+
+    assert args[:6] == (
+        "--authority-backend",
+        "managed_service",
+        "--authority-profile",
+        "managed_service",
+        "--authority-endpoint",
+        "tcp://127.0.0.1:12345",
+    )
+    assert "--authority-metadata-json" in args
 
 
 def test_serial_run_admission_reports_missing_capability() -> None:

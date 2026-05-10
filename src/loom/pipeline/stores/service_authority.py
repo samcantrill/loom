@@ -13,10 +13,10 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
 
 from .authority import (
     AttemptAllocation,
@@ -200,7 +200,7 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
                 "create_run",
                 run_uri,
                 status=status,
-                metadata=metadata,
+                metadata=_plain_mapping_or_none(metadata, "metadata"),
             ),
         )
 
@@ -215,14 +215,13 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         to_status: RunStatus,
         reason: LifecycleReason | None = None,
     ) -> StatusTransition:
-        return cast(
-            StatusTransition,
+        return StatusTransition.from_dict(
             self._call(
                 "transition_run",
                 run_uri,
                 from_status=from_status,
                 to_status=to_status,
-                reason=reason,
+                reason=_reason_to_wire(reason),
             ),
         )
 
@@ -235,15 +234,14 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         to_status: StageStatus,
         reason: LifecycleReason | None = None,
     ) -> StatusTransition:
-        return cast(
-            StatusTransition,
+        return StatusTransition.from_dict(
             self._call(
                 "transition_stage",
                 run_uri,
                 stage_name,
                 from_status=from_status,
                 to_status=to_status,
-                reason=reason,
+                reason=_reason_to_wire(reason),
             ),
         )
 
@@ -310,14 +308,13 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         fencing_token: str,
         reason: LifecycleReason | None = None,
     ) -> LeaseRecord:
-        return cast(
-            LeaseRecord,
+        return LeaseRecord.from_dict(
             self._call(
                 "release_lease",
                 lease_id,
                 owner_id=owner_id,
                 fencing_token=fencing_token,
-                reason=reason,
+                reason=_reason_to_wire(reason),
             ),
         )
 
@@ -329,14 +326,13 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
         fencing_token: str,
         reason: LifecycleReason,
     ) -> LeaseRecord:
-        return cast(
-            LeaseRecord,
+        return LeaseRecord.from_dict(
             self._call(
                 "fail_lease",
                 lease_id,
                 owner_id=owner_id,
                 fencing_token=fencing_token,
-                reason=reason,
+                reason=_reason_to_wire(reason),
             ),
         )
 
@@ -394,7 +390,7 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
                     outputs={
                         name: artifact.to_dict() for name, artifact in outputs.items()
                     },
-                    reason=reason,
+                    reason=_reason_to_wire(reason),
                 )
             ),
         )
@@ -402,12 +398,11 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
     ) -> PipelineEventRecord:
-        return cast(
-            PipelineEventRecord,
+        return PipelineEventRecord.from_dict(
             self._call(
                 "append_audit_event",
                 run_uri,
-                event,
+                event.to_dict(),
             ),
         )
 
@@ -589,8 +584,8 @@ class _ServiceAuthorityCore:
         *,
         from_status: RunStatus,
         to_status: RunStatus,
-        reason: LifecycleReason | None = None,
-    ) -> StatusTransition:
+        reason: object = None,
+    ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
             if state.status is not from_status:
@@ -603,8 +598,8 @@ class _ServiceAuthorityCore:
                 previous_status=previous,
                 status=to_status,
                 revision=state.revision,
-                reason=reason,
-            )
+                reason=_reason_from_wire(reason),
+            ).to_dict()
 
     def transition_stage(
         self,
@@ -613,8 +608,8 @@ class _ServiceAuthorityCore:
         *,
         from_status: StageStatus | None,
         to_status: StageStatus,
-        reason: LifecycleReason | None = None,
-    ) -> StatusTransition:
+        reason: object = None,
+    ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
             current = state.stage_statuses.get(stage_name)
@@ -628,8 +623,8 @@ class _ServiceAuthorityCore:
                 previous_status=current,
                 status=to_status,
                 revision=state.revision,
-                reason=reason,
-            )
+                reason=_reason_from_wire(reason),
+            ).to_dict()
 
     def allocate_stage_attempt(
         self,
@@ -714,8 +709,8 @@ class _ServiceAuthorityCore:
         *,
         owner_id: str,
         fencing_token: str,
-        reason: LifecycleReason | None = None,
-    ) -> LeaseRecord:
+        reason: object = None,
+    ) -> dict[str, PlainData]:
         with self._lock:
             state, lease = self._require_lease(lease_id, owner_id, fencing_token)
             return self._replace_lease(
@@ -723,8 +718,8 @@ class _ServiceAuthorityCore:
                 lease,
                 state_value=LeaseState.RELEASED,
                 revision=self._next_revision(),
-                reason=reason,
-            )
+                reason=_reason_from_wire(reason),
+            ).to_dict()
 
     def fail_lease(
         self,
@@ -732,8 +727,8 @@ class _ServiceAuthorityCore:
         *,
         owner_id: str,
         fencing_token: str,
-        reason: LifecycleReason,
-    ) -> LeaseRecord:
+        reason: object,
+    ) -> dict[str, PlainData]:
         with self._lock:
             state, lease = self._require_lease(lease_id, owner_id, fencing_token)
             return self._replace_lease(
@@ -741,8 +736,8 @@ class _ServiceAuthorityCore:
                 lease,
                 state_value=LeaseState.FAILED,
                 revision=self._next_revision(),
-                reason=reason,
-            )
+                reason=_reason_from_wire(reason),
+            ).to_dict()
 
     def write_submitted_operation(
         self, run_uri: str, record: object
@@ -778,7 +773,7 @@ class _ServiceAuthorityCore:
         attempt_id: str,
         fencing_token: str,
         outputs: Mapping[str, object],
-        reason: LifecycleReason | None = None,
+        reason: object = None,
     ) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
@@ -818,7 +813,7 @@ class _ServiceAuthorityCore:
                     else attempt.revision,
                     created_at=attempt.created_at,
                     owner=attempt.owner,
-                    reason=reason
+                    reason=_reason_from_wire(reason)
                     if attempt.attempt_id == attempt_id
                     else attempt.reason,
                 )
@@ -828,22 +823,23 @@ class _ServiceAuthorityCore:
             state.revision = revision
             return OutputCommit(commit=commit, artifact_facts=facts).to_dict()
 
-    def append_audit_event(
-        self, run_uri: str, event: PipelineEvent
-    ) -> PipelineEventRecord:
+    def append_audit_event(self, run_uri: str, event: object) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
+            resolved_event = _pipeline_event_from_wire(event)
             record = PipelineEventRecord(
                 run_uri=run_uri,
                 sequence=len(state.events) + 1,
                 timestamp=self._now(),
-                scope=event.scope,
-                event_type=event.event_type,
-                payload=event.payload,
+                scope=resolved_event.scope,
+                event_type=resolved_event.event_type,
+                payload=_plain_mapping_from_wire(
+                    resolved_event.payload, "PipelineEventRecord.payload"
+                ),
             )
             state.events.append(record)
             state.revision = self._next_revision()
-            return record
+            return record.to_dict()
 
     def snapshot(self, run_uri: str) -> dict[str, PlainData]:
         with self._lock:
@@ -1082,6 +1078,62 @@ def _submitted_operation_or_none(value: object) -> SubmittedOperationRecord | No
     if value is None:
         return None
     return SubmittedOperationRecord.from_dict(value)
+
+
+def _plain_mapping_or_none(
+    value: Mapping[str, PlainData] | None, path: str
+) -> dict[str, PlainData] | None:
+    if value is None:
+        return None
+    normalized = thaw_plain_data(value, path=path)
+    if not isinstance(normalized, dict):
+        raise AuthorityStoreError(f"{path} must be a mapping")
+    return cast(dict[str, PlainData], normalized)
+
+
+def _reason_to_wire(reason: LifecycleReason | None) -> dict[str, PlainData] | None:
+    return None if reason is None else reason.to_dict()
+
+
+def _reason_from_wire(reason: object) -> LifecycleReason | None:
+    if reason is None:
+        return None
+    if isinstance(reason, LifecycleReason):
+        return reason
+    return LifecycleReason.from_dict(reason)
+
+
+def _pipeline_event_from_wire(value: object) -> PipelineEvent:
+    if isinstance(value, PipelineEvent):
+        return value
+    mapping = _object_mapping(value, "PipelineEvent")
+    timestamp = mapping.get("timestamp")
+    if timestamp is not None and not isinstance(timestamp, str):
+        raise AuthorityStoreError("PipelineEvent.timestamp must be a string or null")
+    event_type = mapping.get("event_type")
+    if not isinstance(event_type, str):
+        raise AuthorityStoreError("PipelineEvent.event_type must be a string")
+    return PipelineEvent(
+        scope=EventScope.from_dict(mapping.get("scope")),
+        event_type=event_type,
+        payload=_plain_mapping_from_wire(mapping.get("payload", {}), "PipelineEvent.payload"),
+        timestamp=timestamp,
+    )
+
+
+def _plain_mapping_from_wire(value: object, path: str) -> dict[str, PlainData]:
+    normalized = thaw_plain_data(value, path=path)
+    if not isinstance(normalized, dict):
+        raise AuthorityStoreError(f"{path} must be a mapping")
+    return cast(dict[str, PlainData], normalized)
+
+
+def _object_mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise AuthorityStoreError(f"{field} must be a mapping")
+    if any(not isinstance(key, str) for key in value):
+        raise AuthorityStoreError(f"{field} must have string keys")
+    return cast(Mapping[str, object], value)
 
 
 def _encode_authkey(authkey: bytes) -> str:

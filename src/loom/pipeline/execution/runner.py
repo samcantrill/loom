@@ -44,7 +44,9 @@ from loom.pipeline.stores import (
     LocalRunStore,
     LocalRunStorePaths,
     LegacyRunStore as RunStore,
+    RequiredAuthorityCapability,
     StoreDiagnostic,
+    admit_authority_capabilities,
 )
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import ArtifactStoreError, StoreError
@@ -188,7 +190,7 @@ class PipelineRunner:
                 "PipelineRunner.run does not execute dry-run requests; use planning APIs instead"
             )
         parallel_policy = _parallel_policy_from_request(request, options)
-        self._preflight_parallel_execution(parallel_policy)
+        self._preflight_authority_admission(parallel_policy)
 
         started_at = self.clock()
         local_run_store = self._require_local_run_store()
@@ -221,9 +223,22 @@ class PipelineRunner:
         finally:
             release_run_lock(self.run_store, lock)
 
-    def _preflight_parallel_execution(
+    def _preflight_authority_admission(
         self, policy: ParallelExecutionOptions
     ) -> None:
+        self._admit_authority_capabilities(
+            (RequiredAuthorityCapability.SERIAL_RUN,),
+            feature="serial pipeline execution",
+            error_code="pipeline.authority.unsupported_serial",
+            context={},
+        )
+        if str(getattr(self.executor, "name", "local")) == "subprocess":
+            self._admit_authority_capabilities(
+                (RequiredAuthorityCapability.SUBPROCESS_WORKER,),
+                feature="subprocess worker execution",
+                error_code="pipeline.authority.unsupported_subprocess_worker",
+                context={},
+            )
         if policy.continue_independent and not policy.enabled:
             raise ParallelExecutionUnsupportedError(
                 "continue_independent failure policy requires max_parallel_stages greater than 1",
@@ -268,6 +283,12 @@ class PipelineRunner:
                 context={"max_parallel_stages": policy.max_parallel_stages},
                 diagnostics=(diagnostic.to_dict(),),
             )
+        self._admit_authority_capabilities(
+            (RequiredAuthorityCapability.BOUNDED_PARALLEL_STAGES,),
+            feature="bounded local parallel execution",
+            error_code="pipeline.parallel.unsupported_backend",
+            context={"max_parallel_stages": policy.max_parallel_stages},
+        )
         capability_set = authority_store.capabilities()
         diagnostics = capability_set.diagnostics_for(
             _REQUIRED_PARALLEL_CAPABILITIES,
@@ -283,6 +304,45 @@ class PipelineRunner:
                 },
                 diagnostics=tuple(diagnostic.to_dict() for diagnostic in diagnostics),
             )
+
+    def _admit_authority_capabilities(
+        self,
+        required: Sequence[RequiredAuthorityCapability],
+        *,
+        feature: str,
+        error_code: str,
+        context: Mapping[str, PlainData],
+    ) -> None:
+        authority_store = getattr(self.run_store, "authority_store", None)
+        if authority_store is None:
+            raise ParallelExecutionUnsupportedError(
+                f"{feature} requires an authoritative backend",
+                code=error_code,
+                context=dict(context or {}),
+            )
+        config_provider = getattr(self.run_store, "authority_config", None)
+        config = config_provider() if callable(config_provider) else None
+        from loom.pipeline.stores import AuthorityConfig
+
+        if not isinstance(config, AuthorityConfig):
+            config = AuthorityConfig()
+        admission = admit_authority_capabilities(
+            config=config,
+            capabilities=authority_store.capabilities(),
+            required=required,
+        )
+        if admission.supported:
+            return
+        raise ParallelExecutionUnsupportedError(
+            f"authority backend does not support {feature}",
+            code=error_code,
+            context={
+                **dict(context or {}),
+                "backend_name": admission.backend_name,
+                "required": [item.value for item in required],
+            },
+            diagnostics=tuple(error.to_dict() for error in admission.errors),
+        )
 
     def _run_locked(
         self,

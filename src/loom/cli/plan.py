@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope, format_plan_text
 from loom.cli.options import (
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     from loom.pipeline.runtime import RunOptions
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.stores.artifact_store import ArtifactStore
+    from loom.pipeline.stores import AuthorityConfig
     from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
     from loom.pipeline.validation import PipelineValidationResult
 
@@ -126,6 +128,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -147,6 +150,7 @@ def handle(namespace: argparse.Namespace) -> int:
         config_options=config_options,
         plan_options=plan_options,
         selector_options=selector_options,
+        authority_config=authority_config_from_namespace(namespace),
     )
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
@@ -168,10 +172,11 @@ def build_plan_result(
     config_options: ConfigCliOptions,
     plan_options: PlanCliOptions,
     selector_options: SelectorCliOptions,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> PlanCliResult:
     """Build the CLI-specific plan view."""
 
-    store = _create_default_run_store()
+    store = _create_default_run_store(authority_config=authority_config)
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -258,10 +263,17 @@ def _build_plan_selectors(options: SelectorCliOptions) -> "PlanSelectors":
     )
 
 
-def _create_default_run_store() -> Any:
+def _create_default_run_store(
+    *,
+    authority_config: "AuthorityConfig | None" = None,
+) -> Any:
     from loom.pipeline.execution import create_authority_backed_serial_run_store
 
-    return create_authority_backed_serial_run_store("runs", owner_id="plan")
+    return create_authority_backed_serial_run_store(
+        "runs",
+        authority_config=authority_config,
+        owner_id="plan",
+    )
 
 
 def _resolve_run_uri_for_plan(

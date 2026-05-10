@@ -9,6 +9,7 @@ from typing import cast
 from loom.pipeline.execution import PreparedRunRecord
 from loom.pipeline.planning import ExecutionPlan, PlanAction
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.stores import AuthorityConfig
 from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
 from loom.serialization import PlainData
 from loom.timestamps import safe_timestamp_for_path, utc_timestamp
@@ -65,6 +66,7 @@ def plan_single_job_slurm_dry_run(
         created_at=created_at or utc_timestamp(),
         options=options or SlurmOptions(),
         resources=resources,
+        authority_config=_authority_config_from_run_store(run_store),
     )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
@@ -110,6 +112,7 @@ def plan_afterok_slurm_dry_run(
         options=options or SlurmOptions(),
         stage_options=stage_options,
         stage_resources=stage_resources,
+        authority_config=_authority_config_from_run_store(run_store),
     )
     jobs = cast(tuple[SlurmPlannedJob, ...], planned_submission.jobs)
     scripts = {
@@ -144,6 +147,7 @@ def build_single_job_planned_submission(
     created_at: str,
     options: SlurmOptions,
     resources: SlurmResourceInput | None = None,
+    authority_config: AuthorityConfig | None = None,
 ) -> SlurmPlannedSubmission:
     """Build a deterministic single-job dry-run manifest in memory."""
 
@@ -151,6 +155,7 @@ def build_single_job_planned_submission(
     command = build_single_job_command_argv(
         run_uri,
         launcher_argv=options.launcher_argv,
+        authority_config=authority_config,
     )
     manifest_relative_path = slurm_manifest_relative_path(planning_id)
     job = _build_job(
@@ -188,6 +193,7 @@ def build_afterok_planned_submission(
     options: SlurmOptions,
     stage_options: SlurmStageOptionInputs | None = None,
     stage_resources: SlurmStageResourceInputs | None = None,
+    authority_config: AuthorityConfig | None = None,
 ) -> SlurmPlannedSubmission:
     """Build a deterministic afterok dry-run manifest in memory."""
 
@@ -222,6 +228,7 @@ def build_afterok_planned_submission(
             run_uri,
             stage_plan.stage_name,
             launcher_argv=job_options.launcher_argv,
+            authority_config=authority_config,
         )
         resources = _stage_resources(stage_plan.stage_name, stage_resources)
         jobs.append(
@@ -481,6 +488,17 @@ def _validate_local_store_paths(run_store: RunStore) -> None:
         raise SlurmPlanningError(
             "SLURM dry-run artifact writing requires local store path support"
         )
+
+
+def _authority_config_from_run_store(run_store: RunStore) -> AuthorityConfig | None:
+    raw_config = getattr(run_store, "authority_config", None)
+    if isinstance(raw_config, AuthorityConfig):
+        return raw_config
+    if callable(raw_config):
+        value = raw_config()
+        if isinstance(value, AuthorityConfig):
+            return value
+    return None
 
 
 def _planning_id(value: str | None, *, mode: SlurmMode) -> str:

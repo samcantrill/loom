@@ -6,6 +6,7 @@ import argparse
 import sys
 from typing import TYPE_CHECKING
 
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_cancel_jobs_text, format_json_envelope
 from loom.cli.options import OutputFormat, output_format_from_namespace
@@ -13,6 +14,8 @@ from loom.cli.options import OutputFormat, output_format_from_namespace
 if TYPE_CHECKING:
     from loom.pipeline.executors.slurm.cancellation import SlurmCancellationResult
     from loom.pipeline.executors.slurm.commands import SlurmCommandRunner
+    from loom.pipeline.stores import AuthorityConfig
+    from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
 
 
 CANCEL_JOBS_RESULT_SCHEMA_VERSION = "loom.cli.cancel.jobs.v1"
@@ -35,6 +38,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -56,7 +60,10 @@ def handle(namespace: argparse.Namespace) -> int:
         )
 
     output_format = output_format_from_namespace(namespace)
-    result = build_cancel_jobs_result(str(namespace.run_uri))
+    result = build_cancel_jobs_result(
+        str(namespace.run_uri),
+        authority_config=authority_config_from_namespace(namespace),
+    )
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
             format_json_envelope(
@@ -72,7 +79,11 @@ def handle(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS if result.ok else ExitCode.RUN_FAILED)
 
 
-def build_cancel_jobs_result(run_uri: str) -> "SlurmCancellationResult":
+def build_cancel_jobs_result(
+    run_uri: str,
+    *,
+    authority_config: "AuthorityConfig | None" = None,
+) -> "SlurmCancellationResult":
     """Build a submitted-job cancellation result."""
 
     from loom.pipeline.executors.slurm.cancellation import (
@@ -83,6 +94,7 @@ def build_cancel_jobs_result(run_uri: str) -> "SlurmCancellationResult":
     try:
         return cancel_slurm_jobs(
             run_uri,
+            run_store=_create_cancel_run_store(authority_config=authority_config),
             command_runner=_build_slurm_cancel_command_runner(),
         )
     except SlurmCancellationError as exc:
@@ -107,6 +119,19 @@ def _build_slurm_cancel_command_runner() -> "SlurmCommandRunner":
     )
 
     return default_slurm_cancel_command_runner()
+
+
+def _create_cancel_run_store(
+    *,
+    authority_config: "AuthorityConfig | None",
+) -> "RunStore":
+    from loom.pipeline.execution import create_authority_backed_serial_run_store
+
+    return create_authority_backed_serial_run_store(
+        "runs",
+        authority_config=authority_config,
+        owner_id="slurm-cancellation",
+    )
 
 
 __all__ = [

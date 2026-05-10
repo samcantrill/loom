@@ -43,6 +43,11 @@ from .config import (
     AuthorityConfigError,
     AuthorityDeploymentProfile,
     AuthorityReference,
+    authority_config_from_env,
+    authority_config_from_mapping,
+    authority_config_to_cli_args,
+    authority_config_to_env,
+    default_deployment_profile_for_backend,
 )
 from .coordination import (
     ConcurrencyCounter,
@@ -212,6 +217,11 @@ __all__ = [
     "AuthorityReference",
     "AuthorityConfig",
     "AuthorityConfigError",
+    "authority_config_from_env",
+    "authority_config_from_mapping",
+    "authority_config_to_cli_args",
+    "authority_config_to_env",
+    "default_deployment_profile_for_backend",
     "RequiredAuthorityCapability",
     "CapabilityAdmissionResult",
     "CapabilityAdmissionError",

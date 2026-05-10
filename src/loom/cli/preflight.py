@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope, format_preflight_text
 from loom.cli.options import (
@@ -19,6 +20,7 @@ from loom.cli.options import (
 
 if TYPE_CHECKING:
     from loom.diagnostics import PreflightRequest, PreflightResult
+    from loom.pipeline.stores import AuthorityConfig
 
 
 PREFLIGHT_RESULT_SCHEMA_VERSION = "loom.cli.preflight.v3"
@@ -116,6 +118,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -137,6 +140,7 @@ def handle(namespace: argparse.Namespace) -> int:
         config_options=config_options,
         preflight_options=preflight_options,
         selector_options=selector_options,
+        authority_config=authority_config_from_namespace(namespace),
     )
     exit_code = exit_code_for_preflight(result, strict=preflight_options.strict)
     ok = exit_code is ExitCode.SUCCESS
@@ -160,6 +164,7 @@ def build_preflight_result(
     config_options: ConfigCliOptions,
     preflight_options: PreflightCliOptions,
     selector_options: SelectorCliOptions | None = None,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> "PreflightResult":
     """Run preflight diagnostics and return the diagnostics result."""
 
@@ -170,6 +175,7 @@ def build_preflight_result(
             config_options=config_options,
             preflight_options=preflight_options,
             selector_options=selector_options,
+            authority_config=authority_config,
         )
         return _run_diagnostics_preflight(request)
     except PreflightError as exc:
@@ -192,6 +198,7 @@ def _build_preflight_request(
     config_options: ConfigCliOptions,
     preflight_options: PreflightCliOptions,
     selector_options: SelectorCliOptions | None,
+    authority_config: "AuthorityConfig | None",
 ) -> "PreflightRequest":
     from loom.diagnostics import PreflightRequest
 
@@ -206,6 +213,7 @@ def _build_preflight_request(
         overrides=config_options.overrides,
         selectors=None if selector_options is None else selector_options.to_runtime_source(),
         runtime_options=runtime_source or None,
+        authority_config=authority_config,
     )
 
 

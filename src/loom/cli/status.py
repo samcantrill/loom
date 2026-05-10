@@ -6,6 +6,7 @@ import argparse
 import sys
 from typing import TYPE_CHECKING
 
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import (
     format_json_envelope,
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from loom.diagnostics.inspection import RunStatusSummary
     from loom.pipeline.executors.slurm.commands import SlurmCommandRunner
     from loom.pipeline.executors.slurm.status import SlurmJobsStatusReport
+    from loom.pipeline.stores import AuthorityConfig
+    from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
 
 
 STATUS_RESULT_SCHEMA_VERSION = "loom.cli.status.v3"
@@ -41,6 +44,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -54,8 +58,12 @@ def handle(namespace: argparse.Namespace) -> int:
     """Handle ``loom status``."""
 
     output_format = output_format_from_namespace(namespace)
+    authority_config = authority_config_from_namespace(namespace)
     if bool(getattr(namespace, "jobs", False)):
-        result = build_status_jobs_result(str(namespace.run_uri))
+        result = build_status_jobs_result(
+            str(namespace.run_uri),
+            authority_config=authority_config,
+        )
         warnings = [warning.to_dict() for warning in result.warnings]
         if output_format is OutputFormat.JSON:
             sys.stdout.write(
@@ -71,7 +79,10 @@ def handle(namespace: argparse.Namespace) -> int:
             sys.stdout.write(format_status_jobs_text(result) + "\n")
         return int(ExitCode.SUCCESS)
 
-    result = build_status_result(str(namespace.run_uri))
+    result = build_status_result(
+        str(namespace.run_uri),
+        authority_config=authority_config,
+    )
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
             format_json_envelope(
@@ -87,18 +98,29 @@ def handle(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
-def build_status_result(run_uri: str) -> "RunStatusSummary":
+def build_status_result(
+    run_uri: str,
+    *,
+    authority_config: "AuthorityConfig | None" = None,
+) -> "RunStatusSummary":
     """Build a run status summary."""
 
     try:
         from loom.diagnostics.inspection import inspect_run_status
 
-        return inspect_run_status(run_uri)
+        return inspect_run_status(
+            run_uri,
+            run_store=_create_status_run_store(authority_config=authority_config),
+        )
     except Exception as exc:
         raise _run_state_error(exc) from exc
 
 
-def build_status_jobs_result(run_uri: str) -> "SlurmJobsStatusReport":
+def build_status_jobs_result(
+    run_uri: str,
+    *,
+    authority_config: "AuthorityConfig | None" = None,
+) -> "SlurmJobsStatusReport":
     """Build a scheduler-aware run status summary."""
 
     from loom.pipeline.executors.slurm.status import (
@@ -109,6 +131,10 @@ def build_status_jobs_result(run_uri: str) -> "SlurmJobsStatusReport":
     try:
         return inspect_slurm_job_status(
             run_uri,
+            run_store=_create_status_run_store(
+                authority_config=authority_config,
+                owner_id="slurm-status",
+            ),
             command_runner=_build_slurm_status_command_runner(),
         )
     except SlurmStatusInspectionError as exc:
@@ -126,6 +152,20 @@ def _build_slurm_status_command_runner() -> "SlurmCommandRunner":
     from loom.pipeline.executors.slurm.status import default_slurm_status_command_runner
 
     return default_slurm_status_command_runner()
+
+
+def _create_status_run_store(
+    *,
+    authority_config: "AuthorityConfig | None",
+    owner_id: str = "status",
+) -> "RunStore":
+    from loom.pipeline.execution import create_authority_backed_serial_run_store
+
+    return create_authority_backed_serial_run_store(
+        "runs",
+        authority_config=authority_config,
+        owner_id=owner_id,
+    )
 
 
 def _run_state_error(error: BaseException) -> CliError:

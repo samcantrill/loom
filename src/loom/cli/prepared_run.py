@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.options import OutputFormat
 
@@ -64,6 +65,7 @@ def register_subparser(
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(continue_parser)
     continue_parser.add_argument(
         "--traceback",
         action="store_true",
@@ -84,10 +86,12 @@ def handle_continue(namespace: argparse.Namespace) -> int:
         create_authority_backed_serial_run_store,
     )
 
+    authority_config = authority_config_from_namespace(namespace)
     try:
         continue_prepared_run(
             run_store=create_authority_backed_serial_run_store(
                 "runs",
+                authority_config=authority_config,
                 owner_id="prepared-run",
             ),
             request=PreparedRunContinueRequest(

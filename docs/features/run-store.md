@@ -60,6 +60,29 @@ files, workspaces, and artifact payload roots only. They intentionally do not
 expose run or stage status, attempts, leases, submitted operations, output
 commits, snapshots, recovery records, or behavior summaries.
 
+Phase 9 wires that authority selection into runtime entry points. Commands that
+create, continue, inspect, or manage runs accept the same authority flags:
+`--authority-backend`, `--authority-profile`, `--authority-endpoint`,
+`--authority-workspace`, `--authority-state`, and `--authority-reference`.
+Subprocess workers and generated SLURM continuation commands carry the selected
+authority reference forward instead of silently reconnecting to a run-local
+SQLite authority. Sensitive reference metadata is available only in trusted
+handoff/config channels; diagnostics and manifests use redacted authority
+summaries.
+
+Python callers can pass an `AuthorityConfig` to the runtime store adapter:
+
+```python
+from loom.pipeline.execution import create_authority_backed_serial_run_store
+from loom.pipeline.stores.service_authority import LocalAuthorityService
+
+with LocalAuthorityService.start() as service:
+    run_store = create_authority_backed_serial_run_store(
+        "runs",
+        authority_config=service.config(),
+    )
+```
+
 ### 1.1 V2 Run URI Migration
 
 The current runtime uses `run_uri` as the run-scoped identifier. V2 intentionally

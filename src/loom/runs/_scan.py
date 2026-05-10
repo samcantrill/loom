@@ -11,6 +11,7 @@ from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageS
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
     AuthoritativeReadOptions,
+    AuthorityBackendKind,
     CorruptStoreDocumentError,
     LocalMaterializationRequest,
     LocalRunStore,
@@ -22,6 +23,7 @@ from loom.pipeline.stores import (
     format_artifact_key,
     path_to_run_uri,
     read_authoritative_run,
+    authority_config_from_env,
 )
 from loom.pipeline.stores.read_models import (
     AuthoritativeRunSnapshot,
@@ -370,6 +372,20 @@ def _warning_for_store_exception(
 def _authority_store_for_candidate(
     run_uri: str, candidate: Path
 ) -> tuple[PerRunAuthorityStore | None, CatalogWarning | None]:
+    config = authority_config_from_env()
+    if config.backend_kind in {
+        AuthorityBackendKind.CO_LOCATED_SERVICE,
+        AuthorityBackendKind.MANAGED_SERVICE,
+        AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+    }:
+        from loom.pipeline.stores.service_authority import create_service_authority_store
+
+        authority_store = create_service_authority_store(config)
+        check = authority_store.check_schema(run_uri)
+        if check.failure is None:
+            return cast(PerRunAuthorityStore, authority_store), None
+        raise CorruptStoreDocumentError(check.failure.message)
+
     from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
     authority_store = SQLitePerRunAuthorityStore()

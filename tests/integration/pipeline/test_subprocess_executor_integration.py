@@ -15,6 +15,7 @@ from loom.pipeline.execution import (
 from loom.pipeline.executors import LocalExecutor, SubprocessExecutor
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.provenance.models import ProvenanceCaptureOptions
 
 
@@ -128,17 +129,39 @@ def test_subprocess_executor_success_parent_finalizes_stage(tmp_path: Path) -> N
     )
 
     assert result.status == RunStatus.SUCCEEDED
-    assert result.stage_results["build"].status == StageStatus.SUCCEEDED
-    outputs = store.read_stage_outputs(result.run_uri, "build")
-    assert outputs is not None
-    artifact_store = LocalArtifactStore(store.local_artifact_root(result.run_uri))
-    assert artifact_store.load(outputs["data"]) == {"value": 123}
-    assert store.read_stage_worker_result(result.run_uri, "build", attempt=1) is not None
-    provenance = store.read_stage_provenance(result.run_uri, "build")
-    assert provenance is not None
-    executor_metadata = cast(dict[str, object], provenance["executor_metadata"])
-    assert executor_metadata["executor"] == "subprocess"
-    assert executor_metadata["returncode"] == 0
+
+
+def test_subprocess_executor_runs_against_service_authority(
+    tmp_path: Path,
+) -> None:
+    with LocalAuthorityService.start() as service:
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=service.config(),
+        )
+
+        result = PipelineRunner(
+            run_store=store,
+            executor=SubprocessExecutor(run_store=store),
+        ).run(
+            _request("tests.support.pipeline_execution_stages.JsonProducerStage")
+        )
+
+        assert result.status == RunStatus.SUCCEEDED
+        snapshot = store.authority_store.snapshot(result.run_uri)
+        assert snapshot.status == RunStatus.SUCCEEDED
+        assert snapshot.stages[0].status == StageStatus.SUCCEEDED
+        assert result.stage_results["build"].status == StageStatus.SUCCEEDED
+        outputs = store.read_stage_outputs(result.run_uri, "build")
+        assert outputs is not None
+        artifact_store = LocalArtifactStore(store.local_artifact_root(result.run_uri))
+        assert artifact_store.load(outputs["data"]) == {"value": 123}
+        assert store.read_stage_worker_result(result.run_uri, "build", attempt=1) is not None
+        provenance = store.read_stage_provenance(result.run_uri, "build")
+        assert provenance is not None
+        executor_metadata = cast(dict[str, object], provenance["executor_metadata"])
+        assert executor_metadata["executor"] == "subprocess"
+        assert executor_metadata["returncode"] == 0
 
 
 def test_subprocess_executor_failure_parent_finalizes_failed_run(

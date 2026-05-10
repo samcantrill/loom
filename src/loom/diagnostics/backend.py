@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 from loom.pipeline.stores import (
     AuthoritativeReadOptions,
+    AuthorityBackendKind,
+    AuthorityConfig,
     BackendCapability,
     BackendCapabilitySet,
     BackendRevision,
@@ -136,11 +138,12 @@ def inspect_backend(
     verify_materialization: bool = False,
     projection_revision: BackendRevision | str | None = None,
     authority_store: PerRunAuthorityStore | None = None,
+    authority_config: AuthorityConfig | None = None,
 ) -> BackendInspectionResult:
     """Inspect one authoritative run without mutating backend state."""
 
     resolved_run_uri = _validate_run_uri(run_uri)
-    store = authority_store or _default_authority_store()
+    store = authority_store or _default_authority_store(authority_config)
     schema = _require_supported_schema(store, resolved_run_uri)
     capability_set = store.capabilities()
     snapshot = read_authoritative_run(
@@ -214,11 +217,12 @@ def inspect_backend_capabilities(
     require_shared_filesystem: bool = False,
     require_remote: bool = False,
     authority_store: PerRunAuthorityStore | None = None,
+    authority_config: AuthorityConfig | None = None,
 ) -> BackendCapabilitiesResult:
     """Inspect backend capabilities and optional environment assumptions."""
 
     resolved_run_uri = _validate_run_uri(run_uri)
-    store = authority_store or _default_authority_store()
+    store = authority_store or _default_authority_store(authority_config)
     schema = _require_supported_schema(store, resolved_run_uri)
     capability_set = store.capabilities()
     diagnostics = _requirement_diagnostics(
@@ -251,10 +255,32 @@ def _validate_run_uri(run_uri: str) -> str:
     return validate_run_uri(run_uri)
 
 
-def _default_authority_store() -> PerRunAuthorityStore:
-    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+def _default_authority_store(
+    authority_config: AuthorityConfig | None = None,
+) -> PerRunAuthorityStore:
+    if authority_config is None:
+        from loom.pipeline.stores import authority_config_from_env
 
-    return SQLitePerRunAuthorityStore()
+        config = authority_config_from_env()
+    else:
+        config = authority_config
+    if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
+        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+        return SQLitePerRunAuthorityStore()
+    if config.backend_kind in {
+        AuthorityBackendKind.CO_LOCATED_SERVICE,
+        AuthorityBackendKind.MANAGED_SERVICE,
+        AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+    }:
+        from loom.pipeline.stores.service_authority import create_service_authority_store
+
+        return create_service_authority_store(config)
+    raise BackendDiagnosticsError(
+        f"backend diagnostics cannot inspect authority backend {config.backend_kind.value}",
+        code="backend_diagnostics.unsupported_backend",
+        context={"backend_kind": config.backend_kind.value},
+    )
 
 
 def _require_supported_schema(

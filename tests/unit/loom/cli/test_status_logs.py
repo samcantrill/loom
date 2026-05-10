@@ -31,7 +31,7 @@ def test_status_json_uses_diagnostics_payload(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         status_command,
         "build_status_result",
-        lambda run_uri: RunStatusSummary(
+        lambda run_uri, authority_config=None: RunStatusSummary(
             run_uri=run_uri,
             status="SUBMITTED",
             artifact_count=1,
@@ -88,7 +88,7 @@ def test_status_jobs_json_uses_scheduler_payload(
     monkeypatch.setattr(
         status_command,
         "build_status_jobs_result",
-        lambda run_uri: SlurmJobsStatusReport(
+        lambda run_uri, authority_config=None: SlurmJobsStatusReport(
             run_uri=run_uri,
             run_status="SUBMITTED",
             submission={

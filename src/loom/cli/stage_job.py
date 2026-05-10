@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope, format_stage_job_text
 from loom.cli.options import OutputFormat, output_format_from_namespace
@@ -90,6 +91,7 @@ def register_subparser(
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(run_parser)
     run_parser.add_argument(
         "--traceback",
         action="store_true",
@@ -112,10 +114,12 @@ def handle_run(namespace: argparse.Namespace) -> int:
     from loom.pipeline.status import StageStatus
 
     output_format = output_format_from_namespace(namespace)
+    authority_config = authority_config_from_namespace(namespace)
     try:
         result = run_stage_job(
             run_store=create_authority_backed_serial_run_store(
                 "runs",
+                authority_config=authority_config,
                 owner_id="stage-job",
             ),
             request=StageJobRunRequest(

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from loom.cli.errors import CliError, ExitCode
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.formatting import (
     format_json_envelope,
     format_run_text,
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.validation import PipelineValidationResult
     from loom.serialization import PlainData
+    from loom.pipeline.stores import AuthorityConfig
 
 
 RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v2"
@@ -166,6 +168,7 @@ def register_subparser(
         default=OutputFormat.TEXT.value,
         help="output format",
     )
+    add_authority_options(parser)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -182,6 +185,7 @@ def handle(namespace: argparse.Namespace) -> int:
     run_options = RunCliOptions.from_namespace(namespace)
     selector_options = SelectorCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
+    authority_config = authority_config_from_namespace(namespace)
 
     if run_options.dry_run:
         return _handle_dry_run(
@@ -189,6 +193,7 @@ def handle(namespace: argparse.Namespace) -> int:
             run_options=run_options,
             selector_options=selector_options,
             output_format=output_format,
+            authority_config=authority_config,
         )
 
     if _run_selects_slurm_executor(
@@ -200,6 +205,7 @@ def handle(namespace: argparse.Namespace) -> int:
             config_options=config_options,
             run_options=run_options,
             selector_options=selector_options,
+            authority_config=authority_config,
         )
         ok = result.status == "SUBMITTED"
         if output_format is OutputFormat.JSON:
@@ -220,6 +226,7 @@ def handle(namespace: argparse.Namespace) -> int:
         config_options=config_options,
         run_options=run_options,
         selector_options=selector_options,
+        authority_config=authority_config,
     )
     ok = result.status == "SUCCEEDED"
     if output_format is OutputFormat.JSON:
@@ -242,10 +249,11 @@ def build_run_result(
     config_options: ConfigCliOptions,
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> RunCliResult:
     """Execute a pipeline and build the CLI-specific run result."""
 
-    store = _create_default_run_store()
+    store = _create_default_run_store(authority_config=authority_config)
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -271,6 +279,7 @@ def build_run_result(
         config_options=config_options,
         runtime_options=runtime_options,
         open_existing=run_options.resume,
+        authority_config=authority_config,
     )
     request = _build_run_request(
         composed,
@@ -287,6 +296,7 @@ def _handle_dry_run(
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
     output_format: OutputFormat,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> int:
     if _dry_run_selects_slurm_executor(
         config_options=config_options,
@@ -297,6 +307,7 @@ def _handle_dry_run(
             config_options=config_options,
             run_options=run_options,
             selector_options=selector_options,
+            authority_config=authority_config,
         )
         if output_format is OutputFormat.JSON:
             sys.stdout.write(
@@ -397,10 +408,14 @@ def build_slurm_dry_run_result(
     config_options: ConfigCliOptions,
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> tuple[SlurmDryRunCliResult, tuple[CliWarning, ...]]:
     """Prepare persisted state and invoke the public SLURM dry-run planners."""
 
-    store = _create_default_run_store()
+    store = _create_default_run_store(
+        authority_config=authority_config,
+        owner_id="slurm-dry-run",
+    )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -433,6 +448,7 @@ def build_slurm_dry_run_result(
         config_options=config_options,
         runtime_options=runtime_options,
         open_existing=run_options.resume,
+        authority_config=authority_config,
     )
     warnings = _preflight_cli_warnings(preflight)
     if not run_options.resume:
@@ -543,12 +559,20 @@ def _with_resolved_run_uri(options: "RunOptions", run_uri: str | None) -> "RunOp
     return RunOptions.from_dict(data)
 
 
-def _create_default_run_store() -> Any:
+def _create_default_run_store(
+    *,
+    authority_config: "AuthorityConfig | None" = None,
+    owner_id: str = "cli-run",
+) -> Any:
     from loom.pipeline.execution.authority_adapter import (
         create_authority_backed_serial_run_store,
     )
 
-    return create_authority_backed_serial_run_store("runs")
+    return create_authority_backed_serial_run_store(
+        "runs",
+        authority_config=authority_config,
+        owner_id=owner_id,
+    )
 
 
 def _resolve_run_uri_for_run(
@@ -584,6 +608,7 @@ def _run_preflight_for_run(
     config_options: ConfigCliOptions,
     runtime_options: "RunOptions",
     open_existing: bool,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> None:
     from loom.diagnostics import PreflightError, PreflightRequest
 
@@ -609,6 +634,7 @@ def _run_preflight_for_run(
                 overlays=config_options.overlays,
                 overrides=config_options.overrides,
                 runtime_options=runtime_options,
+                authority_config=authority_config,
             )
         )
     except PreflightError as exc:
@@ -635,6 +661,7 @@ def _run_preflight_for_slurm_dry_run(
     config_options: ConfigCliOptions,
     runtime_options: "RunOptions",
     open_existing: bool,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> "PreflightResult":
     from loom.diagnostics import PreflightError, PreflightRequest
 
@@ -669,6 +696,7 @@ def _run_preflight_for_slurm_dry_run(
                 overlays=config_options.overlays,
                 overrides=config_options.overrides,
                 runtime_options=runtime_options,
+                authority_config=authority_config,
             )
         )
     except PreflightError as exc:
@@ -699,6 +727,7 @@ def _run_preflight_for_slurm_live_submission(
     config_options: ConfigCliOptions,
     runtime_options: "RunOptions",
     open_existing: bool,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> "PreflightResult":
     from loom.diagnostics import PreflightError, PreflightRequest
 
@@ -733,6 +762,7 @@ def _run_preflight_for_slurm_live_submission(
                 overlays=config_options.overlays,
                 overrides=config_options.overrides,
                 runtime_options=runtime_options,
+                authority_config=authority_config,
             )
         )
     except PreflightError as exc:
@@ -1049,10 +1079,14 @@ def build_slurm_live_submission_result(
     config_options: ConfigCliOptions,
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
+    authority_config: "AuthorityConfig | None" = None,
 ) -> SlurmLiveRunCliResult:
     """Prepare a SLURM plan and submit it with ``sbatch``."""
 
-    store = _create_default_run_store()
+    store = _create_default_run_store(
+        authority_config=authority_config,
+        owner_id="slurm-live-submission",
+    )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -1086,6 +1120,7 @@ def build_slurm_live_submission_result(
         config_options=config_options,
         runtime_options=runtime_options,
         open_existing=run_options.resume,
+        authority_config=authority_config,
     )
     if not run_options.resume:
         store.create_run(
@@ -1289,8 +1324,12 @@ def _require_slurm_live_authority(store: Any, *, executor: str) -> None:
         admit_authority_capabilities,
     )
 
+    config_provider = getattr(store, "authority_config", None)
+    config = config_provider() if callable(config_provider) else None
+    if not isinstance(config, AuthorityConfig):
+        config = AuthorityConfig()
     admission = admit_authority_capabilities(
-        config=AuthorityConfig(),
+        config=config,
         capabilities=authority_store.capabilities(),
         required=(RequiredAuthorityCapability.SLURM_LIVE_WORKER,),
     )

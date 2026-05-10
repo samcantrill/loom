@@ -21,7 +21,7 @@ def test_cancel_jobs_json_uses_result_payload(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         cancel_command,
         "build_cancel_jobs_result",
-        lambda run_uri: SlurmCancellationResult(
+        lambda run_uri, authority_config=None: SlurmCancellationResult(
             run_uri=run_uri,
             submission_id="planning-1",
             status="CANCELLED",

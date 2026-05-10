@@ -207,7 +207,9 @@ def _patch_common(
         config_options: object,
         runtime_options: object,
         open_existing: bool,
+        authority_config: object | None = None,
     ) -> None:
+        calls["preflight_authority_config"] = authority_config
         calls["preflight_config_path"] = getattr(config_options, "config_path")
         calls["preflight_resume"] = open_existing
         calls["preflight_run_uri"] = getattr(runtime_options, "run_uri")
@@ -216,7 +218,11 @@ def _patch_common(
     monkeypatch.setattr(
         run_command, "_validate_pipeline_config", lambda _config: FakePipelineResult()
     )
-    monkeypatch.setattr(run_command, "_create_default_run_store", lambda: fake_store)
+    monkeypatch.setattr(
+        run_command,
+        "_create_default_run_store",
+        lambda *, authority_config=None: fake_store,
+    )
     monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
     monkeypatch.setattr(run_command, "_run_preflight_for_run", run_preflight)
     monkeypatch.setattr(run_command, "_run_pipeline", run_pipeline)

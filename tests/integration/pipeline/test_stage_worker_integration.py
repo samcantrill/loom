@@ -18,7 +18,12 @@ from loom.pipeline.execution import (
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
+from loom.pipeline.stores import (
+    LocalArtifactStore,
+    authority_config_to_cli_args,
+    path_to_run_uri,
+)
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 def _spec(
@@ -42,6 +47,10 @@ def _spec(
 
 def _prepare(tmp_path: Path, *, target: str) -> tuple[Any, str]:
     store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    return _prepare_with_store(tmp_path, store=store, target=target)
+
+
+def _prepare_with_store(tmp_path: Path, *, store: Any, target: str) -> tuple[Any, str]:
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
     store.create_run(run_uri)
     spec = _spec(target=target)
@@ -135,3 +144,45 @@ def test_direct_worker_cli_success_smoke(tmp_path: Path) -> None:
     assert payload["ok"] is True
     assert payload["result"]["stage_name"] == "build"
     assert stderr.getvalue() == ""
+
+
+def test_direct_worker_cli_uses_service_authority_config(tmp_path: Path) -> None:
+    from loom.cli.main import main
+
+    with LocalAuthorityService.start() as service:
+        config = service.config()
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=config,
+        )
+        _store, run_uri = _prepare_with_store(
+            tmp_path,
+            store=store,
+            target="tests.support.pipeline_execution_stages.JsonProducerStage",
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        assert (
+            main(
+                [
+                    "stage",
+                    "run",
+                    "--run-uri",
+                    run_uri,
+                    "--stage",
+                    "build",
+                    *authority_config_to_cli_args(config),
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
+
+        payload = json.loads(stdout.getvalue())
+        assert payload["ok"] is True
+        assert payload["result"]["stage_name"] == "build"
+        assert stderr.getvalue() == ""
