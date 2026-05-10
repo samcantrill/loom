@@ -1849,7 +1849,7 @@ Completion summary:
 
 ### Phase 10 - Service Default And SQLite Authority Removal
 
-Status: pr_open
+Status: merged
 Branch: `codex/service-default-sqlite-removal`
 PR: https://github.com/samcantrill/loom/pull/118
 
@@ -1935,5 +1935,9 @@ Completion summary:
 - Validation: `make validate-pr` and `make test-summary` passed on 2026-05-10;
   `make validate-pr` also passed after the service-authority threaded proxy
   blocker fix.
-- Review/merge: pending replacement GitHub CI and merge gate after automated
-  review found no blocking findings.
+- Review/merge: automated review found no blocking findings; GitHub CI
+  `checks` passed on the replacement PR head; PR #118 was squash-merged into
+  `develop` at `5953a32171b0c44859238f82acf2cf9e15fa67f3` on 2026-05-10.
+- Follow-up notes: no successor branches depend on
+  `codex/service-default-sqlite-removal`; phase branch and worktree cleanup are
+  eligible after metadata is pushed.
