@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 3 - RunArtifactStore And StageArtifactStore Split
-- Status: pr_open
+- Status: approved
 - Branch: `codex/artifact-store-split`
 - Worktree: `/home/samcantrill/work/loom-worktrees/artifact-store-split`
 - Stack predecessor: none
@@ -19,7 +19,7 @@
 - Refine pass: not planned; the phase is bounded to protocol and local-wrapper
   introduction.
 - Phase implementation refinement budget: unused
-- Phase PR review budget: unused
+- Phase PR review budget: used locally on 2026-05-10; no blocking findings.
 - Blocker-resolution budget: 0/3 used
 
 ## PR Preparation Notes
@@ -28,6 +28,10 @@
   `codex/artifact-store-split`.
 - Verified immediately after creation: base `develop`, head
   `codex/artifact-store-split`, state `OPEN`, CI `checks` in progress.
+- Automated review confirmed the PR targets `develop`, stays within the Phase
+  3 artifact/materialization split, avoids runtime caller migration, and keeps
+  lifecycle status/attempt/lease/submitted-operation/output-commit/snapshot
+  surfaces out of the new wrappers.
 
 ## Scope
 
