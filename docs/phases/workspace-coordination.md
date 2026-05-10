@@ -477,8 +477,8 @@ make test-summary
   workspace and sweep identities like the SQLite backend, and contract tests
   cover duplicate identity and unknown-parent failures across both backends.
 - Blocker-resolution summary: none.
-- PR preparation: PR body drafted in
-  `docs/phases/workspace-coordination-pr-body.md`; PR creation pending.
+- PR preparation: PR #108 opened against `develop`:
+  https://github.com/samcantrill/loom/pull/108.
 - Stack maintenance: no predecessor; rebase onto updated `develop` if needed
   before PR preparation.
 - Remaining blockers: none.
