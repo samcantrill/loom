@@ -1111,7 +1111,7 @@ Completion summary:
 
 ### Phase 3 - RunArtifactStore And StageArtifactStore Split
 
-Status: approved
+Status: merged
 Branch: `codex/artifact-store-split`
 PR: https://github.com/samcantrill/loom/pull/111
 
@@ -1199,6 +1199,12 @@ Completion summary:
 - Automated review approved the PR on 2026-05-10 with no blocking findings;
   the review confirmed the diff stays within the artifact/materialization
   boundary and does not expose lifecycle authority through the new wrappers.
+- Merged PR #111 into `develop` on 2026-05-10 with merge commit
+  `2a12ceb6ccf681c7ccc1f24ef854825ac186d3e3`. Final GitHub CI `checks`
+  passed after one rerun of the known flaky
+  `test_bounded_parallel_runs_independent_stages_concurrently` failure on the
+  docs-only review metadata head. The Phase 4 successor branch was prepared
+  for rebase onto updated `develop`.
 
 ### Phase 4 - Python Runner And Public Example Migration
 

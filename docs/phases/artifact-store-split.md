@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 3 - RunArtifactStore And StageArtifactStore Split
-- Status: approved
+- Status: merged
 - Branch: `codex/artifact-store-split`
 - Worktree: `/home/samcantrill/work/loom-worktrees/artifact-store-split`
 - Stack predecessor: none
@@ -32,6 +32,12 @@
   3 artifact/materialization split, avoids runtime caller migration, and keeps
   lifecycle status/attempt/lease/submitted-operation/output-commit/snapshot
   surfaces out of the new wrappers.
+- Final merge verification on 2026-05-10: base `develop`, head
+  `codex/artifact-store-split`, CI `checks` passed, and PR #111 merged with
+  merge commit `2a12ceb6ccf681c7ccc1f24ef854825ac186d3e3`.
+- Stack maintenance: Phase 4 was already started as successor branch
+  `codex/python-runner-authority`; it must be rebased onto updated `develop`
+  before PR opening.
 
 ## Scope
 
