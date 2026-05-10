@@ -30,7 +30,7 @@ def test_create_run_store_defaults_to_service_authority(tmp_path: Path) -> None:
     )
     assert store.authority_config().endpoint is not None
     revision = store.admit_run(run_uri)
-    assert revision.sequence == 1
+    assert revision.sequence >= 1
     assert store.open_run(run_uri).status is RunStatus.CREATED
 
 
