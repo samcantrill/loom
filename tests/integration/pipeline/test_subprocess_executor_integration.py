@@ -6,10 +6,15 @@ from pathlib import Path
 from typing import cast
 
 from loom.pipeline import PipelineSpec
-from loom.pipeline.execution import ExecutionFailure, PipelineRunner, RunRequest
+from loom.pipeline.execution import (
+    ExecutionFailure,
+    PipelineRunner,
+    RunRequest,
+    create_authority_backed_serial_run_store,
+)
 from loom.pipeline.executors import LocalExecutor, SubprocessExecutor
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
 from loom.provenance.models import ProvenanceCaptureOptions
 
 
@@ -59,12 +64,17 @@ def _request_with_executor(target: str, *, executor: str, run_uri: str) -> RunRe
     )
 
 
+def _run_store(tmp_path: Path):
+    return create_authority_backed_serial_run_store(tmp_path / "runs")
+
+
 def test_local_and_subprocess_success_runs_are_equivalent(tmp_path: Path) -> None:
-    store = LocalRunStore(tmp_path / "runs")
+    local_store = _run_store(tmp_path)
+    subprocess_store = _run_store(tmp_path)
     local_uri = path_to_run_uri(tmp_path / "runs" / "local")
     subprocess_uri = path_to_run_uri(tmp_path / "runs" / "subprocess")
 
-    local = PipelineRunner(run_store=store, executor=LocalExecutor()).run(
+    local = PipelineRunner(run_store=local_store, executor=LocalExecutor()).run(
         _request_with_executor(
             "tests.support.pipeline_execution_stages.JsonProducerStage",
             executor="local",
@@ -72,8 +82,8 @@ def test_local_and_subprocess_success_runs_are_equivalent(tmp_path: Path) -> Non
         )
     )
     subprocess = PipelineRunner(
-        run_store=store,
-        executor=SubprocessExecutor(run_store=store),
+        run_store=subprocess_store,
+        executor=SubprocessExecutor(run_store=subprocess_store),
     ).run(
         _request_with_executor(
             "tests.support.pipeline_execution_stages.JsonProducerStage",
@@ -82,13 +92,15 @@ def test_local_and_subprocess_success_runs_are_equivalent(tmp_path: Path) -> Non
         )
     )
 
-    local_outputs = store.read_stage_outputs(local.run_uri, "build")
-    subprocess_outputs = store.read_stage_outputs(subprocess.run_uri, "build")
+    local_outputs = local_store.read_stage_outputs(local.run_uri, "build")
+    subprocess_outputs = subprocess_store.read_stage_outputs(
+        subprocess.run_uri, "build"
+    )
     assert local_outputs is not None
     assert subprocess_outputs is not None
-    local_artifacts = LocalArtifactStore(store.local_artifact_root(local.run_uri))
+    local_artifacts = LocalArtifactStore(local_store.local_artifact_root(local.run_uri))
     subprocess_artifacts = LocalArtifactStore(
-        store.local_artifact_root(subprocess.run_uri)
+        subprocess_store.local_artifact_root(subprocess.run_uri)
     )
 
     assert local.status == subprocess.status == RunStatus.SUCCEEDED
@@ -97,12 +109,16 @@ def test_local_and_subprocess_success_runs_are_equivalent(tmp_path: Path) -> Non
     assert local_artifacts.load(local_outputs["data"]) == subprocess_artifacts.load(
         subprocess_outputs["data"]
     )
-    assert store.read_stage_worker_result(subprocess.run_uri, "build", attempt=1)
-    assert store.read_stage_worker_result(local.run_uri, "build", attempt=1) is None
+    assert subprocess_store.read_stage_worker_result(
+        subprocess.run_uri, "build", attempt=1
+    )
+    assert (
+        local_store.read_stage_worker_result(local.run_uri, "build", attempt=1) is None
+    )
 
 
 def test_subprocess_executor_success_parent_finalizes_stage(tmp_path: Path) -> None:
-    store = LocalRunStore(tmp_path / "runs")
+    store = _run_store(tmp_path)
 
     result = PipelineRunner(
         run_store=store,
@@ -128,7 +144,7 @@ def test_subprocess_executor_success_parent_finalizes_stage(tmp_path: Path) -> N
 def test_subprocess_executor_failure_parent_finalizes_failed_run(
     tmp_path: Path,
 ) -> None:
-    store = LocalRunStore(tmp_path / "runs")
+    store = _run_store(tmp_path)
 
     result = PipelineRunner(
         run_store=store,

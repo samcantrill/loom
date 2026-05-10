@@ -47,6 +47,7 @@ def test_pipeline_execution_public_exports_are_phase_scoped() -> None:
         "StageWorkerStateError",
         "UnsupportedContinuationExecutorError",
         "continue_prepared_run",
+        "create_authority_backed_serial_run_store",
         "infer_stage_worker_attempt",
         "prepare_stage_attempt",
         "reconstruct_stage_execution_request",

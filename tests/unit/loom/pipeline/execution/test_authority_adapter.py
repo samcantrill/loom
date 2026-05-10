@@ -574,11 +574,15 @@ def test_authority_backed_commit_failure_leaves_no_authoritative_outputs(
 def test_public_local_run_store_still_uses_file_lock(tmp_path: Path) -> None:
     run_store = LocalRunStore(tmp_path / "runs")
     run_uri = _run_uri(tmp_path)
+    run_store.create_run(run_uri)
 
-    result = PipelineRunner(run_store=run_store).run(
-        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
+    lock = run_store.acquire_run_lock(
+        run_uri,
+        owner={"component": "unit-test"},
     )
 
-    assert result.status is RunStatus.SUCCEEDED
+    assert run_store.read_run_lock(run_uri) == lock
+    assert (tmp_path / "runs" / "run1" / "lock.json").is_file()
+    run_store.release_run_lock(run_uri, lock.token)
     assert run_store.read_run_lock(run_uri) is None
-    assert (tmp_path / "runs" / "run1" / "status.json").is_file()
+    assert not (tmp_path / "runs" / "run1" / "lock.json").exists()

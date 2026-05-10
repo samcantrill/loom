@@ -14,13 +14,16 @@ from loom.pipeline.execution import (
     ConfigSnapshotInputs,
     FailurePolicy,
     ParallelExecutionUnsupportedError,
+    PipelineExecutionError,
     PipelineRunner,
     RunRequest,
     RunRequestError,
     StageExecutionRequest,
     StageExecutionResult,
+    run_pipeline,
 )
 from loom.pipeline.execution.authority_adapter import (
+    AuthorityBackedSerialRunStore,
     create_authority_backed_serial_run_store,
 )
 from loom.pipeline.executors import LocalExecutor
@@ -35,6 +38,7 @@ from loom.pipeline.stores import (
     path_to_run_uri,
     run_uri_to_path,
 )
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.provenance.models import ProvenanceCaptureOptions
 from loom.serialization import PlainData
 from tests.support.authority_stores import InMemoryPerRunAuthorityStore
@@ -103,7 +107,16 @@ class _ComposedConfig:
 
 
 def _runner(tmp_path: Path) -> PipelineRunner:
-    return PipelineRunner(run_store=LocalRunStore(tmp_path / "runs"))
+    return PipelineRunner(run_store=_authority_run_store(tmp_path))
+
+
+def _authority_run_store(tmp_path: Path) -> AuthorityBackedSerialRunStore:
+    return create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(
+            clock=lambda: "2020-01-01T00:00:00Z"
+        ),
+    )
 
 
 def _run_uri(tmp_path: Path) -> str:
@@ -261,7 +274,7 @@ def test_construct_stage_rejects_non_empty_init_for_prebuilt_instance(
 
 
 def test_runner_allocates_default_run_uri_under_store_root(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _authority_run_store(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
             pipeline=PipelineSpec(
@@ -295,7 +308,7 @@ def test_runner_allocates_default_run_uri_under_store_root(tmp_path: Path) -> No
 def test_runner_passes_resolved_runtime_to_stage_execution_request(
     tmp_path: Path,
 ) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _authority_run_store(tmp_path)
     executor = TrackingExecutor()
     result = PipelineRunner(run_store=run_store, executor=executor).run(
         RunRequest(
@@ -343,7 +356,7 @@ def test_runner_passes_resolved_runtime_to_stage_execution_request(
 def test_runner_prepares_worker_attempt_for_subprocess_without_constructing_stage(
     tmp_path: Path,
 ) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _authority_run_store(tmp_path)
     executor = PreparedWorkerExecutor()
 
     result = PipelineRunner(run_store=run_store, executor=executor).run(
@@ -389,7 +402,7 @@ def test_runner_prepares_worker_attempt_for_subprocess_without_constructing_stag
 def test_runner_rejects_dry_run_execution_request(tmp_path: Path) -> None:
     run_root = tmp_path / "runs"
     with pytest.raises(RunRequestError, match="dry-run"):
-        PipelineRunner(run_store=LocalRunStore(run_root)).run(
+        PipelineRunner(run_store=_authority_run_store(tmp_path)).run(
             RunRequest(
                 pipeline=PipelineSpec(
                     stages=(
@@ -404,15 +417,37 @@ def test_runner_rejects_dry_run_execution_request(tmp_path: Path) -> None:
     assert not run_root.exists()
 
 
-def test_runner_rejects_parallel_without_authority_backend(tmp_path: Path) -> None:
+def test_runner_rejects_local_run_store_before_mutation(tmp_path: Path) -> None:
     run_root = tmp_path / "runs"
 
-    with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
-        PipelineRunner(run_store=LocalRunStore(run_root)).run(_parallel_request())
+    with pytest.raises(PipelineExecutionError) as exc_info:
+        PipelineRunner(run_store=LocalRunStore(run_root))
 
-    error = exc_info.value
-    assert error.code == "pipeline.parallel.unsupported_backend"
-    assert error.diagnostics[0]["code"] == "missing_authority_backend"
+    assert "authority-backed runtime store" in str(exc_info.value)
+    assert "create_authority_backed_serial_run_store" in str(exc_info.value)
+    assert not run_root.exists()
+
+
+def test_run_pipeline_rejects_local_run_store_before_mutation(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "runs"
+
+    with pytest.raises(PipelineExecutionError) as exc_info:
+        run_pipeline(
+            RunRequest(
+                pipeline=PipelineSpec(
+                    stages=(
+                        _stage(
+                            target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                        ),
+                    )
+                ),
+            ),
+            run_store=LocalRunStore(run_root),
+        )
+
+    assert "authority-backed runtime store" in str(exc_info.value)
     assert not run_root.exists()
 
 
@@ -438,7 +473,7 @@ def test_runner_rejects_continue_independent_without_bounded_parallelism(
     )
 
     with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
-        PipelineRunner(run_store=LocalRunStore(run_root)).run(request)
+        PipelineRunner(run_store=_authority_run_store(tmp_path)).run(request)
 
     error = exc_info.value
     assert error.code == "pipeline.parallel.failure_policy_requires_parallelism"
@@ -472,7 +507,7 @@ def test_runner_rejects_legacy_continue_failure_policy_without_parallelism(
     )
 
     with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
-        PipelineRunner(run_store=LocalRunStore(run_root)).run(request)
+        PipelineRunner(run_store=_authority_run_store(tmp_path)).run(request)
 
     assert exc_info.value.code == "pipeline.parallel.failure_policy_requires_parallelism"
     assert not run_root.exists()
@@ -522,7 +557,7 @@ def test_runner_rejects_parallel_when_backend_capabilities_are_missing(
 
 def test_runner_requires_run_uri_for_open_existing(tmp_path: Path) -> None:
     with pytest.raises(RunRequestError, match="open_existing requires run_uri"):
-        PipelineRunner(run_store=LocalRunStore(tmp_path / "runs")).run(
+        PipelineRunner(run_store=_authority_run_store(tmp_path)).run(
             RunRequest(
                 pipeline=PipelineSpec(
                     stages=(
@@ -539,7 +574,7 @@ def test_runner_requires_run_uri_for_open_existing(tmp_path: Path) -> None:
 def test_runner_persists_composed_config_artifact_manifest_without_resolved_snapshots(
     tmp_path: Path,
 ) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _authority_run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     run_store.create_run(run_uri, metadata={"caller": "unit"})
     runner = PipelineRunner(run_store=run_store)
@@ -578,7 +613,7 @@ def test_runner_persists_composed_config_artifact_manifest_without_resolved_snap
 def test_runner_preserves_plain_mapping_config_as_caller_provided_snapshot(
     tmp_path: Path,
 ) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _authority_run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     run_store.create_run(run_uri)
     runner = PipelineRunner(run_store=run_store)

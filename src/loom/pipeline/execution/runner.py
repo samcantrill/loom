@@ -41,6 +41,7 @@ from loom.pipeline.stores import (
     CapabilityScope,
     DiagnosticSeverity,
     LocalArtifactStore,
+    LocalRunStore,
     LocalRunStorePaths,
     LegacyRunStore as RunStore,
     StoreDiagnostic,
@@ -155,6 +156,13 @@ class PipelineRunner:
     ) -> None:
         if not isinstance(run_store, RunStore):
             raise PipelineExecutionError("run_store must satisfy RunStore")
+        if isinstance(run_store, LocalRunStore):
+            raise PipelineExecutionError(
+                "PipelineRunner requires an authority-backed runtime store; "
+                "LocalRunStore is limited to local artifact/materialization access. "
+                "Use create_authority_backed_serial_run_store(...) for serial "
+                "Python execution."
+            )
         if executor is None:
             from loom.pipeline.executors import LocalExecutor
 

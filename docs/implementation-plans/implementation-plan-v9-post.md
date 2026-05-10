@@ -1208,9 +1208,9 @@ Completion summary:
 
 ### Phase 4 - Python Runner And Public Example Migration
 
-Status: pending
+Status: approved
 Branch: `codex/python-runner-authority`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/112
 
 Goal:
 
@@ -1265,7 +1265,11 @@ Alternatives rejected:
 
 Debt introduced:
 
-- None intended beyond temporary compatibility aliases from Phase 3.
+- `create_authority_backed_serial_run_store` remains a transitional bridge
+  that combines authority lifecycle writes with local materialization paths.
+  Changed-config same-run re-execution remains failure-closed when the
+  transitional SQLite authority already has a stage output commit, rather than
+  overwriting authoritative commits without explicit supersede semantics.
 
 Reviewability:
 
@@ -1273,7 +1277,28 @@ Reviewability:
 
 Completion summary:
 
-- Pending.
+- Phase execution plan drafted and refined on 2026-05-10 in
+  `docs/phases/python-runner-authority.md`.
+- Initially started from `codex/artifact-store-split`; after Phase 3 merged,
+  branch `codex/python-runner-authority` was rebased onto updated `develop`
+  and the PR target was reset to `develop`.
+- Implemented a `PipelineRunner` guard that rejects bare `LocalRunStore`
+  instances before mutation and routes public Python examples to
+  `create_authority_backed_serial_run_store(...)`.
+- Exposed the authority-backed serial factory from `loom.pipeline.execution`
+  without adding eager optional imports.
+- Updated package, unit, integration, docs-example, and e2e coverage so
+  mutating Python execution uses authority-backed stores, while direct
+  `LocalRunStore` tests remain scoped to local file behavior.
+- Validation before PR opening: `make validate-pr` passed Ruff, Pyright,
+  default tests, config-extra tests, and build; `make test-summary` passed
+  with package 57 passed, unit 837 passed, contract 108 passed, integration
+  90 passed, e2e 39 passed, config-extra 420 passed, and 0 failures/errors.
+- PR #112 opened on 2026-05-10 against `develop`; initial verification
+  confirmed base `develop`, head `codex/python-runner-authority`, state
+  `OPEN`, and CI `checks` in progress.
+- Automated review approved the PR on 2026-05-10 with no blocking findings;
+  GitHub CI `checks` passed on the PR-open head.
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 

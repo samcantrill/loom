@@ -6,12 +6,16 @@ from typing import cast
 import pytest
 
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution.authority_adapter import (
+    AuthorityBackedSerialRunStore,
+)
 from loom.pipeline.planning import PlanAction, PlanSelectors
 from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.errors import CorruptStoreDocumentError
-from tests.support.pipeline_execution_configs import local_execution_config
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.serialization import PlainData
+from tests.support.pipeline_execution_configs import local_execution_config
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -72,8 +76,21 @@ def _run_uri(tmp_path: Path, name: str = "run1") -> str:
     return path_to_run_uri(tmp_path / "runs" / name)
 
 
+def _run_store(
+    tmp_path: Path,
+    *,
+    local_store: LocalRunStore | None = None,
+) -> AuthorityBackedSerialRunStore:
+    return AuthorityBackedSerialRunStore(
+        local_store=local_store or LocalRunStore(tmp_path / "runs"),
+        authority_store=SQLitePerRunAuthorityStore(
+            clock=lambda: "2020-01-01T00:00:00Z"
+        ),
+    )
+
+
 def test_stage_exception_persists_failure_before_failed_status(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
@@ -114,7 +131,7 @@ def test_stage_exception_persists_failure_before_failed_status(tmp_path: Path) -
 
 
 def test_invalid_outputs_fail_with_inspectable_state(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
@@ -137,7 +154,10 @@ def test_invalid_outputs_fail_with_inspectable_state(tmp_path: Path) -> None:
 def test_failed_status_commit_failure_marks_root_run_failed(
     tmp_path: Path,
 ) -> None:
-    run_store = FailedStatusFailingRunStore(tmp_path / "runs")
+    run_store = _run_store(
+        tmp_path,
+        local_store=FailedStatusFailingRunStore(tmp_path / "runs"),
+    )
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
@@ -160,7 +180,7 @@ def test_failed_status_commit_failure_marks_root_run_failed(
 
 
 def test_stage_contract_failure_uses_stage_contract_type(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
@@ -175,7 +195,10 @@ def test_stage_contract_failure_uses_stage_contract_type(tmp_path: Path) -> None
 
 
 def test_skip_status_commit_failure_keeps_run_failed(tmp_path: Path) -> None:
-    run_store = SkipStatusFailingRunStore(tmp_path / "runs")
+    run_store = _run_store(
+        tmp_path,
+        local_store=SkipStatusFailingRunStore(tmp_path / "runs"),
+    )
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(

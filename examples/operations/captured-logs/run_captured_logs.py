@@ -12,8 +12,9 @@ from uuid import uuid4
 from loom.cli.main import main as loom_main
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.executors import LocalExecutor
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 
 
 HERE = Path(__file__).resolve().parent
@@ -26,10 +27,12 @@ def main() -> None:
     run_uri = path_to_run_uri(run_root / f"captured-logs-{uuid4().hex[:8]}")
 
     runner = PipelineRunner(
-        run_store=LocalRunStore(run_root),
+        run_store=create_authority_backed_serial_run_store(run_root),
         executor=LocalExecutor(capture_stdout_stderr=True),
     )
-    result = runner.run(RunRequest(config=compose_config(HERE / "pipeline.yaml"), run_uri=run_uri))
+    result = runner.run(
+        RunRequest(config=compose_config(HERE / "pipeline.yaml"), run_uri=run_uri)
+    )
 
     stdout_logs = _run_cli(
         [

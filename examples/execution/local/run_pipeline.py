@@ -7,7 +7,8 @@ from pathlib import Path
 
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.execution import create_authority_backed_serial_run_store
+from loom.pipeline.stores import path_to_run_uri
 from loom.timestamps import safe_timestamp_for_path
 
 
@@ -22,7 +23,9 @@ def main() -> None:
     )
 
     composed = compose_config(HERE / "pipeline.yaml")
-    runner = PipelineRunner(run_store=LocalRunStore(run_root))
+    runner = PipelineRunner(
+        run_store=create_authority_backed_serial_run_store(run_root)
+    )
 
     first = runner.run(RunRequest(config=composed, run_uri=run_uri))
     second = runner.run(

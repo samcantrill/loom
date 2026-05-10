@@ -76,7 +76,8 @@ from pathlib import Path
 
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.execution import create_authority_backed_serial_run_store
+from loom.pipeline.stores import path_to_run_uri
 
 run_root = Path("tmp/runs")
 config_path = Path("tmp/demo_pipeline.yaml")
@@ -106,7 +107,7 @@ pipeline:
           codec_key: text.v1
 """
 )
-run_store = LocalRunStore(run_root)
+run_store = create_authority_backed_serial_run_store(run_root)
 runner = PipelineRunner(run_store=run_store)
 run_uri = path_to_run_uri(run_root / "run1")
 

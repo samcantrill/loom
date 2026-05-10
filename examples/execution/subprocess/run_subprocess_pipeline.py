@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from loom.cli.main import main as loom_main
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LocalRunArtifactStore, path_to_run_uri
 
 
 HERE = Path(__file__).resolve().parent
@@ -38,8 +38,8 @@ def main() -> None:
         ]
     )
 
-    store = LocalRunStore()
-    provenance = store.read_stage_provenance(subprocess_uri, "seed")
+    store = LocalRunArtifactStore(run_root)
+    provenance = store.stage_artifacts(subprocess_uri, "seed").read_stage_provenance()
     executor = None
     if provenance is not None:
         metadata = provenance.get("executor_metadata", {})
