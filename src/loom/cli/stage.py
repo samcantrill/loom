@@ -112,11 +112,17 @@ def _run_stage_worker(
     stage_name: str,
     attempt: int | None,
 ) -> "StageWorkerResult":
-    from loom.pipeline.execution import StageWorkerRunRequest, run_stage_worker
-    from loom.pipeline.stores import LocalRunStore
+    from loom.pipeline.execution import (
+        StageWorkerRunRequest,
+        create_authority_backed_serial_run_store,
+        run_stage_worker,
+    )
 
     return run_stage_worker(
-        run_store=LocalRunStore(),
+        run_store=create_authority_backed_serial_run_store(
+            "runs",
+            owner_id="stage-worker",
+        ),
         request=StageWorkerRunRequest(
             run_uri=run_uri,
             stage_name=stage_name,

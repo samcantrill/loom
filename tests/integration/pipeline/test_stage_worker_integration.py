@@ -5,19 +5,20 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from loom.pipeline import PipelineSpec
 from loom.pipeline.execution import (
     ExecutionFailure,
     StageWorkerRunRequest,
+    create_authority_backed_serial_run_store,
     prepare_stage_attempt,
     run_stage_worker,
 )
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
 
 
 def _spec(
@@ -39,8 +40,8 @@ def _spec(
     )
 
 
-def _prepare(tmp_path: Path, *, target: str) -> tuple[LocalRunStore, str]:
-    store = LocalRunStore(tmp_path / "runs")
+def _prepare(tmp_path: Path, *, target: str) -> tuple[Any, str]:
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
     store.create_run(run_uri)
     spec = _spec(target=target)

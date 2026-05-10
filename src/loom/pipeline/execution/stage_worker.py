@@ -23,6 +23,7 @@ from loom.pipeline.specs import OutputSpec, StageFactorySpec, StageSpec
 from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
+    AuthorityStoreError,
     LegacyRunStore as RunStore,
     LocalArtifactStore,
     LocalRunStorePaths,
@@ -117,6 +118,13 @@ def run_stage_worker(
         run_uri=run_uri,
         stage_name=request.stage_name,
         attempt=attempt,
+    )
+    _validate_worker_authority_if_supported(
+        run_store=run_store,
+        run_uri=run_uri,
+        stage_name=request.stage_name,
+        attempt=attempt,
+        worker_request=prepared,
     )
     stage_plan = _read_stage_plan(
         run_store=run_store,
@@ -332,6 +340,48 @@ def _validate_current_attempt_state(
         raise StageWorkerStateError(
             f"worker stage {stage_name!r} attempt {attempt} already has a worker result"
         )
+
+
+def _validate_worker_authority_if_supported(
+    *,
+    run_store: RunStore,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    worker_request: StageWorkerRequest,
+) -> None:
+    validator = getattr(run_store, "validate_stage_job_authority", None)
+    if not callable(validator):
+        return
+    try:
+        authority = _authority_attempt_metadata(worker_request.metadata)
+        validator(
+            run_uri,
+            stage_name,
+            attempt,
+            authority_attempt_id=authority["attempt_id"],
+            authority_lease_id=authority["lease_id"],
+            authority_owner_id=authority["owner_id"],
+            authority_fencing_token=authority["fencing_token"],
+            worker_metadata=worker_request.metadata,
+        )
+    except AuthorityStoreError as exc:
+        raise StageWorkerStateError(str(exc)) from exc
+
+
+def _authority_attempt_metadata(metadata: Mapping[str, PlainData]) -> dict[str, str]:
+    raw = metadata.get("authority_attempt")
+    if not isinstance(raw, Mapping):
+        raise AuthorityStoreError("worker request is missing authority_attempt metadata")
+    values: dict[str, str] = {}
+    for key in ("attempt_id", "lease_id", "owner_id", "fencing_token"):
+        value = raw.get(key)
+        if not isinstance(value, str) or not value:
+            raise AuthorityStoreError(
+                f"worker request authority_attempt.{key} must be a non-empty string"
+            )
+        values[key] = value
+    return values
 
 
 def _read_stage_plan(

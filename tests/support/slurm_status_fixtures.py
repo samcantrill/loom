@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from loom.pipeline.executors.slurm import (
     SlurmCommandResult,
@@ -17,6 +17,7 @@ from loom.pipeline.executors.slurm import (
     live_manifest_from_planned_submission,
     write_slurm_live_manifest,
 )
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.planning import (
     ExecutionPlan,
     FingerprintContext,
@@ -32,7 +33,7 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
@@ -43,10 +44,10 @@ def write_submitted_slurm_fixture(
     starting_job_id: int = 700,
     run_status: RunStatus = RunStatus.SUBMITTED,
     stage_status: StageStatus = StageStatus.SUBMITTED,
-) -> tuple[LocalRunStore, str, Path]:
+) -> tuple[Any, str, Path]:
     """Persist a submitted afterok manifest and registry for status tests."""
 
-    store = LocalRunStore(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "submitted-slurm")
     store.create_run(run_uri)
     submission = build_afterok_planned_submission(

@@ -81,12 +81,15 @@ def handle_continue(namespace: argparse.Namespace) -> int:
         PreparedRunContinueRequest,
         UnsupportedContinuationExecutorError,
         continue_prepared_run,
+        create_authority_backed_serial_run_store,
     )
-    from loom.pipeline.stores import LocalRunStore
 
     try:
         continue_prepared_run(
-            run_store=LocalRunStore(),
+            run_store=create_authority_backed_serial_run_store(
+                "runs",
+                owner_id="prepared-run",
+            ),
             request=PreparedRunContinueRequest(
                 run_uri=str(namespace.run_uri),
                 executor=str(namespace.executor),

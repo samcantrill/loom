@@ -64,6 +64,26 @@ def register_subparser(
         help="exact prepared attempt number",
     )
     run_parser.add_argument(
+        "--authority-attempt-id",
+        metavar="ID",
+        help="authority attempt id for fenced finalization",
+    )
+    run_parser.add_argument(
+        "--authority-lease-id",
+        metavar="ID",
+        help="authority lease id for fenced finalization",
+    )
+    run_parser.add_argument(
+        "--authority-owner-id",
+        metavar="ID",
+        help="authority owner id for fenced finalization",
+    )
+    run_parser.add_argument(
+        "--authority-fencing-token",
+        metavar="TOKEN",
+        help="authority fencing token for fenced finalization",
+    )
+    run_parser.add_argument(
         "--format",
         dest="output_format",
         choices=[format.value for format in OutputFormat],
@@ -86,20 +106,27 @@ def handle_run(namespace: argparse.Namespace) -> int:
         ContinuationStateError,
         StageJobRunRequest,
         UnsupportedContinuationExecutorError,
+        create_authority_backed_serial_run_store,
         run_stage_job,
     )
     from loom.pipeline.status import StageStatus
-    from loom.pipeline.stores import LocalRunStore
 
     output_format = output_format_from_namespace(namespace)
     try:
         result = run_stage_job(
-            run_store=LocalRunStore(),
+            run_store=create_authority_backed_serial_run_store(
+                "runs",
+                owner_id="stage-job",
+            ),
             request=StageJobRunRequest(
                 run_uri=str(namespace.run_uri),
                 stage_name=str(namespace.stage),
                 executor=str(namespace.executor),
                 attempt=namespace.attempt,
+                authority_attempt_id=namespace.authority_attempt_id,
+                authority_lease_id=namespace.authority_lease_id,
+                authority_owner_id=namespace.authority_owner_id,
+                authority_fencing_token=namespace.authority_fencing_token,
             ),
         )
     except UnsupportedContinuationExecutorError as exc:

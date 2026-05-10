@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import cast
 
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
-from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.serialization import PlainData, ensure_plain_data, json_loads
@@ -161,7 +160,7 @@ def cancel_slurm_jobs(
 ) -> SlurmCancellationResult:
     """Cancel non-terminal jobs in the latest active SLURM submission."""
 
-    store = LocalRunStore() if run_store is None else run_store
+    store = _default_authority_run_store() if run_store is None else run_store
     if not isinstance(store, RunStore):
         raise SlurmCancellationError(
             "job cancellation requires a run store",
@@ -607,6 +606,17 @@ def _plain_mapping(value: object, *, path: str) -> dict[str, PlainData]:
             code="executor.slurm.cancel.invalid_plain_data",
         )
     return normalized
+
+
+def _default_authority_run_store() -> RunStore:
+    from loom.pipeline.execution.authority_adapter import (
+        create_authority_backed_serial_run_store,
+    )
+
+    return create_authority_backed_serial_run_store(
+        "runs",
+        owner_id="slurm-cancellation",
+    )
 
 
 __all__ = [

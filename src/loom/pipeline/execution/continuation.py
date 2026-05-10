@@ -1277,25 +1277,20 @@ def _validate_stage_job_authority_if_supported(
     }
     missing = tuple(key for key, value in authority_values.items() if value is None)
     if missing:
-        raise ContinuationStateError(
-            "stage-job request is missing authority fencing facts",
-            code="execution.stage_job.missing_authority_fence",
-            context={
-                "run_uri": request.run_uri,
-                "stage": request.stage_name,
-                "attempt": attempt,
-                "missing": list(missing),
-            },
+        authority_values = _authority_values_from_worker_request(
+            request=request,
+            attempt=attempt,
+            worker_request=worker_request,
         )
     try:
         validator(
             request.run_uri,
             request.stage_name,
             attempt,
-            authority_attempt_id=cast(str, request.authority_attempt_id),
-            authority_lease_id=cast(str, request.authority_lease_id),
-            authority_owner_id=cast(str, request.authority_owner_id),
-            authority_fencing_token=cast(str, request.authority_fencing_token),
+            authority_attempt_id=cast(str, authority_values["attempt_id"]),
+            authority_lease_id=cast(str, authority_values["lease_id"]),
+            authority_owner_id=cast(str, authority_values["owner_id"]),
+            authority_fencing_token=cast(str, authority_values["fencing_token"]),
             worker_metadata=worker_request.metadata,
         )
     except AuthorityStoreError as exc:
@@ -1308,6 +1303,56 @@ def _validate_stage_job_authority_if_supported(
                 "attempt": attempt,
             },
         ) from exc
+
+
+def _authority_values_from_worker_request(
+    *,
+    request: StageJobRunRequest,
+    attempt: int,
+    worker_request: StageWorkerRequest,
+) -> dict[str, str]:
+    raw = worker_request.metadata.get("authority_attempt")
+    if not isinstance(raw, Mapping):
+        raise ContinuationStateError(
+            "stage-job request is missing authority fencing facts",
+            code="execution.stage_job.missing_authority_fence",
+            context={
+                "run_uri": request.run_uri,
+                "stage": request.stage_name,
+                "attempt": attempt,
+                "missing": [
+                    "authority_attempt_id",
+                    "authority_lease_id",
+                    "authority_owner_id",
+                    "authority_fencing_token",
+                ],
+            },
+        )
+    values: dict[str, str] = {}
+    missing: list[str] = []
+    for key, request_field in (
+        ("attempt_id", "authority_attempt_id"),
+        ("lease_id", "authority_lease_id"),
+        ("owner_id", "authority_owner_id"),
+        ("fencing_token", "authority_fencing_token"),
+    ):
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            values[key] = value
+        else:
+            missing.append(request_field)
+    if missing:
+        raise ContinuationStateError(
+            "stage-job request is missing authority fencing facts",
+            code="execution.stage_job.missing_authority_fence",
+            context={
+                "run_uri": request.run_uri,
+                "stage": request.stage_name,
+                "attempt": attempt,
+                "missing": missing,
+            },
+        )
+    return values
 
 
 def _stage_job_run_finalization_allowed(run_store: RunStore) -> bool:

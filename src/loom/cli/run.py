@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from loom.pipeline.planning import ExecutionPlan, PlanSelectors
     from loom.pipeline.runtime import RunOptions
     from loom.pipeline.specs import PipelineSpec
-    from loom.pipeline.stores import LocalRunStore
     from loom.pipeline.validation import PipelineValidationResult
     from loom.serialization import PlainData
 
@@ -401,7 +400,7 @@ def build_slurm_dry_run_result(
 ) -> tuple[SlurmDryRunCliResult, tuple[CliWarning, ...]]:
     """Prepare persisted state and invoke the public SLURM dry-run planners."""
 
-    store = _create_default_local_run_store()
+    store = _create_default_run_store()
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -552,14 +551,8 @@ def _create_default_run_store() -> Any:
     return create_authority_backed_serial_run_store("runs")
 
 
-def _create_default_local_run_store() -> "LocalRunStore":
-    from loom.pipeline.stores import LocalRunStore
-
-    return LocalRunStore()
-
-
 def _resolve_run_uri_for_run(
-    store: "LocalRunStore",
+    store: Any,
     run_uri: str | None,
     *,
     open_existing: bool,
@@ -791,7 +784,7 @@ def _persist_slurm_dry_run_plan(
     spec: "PipelineSpec",
     *,
     run_uri: str,
-    store: "LocalRunStore",
+    store: Any,
     runtime_options: "RunOptions",
 ) -> "ExecutionPlan":
     from loom.pipeline.planning import ResumeOptions, plan_pipeline
@@ -811,7 +804,7 @@ def _persist_slurm_dry_run_plan(
 
 
 def _write_slurm_prepared_run(
-    store: "LocalRunStore",
+    store: Any,
     *,
     run_uri: str,
     executor: str,
@@ -871,7 +864,7 @@ def _write_slurm_prepared_run(
 
 
 def _write_slurm_safe_config_snapshot(
-    store: "LocalRunStore",
+    store: Any,
     *,
     run_uri: str,
     config: Mapping[str, object],
@@ -884,7 +877,7 @@ def _write_slurm_safe_config_snapshot(
 
 
 def _write_runtime_metadata(
-    store: "LocalRunStore",
+    store: Any,
     *,
     run_uri: str,
     runtime_options: "RunOptions",
@@ -1059,7 +1052,7 @@ def build_slurm_live_submission_result(
 ) -> SlurmLiveRunCliResult:
     """Prepare a SLURM plan and submit it with ``sbatch``."""
 
-    store = _create_default_local_run_store()
+    store = _create_default_run_store()
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -1075,6 +1068,7 @@ def build_slurm_live_submission_result(
     executor = runtime_options.executor or "local"
     if executor not in _SLURM_EXECUTORS:
         raise UnsupportedExecutorError(executor)
+    _require_slurm_live_authority(store, executor=executor)
 
     run_uri = _resolve_run_uri_for_run(
         store,
@@ -1250,7 +1244,7 @@ def _build_run_request(
     )
 
 
-def _build_executor(executor: str, store: "LocalRunStore") -> "Executor":
+def _build_executor(executor: str, store: Any) -> "Executor":
     if executor == "local":
         from loom.pipeline.executors import LocalExecutor
 
@@ -1270,13 +1264,48 @@ def _build_slurm_command_runner() -> "SlurmCommandRunner":
 
 def _run_pipeline(
     request: "RunRequest",
-    store: "LocalRunStore",
+    store: Any,
     *,
     executor: "Executor",
 ) -> "RunResult":
     from loom.pipeline.execution import PipelineRunner
 
     return PipelineRunner(run_store=store, executor=executor).run(request)
+
+
+def _require_slurm_live_authority(store: Any, *, executor: str) -> None:
+    authority_store = getattr(store, "authority_store", None)
+    if authority_store is None:
+        raise CliError(
+            "SLURM live submission requires an authority-backed runtime store.",
+            code="cli.run.slurm_live_missing_authority",
+            context={"executor": executor},
+            exit_code=ExitCode.EXECUTOR,
+        )
+
+    from loom.pipeline.stores import (
+        AuthorityConfig,
+        RequiredAuthorityCapability,
+        admit_authority_capabilities,
+    )
+
+    admission = admit_authority_capabilities(
+        config=AuthorityConfig(),
+        capabilities=authority_store.capabilities(),
+        required=(RequiredAuthorityCapability.SLURM_LIVE_WORKER,),
+    )
+    if not admission.supported:
+        raise CliError(
+            "SLURM live submission requires an authority backend that supports live submitted workers.",
+            code="cli.run.slurm_live_authority_unsupported",
+            hint=(
+                "Use --dry-run to materialize SLURM scripts without submitting, "
+                "or select a service/database authority profile that supports live workers."
+            ),
+            context={"executor": executor, "backend_name": admission.backend_name},
+            details={"authority_admission": admission.to_dict()},
+            exit_code=ExitCode.EXECUTOR,
+        )
 
 
 def _run_result_from_execution_result(result: "RunResult") -> RunCliResult:
