@@ -1208,7 +1208,7 @@ Completion summary:
 
 ### Phase 4 - Python Runner And Public Example Migration
 
-Status: approved
+Status: merged
 Branch: `codex/python-runner-authority`
 PR: https://github.com/samcantrill/loom/pull/112
 
@@ -1299,6 +1299,13 @@ Completion summary:
   `OPEN`, and CI `checks` in progress.
 - Automated review approved the PR on 2026-05-10 with no blocking findings;
   GitHub CI `checks` passed on the PR-open head.
+- Final merge verification on 2026-05-10 confirmed PR #112 still targeted
+  `develop`, head `codex/python-runner-authority`, and GitHub CI `checks`
+  passed.
+- PR #112 was squash-merged into `develop` on 2026-05-10 as
+  `96f4392892ddead16b17ccf15e723b6791d7dfb3`. The branch was kept temporarily
+  because Phase 5 had already been started as stacked successor branch
+  `codex/cli-worker-authority`.
 
 ### Phase 5 - CLI, Worker, Submitted Job, And SLURM Migration
 

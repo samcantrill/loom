@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 4 - Python Runner And Public Example Migration
-- Status: approved
+- Status: merged
 - Branch: `codex/python-runner-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/python-runner-authority`
 - Stack predecessor: none; Phase 3 merged before PR opening.
@@ -38,6 +38,11 @@
   `LocalRunStore` mutating runner construction, preserves authority-backed
   serial execution, and leaves CLI worker, continuation, and SLURM migration
   for Phase 5.
+- Final merge verification on 2026-05-10 confirmed base `develop`, head
+  `codex/python-runner-authority`, state `OPEN`, and CI `checks` success.
+- PR #112 was squash-merged into `develop` on 2026-05-10 as
+  `96f4392892ddead16b17ccf15e723b6791d7dfb3`; branch deletion was skipped
+  because Phase 5 was already stacked on `codex/python-runner-authority`.
 
 ## Scope
 
