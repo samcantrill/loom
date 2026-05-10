@@ -57,6 +57,21 @@ from .coordination import (
     WorkspaceIdentity,
     coordination_requirement_diagnostics,
 )
+from .deferred_finalization import (
+    DEFERRED_RESULT_ENVELOPE_SCHEMA_VERSION,
+    DeferredFinalizationError,
+    DeferredReconciliationCode,
+    DeferredReconciliationResult,
+    DeferredResultEnvelope,
+    reconcile_deferred_result,
+)
+from .deployment import (
+    AuthorityDeploymentError,
+    AuthorityDeploymentPreflightResult,
+    AuthorityDeploymentProfileSummary,
+    describe_authority_deployment,
+    preflight_authority_deployment,
+)
 from .factory import create_run_store
 from .errors import (
     ArtifactStoreError,
@@ -241,6 +256,17 @@ __all__ = [
     "CoordinationRecoveryRecord",
     "ConcurrencyCounter",
     "coordination_requirement_diagnostics",
+    "AuthorityDeploymentError",
+    "AuthorityDeploymentPreflightResult",
+    "AuthorityDeploymentProfileSummary",
+    "describe_authority_deployment",
+    "preflight_authority_deployment",
+    "DEFERRED_RESULT_ENVELOPE_SCHEMA_VERSION",
+    "DeferredFinalizationError",
+    "DeferredReconciliationCode",
+    "DeferredReconciliationResult",
+    "DeferredResultEnvelope",
+    "reconcile_deferred_result",
     "LegacyRunStore",
     "RunLifecycleStore",
     "RunDocumentStore",
