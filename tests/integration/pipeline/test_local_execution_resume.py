@@ -5,9 +5,10 @@ from pathlib import Path
 import pytest
 
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.planning import PlanAction
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 from tests.support.pipeline_execution_configs import local_execution_config
 
 pytest.importorskip("pydantic")
@@ -21,9 +22,13 @@ def _run_uri(tmp_path: Path, name: str = "run1") -> str:
     return path_to_run_uri(tmp_path / "runs" / name)
 
 
+def _run_store(tmp_path: Path):
+    return create_authority_backed_serial_run_store(tmp_path / "runs")
+
+
 def test_same_run_rerun_reuses_unchanged_stages(tmp_path: Path) -> None:
     counter_path = tmp_path / "counter.txt"
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     runner = PipelineRunner(run_store=run_store)
     run_uri = _run_uri(tmp_path)
 
@@ -56,9 +61,11 @@ def test_same_run_rerun_reuses_unchanged_stages(tmp_path: Path) -> None:
     assert opened_events[-1].payload == {"open_existing": True}
 
 
-def test_changed_config_reruns_changed_stage_and_downstream(tmp_path: Path) -> None:
+def test_changed_config_rerun_fails_closed_without_overwriting_authority_commit(
+    tmp_path: Path,
+) -> None:
     counter_path = tmp_path / "counter.txt"
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     runner = PipelineRunner(run_store=run_store)
     run_uri = _run_uri(tmp_path)
 
@@ -76,6 +83,12 @@ def test_changed_config_reruns_changed_stage_and_downstream(tmp_path: Path) -> N
         )
     )
 
+    assert second.status == RunStatus.FAILED
     assert second.stage_results["build"].action == PlanAction.RUN
-    assert second.stage_results["report"].action == PlanAction.RUN
-    assert counter_path.read_text(encoding="utf-8") == "2"
+    assert second.stage_results["build"].failure is not None
+    assert second.stage_results["build"].failure.failure_type == "store_commit"
+    assert "stage already has an output commit" in second.stage_results[
+        "build"
+    ].failure.message
+    assert second.stage_results["report"].action == PlanAction.BLOCKED
+    assert counter_path.read_text(encoding="utf-8") == "1"

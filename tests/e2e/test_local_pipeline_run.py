@@ -8,10 +8,13 @@ from typing import Any, cast
 import pytest
 
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
+from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.planning import PlanAction
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.serialization import PlainData
 from tests.support.pipeline_execution_configs import local_execution_config
 
@@ -112,9 +115,14 @@ def _explicit_catalog_recipe(**_: Any) -> dict[str, Any]:
     }
 
 
-class _TrackingLocalRunStore(LocalRunStore):
+class _TrackingAuthorityBackedRunStore(AuthorityBackedSerialRunStore):
     def __init__(self, run_root: Path) -> None:
-        super().__init__(run_root)
+        super().__init__(
+            local_store=LocalRunStore(run_root),
+            authority_store=SQLitePerRunAuthorityStore(
+                clock=lambda: "2020-01-01T00:00:00Z"
+            ),
+        )
         self.lock_events: list[str] = []
 
     def acquire_run_lock(
@@ -135,9 +143,13 @@ def _run_uri(tmp_path: Path, name: str = "run1") -> str:
     return path_to_run_uri(tmp_path / "runs" / name)
 
 
+def _run_store(tmp_path: Path):
+    return create_authority_backed_serial_run_store(tmp_path / "runs")
+
+
 def test_local_pipeline_run_and_resume_from_config(tmp_path: Path) -> None:
     counter_path = tmp_path / "counter.txt"
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     runner = PipelineRunner(run_store=run_store)
     run_uri = _run_uri(tmp_path)
 
@@ -200,7 +212,7 @@ def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_
     )
     monkeypatch.setenv("LOOM_E2E_RUNNER_ROOT", "/runtime/from-env")
     composed = compose_config(config_path)
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
 
     result = PipelineRunner(run_store=run_store).run(
@@ -238,7 +250,7 @@ def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_
 
 
 def test_local_pipeline_run_fails_with_blocked_outcomes(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
@@ -272,7 +284,7 @@ def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(
     catalog = RecipeCatalog()
     catalog.register("explicit_catalog_pipeline", _explicit_catalog_recipe)
     composed = compose_config_with_catalog(config_path, recipe_catalog=catalog)
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
 
     result = PipelineRunner(run_store=run_store).run(
@@ -286,7 +298,7 @@ def test_local_pipeline_run_uses_explicit_catalog_without_global_recipes(
 def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(
     tmp_path: Path,
 ) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     config = {
         "pipeline": {
@@ -322,7 +334,7 @@ def test_local_pipeline_run_keeps_factory_init_separate_from_stage_config(
 
 
 def test_local_pipeline_run_records_events_and_lock_lifecycle(tmp_path: Path) -> None:
-    run_store = _TrackingLocalRunStore(tmp_path / "runs")
+    run_store = _TrackingAuthorityBackedRunStore(tmp_path / "runs")
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(config=local_execution_config(), run_uri=run_uri)

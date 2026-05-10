@@ -1831,9 +1831,9 @@ from loom.pipeline import (
     plan_pipeline,
 )
 
-from loom.pipeline.execution import PipelineRunner
+from loom.pipeline.execution import PipelineRunner, create_authority_backed_serial_run_store
 from loom.pipeline.executors import LocalExecutor
-from loom.pipeline.stores import LocalRunStore, LocalArtifactStore
+from loom.pipeline.stores import LocalArtifactStore, LocalRunArtifactStore
 ```
 
 ### 20.1 Validation

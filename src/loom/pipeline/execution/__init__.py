@@ -44,6 +44,9 @@ if TYPE_CHECKING:
     from loom.pipeline.execution.models import redact_executor_metadata
     from loom.pipeline.execution.outputs import validate_stage_outputs
     from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+    from loom.pipeline.execution.authority_adapter import (
+        create_authority_backed_serial_run_store,
+    )
     from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
     from loom.pipeline.execution.stage_worker import (
         StageWorkerRunRequest,
@@ -88,6 +91,7 @@ def __getattr__(name: str) -> object:
         "StageWorkerStateError",
         "UnsupportedContinuationExecutorError",
         "continue_prepared_run",
+        "create_authority_backed_serial_run_store",
         "infer_stage_worker_attempt",
         "prepare_stage_attempt",
         "reconstruct_stage_execution_request",
@@ -138,6 +142,9 @@ def __getattr__(name: str) -> object:
             PreparedRunRecord,
         )
         from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+        from loom.pipeline.execution.authority_adapter import (
+            create_authority_backed_serial_run_store,
+        )
         from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
         from loom.pipeline.execution.stage_worker import (
             StageWorkerRunRequest,
@@ -180,6 +187,9 @@ def __getattr__(name: str) -> object:
             "StageWorkerStateError": StageWorkerStateError,
             "UnsupportedContinuationExecutorError": UnsupportedContinuationExecutorError,
             "continue_prepared_run": continue_prepared_run,
+            "create_authority_backed_serial_run_store": (
+                create_authority_backed_serial_run_store
+            ),
             "infer_stage_worker_attempt": infer_stage_worker_attempt,
             "prepare_stage_attempt": prepare_stage_attempt,
             "reconstruct_stage_execution_request": reconstruct_stage_execution_request,
@@ -225,6 +235,7 @@ __all__ = [
     "StageWorkerStateError",
     "UnsupportedContinuationExecutorError",
     "continue_prepared_run",
+    "create_authority_backed_serial_run_store",
     "infer_stage_worker_attempt",
     "prepare_stage_attempt",
     "reconstruct_stage_execution_request",

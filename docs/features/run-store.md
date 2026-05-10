@@ -1478,28 +1478,28 @@ Do not silently rewrite ambiguous state.
 Recommended API:
 
 ```python
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.status import RunStatus
+from loom.pipeline.stores import create_run_store, path_to_run_uri
 ```
 
 Example:
 
 ```python
-run_store = LocalRunStore(root="runs")
+run_store = create_run_store()
 run_uri = path_to_run_uri("runs/example")
-run_store.create_run(run_uri, metadata={"name": "example"})
+run_store.admit_run(run_uri, metadata={"name": "example"})
 
-run_store.write_run_status(
+run_store.transition_run(
     run_uri,
-    {
-        "schema_version": 1,
-        "run_uri": run_uri,
-        "status": "RUNNING",
-    },
+    from_status=RunStatus.CREATED,
+    to_status=RunStatus.RUNNING,
 )
 ```
 
 Pipeline code should usually interact through higher-level runner APIs. Direct
 run store usage is mainly for tests, inspection tools, and advanced integrations.
+Use `LocalRunArtifactStore` or `LocalStageArtifactStore` when code only needs
+local files, logs, configs, provenance, or generated artifacts.
 
 ---
 

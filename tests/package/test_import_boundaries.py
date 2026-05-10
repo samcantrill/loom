@@ -836,8 +836,9 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
                     raise SystemExit(f"{forbidden} was imported {phase}")
 
         from loom.pipeline import PipelineRunner, PipelineSpec, RunRequest
+        from loom.pipeline.execution import create_authority_backed_serial_run_store
         from loom.pipeline.status import RunStatus
-        from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+        from loom.pipeline.stores import path_to_run_uri
 
         assert_forbidden_absent("before direct pipeline run")
 
@@ -857,7 +858,7 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
             }
         )
         with TemporaryDirectory() as tmpdir:
-            run_store = LocalRunStore(tmpdir)
+            run_store = create_authority_backed_serial_run_store(tmpdir)
             run_uri = path_to_run_uri(f"{tmpdir}/run1")
             result = PipelineRunner(run_store=run_store).run(
                 RunRequest(pipeline=spec, run_uri=run_uri)

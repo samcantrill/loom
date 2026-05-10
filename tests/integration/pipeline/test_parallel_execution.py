@@ -14,7 +14,7 @@ from loom.pipeline.execution.authority_adapter import (
 from loom.pipeline.planning import PlanSelectors
 from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LeaseRecord, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LeaseRecord, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
@@ -122,7 +122,7 @@ def test_parallel_stages_renew_active_stage_leases(tmp_path: Path) -> None:
 
 
 def test_explicit_single_parallelism_keeps_serial_local_path(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = create_authority_backed_serial_run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "serial-explicit-one")
 
     result = PipelineRunner(run_store=run_store).run(

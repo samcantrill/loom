@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from loom.pipeline import PipelineRunner, RunRequest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.planning import PlanAction, PlanSelectors
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
 from tests.support.pipeline_execution_configs import local_execution_config
 
 pytest.importorskip("pydantic")
@@ -34,8 +35,12 @@ def _run_uri(tmp_path: Path, name: str = "run1") -> str:
     return path_to_run_uri(tmp_path / "runs" / name)
 
 
+def _run_store(tmp_path: Path):
+    return create_authority_backed_serial_run_store(tmp_path / "runs")
+
+
 def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
         RunRequest(config=local_execution_config(), run_uri=run_uri)
@@ -96,7 +101,7 @@ def test_local_runner_persists_composed_config_manifest_without_resolved_snapsho
         encoding="utf-8",
     )
     composed = compose_config(config_path)
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
 
     result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
@@ -116,7 +121,7 @@ def test_local_runner_persists_composed_config_manifest_without_resolved_snapsho
 
 
 def test_local_runner_applies_selector_skip(tmp_path: Path) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     run_uri = _run_uri(tmp_path)
     result = PipelineRunner(run_store=run_store).run(
         RunRequest(
@@ -140,7 +145,7 @@ def test_local_runner_applies_selector_skip(tmp_path: Path) -> None:
 def test_local_runner_keeps_factory_init_separate_from_stage_config(
     tmp_path: Path,
 ) -> None:
-    run_store = LocalRunStore(tmp_path / "runs")
+    run_store = _run_store(tmp_path)
     config = {
         "pipeline": {
             "name": "factory-init-demo",

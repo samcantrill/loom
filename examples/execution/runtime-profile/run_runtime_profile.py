@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from loom.cli.main import main as loom_main
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import LocalRunArtifactStore, path_to_run_uri
 
 
 HERE = Path(__file__).resolve().parent
@@ -49,7 +49,7 @@ def main() -> None:
             "json",
         ]
     )
-    metadata = LocalRunStore(run_root).read_runtime_metadata(run_uri)
+    metadata = LocalRunArtifactStore(run_root).read_runtime_metadata(run_uri)
     if metadata is None:
         raise RuntimeError("runtime metadata was not written")
 

@@ -2164,10 +2164,14 @@ they require optional behavior.
 Recommended convenience:
 
 ```python
-from loom.pipeline.execution import RunRequest, run_pipeline
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.execution import (
+    RunRequest,
+    create_authority_backed_serial_run_store,
+    run_pipeline,
+)
+from loom.pipeline.stores import path_to_run_uri
 
-run_store = LocalRunStore("runs")
+run_store = create_authority_backed_serial_run_store("runs")
 run_uri = path_to_run_uri("runs/example")
 result = run_pipeline(
     RunRequest(pipeline=pipeline, run_uri=run_uri),
