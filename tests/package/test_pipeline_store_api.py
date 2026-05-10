@@ -16,7 +16,11 @@ def test_pipeline_store_public_exports() -> None:
     assert stores
     assert set(stores.__all__) == {
         "ArtifactStore",
+        "RunArtifactStore",
+        "StageArtifactStore",
         "LocalArtifactStore",
+        "LocalRunArtifactStore",
+        "LocalStageArtifactStore",
         "PerRunAuthorityStore",
         "RunStore",
         "StageStore",
@@ -178,6 +182,10 @@ def test_pipeline_store_public_exports() -> None:
     assert "local_stage_worker_result_path" in stores.LocalRunStorePaths.__dict__
     assert "local_generated_artifact_path" in stores.LocalRunStorePaths.__dict__
     assert "local_run_freshness_path" in stores.LocalRunStorePaths.__dict__
+    assert "read_stage_status" not in stores.RunArtifactStore.__dict__
+    assert "write_stage_status" not in stores.StageArtifactStore.__dict__
+    assert "write_submitted_operation" not in stores.RunArtifactStore.__dict__
+    assert "record_output_commit" not in stores.StageArtifactStore.__dict__
     write_signature = inspect.signature(
         stores.RunConfigStore.write_composition_manifest
     )
