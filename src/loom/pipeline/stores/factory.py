@@ -55,6 +55,17 @@ def create_run_store(
             SQLitePerRunAuthorityStore(),
             resolved_config,
         )
+    if resolved_config.backend_kind in {
+        AuthorityBackendKind.CO_LOCATED_SERVICE,
+        AuthorityBackendKind.MANAGED_SERVICE,
+        AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+    }:
+        from .service_authority import create_service_authority_store
+
+        return _PerRunAuthorityRunStore(
+            create_service_authority_store(resolved_config),
+            resolved_config,
+        )
     raise AuthorityStoreError(
         "authority backend is not implemented in this phase: "
         f"{resolved_config.backend_kind.value}"

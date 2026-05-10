@@ -1,0 +1,1105 @@
+"""Stdlib local service authority backend."""
+
+from __future__ import annotations
+
+import base64
+import secrets
+import threading
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from multiprocessing.managers import BaseManager
+from typing import Any, cast
+from urllib.parse import urlparse
+
+from loom.artifacts import ArtifactRef
+from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.submitted import SubmittedOperationRecord
+from loom.serialization import PlainData
+
+from .authority import (
+    AttemptAllocation,
+    AuthorityStoreError,
+    OutputCommit,
+    PerRunAuthorityStore,
+    StatusTransition,
+)
+from .capabilities import (
+    BackendCapability,
+    BackendCapabilityRecord,
+    BackendCapabilitySet,
+    CapabilityScope,
+    CapabilitySupport,
+)
+from .config import (
+    AuthorityBackendKind,
+    AuthorityConfig,
+    AuthorityDeploymentProfile,
+)
+from .read_models import (
+    ArtifactFactRecord,
+    AuthoritativeRunSnapshot,
+    BackendRevision,
+    CleanupCandidate,
+    LeaseKind,
+    LeaseRecord,
+    LeaseState,
+    LifecycleReason,
+    OutputCommitRecord,
+    RecoveryKind,
+    RecoveryRecord,
+    StageAttempt,
+    StageLifecycleSnapshot,
+)
+from .schema_policy import (
+    AUTHORITY_SCHEMA_VERSION,
+    AuthoritySchemaCheck,
+    check_authority_schema_version,
+)
+from .run_uri import validate_run_uri
+
+
+_DEFAULT_HOST = "127.0.0.1"
+_AUTHKEY_METADATA_KEY = "authkey"
+_SERVICE_BACKEND_KINDS = {
+    AuthorityBackendKind.CO_LOCATED_SERVICE,
+    AuthorityBackendKind.MANAGED_SERVICE,
+    AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+}
+_EXPOSED = (
+    "advance_time",
+    "append_audit_event",
+    "capabilities",
+    "check_schema",
+    "create_run",
+    "health",
+    "open_run",
+    "transition_run",
+    "transition_stage",
+    "allocate_stage_attempt",
+    "acquire_controller_lease",
+    "renew_lease",
+    "release_lease",
+    "fail_lease",
+    "write_submitted_operation",
+    "read_submitted_operation",
+    "list_submitted_operations",
+    "record_output_commit",
+    "snapshot",
+    "scan_recovery",
+    "list_cleanup_candidates",
+)
+
+
+class AuthorityServiceUnavailable(AuthorityStoreError):
+    """Raised when a configured authority service endpoint cannot be used."""
+
+
+@dataclass(frozen=True, slots=True)
+class LocalAuthorityService:
+    """Own a deterministic local authority service process for tests."""
+
+    endpoint: str
+    authkey: bytes
+    _manager: BaseManager
+
+    @classmethod
+    def start(
+        cls,
+        *,
+        host: str = _DEFAULT_HOST,
+        port: int = 0,
+        authkey: bytes | None = None,
+    ) -> "LocalAuthorityService":
+        if not host:
+            raise AuthorityStoreError("service host must be non-empty")
+        if port < 0:
+            raise AuthorityStoreError("service port must be non-negative")
+        resolved_authkey = authkey or secrets.token_bytes(32)
+        core = _ServiceAuthorityCore()
+        manager_type = _server_manager_type(core)
+        manager = manager_type(address=(host, port), authkey=resolved_authkey)
+        manager.start()
+        address = cast(tuple[str, int], manager.address)
+        return cls(
+            endpoint=f"tcp://{address[0]}:{address[1]}",
+            authkey=resolved_authkey,
+            _manager=manager,
+        )
+
+    def config(
+        self,
+        *,
+        backend_kind: AuthorityBackendKind = AuthorityBackendKind.CO_LOCATED_SERVICE,
+        deployment_profile: AuthorityDeploymentProfile = (
+            AuthorityDeploymentProfile.CO_LOCATED
+        ),
+        reference_id: str = "local-authority-service",
+    ) -> AuthorityConfig:
+        return AuthorityConfig(
+            backend_kind=backend_kind,
+            deployment_profile=deployment_profile,
+            endpoint=self.endpoint,
+            reference_id=reference_id,
+            metadata={_AUTHKEY_METADATA_KEY: _encode_authkey(self.authkey)},
+        )
+
+    def health(self) -> Mapping[str, PlainData]:
+        return cast(Mapping[str, PlainData], self._proxy().health())
+
+    def advance_time(self, seconds: int) -> None:
+        self._proxy().advance_time(seconds)
+
+    def stop(self) -> None:
+        self._manager.shutdown()
+
+    def __enter__(self) -> "LocalAuthorityService":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.stop()
+
+    def _proxy(self) -> Any:
+        return self._manager.authority()  # type: ignore[attr-defined]
+
+
+class ServiceAuthorityStore(PerRunAuthorityStore):
+    """Per-run authority client that communicates only through a service proxy."""
+
+    def __init__(self, proxy: Any, config: AuthorityConfig) -> None:
+        self._proxy = proxy
+        self._config = config
+
+    @property
+    def authority_config(self) -> AuthorityConfig:
+        return self._config
+
+    def health(self) -> Mapping[str, PlainData]:
+        return cast(Mapping[str, PlainData], self._call("health"))
+
+    def advance_time(self, seconds: int) -> None:
+        self._call("advance_time", seconds)
+
+    def capabilities(self) -> BackendCapabilitySet:
+        return cast(BackendCapabilitySet, self._call("capabilities"))
+
+    def check_schema(self, run_uri: str) -> AuthoritySchemaCheck:
+        return cast(AuthoritySchemaCheck, self._call("check_schema", run_uri))
+
+    def create_run(
+        self,
+        run_uri: str,
+        *,
+        status: RunStatus = RunStatus.CREATED,
+        metadata: Mapping[str, PlainData] | None = None,
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call(
+                "create_run",
+                run_uri,
+                status=status,
+                metadata=metadata,
+            ),
+        )
+
+    def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        return AuthoritativeRunSnapshot.from_dict(self._call("open_run", run_uri))
+
+    def transition_run(
+        self,
+        run_uri: str,
+        *,
+        from_status: RunStatus,
+        to_status: RunStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition:
+        return cast(
+            StatusTransition,
+            self._call(
+                "transition_run",
+                run_uri,
+                from_status=from_status,
+                to_status=to_status,
+                reason=reason,
+            ),
+        )
+
+    def transition_stage(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        from_status: StageStatus | None,
+        to_status: StageStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition:
+        return cast(
+            StatusTransition,
+            self._call(
+                "transition_stage",
+                run_uri,
+                stage_name,
+                from_status=from_status,
+                to_status=to_status,
+                reason=reason,
+            ),
+        )
+
+    def allocate_stage_attempt(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int | None = None,
+    ) -> AttemptAllocation:
+        return cast(
+            AttemptAllocation,
+            self._call(
+                "allocate_stage_attempt",
+                run_uri,
+                stage_name,
+                owner_id=owner_id,
+                lease_ttl_seconds=lease_ttl_seconds,
+            ),
+        )
+
+    def acquire_controller_lease(
+        self,
+        run_uri: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        return cast(
+            LeaseRecord,
+            self._call(
+                "acquire_controller_lease",
+                run_uri,
+                owner_id=owner_id,
+                lease_ttl_seconds=lease_ttl_seconds,
+            ),
+        )
+
+    def renew_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        return cast(
+            LeaseRecord,
+            self._call(
+                "renew_lease",
+                lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                lease_ttl_seconds=lease_ttl_seconds,
+            ),
+        )
+
+    def release_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord:
+        return cast(
+            LeaseRecord,
+            self._call(
+                "release_lease",
+                lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                reason=reason,
+            ),
+        )
+
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord:
+        return cast(
+            LeaseRecord,
+            self._call(
+                "fail_lease",
+                lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                reason=reason,
+            ),
+        )
+
+    def write_submitted_operation(
+        self, run_uri: str, record: SubmittedOperationRecord
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call("write_submitted_operation", run_uri, record.to_dict()),
+        )
+
+    def read_submitted_operation(
+        self, run_uri: str, submission_id: str
+    ) -> SubmittedOperationRecord | None:
+        return cast(
+            SubmittedOperationRecord | None,
+            _submitted_operation_or_none(
+                self._call("read_submitted_operation", run_uri, submission_id)
+            ),
+        )
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[SubmittedOperationRecord, ...]:
+        return cast(
+            tuple[SubmittedOperationRecord, ...],
+            tuple(
+                SubmittedOperationRecord.from_dict(record)
+                for record in cast(
+                    tuple[object, ...],
+                    self._call("list_submitted_operations", run_uri),
+                )
+            ),
+        )
+
+    def record_output_commit(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        attempt_id: str,
+        fencing_token: str,
+        outputs: Mapping[str, ArtifactRef],
+        reason: LifecycleReason | None = None,
+    ) -> OutputCommit:
+        return cast(
+            OutputCommit,
+            OutputCommit.from_dict(
+                self._call(
+                    "record_output_commit",
+                    run_uri,
+                    stage_name,
+                    attempt_id=attempt_id,
+                    fencing_token=fencing_token,
+                    outputs={
+                        name: artifact.to_dict() for name, artifact in outputs.items()
+                    },
+                    reason=reason,
+                )
+            ),
+        )
+
+    def append_audit_event(
+        self, run_uri: str, event: PipelineEvent
+    ) -> PipelineEventRecord:
+        return cast(
+            PipelineEventRecord,
+            self._call(
+                "append_audit_event",
+                run_uri,
+                event,
+            ),
+        )
+
+    def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        return AuthoritativeRunSnapshot.from_dict(self._call("snapshot", run_uri))
+
+    def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
+        return cast(tuple[RecoveryRecord, ...], self._call("scan_recovery", run_uri))
+
+    def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
+        return cast(
+            tuple[CleanupCandidate, ...],
+            self._call("list_cleanup_candidates", run_uri),
+        )
+
+    def _call(self, method_name: str, *args: object, **kwargs: object) -> object:
+        try:
+            method = getattr(self._proxy, method_name)
+            return method(*args, **kwargs)
+        except (ConnectionError, EOFError, OSError) as exc:
+            raise AuthorityServiceUnavailable(
+                "authority service is unavailable"
+            ) from exc
+
+
+def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityStore:
+    """Create a service authority client from public authority configuration."""
+
+    if config.backend_kind not in _SERVICE_BACKEND_KINDS:
+        raise AuthorityStoreError(
+            "service authority requires a service backend kind, got "
+            f"{config.backend_kind.value}"
+        )
+    if config.state_path is not None:
+        raise AuthorityStoreError(
+            "service authority clients must not use a direct state_path"
+        )
+    host, port = _parse_endpoint(config.endpoint)
+    authkey = _decode_authkey(config.metadata.get(_AUTHKEY_METADATA_KEY))
+    manager_type = _client_manager_type()
+    manager = manager_type(address=(host, port), authkey=authkey)
+    try:
+        manager.connect()
+        proxy = manager.authority()  # type: ignore[attr-defined]
+        proxy.health()
+    except Exception as exc:
+        raise AuthorityServiceUnavailable(
+            f"authority service is unavailable at {config.endpoint}"
+        ) from exc
+    return ServiceAuthorityStore(proxy, config)
+
+
+class _RunState:
+    def __init__(self, run_uri: str, status: RunStatus, revision: BackendRevision):
+        self.run_uri = run_uri
+        self.status = status
+        self.revision = revision
+        self.stage_statuses: dict[str, StageStatus] = {}
+        self.attempts: dict[str, list[StageAttempt]] = {}
+        self.leases: dict[str, LeaseRecord] = {}
+        self.submitted: dict[str, SubmittedOperationRecord] = {}
+        self.commits: dict[str, OutputCommitRecord] = {}
+        self.facts: dict[str, list[ArtifactFactRecord]] = {}
+        self.cleanup: list[CleanupCandidate] = []
+        self.events: list[PipelineEventRecord] = []
+
+
+class _ServiceAuthorityCore:
+    def __init__(self) -> None:
+        self._runs: dict[str, _RunState] = {}
+        self._revision = 0
+        self._tick = 0
+        self._lease_expiry_ticks: dict[str, int] = {}
+        self._lock = threading.RLock()
+
+    def health(self) -> dict[str, PlainData]:
+        with self._lock:
+            return {
+                "ok": True,
+                "backend_name": "local-authority-service",
+                "runs": len(self._runs),
+                "revision": self._revision,
+            }
+
+    def capabilities(self) -> BackendCapabilitySet:
+        supported = (
+            BackendCapability.RUN_ADMISSION,
+            BackendCapability.ATOMIC_TRANSITIONS,
+            BackendCapability.ATTEMPT_ALLOCATION,
+            BackendCapability.RUN_LEASES,
+            BackendCapability.STAGE_LEASES,
+            BackendCapability.LEASE_TTL,
+            BackendCapability.FENCING_TOKENS,
+            BackendCapability.BACKEND_LEASE_TIME,
+            BackendCapability.ATOMIC_OUTPUT_COMMIT,
+            BackendCapability.ARTIFACT_FACTS,
+            BackendCapability.SUBMITTED_OPERATIONS,
+            BackendCapability.REVISIONED_SNAPSHOTS,
+            BackendCapability.MONOTONIC_REVISIONS,
+            BackendCapability.RECOVERY_SCANS,
+            BackendCapability.CONSISTENT_READS,
+            BackendCapability.TRANSACTION_ISOLATION,
+            BackendCapability.CLOCK_SEMANTICS,
+            BackendCapability.MATERIALIZATION_REFS,
+            BackendCapability.AUDIT_EVENTS,
+            BackendCapability.PER_RUN_COORDINATION,
+            BackendCapability.SINGLE_HOST_AUTHORITY,
+            BackendCapability.SERVICE_ENDPOINT,
+        )
+        unsupported = {
+            BackendCapability.MULTI_HOST_AUTHORITY:
+                "the local service fixture proves endpoint semantics but not "
+                "production multi-host deployment",
+            BackendCapability.SHARED_FILESYSTEM_SAFE:
+                "clients do not share direct authority files",
+            BackendCapability.DEFERRED_FINALIZATION:
+                "deferred finalization is defined by a later deployment phase",
+            BackendCapability.CROSS_RUN_COORDINATION:
+                "workspace-level coordination is not implemented by this backend",
+            BackendCapability.GLOBAL_COUNTERS:
+                "workspace-level counters are not implemented by this backend",
+        }
+        return BackendCapabilitySet(
+            backend_name="local-authority-service",
+            records=tuple(
+                BackendCapabilityRecord(
+                    capability=capability,
+                    scope=CapabilityScope.PER_RUN,
+                    detail={"service_boundary": True},
+                )
+                for capability in supported
+            )
+            + tuple(
+                BackendCapabilityRecord(
+                    capability=capability,
+                    scope=CapabilityScope.CROSS_RUN
+                    if capability
+                    in {
+                        BackendCapability.CROSS_RUN_COORDINATION,
+                        BackendCapability.GLOBAL_COUNTERS,
+                    }
+                    else CapabilityScope.PER_RUN,
+                    support=CapabilitySupport.UNSUPPORTED,
+                    message=message,
+                    detail={"service_boundary": True},
+                )
+                for capability, message in unsupported.items()
+            ),
+        )
+
+    def check_schema(self, run_uri: str) -> AuthoritySchemaCheck:
+        validate_run_uri(run_uri)
+        with self._lock:
+            return check_authority_schema_version(
+                {"schema_version": AUTHORITY_SCHEMA_VERSION}
+            )
+
+    def create_run(
+        self,
+        run_uri: str,
+        *,
+        status: RunStatus = RunStatus.CREATED,
+        metadata: Mapping[str, PlainData] | None = None,
+    ) -> BackendRevision:
+        validate_run_uri(run_uri)
+        with self._lock:
+            if run_uri in self._runs:
+                raise ValueError(f"run already exists: {run_uri}")
+            revision = self._next_revision()
+            self._runs[run_uri] = _RunState(run_uri, RunStatus(status), revision)
+            return revision
+
+    def open_run(self, run_uri: str) -> dict[str, PlainData]:
+        return self.snapshot(run_uri)
+
+    def transition_run(
+        self,
+        run_uri: str,
+        *,
+        from_status: RunStatus,
+        to_status: RunStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition:
+        with self._lock:
+            state = self._require_run(run_uri)
+            if state.status is not from_status:
+                raise ValueError("stale run transition")
+            previous = state.status
+            state.status = to_status
+            state.revision = self._next_revision()
+            return StatusTransition(
+                run_uri=run_uri,
+                previous_status=previous,
+                status=to_status,
+                revision=state.revision,
+                reason=reason,
+            )
+
+    def transition_stage(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        from_status: StageStatus | None,
+        to_status: StageStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition:
+        with self._lock:
+            state = self._require_run(run_uri)
+            current = state.stage_statuses.get(stage_name)
+            if current is not from_status:
+                raise ValueError("stale stage transition")
+            state.stage_statuses[stage_name] = to_status
+            state.revision = self._next_revision()
+            return StatusTransition(
+                run_uri=run_uri,
+                stage_name=stage_name,
+                previous_status=current,
+                status=to_status,
+                revision=state.revision,
+                reason=reason,
+            )
+
+    def allocate_stage_attempt(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int | None = None,
+    ) -> AttemptAllocation:
+        with self._lock:
+            state = self._require_run(run_uri)
+            if (
+                lease_ttl_seconds is not None
+                and self._active_stage_lease(state, stage_name) is not None
+            ):
+                raise ValueError("stage already has an active lease")
+            attempt_number = len(state.attempts.get(stage_name, ())) + 1
+            revision = self._next_revision()
+            attempt = StageAttempt(
+                run_uri=run_uri,
+                stage_name=stage_name,
+                attempt=attempt_number,
+                attempt_id=f"{stage_name}-{attempt_number}",
+                status=StageStatus.RUNNING,
+                revision=revision,
+                created_at=self._now(),
+                owner=owner_id,
+            )
+            state.attempts.setdefault(stage_name, []).append(attempt)
+            state.stage_statuses[stage_name] = StageStatus.RUNNING
+            lease = None
+            if lease_ttl_seconds is not None:
+                lease = self._new_lease(
+                    state,
+                    kind=LeaseKind.STAGE,
+                    owner_id=owner_id,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                    stage_name=stage_name,
+                    attempt_id=attempt.attempt_id,
+                )
+            return AttemptAllocation(attempt=attempt, lease=lease)
+
+    def acquire_controller_lease(
+        self,
+        run_uri: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        with self._lock:
+            state = self._require_run(run_uri)
+            return self._new_lease(
+                state,
+                kind=LeaseKind.CONTROLLER,
+                owner_id=owner_id,
+                lease_ttl_seconds=lease_ttl_seconds,
+            )
+
+    def renew_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        with self._lock:
+            state, lease = self._require_lease(lease_id, owner_id, fencing_token)
+            renewed = self._replace_lease(
+                state,
+                lease,
+                renewed_at=self._now(),
+                expires_at=self._at_tick(self._tick + lease_ttl_seconds),
+                revision=self._next_revision(),
+            )
+            self._lease_expiry_ticks[lease_id] = self._tick + lease_ttl_seconds
+            return renewed
+
+    def release_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord:
+        with self._lock:
+            state, lease = self._require_lease(lease_id, owner_id, fencing_token)
+            return self._replace_lease(
+                state,
+                lease,
+                state_value=LeaseState.RELEASED,
+                revision=self._next_revision(),
+                reason=reason,
+            )
+
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord:
+        with self._lock:
+            state, lease = self._require_lease(lease_id, owner_id, fencing_token)
+            return self._replace_lease(
+                state,
+                lease,
+                state_value=LeaseState.FAILED,
+                revision=self._next_revision(),
+                reason=reason,
+            )
+
+    def write_submitted_operation(
+        self, run_uri: str, record: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = SubmittedOperationRecord.from_dict(record)
+            state.submitted[record.submission_id] = record
+            state.revision = self._next_revision()
+            return state.revision
+
+    def read_submitted_operation(
+        self, run_uri: str, submission_id: str
+    ) -> dict[str, PlainData] | None:
+        with self._lock:
+            record = self._require_run(run_uri).submitted.get(submission_id)
+            return None if record is None else record.to_dict()
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                record.to_dict()
+                for record in self._require_run(run_uri).submitted.values()
+            )
+
+    def record_output_commit(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        attempt_id: str,
+        fencing_token: str,
+        outputs: Mapping[str, object],
+        reason: LifecycleReason | None = None,
+    ) -> dict[str, PlainData]:
+        with self._lock:
+            state = self._require_run(run_uri)
+            self._require_stage_fence(state, stage_name, attempt_id, fencing_token)
+            revision = self._next_revision()
+            commit = OutputCommitRecord(
+                commit_id=f"{stage_name}-{attempt_id}-commit",
+                run_uri=run_uri,
+                stage_name=stage_name,
+                attempt_id=attempt_id,
+                committed_at=self._now(),
+                revision=revision,
+                output_names=tuple(outputs),
+            )
+            facts = tuple(
+                ArtifactFactRecord(
+                    artifact_name=name,
+                    artifact=ArtifactRef.from_dict(artifact),
+                    commit_id=commit.commit_id,
+                    revision=revision,
+                )
+                for name, artifact in outputs.items()
+            )
+            state.commits[stage_name] = commit
+            state.facts[stage_name] = list(facts)
+            state.attempts[stage_name] = [
+                StageAttempt(
+                    run_uri=attempt.run_uri,
+                    stage_name=attempt.stage_name,
+                    attempt=attempt.attempt,
+                    attempt_id=attempt.attempt_id,
+                    status=StageStatus.SUCCEEDED
+                    if attempt.attempt_id == attempt_id
+                    else attempt.status,
+                    revision=revision
+                    if attempt.attempt_id == attempt_id
+                    else attempt.revision,
+                    created_at=attempt.created_at,
+                    owner=attempt.owner,
+                    reason=reason
+                    if attempt.attempt_id == attempt_id
+                    else attempt.reason,
+                )
+                for attempt in state.attempts.get(stage_name, ())
+            ]
+            state.stage_statuses[stage_name] = StageStatus.SUCCEEDED
+            state.revision = revision
+            return OutputCommit(commit=commit, artifact_facts=facts).to_dict()
+
+    def append_audit_event(
+        self, run_uri: str, event: PipelineEvent
+    ) -> PipelineEventRecord:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = PipelineEventRecord(
+                run_uri=run_uri,
+                sequence=len(state.events) + 1,
+                timestamp=self._now(),
+                scope=event.scope,
+                event_type=event.event_type,
+                payload=event.payload,
+            )
+            state.events.append(record)
+            state.revision = self._next_revision()
+            return record
+
+    def snapshot(self, run_uri: str) -> dict[str, PlainData]:
+        with self._lock:
+            state = self._require_run(run_uri)
+            stage_names = set(state.stage_statuses)
+            stage_names.update(state.attempts)
+            stage_names.update(state.commits)
+            stages = tuple(
+                StageLifecycleSnapshot(
+                    stage_name=stage_name,
+                    status=state.stage_statuses.get(stage_name, StageStatus.PENDING),
+                    revision=state.revision,
+                    attempts=tuple(state.attempts.get(stage_name, ())),
+                    active_lease=self._active_stage_lease(state, stage_name),
+                    latest_commit=state.commits.get(stage_name),
+                    artifact_facts=tuple(state.facts.get(stage_name, ())),
+                )
+                for stage_name in sorted(stage_names)
+            )
+            return AuthoritativeRunSnapshot(
+                run_uri=run_uri,
+                status=state.status,
+                schema_version=AUTHORITY_SCHEMA_VERSION,
+                revision=state.revision,
+                stages=stages,
+                submitted_operations=tuple(state.submitted.values()),
+                cleanup_candidates=tuple(state.cleanup),
+            ).to_dict()
+
+    def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
+        with self._lock:
+            state = self._require_run(run_uri)
+            records: list[RecoveryRecord] = []
+            for lease_id, lease in state.leases.items():
+                if lease.state is LeaseState.ACTIVE and (
+                    self._lease_expiry_ticks.get(lease_id, self._tick + 1)
+                    <= self._tick
+                ):
+                    records.append(
+                        RecoveryRecord(
+                            recovery_id=f"expired-{lease_id}",
+                            kind=RecoveryKind.EXPIRED_LEASE,
+                            reason=LifecycleReason(code="lease_expired"),
+                            detected_at=self._now(),
+                            revision=state.revision,
+                            run_uri=run_uri,
+                            stage_name=lease.stage_name,
+                            attempt_id=lease.attempt_id,
+                        )
+                    )
+            return tuple(records)
+
+    def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
+        with self._lock:
+            return tuple(self._require_run(run_uri).cleanup)
+
+    def advance_time(self, seconds: int) -> None:
+        if seconds <= 0:
+            raise ValueError("seconds must be positive")
+        with self._lock:
+            self._tick += seconds
+
+    def _require_run(self, run_uri: str) -> _RunState:
+        validate_run_uri(run_uri)
+        try:
+            return self._runs[run_uri]
+        except KeyError as exc:
+            raise ValueError(f"unknown run: {run_uri}") from exc
+
+    def _next_revision(self) -> BackendRevision:
+        self._revision += 1
+        return BackendRevision(
+            sequence=self._revision,
+            token=f"service-rev-{self._revision}",
+            created_at=self._now(),
+        )
+
+    def _new_lease(
+        self,
+        state: _RunState,
+        *,
+        kind: LeaseKind,
+        owner_id: str,
+        lease_ttl_seconds: int,
+        stage_name: str | None = None,
+        attempt_id: str | None = None,
+    ) -> LeaseRecord:
+        if lease_ttl_seconds <= 0:
+            raise ValueError("lease_ttl_seconds must be positive")
+        revision = self._next_revision()
+        lease_id = f"service-lease-{revision.sequence}"
+        lease = LeaseRecord(
+            lease_id=lease_id,
+            kind=kind,
+            owner_id=owner_id,
+            fencing_token=f"service-fence-{revision.sequence}",
+            acquired_at=self._now(),
+            renewed_at=self._now(),
+            expires_at=self._at_tick(self._tick + lease_ttl_seconds),
+            revision=revision,
+            run_uri=state.run_uri,
+            stage_name=stage_name,
+            attempt_id=attempt_id,
+        )
+        state.leases[lease_id] = lease
+        self._lease_expiry_ticks[lease_id] = self._tick + lease_ttl_seconds
+        state.revision = revision
+        return lease
+
+    def _require_lease(
+        self, lease_id: str, owner_id: str, fencing_token: str
+    ) -> tuple[_RunState, LeaseRecord]:
+        for state in self._runs.values():
+            lease = state.leases.get(lease_id)
+            if lease is None:
+                continue
+            if lease.owner_id != owner_id or lease.fencing_token != fencing_token:
+                raise ValueError("stale or foreign lease token")
+            if lease.state is not LeaseState.ACTIVE:
+                raise ValueError("lease is not active")
+            if self._lease_expired(lease):
+                raise ValueError("lease has expired")
+            return state, lease
+        raise ValueError(f"unknown lease: {lease_id}")
+
+    def _replace_lease(
+        self,
+        state: _RunState,
+        lease: LeaseRecord,
+        *,
+        renewed_at: str | None = None,
+        expires_at: str | None = None,
+        revision: BackendRevision,
+        state_value: LeaseState | None = None,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord:
+        updated = LeaseRecord(
+            lease_id=lease.lease_id,
+            kind=lease.kind,
+            owner_id=lease.owner_id,
+            fencing_token=lease.fencing_token,
+            acquired_at=lease.acquired_at,
+            renewed_at=renewed_at or lease.renewed_at,
+            expires_at=expires_at or lease.expires_at,
+            revision=revision,
+            state=state_value or lease.state,
+            run_uri=lease.run_uri,
+            stage_name=lease.stage_name,
+            attempt_id=lease.attempt_id,
+            reason=reason or lease.reason,
+        )
+        state.leases[lease.lease_id] = updated
+        state.revision = revision
+        return updated
+
+    def _require_stage_fence(
+        self,
+        state: _RunState,
+        stage_name: str,
+        attempt_id: str,
+        fencing_token: str,
+    ) -> None:
+        for lease in state.leases.values():
+            if (
+                lease.kind is LeaseKind.STAGE
+                and lease.stage_name == stage_name
+                and lease.attempt_id == attempt_id
+                and lease.fencing_token == fencing_token
+            ):
+                if self._lease_expired(lease):
+                    raise ValueError("stage lease has expired")
+                if lease.state is not LeaseState.ACTIVE:
+                    raise ValueError("stage lease is not active")
+                return
+        raise ValueError("missing active stage lease for output commit")
+
+    def _active_stage_lease(
+        self, state: _RunState, stage_name: str
+    ) -> LeaseRecord | None:
+        for lease in state.leases.values():
+            if (
+                lease.kind is LeaseKind.STAGE
+                and lease.stage_name == stage_name
+                and lease.state is LeaseState.ACTIVE
+                and not self._lease_expired(lease)
+            ):
+                return lease
+        return None
+
+    def _lease_expired(self, lease: LeaseRecord) -> bool:
+        return (
+            self._lease_expiry_ticks.get(lease.lease_id, self._tick + 1) <= self._tick
+        )
+
+    def _now(self) -> str:
+        return self._at_tick(self._tick)
+
+    @staticmethod
+    def _at_tick(tick: int) -> str:
+        value = datetime(2020, 1, 1, tzinfo=UTC) + timedelta(seconds=tick)
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _server_manager_type(core: _ServiceAuthorityCore) -> type[BaseManager]:
+    class AuthorityServiceManager(BaseManager):
+        pass
+
+    AuthorityServiceManager.register(
+        "authority",
+        callable=lambda: core,
+        exposed=_EXPOSED,
+    )
+    return AuthorityServiceManager
+
+
+def _client_manager_type() -> type[BaseManager]:
+    class AuthorityServiceManager(BaseManager):
+        pass
+
+    AuthorityServiceManager.register("authority", exposed=_EXPOSED)
+    return AuthorityServiceManager
+
+
+def _parse_endpoint(endpoint: str | None) -> tuple[str, int]:
+    if endpoint is None:
+        raise AuthorityStoreError("service authority requires endpoint")
+    parsed = urlparse(endpoint)
+    if parsed.scheme != "tcp" or not parsed.hostname or parsed.port is None:
+        raise AuthorityStoreError(
+            "service authority endpoint must use tcp://host:port"
+        )
+    return parsed.hostname, parsed.port
+
+
+def _submitted_operation_or_none(value: object) -> SubmittedOperationRecord | None:
+    if value is None:
+        return None
+    return SubmittedOperationRecord.from_dict(value)
+
+
+def _encode_authkey(authkey: bytes) -> str:
+    return base64.urlsafe_b64encode(authkey).decode("ascii")
+
+
+def _decode_authkey(value: object) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise AuthorityStoreError("service authority requires metadata.authkey")
+    try:
+        return base64.urlsafe_b64decode(value.encode("ascii"))
+    except Exception as exc:
+        raise AuthorityStoreError("service authority authkey is invalid") from exc
+
+
+__all__ = [
+    "AuthorityServiceUnavailable",
+    "LocalAuthorityService",
+    "ServiceAuthorityStore",
+    "create_service_authority_store",
+]
