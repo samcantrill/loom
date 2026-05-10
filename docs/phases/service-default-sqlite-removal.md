@@ -192,7 +192,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used; manager-local fixes addressed validation findings without changing phase scope
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -200,10 +200,10 @@ make test-summary
 
 - Draft plan: completed locally on 2026-05-10.
 - Final phase execution plan: completed locally on 2026-05-10.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary: default authority config now selects co-located service authority; endpoint-less co-located configs bootstrap a shared stdlib local service; runtime factories, execution adapters, diagnostics, backend CLI behavior, and catalog scans no longer instantiate `SQLitePerRunAuthorityStore` from config or environment; explicit `transitional_sqlite` runtime config fails with a removal diagnostic; derived catalog SQLite sidecars remain projection-only.
+- Implementation validation: `make validate-pr` passed on 2026-05-10 with Ruff, configured Pyright, default test harness, config-extra harness, and `uv build`. `make test-summary` passed on 2026-05-10 with package 57 passed / 1 skipped, unit 859 passed / 1 skipped, contract 110 passed / 2 skipped, integration 101 passed / 8 skipped / 10 deselected, e2e 39 passed / 1 deselected, and config-extra 420 passed / 1169 deselected.
+- Refinement summary: validation findings were fixed by aligning backend CLI tests with service authority and by making the service authority backend reject duplicate output commits, release stage leases on commit, and fail closed before rerunning already-committed stages.
 - Blocker-resolution summary: pending.
-- PR preparation: pending.
+- PR preparation: PR body drafted at `docs/phases/service-default-sqlite-removal-pr-body.md`; PR pending.
 - Stack maintenance: pending.
 - Remaining blockers: none.
