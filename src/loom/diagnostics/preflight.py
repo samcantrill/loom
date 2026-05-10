@@ -45,6 +45,9 @@ class _Context:
     _run_uri: object | None = None
     _run_uri_error: BaseException | None = None
 
+    def authority_config(self) -> object | None:
+        return self.request.authority_config
+
     def config(self) -> object:
         if self._config is not None:
             return self._config
@@ -504,6 +507,7 @@ def _check_slurm_active_submission(
             )
         store = create_authority_backed_serial_run_store(
             resolved.path.parent,
+            authority_config=cast(Any, context.authority_config()),
             owner_id="preflight",
         )
         store.open_run(resolved.uri)

@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+import json
+import os
 from typing import cast
 
 from loom.serialization import PlainData, ensure_plain_data
@@ -34,6 +36,13 @@ class AuthorityDeploymentProfile(StrEnum):
 
 
 _DEFAULT_REDACTION_KEYS = ("endpoint", "credential", "credentials", "token", "secret")
+LOOM_AUTHORITY_BACKEND = "LOOM_AUTHORITY_BACKEND"
+LOOM_AUTHORITY_PROFILE = "LOOM_AUTHORITY_PROFILE"
+LOOM_AUTHORITY_ENDPOINT = "LOOM_AUTHORITY_ENDPOINT"
+LOOM_AUTHORITY_WORKSPACE = "LOOM_AUTHORITY_WORKSPACE"
+LOOM_AUTHORITY_STATE = "LOOM_AUTHORITY_STATE"
+LOOM_AUTHORITY_REFERENCE_ID = "LOOM_AUTHORITY_REFERENCE_ID"
+LOOM_AUTHORITY_METADATA_JSON = "LOOM_AUTHORITY_METADATA_JSON"
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +273,202 @@ class AuthorityConfig:
         )
 
 
+def default_deployment_profile_for_backend(
+    backend_kind: AuthorityBackendKind | str,
+) -> AuthorityDeploymentProfile:
+    """Return the default deployment profile for a backend kind."""
+
+    kind = _enum(backend_kind, AuthorityBackendKind, "backend_kind")
+    match kind:
+        case AuthorityBackendKind.CO_LOCATED_SERVICE:
+            return AuthorityDeploymentProfile.CO_LOCATED
+        case AuthorityBackendKind.MANAGED_SERVICE:
+            return AuthorityDeploymentProfile.MANAGED_SERVICE
+        case AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE:
+            return AuthorityDeploymentProfile.ALLOCATION_SCOPED
+        case AuthorityBackendKind.DIRECT_DATABASE:
+            return AuthorityDeploymentProfile.DIRECT_DATABASE
+        case AuthorityBackendKind.DEFERRED_FINALIZATION:
+            return AuthorityDeploymentProfile.DEFERRED_FINALIZATION
+        case AuthorityBackendKind.TRANSITIONAL_SQLITE | AuthorityBackendKind.TEST_FAKE:
+            return AuthorityDeploymentProfile.CO_LOCATED
+
+
+def authority_config_from_env(
+    environ: Mapping[str, str] | None = None,
+    *,
+    default: AuthorityConfig | None = None,
+) -> AuthorityConfig:
+    """Resolve authority config from Loom environment variables."""
+
+    source = os.environ if environ is None else environ
+    fallback = default or AuthorityConfig()
+    selected = {
+        key: source.get(key)
+        for key in (
+            LOOM_AUTHORITY_BACKEND,
+            LOOM_AUTHORITY_PROFILE,
+            LOOM_AUTHORITY_ENDPOINT,
+            LOOM_AUTHORITY_WORKSPACE,
+            LOOM_AUTHORITY_STATE,
+            LOOM_AUTHORITY_REFERENCE_ID,
+            LOOM_AUTHORITY_METADATA_JSON,
+        )
+    }
+    if all(value in {None, ""} for value in selected.values()):
+        return fallback
+
+    backend = selected[LOOM_AUTHORITY_BACKEND]
+    endpoint = _blank_to_none(selected[LOOM_AUTHORITY_ENDPOINT])
+    if backend is None or backend == "":
+        backend = (
+            AuthorityBackendKind.CO_LOCATED_SERVICE.value
+            if endpoint is not None
+            else fallback.backend_kind.value
+        )
+    backend_kind = _enum(backend, AuthorityBackendKind, "backend_kind")
+    profile = selected[LOOM_AUTHORITY_PROFILE]
+    deployment_profile = (
+        default_deployment_profile_for_backend(backend_kind)
+        if profile is None or profile == ""
+        else _enum(profile, AuthorityDeploymentProfile, "deployment_profile")
+    )
+    metadata = fallback.metadata
+    raw_metadata = selected[LOOM_AUTHORITY_METADATA_JSON]
+    if raw_metadata not in {None, ""}:
+        metadata = _metadata_from_json(cast(str, raw_metadata))
+    return AuthorityConfig(
+        backend_kind=backend_kind,
+        deployment_profile=deployment_profile,
+        endpoint=endpoint if endpoint is not None else fallback.endpoint,
+        workspace_id=_blank_to_none(selected[LOOM_AUTHORITY_WORKSPACE])
+        or fallback.workspace_id,
+        state_path=_blank_to_none(selected[LOOM_AUTHORITY_STATE]) or fallback.state_path,
+        reference_id=_blank_to_none(selected[LOOM_AUTHORITY_REFERENCE_ID])
+        or fallback.reference_id,
+        redaction_keys=fallback.redaction_keys,
+        metadata=metadata,
+    )
+
+
+def authority_config_to_env(config: AuthorityConfig) -> dict[str, str]:
+    """Serialize authority config into Loom environment variables."""
+
+    if not isinstance(config, AuthorityConfig):
+        raise AuthorityConfigError("config must be an AuthorityConfig")
+    values = {
+        LOOM_AUTHORITY_BACKEND: config.backend_kind.value,
+        LOOM_AUTHORITY_PROFILE: config.deployment_profile.value,
+        LOOM_AUTHORITY_REFERENCE_ID: config.reference_id,
+    }
+    if config.endpoint is not None:
+        values[LOOM_AUTHORITY_ENDPOINT] = config.endpoint
+    if config.workspace_id is not None:
+        values[LOOM_AUTHORITY_WORKSPACE] = config.workspace_id
+    if config.state_path is not None:
+        values[LOOM_AUTHORITY_STATE] = config.state_path
+    if config.metadata:
+        values[LOOM_AUTHORITY_METADATA_JSON] = json.dumps(
+            config.metadata,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    return values
+
+
+def authority_config_to_cli_args(config: AuthorityConfig) -> tuple[str, ...]:
+    """Serialize authority config as CLI flags for worker handoff commands."""
+
+    env = authority_config_to_env(config)
+    args: list[str] = []
+    flag_by_var = {
+        LOOM_AUTHORITY_BACKEND: "--authority-backend",
+        LOOM_AUTHORITY_PROFILE: "--authority-profile",
+        LOOM_AUTHORITY_ENDPOINT: "--authority-endpoint",
+        LOOM_AUTHORITY_WORKSPACE: "--authority-workspace",
+        LOOM_AUTHORITY_STATE: "--authority-state",
+        LOOM_AUTHORITY_REFERENCE_ID: "--authority-reference",
+        LOOM_AUTHORITY_METADATA_JSON: "--authority-metadata-json",
+    }
+    for variable in (
+        LOOM_AUTHORITY_BACKEND,
+        LOOM_AUTHORITY_PROFILE,
+        LOOM_AUTHORITY_ENDPOINT,
+        LOOM_AUTHORITY_WORKSPACE,
+        LOOM_AUTHORITY_STATE,
+        LOOM_AUTHORITY_REFERENCE_ID,
+        LOOM_AUTHORITY_METADATA_JSON,
+    ):
+        value = env.get(variable)
+        if value is not None:
+            args.extend((flag_by_var[variable], value))
+    return tuple(args)
+
+
+def authority_config_from_mapping(
+    *,
+    backend_kind: str | None = None,
+    deployment_profile: str | None = None,
+    endpoint: str | None = None,
+    workspace_id: str | None = None,
+    state_path: str | None = None,
+    reference_id: str | None = None,
+    metadata_json: str | None = None,
+    default: AuthorityConfig | None = None,
+) -> AuthorityConfig:
+    """Resolve explicit authority option values over the environment/default."""
+
+    fallback = authority_config_from_env(default=default)
+    explicit_values = (
+        backend_kind,
+        deployment_profile,
+        endpoint,
+        workspace_id,
+        state_path,
+        reference_id,
+        metadata_json,
+    )
+    if all(value in {None, ""} for value in explicit_values):
+        return fallback
+    if backend_kind in {None, ""}:
+        backend = (
+            AuthorityBackendKind.CO_LOCATED_SERVICE
+            if endpoint not in {None, ""}
+            else fallback.backend_kind
+        )
+    else:
+        backend = _enum(backend_kind, AuthorityBackendKind, "backend_kind")
+    profile = (
+        default_deployment_profile_for_backend(backend)
+        if deployment_profile in {None, ""}
+        and (backend_kind not in {None, ""} or endpoint not in {None, ""})
+        else (
+            fallback.deployment_profile
+            if deployment_profile in {None, ""}
+            else _enum(
+                deployment_profile,
+                AuthorityDeploymentProfile,
+                "deployment_profile",
+            )
+        )
+    )
+    metadata = (
+        fallback.metadata
+        if metadata_json in {None, ""}
+        else _metadata_from_json(cast(str, metadata_json))
+    )
+    return AuthorityConfig(
+        backend_kind=backend,
+        deployment_profile=profile,
+        endpoint=_blank_to_none(endpoint) or fallback.endpoint,
+        workspace_id=_blank_to_none(workspace_id) or fallback.workspace_id,
+        state_path=_blank_to_none(state_path) or fallback.state_path,
+        reference_id=_blank_to_none(reference_id) or fallback.reference_id,
+        redaction_keys=fallback.redaction_keys,
+        metadata=metadata,
+    )
+
+
 def _enum[T: StrEnum](value: object, enum_type: type[T], field: str) -> T:
     if isinstance(value, enum_type):
         return value
@@ -329,6 +534,20 @@ def _plain_mapping(value: object, field: str) -> Mapping[str, PlainData]:
     return cast(Mapping[str, PlainData], normalized)
 
 
+def _blank_to_none(value: str | None) -> str | None:
+    return None if value is None or value == "" else value
+
+
+def _metadata_from_json(value: str) -> Mapping[str, PlainData]:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise AuthorityConfigError(
+            f"{LOOM_AUTHORITY_METADATA_JSON} must contain JSON object metadata"
+        ) from exc
+    return _plain_mapping(decoded, "metadata")
+
+
 def _redact_mapping(
     mapping: Mapping[str, PlainData], redaction_keys: Sequence[str]
 ) -> dict[str, PlainData]:
@@ -352,4 +571,16 @@ __all__ = [
     "AuthorityConfigError",
     "AuthorityDeploymentProfile",
     "AuthorityReference",
+    "LOOM_AUTHORITY_BACKEND",
+    "LOOM_AUTHORITY_ENDPOINT",
+    "LOOM_AUTHORITY_METADATA_JSON",
+    "LOOM_AUTHORITY_PROFILE",
+    "LOOM_AUTHORITY_REFERENCE_ID",
+    "LOOM_AUTHORITY_STATE",
+    "LOOM_AUTHORITY_WORKSPACE",
+    "authority_config_from_env",
+    "authority_config_from_mapping",
+    "authority_config_to_cli_args",
+    "authority_config_to_env",
+    "default_deployment_profile_for_backend",
 ]

@@ -171,6 +171,7 @@ class PreflightRequest:
     overrides: tuple[str, ...] = ()
     selectors: object | None = None
     runtime_options: object | None = None
+    authority_config: object | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "config_path", _path_like(self.config_path, "config_path"))

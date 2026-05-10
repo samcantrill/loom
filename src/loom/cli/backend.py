@@ -7,6 +7,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from loom.cli.authority import add_authority_options, authority_config_from_namespace
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import format_json_envelope
 from loom.cli.options import OutputFormat, output_format_from_namespace
@@ -49,6 +50,7 @@ def register_subparser(
         metavar="SEQUENCE:TOKEN",
         help="compare against read-only projection revision evidence",
     )
+    add_authority_options(inspect)
     _add_output_options(inspect)
     inspect.set_defaults(handler=handle_inspect)
 
@@ -66,6 +68,7 @@ def register_subparser(
         action="store_true",
         help="fail if remote coordination is not supported",
     )
+    add_authority_options(capabilities)
     _add_output_options(capabilities)
     capabilities.set_defaults(handler=handle_capabilities)
 
@@ -84,6 +87,7 @@ def handle_inspect(namespace: argparse.Namespace) -> int:
                 getattr(namespace, "verify_materialization", False)
             ),
             projection_revision=getattr(namespace, "projection_revision", None),
+            authority_config=authority_config_from_namespace(namespace),
         )
     except BackendDiagnosticsError as exc:
         raise _backend_error(exc) from exc
@@ -118,6 +122,7 @@ def handle_capabilities(namespace: argparse.Namespace) -> int:
                 getattr(namespace, "require_shared_filesystem", False)
             ),
             require_remote=bool(getattr(namespace, "require_remote", False)),
+            authority_config=authority_config_from_namespace(namespace),
         )
     except BackendDiagnosticsError as exc:
         raise _backend_error(exc) from exc

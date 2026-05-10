@@ -9,6 +9,7 @@ from typing import cast
 
 from loom.pipeline.execution.lifecycle import write_run_submitted, write_stage_submitted
 from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
+from loom.pipeline.stores import AuthorityConfig
 from loom.pipeline.submitted import (
     SubmittedOperationRecord,
     SubmittedOperationState,
@@ -648,6 +649,7 @@ def _write_manifest_and_registry(
         backend_metadata={
             "live_schema_version": manifest.schema_version,
             "manifest_kind": "loom.slurm_live_manifest",
+            **_authority_backend_metadata(run_store),
         },
     )
     run_store.write_submitted_operation(run_uri, record)
@@ -927,6 +929,21 @@ def _stage_name_from_logical_key(logical_key: str) -> str:
     if not stage_name:
         raise SlurmPlanningError("afterok stage logical key is missing a stage name")
     return stage_name
+
+
+def _authority_backend_metadata(run_store: RunStore) -> dict[str, PlainData]:
+    raw_config = getattr(run_store, "authority_config", None)
+    config = raw_config() if callable(raw_config) else None
+    if not isinstance(config, AuthorityConfig):
+        return {}
+    reference = config.to_reference()
+    return {
+        "authority": {
+            "backend_kind": config.backend_kind.value,
+            "deployment_profile": config.deployment_profile.value,
+            "reference": reference.redacted_dict(config.redaction_keys),
+        }
+    }
 
 
 __all__ = [

@@ -612,9 +612,11 @@ def _default_authority_run_store() -> RunStore:
     from loom.pipeline.execution.authority_adapter import (
         create_authority_backed_serial_run_store,
     )
+    from loom.pipeline.stores import authority_config_from_env
 
     return create_authority_backed_serial_run_store(
         "runs",
+        authority_config=authority_config_from_env(),
         owner_id="slurm-cancellation",
     )
 

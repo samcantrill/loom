@@ -12,6 +12,8 @@ from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
 from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityConfig,
     AuthorityStoreError,
     LocalRunStore,
     PerRunAuthorityStore,
@@ -61,6 +63,7 @@ class AuthorityBackedSerialRunStore:
         *,
         local_store: LocalRunStore,
         authority_store: PerRunAuthorityStore,
+        authority_config: AuthorityConfig | None = None,
         owner_id: str = "serial-controller",
     ) -> None:
         if not isinstance(local_store, LocalRunStore):
@@ -71,9 +74,15 @@ class AuthorityBackedSerialRunStore:
             raise ValueError("owner_id must be non-empty")
         self.local_store = local_store
         self.authority_store = authority_store
+        self._authority_config = authority_config or _config_from_authority_store(
+            authority_store
+        )
         self.owner_id = owner_id
         self._attempt_leases: dict[tuple[str, str, int], _AttemptLease] = {}
         self._controller_leases: dict[str, _ControllerLease] = {}
+
+    def authority_config(self) -> AuthorityConfig:
+        return self._authority_config
 
     def resolve_run_uri(self, run_uri: str) -> str:
         return self.local_store.resolve_run_uri(run_uri)
@@ -329,22 +338,40 @@ class AuthorityBackedSerialRunStore:
     def read_stage_status(
         self, run_uri: str, stage_name: str
     ) -> StageStatusRecord | None:
+        local_status = self.local_store.read_stage_status(run_uri, stage_name)
         stage = self._stage_snapshot(run_uri, stage_name)
         if stage is None:
-            return None
+            return local_status
         attempt = stage.attempts[-1].attempt if stage.attempts else 1
         updated_at = stage.revision.created_at or utc_timestamp()
         metadata = _reason_detail(stage.reason)
+        local_matches = (
+            local_status is not None
+            and local_status.status is stage.status
+            and local_status.attempt == attempt
+        )
+        local_projection = local_status if local_matches else None
+        if local_projection is not None:
+            metadata = {**metadata, **local_projection.metadata}
         return StageStatusRecord(
             run_uri=run_uri,
             stage_name=stage.stage_name,
             status=stage.status,
             attempt=attempt,
-            updated_at=updated_at,
-            started_at=_stage_started_at(stage),
-            finished_at=_stage_finished_at(stage, updated_at),
-            message=None if stage.reason is None else stage.reason.message,
-            owner=_stage_owner(stage),
+            updated_at=local_projection.updated_at
+            if local_projection is not None
+            else updated_at,
+            started_at=local_projection.started_at
+            if local_projection is not None
+            else _stage_started_at(stage),
+            finished_at=local_projection.finished_at
+            if local_projection is not None
+            else _stage_finished_at(stage, updated_at),
+            message=(None if stage.reason is None else stage.reason.message)
+            or (None if local_status is None else local_status.message),
+            owner=local_projection.owner
+            if local_projection is not None and local_projection.owner
+            else _stage_owner(stage),
             metadata=metadata,
         )
 
@@ -487,6 +514,7 @@ class AuthorityBackedSerialRunStore:
                 "fencing_token": active.lease.fencing_token,
                 "owner_id": active.lease.owner_id,
             }
+            metadata["authority"] = _authority_handoff_metadata(self._authority_config)
             payload["metadata"] = metadata
         self.local_store.write_stage_worker_request(
             run_uri, stage_name, payload, attempt=attempt
@@ -784,21 +812,80 @@ class AuthorityBackedSerialRunStore:
 def create_authority_backed_serial_run_store(
     root: str | Path,
     *,
+    authority_config: AuthorityConfig | Mapping[str, object] | None = None,
     authority_store: PerRunAuthorityStore | None = None,
     owner_id: str = "serial-controller",
 ) -> AuthorityBackedSerialRunStore:
     """Create the default authority-backed local serial run store."""
 
+    resolved_config = _resolve_authority_config(authority_config, authority_store)
     if authority_store is None:
-        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-
-        authority_store = SQLitePerRunAuthorityStore()
+        authority_store = _authority_store_from_config(resolved_config)
 
     return AuthorityBackedSerialRunStore(
         local_store=LocalRunStore(root),
         authority_store=authority_store,
+        authority_config=resolved_config,
         owner_id=owner_id,
     )
+
+
+def _resolve_authority_config(
+    config: AuthorityConfig | Mapping[str, object] | None,
+    authority_store: PerRunAuthorityStore | None,
+) -> AuthorityConfig:
+    if config is not None:
+        if isinstance(config, AuthorityConfig):
+            return config
+        return AuthorityConfig.from_dict(config)
+    if authority_store is not None:
+        return _config_from_authority_store(authority_store)
+    return AuthorityConfig()
+
+
+def _config_from_authority_store(authority_store: PerRunAuthorityStore) -> AuthorityConfig:
+    raw_config = getattr(authority_store, "authority_config", None)
+    if isinstance(raw_config, AuthorityConfig):
+        return raw_config
+    if callable(raw_config):
+        value = raw_config()
+        if isinstance(value, AuthorityConfig):
+            return value
+    try:
+        if authority_store.capabilities().backend_name == "sqlite-per-run-authority":
+            return AuthorityConfig()
+    except Exception:
+        pass
+    return AuthorityConfig(backend_kind=AuthorityBackendKind.TEST_FAKE)
+
+
+def _authority_store_from_config(config: AuthorityConfig) -> PerRunAuthorityStore:
+    if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
+        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+
+        return SQLitePerRunAuthorityStore()
+    if config.backend_kind in {
+        AuthorityBackendKind.CO_LOCATED_SERVICE,
+        AuthorityBackendKind.MANAGED_SERVICE,
+        AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+    }:
+        from loom.pipeline.stores.service_authority import create_service_authority_store
+
+        return create_service_authority_store(config)
+    raise AuthorityStoreError(
+        "authority-backed serial store does not support backend "
+        f"{config.backend_kind.value}"
+    )
+
+
+def _authority_handoff_metadata(config: AuthorityConfig) -> dict[str, PlainData]:
+    reference = config.to_reference()
+    return {
+        "backend_kind": config.backend_kind.value,
+        "deployment_profile": config.deployment_profile.value,
+        "reference": reference.to_dict(),
+        "reference_redacted": reference.redacted_dict(config.redaction_keys),
+    }
 
 
 def _created_at(

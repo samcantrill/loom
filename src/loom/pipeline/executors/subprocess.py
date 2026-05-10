@@ -18,6 +18,7 @@ from loom.pipeline.execution.models import (
 )
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LegacyRunStore as RunStore
+from loom.pipeline.stores.config import AuthorityConfig, authority_config_to_cli_args
 from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
@@ -89,6 +90,7 @@ class SubprocessExecutor:
             run_uri=request.run_uri,
             stage_name=request.stage.name,
             attempt=request.attempt,
+            authority_config=_authority_config(self.run_store),
         )
         started_at = self.clock()
         try:
@@ -199,6 +201,7 @@ def build_stage_worker_command(
     run_uri: str,
     stage_name: str,
     attempt: int,
+    authority_config: AuthorityConfig | None = None,
 ) -> tuple[str, ...]:
     """Return the command used to invoke the durable stage worker."""
 
@@ -210,7 +213,7 @@ def build_stage_worker_command(
         raise ExecutorError("stage_name must be a non-empty string")
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
         raise ExecutorError("attempt must be a positive integer")
-    return (
+    command = [
         python_executable,
         "-c",
         WORKER_MAIN_SNIPPET,
@@ -222,9 +225,22 @@ def build_stage_worker_command(
         stage_name,
         "--attempt",
         str(attempt),
-        "--format",
-        "json",
-    )
+    ]
+    if authority_config is not None:
+        command.extend(authority_config_to_cli_args(authority_config))
+    command.extend(("--format", "json"))
+    return tuple(command)
+
+
+def _authority_config(run_store: RunStore) -> AuthorityConfig | None:
+    raw_config = getattr(run_store, "authority_config", None)
+    if isinstance(raw_config, AuthorityConfig):
+        return raw_config
+    if callable(raw_config):
+        value = raw_config()
+        if isinstance(value, AuthorityConfig):
+            return value
+    return None
 
 
 def _run_subprocess(command: Sequence[str]) -> SubprocessRunResult:

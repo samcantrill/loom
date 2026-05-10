@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import cast
 
+from loom.pipeline.stores.config import AuthorityConfig, authority_config_to_cli_args
 from loom.serialization import PlainData, load_versioned_document
 from loom.serialization.errors import SchemaVersionError
 
@@ -301,18 +302,22 @@ def build_single_job_command_argv(
     run_uri: str,
     *,
     launcher_argv: Sequence[str] = DEFAULT_SLURM_LAUNCHER_ARGV,
+    authority_config: AuthorityConfig | None = None,
 ) -> SlurmCommandArgv:
     run_uri_text = _required_string(run_uri, path="run_uri")
+    command_args = [
+        "prepared-run",
+        "continue",
+        "--run-uri",
+        run_uri_text,
+        "--executor",
+        "local",
+    ]
+    if authority_config is not None:
+        command_args.extend(authority_config_to_cli_args(authority_config))
     return SlurmCommandArgv(
         launcher_argv=launcher_argv,
-        command_args=(
-            "prepared-run",
-            "continue",
-            "--run-uri",
-            run_uri_text,
-            "--executor",
-            "local",
-        ),
+        command_args=tuple(command_args),
     )
 
 
@@ -321,21 +326,25 @@ def build_stage_job_command_argv(
     stage_name: str,
     *,
     launcher_argv: Sequence[str] = DEFAULT_SLURM_LAUNCHER_ARGV,
+    authority_config: AuthorityConfig | None = None,
 ) -> SlurmCommandArgv:
     run_uri_text = _required_string(run_uri, path="run_uri")
     stage_text = _required_string(stage_name, path="stage_name")
+    command_args = [
+        "stage-job",
+        "run",
+        "--run-uri",
+        run_uri_text,
+        "--stage",
+        stage_text,
+        "--executor",
+        "local",
+    ]
+    if authority_config is not None:
+        command_args.extend(authority_config_to_cli_args(authority_config))
     return SlurmCommandArgv(
         launcher_argv=launcher_argv,
-        command_args=(
-            "stage-job",
-            "run",
-            "--run-uri",
-            run_uri_text,
-            "--stage",
-            stage_text,
-            "--executor",
-            "local",
-        ),
+        command_args=tuple(command_args),
     )
 
 
