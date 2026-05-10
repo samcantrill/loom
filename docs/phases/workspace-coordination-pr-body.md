@@ -63,20 +63,20 @@ New tests implemented:
 | Check | Result | Evidence |
 | --- | --- | --- |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness (`1088 passed, 18 skipped, 14 deselected`), config-extra harness (`420 passed, 1117 deselected`), and `uv build` succeeded. |
-| `make test-summary` | Passed | Post-blocker `build/test-summary.md` generated at `2026-05-10T00:24:54+00:00`; overall `1534 passed`, `0 failed`, `0 errors`, `12 skipped`, `1128 deselected`. |
+| `make test-summary` | Passed | Post-blocker `build/test-summary.md` generated at `2026-05-10T00:41:39+00:00`; overall `1534 passed`, `0 failed`, `0 errors`, `12 skipped`, `1128 deselected`. |
 | GitHub checks | Pending | CI will run after PR creation. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 57 | 0 | 0 | 1 | 0 | 58 | 7.64s |
-| unit | passed | 830 | 0 | 0 | 1 | 0 | 831 | 30.27s |
-| contract | passed | 101 | 0 | 0 | 2 | 0 | 103 | 4.83s |
-| integration | passed | 87 | 0 | 0 | 8 | 10 | 95 | 59.82s |
-| e2e | passed | 39 | 0 | 0 | 0 | 1 | 39 | 19.28s |
-| config-extra | passed | 420 | 0 | 0 | 0 | 1117 | 420 | 39.34s |
-| Overall | passed | 1534 | 0 | 0 | 12 | 1128 | 1546 | 161.18s |
+| package | passed | 57 | 0 | 0 | 1 | 0 | 58 | 8.10s |
+| unit | passed | 830 | 0 | 0 | 1 | 0 | 831 | 29.92s |
+| contract | passed | 101 | 0 | 0 | 2 | 0 | 103 | 4.78s |
+| integration | passed | 87 | 0 | 0 | 8 | 10 | 95 | 60.51s |
+| e2e | passed | 39 | 0 | 0 | 0 | 1 | 39 | 18.79s |
+| config-extra | passed | 420 | 0 | 0 | 0 | 1117 | 420 | 39.64s |
+| Overall | passed | 1534 | 0 | 0 | 12 | 1128 | 1546 | 161.75s |
 
 ## Risks / Follow-Ups
 

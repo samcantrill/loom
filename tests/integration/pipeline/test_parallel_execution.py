@@ -349,7 +349,11 @@ def _coordinated_stage(name: str, *, marker_dir: Path) -> StageSpec:
         factory=StageFactorySpec(
             target_path="tests.support.pipeline_execution_stages.CoordinatedStage"
         ),
-        stage_config={"marker_dir": str(marker_dir), "wait_for": 2},
+        stage_config={
+            "marker_dir": str(marker_dir),
+            "wait_for": 2,
+            "timeout_seconds": 30,
+        },
         outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
     )
 
@@ -360,17 +364,6 @@ def _failure_policy_pipeline(tmp_path: Path) -> PipelineSpec:
     return PipelineSpec(
         stages=(
             StageSpec(
-                name="fail",
-                factory=StageFactorySpec(
-                    target_path="tests.support.pipeline_execution_stages.FailingStage"
-                ),
-                stage_config={
-                    "wait_for_marker": str(ok_started_marker),
-                    "timeout_seconds": 5,
-                },
-                outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
-            ),
-            StageSpec(
                 name="ok",
                 factory=StageFactorySpec(
                     target_path="tests.support.pipeline_execution_stages.SleepStage"
@@ -378,6 +371,17 @@ def _failure_policy_pipeline(tmp_path: Path) -> PipelineSpec:
                 stage_config={
                     "seconds": 0.1,
                     "started_marker": str(ok_started_marker),
+                },
+                outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
+            ),
+            StageSpec(
+                name="fail",
+                factory=StageFactorySpec(
+                    target_path="tests.support.pipeline_execution_stages.FailingStage"
+                ),
+                stage_config={
+                    "wait_for_marker": str(ok_started_marker),
+                    "timeout_seconds": 30,
                 },
                 outputs={"data": OutputSpec(artifact_type="json", codec_key="json.v1")},
             ),

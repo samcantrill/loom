@@ -452,10 +452,14 @@ make test-summary
   Phase 8 SQLite coordination backend, protocol extensions, fake conformance,
   contract/integration coverage, docs, target branch, and validation evidence,
   and found no blocking findings.
-- Blocker resolution: 1/3 used on 2026-05-10 by the managing agent; fixed a
+- Blocker resolution: 3/3 used on 2026-05-10 by the managing agent; fixed a
   GitHub CI-only race in the existing parallel failure-policy integration test
-  by making the failing support stage wait until the independent branch has
-  started before failing.
+  by first making the failing support stage wait until the independent branch
+  had started before failing, then making the fixture submit that independent
+  branch before the failing branch so GitHub runners could not exhaust the wait
+  before the independent task started. The final pass raised the bounded
+  parallel smoke test's explicit coordination timeout so isolated harness runs
+  do not fail before both worker tasks have a fair scheduling window.
 
 ## Completion Notes
 
@@ -476,16 +480,18 @@ make test-summary
   default harness (1088 passed, 18 skipped, 14 deselected), config-extra
   harness (420 passed, 1117 deselected), and `uv build`. Final post-blocker
   `make test-summary` passed and generated `build/test-summary.md` at
-  `2026-05-10T00:24:54+00:00` with 1534 passed, 0 failed, 0 errors, 12
+  `2026-05-10T00:41:39+00:00` with 1534 passed, 0 failed, 0 errors, 12
   skipped, and 1128 deselected. The sandboxed focused command could not write
   the shared uv cache, so it was rerun with approved access.
 - Refinement summary: expanded-path implementation refinement completed. The
   in-memory workspace coordination conformance store now rejects duplicate
   workspace and sweep identities like the SQLite backend, and contract tests
   cover duplicate identity and unknown-parent failures across both backends.
-- Blocker-resolution summary: pass 1/3 fixed the CI failure in
-  `tests/integration/pipeline/test_parallel_execution.py` by making the
-  failure-policy fixture deterministic about already-running independent work.
+- Blocker-resolution summary: passes 1/3, 2/3, and 3/3 fixed
+  `tests/integration/pipeline/test_parallel_execution.py` stability by making
+  the failure-policy fixture deterministic about already-running independent
+  work and making the bounded parallel smoke test tolerate slower isolated
+  harness scheduling.
 - PR preparation: PR #108 opened against `develop`:
   https://github.com/samcantrill/loom/pull/108.
 - Stack maintenance: no predecessor; rebase onto updated `develop` if needed
