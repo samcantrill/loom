@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 4 - Python Runner And Public Example Migration
-- Status: pr_open
+- Status: approved
 - Branch: `codex/python-runner-authority`
 - Worktree: `/home/samcantrill/work/loom-worktrees/python-runner-authority`
 - Stack predecessor: none; Phase 3 merged before PR opening.
@@ -19,7 +19,7 @@
 - Refine pass: complete on 2026-05-10 because this phase changes public Python
   API guidance.
 - Phase implementation refinement budget: unused
-- Phase PR review budget: unused
+- Phase PR review budget: used locally on 2026-05-10; no blocking findings.
 - Blocker-resolution budget: 0/3 used
 
 ## Stack Maintenance Notes
@@ -33,6 +33,11 @@
   `codex/python-runner-authority`.
 - Verified immediately after creation: base `develop`, head
   `codex/python-runner-authority`, state `OPEN`, CI `checks` in progress.
+- GitHub CI `checks` passed on the PR-open head.
+- Automated review confirmed the PR targets `develop`, rejects only bare
+  `LocalRunStore` mutating runner construction, preserves authority-backed
+  serial execution, and leaves CLI worker, continuation, and SLURM migration
+  for Phase 5.
 
 ## Scope
 
