@@ -65,7 +65,10 @@ def test_bounded_parallel_runs_independent_stages_concurrently(
         )
     )
 
-    assert result.status is RunStatus.SUCCEEDED
+    assert result.status is RunStatus.SUCCEEDED, {
+        name: None if stage.failure is None else stage.failure.to_dict()
+        for name, stage in result.stage_results.items()
+    }
     assert result.stage_results["left"].status is StageStatus.SUCCEEDED
     assert result.stage_results["right"].status is StageStatus.SUCCEEDED
     assert set(run_store.read_artifact_index(run_uri)) == {"left.data", "right.data"}

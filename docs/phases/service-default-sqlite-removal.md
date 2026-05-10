@@ -194,7 +194,7 @@ make test-summary
 
 - Phase implementation refinement: used; manager-local fixes addressed validation findings without changing phase scope
 - PR review: unused
-- Blocker resolution: 1/3 used for CI-only parallel runtime test blocker
+- Blocker resolution: 2/3 used for CI-only parallel runtime test blockers
 
 ## Completion Notes
 
@@ -203,7 +203,7 @@ make test-summary
 - Implementation summary: default authority config now selects co-located service authority; endpoint-less co-located configs bootstrap a shared stdlib local service; runtime factories, execution adapters, diagnostics, backend CLI behavior, and catalog scans no longer instantiate `SQLitePerRunAuthorityStore` from config or environment; explicit `transitional_sqlite` runtime config fails with a removal diagnostic; derived catalog SQLite sidecars remain projection-only.
 - Implementation validation: `make validate-pr` passed on 2026-05-10 with Ruff, configured Pyright, default test harness, config-extra harness, and `uv build`. `make test-summary` passed on 2026-05-10 with package 57 passed / 1 skipped, unit 859 passed / 1 skipped, contract 110 passed / 2 skipped, integration 101 passed / 8 skipped / 10 deselected, e2e 39 passed / 1 deselected, and config-extra 420 passed / 1169 deselected.
 - Refinement summary: validation findings were fixed by aligning backend CLI tests with service authority and by making the service authority backend reject duplicate output commits, release stage leases on commit, and fail closed before rerunning already-committed stages.
-- Blocker-resolution summary: used one scoped pass after GitHub CI failed on `test_bounded_parallel_runs_independent_stages_concurrently`; the positive bounded-parallel runtime test now uses default service authority, leaving explicit SQLite coverage only for private regression/fault-injection cases. Local `make validate-pr` passed again after the fix.
+- Blocker-resolution summary: used one scoped pass after GitHub CI failed on `test_bounded_parallel_runs_independent_stages_concurrently`; the positive bounded-parallel runtime test now uses default service authority, leaving explicit SQLite coverage only for private regression/fault-injection cases. Used a second scoped pass after GitHub CI reproduced the same test failure under service authority; service proxy calls are now guarded per client for threaded runner use and the assertion reports stage-level failures. Local `uv run pytest tests/integration/pipeline/test_parallel_execution.py -q` and `make validate-pr` passed again after the fix.
 - PR preparation: PR #118 opened at https://github.com/samcantrill/loom/pull/118 targeting `develop` from `codex/service-default-sqlite-removal`; target verified with `gh pr view 118 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: pending.
 - Remaining blockers: none.

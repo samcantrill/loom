@@ -1932,5 +1932,8 @@ Completion summary:
   authority; stale `transitional_sqlite` runtime config fails clearly; backend
   CLI, diagnostics, catalog scan, runtime factory, and conformance tests no
   longer treat run-local SQLite authority as supported runtime behavior.
-- Validation: `make validate-pr` and `make test-summary` passed on 2026-05-10.
-- Review/merge: pending automated review, GitHub CI, and merge gate.
+- Validation: `make validate-pr` and `make test-summary` passed on 2026-05-10;
+  `make validate-pr` also passed after the service-authority threaded proxy
+  blocker fix.
+- Review/merge: pending replacement GitHub CI and merge gate after automated
+  review found no blocking findings.

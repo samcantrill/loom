@@ -176,6 +176,7 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
     def __init__(self, proxy: Any, config: AuthorityConfig) -> None:
         self._proxy = proxy
         self._config = config
+        self._call_lock = threading.Lock()
 
     @property
     def authority_config(self) -> AuthorityConfig:
@@ -426,8 +427,9 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
 
     def _call(self, method_name: str, *args: object, **kwargs: object) -> object:
         try:
-            method = getattr(self._proxy, method_name)
-            return method(*args, **kwargs)
+            with self._call_lock:
+                method = getattr(self._proxy, method_name)
+                return method(*args, **kwargs)
         except (ConnectionError, EOFError, OSError) as exc:
             raise AuthorityServiceUnavailable(
                 "authority service is unavailable"
