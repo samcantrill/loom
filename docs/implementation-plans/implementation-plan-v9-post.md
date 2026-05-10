@@ -1420,9 +1420,9 @@ Completion summary:
 
 ### Phase 6 - Authority Read Models For Status, Catalog, Plan, And Diagnostics
 
-Status: in_progress
+Status: pr_open
 Branch: `codex/authority-read-models`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/114
 
 Goal:
 
@@ -1490,8 +1490,11 @@ Reviewability:
 Completion summary:
 
 - Phase execution plan drafted and refined on 2026-05-10 in
-  `docs/phases/authority-read-models.md`; implementation in progress on
-  branch `codex/authority-read-models` from updated `develop`.
+  `docs/phases/authority-read-models.md`.
+- PR #114 opened against `develop` from branch
+  `codex/authority-read-models`.
+- Local automated review on 2026-05-10 found no blocking findings.
+- `make validate-pr` and `make test-summary` passed before PR review.
 
 ### Phase 7 - Concrete Service/Database Backend
 
