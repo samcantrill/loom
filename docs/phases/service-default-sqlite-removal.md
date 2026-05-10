@@ -204,6 +204,6 @@ make test-summary
 - Implementation validation: `make validate-pr` passed on 2026-05-10 with Ruff, configured Pyright, default test harness, config-extra harness, and `uv build`. `make test-summary` passed on 2026-05-10 with package 57 passed / 1 skipped, unit 859 passed / 1 skipped, contract 110 passed / 2 skipped, integration 101 passed / 8 skipped / 10 deselected, e2e 39 passed / 1 deselected, and config-extra 420 passed / 1169 deselected.
 - Refinement summary: validation findings were fixed by aligning backend CLI tests with service authority and by making the service authority backend reject duplicate output commits, release stage leases on commit, and fail closed before rerunning already-committed stages.
 - Blocker-resolution summary: pending.
-- PR preparation: PR body drafted at `docs/phases/service-default-sqlite-removal-pr-body.md`; PR pending.
+- PR preparation: PR #118 opened at https://github.com/samcantrill/loom/pull/118 targeting `develop` from `codex/service-default-sqlite-removal`; target verified with `gh pr view 118 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: pending.
 - Remaining blockers: none.
