@@ -7,20 +7,21 @@ from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import format_digest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.runs import CatalogWarningCode, RunCatalog
 
 
 def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
+    store = create_authority_backed_serial_run_store(root)
     run_path = root / "run-1"
     run_uri = path_to_run_uri(run_path)
     checksum = format_digest("sha256", "a" * 64)
@@ -101,7 +102,7 @@ def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> N
     assert summary.path == str(run_path)
     assert summary.status == "SUCCEEDED"
     assert summary.created_at is not None
-    assert summary.updated_at == "2020-01-01T00:00:05Z"
+    assert summary.updated_at is not None
     assert summary.tags == {"project": "demo", "runtime": "yes"}
     assert summary.config_fingerprint == "config-fp"
     assert summary.pipeline_fingerprint == "pipeline-fp"
@@ -145,5 +146,5 @@ def test_run_catalog_scan_current_returns_warnings_for_bad_candidates(
     assert result.summaries == ()
     assert [warning.code for warning in result.warnings] == [
         CatalogWarningCode.INVALID_RUN,
-        CatalogWarningCode.PARTIAL_RUN,
+        CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
     ]

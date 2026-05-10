@@ -14,19 +14,19 @@ from loom.cli.runs import (
     RUNS_LIST_SCHEMA_VERSION,
 )
 from loom.fingerprints import format_digest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 
 
 def test_runs_index_json_contract(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
-    _create_run(store, root / "a", status=RunStatus.SUCCEEDED)
+    _create_run(root, root / "a", status=RunStatus.SUCCEEDED)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -50,9 +50,8 @@ def test_runs_index_json_contract(tmp_path: Path) -> None:
 
 def test_runs_list_json_contract(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
-    _create_run(store, root / "a", status=RunStatus.SUCCEEDED)
-    _create_run(store, root / "b", status=RunStatus.FAILED)
+    _create_run(root, root / "a", status=RunStatus.SUCCEEDED)
+    _create_run(root, root / "b", status=RunStatus.FAILED)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -88,9 +87,8 @@ def test_runs_list_json_contract(tmp_path: Path) -> None:
 
 def test_runs_diff_json_contract(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
-    left_uri = _create_run(store, root / "a", status=RunStatus.SUCCEEDED)
-    right_uri = _create_run(store, root / "b", status=RunStatus.FAILED)
+    left_uri = _create_run(root, root / "a", status=RunStatus.SUCCEEDED)
+    right_uri = _create_run(root, root / "b", status=RunStatus.FAILED)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -128,11 +126,12 @@ def test_runs_diff_json_contract(tmp_path: Path) -> None:
 
 
 def _create_run(
-    store: LocalRunStore,
+    root: Path,
     run_path: Path,
     *,
     status: RunStatus,
 ) -> str:
+    store = create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": "contract"}})
     store.write_run_status(

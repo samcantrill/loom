@@ -11,13 +11,14 @@ import pytest
 from loom.artifacts import ArtifactRef
 from loom.cli.main import main
 from loom.fingerprints import format_digest
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import path_to_run_uri
 
 
 pytestmark = pytest.mark.e2e
@@ -25,16 +26,15 @@ pytestmark = pytest.mark.e2e
 
 def test_cli_runs_index_list_and_diff(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
     left_uri = _create_run(
-        store,
+        root,
         root / "left",
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
         config_fingerprint="config-left",
     )
     right_uri = _create_run(
-        store,
+        root,
         root / "right",
         status=RunStatus.FAILED,
         tag_value="demo",
@@ -103,13 +103,14 @@ def test_cli_runs_index_list_and_diff(tmp_path: Path) -> None:
 
 
 def _create_run(
-    store: LocalRunStore,
+    root: Path,
     run_path: Path,
     *,
     status: RunStatus,
     tag_value: str,
     config_fingerprint: str,
 ) -> str:
+    store = create_authority_backed_serial_run_store(root)
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
     store.write_run_status(

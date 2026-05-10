@@ -129,7 +129,7 @@ def test_scan_current_collection_classifies_invalid_and_partial_candidates(
     assert [warning.code for warning in result.warnings] == [
         CatalogWarningCode.INVALID_RUN,
         CatalogWarningCode.INVALID_RUN,
-        CatalogWarningCode.PARTIAL_RUN,
+        CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
         CatalogWarningCode.UNSUPPORTED_SCHEMA,
     ]
     assert all(

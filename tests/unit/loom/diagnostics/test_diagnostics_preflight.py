@@ -423,13 +423,14 @@ def test_slurm_live_preflight_warns_for_optional_status_and_cancel_commands(
 def test_slurm_run_preflight_fails_existing_active_submission(
     tmp_path,
 ) -> None:
-    from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+    from loom.pipeline.execution import create_authority_backed_serial_run_store
+    from loom.pipeline.stores import path_to_run_uri
     from loom.pipeline.submitted import (
         SubmittedOperationRecord,
         SubmittedOperationState,
     )
 
-    store = LocalRunStore(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "active")
     store.create_run(run_uri)
     store.write_submitted_operation(

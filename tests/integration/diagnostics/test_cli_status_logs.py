@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from loom.cli.main import main
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
@@ -144,7 +145,7 @@ def test_status_reports_persisted_submitted_state_without_scheduler_access(
     tmp_path: Path,
 ) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "submitted")
-    store = LocalRunStore(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
     store.create_run(run_uri)
     store.write_run_status(
         run_uri,
@@ -210,7 +211,7 @@ def test_status_without_jobs_never_builds_scheduler_runner(
         fail_scheduler_runner,
     )
     run_uri = path_to_run_uri(tmp_path / "runs" / "scheduler-free-status")
-    store = LocalRunStore(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(tmp_path / "runs")
     store.create_run(run_uri)
     store.write_run_status(
         run_uri,
