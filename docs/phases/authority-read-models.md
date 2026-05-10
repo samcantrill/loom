@@ -109,11 +109,42 @@ local lifecycle fallback.
 
 ## Implementation Summary
 
-- Pending.
+- Routed `loom plan --resume` default store construction through the
+  authority-backed serial run-store factory.
+- Made diagnostics status inspection authority-only for lifecycle facts while
+  preserving local artifact and log materialization reads.
+- Routed SLURM active-submission preflight through authority-backed submitted
+  operation reads.
+- Updated run catalog direct scans to summarize lifecycle facts from
+  authority snapshots, preserve local artifact materialization refs, and warn
+  without indexing local-only lifecycle state.
+- Updated CLI/contracts/examples/tests so supported lifecycle fixtures use
+  authority-backed runs and historical local-only runs surface
+  `local_lifecycle_unsupported`.
 
 ## Validation Evidence
 
-- Pending.
+- Targeted authority read-model suite:
+  `uv run --extra config pytest tests/unit/loom/diagnostics/test_diagnostics_inspection.py tests/integration/diagnostics/test_cli_status_logs.py tests/unit/loom/runs/test_direct_scan_helpers.py tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_direct_scan.py tests/integration/pipeline/test_run_catalog_sqlite.py tests/integration/pipeline/test_run_catalog_compare.py tests/integration/config/test_cli_plan.py tests/unit/loom/diagnostics/test_diagnostics_preflight.py tests/e2e/test_cli_runs_e2e.py -q`
+  passed with 69 tests.
+- `uv run --extra config pytest tests/e2e/test_cli_core.py::test_cli_status_submitted_state_smoke -q`
+  passed after the e2e fixture was migrated to an authority-backed run.
+- `uv run --extra config pytest tests/integration/pipeline/test_parallel_execution.py::test_run_request_failure_policy_can_continue_independent_branch -q`
+  passed after one transient `make test-summary` integration failure in an
+  unrelated parallel execution test.
+- `make test-summary` passed on the final run:
+
+  | Suite | Result |
+  | --- | --- |
+  | package | 57 passed, 1 skipped |
+  | unit | 838 passed, 1 skipped |
+  | contract | 108 passed, 2 skipped |
+  | integration | 90 passed, 8 skipped, 10 deselected |
+  | e2e | 39 passed, 1 deselected |
+  | config-extra | 420 passed, 1135 deselected |
+
+- `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
+  and build on the final run.
 
 ## Stop Conditions
 
