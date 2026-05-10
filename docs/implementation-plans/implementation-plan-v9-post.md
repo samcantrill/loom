@@ -994,7 +994,7 @@ Completion summary:
 
 ### Phase 2 - Generic RunStore/StageStore Interfaces And Conformance Harness
 
-Status: approved
+Status: merged
 Branch: `codex/run-stage-store-contracts`
 PR: https://github.com/samcantrill/loom/pull/110
 
@@ -1085,6 +1085,8 @@ Completion summary:
   `codex/run-stage-store-contracts`.
 - Automated review found no blocking findings; GitHub CI `checks` passed and
   merge state was `CLEAN` before approval metadata was recorded.
+- PR #110 was squash-merged into `develop` on 2026-05-10 as
+  `dd4a212ca6b444d74151fa5ed6936cc1a1042987`.
 - Implemented public authority `RunStore` and scoped `StageStore` protocols,
   `AuthorityConfig`/`AuthorityReference`, backend-kind and deployment-profile
   vocabulary, capability-admission diagnostics, `create_run_store(...)`, and a
@@ -1097,6 +1099,15 @@ Completion summary:
   default tests, config-extra tests, and build; `make test-summary` passed
   with package 57 passed, unit 834 passed, contract 107 passed, integration
   89 passed, e2e 39 passed, config-extra 420 passed, and 0 failures/errors.
+- Merge checks: final `gh pr view` verified base `develop`, head
+  `codex/run-stage-store-contracts`, state `OPEN`, CI `checks` success, and
+  no merge commit before merge. A metadata-only approval push produced one
+  failed CI run in
+  `tests/integration/pipeline/test_parallel_execution.py::test_bounded_parallel_runs_independent_stages_concurrently`;
+  the same test passed locally, the failed job was rerun once, and the rerun
+  passed before merge.
+- Stack maintenance: no successor branch existed at merge time, and the Phase
+  2 remote branch was requested for deletion by the merge command.
 
 ### Phase 3 - RunArtifactStore And StageArtifactStore Split
 

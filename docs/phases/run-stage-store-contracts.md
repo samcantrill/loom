@@ -5,7 +5,7 @@
 - Implementation plan:
   `docs/implementation-plans/implementation-plan-v9-post.md`
 - Phase: 2 - Generic RunStore/StageStore Interfaces And Conformance Harness
-- Status: pr_open
+- Status: merged
 - Branch: `codex/run-stage-store-contracts`
 - Worktree:
   `/home/samcantrill/work/loom-worktrees/run-stage-store-contracts`
@@ -34,6 +34,11 @@
 - Automated local review found no scope, API, import-boundary, or validation
   blockers. GitHub CI `checks` passed on 2026-05-10 at 09:34:30Z with merge
   state `CLEAN`.
+- PR #110 was squash-merged into `develop` on 2026-05-10 as
+  `dd4a212ca6b444d74151fa5ed6936cc1a1042987`. A metadata-only approval push
+  triggered one flaky parallel-execution CI failure; the failed job was rerun
+  once and passed before merge. No successor branch existed at merge time, and
+  the merge command requested deletion of the Phase 2 remote branch.
 
 ## Scope
 
