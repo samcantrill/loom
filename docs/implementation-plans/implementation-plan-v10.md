@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 3 PR open; automated review and merge gate pending
+- Phase work status: Phase 3 merged; ready for Phase 4 planning
 
 Related artifacts and references:
 
@@ -573,7 +573,7 @@ Phase 2 merged on 2026-05-11:
 
 ### Phase 3: FastAPI Transport Skeleton
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-fastapi-skeleton`
 - PR: https://github.com/samcantrill/loom/pull/121
 
@@ -655,21 +655,26 @@ whether the route split is clear enough for future phases.
 
 **Completion Summary**
 
-Phase 3 PR opened on 2026-05-11:
+Phase 3 merged on 2026-05-11:
 
 - Branch: `codex/authority-fastapi-skeleton`
 - PR: https://github.com/samcantrill/loom/pull/121
 - Target branch: `develop`
+- Merge commit: `700f3bb66875e711825148377c5260d5a22a11b6`
 - Implementation summary: added FastAPI as the explicit runtime service
   dependency, `httpx` as dev-only TestClient support, the lightweight
   `loom.authority` package, in-process app construction, injected service
   facts, supervisor health/live/ready/version/capability routes, and a
   non-mutating `/v1/authority` route-group boundary for future mutation APIs.
-- Validation before PR: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
-  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall 1646
-  passed, 12 skipped, and 1240 deselected.
-- Stack maintenance: root phase PR targets `develop`; no successor branch
-  depends on `codex/authority-fastapi-skeleton` yet.
+- Validation before merge: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall
+  1646 passed, 12 skipped, and 1240 deselected.
+- GitHub CI: `checks` succeeded before merge on 2026-05-11.
+- Automated review: manager review found no scope, dependency,
+  import-boundary, route-contract, or validation-evidence blockers after the
+  bounded implementation refinement recorded in the phase artifact.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-fastapi-skeleton` at merge time.
 - Follow-up notes: Phase 4 can use the injected service/repository boundary for
   private schema/versioning work without moving FastAPI imports into core store
   protocol modules.
