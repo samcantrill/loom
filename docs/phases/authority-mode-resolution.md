@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: DB-Backed Authority Supervisor And Offline Import
 - PR title: `DB-Backed Authority Supervisor And Offline Import - Phase 1: Authority Mode And Resolver Contracts`
 - Branch: `codex/authority-mode-resolution`
@@ -19,7 +19,7 @@
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and confirmation review
 - Plan quality gate loop budget: consumed; do not reopen unless the v10 implementation plan changes materially
 - Draft pass: completed by `loom_phase_planner` on 2026-05-11
-- Refine pass: pending for expanded path
+- Refine pass: completed by `loom_phase_planner` on 2026-05-11 after manager review
 - Setup limitations: none; `origin` was fetched and local `develop` matched `origin/develop` at worktree creation
 - Blockers: none
 
@@ -42,13 +42,13 @@ This is the semantic root of v10. Later phases add transport-independent protoco
 ## Source Phase Summary
 
 - Goal: define the authority selection contract that all later online/offline behavior will use.
-- Required scope: add explicit records for online authority mode, offline-first mode, resolver inputs, resolver outcomes, and failure diagnostics; cover shared CLI/config/environment inputs; encode no implicit service start in new resolver semantics; classify `direct_database` as unsupported/reserved for v10 runtime mutation; distinguish unavailable, stale, incompatible, unhealthy, and explicit offline outcomes; preserve existing service APIs.
-- Required checkpoints: stable importable contract types, side-effect-free resolver behavior, CLI/env/config normalization, direct-database diagnostics, explicit offline outcome, compatibility tests, and no runtime factory adoption.
-- Acceptance criteria: resolver contract types are importable from stable non-transport modules; missing authority references fail closed for online mutation mode; direct-database inputs produce an unsupported/reserved diagnostic; explicit offline-first resolution succeeds as non-authoritative; diagnostics provide next steps without starting a service; existing authority store tests still pass or are adjusted only for contract clarity.
+- Required scope: add explicit records for online authority mode, offline-first mode, resolver inputs, resolver outcomes, and failure diagnostics; cover minimal shared CLI/config/environment inputs needed to carry resolver intent; encode no implicit service start in new resolver semantics; classify `direct_database` as unsupported/reserved for v10 runtime mutation; distinguish unavailable, stale, incompatible, unhealthy, and explicit offline outcomes; preserve existing service APIs.
+- Required checkpoints: stable importable contract types, side-effect-free resolver behavior, CLI/env/config normalization that does not imply offline execution support, direct-database diagnostics, explicit offline outcome, compatibility tests, and no runtime factory adoption.
+- Acceptance criteria: resolver contract types are importable from stable non-transport modules under `src/loom/pipeline/stores/`; missing authority references fail closed for online mutation mode; direct-database inputs produce an unsupported/reserved diagnostic; explicit offline-first resolution succeeds as non-authoritative; diagnostics provide next steps without starting a service; existing authority store tests still pass or are adjusted only for contract clarity.
 
 ## Current Source And Harness Findings
 
-- `src/loom/pipeline/stores/config.py` owns `AuthorityConfig`, `AuthorityReference`, backend/profile enums, env parsing, and CLI-argument serialization. `AuthorityConfig()` currently defaults to co-located service authority.
+- `src/loom/pipeline/stores/config.py` owns `AuthorityConfig`, `AuthorityReference`, backend/profile enums, env parsing, and CLI-argument serialization. `AuthorityConfig()` currently defaults to co-located service authority; Phase 1 must preserve that default-compatible construction until Phase 10 adopts strict resolver behavior in factories.
 - `src/loom/pipeline/stores/deployment.py` owns deployment-profile diagnostics and preflight summaries. It already models co-located, managed, allocation-scoped, direct-database, and deferred-finalization profiles, but it is not a strict online/offline resolver.
 - `src/loom/pipeline/stores/service_authority.py` provides the current stdlib local service fixture/client. `create_service_authority_store()` starts a shared co-located service when config has no endpoint, so Phase 1 must not route strict resolver checks through that factory.
 - `src/loom/pipeline/stores/factory.py`, `src/loom/pipeline/execution/authority_adapter.py`, and CLI run/status/stage/stage-job/preflight/backend commands consume `AuthorityConfig` today. Full adoption of strict behavior is Phase 10 or later, not this phase.
@@ -58,9 +58,10 @@ This is the semantic root of v10. Later phases add transport-independent protoco
 
 ## In-Scope Work
 
-- Add a stable non-transport resolver contract module under the authority/store boundary, exported through `loom.pipeline.stores` if it is intended as public package vocabulary.
+- Add stable non-transport resolver records in a new module under `src/loom/pipeline/stores/`, preferably `authority_resolution.py`, rather than in CLI, service, factory, FastAPI, or SQLite modules.
+- Treat resolver records, outcome categories, diagnostics, and the resolver entrypoint as intentional public package vocabulary for v10, exporting only that surface through `loom.pipeline.stores`; keep helper parsing/classification details private to the module.
 - Define explicit mode/input/outcome/diagnostic records for online mutation resolution and offline-first resolution.
-- Extend shared config/env/CLI normalization enough for future commands to pass explicit online/offline intent into the resolver.
+- Extend shared config/env/CLI normalization only enough for future commands to pass explicit online/offline resolver intent; parser additions must not advertise or enable offline execution before Phase 17.
 - Implement a side-effect-free resolver that classifies missing authority, explicit endpoint references, registry-hint facts supplied by callers, stale generation, incompatible generation or version, unhealthy service, unavailable service, unsupported/reserved `direct_database`, and explicit offline selection.
 - Keep current runtime factories and service APIs working during this phase unless a test adjustment is required to isolate the new contract.
 - Add package, unit, contract, and minimal integration coverage for the resolver contract and shared option parsing.
@@ -73,28 +74,31 @@ This is the semantic root of v10. Later phases add transport-independent protoco
 - Supervisor lifecycle commands or process management.
 - Runtime factory adoption of the strict resolver.
 - Runner, worker, SLURM, diagnostics, or preflight behavior changes beyond shared option/config parsing needed to carry resolver inputs.
+- Offline execution CLI behavior, runtime support, or user-facing claims that `loom run` can execute offline before Phase 17.
 - Offline evidence writing, offline import, or any claim that offline evidence is authority truth.
 - Direct database access as a supported runtime mutation path.
 
 ## Assumptions
 
-- `AuthorityConfig()` defaults remain temporarily backward-compatible for this phase; strict no-implicit-start behavior belongs to the new resolver API and is adopted by factories in later phases.
+- `AuthorityConfig()` defaults remain backward-compatible for this phase; strict no-implicit-start behavior belongs to the new resolver API and is adopted by factories in Phase 10. New resolver intent must default compatibly when absent and must not add required constructor fields to `AuthorityConfig`.
 - Offline-first mode can be represented as resolver intent/outcome now, even though execution support and evidence manifests are Phase 17 work.
 - Registry and service health facts are inputs to the resolver in this phase. File IO, network probing, and supervisor health checks are later adapter responsibilities.
 - `direct_database` remains parseable so stale env/CLI/config values can receive a precise unsupported/reserved diagnostic.
 
 ## Scope Contract
 
-The resolver core must be deterministic and side-effect-free. Calling it must never start `LocalAuthorityService`, open SQLite files, read `.loom/authority/`, or perform network health checks. It may normalize already-supplied config, environment, CLI, registry-hint, and health/capability facts into typed outcomes.
+The resolver core must be deterministic and side-effect-free. Calling it must never start `LocalAuthorityService`, open SQLite files, read `.loom/authority/`, load registry files, call service endpoints, or perform network health checks. It accepts only supplied config, environment, CLI, registry-hint, health, generation, version, and capability facts, then normalizes those facts into typed outcomes.
 
-Online mutation mode requires a usable authority reference. Missing endpoint/registry facts, stale registry facts, incompatible generation/version facts, unhealthy service facts, unavailable service facts, and reserved direct-database selections produce non-success outcomes with actionable diagnostics. Offline-first mode is an explicit success outcome, but it is non-authoritative and must label later evidence/import requirements. Existing runtime factories may continue their current behavior until Phase 10 adopts this resolver.
+Resolver records should live in a stable store-boundary module such as `src/loom/pipeline/stores/authority_resolution.py`. Because later phases and clients will depend on these names, public records, outcome enums, diagnostics, and the resolver entrypoint should be exported through `loom.pipeline.stores` deliberately and covered by package API tests. Transport-, repository-, service-process-, and CLI-specific adapters may feed facts into the resolver later, but they must not own or redefine the resolver vocabulary.
+
+Online mutation mode requires a usable authority reference. Missing endpoint/registry facts, stale registry facts, incompatible generation/version facts, unhealthy service facts, unavailable service facts, and reserved direct-database selections produce non-success outcomes with actionable diagnostics. Offline-first mode is an explicit success outcome, but it is non-authoritative and must label later evidence/import requirements without implying that execution support exists in Phase 1. Existing runtime factories and `AuthorityConfig()` defaults must continue their current behavior until Phase 10 adopts this resolver.
 
 ## Design Impact
 
 - Maintainability: separates authority-selection policy from service clients, repositories, CLI commands, and runtime factories.
 - Extensibility: gives later FastAPI, registry, hosted, and supervisor phases stable outcome categories without assuming localhost, SQLite, or one transport.
 - Domain neutrality: all records describe generic authority state, execution mode, diagnostics, and provenance requirements; no research-domain semantics are introduced.
-- Source-tree boundaries: resolver contracts live under `src/loom/pipeline/stores/` or an adjacent authority boundary; CLI helpers may parse shared flags but must not own resolver semantics.
+- Source-tree boundaries: resolver contracts live under `src/loom/pipeline/stores/` in a stable non-transport module; CLI helpers may parse shared flags but must not own resolver semantics.
 
 ## Future Compatibility
 
@@ -125,8 +129,8 @@ Future phases should be able to add registry persistence, capability probing, Fa
 
 ## Implementation Steps
 
-1. Add resolver contract types and diagnostics in a stable non-transport module, with names that distinguish online mutation success, explicit offline success, and failure/rejection outcomes.
-2. Extend shared authority config/env/CLI normalization to carry explicit authority mode or offline-first intent while leaving existing factory defaults intact.
+1. Add resolver contract types and diagnostics in a stable non-transport store module, exporting only the public records/outcomes/entrypoint intended as v10 package vocabulary.
+2. Extend shared authority config/env/CLI normalization to carry explicit resolver intent while leaving existing factory defaults and `AuthorityConfig()` construction intact.
 3. Implement the side-effect-free resolver classification rules for missing references, supplied endpoint references, supplied registry/health/generation facts, direct-database reserved profile, and explicit offline mode.
 4. Export the public contract surface and add package/import-boundary coverage to prove resolver modules do not import transport, service-process, or private SQLite implementation details.
 5. Add unit, contract, and minimal integration tests for normalization, outcome classification, diagnostic rendering, and compatibility with existing authority store/service tests.
@@ -137,7 +141,7 @@ Future phases should be able to add registry persistence, capability probing, Fa
 
 - Status: required
 - Expected paths: `tests/package/test_pipeline_store_api.py` and any package import-boundary test added for resolver contracts
-- Required assertions or deferral reason: public exports are stable, cheap to import, and do not pull in FastAPI, service process internals, or private SQLite implementation modules.
+- Required assertions or deferral reason: public exports from `loom.pipeline.stores` are stable, cheap to import, and do not pull in FastAPI, service process internals, or private SQLite implementation modules.
 
 ### Unit Suite
 
@@ -155,7 +159,7 @@ Future phases should be able to add registry persistence, capability probing, Fa
 
 - Status: required but narrow
 - Expected paths: focused CLI/config/env resolution coverage, plus existing `tests/integration/pipeline/test_authority_factory.py` and `tests/integration/pipeline/test_authority_deployment_profiles.py` as regression checks when touched
-- Required assertions or deferral reason: shared CLI/config/env parsing can supply resolver inputs without starting a server, and existing public factories remain behaviorally unchanged in this phase.
+- Required assertions or deferral reason: shared CLI/config/env parsing can supply resolver inputs without starting a server or enabling offline execution, and existing public factories remain behaviorally unchanged in this phase.
 
 ### E2E Suite
 
@@ -197,11 +201,11 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: resolver contracts/exports, shared parser normalization, resolver classification and diagnostics, then focused tests.
+- Safe implementation slices: resolver contracts/exports, minimal shared parser normalization, resolver classification and diagnostics, then focused tests.
 - Tests to run with each slice: resolver unit tests after contract implementation, package/contract tests after exports, integration regression tests only after parser/factory-adjacent edits.
-- Decisions the executor must not revisit: the resolver core is side-effect-free; offline-first is explicit and non-authoritative; `direct_database` is reserved/unsupported for v10 runtime mutation; current factory adoption is out of scope.
+- Decisions the executor must not revisit: resolver public vocabulary belongs in a stable non-transport store module and is exported intentionally from `loom.pipeline.stores`; the resolver core consumes supplied facts only and performs no probes or file reads; offline-first is explicit and non-authoritative; `direct_database` is reserved/unsupported for v10 runtime mutation; current factory adoption and `AuthorityConfig()` default changes are out of scope.
 - Conditions that require stopping for the manager: inability to preserve existing service API behavior, need to change public runtime defaults, need for live registry/probe IO, or ambiguity that would affect later public protocol compatibility.
-- Expanded-path refinement notes: the refine pass should confirm naming, public export choices, and whether `AuthorityConfig()` default compatibility is sufficiently documented before implementation starts.
+- Expanded-path refinement notes: completed; naming/export choices, supplied-facts-only resolver behavior, minimal CLI parsing scope, and `AuthorityConfig()` default compatibility are now explicit.
 
 ## Refinement And Review Budget Status
 
@@ -212,10 +216,10 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-11.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: completed on 2026-05-11 by expanded-path refine pass.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: tightened public module/export choices, facts-only resolver constraints, minimal CLI parsing scope, and `AuthorityConfig()` compatibility boundaries.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not applicable yet.
