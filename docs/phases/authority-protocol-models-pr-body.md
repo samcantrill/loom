@@ -4,6 +4,7 @@
 - Exposed the intentional protocol surface through `loom.pipeline.stores` without importing FastAPI, Pydantic, SQLite, service-authority, or private repository modules.
 - Added unit and contract coverage for plain-data round trips, unknown-field rejection, version compatibility, operation/error vocabularies, fenced acknowledgements, snapshots, readiness, stale-generation errors, and unsupported-capability errors.
 - Serialized local event appends to resolve a GitHub CI blocker where parallel stage execution could assign duplicate event sequence numbers.
+- Made atomic write temp paths high-entropy to avoid same-target temp-file collisions under parallel run-store writes.
 
 ## Tests
 
@@ -29,3 +30,4 @@
 - Operation grouping stays at representative authority families rather than mirroring every store method as a public wire record.
 - Automated review found and blocker resolution fixed readiness parsing for conflicting top-level and nested compatibility facts.
 - GitHub CI exposed a pre-existing local event append race under parallel stage execution; blocker resolution fixed it with an in-process append lock and unit coverage.
+- A later CI run exposed same-target atomic temp-path collisions; blocker resolution fixed temp allocation without changing artifact or store document shapes.

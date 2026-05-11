@@ -222,7 +222,7 @@ make test-summary
 
 - Phase implementation refinement: used on 2026-05-11 by `loom_phase_refiner`
 - PR review: used on 2026-05-11 by `loom_phase_reviewer`
-- Blocker resolution: 2/3 used on 2026-05-11
+- Blocker resolution: 3/3 used on 2026-05-11
 
 ## Completion Notes
 
@@ -231,7 +231,7 @@ make test-summary
 - Implementation summary: added transport-independent authority protocol value models, public store exports, package import-boundary coverage, unit validation/round-trip coverage, and contract golden-shape coverage.
 - Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/authority_protocol.py src/loom/pipeline/stores/__init__.py tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/contracts/test_authority_protocol_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores/authority_protocol.py tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/contracts/test_authority_protocol_contract.py` passed with 0 errors; `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/contracts/test_authority_protocol_contract.py` passed with 25 tests. Final PR validation after blocker resolution: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall 1636 passed, 12 skipped, and 1230 deselected.
 - Refinement summary: tightened public envelope field names, operation-family granularity, nested-record reuse rules, and the no-adapter-conformance boundary for Phase 2. Implementation refinement added explicit `fencing_token` protocol envelope support, checked result lease/fencing consistency, expanded unit coverage for fenced envelopes, and added contract golden shapes for readiness, fenced mutation acknowledgements, snapshots, stale-generation rejections, and unsupported-capability rejections.
-- Blocker-resolution summary: 2/3 used. The first pass fixed automated PR review's finding that readiness parsing accepted mismatched top-level and nested compatibility facts by rejecting conflicting `protocol_version` and `schema_version` aliases with focused unit coverage. The second pass fixed the GitHub CI blocker where concurrent local event appends could allocate duplicate event sequence numbers under parallel stage execution.
+- Blocker-resolution summary: 3/3 used. The first pass fixed automated PR review's finding that readiness parsing accepted mismatched top-level and nested compatibility facts by rejecting conflicting `protocol_version` and `schema_version` aliases with focused unit coverage. The second pass fixed the GitHub CI blocker where concurrent local event appends could allocate duplicate event sequence numbers under parallel stage execution. The third pass fixed same-target atomic temp-file collisions exposed by the next GitHub CI run.
 - PR preparation: PR #120 opened against `develop` from `codex/authority-protocol-models` on 2026-05-11 and verified with `gh pr view 120 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: not applicable yet.
 - Remaining blockers: none.

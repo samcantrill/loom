@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 
 from loom.serialization.json import json_dumps_pretty
@@ -30,13 +31,8 @@ def unique_temp_path(path: str | Path) -> Path:
     ensure_dir(target.parent)
     base = target.name
     temp_prefix = f".{base}.tmp"
-    for index in range(20):
-        candidate = target.with_name(f"{temp_prefix}.{index}")
-        if not candidate.exists():
-            return candidate
-    # Last-ditch fallback to avoid collision races in long-running processes.
-    for index in range(100):
-        candidate = target.with_name(f"{temp_prefix}.{index}.{os.getpid()}")
+    for _ in range(100):
+        candidate = target.with_name(f"{temp_prefix}.{os.getpid()}.{uuid.uuid4().hex}")
         if not candidate.exists():
             return candidate
     raise AtomicWriteError(f"Failed to allocate unique temporary path for {target}")
