@@ -34,11 +34,21 @@ pytestmark = pytest.mark.unit
 
 
 def test_run_default_store_is_authority_backed_serial_store() -> None:
-    from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
+    from loom.pipeline.stores import (
+        AuthorityFactoryError,
+        AuthorityResolutionFailureKind,
+    )
 
-    store = run_command._create_default_run_store()
+    with pytest.raises(AuthorityFactoryError) as exc_info:
+        run_command._create_default_run_store()
 
-    assert isinstance(store, AuthorityBackedSerialRunStore)
+    error = exc_info.value
+    assert error.code == "authority_factory.resolution_failed"
+    assert error.resolution is not None
+    assert (
+        error.resolution.failure_kind
+        is AuthorityResolutionFailureKind.MISSING_AUTHORITY
+    )
 
 
 @dataclass(frozen=True, slots=True)

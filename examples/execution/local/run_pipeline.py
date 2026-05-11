@@ -9,6 +9,7 @@ from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.timestamps import safe_timestamp_for_path
 
 
@@ -23,14 +24,18 @@ def main() -> None:
     )
 
     composed = compose_config(HERE / "pipeline.yaml")
-    runner = PipelineRunner(
-        run_store=create_authority_backed_serial_run_store(run_root)
-    )
+    with LocalAuthorityService.start() as service:
+        runner = PipelineRunner(
+            run_store=create_authority_backed_serial_run_store(
+                run_root,
+                authority_config=service.config(),
+            )
+        )
 
-    first = runner.run(RunRequest(config=composed, run_uri=run_uri))
-    second = runner.run(
-        RunRequest(config=composed, run_uri=run_uri, open_existing=True)
-    )
+        first = runner.run(RunRequest(config=composed, run_uri=run_uri))
+        second = runner.run(
+            RunRequest(config=composed, run_uri=run_uri, open_existing=True)
+        )
 
     print(f"run_uri: {first.run_uri}")
     print(f"first_status: {first.status.name}")

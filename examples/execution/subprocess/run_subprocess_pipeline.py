@@ -31,20 +31,32 @@ def main() -> None:
     subprocess_uri = path_to_run_uri(run_root / f"subprocess-{uuid4().hex[:8]}")
     service_uri = path_to_run_uri(run_root / f"subprocess-service-{uuid4().hex[:8]}")
 
-    local = _run_cli(["run", str(config_path), "--run-uri", local_uri, "--format", "json"])
-    subprocess = _run_cli(
-        [
-            "run",
-            str(config_path),
-            "--run-uri",
-            subprocess_uri,
-            "--executor",
-            "subprocess",
-            "--format",
-            "json",
-        ]
-    )
     with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        local = _run_cli(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                local_uri,
+                *authority_args,
+                "--format",
+                "json",
+            ]
+        )
+        subprocess = _run_cli(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                subprocess_uri,
+                "--executor",
+                "subprocess",
+                *authority_args,
+                "--format",
+                "json",
+            ]
+        )
         service_run = _run_cli(
             [
                 "run",
@@ -53,7 +65,7 @@ def main() -> None:
                 service_uri,
                 "--executor",
                 "subprocess",
-                *authority_config_to_cli_args(service.config()),
+                *authority_args,
                 "--format",
                 "json",
             ]

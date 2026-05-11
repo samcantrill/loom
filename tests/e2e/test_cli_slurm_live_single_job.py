@@ -10,7 +10,8 @@ import pytest
 
 from loom.cli.main import main
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
-from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -52,23 +53,25 @@ def test_cli_slurm_live_single_job_rejects_default_authority_before_sbatch(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--executor",
-                "slurm-single-job",
-                "--run-uri",
-                run_uri,
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with LocalAuthorityService.start() as service:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--executor",
+                    "slurm-single-job",
+                    "--run-uri",
+                    run_uri,
+                    *authority_config_to_cli_args(service.config()),
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 7
         )
-        == 7
-    )
 
     payload = json.loads(stdout.getvalue())
     assert stderr.getvalue() == ""

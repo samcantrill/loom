@@ -425,37 +425,47 @@ def test_slurm_run_preflight_fails_existing_active_submission(
 ) -> None:
     from loom.pipeline.execution import create_authority_backed_serial_run_store
     from loom.pipeline.stores import path_to_run_uri
+    from loom.pipeline.stores.service_authority import LocalAuthorityService
     from loom.pipeline.submitted import (
         SubmittedOperationRecord,
         SubmittedOperationState,
     )
 
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "active")
-    store.create_run(run_uri)
-    store.write_submitted_operation(
-        run_uri,
-        SubmittedOperationRecord(
-            run_uri=run_uri,
-            submission_id="planning-1",
-            backend="slurm",
-            mode="slurm-afterok",
-            created_at="2026-05-08T00:00:00Z",
-            updated_at="2026-05-08T00:00:01Z",
-            state=SubmittedOperationState.SUBMITTED,
-            manifest_relative_path="slurm/submissions/planning-1/manifest.json",
-            summary_counts={"submitted": 1, "active": 1},
-        ),
-    )
-
-    result = run_preflight(
-        PreflightRequest(
-            config_path="config.yaml",
-            groups=("run",),
-            run_uri=run_uri,
-            runtime_options={"executor": "slurm-afterok", "resume": {"enabled": True}},
+    with LocalAuthorityService.start() as service:
+        authority_config = service.config()
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=authority_config,
         )
-    )
+        store.create_run(run_uri)
+        store.write_submitted_operation(
+            run_uri,
+            SubmittedOperationRecord(
+                run_uri=run_uri,
+                submission_id="planning-1",
+                backend="slurm",
+                mode="slurm-afterok",
+                created_at="2026-05-08T00:00:00Z",
+                updated_at="2026-05-08T00:00:01Z",
+                state=SubmittedOperationState.SUBMITTED,
+                manifest_relative_path="slurm/submissions/planning-1/manifest.json",
+                summary_counts={"submitted": 1, "active": 1},
+            ),
+        )
+
+        result = run_preflight(
+            PreflightRequest(
+                config_path="config.yaml",
+                groups=("run",),
+                run_uri=run_uri,
+                runtime_options={
+                    "executor": "slurm-afterok",
+                    "resume": {"enabled": True},
+                },
+                authority_config=authority_config,
+            )
+        )
 
     by_id = {check.check_id: check for check in result.checks}
     assert result.status is PreflightStatus.FAIL

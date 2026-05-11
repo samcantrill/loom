@@ -1497,13 +1497,16 @@ Recommended API:
 
 ```python
 from loom.pipeline.status import RunStatus
-from loom.pipeline.stores import create_run_store, path_to_run_uri
+from loom.pipeline.stores import AuthorityConfig, create_run_store, path_to_run_uri
 ```
 
 Example:
 
 ```python
-run_store = create_run_store()
+# Use the AuthorityConfig selected by the project, for example the service
+# config emitted by `loom authority start` or equivalent supervisor tooling.
+authority_config: AuthorityConfig = ...
+run_store = create_run_store(authority_config)
 run_uri = path_to_run_uri("runs/example")
 run_store.admit_run(run_uri, metadata={"name": "example"})
 

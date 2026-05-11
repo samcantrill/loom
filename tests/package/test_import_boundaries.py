@@ -303,6 +303,33 @@ def test_import_authority_registry_does_not_import_server_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_authority_factory_does_not_import_server_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.stores.authority_factory
+
+        for forbidden in (
+            "fastapi",
+            "starlette",
+            "loom.authority._repository",
+            "loom.authority.routes.mutations",
+            "loom.authority.supervisor",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through authority_factory")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_diagnostics_root_is_lightweight() -> None:
     script = dedent(
         """
@@ -955,6 +982,7 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
         from loom.pipeline.execution import create_authority_backed_serial_run_store
         from loom.pipeline.status import RunStatus
         from loom.pipeline.stores import path_to_run_uri
+        from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
         assert_forbidden_absent("before direct pipeline run")
 
@@ -974,7 +1002,10 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
             }
         )
         with TemporaryDirectory() as tmpdir:
-            run_store = create_authority_backed_serial_run_store(tmpdir)
+            run_store = create_authority_backed_serial_run_store(
+                tmpdir,
+                authority_store=SQLitePerRunAuthorityStore(),
+            )
             run_uri = path_to_run_uri(f"{tmpdir}/run1")
             result = PipelineRunner(run_store=run_store).run(
                 RunRequest(pipeline=spec, run_uri=run_uri)

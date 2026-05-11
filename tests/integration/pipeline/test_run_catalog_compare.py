@@ -14,6 +14,7 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.runs import (
     CatalogWarningCode,
@@ -157,7 +158,10 @@ def _create_run(
     artifact_logical_name: str = "build.out",
     git_commit: str = "abc123",
 ) -> str:
-    store = create_authority_backed_serial_run_store(root)
+    store = create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri)
     store.write_run_status(

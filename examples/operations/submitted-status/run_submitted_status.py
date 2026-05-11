@@ -12,7 +12,8 @@ from uuid import uuid4
 from loom.cli.main import main as loom_main
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
-from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
@@ -24,65 +25,74 @@ UPDATED_AT = "2026-05-08T00:00:03Z"
 def main() -> None:
     output_root = Path(os.environ.get("LOOM_EXAMPLE_OUTPUT_ROOT", HERE))
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
-    store = create_authority_backed_serial_run_store(run_root)
     run_uri = path_to_run_uri(run_root / f"submitted-status-{uuid4().hex[:8]}")
     submission_id = "example-submitted"
     manifest_relative_path = f"slurm/submissions/{submission_id}/manifest.json"
 
-    store.create_run(run_uri, metadata={"example": "operations.submitted-status"})
-    store.write_run_status(
-        run_uri,
-        RunStatusRecord(
-            run_uri=run_uri,
-            status=RunStatus.SUBMITTED,
-            created_at=CREATED_AT,
-            updated_at=UPDATED_AT,
-            message="submitted to an external scheduler",
-        ),
-    )
-    for stage_name in ("seed", "summarize"):
-        store.write_stage_status(
+    with LocalAuthorityService.start() as service:
+        authority_config = service.config()
+        authority_args = authority_config_to_cli_args(authority_config)
+        store = create_authority_backed_serial_run_store(
+            run_root,
+            authority_config=authority_config,
+        )
+        store.create_run(run_uri, metadata={"example": "operations.submitted-status"})
+        store.write_run_status(
             run_uri,
-            stage_name,
-            StageStatusRecord(
+            RunStatusRecord(
                 run_uri=run_uri,
-                stage_name=stage_name,
-                status=StageStatus.SUBMITTED,
-                attempt=1,
+                status=RunStatus.SUBMITTED,
+                created_at=CREATED_AT,
                 updated_at=UPDATED_AT,
-                message="accepted by scheduler",
+                message="submitted to an external scheduler",
             ),
         )
-    manifest_path = store.local_generated_artifact_path(run_uri, manifest_relative_path)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "example": "operations.submitted-status",
-                "note": "ordinary status only reports the pointer to this manifest",
-            },
-            indent=2,
-            sort_keys=True,
+        for stage_name in ("seed", "summarize"):
+            store.write_stage_status(
+                run_uri,
+                stage_name,
+                StageStatusRecord(
+                    run_uri=run_uri,
+                    stage_name=stage_name,
+                    status=StageStatus.SUBMITTED,
+                    attempt=1,
+                    updated_at=UPDATED_AT,
+                    message="accepted by scheduler",
+                ),
+            )
+        manifest_path = store.local_generated_artifact_path(
+            run_uri,
+            manifest_relative_path,
         )
-        + "\n",
-        encoding="utf-8",
-    )
-    store.write_submitted_operation(
-        run_uri,
-        SubmittedOperationRecord(
-            run_uri=run_uri,
-            submission_id=submission_id,
-            backend="slurm",
-            mode="slurm-afterok",
-            created_at=CREATED_AT,
-            updated_at=UPDATED_AT,
-            state=SubmittedOperationState.SUBMITTED,
-            manifest_relative_path=manifest_relative_path,
-            summary_counts={"submitted": 2, "active": 2},
-        ),
-    )
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "example": "operations.submitted-status",
+                    "note": "ordinary status only reports the pointer to this manifest",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        store.write_submitted_operation(
+            run_uri,
+            SubmittedOperationRecord(
+                run_uri=run_uri,
+                submission_id=submission_id,
+                backend="slurm",
+                mode="slurm-afterok",
+                created_at=CREATED_AT,
+                updated_at=UPDATED_AT,
+                state=SubmittedOperationState.SUBMITTED,
+                manifest_relative_path=manifest_relative_path,
+                summary_counts={"submitted": 2, "active": 2},
+            ),
+        )
 
-    payload = run_cli_json(["status", run_uri, "--format", "json"])
+        payload = run_cli_json(["status", run_uri, *authority_args, "--format", "json"])
     result = require_mapping(payload["result"])
     operation = require_mapping(result["submitted_operations"][0])
     stages = require_mappings(result["stages"])

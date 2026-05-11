@@ -9,6 +9,7 @@ from loom.pipeline.stores import (
     AuthoritativeReadOptions,
     AuthorityBackendKind,
     AuthorityConfig,
+    AuthorityStoreError,
     BackendCapability,
     BackendCapabilitySet,
     BackendRevision,
@@ -285,7 +286,24 @@ def _default_authority_store(
     }:
         from loom.pipeline.stores.service_authority import create_service_authority_store
 
-        return create_service_authority_store(config)
+        if config.endpoint is None:
+            raise BackendDiagnosticsError(
+                "authoritative backend is missing; start or select an authority "
+                "service before running backend diagnostics",
+                code="backend_diagnostics.authority_missing",
+                context={"backend_kind": config.backend_kind.value},
+            )
+        try:
+            return create_service_authority_store(config)
+        except AuthorityStoreError as exc:
+            raise BackendDiagnosticsError(
+                f"authoritative backend is unavailable: {exc}",
+                code="backend_diagnostics.authority_unavailable",
+                context={
+                    "backend_kind": config.backend_kind.value,
+                    "endpoint": config.endpoint,
+                },
+            ) from exc
     raise BackendDiagnosticsError(
         f"backend diagnostics cannot inspect authority backend {config.backend_kind.value}",
         code="backend_diagnostics.unsupported_backend",

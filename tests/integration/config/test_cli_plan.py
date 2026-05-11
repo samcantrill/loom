@@ -11,7 +11,8 @@ import pytest
 from loom.cli.main import main
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.config import compose_config
 
 
@@ -108,26 +109,41 @@ def test_plan_existing_run_uri_without_resume_fails(tmp_path: Path) -> None:
 
 def test_plan_resume_reports_reuse_for_existing_valid_run(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
-    run_store = create_authority_backed_serial_run_store(tmp_path / "runs")
-    run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
-    _write_pipeline_config(config_path)
-    composed = compose_config(config_path)
-    result = PipelineRunner(run_store=run_store).run(
-        RunRequest(config=composed, run_uri=run_uri)
-    )
-    assert result.status.value == "SUCCEEDED"
-
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert (
-        main(
-            ["plan", str(config_path), "--run-uri", run_uri, "--resume", "--format", "json"],
-            stdout=stdout,
-            stderr=stderr,
+    with LocalAuthorityService.start() as service:
+        authority_config = service.config()
+        authority_args = authority_config_to_cli_args(authority_config)
+        run_store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=authority_config,
         )
-        == 0
-    )
+        run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")
+        _write_pipeline_config(config_path)
+        composed = compose_config(config_path)
+        result = PipelineRunner(run_store=run_store).run(
+            RunRequest(config=composed, run_uri=run_uri)
+        )
+        assert result.status.value == "SUCCEEDED"
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        assert (
+            main(
+                [
+                    "plan",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    "--resume",
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
 
     payload = json.loads(stdout.getvalue())
     actions = {stage["stage"]: stage["action"] for stage in payload["result"]["stage_actions"]}

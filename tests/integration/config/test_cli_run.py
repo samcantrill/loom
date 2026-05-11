@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import io
 import json
 from pathlib import Path
@@ -9,10 +11,21 @@ from pathlib import Path
 import pytest
 
 from loom.cli.main import main
-from loom.pipeline.stores import path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import (
+    authority_config_to_cli_args,
+    path_to_run_uri,
+    run_uri_to_path,
+)
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
+
+
+@contextmanager
+def _local_authority_args() -> Iterator[tuple[str, ...]]:
+    with LocalAuthorityService.start() as service:
+        yield authority_config_to_cli_args(service.config())
 
 
 def _write_pipeline_config(
@@ -69,12 +82,15 @@ def test_run_default_uri_executes_under_store_default_root(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            ["run", str(config_path), "--format", "json"], stdout=stdout, stderr=stderr
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                ["run", str(config_path), *authority_args, "--format", "json"],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     run_uri = payload["result"]["run_uri"]
@@ -94,14 +110,21 @@ def test_run_explicit_uri_uses_exact_target_directory(tmp_path: Path) -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", path_to_run_uri(run_path)],
-            stdout=stdout,
-            stderr=stderr,
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    path_to_run_uri(run_path),
+                    *authority_args,
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     assert f"OK run {path_to_run_uri(run_path)}: SUCCEEDED" in stdout.getvalue()
     assert (run_path / "run.json").is_file()
@@ -115,14 +138,21 @@ def test_run_existing_uri_without_resume_fails_before_execution(tmp_path: Path) 
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", path_to_run_uri(run_path)],
-            stdout=stdout,
-            stderr=stderr,
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    path_to_run_uri(run_path),
+                    *authority_args,
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 4
         )
-        == 4
-    )
 
     assert stdout.getvalue() == ""
     assert "run URI already exists" in stderr.getvalue()
@@ -135,34 +165,36 @@ def test_run_resume_reuses_existing_state(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "resume")
     _write_pipeline_config(config_path, counter_path=counter_path)
 
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", run_uri],
-            stdout=io.StringIO(),
-            stderr=io.StringIO(),
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                ["run", str(config_path), "--run-uri", run_uri, *authority_args],
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            )
+            == 0
         )
-        == 0
-    )
-    assert counter_path.read_text(encoding="utf-8") == "1"
+        assert counter_path.read_text(encoding="utf-8") == "1"
 
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--resume",
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    "--resume",
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     actions = {
@@ -218,24 +250,26 @@ def test_run_slurm_single_job_dry_run_persists_plan_prepared_run_and_artifacts(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--executor",
-                "slurm-single-job",
-                "--dry-run",
-                "--run-uri",
-                path_to_run_uri(run_path),
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--executor",
+                    "slurm-single-job",
+                    "--dry-run",
+                    "--run-uri",
+                    path_to_run_uri(run_path),
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     result = payload["result"]
@@ -280,24 +314,26 @@ def test_run_slurm_afterok_dry_run_creates_stage_scripts(tmp_path: Path) -> None
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--executor",
-                "slurm-afterok",
-                "--dry-run",
-                "--run-uri",
-                path_to_run_uri(run_path),
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--executor",
+                    "slurm-afterok",
+                    "--dry-run",
+                    "--run-uri",
+                    path_to_run_uri(run_path),
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     result = payload["result"]
@@ -333,22 +369,24 @@ def test_run_config_resolved_slurm_dry_run_uses_slurm_artifact_path(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--dry-run",
-                "--run-uri",
-                path_to_run_uri(run_path),
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--dry-run",
+                    "--run-uri",
+                    path_to_run_uri(run_path),
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     result = payload["result"]
@@ -381,24 +419,26 @@ def test_run_profile_resolved_slurm_dry_run_uses_slurm_artifact_path(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--profile",
-                "cluster",
-                "--dry-run",
-                "--run-uri",
-                path_to_run_uri(run_path),
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--profile",
+                    "cluster",
+                    "--dry-run",
+                    "--run-uri",
+                    path_to_run_uri(run_path),
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     result = payload["result"]
@@ -420,12 +460,15 @@ def test_run_configured_slurm_without_dry_run_requires_live_authority(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            ["run", str(config_path), "--format", "json"], stdout=stdout, stderr=stderr
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                ["run", str(config_path), *authority_args, "--format", "json"],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 7
         )
-        == 7
-    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["error"]["code"] == "cli.run.slurm_live_authority_unsupported"
@@ -442,14 +485,23 @@ def test_run_failed_pipeline_returns_run_failed_exit_code(tmp_path: Path) -> Non
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", run_uri, "--format", "json"],
-            stdout=stdout,
-            stderr=stderr,
+    with _local_authority_args() as authority_args:
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 5
         )
-        == 5
-    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is False

@@ -10,7 +10,8 @@ from typing import Any
 import pytest
 
 from loom.cli.main import main
-from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -50,41 +51,47 @@ def test_cli_slurm_dry_run_generates_artifacts_without_scheduler(
         encoding="utf-8",
     )
 
-    for mode in ("slurm-single-job", "slurm-afterok"):
-        run_path = tmp_path / "runs" / mode
-        stdout = io.StringIO()
-        stderr = io.StringIO()
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        for mode in ("slurm-single-job", "slurm-afterok"):
+            run_path = tmp_path / "runs" / mode
+            stdout = io.StringIO()
+            stderr = io.StringIO()
 
-        assert (
-            main(
-                [
-                    "run",
-                    str(config_path),
-                    "--executor",
-                    mode,
-                    "--dry-run",
-                    "--run-uri",
-                    path_to_run_uri(run_path),
-                    "--format",
-                    "json",
-                ],
-                stdout=stdout,
-                stderr=stderr,
+            assert (
+                main(
+                    [
+                        "run",
+                        str(config_path),
+                        "--executor",
+                        mode,
+                        "--dry-run",
+                        "--run-uri",
+                        path_to_run_uri(run_path),
+                        *authority_args,
+                        "--format",
+                        "json",
+                    ],
+                    stdout=stdout,
+                    stderr=stderr,
+                )
+                == 0
             )
-            == 0
-        )
 
-        payload = json.loads(stdout.getvalue())
-        result = payload["result"]
-        assert payload["schema_version"] == "loom.cli.slurm_dry_run.v1"
-        assert result["mode"] == mode
-        assert Path(result["manifest_path"]).is_file()
-        assert Path(result["plan_path"]).is_file()
-        assert all(Path(item["path"]).is_file() for item in result["script_paths"])
-        assert (run_path / "plan.json").is_file()
-        assert (run_path / "prepared_run.json").is_file()
-        assert any(warning["code"] == "executor.slurm.sbatch" for warning in payload["warnings"])
-        assert stderr.getvalue() == ""
+            payload = json.loads(stdout.getvalue())
+            result = payload["result"]
+            assert payload["schema_version"] == "loom.cli.slurm_dry_run.v1"
+            assert result["mode"] == mode
+            assert Path(result["manifest_path"]).is_file()
+            assert Path(result["plan_path"]).is_file()
+            assert all(Path(item["path"]).is_file() for item in result["script_paths"])
+            assert (run_path / "plan.json").is_file()
+            assert (run_path / "prepared_run.json").is_file()
+            assert any(
+                warning["code"] == "executor.slurm.sbatch"
+                for warning in payload["warnings"]
+            )
+            assert stderr.getvalue() == ""
 
 
 def test_cli_slurm_dry_run_artifacts_cover_diamond_and_secret_boundary(
@@ -98,91 +105,110 @@ def test_cli_slurm_dry_run_artifacts_cover_diamond_and_secret_boundary(
     config_path = tmp_path / "diamond.yaml"
     _write_diamond_config(config_path)
 
-    single_run_path = tmp_path / "runs" / "single"
-    single_payload = _run_slurm_dry_run(config_path, single_run_path, "slurm-single-job")
-    single_result = single_payload["result"]
-    single_manifest = _read_json(Path(single_result["manifest_path"]))
-    single_plan = _read_json(Path(single_result["plan_path"]))
-    single_script = Path(single_result["script_paths"][0]["path"]).read_text(encoding="utf-8")
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        single_run_path = tmp_path / "runs" / "single"
+        single_payload = _run_slurm_dry_run(
+            config_path,
+            single_run_path,
+            "slurm-single-job",
+            authority_args=authority_args,
+        )
+        single_result = single_payload["result"]
+        single_manifest = _read_json(Path(single_result["manifest_path"]))
+        single_plan = _read_json(Path(single_result["plan_path"]))
+        single_script = Path(single_result["script_paths"][0]["path"]).read_text(
+            encoding="utf-8"
+        )
 
-    assert single_result["job_count"] == 1
-    assert single_result["dependency_count"] == 0
-    assert single_result["log_paths"] == [
-        {
-            "logical_key": "pipeline",
-            "stdout_relative_path": f"slurm/submissions/{single_result['planning_id']}/logs/pipeline.stdout.log",
-            "stderr_relative_path": f"slurm/submissions/{single_result['planning_id']}/logs/pipeline.stderr.log",
+        assert single_result["job_count"] == 1
+        assert single_result["dependency_count"] == 0
+        assert single_result["log_paths"] == [
+            {
+                "logical_key": "pipeline",
+                "stdout_relative_path": f"slurm/submissions/{single_result['planning_id']}/logs/pipeline.stdout.log",
+                "stderr_relative_path": f"slurm/submissions/{single_result['planning_id']}/logs/pipeline.stderr.log",
+            }
+        ]
+        assert single_manifest["mode"] == "slurm-single-job"
+        assert single_manifest["dry_run"] is True
+        assert single_manifest["jobs"][0]["command"]["command_args"][:2] == [
+            "prepared-run",
+            "continue",
+        ]
+        assert "scheduler_job_id" not in single_manifest["jobs"][0]
+        assert single_plan["kind"] == "loom.slurm_dry_run_plan"
+        assert "oc.env:LOOM_SLURM_E2E_SECRET_ROOT" in (
+            single_run_path / "plan.json"
+        ).read_text(encoding="utf-8")
+        assert "loom prepared-run continue" in single_script
+        assert "loom stage-job run" not in single_script
+        assert "loom stage run" not in single_script
+        assert "#SBATCH --partition=shared" in single_script
+        _assert_dry_run_secret_boundary(single_run_path)
+
+        afterok_run_path = tmp_path / "runs" / "afterok"
+        afterok_payload = _run_slurm_dry_run(
+            config_path,
+            afterok_run_path,
+            "slurm-afterok",
+            authority_args=authority_args,
+        )
+        afterok_result = afterok_payload["result"]
+        afterok_manifest = _read_json(Path(afterok_result["manifest_path"]))
+
+        assert afterok_result["job_count"] == 4
+        assert afterok_result["script_count"] == 4
+        assert afterok_result["dependency_count"] == 3
+        assert {
+            dependency["job_key"]: dependency["upstream_job_keys"]
+            for dependency in afterok_manifest["dependencies"]
+        } == {
+            "stage:features": ["stage:extract"],
+            "stage:train": ["stage:extract"],
+            "stage:report": ["stage:features", "stage:train"],
         }
-    ]
-    assert single_manifest["mode"] == "slurm-single-job"
-    assert single_manifest["dry_run"] is True
-    assert single_manifest["jobs"][0]["command"]["command_args"][:2] == [
-        "prepared-run",
-        "continue",
-    ]
-    assert "scheduler_job_id" not in single_manifest["jobs"][0]
-    assert single_plan["kind"] == "loom.slurm_dry_run_plan"
-    assert "oc.env:LOOM_SLURM_E2E_SECRET_ROOT" in (
-        single_run_path / "plan.json"
-    ).read_text(encoding="utf-8")
-    assert "loom prepared-run continue" in single_script
-    assert "loom stage-job run" not in single_script
-    assert "loom stage run" not in single_script
-    assert "#SBATCH --partition=shared" in single_script
-    _assert_dry_run_secret_boundary(single_run_path)
+        commands = {
+            command["logical_key"]: command["argv"]
+            for command in afterok_result["generated_commands"]
+        }
+        assert commands["stage:extract"][:2] == ["loom", "stage-job"]
+        assert commands["stage:report"][:4] == ["uv", "run", "loom", "stage-job"]
+        assert commands["stage:report"][4:6] == ["run", "--run-uri"]
+        scripts = {
+            item["logical_key"]: Path(item["path"]).read_text(encoding="utf-8")
+            for item in afterok_result["script_paths"]
+        }
+        assert "#SBATCH --dependency=afterok:stage:features:stage:train" in scripts[
+            "stage:report"
+        ]
+        assert "#SBATCH --dependency=afterok:stage:extract" in scripts["stage:features"]
+        assert "#SBATCH --dependency=afterok:stage:extract" in scripts["stage:train"]
+        assert "#SBATCH --partition=train" in scripts["stage:train"]
+        assert "#SBATCH --partition=report" in scripts["stage:report"]
+        assert "#SBATCH --cpus-per-task=2" in scripts["stage:train"]
+        assert all("loom stage-job run" in script for script in scripts.values())
+        assert all("loom stage run" not in script for script in scripts.values())
+        assert all("prepared-run continue" not in script for script in scripts.values())
+        assert all("scheduler_job_id" not in job for job in afterok_manifest["jobs"])
+        _assert_dry_run_secret_boundary(afterok_run_path)
 
-    afterok_run_path = tmp_path / "runs" / "afterok"
-    afterok_payload = _run_slurm_dry_run(config_path, afterok_run_path, "slurm-afterok")
-    afterok_result = afterok_payload["result"]
-    afterok_manifest = _read_json(Path(afterok_result["manifest_path"]))
+        repeated_payload = _run_slurm_dry_run(
+            config_path,
+            afterok_run_path,
+            "slurm-afterok",
+            resume=True,
+            authority_args=authority_args,
+        )
+        repeated_result = repeated_payload["result"]
 
-    assert afterok_result["job_count"] == 4
-    assert afterok_result["script_count"] == 4
-    assert afterok_result["dependency_count"] == 3
-    assert {
-        dependency["job_key"]: dependency["upstream_job_keys"]
-        for dependency in afterok_manifest["dependencies"]
-    } == {
-        "stage:features": ["stage:extract"],
-        "stage:train": ["stage:extract"],
-        "stage:report": ["stage:features", "stage:train"],
-    }
-    commands = {
-        command["logical_key"]: command["argv"]
-        for command in afterok_result["generated_commands"]
-    }
-    assert commands["stage:extract"][:2] == ["loom", "stage-job"]
-    assert commands["stage:report"][:4] == ["uv", "run", "loom", "stage-job"]
-    assert commands["stage:report"][4:6] == ["run", "--run-uri"]
-    scripts = {
-        item["logical_key"]: Path(item["path"]).read_text(encoding="utf-8")
-        for item in afterok_result["script_paths"]
-    }
-    assert "#SBATCH --dependency=afterok:stage:features:stage:train" in scripts["stage:report"]
-    assert "#SBATCH --dependency=afterok:stage:extract" in scripts["stage:features"]
-    assert "#SBATCH --dependency=afterok:stage:extract" in scripts["stage:train"]
-    assert "#SBATCH --partition=train" in scripts["stage:train"]
-    assert "#SBATCH --partition=report" in scripts["stage:report"]
-    assert "#SBATCH --cpus-per-task=2" in scripts["stage:train"]
-    assert all("loom stage-job run" in script for script in scripts.values())
-    assert all("loom stage run" not in script for script in scripts.values())
-    assert all("prepared-run continue" not in script for script in scripts.values())
-    assert all("scheduler_job_id" not in job for job in afterok_manifest["jobs"])
-    _assert_dry_run_secret_boundary(afterok_run_path)
-
-    repeated_payload = _run_slurm_dry_run(
-        config_path,
-        afterok_run_path,
-        "slurm-afterok",
-        resume=True,
-    )
-    repeated_result = repeated_payload["result"]
-
-    assert repeated_result["planning_id"] != afterok_result["planning_id"]
-    assert Path(afterok_result["manifest_path"]).is_file()
-    assert Path(repeated_result["manifest_path"]).is_file()
-    assert Path(afterok_result["manifest_path"]) != Path(repeated_result["manifest_path"])
-    _assert_dry_run_secret_boundary(afterok_run_path)
+        assert repeated_result["planning_id"] != afterok_result["planning_id"]
+        assert Path(afterok_result["manifest_path"]).is_file()
+        assert Path(repeated_result["manifest_path"]).is_file()
+        assert Path(afterok_result["manifest_path"]) != Path(
+            repeated_result["manifest_path"]
+        )
+        _assert_dry_run_secret_boundary(afterok_run_path)
 
 
 def _write_diamond_config(path: Path) -> None:
@@ -261,6 +287,7 @@ def _run_slurm_dry_run(
     run_path: Path,
     mode: str,
     *,
+    authority_args: tuple[str, ...],
     resume: bool = False,
 ) -> dict[str, Any]:
     stdout = io.StringIO()
@@ -273,6 +300,7 @@ def _run_slurm_dry_run(
         "--dry-run",
         "--run-uri",
         path_to_run_uri(run_path),
+        *authority_args,
         "--format",
         "json",
     ]

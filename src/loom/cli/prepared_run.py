@@ -86,6 +86,11 @@ def handle_continue(namespace: argparse.Namespace) -> int:
         create_authority_backed_serial_run_store,
     )
 
+    if str(namespace.executor) != "local":
+        raise _cli_error_from_continuation(
+            UnsupportedContinuationExecutorError(str(namespace.executor)),
+            exit_code=ExitCode.EXECUTOR,
+        )
     authority_config = authority_config_from_namespace(namespace)
     try:
         continue_prepared_run(

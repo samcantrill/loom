@@ -16,6 +16,7 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.runs import CatalogWarningCode, RunCatalog, RunFilter, RunFilterKind
 from loom.runs._sqlite import catalog_db_path, read_catalog_summaries
 
@@ -86,7 +87,10 @@ def test_run_catalog_list_reconciles_new_changed_deleted_and_stale_rows(
         status=RunStatus.SUCCEEDED,
         tag_value="demo",
     )
-    first_store = create_authority_backed_serial_run_store(root)
+    first_store = create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     first_store.open_run(first_uri)
     first_store.write_run_status(
         first_uri,
@@ -191,7 +195,6 @@ def test_multiple_catalog_instances_can_list_and_rebuild(tmp_path: Path) -> None
 
 def test_run_catalog_list_filters_synthetic_large_collection(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = create_authority_backed_serial_run_store(root)
     expected: list[str] = []
     for index in range(120):
         status = RunStatus.SUCCEEDED if index % 10 == 0 else RunStatus.FAILED
@@ -200,7 +203,6 @@ def test_run_catalog_list_filters_synthetic_large_collection(tmp_path: Path) -> 
             root / f"run-{index:03d}",
             status=status,
             tag_value="bulk",
-            run_store=store,
         )
         if status is RunStatus.SUCCEEDED:
             expected.append(run_uri)
@@ -229,7 +231,10 @@ def _create_catalog_run(
     backend: str = "local",
     artifact_id: str = "build/out",
 ) -> str:
-    store = create_authority_backed_serial_run_store(root)
+    store = create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_uri = path_to_run_uri(run_path)
     checksum = checksum or format_digest("sha256", "a" * 64)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
@@ -283,7 +288,10 @@ def _create_minimal_catalog_run(
     tag_value: str,
     run_store: Any | None = None,
 ) -> str:
-    store = run_store or create_authority_backed_serial_run_store(root)
+    store = run_store or create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": tag_value}})
     store.write_run_status(

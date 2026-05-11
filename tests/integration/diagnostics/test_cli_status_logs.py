@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import io
 import json
 from pathlib import Path
@@ -16,11 +17,24 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import (
+    AuthorityConfig,
+    LocalRunStore,
+    authority_config_to_cli_args,
+    path_to_run_uri,
+)
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
+
+
+@pytest.fixture
+def authority_context() -> Iterator[tuple[AuthorityConfig, tuple[str, ...]]]:
+    with LocalAuthorityService.start() as service:
+        config = service.config()
+        yield config, authority_config_to_cli_args(config)
 
 
 def _write_pipeline_config(path: Path, *, failing: bool = False) -> None:
@@ -77,6 +91,7 @@ def _write_two_stage_pipeline_config(path: Path) -> None:
 def _run_pipeline(
     tmp_path: Path,
     *,
+    authority_args: tuple[str, ...],
     failing: bool = False,
     executor: str = "local",
 ) -> str:
@@ -88,9 +103,15 @@ def _run_pipeline(
     stderr = io.StringIO()
     expected = 5 if failing else 0
 
-    argv = ["run", str(config_path), "--run-uri", run_uri, "--format", "json"]
+    argv = [
+        "run",
+        str(config_path),
+        "--run-uri",
+        run_uri,
+    ]
     if executor != "local":
         argv.extend(["--executor", executor])
+    argv.extend([*authority_args, "--format", "json"])
     assert (
         main(
             argv,
@@ -103,7 +124,11 @@ def _run_pipeline(
     return run_uri
 
 
-def _run_two_stage_pipeline(tmp_path: Path) -> str:
+def _run_two_stage_pipeline(
+    tmp_path: Path,
+    *,
+    authority_args: tuple[str, ...],
+) -> str:
     config_path = tmp_path / "pipeline.yaml"
     run_uri = path_to_run_uri(tmp_path / "runs" / "ok")
     _write_two_stage_pipeline_config(config_path)
@@ -112,7 +137,15 @@ def _run_two_stage_pipeline(tmp_path: Path) -> str:
 
     assert (
         main(
-            ["run", str(config_path), "--run-uri", run_uri, "--format", "json"],
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                *authority_args,
+                "--format",
+                "json",
+            ],
             stdout=stdout,
             stderr=stderr,
         )
@@ -122,14 +155,23 @@ def _run_two_stage_pipeline(tmp_path: Path) -> str:
     return run_uri
 
 
-def test_status_summarizes_successful_run(tmp_path: Path) -> None:
-    run_uri = _run_pipeline(tmp_path)
+def test_status_summarizes_successful_run(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_pipeline(tmp_path, authority_args=authority_args)
     LocalRunStore().write_stage_log(run_uri, "build", "stdout", "a\nb\nc\n")
     stdout = io.StringIO()
     stderr = io.StringIO()
 
     assert (
-        main(["status", run_uri, "--format", "json"], stdout=stdout, stderr=stderr) == 0
+        main(
+            ["status", run_uri, *authority_args, "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
     )
 
     payload = json.loads(stdout.getvalue())
@@ -143,9 +185,14 @@ def test_status_summarizes_successful_run(tmp_path: Path) -> None:
 
 def test_status_reports_persisted_submitted_state_without_scheduler_access(
     tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
 ) -> None:
+    authority_config, authority_args = authority_context
     run_uri = path_to_run_uri(tmp_path / "runs" / "submitted")
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_config=authority_config,
+    )
     store.create_run(run_uri)
     store.write_run_status(
         run_uri,
@@ -185,7 +232,12 @@ def test_status_reports_persisted_submitted_state_without_scheduler_access(
     stderr = io.StringIO()
 
     assert (
-        main(["status", run_uri, "--format", "json"], stdout=stdout, stderr=stderr) == 0
+        main(
+            ["status", run_uri, *authority_args, "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
     )
 
     payload = json.loads(stdout.getvalue())
@@ -199,7 +251,9 @@ def test_status_reports_persisted_submitted_state_without_scheduler_access(
 def test_status_without_jobs_never_builds_scheduler_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
 ) -> None:
+    authority_config, authority_args = authority_context
     import loom.cli.status as status_command
 
     def fail_scheduler_runner() -> object:
@@ -211,7 +265,10 @@ def test_status_without_jobs_never_builds_scheduler_runner(
         fail_scheduler_runner,
     )
     run_uri = path_to_run_uri(tmp_path / "runs" / "scheduler-free-status")
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_config=authority_config,
+    )
     store.create_run(run_uri)
     store.write_run_status(
         run_uri,
@@ -225,14 +282,18 @@ def test_status_without_jobs_never_builds_scheduler_runner(
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert main(["status", run_uri], stdout=stdout, stderr=stderr) == 0
+    assert main(["status", run_uri, *authority_args], stdout=stdout, stderr=stderr) == 0
 
     assert stdout.getvalue().startswith(f"status {run_uri}: SUCCEEDED")
     assert stderr.getvalue() == ""
 
 
-def test_logs_returns_bounded_content(tmp_path: Path) -> None:
-    run_uri = _run_pipeline(tmp_path)
+def test_logs_returns_bounded_content(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_pipeline(tmp_path, authority_args=authority_args)
     LocalRunStore().write_stage_log(run_uri, "build", "stdout", "a\nb\nc\n")
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -265,8 +326,12 @@ def test_logs_returns_bounded_content(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
 
 
-def test_status_and_logs_report_failed_run(tmp_path: Path) -> None:
-    run_uri = _run_pipeline(tmp_path, failing=True)
+def test_status_and_logs_report_failed_run(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_pipeline(tmp_path, authority_args=authority_args, failing=True)
     LocalRunStore().write_stage_log(run_uri, "build", "stderr", "failed\n")
     status_stdout = io.StringIO()
     logs_stdout = io.StringIO()
@@ -274,7 +339,9 @@ def test_status_and_logs_report_failed_run(tmp_path: Path) -> None:
 
     assert (
         main(
-            ["status", run_uri, "--format", "json"], stdout=status_stdout, stderr=stderr
+            ["status", run_uri, *authority_args, "--format", "json"],
+            stdout=status_stdout,
+            stderr=stderr,
         )
         == 0
     )
@@ -297,15 +364,26 @@ def test_status_and_logs_report_failed_run(tmp_path: Path) -> None:
     )
 
 
-def test_status_and_logs_report_subprocess_failure_metadata(tmp_path: Path) -> None:
-    run_uri = _run_pipeline(tmp_path, failing=True, executor="subprocess")
+def test_status_and_logs_report_subprocess_failure_metadata(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_pipeline(
+        tmp_path,
+        authority_args=authority_args,
+        failing=True,
+        executor="subprocess",
+    )
     status_stdout = io.StringIO()
     logs_stdout = io.StringIO()
     stderr = io.StringIO()
 
     assert (
         main(
-            ["status", run_uri, "--format", "json"], stdout=status_stdout, stderr=stderr
+            ["status", run_uri, *authority_args, "--format", "json"],
+            stdout=status_stdout,
+            stderr=stderr,
         )
         == 0
     )
@@ -333,8 +411,12 @@ def test_status_and_logs_report_subprocess_failure_metadata(tmp_path: Path) -> N
     assert logs_payload["result"]["streams"][0]["content"] is not None
 
 
-def test_logs_missing_stage_fails_clearly(tmp_path: Path) -> None:
-    run_uri = _run_pipeline(tmp_path)
+def test_logs_missing_stage_fails_clearly(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_pipeline(tmp_path, authority_args=authority_args)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -353,8 +435,12 @@ def test_logs_missing_stage_fails_clearly(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
 
 
-def test_artifacts_list_and_show_multiple_artifacts(tmp_path: Path) -> None:
-    run_uri = _run_two_stage_pipeline(tmp_path)
+def test_artifacts_list_and_show_multiple_artifacts(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_two_stage_pipeline(tmp_path, authority_args=authority_args)
     list_stdout = io.StringIO()
     show_stdout = io.StringIO()
     stderr = io.StringIO()
@@ -397,8 +483,12 @@ def test_artifacts_list_and_show_multiple_artifacts(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
 
 
-def test_artifacts_missing_artifact_id_fails_clearly(tmp_path: Path) -> None:
-    run_uri = _run_pipeline(tmp_path)
+def test_artifacts_missing_artifact_id_fails_clearly(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_pipeline(tmp_path, authority_args=authority_args)
     stdout = io.StringIO()
     stderr = io.StringIO()
 
@@ -417,8 +507,12 @@ def test_artifacts_missing_artifact_id_fails_clearly(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
 
 
-def test_artifacts_list_failed_run_with_no_artifacts(tmp_path: Path) -> None:
-    run_uri = _run_pipeline(tmp_path, failing=True)
+def test_artifacts_list_failed_run_with_no_artifacts(
+    tmp_path: Path,
+    authority_context: tuple[AuthorityConfig, tuple[str, ...]],
+) -> None:
+    _authority_config, authority_args = authority_context
+    run_uri = _run_pipeline(tmp_path, authority_args=authority_args, failing=True)
     stdout = io.StringIO()
     stderr = io.StringIO()
 

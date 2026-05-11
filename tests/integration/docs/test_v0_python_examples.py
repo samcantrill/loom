@@ -18,6 +18,7 @@ from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.planning import PlanAction
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.optional_dependency]
@@ -72,7 +73,10 @@ pipeline:
 
 
 def test_readme_python_api_example_runs_and_reuses_same_run(tmp_path: Path) -> None:
-    run_store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    run_store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     runner = PipelineRunner(run_store=run_store)
     config = compose_config(_config_path(tmp_path)).resolved
     run_uri = path_to_run_uri(tmp_path / "runs" / "run-1")

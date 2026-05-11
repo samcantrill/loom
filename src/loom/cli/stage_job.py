@@ -114,6 +114,11 @@ def handle_run(namespace: argparse.Namespace) -> int:
     from loom.pipeline.status import StageStatus
 
     output_format = output_format_from_namespace(namespace)
+    if str(namespace.executor) != "local":
+        raise _cli_error_from_continuation(
+            UnsupportedContinuationExecutorError(str(namespace.executor)),
+            exit_code=ExitCode.EXECUTOR,
+        )
     authority_config = authority_config_from_namespace(namespace)
     try:
         result = run_stage_job(
