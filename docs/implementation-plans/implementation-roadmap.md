@@ -34,6 +34,16 @@ splits oversized steps:
 - A persistence and concurrency foundation is inserted after the run catalog so
   concurrent DAG execution, large sweeps, shared filesystems, and remote-capable
   stores do not inherit single-writer local-run assumptions.
+- A post-v9 authority-unification step is inserted before bundles and sweeps so
+  all mutating entrypoints use authoritative lifecycle state and stronger
+  service/database backends can satisfy multi-host guarantees without preserving
+  local-file runtime escape hatches.
+- A DB-backed authority service supervisor step is inserted as v10 because
+  v9-post intentionally stops at an in-memory co-located service. Production-like
+  execution needs a durable service lifecycle, strict connect-or-fail behavior,
+  explicit offline-first import, and service-backed workspace coordination
+  before bundles, sweeps, remote stores, containers, and reliability features
+  build on runtime authority.
 - Remote stores are split into the backend-neutral contract and optional
   operational backend work.
 - Container execution is split into Docker and Apptainer/SLURM composition.
@@ -85,6 +95,15 @@ written.
   payloads, logs, config/provenance materialization, or later export workflows,
   but active state readers should use backend-neutral store contracts and
   capabilities rather than legacy local-file state.
+- Treat direct `LocalRunStore` runtime mutation as deprecated after v9. Local
+  store helpers may remain internal materialization and read-compatibility
+  tools, but new run, stage, worker, submitted-job, and continuation mutations
+  should enter through authority-backed store factories.
+- Treat implicit in-process service startup as a development convenience, not a
+  production authority policy. After v10, runtime entrypoints should connect to
+  an explicitly configured or registry-discovered service and fail closed when
+  one is unavailable, unless the user explicitly selects offline-first
+  execution and later imports the run into authority.
 - Keep every version useful on its own and reviewable as a coherent product
   increment.
 
@@ -102,15 +121,17 @@ written.
 | v7 | SLURM operations | Optional live `sbatch` submission, status, cancellation, and submission recovery. |
 | v8 | Run catalog and comparison | Rebuildable local run index, run listing, filtering, and metadata comparison. |
 | v9 | Persistence and concurrency foundation | Authoritative run/sweep store contracts, backend capabilities, stage attempts, leases, and commit semantics for future concurrent execution. |
-| v10 | Run bundles and exporters | Safe run export, inspect, import, and compatibility exporter contracts with portable manifests. |
-| v11 | Deterministic sweeps | Grid/manual sweep expansion, manifests, sequential execution, status, and collection. |
-| v12 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, artifact stores, run exporters, event sinks, and provenance. |
-| v13 | Remote store contract | Backend-neutral artifact-store capabilities, fake remote store, and remote preflight surface. |
-| v14 | Remote store operations | Explicit remote payload operations and at most one optional backend adapter family, if selected. |
-| v15 | Docker container executor | Docker CLI executor using the stage-worker and artifact/run-store contracts. |
-| v16 | HPC container execution | Apptainer/Singularity executor and SLURM-container composition. |
-| v17 | Reliability policies and event sinks | Retry, timeout, failure-category, runtime event, and observe-only event sink policies across executors. |
-| v18 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
+| v9-post | Authority-backed runtime unification | Deprecate local-only runtime mutation, route every run/stage entrypoint through authority-backed stores, and plan the service/database authority backend for multi-host operation. |
+| v10 | DB-backed service supervisor | Durable authority service lifecycle, strict online/offline policy, true offline import, and service-backed workspace coordination. |
+| v11 | Run bundles and exporters | Safe run export, inspect, import, and compatibility exporter contracts with portable manifests. |
+| v12 | Deterministic sweeps | Grid/manual sweep expansion, manifests, sequential execution, status, and collection. |
+| v13 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, artifact stores, run exporters, event sinks, and provenance. |
+| v14 | Remote store contract | Backend-neutral artifact-store capabilities, fake remote store, and remote preflight surface. |
+| v15 | Remote store operations | Explicit remote payload operations and at most one optional backend adapter family, if selected. |
+| v16 | Docker container executor | Docker CLI executor using the stage-worker and artifact/run-store contracts. |
+| v17 | HPC container execution | Apptainer/Singularity executor and SLURM-container composition. |
+| v18 | Reliability policies and event sinks | Retry, timeout, failure-category, runtime event, and observe-only event sink policies across executors. |
+| v19 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 
 ## v0 - Local Runtime Kernel
 
@@ -678,7 +699,286 @@ Planning notes:
 
 - `roadmap-v9-planning-notes.md`
 
-## v10 - Run Bundles And Exporters
+## v9-post - Authority-Backed Runtime Unification
+
+Goal:
+
+- Close the post-v9 local-store escape hatches so every active run and stage
+  mutation enters through authority-backed store contracts, and define the
+  service/database authority backend needed for multi-host and
+  concurrent-controller operation.
+
+Implement:
+
+- A clear deprecation plan for `LocalRunStore` as a runtime entrypoint while
+  keeping local path/materialization helpers for artifacts, logs, config
+  snapshots, provenance, worker handoff files, and artifact/directory access.
+- A comprehensive inventory of every current `LocalRunStore` runtime mutation
+  entrypoint, plus a migration map for runtime paths, authority read paths,
+  and local artifact/materialization helpers.
+- A rename or split of useful local-run-directory machinery so local
+  materialization cannot be mistaken for active lifecycle authority, likely
+  around run-level and stage-level artifact/materialization interfaces.
+- A documented run lifecycle over authority facts: run allocation/open,
+  controller lease, guarded run status transitions, submitted state,
+  cancellation/interruption, finalization, revisioned snapshots, and recovery
+  diagnostics.
+- A documented stage lifecycle over authority facts: stage plan action, attempt
+  allocation, stage lease and fencing token, running/submitted state, output
+  commit, terminal status, failure/blocking, retry eligibility, and cleanup
+  candidates.
+- Mandatory authority-backed runtime store construction for `PipelineRunner`
+  and public Python examples.
+- Authority-backed CLI mutation paths for `loom run`, SLURM dry-run/live
+  submission, `loom stage run`, `loom stage-job run`, and prepared-run
+  continuation.
+- Fenced submitted-job and worker finalization so a worker can write local
+  handoff files only as materialization and cannot commit stage success without
+  active authority.
+- A public store-interface decision where `RunStore` manages runs, run-level
+  leases, run lifecycle, submitted operations, and access to scoped
+  `StageStore` handles, while separate workspace/coordination surfaces are
+  reserved for non-run sweep/resource concerns.
+- A generic authority interface and conformance harness before concrete backend
+  work, covering run lifecycle, stage lifecycle, leases, fencing, submissions,
+  commits, snapshots, and recovery.
+- A service/database backend implementation path for concurrent terminals,
+  multi-host workers, and HPC submitted jobs, including declared consistency
+  guarantees, lease/fencing behavior, and failure-closed mutation.
+- Explicit HPC deployment and fallback capability profiles so the plan does
+  not assume long-running login-node processes or compute-to-login networking.
+  Fallback modes such as deferred finalization preserve authority-backed
+  lifecycle commits while declaring weaker live-worker semantics.
+- A separate system-wide backend adoption/refactor path after the concrete
+  backend exists, covering runner construction, public factories, CLI
+  commands, workers, SLURM planning/submission/cancel/status, status/catalog,
+  plan, diagnostics, preflight, configuration propagation, examples, and tests.
+- Capability diagnostics for embedded SQLite, local service, and future remote
+  service authority backends, especially around multi-host consistency,
+  transaction isolation, lease time, recovery scans, and stale writer fencing.
+- Strict capability admission before concurrent stages, concurrent run
+  submission, multi-host workers, live submitted-job commits, sweeps, or shared
+  resource coordination are allowed.
+- A hard deprecation and removal path for embedded run-local SQLite authority
+  once the revised service/database backend satisfies the runtime authority
+  contract. Derived catalog SQLite sidecars remain separate rebuildable
+  projections.
+- Tests proving local-only mutation is rejected for new runtime paths, local
+  directory access cannot read or write lifecycle behavior, and
+  authority-backed lifecycle transitions cover serial, parallel, subprocess,
+  submitted, and worker-continuation flows.
+
+Exit criteria:
+
+- No supported mutating entrypoint creates or resumes a run through
+  `LocalRunStore` alone.
+- New runs always have authoritative attempt, lease, commit, revision, and
+  snapshot state.
+- Direct Python API docs and examples teach the authority-backed store factory,
+  not `LocalRunStore`.
+- SLURM and stage continuation flows are authority-backed or fail loudly when
+  authority is unavailable.
+- The concrete service/database backend is implemented, proven against the
+  authority conformance harness, and supported by runtime/read systems through
+  the public factory/configuration path.
+- HPC deployment diagnostics distinguish managed service, allocation-scoped
+  service, direct transactional database, co-located single-process, and
+  deferred-finalization profiles.
+- Unsupported concurrency modes fail before worker launch or scheduler
+  submission rather than falling back to weaker local lifecycle behavior.
+- The roadmap and planning notes state that embedded run-local SQLite authority
+  is transitional and is removed from supported runtime behavior after the
+  service/database backend lands.
+
+Defer:
+
+- Deleting local materialization files and helpers.
+- Hosted production service deployment, authentication, authorization,
+  tenancy, and operations.
+- A distributed scheduler, queue, worker-daemon, or workflow engine.
+- Migration or lifecycle interpretation of old local-only v0-v8 run
+  directories.
+- Full sweep runner behavior, remote artifact payload movement, and remote
+  object-store authority.
+
+Primary feature docs:
+
+- `run-store.md`
+- `state.md`
+- `execution.md`
+- `reliability.md`
+- `resume.md`
+- `remote-stores.md`
+- `sweeps.md`
+- `run-catalog.md`
+- `slurm.md`
+- `cli.md`
+- `testing.md`
+
+Planning notes:
+
+- `roadmap-v9-post-planning-notes.md`
+
+Implementation plan:
+
+- `implementation-plan-v9-post.md`
+
+## v10 - DB-Backed Service Supervisor And Offline Authority Import
+
+Goal:
+
+- Replace the v9-post in-memory co-located authority default with an
+  operationally clear, DB-backed authority server plus supervisor that manages
+  durable run lifecycle, stage lifecycle, and generic workspace coordination
+  across commands, controllers, workers, and submitted jobs.
+
+Implement:
+
+- A DB-backed `AuthorityServer` implementation where clients and workers talk
+  only to the authority API and never open the authority database directly.
+- An `AuthoritySupervisor` responsible for server start, stop, health checks,
+  stale-process detection, endpoint/auth metadata, registry updates, and
+  cleanup.
+- A workspace/allocation-scoped service registry that records the selected
+  authority endpoint, workspace id, database location or service reference,
+  process identity where applicable, service generation, health metadata, and
+  redacted diagnostics.
+- Strict authority resolution shared by Python API, CLI, subprocess workers,
+  stage jobs, SLURM planning/submission/cancel/status, continuation commands,
+  diagnostics, and preflight:
+  - connect to an explicit endpoint or registry-discovered service and fail
+    closed when unavailable;
+  - run offline only when explicitly requested and record import evidence;
+  - start local service infrastructure only through explicit supervisor
+    lifecycle commands or trusted API calls;
+  - reject silent creation of unrelated in-memory services for production-like
+    entrypoints.
+- Full conversion of production-like lifecycle-mutating runtime paths to the
+  authority-first structure, including `loom run`, Python execution helpers,
+  `PipelineRunner`, worker entrypoints, `loom stage run`, `loom stage-job run`,
+  prepared-run continuation, SLURM live submission/cancel/status mutation paths,
+  offline evidence creation, offline import, diagnostics, and preflight.
+- Clear separation between authority-backed lifecycle mutation and read-only
+  local inspection. Local log, artifact, config, provenance, and catalog
+  inspection can remain file-backed when it is explicitly read-only and labels
+  materialized/evidence state rather than authoritative service state.
+- Clear user-facing modes for online service-backed execution and explicit
+  offline-first execution, with any local service startup treated as
+  supervisor-managed online infrastructure rather than an implicit runtime
+  fallback.
+- Persistent run lifecycle and stage lifecycle storage covering run admission,
+  controller leases, run transitions, attempts, stage leases, fencing,
+  submitted operations, output commits, artifact facts, snapshots, recovery,
+  cleanup candidates, and audit events.
+- Authority-backed `WorkspaceCoordinationStore` behavior for generic
+  workspace/trial references, global counters, named resource limits, resource
+  leases, and cross-run recovery scans, without implementing sweep scheduling in
+  the authority server.
+- A resource coordination port exposed through the authority client where online
+  runners acquire generic named resource leases from the authority server before
+  launching admitted work.
+- A run-local offline resource coordinator for offline-first execution that can
+  enforce limits within one run and records that no cross-run resource guarantee
+  existed.
+- Scheduler-ready request and decision value objects so a future
+  `WorkflowScheduler` can optimize run/stage starts through authority APIs
+  without opening the authority DB or replacing the runner/executor boundary.
+- Admission and diagnostics that distinguish per-run lifecycle authority from
+  cross-run workspace coordination capabilities.
+- Documented run and stage lifecycle state diagrams with guarded transition
+  rules, terminal-state policy, and clear ownership of who requests versus who
+  accepts each transition.
+- Lifecycle policy that treats interrupted stages as restart-from-scratch on
+  resume, permits `SUBMITTED -> RUNNING` only when Loom regains active execution
+  control after external scheduler acceptance, and converts accepted offline
+  import evidence into authority-owned truth.
+- True offline run import: a run may execute with no authority-created
+  run/stage/attempt first, persist an offline execution evidence record, and
+  later import into authority only after an equivalence and conflict check.
+- Offline evidence schemas for execution plan, config/provenance, run URI,
+  stage order, stage attempts, input fingerprints, output refs, artifact
+  checksums where available, failure records, logs, runtime metadata, and
+  provenance summaries.
+- An authority import transaction that either creates an imported authoritative
+  run with equivalent lifecycle facts or rejects the import with actionable
+  diagnostics for conflicts, missing evidence, changed fingerprints, missing
+  payloads, unsafe paths, or incompatible schema versions.
+- Tests for service registry safety, connect-or-fail behavior, explicit
+  offline-first execution, explicit supervisor startup, supervisor
+  restart/health behavior, concurrent commands sharing a service, DB durability
+  across service restart, service-backed workspace coordination, offline import
+  acceptance/rejection, and no direct DB client bypass.
+
+Exit criteria:
+
+- Every production-like lifecycle-mutating entrypoint resolves authority through
+  the shared online/offline policy before changing run, stage, attempt, lease,
+  resource, or workspace coordination state.
+- No converted runtime entrypoint writes lifecycle truth directly to a local run
+  store except through explicit offline evidence creation or authority import.
+- Read-only local inspection commands do not mutate lifecycle records and make
+  clear whether they are reading authoritative service state or local
+  materialized/evidence state.
+- Runtime entrypoints no longer silently create an in-memory or DB-backed
+  authority service as a fallback from execution.
+- Missing or unreachable online authority fails by default with guidance for
+  service startup/configuration and explicit offline-first execution.
+- Independent commands in the same workspace/allocation discover or receive the
+  same durable service endpoint and authority generation.
+- A stopped or unreachable configured service produces clear fail-closed
+  diagnostics before lifecycle mutation.
+- Authority server state survives process restart through the selected DB
+  backend.
+- Concurrent controllers can create and mutate distinct runs against the same
+  service without sharing per-run lifecycle accidentally.
+- Concurrent stages in one run are still scheduled by the runner but fenced and
+  committed by the authority server.
+- Workspace coordination for sweeps, global counters, and shared resource
+  limits is available through generic authority-backed coordination primitives
+  rather than a separate client-opened SQLite coordination store.
+- Online resource limits are enforced through authority-backed generic resource
+  leases. Offline-first runs enforce only run-local limits and report the absence
+  of cross-run resource guarantees.
+- The authority server does not directly schedule DAG stages, sweep trials, or
+  pipelines in v10; scheduler-ready request/decision data leaves room for a
+  future `WorkflowScheduler` to optimize these starts through authority APIs.
+- Offline-first runs can be imported into authority only when Loom can prove
+  equivalence of plan, inputs, outputs, and persisted evidence.
+
+Defer:
+
+- Hosted production operations, authentication, authorization, tenancy, and
+  high availability beyond the minimum supervisor contract.
+- Compatibility support or migration for old implicit local-only runtime
+  behavior.
+- A full online `WorkflowScheduler`, distributed queue, worker daemon, adaptive
+  sweep runner, or external orchestration system. V10 reserves scheduler-ready
+  interfaces but does not implement global scheduling policy.
+- Remote artifact payload movement and remote object-store authority.
+- Cryptographic attestation or signing for offline evidence.
+- Domain-specific metric equivalence, artifact interpretation, or report
+  generation.
+
+Primary feature docs:
+
+- `run-store.md`
+- `state.md`
+- `execution.md`
+- `reliability.md`
+- `resume.md`
+- `remote-stores.md`
+- `sweeps.md`
+- `run-catalog.md`
+- `slurm.md`
+- `preflight.md`
+- `cli.md`
+- `testing.md`
+
+Planning notes:
+
+- `roadmap-v10-planning-notes.md`
+
+## v11 - Run Bundles And Exporters
 
 Goal:
 
@@ -734,7 +1034,7 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v11 - Deterministic Sweeps
+## v12 - Deterministic Sweeps
 
 Goal:
 
@@ -764,7 +1064,7 @@ Exit criteria:
 
 - A user can define a grid or manual sweep, inspect the planned trials, run
   them sequentially, and see trial statuses.
-- Every trial remains an ordinary run that v8 catalog and v10 bundle tools can
+- Every trial remains an ordinary run that v8 catalog and v11 bundle tools can
   inspect.
 - Sweep logic does not implement its own config merge, stage execution, or
   scheduler submission behavior.
@@ -789,7 +1089,7 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v12 - Plugin Discovery
+## v13 - Plugin Discovery
 
 Goal:
 
@@ -807,8 +1107,8 @@ Implement:
 - Codec plugin loading into supplied codec registries.
 - Source, executor, and store backend loading after corresponding registries
   exist.
-- Run exporter plugin loading after the v10 exporter protocol exists.
-- Event sink plugin listing, with registration deferred until the v17
+- Run exporter plugin loading after the v11 exporter protocol exists.
+- Event sink plugin listing, with registration deferred until the v18
   `RuntimeEvent` and `EventSinkRegistry` contracts are stable.
 - Plugin provenance summaries for plugin names, packages, versions, groups, and
   load results.
@@ -845,7 +1145,7 @@ Primary feature docs:
 - `provenance.md`
 - `testing.md`
 
-## v13 - Remote Store Contract
+## v14 - Remote Store Contract
 
 Goal:
 
@@ -858,7 +1158,7 @@ Implement:
 - Artifact-store capability model: readable, writable, listable,
   atomic-commit support, checksum verification, and delete support.
 - Backend-neutral URI/config validation hooks and redaction helpers.
-- Store registry hooks compatible with v12 plugin loading.
+- Store registry hooks compatible with v13 plugin loading.
 - Fake remote artifact store for contract and preflight tests.
 - Manifest-last commit expectations and metadata shapes for remote-like stores.
 - Read-only store behavior for reference artifacts.
@@ -894,7 +1194,7 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v14 - Remote Store Operations
+## v15 - Remote Store Operations
 
 Goal:
 
@@ -942,7 +1242,7 @@ Primary feature docs:
 - `preflight.md`
 - `testing.md`
 
-## v15 - Docker Container Executor
+## v16 - Docker Container Executor
 
 Goal:
 
@@ -990,7 +1290,7 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v16 - HPC Container Execution
+## v17 - HPC Container Execution
 
 Goal:
 
@@ -1039,7 +1339,7 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v17 - Reliability Policies And Event Sinks
+## v18 - Reliability Policies And Event Sinks
 
 Goal:
 
@@ -1085,7 +1385,7 @@ Implement:
   environments, including named keys, slot counts, lease duration, renewal
   records, and explicit behavior when lease renewal fails.
 - Programmatic event sink registration first, with plugin-discovered event sink
-  loading integrated after the v12 plugin surfaces and this version's event
+  loading integrated after the v13 plugin surfaces and this version's event
   sink registry are both stable.
 - Preflight warnings for unsupported retry, timeout, event, transaction, and
   concurrency-lease policies.
@@ -1112,7 +1412,7 @@ Exit criteria:
 - Event sinks are observer-only and cannot become an alternate execution,
   planning, artifact, retry, or metric semantics layer.
 - Global concurrency leases can be consumed by later bounded sweeps or external
-  adapters without making v11 sweeps concurrent by default.
+  adapters without making v12 sweeps concurrent by default.
 
 Defer:
 
@@ -1123,7 +1423,7 @@ Defer:
   escalation.
 - Work-pool, queue, worker-daemon, prefetch, scheduling, and worker-health
   abstractions. Those may be revisited for future orchestration adapters, but
-  v17 should stay focused on the durable runtime records and policies that such
+  v18 should stay focused on the durable runtime records and policies that such
   adapters would consume.
 
 Primary feature docs:
@@ -1138,7 +1438,7 @@ Primary feature docs:
 - `cli.md`
 - `testing.md`
 
-## v18 - Cleanup And Retention
+## v19 - Cleanup And Retention
 
 Goal:
 
@@ -1215,7 +1515,7 @@ future roadmap candidates, not as implicit scope for the versions above.
   and centralize cancellation. This should remain deferred until Loom has a
   concrete scheduling or multi-run orchestration need.
 - MLflow-backed and DVC-backed artifact stores. These should be optional
-  plugin backends after the v13 remote-store capability model exists. They must
+  plugin backends after the v14 remote-store capability model exists. They must
   advertise read/write/list/checksum/delete and transaction semantics like any
   other backend, and they must not become special cases inside core Loom.
 - Hydra configuration or launcher bridges. Existing Hydra projects may benefit
@@ -1223,7 +1523,7 @@ future roadmap candidates, not as implicit scope for the versions above.
   authored-source provenance, fingerprints, and path-aware error behavior well
   enough for Loom resume decisions to stay trustworthy.
 - OpenTelemetry, W&B, JSONL audit, webhook, or notification event sinks. These
-  should be service-specific plugins over the v17 event sink model. Core Loom
+  should be service-specific plugins over the v18 event sink model. Core Loom
   should provide the event contract and failure policy, not service delivery.
 - No `MetricExtractor` layer. Loom may track a metrics file as an ordinary
   artifact reference because project code produced it, but core Loom should not
@@ -1266,26 +1566,26 @@ Before turning any roadmap version into a full implementation plan:
 | `errors.md` | v0, v1, v2, v3 | Shared roots land in v0; composition directive errors mature in v1; CLI formatting and local diagnostics mature in v2 and v3. |
 | `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
-| `io.md` | v0, v1, v12, v13, v14 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v12; remote hooks and operations in v13/v14. |
-| `artifacts.md` | v0, v3, v9, v10, v13, v14, v18 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; bundles/exporters in v10; remote capabilities in v13/v14; retention in v18. |
-| `config.md` | v0, v1, v2, v11, v12 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v11; recipe plugins in v12. |
-| `pipeline.md` | v0, v2, v9, v11 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
+| `io.md` | v0, v1, v13, v14, v15 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v13; remote hooks and operations in v14/v15. |
+| `artifacts.md` | v0, v3, v9, v9-post, v10, v11, v14, v15, v19 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v11; remote capabilities in v14/v15; retention in v19. |
+| `config.md` | v0, v1, v2, v12, v13 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v12; recipe plugins in v13. |
+| `pipeline.md` | v0, v2, v9, v12 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
-| `runtime-resources.md` | v4, v6, v7, v15, v16 | Shared runtime/resource objects arrive before executor-specific mapping. |
-| `execution.md` | v0, v4, v5, v6, v7, v9, v15, v16, v17 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; reliability in v17. |
-| `run-store.md` | v0, v3, v5, v8, v9, v10, v17, v18 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; bundles/reliability/cleanup build later. |
-| `state.md` | v0, v5, v7, v9, v17 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, and reliability records mature later. |
-| `provenance.md` | v0, v1, v6, v7, v12, v15, v16, v17 | Generic provenance in v0; config composition provenance in v1; submission, plugin, container, event, and event-sink facts added with those capabilities. |
-| `resume.md` | v0, v2, v3, v9, v11, v17 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; sweeps and retry policies build later. |
-| `preflight.md` | v3, v4, v5, v6, v7, v9, v12, v13, v14, v15, v16, v17, v18 | Core check runner in v3; new checks arrive with each operational feature. |
-| `run-catalog.md` | v8, v9, v10, v11, v14, v18 | Catalog/comparison in v8; active-query guarantees and projections in v9; bundles and exporters in v10; sweeps integrate in v11; remote refs and cleanup later. |
-| `sweeps.md` | v9, v11 | V9 defines coordination primitives for large sweeps; v11 implements deterministic sweeps as many ordinary runs. |
-| `slurm.md` | v6, v7, v16 | Script/dry-run support first; live operations second; container composition after both are stable. |
-| `container-executors.md` | v15, v16 | Docker first; Apptainer and SLURM-container composition second. |
-| `remote-stores.md` | v9, v13, v14 | V9 shapes backend capability expectations; contract and fake backend first; payload operations and optional real backends second. |
-| `reliability.md` | v5, v9, v17, v18 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; retry, timeout, runtime events, event sinks, and cleanup land later. |
-| `plugins.md` | v12, v13, v14, v17 | Explicit discovery in v12; remote backend, exporter, and event sink integration later. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v10, v11, v12, v14, v15, v16, v17, v18 | Core CLI lands in v2; commands grow only with their owning feature. |
+| `runtime-resources.md` | v4, v6, v7, v16, v17 | Shared runtime/resource objects arrive before executor-specific mapping. |
+| `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v16, v17, v18 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; v9-post removes local-only mutation entrypoints; v10 makes service connection/start policy explicit and durable; reliability in v18. |
+| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v18, v19 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; v9-post deprecates `LocalRunStore` as a runtime entrypoint; v10 adds DB-backed authority service and offline import; bundles/reliability/cleanup build later. |
+| `state.md` | v0, v5, v7, v9, v9-post, v10, v18 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, mandatory authority-backed lifecycle use, durable service state, and reliability records mature later. |
+| `provenance.md` | v0, v1, v6, v7, v10, v13, v16, v17, v18 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, plugin, container, event, and event-sink facts added with those capabilities. |
+| `resume.md` | v0, v2, v3, v9, v9-post, v10, v12, v18 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; v9-post authority-backs continuation entrypoints; v10 adds offline import/equivalence policy; sweeps and retry policies build later. |
+| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v13, v14, v15, v16, v17, v18, v19 | Core check runner in v3; new checks arrive with each operational feature. |
+| `run-catalog.md` | v8, v9, v9-post, v10, v11, v12, v15, v19 | Catalog/comparison in v8; active-query guarantees and projections in v9; v9-post clarifies authority-backed behavior reads versus artifact-only local directory access; v10 service registry/offline import updates run visibility; bundles and exporters in v11; sweeps integrate in v12; remote refs and cleanup later. |
+| `sweeps.md` | v9, v9-post, v10, v12 | V9 defines coordination primitives for large sweeps; v9-post shapes workspace authority and service-backed coordination; v10 service-backs workspace coordination; v12 implements deterministic sweeps as many ordinary runs. |
+| `slurm.md` | v6, v7, v9-post, v10, v17 | Script/dry-run support first; live operations second; v9-post removes local-only submitted-state mutation; v10 clarifies allocation-scoped service supervision and connection policy; container composition after both are stable. |
+| `container-executors.md` | v16, v17 | Docker first; Apptainer and SLURM-container composition second. |
+| `remote-stores.md` | v9, v9-post, v10, v14, v15 | V9 shapes backend capability expectations; v9-post plans service/database authority for multi-host state; v10 delivers durable service supervision; contract and fake backend first; payload operations and optional real backends second. |
+| `reliability.md` | v5, v9, v9-post, v10, v18, v19 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; retry, timeout, runtime events, event sinks, and cleanup land later. |
+| `plugins.md` | v13, v14, v15, v18 | Explicit discovery in v13; remote backend, exporter, and event sink integration later. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v15, v16, v17, v18, v19 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
 
 ## Functionality Not Encompassed By This Roadmap
@@ -1309,8 +1609,8 @@ until there is a specific downstream need and a separate design review.
   `loom`.
 - Hosted workflow orchestration, remote tracking servers, web dashboards,
   authorization systems, and hosted run catalog services as core Loom features.
-  V9 may consider database-backed authoritative store implementations for
-  Loom's own persistence contract, but external systems such as Prefect or
+  V10 owns database-backed authoritative service supervision for Loom's own
+  persistence contract, but external systems such as Prefect or
   MLflow remain optional adapters.
 - Controller-mode SLURM, job arrays, multi-node MPI orchestration, cloud batch
   backends, Kubernetes, and workflow submission across unrelated clusters.
@@ -1318,7 +1618,7 @@ until there is a specific downstream need and a separate design review.
   population-based training, adaptive trial generation, early stopping across
   trials, and metric query languages.
 - Broad first-party parity across S3, GCS, Azure, MLflow, DVC, fsspec, and
-  similar backends. v14 should select at most one optional adapter family if a
+  similar backends. v15 should select at most one optional adapter family if a
   concrete need exists.
 - Full SBOM generation, cryptographic attestation, signed artifact manifests,
   distributed tracing, and remote telemetry.
