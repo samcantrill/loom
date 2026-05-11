@@ -211,7 +211,7 @@ make test-summary
 
 - Phase implementation refinement: used
 - PR review: unused
-- Blocker resolution: 0/3 used
+- Blocker resolution: 1/3 used
 
 ## Completion Notes
 
@@ -272,7 +272,17 @@ make test-summary
   - PR preparation handoff: completion notes and budget status are updated;
     final PR preparation should still run `make validate-pr` and
     `make test-summary`.
-- Blocker-resolution summary: none used.
+- Blocker-resolution summary: 1/3 used.
+  - Pass 1 addressed the pre-submit validation blocker found during PR body
+    draft preparation: `tests/unit/loom/pipeline/stores/test_store_errors.py`
+    asserted the exact `loom.pipeline.stores.__all__` list and had not been
+    updated for the new public resolver exports. The scoped fix updated that
+    expected export list only.
+  - Validation after the fix:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_store_errors.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_authority_resolution.py tests/contracts/test_authority_resolution_contract.py`
+    passed with 37 tests, and
+    `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/unit/loom/pipeline/stores/test_store_errors.py`
+    passed.
 - PR preparation: pending.
 - Stack maintenance: not applicable yet.
 - Remaining blockers: none.
