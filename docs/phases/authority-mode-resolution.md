@@ -1,0 +1,222 @@
+# Phase 1 Execution Plan: Authority Mode And Resolver Contracts
+
+## Metadata
+
+- Status: draft phase execution plan
+- Feature focus: DB-Backed Authority Supervisor And Offline Import
+- PR title: `DB-Backed Authority Supervisor And Offline Import - Phase 1: Authority Mode And Resolver Contracts`
+- Branch: `codex/authority-mode-resolution`
+- Worktree: `/home/samcantrill/work/loom-worktrees/authority-mode-resolution`
+- Phase execution plan path: `docs/phases/authority-mode-resolution.md`
+- Full plan: `docs/implementation-plans/implementation-plan-v10.md`
+- Source phase: Phase 1 - Authority Mode And Resolver Contracts
+- Stack predecessor: none
+- Base branch: `develop`
+- Target branch: `develop`
+- Merge eligibility: root phase, merge-eligible after PR targets `develop` and automated gates pass
+- Workflow path: expanded path
+- Successor dependency notes: Phase 2 will build protocol models on these resolver categories; Phase 8 and Phase 10 later provide registry persistence and runtime adoption.
+- Plan quality gate: passed on 2026-05-11 after one refinement pass and confirmation review
+- Plan quality gate loop budget: consumed; do not reopen unless the v10 implementation plan changes materially
+- Draft pass: completed by `loom_phase_planner` on 2026-05-11
+- Refine pass: pending for expanded path
+- Setup limitations: none; `origin` was fetched and local `develop` matched `origin/develop` at worktree creation
+- Blockers: none
+
+## Objective
+
+Define the stable, side-effect-free authority selection and resolver contract for v10 online and offline behavior, including explicit online mutation mode, explicit offline-first mode, resolver inputs, resolver outcomes, and actionable diagnostics.
+
+## Full-Plan Context
+
+This is the semantic root of v10. Later phases add transport-independent protocol models, FastAPI transport, durable private repository state, registry files, supervisor commands, runtime adoption, workspace coordination, resource leases, offline evidence, and import. This phase must not implement those later behaviors. It should make those phases possible by giving them shared vocabulary for online authority references, offline evidence intent, stale or incompatible registry hints, unhealthy or unavailable services, and reserved direct-database selections.
+
+## Stack Context
+
+- Root or stacked phase: root phase
+- Current predecessor branch or PR: none
+- Why this base branch is correct: this is the first v10 phase and the assignment records no unmerged predecessor
+- Retarget/rebase plan after predecessor merge: not applicable
+- Branch cleanup constraints: delete the phase branch and worktree after merge if no successor branch depends on it
+
+## Source Phase Summary
+
+- Goal: define the authority selection contract that all later online/offline behavior will use.
+- Required scope: add explicit records for online authority mode, offline-first mode, resolver inputs, resolver outcomes, and failure diagnostics; cover shared CLI/config/environment inputs; encode no implicit service start in new resolver semantics; classify `direct_database` as unsupported/reserved for v10 runtime mutation; distinguish unavailable, stale, incompatible, unhealthy, and explicit offline outcomes; preserve existing service APIs.
+- Required checkpoints: stable importable contract types, side-effect-free resolver behavior, CLI/env/config normalization, direct-database diagnostics, explicit offline outcome, compatibility tests, and no runtime factory adoption.
+- Acceptance criteria: resolver contract types are importable from stable non-transport modules; missing authority references fail closed for online mutation mode; direct-database inputs produce an unsupported/reserved diagnostic; explicit offline-first resolution succeeds as non-authoritative; diagnostics provide next steps without starting a service; existing authority store tests still pass or are adjusted only for contract clarity.
+
+## Current Source And Harness Findings
+
+- `src/loom/pipeline/stores/config.py` owns `AuthorityConfig`, `AuthorityReference`, backend/profile enums, env parsing, and CLI-argument serialization. `AuthorityConfig()` currently defaults to co-located service authority.
+- `src/loom/pipeline/stores/deployment.py` owns deployment-profile diagnostics and preflight summaries. It already models co-located, managed, allocation-scoped, direct-database, and deferred-finalization profiles, but it is not a strict online/offline resolver.
+- `src/loom/pipeline/stores/service_authority.py` provides the current stdlib local service fixture/client. `create_service_authority_store()` starts a shared co-located service when config has no endpoint, so Phase 1 must not route strict resolver checks through that factory.
+- `src/loom/pipeline/stores/factory.py`, `src/loom/pipeline/execution/authority_adapter.py`, and CLI run/status/stage/stage-job/preflight/backend commands consume `AuthorityConfig` today. Full adoption of strict behavior is Phase 10 or later, not this phase.
+- `src/loom/cli/authority.py` is the shared parser helper for authority options. It currently exposes backend/profile/endpoint/workspace/state/reference metadata, but no explicit authority mode or offline-first selection.
+- Existing tests cover authority config parsing, deployment diagnostics, service authority behavior, public store contracts, backend diagnostics, and CLI backend behavior. New resolver coverage should fit beside these tests rather than replacing service/store conformance.
+- Import-boundary constraint: resolver contracts must not import FastAPI, private SQLite implementation modules, or service process internals.
+
+## In-Scope Work
+
+- Add a stable non-transport resolver contract module under the authority/store boundary, exported through `loom.pipeline.stores` if it is intended as public package vocabulary.
+- Define explicit mode/input/outcome/diagnostic records for online mutation resolution and offline-first resolution.
+- Extend shared config/env/CLI normalization enough for future commands to pass explicit online/offline intent into the resolver.
+- Implement a side-effect-free resolver that classifies missing authority, explicit endpoint references, registry-hint facts supplied by callers, stale generation, incompatible generation or version, unhealthy service, unavailable service, unsupported/reserved `direct_database`, and explicit offline selection.
+- Keep current runtime factories and service APIs working during this phase unless a test adjustment is required to isolate the new contract.
+- Add package, unit, contract, and minimal integration coverage for the resolver contract and shared option parsing.
+
+## Out-of-Scope Work
+
+- FastAPI server/client implementation.
+- Durable SQLite repository or schema work.
+- Workspace registry file persistence under `.loom/authority/`.
+- Supervisor lifecycle commands or process management.
+- Runtime factory adoption of the strict resolver.
+- Runner, worker, SLURM, diagnostics, or preflight behavior changes beyond shared option/config parsing needed to carry resolver inputs.
+- Offline evidence writing, offline import, or any claim that offline evidence is authority truth.
+- Direct database access as a supported runtime mutation path.
+
+## Assumptions
+
+- `AuthorityConfig()` defaults remain temporarily backward-compatible for this phase; strict no-implicit-start behavior belongs to the new resolver API and is adopted by factories in later phases.
+- Offline-first mode can be represented as resolver intent/outcome now, even though execution support and evidence manifests are Phase 17 work.
+- Registry and service health facts are inputs to the resolver in this phase. File IO, network probing, and supervisor health checks are later adapter responsibilities.
+- `direct_database` remains parseable so stale env/CLI/config values can receive a precise unsupported/reserved diagnostic.
+
+## Scope Contract
+
+The resolver core must be deterministic and side-effect-free. Calling it must never start `LocalAuthorityService`, open SQLite files, read `.loom/authority/`, or perform network health checks. It may normalize already-supplied config, environment, CLI, registry-hint, and health/capability facts into typed outcomes.
+
+Online mutation mode requires a usable authority reference. Missing endpoint/registry facts, stale registry facts, incompatible generation/version facts, unhealthy service facts, unavailable service facts, and reserved direct-database selections produce non-success outcomes with actionable diagnostics. Offline-first mode is an explicit success outcome, but it is non-authoritative and must label later evidence/import requirements. Existing runtime factories may continue their current behavior until Phase 10 adopts this resolver.
+
+## Design Impact
+
+- Maintainability: separates authority-selection policy from service clients, repositories, CLI commands, and runtime factories.
+- Extensibility: gives later FastAPI, registry, hosted, and supervisor phases stable outcome categories without assuming localhost, SQLite, or one transport.
+- Domain neutrality: all records describe generic authority state, execution mode, diagnostics, and provenance requirements; no research-domain semantics are introduced.
+- Source-tree boundaries: resolver contracts live under `src/loom/pipeline/stores/` or an adjacent authority boundary; CLI helpers may parse shared flags but must not own resolver semantics.
+
+## Future Compatibility
+
+Future phases should be able to add registry persistence, capability probing, FastAPI client checks, hosted authority references, and import provenance without changing the core online/offline outcome categories. If later source review proves additional failure classes are needed, they should be additive enum values with contract tests.
+
+## Alternatives Rejected
+
+| Alternative | Reason rejected |
+| --- | --- |
+| Continue inferring authority mode from missing endpoints | Missing endpoint currently triggers co-located service startup in some paths, which conflicts with v10 fail-closed semantics. |
+| Treat offline mode as an exception or fallback after online failure | v10 requires explicit offline-first selection and evidence/import labeling. |
+| Make the resolver call `create_service_authority_store()` for validation | That factory can start a co-located service, so it cannot be the strict resolver core. |
+| Remove `direct_database` parsing immediately | Stale config should produce a clear reserved-profile diagnostic instead of an unknown-value error. |
+
+## Debt Introduced
+
+| Debt | Reason accepted | Revisit trigger |
+| --- | --- | --- |
+| Existing factories still auto-bootstrap co-located service outside the new resolver | Phase 1 defines contracts while preserving current service APIs; Phase 10 owns adoption and behavior change. | Phase 10 strict resolver/factory adoption starts. |
+| Registry and health checks are modeled as supplied facts, not live probes | Registry persistence and supervisor health checks do not exist yet. | Phase 8 registry records or Phase 9 supervisor lifecycle need real adapters. |
+| Offline-first outcome exists before offline evidence writing | Later phases need shared vocabulary before execution support exists. | Phase 17 implements offline evidence writer. |
+
+## Reviewability
+
+- Expected PR size and shape: small to moderate contract PR with new resolver records, shared parsing additions, and focused tests.
+- Files and areas to inspect: `src/loom/pipeline/stores/config.py`, new resolver module, `src/loom/pipeline/stores/__init__.py`, `src/loom/cli/authority.py`, authority config/deployment tests, new resolver contract tests, and any minimal CLI parser tests.
+- Scope-control checks: no FastAPI imports, no SQLite repository work, no registry file IO, no supervisor commands, no runtime factory adoption, and no offline evidence files.
+
+## Implementation Steps
+
+1. Add resolver contract types and diagnostics in a stable non-transport module, with names that distinguish online mutation success, explicit offline success, and failure/rejection outcomes.
+2. Extend shared authority config/env/CLI normalization to carry explicit authority mode or offline-first intent while leaving existing factory defaults intact.
+3. Implement the side-effect-free resolver classification rules for missing references, supplied endpoint references, supplied registry/health/generation facts, direct-database reserved profile, and explicit offline mode.
+4. Export the public contract surface and add package/import-boundary coverage to prove resolver modules do not import transport, service-process, or private SQLite implementation details.
+5. Add unit, contract, and minimal integration tests for normalization, outcome classification, diagnostic rendering, and compatibility with existing authority store/service tests.
+
+## Test Plan
+
+### Package Suite
+
+- Status: required
+- Expected paths: `tests/package/test_pipeline_store_api.py` and any package import-boundary test added for resolver contracts
+- Required assertions or deferral reason: public exports are stable, cheap to import, and do not pull in FastAPI, service process internals, or private SQLite implementation modules.
+
+### Unit Suite
+
+- Status: required
+- Expected paths: `tests/unit/loom/pipeline/stores/test_authority_resolution.py`, `tests/unit/loom/pipeline/stores/test_authority_config_admission.py`, and `tests/unit/loom/cli/test_authority.py` if CLI parsing changes need a focused test file
+- Required assertions or deferral reason: mode/env/CLI normalization, offline-first outcome, online missing-authority failure, direct-database reserved outcome, stale/incompatible/unhealthy/unavailable classifications, and diagnostic guidance.
+
+### Contract Suite
+
+- Status: required
+- Expected paths: `tests/contracts/test_authority_resolution_contract.py`
+- Required assertions or deferral reason: future clients can distinguish online, offline, stale registry, incompatible generation/version, unavailable/unhealthy authority, and unsupported/reserved direct-database outcomes from typed data rather than message matching.
+
+### Integration Suite
+
+- Status: required but narrow
+- Expected paths: focused CLI/config/env resolution coverage, plus existing `tests/integration/pipeline/test_authority_factory.py` and `tests/integration/pipeline/test_authority_deployment_profiles.py` as regression checks when touched
+- Required assertions or deferral reason: shared CLI/config/env parsing can supply resolver inputs without starting a server, and existing public factories remain behaviorally unchanged in this phase.
+
+### E2E Suite
+
+- Status: deferred
+- Expected paths: not required for this phase
+- Required assertions or deferral reason: no user-facing runtime adoption or offline execution command is implemented in Phase 1.
+
+### Opt-In Suites
+
+- Status: deferred
+- Markers affected: none expected
+- Required assertions or deferral reason: this phase must not require external authority services, real process supervisors, network health checks, or scheduler environments.
+
+## Risks
+
+- Resolver names may become long-lived public vocabulary, so ambiguous categories would be costly to unwind.
+- Accidentally routing resolver checks through current service factories would start hidden services and violate the phase's core policy.
+- Adding offline-first parsing without clear labeling could imply offline execution support exists before Phase 17.
+- Changing `AuthorityConfig()` defaults or runtime factory behavior early would pull Phase 10 work into Phase 1.
+- Direct-database diagnostics must be clear without making direct DB access look like a future-safe runtime option.
+
+## Validation Commands
+
+Targeted development commands:
+
+```sh
+uv run pytest tests/package/test_pipeline_store_api.py
+uv run pytest tests/unit/loom/pipeline/stores/test_authority_resolution.py tests/unit/loom/pipeline/stores/test_authority_config_admission.py tests/unit/loom/cli/test_authority.py
+uv run pytest tests/contracts/test_authority_resolution_contract.py
+uv run pytest tests/integration/pipeline/test_authority_factory.py tests/integration/pipeline/test_authority_deployment_profiles.py
+```
+
+Final PR-preparation commands:
+
+```sh
+make validate-pr
+make test-summary
+```
+
+## Handoff Notes For `loom_phase_executor`
+
+- Safe implementation slices: resolver contracts/exports, shared parser normalization, resolver classification and diagnostics, then focused tests.
+- Tests to run with each slice: resolver unit tests after contract implementation, package/contract tests after exports, integration regression tests only after parser/factory-adjacent edits.
+- Decisions the executor must not revisit: the resolver core is side-effect-free; offline-first is explicit and non-authoritative; `direct_database` is reserved/unsupported for v10 runtime mutation; current factory adoption is out of scope.
+- Conditions that require stopping for the manager: inability to preserve existing service API behavior, need to change public runtime defaults, need for live registry/probe IO, or ambiguity that would affect later public protocol compatibility.
+- Expanded-path refinement notes: the refine pass should confirm naming, public export choices, and whether `AuthorityConfig()` default compatibility is sufficiently documented before implementation starts.
+
+## Refinement And Review Budget Status
+
+- Phase implementation refinement: unused
+- PR review: unused
+- Blocker resolution: 0/3 used
+
+## Completion Notes
+
+- Draft plan: completed by `loom_phase_planner` on 2026-05-11.
+- Final phase execution plan: pending expanded-path refine pass.
+- Implementation summary: pending.
+- Implementation validation: pending.
+- Refinement summary: pending.
+- Blocker-resolution summary: none used.
+- PR preparation: pending.
+- Stack maintenance: not applicable yet.
+- Remaining blockers: none.
