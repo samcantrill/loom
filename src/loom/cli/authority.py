@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from loom.pipeline.stores import AuthorityConfig
+    from loom.pipeline.stores import AuthorityResolutionMode
     from loom.serialization import PlainData
 
 
@@ -27,9 +28,14 @@ _AUTHORITY_PROFILE_CHOICES = (
     "direct_database",
     "deferred_finalization",
 )
+_AUTHORITY_MODE_CHOICES = ("online_mutation", "offline_first")
 
 
-def add_authority_options(parser: argparse.ArgumentParser) -> None:
+def add_authority_options(
+    parser: argparse.ArgumentParser,
+    *,
+    include_resolution_mode: bool = False,
+) -> None:
     """Add shared authority-selection options to a command parser."""
 
     parser.add_argument(
@@ -67,6 +73,17 @@ def add_authority_options(parser: argparse.ArgumentParser) -> None:
         metavar="JSON",
         help=argparse.SUPPRESS,
     )
+    if include_resolution_mode:
+        parser.add_argument(
+            "--authority-mode",
+            choices=_AUTHORITY_MODE_CHOICES,
+            help=argparse.SUPPRESS,
+        )
+        parser.add_argument(
+            "--offline-first",
+            action="store_true",
+            help=argparse.SUPPRESS,
+        )
 
 
 def authority_config_from_namespace(namespace: Any) -> "AuthorityConfig":
@@ -103,6 +120,17 @@ def authority_config_to_worker_args(config: "AuthorityConfig") -> tuple[str, ...
     return authority_config_to_cli_args(config)
 
 
+def authority_resolution_mode_from_namespace(namespace: Any) -> "AuthorityResolutionMode":
+    """Resolve authority mode from optional CLI namespace fields."""
+
+    from loom.pipeline.stores import authority_resolution_mode_from_mapping
+
+    return authority_resolution_mode_from_mapping(
+        authority_mode=getattr(namespace, "authority_mode", None),
+        offline_first=getattr(namespace, "offline_first", None),
+    )
+
+
 def authority_metadata_summary(config: "AuthorityConfig") -> "Mapping[str, PlainData]":
     """Return a redacted metadata summary for CLI result contexts."""
 
@@ -114,4 +142,5 @@ __all__ = [
     "authority_config_from_namespace",
     "authority_config_to_worker_args",
     "authority_metadata_summary",
+    "authority_resolution_mode_from_namespace",
 ]
