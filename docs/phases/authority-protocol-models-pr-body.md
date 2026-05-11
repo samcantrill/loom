@@ -14,15 +14,16 @@
 | Suite | Result |
 | --- | --- |
 | package | 62 passed, 1 skipped |
-| unit | 884 passed, 1 skipped |
+| unit | 886 passed, 1 skipped |
 | contract | 127 passed, 2 skipped |
 | integration | 101 passed, 8 skipped, 10 deselected |
 | e2e | 39 passed, 1 deselected |
-| config-extra | 420 passed, 1216 deselected |
-| overall | 1633 passed, 12 skipped, 1227 deselected |
+| config-extra | 420 passed, 1218 deselected |
+| overall | 1635 passed, 12 skipped, 1229 deselected |
 
 ## Assumptions And Risks
 
 - Phase 2 defines value objects only; FastAPI routes, transport dispatch, repository bindings, client behavior, supervisor lifecycle, and runtime adoption remain in later phases.
 - Protocol envelopes intentionally nest existing public read-model records only where they already represent stable domain-neutral facts.
 - Operation grouping stays at representative authority families rather than mirroring every store method as a public wire record.
+- Automated review found and blocker resolution fixed readiness parsing for conflicting top-level and nested compatibility facts.
