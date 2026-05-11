@@ -76,6 +76,19 @@ def test_validate_registry_missing_record_fails_closed(tmp_path) -> None:
     assert result.diagnostics[0].code == "authority_registry.missing"
 
 
+def test_validate_registry_malformed_record_fails_closed(tmp_path) -> None:
+    path = tmp_path / ".loom" / "authority" / "current.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    result = validate_authority_registry(tmp_path)
+
+    assert result.status is AuthorityRegistryValidationStatus.INVALID
+    assert result.registry_hint is None
+    assert result.failure_kind is not None
+    assert result.diagnostics[0].code == "authority_registry.invalid"
+
+
 def test_validate_registry_reads_record_and_checks_workspace(tmp_path) -> None:
     write_authority_registry_record(tmp_path, _record())
 

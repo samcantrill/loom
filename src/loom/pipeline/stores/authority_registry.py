@@ -9,9 +9,9 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
-from urllib.parse import parse_qsl, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit
 
-from loom.serialization import PlainData, ensure_plain_data, json_loads
+from loom.serialization import DeserializationError, PlainData, ensure_plain_data, json_loads
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
@@ -254,12 +254,8 @@ class AuthorityRegistryRecord:
                 "allocation_scope",
             ),
             allocation_id=_optional_allocation_id(mapping.get("allocation_id")),
-            created_at=_timestamp_string(
-                mapping.get("created_at", utc_timestamp()), "created_at"
-            ),
-            updated_at=_timestamp_string(
-                mapping.get("updated_at", utc_timestamp()), "updated_at"
-            ),
+            created_at=_timestamp_string(_required(mapping, "created_at"), "created_at"),
+            updated_at=_timestamp_string(_required(mapping, "updated_at"), "updated_at"),
             expires_at=_optional_timestamp_string(mapping.get("expires_at")),
             service_health_state=_enum(
                 mapping.get(
@@ -410,6 +406,10 @@ def read_authority_registry_record(
         raise AuthorityRegistryError(f"authority registry record is missing: {path}") from exc
     except OSError as exc:
         raise AuthorityRegistryError(f"failed reading authority registry record: {path}") from exc
+    except (DeserializationError, PlainDataError) as exc:
+        raise AuthorityRegistryError(
+            f"failed parsing authority registry record: {path}"
+        ) from exc
     return AuthorityRegistryRecord.from_dict(payload)
 
 
@@ -688,17 +688,11 @@ def _safe_endpoint(endpoint: str) -> str:
     if parsed.username or parsed.password:
         raise AuthorityRegistryError("authority endpoint must not contain userinfo")
     if parsed.query:
-        redacted_query = []
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        for key, _value in parse_qsl(parsed.query, keep_blank_values=True):
             if _is_sensitive_key(key):
                 raise AuthorityRegistryError(
                     "authority endpoint must not contain sensitive query parameters"
                 )
-            redacted_query.append((key, value))
-        query = "&".join(f"{key}={value}" for key, value in redacted_query)
-        return urlunsplit(
-            (parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment)
-        )
     return endpoint
 
 

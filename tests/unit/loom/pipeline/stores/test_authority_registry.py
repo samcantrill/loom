@@ -108,6 +108,14 @@ def test_registry_record_round_trips_and_redacts_sensitive_metadata() -> None:
     assert restored == record
 
 
+def test_registry_record_requires_persisted_timestamps() -> None:
+    payload = cast(dict[str, Any], _record().to_dict())
+    del payload["created_at"]
+
+    with pytest.raises(AuthorityRegistryError, match="created_at"):
+        AuthorityRegistryRecord.from_dict(payload)
+
+
 def test_registry_record_rejects_sensitive_endpoint_payloads() -> None:
     with pytest.raises(AuthorityRegistryError, match="userinfo"):
         AuthorityRegistryRecord(
@@ -136,6 +144,23 @@ def test_registry_record_rejects_sensitive_endpoint_payloads() -> None:
             workspace_id="workspace-a",
             state_dir="/tmp/authority-state",
         )
+
+
+def test_registry_record_preserves_safe_endpoint_query_payloads() -> None:
+    record = AuthorityRegistryRecord(
+        reference=AuthorityReference(
+            backend_kind=AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.ALLOCATION_SCOPED,
+            reference_id="authority-1",
+            endpoint="http://127.0.0.1:8000?redirect=a%2Fb&empty=",
+            workspace_id="workspace-a",
+        ),
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+        state_dir="/tmp/authority-state",
+    )
+
+    assert record.reference.endpoint == "http://127.0.0.1:8000?redirect=a%2Fb&empty="
 
 
 def test_registry_record_paths_validate_allocation_ids(tmp_path) -> None:
