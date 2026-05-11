@@ -295,7 +295,11 @@ def start_authority_supervisor(
         log_handle.close()
 
     try:
-        readiness = _wait_until_ready(endpoint, timeout_seconds=timeout_seconds)
+        readiness = _wait_until_ready(
+            endpoint,
+            timeout_seconds=timeout_seconds,
+            process=process,
+        )
     except Exception as exc:
         _terminate_process(process.pid, timeout_seconds=2.0)
         raise AuthoritySupervisorError(
@@ -672,10 +676,20 @@ def _wait_until_ready(
     endpoint: str,
     *,
     timeout_seconds: float,
+    process: subprocess.Popen[bytes] | None = None,
 ) -> AuthorityProtocolReadiness:
     deadline = time.monotonic() + timeout_seconds
     last_error: Exception | None = None
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise AuthoritySupervisorError(
+                "authority supervisor process exited during startup",
+                code="authority_supervisor.exited_during_startup",
+                context={
+                    "endpoint": endpoint,
+                    "returncode": process.returncode,
+                },
+            )
         try:
             return _fetch_readiness(endpoint)
         except Exception as exc:  # noqa: BLE001 - retain the last readiness failure.

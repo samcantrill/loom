@@ -32,6 +32,17 @@ pytestmark = pytest.mark.unit
 class _FakeProcess:
     pid = 43210
 
+    def poll(self) -> int | None:
+        return None
+
+
+class _ExitedFakeProcess:
+    pid = 43211
+    returncode = 1
+
+    def poll(self) -> int:
+        return self.returncode
+
 
 def test_supervisor_state_round_trips(tmp_path: Path) -> None:
     state = AuthoritySupervisorState(
@@ -65,7 +76,7 @@ def test_start_writes_supervisor_state_and_registry(tmp_path: Path, monkeypatch)
     )
     monkeypatch.setattr(
         "loom.authority.supervisor._wait_until_ready",
-        lambda endpoint, *, timeout_seconds: AuthorityProtocolReadiness(),
+        lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
     )
 
     result = start_authority_supervisor(
@@ -86,6 +97,22 @@ def test_start_writes_supervisor_state_and_registry(tmp_path: Path, monkeypatch)
     assert supervisor_state_path(tmp_path / "state").exists()
 
 
+def test_start_fails_if_process_exits_during_startup(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "loom.authority.supervisor.subprocess.Popen",
+        lambda *args, **kwargs: _ExitedFakeProcess(),
+    )
+
+    with pytest.raises(AuthoritySupervisorError, match="exited during startup"):
+        start_authority_supervisor(
+            state_dir=tmp_path / "state",
+            workspace_root=tmp_path / "workspace",
+            workspace_id="workspace-a",
+            port=8766,
+            service_generation="generation-1",
+        )
+
+
 def test_stop_marks_registry_unavailable(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         "loom.authority.supervisor.subprocess.Popen",
@@ -93,7 +120,7 @@ def test_stop_marks_registry_unavailable(tmp_path: Path, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "loom.authority.supervisor._wait_until_ready",
-        lambda endpoint, *, timeout_seconds: AuthorityProtocolReadiness(),
+        lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
     )
     monkeypatch.setattr(
         "loom.authority.supervisor._terminate_process",
