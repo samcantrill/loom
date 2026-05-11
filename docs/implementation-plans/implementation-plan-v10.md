@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 10 PR open; Phase 11 pending
+- Phase work status: Phase 10 merged; Phase 11 pending
 
 Related artifacts and references:
 
@@ -1359,7 +1359,7 @@ development use.
 
 ### Phase 10: Strict Resolver And Factory Adoption
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-resolver-adoption`
 - PR: <https://github.com/samcantrill/loom/pull/128>
 
@@ -1463,6 +1463,14 @@ clarity of user-facing failure messages.
 - Validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
   passed with overall 1740 passed / 0 failed / 0 errors / 12 skipped / 1334
   deselected.
+- Review and CI: managing-agent automated review completed with no blocking
+  findings; GitHub CI `checks` passed on
+  <https://github.com/samcantrill/loom/actions/runs/25704175728/job/75470625510>.
+- Merge metadata: PR #128 was squash-merged into `develop` as `6ce630a` after
+  confirming the PR target was exactly `develop`, the PR was open, and CI had
+  passed.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-resolver-adoption` at merge time.
 - Follow-up notes: Phase 11 should adapt `PipelineRunner` and `loom run` onto
   service-backed online mutation. Phases 12 and 13 still own continuation,
   worker, subprocess, and SLURM migration. Phase 17 owns true offline evidence
