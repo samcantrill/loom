@@ -13,10 +13,16 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
+from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
-from loom.pipeline.status import RunStatus
-from loom.pipeline.stores.authority import StatusTransition
+from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.stores.authority import (
+    AttemptAllocation,
+    OutputCommit,
+    StatusTransition,
+)
 from loom.pipeline.stores.read_models import (
+    ArtifactFactRecord,
     AuthoritativeRunSnapshot,
     BackendRevision,
     CleanupCandidate,
@@ -25,8 +31,11 @@ from loom.pipeline.stores.read_models import (
     LeaseRecord,
     LeaseState,
     LifecycleReason,
+    OutputCommitRecord,
     RecoveryKind,
     RecoveryRecord,
+    StageAttempt,
+    StageLifecycleSnapshot,
 )
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
@@ -34,7 +43,7 @@ from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
 
-AUTHORITY_REPOSITORY_SCHEMA_VERSION = 2
+AUTHORITY_REPOSITORY_SCHEMA_VERSION = 3
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _METADATA_TABLE = "repository_metadata"
@@ -102,6 +111,61 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "revision_sequence",
         }
     ),
+    "authority_stages": frozenset(
+        {"run_uri", "stage_name", "status", "revision_sequence", "reason_json"}
+    ),
+    "stage_attempts": frozenset(
+        {
+            "run_uri",
+            "attempt_id",
+            "stage_name",
+            "attempt_number",
+            "status",
+            "owner_id",
+            "created_at",
+            "revision_sequence",
+            "reason_json",
+        }
+    ),
+    "stage_leases": frozenset(
+        {
+            "lease_id",
+            "run_uri",
+            "stage_name",
+            "attempt_id",
+            "owner_id",
+            "fencing_token",
+            "acquired_at",
+            "renewed_at",
+            "expires_at",
+            "state",
+            "revision_sequence",
+            "reason_json",
+        }
+    ),
+    "output_commits": frozenset(
+        {
+            "commit_id",
+            "run_uri",
+            "stage_name",
+            "attempt_id",
+            "committed_at",
+            "revision_sequence",
+            "output_names_json",
+            "materialized_refs_json",
+        }
+    ),
+    "artifact_facts": frozenset(
+        {
+            "id",
+            "run_uri",
+            "stage_name",
+            "artifact_name",
+            "artifact_json",
+            "commit_id",
+            "revision_sequence",
+        }
+    ),
 }
 _REQUIRED_METADATA_KEYS = frozenset(
     {
@@ -109,6 +173,23 @@ _REQUIRED_METADATA_KEYS = frozenset(
         "service_generation",
         "created_at",
         "updated_at",
+    }
+)
+_ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
+    {
+        StageStatus.PENDING,
+        StageStatus.RUNNING,
+        StageStatus.SUBMITTED,
+    }
+)
+_ATTEMPT_TERMINAL_STATUSES = frozenset(
+    {
+        StageStatus.SUCCEEDED,
+        StageStatus.FAILED,
+        StageStatus.BLOCKED,
+        StageStatus.SKIPPED,
+        StageStatus.STALE,
+        StageStatus.CANCELLED,
     }
 )
 
@@ -326,6 +407,7 @@ class AuthorityRepository:
                 conn,
                 run_uri=run_uri,
                 schema_version=self.schema_version,
+                now=self._now(),
             )
 
     def transition_run(
@@ -374,6 +456,520 @@ class AuthorityRepository:
                 revision=revision,
                 reason=reason,
             )
+
+    def transition_stage(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        from_status: StageStatus | None,
+        to_status: StageStatus,
+        expected_revision: BackendRevision | None = None,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition:
+        """Persist a stage status transition after status and revision checks."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        stage_name = _non_empty(stage_name, "stage_name")
+        to_status = StageStatus(to_status)
+        expected_status = None if from_status is None else StageStatus(from_status)
+        if reason is not None and not isinstance(reason, LifecycleReason):
+            raise AuthorityRepositoryError("reason must be a LifecycleReason or None")
+        with self.transaction() as conn:
+            current_revision = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current_revision, expected_revision)
+            row = conn.execute(
+                """
+                SELECT status
+                FROM authority_stages
+                WHERE run_uri = ? AND stage_name = ?
+                """,
+                (run_uri, stage_name),
+            ).fetchone()
+            current = None if row is None else StageStatus(cast(str, row["status"]))
+            if current is not expected_status:
+                raise AuthorityRepositoryError("stale stage transition")
+            revision = self._next_revision(conn)
+            _upsert_stage(
+                conn,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                status=to_status,
+                revision=revision,
+                reason=reason,
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return StatusTransition(
+                run_uri=run_uri,
+                stage_name=stage_name,
+                previous_status=current,
+                status=to_status,
+                revision=revision,
+                reason=reason,
+            )
+
+    def allocate_stage_attempt(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int | None = None,
+        expected_revision: BackendRevision | None = None,
+    ) -> AttemptAllocation:
+        """Allocate a stage attempt and optionally acquire its stage lease."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        stage_name = _non_empty(stage_name, "stage_name")
+        owner_id = _non_empty(owner_id, "owner_id")
+        if lease_ttl_seconds is not None:
+            lease_ttl_seconds = _positive_seconds(lease_ttl_seconds)
+        with self.transaction() as conn:
+            current_revision = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current_revision, expected_revision)
+            now = self._now()
+            active = _active_stage_lease_row(
+                conn, run_uri=run_uri, stage_name=stage_name, now=now
+            )
+            if active is not None:
+                raise AuthorityRepositoryError("stage already has an active lease")
+            existing_commit = conn.execute(
+                """
+                SELECT 1
+                FROM output_commits
+                WHERE run_uri = ? AND stage_name = ?
+                """,
+                (run_uri, stage_name),
+            ).fetchone()
+            if existing_commit is not None:
+                raise AuthorityRepositoryError("stage already has an output commit")
+            stage_row = conn.execute(
+                """
+                SELECT status
+                FROM authority_stages
+                WHERE run_uri = ? AND stage_name = ?
+                """,
+                (run_uri, stage_name),
+            ).fetchone()
+            if stage_row is not None:
+                stage_status = StageStatus(cast(str, stage_row["status"]))
+                if stage_status not in _ATTEMPT_ALLOCATABLE_STAGE_STATUSES:
+                    raise AuthorityRepositoryError("stage is already terminal")
+            attempt_number = _next_attempt_number(conn, run_uri, stage_name)
+            revision = self._next_revision(conn)
+            attempt_id = f"{stage_name}-{attempt_number}"
+            conn.execute(
+                """
+                INSERT INTO stage_attempts (
+                    run_uri, attempt_id, stage_name, attempt_number, status,
+                    owner_id, created_at, revision_sequence, reason_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    run_uri,
+                    attempt_id,
+                    stage_name,
+                    attempt_number,
+                    StageStatus.RUNNING.value,
+                    owner_id,
+                    now,
+                    revision.sequence,
+                ),
+            )
+            _upsert_stage(
+                conn,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                status=StageStatus.RUNNING,
+                revision=revision,
+                reason=None,
+            )
+            lease = None
+            if lease_ttl_seconds is not None:
+                lease = _insert_stage_lease(
+                    conn,
+                    run_uri=run_uri,
+                    stage_name=stage_name,
+                    attempt_id=attempt_id,
+                    owner_id=owner_id,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                    revision=revision,
+                    now=now,
+                )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            attempt = StageAttempt(
+                run_uri=run_uri,
+                stage_name=stage_name,
+                attempt=attempt_number,
+                attempt_id=attempt_id,
+                status=StageStatus.RUNNING,
+                revision=revision,
+                created_at=now,
+                owner=owner_id,
+            )
+            return AttemptAllocation(attempt=attempt, lease=lease)
+
+    def renew_stage_lease(
+        self,
+        run_uri: str,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+        expected_revision: BackendRevision | None = None,
+    ) -> LeaseRecord:
+        """Renew an active stage lease after owner, fence, and TTL checks."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        lease_ttl_seconds = _positive_seconds(lease_ttl_seconds)
+        with self.transaction() as conn:
+            row = _require_active_stage_lease_row(
+                conn,
+                run_uri=run_uri,
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+            )
+            current = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current, expected_revision)
+            now = self._now()
+            if _timestamp_expired(cast(str, row["expires_at"]), now):
+                raise AuthorityRepositoryError("stage lease has expired")
+            revision = self._next_revision(conn)
+            expires_at = _add_seconds(now, lease_ttl_seconds)
+            conn.execute(
+                """
+                UPDATE stage_leases
+                SET renewed_at = ?, expires_at = ?, revision_sequence = ?
+                WHERE lease_id = ?
+                """,
+                (now, expires_at, revision.sequence, lease_id),
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return _stage_lease_from_row(
+                _require_row(
+                    conn.execute(
+                        "SELECT * FROM stage_leases WHERE lease_id = ?",
+                        (lease_id,),
+                    ).fetchone(),
+                    "unknown stage lease",
+                ),
+                revision=revision,
+            )
+
+    def release_stage_lease(
+        self,
+        run_uri: str,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        expected_revision: BackendRevision | None = None,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord:
+        """Mark an active stage lease released."""
+
+        return self._finish_stage_lease(
+            run_uri,
+            lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            expected_revision=expected_revision,
+            state=LeaseState.RELEASED,
+            reason=reason,
+        )
+
+    def fail_stage_lease(
+        self,
+        run_uri: str,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+        expected_revision: BackendRevision | None = None,
+    ) -> LeaseRecord:
+        """Mark an active stage lease failed."""
+
+        if not isinstance(reason, LifecycleReason):
+            raise AuthorityRepositoryError("reason must be a LifecycleReason")
+        return self._finish_stage_lease(
+            run_uri,
+            lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            expected_revision=expected_revision,
+            state=LeaseState.FAILED,
+            reason=reason,
+        )
+
+    def finish_stage_attempt(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        attempt_id: str,
+        owner_id: str,
+        fencing_token: str,
+        to_status: StageStatus,
+        expected_revision: BackendRevision | None = None,
+        service_generation: str | None = None,
+        reason: LifecycleReason | None = None,
+    ) -> StageAttempt:
+        """Record a terminal non-output stage attempt state."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        stage_name = _non_empty(stage_name, "stage_name")
+        attempt_id = _non_empty(attempt_id, "attempt_id")
+        to_status = StageStatus(to_status)
+        if to_status not in _ATTEMPT_TERMINAL_STATUSES:
+            raise AuthorityRepositoryError("attempt terminal status is required")
+        if reason is not None and not isinstance(reason, LifecycleReason):
+            raise AuthorityRepositoryError("reason must be a LifecycleReason or None")
+        with self.transaction() as conn:
+            _require_service_generation(conn, service_generation)
+            current = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current, expected_revision)
+            lease_row = _require_active_stage_lease_row(
+                conn,
+                run_uri=run_uri,
+                lease_id=_stage_lease_id_for_attempt(conn, run_uri, attempt_id),
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+            )
+            now = self._now()
+            if _timestamp_expired(cast(str, lease_row["expires_at"]), now):
+                raise AuthorityRepositoryError("stage lease has expired")
+            attempt_row = _require_stage_attempt_row(
+                conn,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                attempt_id=attempt_id,
+            )
+            if StageStatus(cast(str, attempt_row["status"])) not in {
+                StageStatus.RUNNING,
+                StageStatus.SUBMITTED,
+            }:
+                raise AuthorityRepositoryError("stage attempt is already terminal")
+            revision = self._next_revision(conn)
+            conn.execute(
+                """
+                UPDATE stage_attempts
+                SET status = ?, revision_sequence = ?, reason_json = ?
+                WHERE run_uri = ? AND attempt_id = ?
+                """,
+                (
+                    to_status.value,
+                    revision.sequence,
+                    _json_dumps_or_none(reason),
+                    run_uri,
+                    attempt_id,
+                ),
+            )
+            _upsert_stage(
+                conn,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                status=to_status,
+                revision=revision,
+                reason=reason,
+            )
+            conn.execute(
+                """
+                UPDATE stage_leases
+                SET state = ?, revision_sequence = ?, reason_json = ?
+                WHERE lease_id = ?
+                """,
+                (
+                    LeaseState.RELEASED.value,
+                    revision.sequence,
+                    _json_dumps_or_none(reason),
+                    cast(str, lease_row["lease_id"]),
+                ),
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return _attempt_from_row(
+                _require_stage_attempt_row(
+                    conn,
+                    run_uri=run_uri,
+                    stage_name=stage_name,
+                    attempt_id=attempt_id,
+                ),
+                conn=conn,
+            )
+
+    def record_output_commit(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        attempt_id: str,
+        owner_id: str,
+        fencing_token: str,
+        outputs: Mapping[str, ArtifactRef],
+        expected_revision: BackendRevision | None = None,
+        service_generation: str | None = None,
+        reason: LifecycleReason | None = None,
+    ) -> OutputCommit:
+        """Persist a fenced stage output commit and artifact facts."""
+
+        run_uri = _non_empty(run_uri, "run_uri")
+        stage_name = _non_empty(stage_name, "stage_name")
+        attempt_id = _non_empty(attempt_id, "attempt_id")
+        owner_id = _non_empty(owner_id, "owner_id")
+        fencing_token = _non_empty(fencing_token, "fencing_token")
+        artifacts = tuple((name, artifact) for name, artifact in outputs.items())
+        for name, artifact in artifacts:
+            _non_empty(name, "output_name")
+            if not isinstance(artifact, ArtifactRef):
+                raise AuthorityRepositoryError("outputs must contain ArtifactRef values")
+        if reason is not None and not isinstance(reason, LifecycleReason):
+            raise AuthorityRepositoryError("reason must be a LifecycleReason or None")
+        with self.transaction() as conn:
+            _require_service_generation(conn, service_generation)
+            current = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current, expected_revision)
+            lease_row = _require_active_stage_lease_row(
+                conn,
+                run_uri=run_uri,
+                lease_id=_stage_lease_id_for_attempt(conn, run_uri, attempt_id),
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+            )
+            now = self._now()
+            if _timestamp_expired(cast(str, lease_row["expires_at"]), now):
+                raise AuthorityRepositoryError("stage lease has expired")
+            attempt_row = _require_stage_attempt_row(
+                conn,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                attempt_id=attempt_id,
+            )
+            if StageStatus(cast(str, attempt_row["status"])) not in {
+                StageStatus.RUNNING,
+                StageStatus.SUBMITTED,
+            }:
+                raise AuthorityRepositoryError("stage attempt is not running")
+            stage_row = conn.execute(
+                """
+                SELECT status
+                FROM authority_stages
+                WHERE run_uri = ? AND stage_name = ?
+                """,
+                (run_uri, stage_name),
+            ).fetchone()
+            if stage_row is None or StageStatus(cast(str, stage_row["status"])) not in {
+                StageStatus.RUNNING,
+                StageStatus.SUBMITTED,
+            }:
+                raise AuthorityRepositoryError("stage is not running")
+            existing_commit = conn.execute(
+                """
+                SELECT 1
+                FROM output_commits
+                WHERE run_uri = ? AND stage_name = ?
+                """,
+                (run_uri, stage_name),
+            ).fetchone()
+            if existing_commit is not None:
+                raise AuthorityRepositoryError("stage already has an output commit")
+            revision = self._next_revision(conn)
+            commit_id = f"{stage_name}-{attempt_id}-commit-{revision.sequence}"
+            output_names = tuple(name for name, _artifact in artifacts)
+            conn.execute(
+                """
+                INSERT INTO output_commits (
+                    commit_id, run_uri, stage_name, attempt_id, committed_at,
+                    revision_sequence, output_names_json, materialized_refs_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    commit_id,
+                    run_uri,
+                    stage_name,
+                    attempt_id,
+                    now,
+                    revision.sequence,
+                    _json_dumps(list(output_names)),
+                    _json_dumps([]),
+                ),
+            )
+            for name, artifact in artifacts:
+                conn.execute(
+                    """
+                    INSERT INTO artifact_facts (
+                        run_uri, stage_name, artifact_name, artifact_json,
+                        commit_id, revision_sequence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_uri,
+                        stage_name,
+                        name,
+                        _json_dumps(artifact.to_dict()),
+                        commit_id,
+                        revision.sequence,
+                    ),
+                )
+            conn.execute(
+                """
+                UPDATE stage_attempts
+                SET status = ?, revision_sequence = ?, reason_json = ?
+                WHERE run_uri = ? AND attempt_id = ?
+                """,
+                (
+                    StageStatus.SUCCEEDED.value,
+                    revision.sequence,
+                    _json_dumps_or_none(reason),
+                    run_uri,
+                    attempt_id,
+                ),
+            )
+            _upsert_stage(
+                conn,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                status=StageStatus.SUCCEEDED,
+                revision=revision,
+                reason=reason,
+            )
+            conn.execute(
+                """
+                UPDATE stage_leases
+                SET state = ?, revision_sequence = ?, reason_json = ?
+                WHERE lease_id = ?
+                """,
+                (
+                    LeaseState.RELEASED.value,
+                    revision.sequence,
+                    _json_dumps_or_none(reason),
+                    cast(str, lease_row["lease_id"]),
+                ),
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            commit = OutputCommitRecord(
+                commit_id=commit_id,
+                run_uri=run_uri,
+                stage_name=stage_name,
+                attempt_id=attempt_id,
+                committed_at=now,
+                revision=revision,
+                output_names=output_names,
+            )
+            facts = tuple(
+                ArtifactFactRecord(
+                    artifact_name=name,
+                    artifact=artifact,
+                    commit_id=commit_id,
+                    revision=revision,
+                )
+                for name, artifact in artifacts
+            )
+            return OutputCommit(commit=commit, artifact_facts=facts)
 
     def acquire_controller_lease(
         self,
@@ -804,6 +1400,64 @@ class AuthorityRepository:
                         run_uri=run_uri,
                     )
                 )
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM stage_leases
+                WHERE run_uri = ? AND state = ?
+                ORDER BY lease_id
+                """,
+                (run_uri, LeaseState.ACTIVE.value),
+            ):
+                if not _timestamp_expired(cast(str, row["expires_at"]), now):
+                    continue
+                lease_id = cast(str, row["lease_id"])
+                records.append(
+                    RecoveryRecord(
+                        recovery_id=f"expired-{lease_id}",
+                        kind=RecoveryKind.EXPIRED_LEASE,
+                        reason=LifecycleReason(code="lease_expired"),
+                        detected_at=now,
+                        revision=revision,
+                        run_uri=run_uri,
+                        stage_name=cast(str, row["stage_name"]),
+                        attempt_id=cast(str, row["attempt_id"]),
+                    )
+                )
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM stage_attempts
+                WHERE run_uri = ? AND status IN (?, ?)
+                ORDER BY stage_name, attempt_number
+                """,
+                (
+                    run_uri,
+                    StageStatus.RUNNING.value,
+                    StageStatus.SUBMITTED.value,
+                ),
+            ):
+                if _active_attempt_lease_row(
+                    conn,
+                    run_uri=run_uri,
+                    stage_name=cast(str, row["stage_name"]),
+                    attempt_id=cast(str, row["attempt_id"]),
+                    now=now,
+                ) is not None:
+                    continue
+                attempt_id = cast(str, row["attempt_id"])
+                records.append(
+                    RecoveryRecord(
+                        recovery_id=f"abandoned-{attempt_id}",
+                        kind=RecoveryKind.ABANDONED_ATTEMPT,
+                        reason=LifecycleReason(code="attempt_without_active_lease"),
+                        detected_at=now,
+                        revision=revision,
+                        run_uri=run_uri,
+                        stage_name=cast(str, row["stage_name"]),
+                        attempt_id=attempt_id,
+                    )
+                )
             for record in _submitted_operations(conn, run_uri):
                 if record.active:
                     records.append(
@@ -844,6 +1498,60 @@ class AuthorityRepository:
                 raise
             else:
                 conn.commit()
+
+    def _finish_stage_lease(
+        self,
+        run_uri: str,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        expected_revision: BackendRevision | None,
+        state: LeaseState,
+        reason: LifecycleReason | None,
+    ) -> LeaseRecord:
+        run_uri = _non_empty(run_uri, "run_uri")
+        state = LeaseState(state)
+        if reason is not None and not isinstance(reason, LifecycleReason):
+            raise AuthorityRepositoryError("reason must be a LifecycleReason or None")
+        with self.transaction() as conn:
+            row = _require_active_stage_lease_row(
+                conn,
+                run_uri=run_uri,
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+            )
+            current = _current_run_revision(conn, run_uri)
+            _require_expected_revision(current, expected_revision)
+            now = self._now()
+            if _timestamp_expired(cast(str, row["expires_at"]), now):
+                raise AuthorityRepositoryError("stage lease has expired")
+            revision = self._next_revision(conn)
+            conn.execute(
+                """
+                UPDATE stage_leases
+                SET state = ?, revision_sequence = ?, reason_json = ?
+                WHERE lease_id = ?
+                """,
+                (
+                    state.value,
+                    revision.sequence,
+                    _json_dumps_or_none(reason),
+                    lease_id,
+                ),
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return _stage_lease_from_row(
+                _require_row(
+                    conn.execute(
+                        "SELECT * FROM stage_leases WHERE lease_id = ?",
+                        (lease_id,),
+                    ).fetchone(),
+                    "unknown stage lease",
+                ),
+                revision=revision,
+            )
 
     def _finish_controller_lease(
         self,
@@ -1056,6 +1764,72 @@ def _initialize_schema(
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS authority_stages (
+            run_uri TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            reason_json TEXT,
+            PRIMARY KEY (run_uri, stage_name)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS stage_attempts (
+            run_uri TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            owner_id TEXT,
+            created_at TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            reason_json TEXT,
+            PRIMARY KEY (run_uri, attempt_id),
+            UNIQUE (run_uri, stage_name, attempt_number)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS stage_leases (
+            lease_id TEXT PRIMARY KEY,
+            run_uri TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            fencing_token TEXT NOT NULL,
+            acquired_at TEXT NOT NULL,
+            renewed_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            state TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            reason_json TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS output_commits (
+            commit_id TEXT PRIMARY KEY,
+            run_uri TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            committed_at TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            output_names_json TEXT NOT NULL,
+            materialized_refs_json TEXT NOT NULL,
+            UNIQUE (run_uri, stage_name)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS artifact_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_uri TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            artifact_name TEXT NOT NULL,
+            artifact_json TEXT NOT NULL,
+            commit_id TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL,
+            UNIQUE (commit_id, artifact_name)
+        )
+        """,
+        """
         CREATE INDEX IF NOT EXISTS idx_controller_leases_run
             ON controller_leases(run_uri, state, expires_at)
         """,
@@ -1074,6 +1848,30 @@ def _initialize_schema(
         """
         CREATE INDEX IF NOT EXISTS idx_audit_events_run
             ON audit_events(run_uri, sequence)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_authority_stages_run
+            ON authority_stages(run_uri, stage_name)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_stage_attempts_stage
+            ON stage_attempts(run_uri, stage_name, attempt_number)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_stage_leases_stage
+            ON stage_leases(run_uri, stage_name, state, expires_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_stage_leases_attempt
+            ON stage_leases(run_uri, attempt_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_output_commits_stage
+            ON output_commits(run_uri, stage_name)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_artifact_facts_stage
+            ON artifact_facts(run_uri, stage_name)
         """,
     )
     for statement in schema_statements:
@@ -1286,16 +2084,20 @@ def _identity_from_connection(
 
 
 def _run_snapshot(
-    conn: sqlite3.Connection, *, run_uri: str, schema_version: int
+    conn: sqlite3.Connection, *, run_uri: str, schema_version: int, now: str
 ) -> AuthoritativeRunSnapshot:
     run_row = _require_run_row(conn, run_uri)
     revision = _revision_for(conn, cast(int, run_row["updated_revision_sequence"]))
+    stage_names = _stage_names(conn, run_uri)
     return AuthoritativeRunSnapshot(
         run_uri=run_uri,
         status=RunStatus(cast(str, run_row["status"])),
         schema_version=schema_version,
         revision=revision,
-        stages=(),
+        stages=tuple(
+            _stage_snapshot(conn, run_uri=run_uri, stage_name=stage_name, now=now)
+            for stage_name in stage_names
+        ),
         submitted_operations=_submitted_operations(conn, run_uri),
         cleanup_candidates=_cleanup_candidates(conn, run_uri),
     )
@@ -1361,6 +2163,395 @@ def _require_expected_revision(
         )
     if actual.sequence != expected.sequence or actual.token != expected.token:
         raise AuthorityRepositoryError("stale run revision")
+
+
+def _require_service_generation(
+    conn: sqlite3.Connection, expected_generation: str | None
+) -> None:
+    if expected_generation is None:
+        return
+    expected_generation = _non_empty(expected_generation, "service_generation")
+    metadata = _read_metadata(
+        conn, current_version=AUTHORITY_REPOSITORY_SCHEMA_VERSION
+    )
+    if isinstance(metadata, AuthorityRepositoryCompatibilityFailure):
+        raise AuthorityRepositoryCompatibilityError(metadata)
+    if metadata["service_generation"] != expected_generation:
+        raise AuthorityRepositoryError("stale service generation")
+
+
+def _upsert_stage(
+    conn: sqlite3.Connection,
+    *,
+    run_uri: str,
+    stage_name: str,
+    status: StageStatus,
+    revision: BackendRevision,
+    reason: LifecycleReason | None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO authority_stages (
+            run_uri, stage_name, status, revision_sequence, reason_json
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(run_uri, stage_name) DO UPDATE SET
+            status = excluded.status,
+            revision_sequence = excluded.revision_sequence,
+            reason_json = excluded.reason_json
+        """,
+        (
+            run_uri,
+            stage_name,
+            StageStatus(status).value,
+            revision.sequence,
+            _json_dumps_or_none(reason),
+        ),
+    )
+
+
+def _next_attempt_number(
+    conn: sqlite3.Connection, run_uri: str, stage_name: str
+) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(MAX(attempt_number), 0) + 1 AS next_attempt
+        FROM stage_attempts
+        WHERE run_uri = ? AND stage_name = ?
+        """,
+        (run_uri, stage_name),
+    ).fetchone()
+    return cast(
+        int, _require_row(row, "could not allocate stage attempt")["next_attempt"]
+    )
+
+
+def _require_stage_attempt_row(
+    conn: sqlite3.Connection,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt_id: str,
+) -> sqlite3.Row:
+    return _require_row(
+        conn.execute(
+            """
+            SELECT *
+            FROM stage_attempts
+            WHERE run_uri = ? AND stage_name = ? AND attempt_id = ?
+            """,
+            (run_uri, stage_name, attempt_id),
+        ).fetchone(),
+        "unknown stage attempt",
+    )
+
+
+def _insert_stage_lease(
+    conn: sqlite3.Connection,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt_id: str,
+    owner_id: str,
+    lease_ttl_seconds: int,
+    revision: BackendRevision,
+    now: str,
+) -> LeaseRecord:
+    lease_id = f"stage-lease-{revision.sequence}-{uuid.uuid4().hex[:12]}"
+    fencing_token = f"fence-{revision.sequence}-{uuid.uuid4().hex}"
+    expires_at = _add_seconds(now, lease_ttl_seconds)
+    conn.execute(
+        """
+        INSERT INTO stage_leases (
+            lease_id, run_uri, stage_name, attempt_id, owner_id, fencing_token,
+            acquired_at, renewed_at, expires_at, state, revision_sequence, reason_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        (
+            lease_id,
+            run_uri,
+            stage_name,
+            attempt_id,
+            owner_id,
+            fencing_token,
+            now,
+            now,
+            expires_at,
+            LeaseState.ACTIVE.value,
+            revision.sequence,
+        ),
+    )
+    return LeaseRecord(
+        lease_id=lease_id,
+        kind=LeaseKind.STAGE,
+        owner_id=owner_id,
+        fencing_token=fencing_token,
+        acquired_at=now,
+        renewed_at=now,
+        expires_at=expires_at,
+        revision=revision,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt_id=attempt_id,
+    )
+
+
+def _active_stage_lease_row(
+    conn: sqlite3.Connection, *, run_uri: str, stage_name: str, now: str
+) -> sqlite3.Row | None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM stage_leases
+        WHERE run_uri = ? AND stage_name = ? AND state = ?
+        ORDER BY acquired_at DESC
+        """,
+        (run_uri, stage_name, LeaseState.ACTIVE.value),
+    ).fetchall()
+    for row in rows:
+        if not _timestamp_expired(cast(str, row["expires_at"]), now):
+            return cast(sqlite3.Row, row)
+    return None
+
+
+def _active_attempt_lease_row(
+    conn: sqlite3.Connection,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt_id: str,
+    now: str,
+) -> sqlite3.Row | None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM stage_leases
+        WHERE run_uri = ?
+            AND stage_name = ?
+            AND attempt_id = ?
+            AND state = ?
+        ORDER BY acquired_at DESC
+        """,
+        (run_uri, stage_name, attempt_id, LeaseState.ACTIVE.value),
+    ).fetchall()
+    for row in rows:
+        if not _timestamp_expired(cast(str, row["expires_at"]), now):
+            return cast(sqlite3.Row, row)
+    return None
+
+
+def _require_active_stage_lease_row(
+    conn: sqlite3.Connection,
+    *,
+    run_uri: str,
+    lease_id: str,
+    owner_id: str,
+    fencing_token: str,
+) -> sqlite3.Row:
+    lease_id = _non_empty(lease_id, "lease_id")
+    owner_id = _non_empty(owner_id, "owner_id")
+    fencing_token = _non_empty(fencing_token, "fencing_token")
+    row = conn.execute(
+        """
+        SELECT *
+        FROM stage_leases
+        WHERE run_uri = ? AND lease_id = ?
+        """,
+        (run_uri, lease_id),
+    ).fetchone()
+    row = _require_row(row, "unknown stage lease")
+    if (
+        cast(str, row["owner_id"]) != owner_id
+        or cast(str, row["fencing_token"]) != fencing_token
+    ):
+        raise AuthorityRepositoryError("stale or foreign fencing token")
+    if LeaseState(cast(str, row["state"])) is not LeaseState.ACTIVE:
+        raise AuthorityRepositoryError("stage lease is not active")
+    return row
+
+
+def _stage_lease_id_for_attempt(
+    conn: sqlite3.Connection, run_uri: str, attempt_id: str
+) -> str:
+    row = conn.execute(
+        """
+        SELECT lease_id
+        FROM stage_leases
+        WHERE run_uri = ? AND attempt_id = ? AND state = ?
+        ORDER BY acquired_at DESC
+        LIMIT 1
+        """,
+        (run_uri, attempt_id, LeaseState.ACTIVE.value),
+    ).fetchone()
+    return cast(str, _require_row(row, "missing active stage lease")["lease_id"])
+
+
+def _stage_lease_from_row(
+    row: sqlite3.Row, *, revision: BackendRevision
+) -> LeaseRecord:
+    return LeaseRecord(
+        lease_id=cast(str, row["lease_id"]),
+        kind=LeaseKind.STAGE,
+        owner_id=cast(str, row["owner_id"]),
+        fencing_token=cast(str, row["fencing_token"]),
+        acquired_at=cast(str, row["acquired_at"]),
+        renewed_at=cast(str, row["renewed_at"]),
+        expires_at=cast(str, row["expires_at"]),
+        revision=revision,
+        state=LeaseState(cast(str, row["state"])),
+        run_uri=cast(str, row["run_uri"]),
+        stage_name=cast(str, row["stage_name"]),
+        attempt_id=cast(str, row["attempt_id"]),
+        reason=_reason_from_json(cast(str | None, row["reason_json"])),
+    )
+
+
+def _stage_names(conn: sqlite3.Connection, run_uri: str) -> tuple[str, ...]:
+    stage_names = {
+        cast(str, row["stage_name"])
+        for row in conn.execute(
+            "SELECT stage_name FROM authority_stages WHERE run_uri = ?",
+            (run_uri,),
+        )
+    }
+    stage_names.update(
+        cast(str, row["stage_name"])
+        for row in conn.execute(
+            "SELECT DISTINCT stage_name FROM stage_attempts WHERE run_uri = ?",
+            (run_uri,),
+        )
+    )
+    stage_names.update(
+        cast(str, row["stage_name"])
+        for row in conn.execute(
+            "SELECT DISTINCT stage_name FROM output_commits WHERE run_uri = ?",
+            (run_uri,),
+        )
+    )
+    return tuple(sorted(stage_names))
+
+
+def _stage_snapshot(
+    conn: sqlite3.Connection, *, run_uri: str, stage_name: str, now: str
+) -> StageLifecycleSnapshot:
+    stage_row = conn.execute(
+        """
+        SELECT *
+        FROM authority_stages
+        WHERE run_uri = ? AND stage_name = ?
+        """,
+        (run_uri, stage_name),
+    ).fetchone()
+    if stage_row is None:
+        status = StageStatus.PENDING
+        revision = _current_run_revision(conn, run_uri)
+        reason = None
+    else:
+        status = StageStatus(cast(str, stage_row["status"]))
+        revision = _revision_for(conn, cast(int, stage_row["revision_sequence"]))
+        reason = _reason_from_json(cast(str | None, stage_row["reason_json"]))
+    attempts = tuple(
+        _attempt_from_row(row, conn=conn)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM stage_attempts
+            WHERE run_uri = ? AND stage_name = ?
+            ORDER BY attempt_number
+            """,
+            (run_uri, stage_name),
+        )
+    )
+    lease_row = _active_stage_lease_row(
+        conn, run_uri=run_uri, stage_name=stage_name, now=now
+    )
+    active_lease = (
+        None
+        if lease_row is None
+        else _stage_lease_from_row(
+            lease_row,
+            revision=_revision_for(conn, cast(int, lease_row["revision_sequence"])),
+        )
+    )
+    commit_row = conn.execute(
+        """
+        SELECT *
+        FROM output_commits
+        WHERE run_uri = ? AND stage_name = ?
+        ORDER BY revision_sequence DESC
+        LIMIT 1
+        """,
+        (run_uri, stage_name),
+    ).fetchone()
+    latest_commit = (
+        None if commit_row is None else _commit_from_row(commit_row, conn=conn)
+    )
+    artifact_facts = tuple(
+        _artifact_fact_from_row(row, conn=conn)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM artifact_facts
+            WHERE run_uri = ? AND stage_name = ?
+            ORDER BY artifact_name
+            """,
+            (run_uri, stage_name),
+        )
+    )
+    return StageLifecycleSnapshot(
+        stage_name=stage_name,
+        status=status,
+        revision=revision,
+        attempts=attempts,
+        active_lease=active_lease,
+        latest_commit=latest_commit,
+        artifact_facts=artifact_facts,
+        reason=reason,
+    )
+
+
+def _attempt_from_row(
+    row: sqlite3.Row, *, conn: sqlite3.Connection
+) -> StageAttempt:
+    return StageAttempt(
+        run_uri=cast(str, row["run_uri"]),
+        stage_name=cast(str, row["stage_name"]),
+        attempt=cast(int, row["attempt_number"]),
+        attempt_id=cast(str, row["attempt_id"]),
+        status=StageStatus(cast(str, row["status"])),
+        revision=_revision_for(conn, cast(int, row["revision_sequence"])),
+        created_at=cast(str, row["created_at"]),
+        owner=cast(str | None, row["owner_id"]),
+        reason=_reason_from_json(cast(str | None, row["reason_json"])),
+    )
+
+
+def _commit_from_row(
+    row: sqlite3.Row, *, conn: sqlite3.Connection
+) -> OutputCommitRecord:
+    return OutputCommitRecord(
+        commit_id=cast(str, row["commit_id"]),
+        run_uri=cast(str, row["run_uri"]),
+        stage_name=cast(str, row["stage_name"]),
+        attempt_id=cast(str, row["attempt_id"]),
+        committed_at=cast(str, row["committed_at"]),
+        revision=_revision_for(conn, cast(int, row["revision_sequence"])),
+        output_names=tuple(
+            cast(str, name) for name in _json_loads(cast(str, row["output_names_json"]))
+        ),
+    )
+
+
+def _artifact_fact_from_row(
+    row: sqlite3.Row, *, conn: sqlite3.Connection
+) -> ArtifactFactRecord:
+    return ArtifactFactRecord(
+        artifact_name=cast(str, row["artifact_name"]),
+        artifact=ArtifactRef.from_dict(_json_loads(cast(str, row["artifact_json"]))),
+        commit_id=cast(str, row["commit_id"]),
+        revision=_revision_for(conn, cast(int, row["revision_sequence"])),
+    )
 
 
 def _insert_controller_lease(

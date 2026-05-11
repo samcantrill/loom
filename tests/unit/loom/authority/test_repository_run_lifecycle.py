@@ -18,8 +18,8 @@ pytestmark = pytest.mark.unit
 RUN_URI = "file:///runs/unit-r1"
 
 
-def test_repository_schema_version_advances_for_run_lifecycle() -> None:
-    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 2
+def test_repository_schema_version_includes_stage_lifecycle() -> None:
+    assert AUTHORITY_REPOSITORY_SCHEMA_VERSION == 3
 
 
 def test_admit_run_rejects_duplicate_and_returns_revision(tmp_path) -> None:

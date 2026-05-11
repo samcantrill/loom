@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from loom.pipeline.status import RunStatus
+from loom.artifacts import ArtifactRef
+from loom.pipeline.status import RunStatus, StageStatus
 from loom.authority._repository import (
     AuthorityRepositoryError,
     AuthorityRepositoryCompatibilityFailure,
@@ -129,3 +130,81 @@ def test_repository_stale_fencing_maps_to_protocol_rejection(tmp_path) -> None:
 
     assert rejection.category is AuthorityProtocolErrorCategory.STALE_FENCING
     assert rejection.message == "stale or foreign fencing token"
+
+
+def test_repository_stage_output_commit_maps_to_protocol_result(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path, service_generation="generation-1"
+    )
+    run_uri = "file:///runs/contract-stage-r1"
+    repository.admit_run(run_uri)
+    allocation = repository.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
+
+    commit = repository.record_output_commit(
+        run_uri,
+        "build",
+        attempt_id=allocation.attempt.attempt_id,
+        owner_id="worker-1",
+        fencing_token=allocation.lease.fencing_token,
+        outputs={
+            "out": ArtifactRef(
+                artifact_id="build/out",
+                uri=f"{run_uri}/artifacts/build/out.json",
+                artifact_type="json",
+            )
+        },
+        service_generation="generation-1",
+    )
+
+    assert commit.commit.revision.sequence > allocation.attempt.revision.sequence
+    assert commit.commit.output_names == ("out",)
+    assert commit.artifact_facts[0].artifact.artifact_id == "build/out"
+    assert repository.open_run(run_uri).stages[0].status is StageStatus.SUCCEEDED
+
+
+def test_repository_stale_generation_maps_to_protocol_rejection(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path, service_generation="generation-1"
+    )
+    run_uri = "file:///runs/contract-stage-r1"
+    repository.admit_run(run_uri)
+    allocation = repository.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
+
+    with pytest.raises(AuthorityRepositoryError) as exc_info:
+        repository.record_output_commit(
+            run_uri,
+            "build",
+            attempt_id=allocation.attempt.attempt_id,
+            owner_id="worker-1",
+            fencing_token=allocation.lease.fencing_token,
+            outputs={
+                "out": ArtifactRef(
+                    artifact_id="build/out",
+                    uri=f"{run_uri}/artifacts/build/out.json",
+                    artifact_type="json",
+                )
+            },
+            service_generation="generation-old",
+        )
+
+    rejection = AuthorityProtocolRejection(
+        category=AuthorityProtocolErrorCategory.STALE_GENERATION,
+        code="authority_repository_stale_generation",
+        message=str(exc_info.value),
+        detail={"run_uri": run_uri},
+    )
+
+    assert rejection.category is AuthorityProtocolErrorCategory.STALE_GENERATION
+    assert rejection.message == "stale service generation"
