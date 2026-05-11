@@ -217,8 +217,28 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-11.
 - Final phase execution plan: completed on 2026-05-11 by expanded-path refine pass.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed locally by the managing agent on
+  2026-05-11 after the `loom_phase_executor` Spark pass was unavailable due to
+  model usage limits. Added `src/loom/pipeline/stores/authority_resolution.py`
+  with side-effect-free resolver intent, supplied registry/health fact records,
+  typed online/offline/failure outcomes, actionable diagnostics, and
+  env/mapping mode helpers. Exported the public resolver vocabulary through
+  `loom.pipeline.stores`. Added opt-in CLI namespace parsing for resolver mode
+  without changing existing command defaults or runtime factory behavior.
+- Implementation commits:
+  - `054fd89 feat: add authority resolution contracts`
+  - `73676fc test: add authority resolution coverage`
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_authority_resolution.py tests/unit/loom/pipeline/stores/test_authority_config_admission.py tests/unit/loom/cli/test_authority.py tests/contracts/test_authority_resolution_contract.py`
+    passed with 37 tests.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/authority_resolution.py src/loom/pipeline/stores/__init__.py src/loom/cli/authority.py tests/unit/loom/pipeline/stores/test_authority_resolution.py tests/unit/loom/cli/test_authority.py tests/contracts/test_authority_resolution_contract.py tests/package/test_pipeline_store_api.py`
+    passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed with 0
+    errors.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_authority_factory.py tests/integration/pipeline/test_authority_deployment_profiles.py`
+    failed in the sandbox because local service tests could not create sockets
+    (`PermissionError: Operation not permitted`), then passed with escalation
+    with 8 tests.
 - Refinement summary: tightened public module/export choices, facts-only resolver constraints, minimal CLI parsing scope, and `AuthorityConfig()` compatibility boundaries.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
