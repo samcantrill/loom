@@ -10,6 +10,17 @@ from .authority import (
     StageStore,
     StatusTransition,
 )
+from .authority_client import (
+    AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH,
+    AUTHORITY_MUTATION_OPEN_RUN_PATH,
+    AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH,
+    AUTHORITY_MUTATION_ROUTE_PREFIX,
+    AUTHORITY_MUTATION_RUN_ADMIT_PATH,
+    AUTHORITY_MUTATION_RUN_TRANSITION_PATH,
+    AUTHORITY_MUTATION_STAGE_TRANSITION_PATH,
+    AuthorityClient,
+    AuthorityClientError,
+)
 from .authority_resolution import (
     LOOM_AUTHORITY_MODE,
     AuthorityRegistryHint,
@@ -238,6 +249,15 @@ __all__ = [
     "StatusTransition",
     "AttemptAllocation",
     "OutputCommit",
+    "AUTHORITY_MUTATION_ROUTE_PREFIX",
+    "AUTHORITY_MUTATION_RUN_ADMIT_PATH",
+    "AUTHORITY_MUTATION_OPEN_RUN_PATH",
+    "AUTHORITY_MUTATION_RUN_TRANSITION_PATH",
+    "AUTHORITY_MUTATION_STAGE_TRANSITION_PATH",
+    "AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH",
+    "AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH",
+    "AuthorityClient",
+    "AuthorityClientError",
     "BackendCapability",
     "CapabilityScope",
     "CapabilitySupport",
