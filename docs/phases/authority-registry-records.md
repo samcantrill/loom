@@ -190,7 +190,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted validation and full PR gates passed after the implementation commit
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -198,10 +198,10 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-11.
 - Final phase execution plan: completed by managing agent on 2026-05-11.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
+- Implementation summary: added `loom.pipeline.stores.authority_registry` with versioned workspace and allocation-scoped registry records, safe path helpers, atomic JSON write/read helpers, recursive sensitive metadata redaction, endpoint safety checks, fail-closed validation statuses, resolver-hint conversion, and service-health fact conversion. Exported the registry surface through `loom.pipeline.stores` and added package, unit, contract, and integration coverage.
+- Implementation validation: targeted Ruff passed; targeted Pyright passed; targeted pytest passed with 74 passed. `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff clean, Pyright clean, default pytest 1268 passed / 18 skipped / 14 deselected, config-extra 420 passed / 1297 deselected, and build success. `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 67 passed / 1 skipped, unit 919 passed / 1 skipped, contract 145 passed / 2 skipped, integration 124 passed / 8 skipped / 10 deselected, e2e 39 passed / 1 deselected, and config-extra 420 passed / 1297 deselected.
+- Refinement summary: no separate refiner pass was needed; typing fixes stayed in the implementation pass before commit.
+- Blocker-resolution summary: none used.
+- PR preparation: PR body drafted in `docs/phases/authority-registry-records-pr-body.md`; PR not yet opened.
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none.
