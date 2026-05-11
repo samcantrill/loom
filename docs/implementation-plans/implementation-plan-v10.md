@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 3 merged; ready for Phase 4 planning
+- Phase work status: Phase 4 PR open; automated review and merge gate pending
 
 Related artifacts and references:
 
@@ -681,9 +681,9 @@ Phase 3 merged on 2026-05-11:
 
 ### Phase 4: Private Repository Schema And Versioning
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-repository-schema`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/122
 
 **Goal**
 
@@ -762,7 +762,25 @@ semantics, and how generation metadata will support restart and fencing.
 
 **Completion Summary**
 
-TBD.
+Phase 4 PR opened on 2026-05-11:
+
+- Branch: `codex/authority-repository-schema`
+- PR: https://github.com/samcantrill/loom/pull/122
+- Target branch: `develop`
+- Implementation summary: added the private `loom.authority._repository`
+  SQLite foundation with explicit state-directory initialization, schema
+  version and service-generation metadata, typed repository identity facts,
+  structured compatibility failures for missing, older, newer, and corrupt
+  repositories, and explicit transaction commit/rollback handling. Added
+  package privacy, unit, contract, and file-backed integration coverage while
+  keeping repository symbols out of the public `loom.authority` root.
+- Validation before PR: targeted Ruff, Pyright, and focused package/unit/
+  contract/integration pytest passed. `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed
+  with overall 1664 passed, 12 skipped, and 1258 deselected.
+- Stack maintenance: root phase PR targets `develop`; no successor branch
+  depends on `codex/authority-repository-schema` yet.
+- Follow-up notes: automated PR review and GitHub CI/merge remain pending.
 
 ### Phase 5: Run Lifecycle Repository
 
