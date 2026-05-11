@@ -529,6 +529,33 @@ def _registry_failure(
     mode: AuthorityResolutionMode,
     hint: AuthorityRegistryHint,
 ) -> AuthorityResolutionResult | None:
+    if hint.reference.backend_kind is AuthorityBackendKind.DIRECT_DATABASE:
+        return _failure(
+            mode,
+            AuthorityResolutionFailureKind.RESERVED_DIRECT_DATABASE,
+            "authority_resolution.direct_database_reserved",
+            "direct database authority is reserved and unsupported for v10 runtime mutation",
+            next_steps=(
+                "select a service authority endpoint",
+                "or select explicit offline-first mode when local evidence is intended",
+            ),
+            detail={
+                "backend_kind": hint.reference.backend_kind.value,
+                "reference_id": hint.reference.reference_id,
+            },
+        )
+    if hint.reference.endpoint is None:
+        return _failure(
+            mode,
+            AuthorityResolutionFailureKind.MISSING_AUTHORITY,
+            "authority_resolution.registry_missing_endpoint",
+            "authority registry reference is missing an endpoint",
+            next_steps=(
+                "inspect the authority with `loom authority status`",
+                "restart it explicitly with `loom authority restart --state-dir <path>`",
+            ),
+            detail=_hint_detail(hint),
+        )
     if hint.stale:
         return _failure(
             mode,

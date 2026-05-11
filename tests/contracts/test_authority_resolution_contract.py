@@ -61,6 +61,31 @@ def test_authority_resolution_contract_distinguishes_online_and_offline() -> Non
             AuthorityResolverInput(
                 registry_hint=AuthorityRegistryHint(
                     reference=AuthorityReference(
+                        backend_kind=AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+                        deployment_profile=AuthorityDeploymentProfile.ALLOCATION_SCOPED,
+                        reference_id="missing-endpoint",
+                    )
+                )
+            ),
+            AuthorityResolutionFailureKind.MISSING_AUTHORITY,
+        ),
+        (
+            AuthorityResolverInput(
+                registry_hint=AuthorityRegistryHint(
+                    reference=AuthorityReference(
+                        backend_kind=AuthorityBackendKind.DIRECT_DATABASE,
+                        deployment_profile=AuthorityDeploymentProfile.DIRECT_DATABASE,
+                        reference_id="direct-db",
+                        state_path="/tmp/authority.sqlite",
+                    )
+                )
+            ),
+            AuthorityResolutionFailureKind.RESERVED_DIRECT_DATABASE,
+        ),
+        (
+            AuthorityResolverInput(
+                registry_hint=AuthorityRegistryHint(
+                    reference=AuthorityReference(
                         backend_kind=AuthorityBackendKind.CO_LOCATED_SERVICE,
                         deployment_profile=AuthorityDeploymentProfile.CO_LOCATED,
                         reference_id="stale",

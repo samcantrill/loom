@@ -121,6 +121,51 @@ def test_registry_hint_can_resolve_without_file_io() -> None:
     assert result.reference == reference
 
 
+def test_registry_hint_without_endpoint_fails_closed() -> None:
+    result = resolve_authority(
+        AuthorityResolverInput(
+            registry_hint=AuthorityRegistryHint(
+                reference=AuthorityReference(
+                    backend_kind=AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+                    deployment_profile=AuthorityDeploymentProfile.ALLOCATION_SCOPED,
+                    reference_id="missing-endpoint",
+                    workspace_id="workspace-1",
+                ),
+                workspace_matches=True,
+            )
+        )
+    )
+
+    assert not result.succeeded
+    assert result.failure_kind is AuthorityResolutionFailureKind.MISSING_AUTHORITY
+    assert result.diagnostics[0].code == "authority_resolution.registry_missing_endpoint"
+
+
+def test_registry_hint_direct_database_is_reserved() -> None:
+    result = resolve_authority(
+        AuthorityResolverInput(
+            registry_hint=AuthorityRegistryHint(
+                reference=AuthorityReference(
+                    backend_kind=AuthorityBackendKind.DIRECT_DATABASE,
+                    deployment_profile=AuthorityDeploymentProfile.DIRECT_DATABASE,
+                    reference_id="db",
+                    state_path="/tmp/authority.sqlite",
+                )
+            )
+        )
+    )
+
+    assert not result.succeeded
+    assert (
+        result.failure_kind
+        is AuthorityResolutionFailureKind.RESERVED_DIRECT_DATABASE
+    )
+    assert result.diagnostics[0].detail == {
+        "backend_kind": "direct_database",
+        "reference_id": "db",
+    }
+
+
 @pytest.mark.parametrize(
     ("registry_hint", "failure_kind"),
     [

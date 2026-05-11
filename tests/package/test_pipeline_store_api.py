@@ -227,7 +227,16 @@ def test_pipeline_store_public_exports() -> None:
 
 @pytest.mark.parametrize(
     "forbidden",
-    ["loom.config", "loom.runs", "loom.cli", "sqlite3"],
+    [
+        "loom.config",
+        "loom.runs",
+        "loom.cli",
+        "sqlite3",
+        "fastapi",
+        "loom.pipeline.stores.service_authority",
+        "loom.pipeline.stores.sqlite_authority",
+        "loom.pipeline.stores.sqlite_coordination",
+    ],
 )
 def test_pipeline_stores_import_does_not_import_forbidden_modules(
     forbidden: str,

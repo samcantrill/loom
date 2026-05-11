@@ -209,7 +209,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -240,6 +240,38 @@ make test-summary
     (`PermissionError: Operation not permitted`), then passed with escalation
     with 8 tests.
 - Refinement summary: tightened public module/export choices, facts-only resolver constraints, minimal CLI parsing scope, and `AuthorityConfig()` compatibility boundaries.
+- Implementation refinement pass:
+  - Metadata: completed on 2026-05-11 in
+    `/home/samcantrill/work/loom-worktrees/authority-mode-resolution` on
+    branch `codex/authority-mode-resolution`; pass type was implementation
+    refinement, consuming the phase implementation refinement budget.
+  - Validation output reviewed: targeted package/unit/contract pytest, Ruff,
+    Pyright, and integration authority factory/deployment validation recorded
+    above.
+  - Blocking issues caused by this phase: registry-supplied authority hints
+    could be accepted as online references when the supplied hint had no
+    endpoint, and registry hints pointing at `direct_database` could bypass the
+    direct-database reserved diagnostic.
+  - Issues confirmed out of scope: no runtime factory adoption, hidden service
+    startup, registry file IO, FastAPI imports, private SQLite imports, or
+    offline execution behavior changes were found in the Phase 1 diff.
+  - Fixes made:
+    | Issue | Change | Evidence |
+    | --- | --- | --- |
+    | Registry hint without endpoint could resolve as online authority. | Added fail-closed `MISSING_AUTHORITY` classification with registry endpoint diagnostic. | Unit and contract coverage added. |
+    | Registry hint with `direct_database` backend could resolve as online authority. | Added `RESERVED_DIRECT_DATABASE` classification for registry hints before accepting the reference. | Unit and contract coverage added. |
+    | Import-boundary package coverage did not name all Phase 1 forbidden imports. | Added package assertions for FastAPI, service authority, and private SQLite modules. | Package test coverage expanded. |
+  - Tests or validation re-run:
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_authority_resolution.py tests/unit/loom/cli/test_authority.py tests/contracts/test_authority_resolution_contract.py`
+      passed with 38 tests.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/authority_resolution.py tests/unit/loom/pipeline/stores/test_authority_resolution.py tests/contracts/test_authority_resolution_contract.py tests/package/test_pipeline_store_api.py src/loom/cli/authority.py tests/unit/loom/cli/test_authority.py`
+      passed.
+    - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed with
+      0 errors, 0 warnings, and 0 informations.
+  - Remaining blockers: none.
+  - PR preparation handoff: completion notes and budget status are updated;
+    final PR preparation should still run `make validate-pr` and
+    `make test-summary`.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not applicable yet.
