@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 4 PR open; automated review and merge gate pending
+- Phase work status: Phase 4 merged; ready for Phase 5 planning
 
 Related artifacts and references:
 
@@ -681,7 +681,7 @@ Phase 3 merged on 2026-05-11:
 
 ### Phase 4: Private Repository Schema And Versioning
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-repository-schema`
 - PR: https://github.com/samcantrill/loom/pull/122
 
@@ -762,11 +762,12 @@ semantics, and how generation metadata will support restart and fencing.
 
 **Completion Summary**
 
-Phase 4 PR opened on 2026-05-11:
+Phase 4 merged on 2026-05-11:
 
 - Branch: `codex/authority-repository-schema`
 - PR: https://github.com/samcantrill/loom/pull/122
 - Target branch: `develop`
+- Merge commit: `aa3a42b011043c2b428b7290a0e788eaafc2fdd8`
 - Implementation summary: added the private `loom.authority._repository`
   SQLite foundation with explicit state-directory initialization, schema
   version and service-generation metadata, typed repository identity facts,
@@ -778,9 +779,14 @@ Phase 4 PR opened on 2026-05-11:
   contract/integration pytest passed. `UV_CACHE_DIR=/tmp/uv-cache make
   validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed
   with overall 1664 passed, 12 skipped, and 1258 deselected.
-- Stack maintenance: root phase PR targets `develop`; no successor branch
-  depends on `codex/authority-repository-schema` yet.
-- Follow-up notes: automated PR review and GitHub CI/merge remain pending.
+- GitHub CI: `checks` succeeded before merge on 2026-05-11.
+- Automated review: manager review found no scope, privacy-boundary,
+  schema-compatibility, transaction, PR-body, or validation-evidence blockers.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-repository-schema` at merge time.
+- Follow-up notes: Phase 5 can build run lifecycle repository behavior on the
+  private schema foundation without exposing direct DB access through public
+  APIs.
 
 ### Phase 5: Run Lifecycle Repository
 
