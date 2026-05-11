@@ -7,6 +7,7 @@ import socket
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from threading import Lock
 from typing import cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
@@ -89,6 +90,7 @@ class LocalRunStore:
 
     def __init__(self, root: str | Path = "runs") -> None:
         self.root = Path(root)
+        self._event_lock = Lock()
 
     def resolve_run_uri(self, run_uri: str) -> str:
         return validate_run_uri(run_uri)
@@ -689,28 +691,29 @@ class LocalRunStore:
         run_dir = self.local_run_dir(run_uri_text)
         if not run_dir.is_dir():
             raise RunNotFoundError(f"run not found: {run_uri_text}")
-        existing = self.read_events(run_uri_text)
-        sequence = existing[-1].sequence + 1 if existing else 1
-        record = PipelineEventRecord(
-            run_uri=run_uri_text,
-            sequence=sequence,
-            timestamp=event.timestamp or utc_timestamp(),
-            scope=event.scope,
-            event_type=event.event_type,
-            payload=cast(
-                Mapping[str, PlainData],
-                thaw_plain_data(event.payload, path="event.payload"),
-            ),
-        )
         path = run_dir / "events.jsonl"
-        try:
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(stable_json_dumps(record.to_dict()))
-                handle.write("\n")
-        except OSError as exc:
-            raise CorruptStoreDocumentError(
-                f"Could not append event at {path}: {exc}"
-            ) from exc
+        with self._event_lock:
+            existing = self.read_events(run_uri_text)
+            sequence = existing[-1].sequence + 1 if existing else 1
+            record = PipelineEventRecord(
+                run_uri=run_uri_text,
+                sequence=sequence,
+                timestamp=event.timestamp or utc_timestamp(),
+                scope=event.scope,
+                event_type=event.event_type,
+                payload=cast(
+                    Mapping[str, PlainData],
+                    thaw_plain_data(event.payload, path="event.payload"),
+                ),
+            )
+            try:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(stable_json_dumps(record.to_dict()))
+                    handle.write("\n")
+            except OSError as exc:
+                raise CorruptStoreDocumentError(
+                    f"Could not append event at {path}: {exc}"
+                ) from exc
         # Catalog summaries do not derive facts from event logs in v8.
         return record
 

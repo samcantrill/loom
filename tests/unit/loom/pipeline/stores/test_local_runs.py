@@ -1,8 +1,10 @@
 """Unit tests for local run-store behavior."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from pathlib import Path
+from threading import Barrier
 from typing import cast
 
 import pytest
@@ -344,6 +346,31 @@ def test_local_run_appends_and_reads_events(tmp_path: Path) -> None:
     assert (store.local_run_dir(run_uri) / "events.jsonl").read_text(
         encoding="utf-8"
     ).count("\n") == 2
+
+
+def test_local_run_appends_events_with_unique_sequences_across_threads(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    event_count = 16
+    barrier = Barrier(event_count)
+
+    def append(index: int) -> int:
+        barrier.wait()
+        return store.append_event(
+            run_uri,
+            PipelineEvent(scope=EventScope.run(), event_type=f"event.{index}"),
+        ).sequence
+
+    with ThreadPoolExecutor(max_workers=event_count) as executor:
+        sequences = list(executor.map(append, range(event_count)))
+
+    assert sorted(sequences) == list(range(1, event_count + 1))
+    assert [record.sequence for record in store.read_events(run_uri)] == list(
+        range(1, event_count + 1)
+    )
 
 
 def test_local_run_rejects_corrupt_event_log(tmp_path: Path) -> None:
