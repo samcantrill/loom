@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan
 - Feature focus: DB-Backed Authority Supervisor And Offline Import
 - PR title: `DB-Backed Authority Supervisor And Offline Import - Phase 2: Authority Client And Server Protocol Models`
 - Branch: `codex/authority-protocol-models`
@@ -19,9 +19,9 @@
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and confirmation review; evidence is recorded in `docs/implementation-plans/implementation-plan-v10.md` and roadmap v10 planning notes
 - Plan quality gate loop budget: consumed; do not reopen unless the v10 implementation plan changes materially
 - Draft pass: completed by `loom_phase_planner` on 2026-05-11
-- Refine pass: pending for expanded path
+- Refine pass: completed by `loom_phase_planner` on 2026-05-11
 - Setup limitations: none unresolved. `gh auth status`, `gh auth setup-git`, `git fetch origin`, and `git worktree add` required approved escalation because sandbox restrictions blocked network access, user Git config writes, and `.git` ref updates; after escalation, local `develop`, `origin/develop`, and remote `develop` all resolved to `c12bb1b2c21e8e7e3951deea820a56af2e06ff5c`.
-- Blockers: none for the draft artifact; implementation must wait until the expanded-path refine pass completes.
+- Blockers: none; implementation may begin from this refined phase execution plan.
 
 ## Objective
 
@@ -51,6 +51,7 @@ Phase 1 established side-effect-free online/offline authority resolution, typed 
 - `src/loom/pipeline/stores/authority_resolution.py` now provides Phase 1 resolver vocabulary with stdlib `dataclass(frozen=True, slots=True)`, `StrEnum`, explicit validation, `PlainData`, and `to_dict`/`from_dict` style serialization. Protocol models should compose with, not replace, those resolver categories.
 - `src/loom/pipeline/stores/authority.py` defines `PerRunAuthorityStore`, public `RunStore` and `StageStore` protocols, plus existing acknowledgement-like records such as `StatusTransition`, `AttemptAllocation`, and `OutputCommit`.
 - `src/loom/pipeline/stores/read_models.py`, `coordination.py`, `capabilities.py`, and `schema_policy.py` already expose public value records for revisions, lifecycle reasons, leases, attempts, snapshots, materialized refs, capability sets, diagnostics, and schema checks. The new protocol layer may nest those public records where they are stable value vocabulary, but should wrap them in protocol envelopes rather than making store method signatures the wire API.
+- The current store protocols expose many method-level operations. Phase 2 should group those methods into representative protocol operation families and shared envelopes, not create a giant one-record-per-method public surface.
 - `src/loom/pipeline/stores/service_authority.py` is the current stdlib manager-backed test service. It serializes some values with `to_dict`/`from_dict`, but it is not the v10 HTTP protocol and must not own the new public model definitions.
 - `src/loom/serialization` exposes `PlainData`, `ensure_plain_data`, `to_plain_data`, `stable_json_dumps`, and dataclass helpers. Existing public models mostly use explicit `to_dict`/`from_dict` so they can coerce enums, reject unknown fields, and validate nested records.
 - `pyproject.toml` has no required runtime dependencies. Pydantic exists only in the optional `config` extra, and FastAPI is not present yet. Phase 2 must not add or depend on either.
@@ -61,7 +62,8 @@ Phase 1 established side-effect-free online/offline authority resolution, typed 
 - Add a stable non-transport protocol model module under `src/loom/pipeline/stores/`, preferably `authority_protocol.py`, and export only intentional public protocol vocabulary through `loom.pipeline.stores`.
 - Use standard-library frozen dataclasses, `StrEnum`, existing `PlainData` helpers, and explicit `to_dict`/`from_dict` methods. Do not use FastAPI, Pydantic, HTTP clients, repository modules, or SQL-specific types.
 - Define protocol version and compatibility records, readiness/health/capability summaries, operation metadata, revision/fencing acknowledgements, structured rejection/error envelopes, and success/failed response envelopes.
-- Define request and response models for the existing per-run authority operation families: run admission/open/transition, controller lease acquire/renew/release/fail, stage transition, attempt allocation, submitted-operation write/read/list, output commit and artifact facts, audit append, snapshots, recovery scans, and cleanup candidates.
+- Define a compact operation-kind vocabulary and request/response envelopes for representative operation families: readiness/capability/schema checks, run lifecycle and snapshots, stage lifecycle and attempts, submitted-operation access, output commits and artifact facts, run/stage lease and fencing updates, and recovery/cleanup read models.
+- Use typed request or result body records only where a family needs fields beyond the shared envelope. Do not mirror every `RunStore`, `StageStore`, or `PerRunAuthorityStore` method with a bespoke top-level protocol record.
 - Keep protocol coverage for workspace coordination, generic resource leases, and offline import limited to capability/readiness and unsupported/error vocabulary needed by future phases; do not implement their service methods here.
 - Add package, unit, and contract tests for import boundaries, validation, enum/category coverage, round trips, version compatibility, and golden plain-data shapes.
 
@@ -87,7 +89,16 @@ Protocol models must be deterministic, side-effect-free, and plain-data serializ
 
 The new model surface should be explicit enough for a future client adapter and server adapter to agree on these public facts: protocol version, schema compatibility, service generation, workspace identity when known, capabilities, readiness, request operation kind, accepted acknowledgement revision, lease/fencing material when relevant, rejection category, diagnostics, and nested read models. Error categories must be machine-readable and include at least resolver, validation, conflict, stale generation, stale revision or fencing, unsupported capability, unavailable service, and internal error.
 
-Do not alias existing store protocols as the wire contract. Store methods describe Python extension-point behavior; protocol envelopes describe serialized client/server exchange. Existing public store/read-model records may appear as nested values only when the protocol still controls versioning, operation identity, acknowledgement, and rejection semantics.
+Public envelope field names should be stable and ordinary:
+
+- Compatibility and service fields: `protocol_version`, `schema_version`, `service_generation`, `workspace_id`, `capabilities`, `readiness`, and `diagnostics`.
+- Request identity and routing fields: `request_id`, `operation_kind`, `run_uri`, `stage_name`, `submission_id`, `lease_id`, `owner_id`, and optional `idempotency_key`.
+- Mutation-safety fields: `expected_revision`, `revision`, `lease_id`, `fencing_token`, and nested lease/fencing records where existing public models already expose the stable facts.
+- Response fields: an explicit `accepted` discriminator with exactly one structured `result` or `rejection`; rejection/error fields named `category`, `code`, `message`, `detail`, and `diagnostics`.
+
+Do not alias existing store protocols as the wire contract. Store methods describe Python extension-point behavior; protocol envelopes describe serialized client/server exchange. Existing public store/read-model records may appear as nested values only when the protocol still controls versioning, operation identity, acknowledgement, and rejection semantics. Existing acknowledgement-like records such as `StatusTransition`, `AttemptAllocation`, and `OutputCommit` must not become top-level response envelopes; if their facts are reused, they belong under protocol-owned `result` payloads.
+
+Phase 2 must not introduce fake client/server conformance behavior. A test helper may round-trip request and response value objects through plain-data serialization, but adapter behavior, route dispatch, transport status mapping, dependency injection, repository mutation, and client/server contract harnesses belong to Phase 3 or Phase 7.
 
 ## Design Impact
 
@@ -98,7 +109,7 @@ Do not alias existing store protocols as the wire contract. Store methods descri
 
 ## Future Compatibility
 
-Protocol and schema compatibility fields should let newer clients and older services fail cleanly before mutation. The envelope structure should permit additive future operation kinds for workspace coordination, resource admission, supervisor diagnostics, and offline import without breaking Phase 2 golden shapes for existing operation families.
+Protocol and schema compatibility fields should let newer clients and older services fail cleanly before mutation. The envelope structure should permit additive future operation kinds for workspace coordination, resource admission, supervisor diagnostics, and offline import without breaking Phase 2 golden shapes for existing operation families. Future route implementations may split operation families across endpoints, but they should still carry the same envelope fields and accepted/rejected semantics.
 
 ## Alternatives Rejected
 
@@ -106,7 +117,7 @@ Protocol and schema compatibility fields should let newer clients and older serv
 | --- | --- |
 | Use FastAPI or Pydantic models as the core protocol | Phase 2 must keep the compatibility layer independent from the selected transport and from optional/config dependencies. |
 | Reuse private repository or SQLite dataclasses as wire models | v10 requires private persistence and public protocol separation; repository shape is Phase 4 and must remain non-public. |
-| Treat existing store method signatures as the serialized API | Store protocols are Python extension points and lack protocol version, service generation, request identity, and structured rejection envelopes. |
+| Treat existing store method signatures as the serialized API | Store protocols are Python extension points and lack protocol version, service generation, request identity, and structured rejection envelopes. Mirroring every method would also make the public surface too broad before adapters exist. |
 | Return unstructured dictionaries for acknowledgements and errors | Future clients need typed revision, fencing, capability, and rejection facts rather than message matching. |
 | Add generic framework abstraction before real adapters exist | Plain dataclasses and explicit helpers match current source patterns and are sufficient for Phase 2. |
 
@@ -117,6 +128,7 @@ Protocol and schema compatibility fields should let newer clients and older serv
 | Some protocol operation models exist before server routes implement them | Phase 2 intentionally creates the compatibility surface ahead of FastAPI, repository, and mutation API phases. | Phase 7 wires mutation routes and finds an operation is unused, missing, or mismatched. |
 | Workspace coordination/resource/offline-import protocol support is limited to compatibility and error vocabulary | Dedicated later phases own those method surfaces and accounting/import semantics. | Phase 15, Phase 16, Phase 17, or Phase 18 starts and needs additive operation models. |
 | Explicit manual `to_dict`/`from_dict` validation duplicates local helper patterns | Existing public models use manual validation to control enums, unknown fields, nested records, and compatibility errors. | A shared helper can be introduced later without weakening validation or public shape stability. |
+| Representative operation families may require Phase 7 endpoint adapters to choose per-route grouping | Keeping Phase 2 below one-record-per-method scope preserves reviewability and avoids freezing transport routing early. | Phase 7 cannot express a needed mutation safely with the shared envelope plus family payloads. |
 
 ## Reviewability
 
@@ -126,8 +138,8 @@ Protocol and schema compatibility fields should let newer clients and older serv
 
 ## Implementation Steps
 
-1. Add the protocol model module with version, readiness, capability, request metadata, acknowledgement, rejection, and error-envelope records using stdlib dataclasses and explicit plain-data serialization.
-2. Add operation-specific request/response records for the current run, stage, submitted-operation, output-commit, artifact-fact, lease/fencing, snapshot, recovery, and cleanup operation families, composing existing public value records where appropriate.
+1. Add the protocol model module with version, readiness, capability, request metadata, accepted response, rejection, and error-envelope records using stdlib dataclasses and explicit plain-data serialization.
+2. Add a compact operation-kind enum plus family-level payload records for run lifecycle, stage lifecycle/attempts, submitted operations, output/artifact facts, lease/fencing, snapshots, recovery, and cleanup, composing existing public value records where appropriate.
 3. Export the intentional public protocol surface through `loom.pipeline.stores` and update package import-boundary tests to prove the new exports remain transport and repository independent.
 4. Add unit tests for model validation, unknown-field rejection, enum/category coverage, version compatibility helpers, nested public-record conversion, and round trips.
 5. Add contract tests with stable golden plain-data shapes for representative readiness, accepted mutation, rejected mutation, snapshot, and unsupported-capability responses.
@@ -150,7 +162,7 @@ Protocol and schema compatibility fields should let newer clients and older serv
 
 - Status: required
 - Expected paths: `tests/contracts/test_authority_protocol_contract.py`
-- Required assertions or deferral reason: stable golden plain-data shapes for representative readiness responses, successful run/stage mutation acknowledgements, stale-generation or conflict rejections, unsupported-capability errors, snapshot responses, and compatibility with Phase 1 resolver failure categories where resolver diagnostics are carried through protocol errors.
+- Required assertions or deferral reason: stable golden plain-data shapes for representative readiness responses, successful run/stage mutation acknowledgements, stale-generation or conflict rejections, unsupported-capability errors, snapshot responses, and compatibility with Phase 1 resolver failure categories where resolver diagnostics are carried through protocol errors. These tests may round-trip value objects through plain data, but must not introduce fake client/server adapter behavior.
 
 ### Integration Suite
 
@@ -172,11 +184,12 @@ Protocol and schema compatibility fields should let newer clients and older serv
 
 ## Risks
 
-- Protocol names and golden shapes become long-lived compatibility vocabulary, so ambiguous operation or error names would be expensive to change.
+- Protocol names, field names, and golden shapes become long-lived compatibility vocabulary, so ambiguous operation or error names would be expensive to change.
 - Over-nesting current store/read-model records could accidentally freeze internal store behavior as the wire API.
 - Under-modeling acknowledgement revision or fencing facts would make later clients prone to blind writes.
 - Adding FastAPI/Pydantic validation for convenience would leak transport/framework concerns into core stores.
 - Adding future workspace/resource/offline operation bodies too early would broaden Phase 2 beyond reviewable protocol foundations.
+- Modeling every store method as its own protocol record would create a broad public API before route and repository adapters prove the needed granularity.
 
 ## Validation Commands
 
@@ -199,11 +212,11 @@ make test-summary
 
 ## Handoff Notes For `loom_phase_executor`
 
-- Safe implementation slices: base protocol/version/envelope records, operation-specific request/response records, public exports/import-boundary tests, then unit and contract golden-shape coverage.
+- Safe implementation slices: base protocol/version/envelope records, compact operation-kind and family payload records, public exports/import-boundary tests, then unit and contract golden-shape coverage.
 - Tests to run with each slice: unit model tests after the new module exists, package tests after exports change, contract golden-shape tests after representative accepted/rejected responses are implemented, then Ruff and Pyright before PR preparation.
-- Decisions the executor must not revisit: use stdlib dataclasses plus existing `PlainData` and explicit `to_dict`/`from_dict` helpers; keep protocol values independent from FastAPI, Pydantic, HTTP, service process internals, SQLite, and repository modules; keep transport, repository, registry, supervisor, runtime adoption, coordination service, resource admission, offline evidence, and import behavior out of scope.
+- Decisions the executor must not revisit: use stdlib dataclasses plus existing `PlainData` and explicit `to_dict`/`from_dict` helpers; keep protocol values independent from FastAPI, Pydantic, HTTP, service process internals, SQLite, and repository modules; use shared protocol envelopes and representative operation families instead of one public record per store method; keep transport, repository, registry, supervisor, runtime adoption, coordination service, resource admission, offline evidence, and import behavior out of scope.
 - Conditions that require stopping for the manager: need for a new runtime dependency, need to change Phase 1 resolver categories, need to alter run/stage lifecycle enums, uncertainty about a public protocol field that would affect Phase 3 or Phase 7 compatibility, or any pressure to implement route/client/repository behavior early.
-- Expanded-path refinement notes: pending. The refine pass should focus on public field names, operation granularity, nested-record reuse, and whether any protocol shapes should be narrowed before implementation begins.
+- Expanded-path refinement notes: completed on 2026-05-11. The refined plan narrows operation granularity to representative families, records stable envelope field names, limits nested public records to stable value vocabulary, and keeps adapter/conformance behavior out of Phase 2.
 
 ## Refinement And Review Budget Status
 
@@ -214,11 +227,11 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-11.
-- Final phase execution plan: pending expanded-path refine pass.
+- Final phase execution plan: completed by `loom_phase_planner` on 2026-05-11.
 - Implementation summary: pending.
 - Implementation validation: pending.
-- Refinement summary: pending.
+- Refinement summary: tightened public envelope field names, operation-family granularity, nested-record reuse rules, and the no-adapter-conformance boundary for Phase 2.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not applicable yet.
-- Remaining blockers: none for planning draft; implementation should not start until the refine pass completes.
+- Remaining blockers: none.
