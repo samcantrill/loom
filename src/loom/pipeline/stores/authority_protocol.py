@@ -452,6 +452,25 @@ class AuthorityProtocolReadiness:
                     "schema_version", AUTHORITY_SCHEMA_VERSION
                 ),
             }
+        else:
+            version = AuthorityProtocolVersion.from_dict(version_data)
+            if (
+                "protocol_version" in mapping
+                and _positive_int(mapping["protocol_version"], "protocol_version")
+                != version.protocol_version
+            ):
+                raise AuthorityProtocolError(
+                    "protocol_version does not match version facts"
+                )
+            if (
+                "schema_version" in mapping
+                and _positive_int(mapping["schema_version"], "schema_version")
+                != version.schema_version
+            ):
+                raise AuthorityProtocolError(
+                    "schema_version does not match version facts"
+                )
+            version_data = version.to_dict()
         capabilities_data = mapping.get("capabilities")
         readiness = cls(
             version=AuthorityProtocolVersion.from_dict(version_data),

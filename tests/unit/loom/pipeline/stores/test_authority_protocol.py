@@ -144,6 +144,23 @@ def test_protocol_readiness_marks_incompatible_versions_not_ready() -> None:
         AuthorityProtocolReadiness.from_dict({**payload, "ready": True})
 
 
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"protocol_version": AUTHORITY_PROTOCOL_VERSION + 1}, "protocol_version"),
+        ({"schema_version": AUTHORITY_SCHEMA_VERSION + 1}, "schema_version"),
+    ],
+)
+def test_protocol_readiness_rejects_conflicting_version_aliases(
+    override: dict[str, object],
+    message: str,
+) -> None:
+    payload = AuthorityProtocolReadiness().to_dict()
+
+    with pytest.raises(AuthorityProtocolError, match=message):
+        AuthorityProtocolReadiness.from_dict({**payload, **override})
+
+
 def test_protocol_request_round_trips_identifiers_revision_and_body() -> None:
     metadata = _metadata(AuthorityProtocolOperationKind.STAGE_ATTEMPT)
     request = AuthorityProtocolRequest(
