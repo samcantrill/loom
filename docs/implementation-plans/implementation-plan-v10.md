@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 1 merged; ready for Phase 2 planning
+- Phase work status: Phase 2 PR open; automated review and merge gate pending
 
 Related artifacts and references:
 
@@ -460,9 +460,9 @@ Phase 1 merged on 2026-05-11:
 
 ### Phase 2: Authority Client And Server Protocol Models
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-protocol-models`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/120
 
 **Goal**
 
@@ -545,7 +545,22 @@ and ensure there are no SQL or FastAPI details in the public model layer.
 
 **Completion Summary**
 
-TBD.
+Phase 2 PR opened on 2026-05-11:
+
+- Branch: `codex/authority-protocol-models`
+- PR: https://github.com/samcantrill/loom/pull/120
+- Target branch: `develop`
+- Implementation summary: added transport-independent authority protocol value
+  models, public store exports, version/schema readiness payloads, request and
+  response envelopes, accepted/rejected result shapes, explicit fence fields,
+  structured rejection categories, and package, unit, and contract coverage.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with overall 1633 passed, 12 skipped, and 1227 deselected.
+- Stack maintenance: root phase PR targets `develop`; no successor branch
+  depends on `codex/authority-protocol-models` yet.
+- Follow-up notes: Phase 3 should adapt these plain-data values into FastAPI
+  route payloads without moving transport or repository concerns back into the
+  protocol model module.
 
 ### Phase 3: FastAPI Transport Skeleton
 
