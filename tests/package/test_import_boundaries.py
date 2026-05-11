@@ -363,6 +363,34 @@ def test_import_backend_cli_is_presentation_only() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_authority_cli_does_not_import_server_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.cli.authority
+
+        for forbidden in (
+            "fastapi",
+            "starlette",
+            "uvicorn",
+            "loom.authority._repository",
+            "loom.authority.supervisor",
+            "loom.authority._server",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.cli.authority")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_lower_layers_do_not_import_diagnostics() -> None:
     script = dedent(
         """

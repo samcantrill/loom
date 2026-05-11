@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from loom.authority.supervisor import AuthoritySupervisorCommandResult
     from loom.pipeline.stores import AuthorityConfig
     from loom.pipeline.stores import AuthorityResolutionMode
     from loom.serialization import PlainData
+
+from loom.cli.errors import CliError, ExitCode
+from loom.cli.formatting import format_json_envelope
+from loom.cli.options import OutputFormat, output_format_from_namespace
 
 
 _AUTHORITY_BACKEND_CHOICES = (
@@ -29,6 +35,163 @@ _AUTHORITY_PROFILE_CHOICES = (
     "deferred_finalization",
 )
 _AUTHORITY_MODE_CHOICES = ("online_mutation", "offline_first")
+AUTHORITY_LIFECYCLE_SCHEMA_VERSION = "loom.cli.authority.lifecycle.v1"
+
+
+def register_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register explicit authority supervisor lifecycle commands."""
+
+    parser = subparsers.add_parser(
+        "authority",
+        help="manage an explicit local authority supervisor",
+    )
+    authority_subparsers = parser.add_subparsers(
+        dest="authority_command",
+        metavar="AUTHORITY_COMMAND",
+    )
+
+    start = authority_subparsers.add_parser(
+        "start",
+        help="start a local authority supervisor",
+    )
+    _add_supervisor_location_options(start, state_required=True)
+    _add_process_options(start)
+    _add_output_options(start)
+    start.set_defaults(handler=handle_start)
+
+    status = authority_subparsers.add_parser(
+        "status",
+        help="inspect local authority supervisor status",
+    )
+    _add_supervisor_location_options(status, state_required=False)
+    _add_output_options(status)
+    status.set_defaults(handler=handle_status)
+
+    doctor = authority_subparsers.add_parser(
+        "doctor",
+        help="verify local authority supervisor readiness and registry state",
+    )
+    _add_supervisor_location_options(doctor, state_required=False)
+    _add_output_options(doctor)
+    doctor.set_defaults(handler=handle_doctor)
+
+    stop = authority_subparsers.add_parser(
+        "stop",
+        help="stop a local authority supervisor",
+    )
+    _add_supervisor_location_options(stop, state_required=False)
+    stop.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="seconds to wait for process termination",
+    )
+    _add_output_options(stop)
+    stop.set_defaults(handler=handle_stop)
+
+    restart = authority_subparsers.add_parser(
+        "restart",
+        help="restart a local authority supervisor with a new generation",
+    )
+    _add_supervisor_location_options(restart, state_required=True)
+    _add_process_options(restart)
+    _add_output_options(restart)
+    restart.set_defaults(handler=handle_restart)
+
+
+def handle_start(namespace: argparse.Namespace) -> int:
+    """Handle ``loom authority start``."""
+
+    from loom.authority.supervisor import (
+        AuthoritySupervisorError,
+        start_authority_supervisor,
+    )
+
+    try:
+        result = start_authority_supervisor(
+            state_dir=namespace.state_dir,
+            workspace_root=namespace.workspace_root,
+            workspace_id=namespace.workspace_id,
+            host=namespace.host,
+            port=namespace.port,
+            timeout_seconds=namespace.timeout,
+        )
+    except AuthoritySupervisorError as exc:
+        raise _supervisor_cli_error(exc) from exc
+    return _emit_result(result, namespace)
+
+
+def handle_status(namespace: argparse.Namespace) -> int:
+    """Handle ``loom authority status``."""
+
+    from loom.authority.supervisor import inspect_authority_supervisor
+
+    result = inspect_authority_supervisor(
+        state_dir=namespace.state_dir,
+        workspace_root=namespace.workspace_root,
+        workspace_id=namespace.workspace_id,
+        command="status",
+    )
+    return _emit_result(result, namespace)
+
+
+def handle_doctor(namespace: argparse.Namespace) -> int:
+    """Handle ``loom authority doctor``."""
+
+    from loom.authority.supervisor import inspect_authority_supervisor
+
+    result = inspect_authority_supervisor(
+        state_dir=namespace.state_dir,
+        workspace_root=namespace.workspace_root,
+        workspace_id=namespace.workspace_id,
+        command="doctor",
+    )
+    if not result.ok:
+        raise CliError(
+            "authority supervisor doctor found unhealthy state",
+            code="cli.authority.doctor_failed",
+            context={"result": result.to_dict()},
+            exit_code=ExitCode.RUN_STATE,
+        )
+    return _emit_result(result, namespace)
+
+
+def handle_stop(namespace: argparse.Namespace) -> int:
+    """Handle ``loom authority stop``."""
+
+    from loom.authority.supervisor import stop_authority_supervisor
+
+    result = stop_authority_supervisor(
+        state_dir=namespace.state_dir,
+        workspace_root=namespace.workspace_root,
+        workspace_id=namespace.workspace_id,
+        timeout_seconds=namespace.timeout,
+    )
+    return _emit_result(result, namespace)
+
+
+def handle_restart(namespace: argparse.Namespace) -> int:
+    """Handle ``loom authority restart``."""
+
+    from loom.authority.supervisor import (
+        AuthoritySupervisorError,
+        restart_authority_supervisor,
+    )
+
+    try:
+        result = restart_authority_supervisor(
+            state_dir=namespace.state_dir,
+            workspace_root=namespace.workspace_root,
+            workspace_id=namespace.workspace_id,
+            host=namespace.host,
+            port=namespace.port,
+            timeout_seconds=namespace.timeout,
+        )
+    except AuthoritySupervisorError as exc:
+        raise _supervisor_cli_error(exc) from exc
+    return _emit_result(result, namespace)
 
 
 def add_authority_options(
@@ -137,10 +300,119 @@ def authority_metadata_summary(config: "AuthorityConfig") -> "Mapping[str, Plain
     return config.redacted_dict()
 
 
+def _add_supervisor_location_options(
+    parser: argparse.ArgumentParser,
+    *,
+    state_required: bool,
+) -> None:
+    parser.add_argument(
+        "--state-dir",
+        required=state_required,
+        help="explicit authority supervisor state directory",
+    )
+    parser.add_argument(
+        "--workspace-root",
+        default=".",
+        help="workspace root for .loom/authority registry records",
+    )
+    parser.add_argument(
+        "--workspace-id",
+        help="workspace identifier to record in authority readiness and registry facts",
+    )
+
+
+def _add_process_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--host", default="127.0.0.1", help="host interface")
+    parser.add_argument("--port", type=int, default=8765, help="port to bind")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="seconds to wait for readiness",
+    )
+
+
+def _add_output_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--format",
+        dest="output_format",
+        choices=[format.value for format in OutputFormat],
+        default=OutputFormat.TEXT.value,
+        help="output format",
+    )
+    parser.add_argument(
+        "--traceback",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="show traceback details for errors",
+    )
+
+
+def _emit_result(
+    result: "AuthoritySupervisorCommandResult",
+    namespace: argparse.Namespace,
+) -> int:
+    output_format = output_format_from_namespace(namespace)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=AUTHORITY_LIFECYCLE_SCHEMA_VERSION,
+                ok=result.ok,
+                warnings=(),
+                payload_name="result",
+                payload=result.to_dict(),
+            )
+        )
+    else:
+        sys.stdout.write(_format_supervisor_text(result) + "\n")
+    return int(ExitCode.SUCCESS)
+
+
+def _format_supervisor_text(result: "AuthoritySupervisorCommandResult") -> str:
+    status = "OK" if result.ok else "WARN"
+    lines = [f"{status} authority {result.command}: {result.readiness.value}"]
+    if result.endpoint is not None:
+        lines.append(f"endpoint: {result.endpoint}")
+    if result.state_dir is not None:
+        lines.append(f"state_dir: {result.state_dir}")
+    if result.pid is not None:
+        lines.append(f"pid: {result.pid} ({result.process_state.value})")
+    lines.append(f"repository: {result.repository_state.value}")
+    if result.registry_status is not None:
+        lines.append(f"registry: {result.registry_status.value}")
+    if result.service_generation is not None:
+        lines.append(f"service_generation: {result.service_generation}")
+    if result.generation_matches is not None:
+        lines.append(f"generation_matches: {result.generation_matches}")
+    for diagnostic in result.diagnostics:
+        lines.append(f"{diagnostic.get('severity')}: {diagnostic.get('code')}: {diagnostic.get('message')}")
+    return "\n".join(lines)
+
+
+def _supervisor_cli_error(error: Exception) -> CliError:
+    code = getattr(error, "code", "cli.authority.error")
+    context = getattr(error, "context", {})
+    if not isinstance(context, dict):
+        context = {}
+    return CliError(
+        str(error),
+        code=str(code).replace("authority_supervisor.", "cli.authority."),
+        context=context,
+        exit_code=ExitCode.RUN_STATE,
+    )
+
+
 __all__ = [
+    "AUTHORITY_LIFECYCLE_SCHEMA_VERSION",
     "add_authority_options",
     "authority_config_from_namespace",
     "authority_config_to_worker_args",
     "authority_metadata_summary",
     "authority_resolution_mode_from_namespace",
+    "handle_doctor",
+    "handle_restart",
+    "handle_start",
+    "handle_status",
+    "handle_stop",
+    "register_subparser",
 ]
