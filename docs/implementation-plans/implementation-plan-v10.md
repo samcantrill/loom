@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 9 PR open in #127; automated review and merge gate pending
+- Phase work status: Phase 9 merged; ready for Phase 10 planning
 
 Related artifacts and references:
 
@@ -1240,7 +1240,7 @@ and how stale records guide users toward explicit status/restart commands.
 
 ### Phase 9: Supervisor Lifecycle Commands
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-supervisor-lifecycle`
 - PR: [#127](https://github.com/samcantrill/loom/pull/127)
 
@@ -1330,21 +1330,32 @@ development use.
 - Worktree: `/home/samcantrill/work/loom-worktrees/authority-supervisor-lifecycle`.
 - Stack target: `develop`; verified PR target is `develop` with head
   `codex/authority-supervisor-lifecycle`.
+- Merge commit: `49c013cc56bbc09933b837e5f69caf93065bde0c`.
 - Implementation summary: added explicit `loom authority start/status/doctor/stop/restart`
   commands, authority-owned supervisor process/state/registry helpers, a private
   repository-backed FastAPI server entrypoint, restart generation rotation, and
   `uvicorn` as the bounded ASGI server dependency needed to run the existing
   FastAPI app.
 - Validation: targeted Ruff passed; targeted Pyright passed; targeted pytest
-  passed with 54 selected tests. `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
-  passed with Ruff clean, Pyright clean, default pytest 1284 passed /
-  18 skipped / 14 deselected, config-extra 420 passed / 1313 deselected, and
-  build success. `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with
-  package 68 passed / 1 skipped, unit 930 passed / 1 skipped, contract
+  passed with 54 selected phase tests during implementation, and the final
+  review-fix supervisor unit run passed with 7 tests.
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff clean, Pyright
+  clean, default pytest 1285 passed / 18 skipped / 14 deselected, config-extra
+  420 passed / 1314 deselected, and build success.
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 68 passed /
+  1 skipped, unit 931 passed / 1 skipped, contract
   146 passed / 2 skipped, integration 126 passed / 8 skipped / 10 deselected,
-  e2e 40 passed / 1 deselected, and config-extra 420 passed / 1313 deselected.
-- Follow-up notes: automated review, GitHub CI, merge, and post-merge metadata
-  update remain pending.
+  e2e 40 passed / 1 deselected, and config-extra 420 passed / 1314 deselected.
+- Review and CI: managing-agent automated review completed on 2026-05-11; one
+  bounded fix made startup fail immediately if the child process exits before
+  readiness. GitHub CI `checks` passed in 2m42s on
+  <https://github.com/samcantrill/loom/actions/runs/25668370100/job/75346782820>.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-supervisor-lifecycle` at merge time, and
+  the remote branch was deleted by the merge command.
+- Follow-up notes: Phase 10 can adopt the registry records and supervisor
+  lifecycle facts from strict resolver and factory paths without adding hidden
+  startup.
 
 ### Phase 10: Strict Resolver And Factory Adoption
 
