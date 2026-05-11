@@ -70,7 +70,10 @@ def _store_with_stage(tmp_path: Path) -> tuple[LocalRunStore, str]:
 
 
 def _authority_store_with_stage(tmp_path: Path) -> tuple[Any, str]:
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_uri = _run_uri(tmp_path)
     store.create_run(run_uri)
     store.write_run_status(

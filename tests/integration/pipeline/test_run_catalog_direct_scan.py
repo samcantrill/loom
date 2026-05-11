@@ -15,13 +15,17 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.runs import CatalogWarningCode, RunCatalog
 
 
 def test_run_catalog_scan_current_extracts_metadata_summary(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = create_authority_backed_serial_run_store(root)
+    store = create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_path = root / "run-1"
     run_uri = path_to_run_uri(run_path)
     checksum = format_digest("sha256", "a" * 64)

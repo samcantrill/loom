@@ -135,6 +135,11 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, *, store: FakeRunStore | None
         "_create_default_run_store",
         lambda *, authority_config=None: fake_store,
     )
+    monkeypatch.setattr(
+        plan_command,
+        "_create_read_only_plan_run_store",
+        lambda: fake_store,
+    )
     monkeypatch.setattr(plan_command, "_plan_pipeline", plan_pipeline)
     return calls
 

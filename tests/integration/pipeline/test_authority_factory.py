@@ -8,6 +8,7 @@ from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityConfig,
+    AuthorityFactoryError,
     AuthorityStoreError,
     RunStore,
     create_run_store,
@@ -18,20 +19,9 @@ from loom.pipeline.stores.service_authority import LocalAuthorityService
 pytestmark = pytest.mark.integration
 
 
-def test_create_run_store_defaults_to_service_authority(tmp_path: Path) -> None:
-    run_uri = path_to_run_uri(tmp_path / "r1")
-    store = create_run_store()
-
-    assert isinstance(store, RunStore)
-    assert store.capabilities().backend_name == "local-authority-service"
-    assert (
-        store.authority_config().backend_kind
-        is AuthorityBackendKind.CO_LOCATED_SERVICE
-    )
-    assert store.authority_config().endpoint is not None
-    revision = store.admit_run(run_uri)
-    assert revision.sequence >= 1
-    assert store.open_run(run_uri).status is RunStatus.CREATED
+def test_create_run_store_fails_closed_without_authority() -> None:
+    with pytest.raises(AuthorityFactoryError, match="online mutation mode requires"):
+        create_run_store()
 
 
 def test_create_run_store_rejects_removed_transitional_sqlite_authority() -> None:

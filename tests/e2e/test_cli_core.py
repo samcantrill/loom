@@ -22,6 +22,8 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import authority_config_to_cli_args
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from tests.support.config_samples import (
     construction_event_log,
@@ -298,168 +300,189 @@ def test_cli_run_default_and_explicit_run_uri(
     assert json.loads(preflight_stdout.getvalue())["result"]["status"] == "PASS"
     assert preflight_stderr.getvalue() == ""
 
-    default_stdout = io.StringIO()
-    default_stderr = io.StringIO()
-    assert (
-        main(
-            ["run", str(config_path), "--format", "json"],
-            stdout=default_stdout,
-            stderr=default_stderr,
-        )
-        == 0
-    )
-    default_payload = json.loads(default_stdout.getvalue())
-    default_run_uri = default_payload["result"]["run_uri"]
-    assert default_payload["schema_version"] == "loom.cli.run.v2"
-    assert default_payload["result"]["status"] == "SUCCEEDED"
-    assert default_run_uri.startswith(
-        path_to_run_uri(tmp_path / "runs").removesuffix("/")
-    )
-    assert run_uri_to_path(default_run_uri).is_dir()
-    LocalRunStore().write_stage_log(
-        default_run_uri, "build", "stdout", "hello\nworld\n"
-    )
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
 
-    status_stdout = io.StringIO()
-    status_stderr = io.StringIO()
-    assert (
-        main(
-            ["status", default_run_uri, "--format", "json"],
-            stdout=status_stdout,
-            stderr=status_stderr,
+        default_stdout = io.StringIO()
+        default_stderr = io.StringIO()
+        assert (
+            main(
+                ["run", str(config_path), *authority_args, "--format", "json"],
+                stdout=default_stdout,
+                stderr=default_stderr,
+            )
+            == 0
         )
-        == 0
-    )
-    status_payload = json.loads(status_stdout.getvalue())
-    assert status_payload["schema_version"] == "loom.cli.status.v3"
-    assert status_payload["result"]["stages"][0]["stage_name"] == "build"
+        default_payload = json.loads(default_stdout.getvalue())
+        default_run_uri = default_payload["result"]["run_uri"]
+        assert default_payload["schema_version"] == "loom.cli.run.v2"
+        assert default_payload["result"]["status"] == "SUCCEEDED"
+        assert default_run_uri.startswith(
+            path_to_run_uri(tmp_path / "runs").removesuffix("/")
+        )
+        assert run_uri_to_path(default_run_uri).is_dir()
+        LocalRunStore().write_stage_log(
+            default_run_uri, "build", "stdout", "hello\nworld\n"
+        )
 
-    logs_stdout = io.StringIO()
-    logs_stderr = io.StringIO()
-    assert (
-        main(
-            [
-                "logs",
-                default_run_uri,
-                "build",
-                "--stream",
-                "stdout",
-                "--tail",
-                "1",
-                "--format",
-                "json",
-            ],
-            stdout=logs_stdout,
-            stderr=logs_stderr,
+        status_stdout = io.StringIO()
+        status_stderr = io.StringIO()
+        assert (
+            main(
+                ["status", default_run_uri, *authority_args, "--format", "json"],
+                stdout=status_stdout,
+                stderr=status_stderr,
+            )
+            == 0
         )
-        == 0
-    )
-    logs_payload = json.loads(logs_stdout.getvalue())
-    assert logs_payload["schema_version"] == "loom.cli.logs.v3"
-    assert logs_payload["result"]["streams"][0]["content"] == "world\n"
+        status_payload = json.loads(status_stdout.getvalue())
+        assert status_payload["schema_version"] == "loom.cli.status.v3"
+        assert status_payload["result"]["stages"][0]["stage_name"] == "build"
 
-    artifacts_stdout = io.StringIO()
-    artifacts_stderr = io.StringIO()
-    assert (
-        main(
-            ["artifacts", "list", default_run_uri, "--format", "json"],
-            stdout=artifacts_stdout,
-            stderr=artifacts_stderr,
+        logs_stdout = io.StringIO()
+        logs_stderr = io.StringIO()
+        assert (
+            main(
+                [
+                    "logs",
+                    default_run_uri,
+                    "build",
+                    "--stream",
+                    "stdout",
+                    "--tail",
+                    "1",
+                    "--format",
+                    "json",
+                ],
+                stdout=logs_stdout,
+                stderr=logs_stderr,
+            )
+            == 0
         )
-        == 0
-    )
-    artifacts_payload = json.loads(artifacts_stdout.getvalue())
-    assert artifacts_payload["schema_version"] == "loom.cli.artifacts.list.v3"
-    assert artifacts_payload["result"]["artifact_count"] == 2
-    assert [
-        artifact["artifact_id"] for artifact in artifacts_payload["result"]["artifacts"]
-    ] == [
-        "build/data",
-        "report/text",
-    ]
-    assert artifacts_stderr.getvalue() == ""
+        logs_payload = json.loads(logs_stdout.getvalue())
+        assert logs_payload["schema_version"] == "loom.cli.logs.v3"
+        assert logs_payload["result"]["streams"][0]["content"] == "world\n"
 
-    artifact_stdout = io.StringIO()
-    artifact_stderr = io.StringIO()
-    assert (
-        main(
-            ["artifacts", "show", default_run_uri, "build/data", "--format", "json"],
-            stdout=artifact_stdout,
-            stderr=artifact_stderr,
+        artifacts_stdout = io.StringIO()
+        artifacts_stderr = io.StringIO()
+        assert (
+            main(
+                ["artifacts", "list", default_run_uri, "--format", "json"],
+                stdout=artifacts_stdout,
+                stderr=artifacts_stderr,
+            )
+            == 0
         )
-        == 0
-    )
-    artifact_payload = json.loads(artifact_stdout.getvalue())
-    assert artifact_payload["schema_version"] == "loom.cli.artifacts.show.v3"
-    assert artifact_payload["result"]["artifact"]["key"] == "build.data"
-    assert artifact_payload["result"]["stage_provenance"] is not None
-    assert artifact_stderr.getvalue() == ""
+        artifacts_payload = json.loads(artifacts_stdout.getvalue())
+        assert artifacts_payload["schema_version"] == "loom.cli.artifacts.list.v3"
+        assert artifacts_payload["result"]["artifact_count"] == 2
+        assert [
+            artifact["artifact_id"]
+            for artifact in artifacts_payload["result"]["artifacts"]
+        ] == [
+            "build/data",
+            "report/text",
+        ]
+        assert artifacts_stderr.getvalue() == ""
 
-    explicit_run_uri = path_to_run_uri(tmp_path / "runs" / "explicit")
-    explicit_stdout = io.StringIO()
-    explicit_stderr = io.StringIO()
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", explicit_run_uri],
-            stdout=explicit_stdout,
-            stderr=explicit_stderr,
+        artifact_stdout = io.StringIO()
+        artifact_stderr = io.StringIO()
+        assert (
+            main(
+                [
+                    "artifacts",
+                    "show",
+                    default_run_uri,
+                    "build/data",
+                    "--format",
+                    "json",
+                ],
+                stdout=artifact_stdout,
+                stderr=artifact_stderr,
+            )
+            == 0
         )
-        == 0
-    )
-    assert f"OK run {explicit_run_uri}: SUCCEEDED" in explicit_stdout.getvalue()
-    assert run_uri_to_path(explicit_run_uri).is_dir()
+        artifact_payload = json.loads(artifact_stdout.getvalue())
+        assert artifact_payload["schema_version"] == "loom.cli.artifacts.show.v3"
+        assert artifact_payload["result"]["artifact"]["key"] == "build.data"
+        assert artifact_payload["result"]["stage_provenance"] is not None
+        assert artifact_stderr.getvalue() == ""
+
+        explicit_run_uri = path_to_run_uri(tmp_path / "runs" / "explicit")
+        explicit_stdout = io.StringIO()
+        explicit_stderr = io.StringIO()
+        assert (
+            main(
+                ["run", str(config_path), "--run-uri", explicit_run_uri, *authority_args],
+                stdout=explicit_stdout,
+                stderr=explicit_stderr,
+            )
+            == 0
+        )
+        assert f"OK run {explicit_run_uri}: SUCCEEDED" in explicit_stdout.getvalue()
+        assert run_uri_to_path(explicit_run_uri).is_dir()
 
 
 def test_cli_status_submitted_state_smoke(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "submitted")
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
-    store.create_run(run_uri)
-    store.write_run_status(
-        run_uri,
-        RunStatusRecord(
-            run_uri=run_uri,
-            status=RunStatus.SUBMITTED,
-            created_at="2020-01-01T00:00:00Z",
-            updated_at="2020-01-01T00:00:01Z",
-        ),
-    )
-    store.write_stage_status(
-        run_uri,
-        "build",
-        StageStatusRecord(
-            run_uri=run_uri,
-            stage_name="build",
-            status=StageStatus.SUBMITTED,
-            attempt=1,
-            updated_at="2020-01-01T00:00:01Z",
-        ),
-    )
-    store.write_submitted_operation(
-        run_uri,
-        SubmittedOperationRecord(
-            run_uri=run_uri,
-            submission_id="sub-1",
-            backend="test-backend",
-            mode="batch",
-            created_at="2020-01-01T00:00:01Z",
-            updated_at="2020-01-01T00:00:01Z",
-            state=SubmittedOperationState.SUBMITTED,
-            manifest_relative_path="submitted/sub-1/manifest.json",
-            summary_counts={"submitted": 1},
-        ),
-    )
-    stdout = io.StringIO()
-    stderr = io.StringIO()
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=service.config(),
+        )
+        store.create_run(run_uri)
+        store.write_run_status(
+            run_uri,
+            RunStatusRecord(
+                run_uri=run_uri,
+                status=RunStatus.SUBMITTED,
+                created_at="2020-01-01T00:00:00Z",
+                updated_at="2020-01-01T00:00:01Z",
+            ),
+        )
+        store.write_stage_status(
+            run_uri,
+            "build",
+            StageStatusRecord(
+                run_uri=run_uri,
+                stage_name="build",
+                status=StageStatus.SUBMITTED,
+                attempt=1,
+                updated_at="2020-01-01T00:00:01Z",
+            ),
+        )
+        store.write_submitted_operation(
+            run_uri,
+            SubmittedOperationRecord(
+                run_uri=run_uri,
+                submission_id="sub-1",
+                backend="test-backend",
+                mode="batch",
+                created_at="2020-01-01T00:00:01Z",
+                updated_at="2020-01-01T00:00:01Z",
+                state=SubmittedOperationState.SUBMITTED,
+                manifest_relative_path="submitted/sub-1/manifest.json",
+                summary_counts={"submitted": 1},
+            ),
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
 
-    assert (
-        main(["status", run_uri, "--format", "json"], stdout=stdout, stderr=stderr) == 0
-    )
+        assert (
+            main(
+                ["status", run_uri, *authority_args, "--format", "json"],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
 
-    payload = json.loads(stdout.getvalue())
-    assert payload["result"]["status"] == "SUBMITTED"
-    assert payload["result"]["stages"][0]["status"] == "SUBMITTED"
-    assert payload["result"]["submitted_operations"][0]["submission_id"] == "sub-1"
-    assert stderr.getvalue() == ""
+        payload = json.loads(stdout.getvalue())
+        assert payload["result"]["status"] == "SUBMITTED"
+        assert payload["result"]["stages"][0]["status"] == "SUBMITTED"
+        assert payload["result"]["submitted_operations"][0]["submission_id"] == "sub-1"
+        assert stderr.getvalue() == ""
 
 
 def test_cli_run_subprocess_success_smoke(tmp_path: Path) -> None:
@@ -469,23 +492,26 @@ def test_cli_run_subprocess_success_smoke(tmp_path: Path) -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--executor",
-                "subprocess",
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    "--executor",
+                    "subprocess",
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is True
@@ -507,25 +533,28 @@ def test_cli_run_parallel_success_smoke(tmp_path: Path) -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--max-parallel-stages",
-                "2",
-                "--failure-policy",
-                "continue-independent",
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    "--max-parallel-stages",
+                    "2",
+                    "--failure-policy",
+                    "continue-independent",
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is True
@@ -548,23 +577,26 @@ def test_cli_run_subprocess_failure_smoke(tmp_path: Path) -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--executor",
-                "subprocess",
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    "--executor",
+                    "subprocess",
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 5
         )
-        == 5
-    )
 
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is False
@@ -594,21 +626,24 @@ def test_cli_run_subprocess_failure_smoke(tmp_path: Path) -> None:
     text_run_uri = path_to_run_uri(tmp_path / "runs" / "subprocess-failed-text")
     text_stdout = io.StringIO()
     text_stderr = io.StringIO()
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                text_run_uri,
-                "--executor",
-                "subprocess",
-            ],
-            stdout=text_stdout,
-            stderr=text_stderr,
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    text_run_uri,
+                    "--executor",
+                    "subprocess",
+                    *authority_args,
+                ],
+                stdout=text_stdout,
+                stderr=text_stderr,
+            )
+            == 5
         )
-        == 5
-    )
     rendered = text_stdout.getvalue()
     assert f"FAILED run {text_run_uri}: FAILED" in rendered
     assert "failure build: stage failed intentionally" in rendered
@@ -654,34 +689,37 @@ def test_cli_run_resume_reuses_existing_state(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "resume")
     _write_pipeline_config(config_path, counter_path=counter_path)
 
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", run_uri],
-            stdout=io.StringIO(),
-            stderr=io.StringIO(),
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        assert (
+            main(
+                ["run", str(config_path), "--run-uri", run_uri, *authority_args],
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            )
+            == 0
         )
-        == 0
-    )
-    assert counter_path.read_text(encoding="utf-8") == "1"
+        assert counter_path.read_text(encoding="utf-8") == "1"
 
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    assert (
-        main(
-            [
-                "run",
-                str(config_path),
-                "--run-uri",
-                run_uri,
-                "--resume",
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    "--resume",
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
         )
-        == 0
-    )
 
     payload = json.loads(stdout.getvalue())
     actions = {
@@ -710,42 +748,53 @@ def test_cli_failed_run_reports_failure_summary(tmp_path: Path) -> None:
     assert json.loads(preflight_stdout.getvalue())["result"]["status"] == "PASS"
     assert preflight_stderr.getvalue() == ""
 
-    stdout = io.StringIO()
-    stderr = io.StringIO()
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        stdout = io.StringIO()
+        stderr = io.StringIO()
 
-    assert (
-        main(
-            ["run", str(config_path), "--run-uri", run_uri, "--format", "json"],
-            stdout=stdout,
-            stderr=stderr,
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    run_uri,
+                    *authority_args,
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 5
         )
-        == 5
-    )
 
-    payload = json.loads(stdout.getvalue())
-    assert payload["ok"] is False
-    assert payload["result"]["status"] == "FAILED"
-    assert payload["result"]["failure_summary"]["stage"] == "build"
-    assert (
-        "stage failed intentionally" in payload["result"]["failure_summary"]["message"]
-    )
-
-    LocalRunStore().write_stage_log(run_uri, "build", "stderr", "failed\n")
-
-    status_stdout = io.StringIO()
-    status_stderr = io.StringIO()
-    assert (
-        main(
-            ["status", run_uri, "--format", "json"],
-            stdout=status_stdout,
-            stderr=status_stderr,
+        payload = json.loads(stdout.getvalue())
+        assert payload["ok"] is False
+        assert payload["result"]["status"] == "FAILED"
+        assert payload["result"]["failure_summary"]["stage"] == "build"
+        assert (
+            "stage failed intentionally"
+            in payload["result"]["failure_summary"]["message"]
         )
-        == 0
-    )
-    status_payload = json.loads(status_stdout.getvalue())
-    assert status_payload["result"]["status"] == "FAILED"
-    assert status_payload["result"]["stages"][0]["stage_name"] == "build"
-    assert status_stderr.getvalue() == ""
+
+        LocalRunStore().write_stage_log(run_uri, "build", "stderr", "failed\n")
+
+        status_stdout = io.StringIO()
+        status_stderr = io.StringIO()
+        assert (
+            main(
+                ["status", run_uri, *authority_args, "--format", "json"],
+                stdout=status_stdout,
+                stderr=status_stderr,
+            )
+            == 0
+        )
+        status_payload = json.loads(status_stdout.getvalue())
+        assert status_payload["result"]["status"] == "FAILED"
+        assert status_payload["result"]["stages"][0]["stage_name"] == "build"
+        assert status_stderr.getvalue() == ""
 
     logs_stdout = io.StringIO()
     logs_stderr = io.StringIO()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.status import RunStatus, StageStatus
@@ -20,6 +21,13 @@ from .authority import (
 )
 from .capabilities import BackendCapabilitySet
 from .config import AuthorityBackendKind, AuthorityConfig
+from .authority_factory import (
+    AuthorityFactoryError,
+    config_from_authority_reference,
+    require_online_authority,
+    resolve_authority_for_factory,
+)
+from .authority_resolution import AuthorityResolutionMode
 from .read_models import (
     AuthoritativeRunSnapshot,
     BackendRevision,
@@ -36,6 +44,11 @@ def create_run_store(
     config: AuthorityConfig | Mapping[str, object] | None = None,
     *,
     authority_store: PerRunAuthorityStore | None = None,
+    authority_mode: AuthorityResolutionMode = AuthorityResolutionMode.ONLINE_MUTATION,
+    workspace_root: str | Path | None = None,
+    allocation_id: str | None = None,
+    expected_workspace_id: str | None = None,
+    expected_generation: str | None = None,
 ) -> RunStore:
     """Create the public authority-backed run-store surface.
 
@@ -43,12 +56,39 @@ def create_run_store(
     store injection remains available for tests and custom integrations.
     """
 
-    resolved_config = _resolve_config(config, authority_store=authority_store)
     if authority_store is not None:
+        resolved_config = _resolve_config(config, authority_store=authority_store)
         _validate_authority_store(authority_store)
         return _PerRunAuthorityRunStore(authority_store, resolved_config)
+    resolved_input_config = _resolve_config(config, authority_store=None)
+    if resolved_input_config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
+        raise AuthorityStoreError(_removed_sqlite_authority_message())
+    resolution = resolve_authority_for_factory(
+        resolved_input_config,
+        authority_mode=authority_mode,
+        workspace_root=workspace_root,
+        allocation_id=allocation_id,
+        expected_workspace_id=expected_workspace_id,
+        expected_generation=expected_generation,
+    )
+    reference = require_online_authority(
+        resolution,
+        purpose="public run-store factory",
+    )
+    resolved_config = config_from_authority_reference(reference)
     if resolved_config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
         raise AuthorityStoreError(_removed_sqlite_authority_message())
+    if resolved_config.endpoint is not None and _is_http_endpoint(resolved_config.endpoint):
+        raise AuthorityFactoryError(
+            "public run-store factory cannot adapt HTTP authority endpoints until "
+            "the runner online path migrates to AuthorityClient",
+            code="authority_factory.http_store_adapter_deferred",
+            resolution=resolution.result,
+            context={
+                "endpoint": resolved_config.endpoint,
+                "deferred_to": "v10_phase_11",
+            },
+        )
     if resolved_config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
         AuthorityBackendKind.MANAGED_SERVICE,
@@ -392,6 +432,10 @@ def _removed_sqlite_authority_message() -> str:
         "use co_located_service, managed_service, or allocation_scoped_service "
         "authority"
     )
+
+
+def _is_http_endpoint(endpoint: str) -> bool:
+    return endpoint.startswith(("http://", "https://"))
 
 
 def _non_empty(value: object, field: str) -> str:

@@ -11,6 +11,7 @@ from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.planning import PlanAction, PlanSelectors
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from tests.support.pipeline_execution_configs import local_execution_config
 
 pytest.importorskip("pydantic")
@@ -36,7 +37,10 @@ def _run_uri(tmp_path: Path, name: str = "run1") -> str:
 
 
 def _run_store(tmp_path: Path):
-    return create_authority_backed_serial_run_store(tmp_path / "runs")
+    return create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
 
 
 def test_local_runner_executes_pipeline_and_writes_state(tmp_path: Path) -> None:

@@ -21,6 +21,16 @@ from .authority_client import (
     AuthorityClient,
     AuthorityClientError,
 )
+from .authority_factory import (
+    DEFAULT_AUTHORITY_READINESS_TIMEOUT_SECONDS,
+    AuthorityFactoryError,
+    AuthorityFactoryResolution,
+    config_from_authority_reference,
+    create_authority_client,
+    probe_http_authority_readiness,
+    require_online_authority,
+    resolve_authority_for_factory,
+)
 from .authority_registry import (
     AUTHORITY_REGISTRY_ALLOCATIONS_DIR,
     AUTHORITY_REGISTRY_CURRENT_FILE,
@@ -277,6 +287,14 @@ __all__ = [
     "AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH",
     "AuthorityClient",
     "AuthorityClientError",
+    "DEFAULT_AUTHORITY_READINESS_TIMEOUT_SECONDS",
+    "AuthorityFactoryError",
+    "AuthorityFactoryResolution",
+    "config_from_authority_reference",
+    "create_authority_client",
+    "probe_http_authority_readiness",
+    "require_online_authority",
+    "resolve_authority_for_factory",
     "AUTHORITY_REGISTRY_ALLOCATIONS_DIR",
     "AUTHORITY_REGISTRY_CURRENT_FILE",
     "AUTHORITY_REGISTRY_DIR",

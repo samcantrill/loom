@@ -217,9 +217,28 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 - Draft plan: completed by managing agent on 2026-05-11.
 - Final phase execution plan: completed by managing agent on 2026-05-11.
 - Implementation summary:
+  - Added `loom.pipeline.stores.authority_factory` as the strict resolver-to-factory adapter with structured `AuthorityFactoryError`, registry validation, HTTP `/ready` probing, and resolver-backed `AuthorityClient` construction.
+  - Routed `create_run_store()` and `create_authority_backed_serial_run_store()` through strict online authority resolution unless a trusted `authority_store=` is injected.
+  - Removed endpoint-less hidden co-located service startup from public factory paths; explicit `LocalAuthorityService.start().config()` remains available for tests and custom integrations.
+  - Preserved read-only `loom plan` behavior by avoiding mutation-store construction for fresh/non-resume planning, while keeping resume planning on explicit authority resolution.
+  - Kept continuation recursive-executor errors ahead of authority construction so invalid executor diagnostics remain stable.
+  - Updated run-catalog scanning to avoid hidden service startup for read-only local catalog scans when no explicit authority endpoint is selected.
+  - Migrated tests and fixtures that need mutation authority to explicit injected SQLite stores or explicit service configs.
+  - Remaining runtime bypass inventory for later phases: `PipelineRunner`, `loom run`, stage worker, prepared-run, stage-job, subprocess, and SLURM paths still use the legacy `AuthorityBackedSerialRunStore` surface and require explicit service configs where they cross process boundaries; HTTP `AuthorityClient` is validated but not yet adapted to the runner mutation surface.
 - Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed with 0 errors.
+  - Targeted non-socket pytest passed: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_authority_factory.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/integration/pipeline/test_run_catalog_compare.py tests/integration/pipeline/test_run_catalog_direct_scan.py tests/integration/pipeline/test_run_catalog_sqlite.py tests/integration/pipeline/test_run_catalog_current_list.py tests/support/slurm_status_fixtures.py tests/integration/pipeline/test_cli_runs.py tests/unit/loom/cli/test_plan.py` produced 78 passed.
+  - Targeted config-extra/no-service CLI pytest passed: `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config pytest tests/e2e/test_cli_core.py::test_cli_validate_plan_and_json_outputs tests/e2e/test_cli_core.py::test_cli_continuation_commands_reject_recursive_executors_as_json tests/e2e/test_cli_core.py::test_cli_run_dry_run_does_not_execute_or_allocate tests/e2e/test_cli_core.py::test_cli_rejects_deferred_executor_and_plain_run_uri tests/integration/config/test_cli_plan.py::test_plan_fresh_without_run_uri_does_not_create_default_run_root tests/integration/config/test_cli_plan.py::test_plan_explicit_new_run_uri_is_read_only tests/integration/config/test_cli_plan.py::test_plan_existing_run_uri_without_resume_fails` produced 7 passed.
+  - Socket/process-manager tests could not be rerun in this sandbox after implementation because local socket creation requires escalation and escalation was rejected by the platform usage limit. Earlier focused service tests for the first implementation slice passed under escalation before the limit was hit.
+  - `make validate-pr` and `make test-summary` have not run for this phase in the current session because the required socket-capable escalation is unavailable.
 - Refinement summary:
+  - Not run as a separate refinement pass yet. Current local fixes were made by the managing agent before the implementation commit/PR checkpoint.
 - Blocker-resolution summary:
+  - 0/3 phase blocker-resolution passes used. Current blocker is environmental: git metadata and socket-capable validation require escalation, but the platform rejected escalation because the session hit the usage limit.
 - PR preparation:
+  - Not started. Local git staging failed because the worktree git metadata is read-only in the sandbox (`index.lock` could not be created), and the required escalation for `git add` was rejected by the platform usage limit.
 - Stack maintenance:
+  - None performed. This is a root phase branch targeting `develop`; no successor branch has been created.
 - Remaining blockers:
+  - Commit, full validation, PR body preparation, push, PR creation, CI, automated review, merge, metadata update, and cleanup are blocked until escalation/local git metadata writes and network operations are available again.

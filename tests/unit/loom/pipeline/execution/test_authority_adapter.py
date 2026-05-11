@@ -38,6 +38,7 @@ from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus
 from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityConfig,
+    AuthorityFactoryError,
     AuthorityStoreError,
     LocalArtifactStore,
     LocalRunStore,
@@ -137,12 +138,12 @@ def _pipeline() -> PipelineSpec:
     )
 
 
-def test_authority_backed_store_defaults_to_service_authority(tmp_path: Path) -> None:
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+def test_authority_backed_store_fails_closed_without_authority(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AuthorityFactoryError, match="online mutation mode requires"):
+        create_authority_backed_serial_run_store(tmp_path / "runs")
 
-    assert store.authority_config().backend_kind is AuthorityBackendKind.CO_LOCATED_SERVICE
-    assert store.authority_config().endpoint is not None
-    assert store.authority_store.capabilities().backend_name == "local-authority-service"
 
 
 def test_authority_backed_store_rejects_removed_transitional_sqlite_config(

@@ -14,10 +14,16 @@ from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageS
 from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityConfig,
+    AuthorityFactoryError,
+    AuthorityResolutionMode,
+    AuthorityResolutionResult,
     AuthorityStoreError,
     LocalRunStore,
     PerRunAuthorityStore,
+    config_from_authority_reference,
     format_artifact_key,
+    require_online_authority,
+    resolve_authority_for_factory,
 )
 from loom.pipeline.stores.inspection import RunStateInspection
 from loom.pipeline.stores.read_models import (
@@ -815,17 +821,42 @@ def create_authority_backed_serial_run_store(
     *,
     authority_config: AuthorityConfig | Mapping[str, object] | None = None,
     authority_store: PerRunAuthorityStore | None = None,
+    authority_mode: AuthorityResolutionMode = AuthorityResolutionMode.ONLINE_MUTATION,
+    workspace_root: str | Path | None = None,
+    allocation_id: str | None = None,
+    expected_workspace_id: str | None = None,
+    expected_generation: str | None = None,
     owner_id: str = "serial-controller",
 ) -> AuthorityBackedSerialRunStore:
     """Create the default authority-backed local serial run store."""
 
-    resolved_config = _resolve_authority_config(authority_config, authority_store)
     if authority_store is None:
-        authority_store = _authority_store_from_config(resolved_config)
+        input_config = _resolve_authority_config(authority_config, authority_store)
+        if input_config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
+            raise AuthorityStoreError(_removed_sqlite_authority_message())
+        resolution = resolve_authority_for_factory(
+            input_config,
+            authority_mode=authority_mode,
+            workspace_root=workspace_root,
+            allocation_id=allocation_id,
+            expected_workspace_id=expected_workspace_id,
+            expected_generation=expected_generation,
+        )
+        reference = require_online_authority(
+            resolution,
+            purpose="authority-backed serial run-store factory",
+        )
+        resolved_config = config_from_authority_reference(reference)
+        authority_store = _authority_store_from_config(
+            resolved_config,
+            resolution=resolution.result,
+        )
         resolved_config = _config_from_authority_store(
             authority_store,
             fallback=resolved_config,
         )
+    else:
+        resolved_config = _resolve_authority_config(authority_config, authority_store)
 
     return AuthorityBackedSerialRunStore(
         local_store=LocalRunStore(root),
@@ -866,9 +897,26 @@ def _config_from_authority_store(
     return fallback
 
 
-def _authority_store_from_config(config: AuthorityConfig) -> PerRunAuthorityStore:
+def _authority_store_from_config(
+    config: AuthorityConfig,
+    *,
+    resolution: AuthorityResolutionResult | None = None,
+) -> PerRunAuthorityStore:
     if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
         raise AuthorityStoreError(_removed_sqlite_authority_message())
+    if config.endpoint is not None and config.endpoint.startswith(
+        ("http://", "https://")
+    ):
+        raise AuthorityFactoryError(
+            "authority-backed serial run store cannot adapt HTTP authority endpoints "
+            "until the runner online path migrates to AuthorityClient",
+            code="authority_factory.http_store_adapter_deferred",
+            resolution=resolution,
+            context={
+                "endpoint": config.endpoint,
+                "deferred_to": "v10_phase_11",
+            },
+        )
     if config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
         AuthorityBackendKind.MANAGED_SERVICE,

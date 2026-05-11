@@ -8,12 +8,16 @@ from typing import cast
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import RunStatus, RunStatusRecord
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.runs import ListRunsResult, RunCatalog, RunFilter, RunFilterKind
 
 
 def test_run_catalog_list_returns_public_result_envelope(tmp_path: Path) -> None:
     root = tmp_path / "runs"
-    store = create_authority_backed_serial_run_store(root)
+    store = create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_path = root / "run-1"
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": "contract"}})

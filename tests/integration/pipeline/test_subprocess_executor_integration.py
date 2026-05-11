@@ -15,6 +15,7 @@ from loom.pipeline.execution import (
 from loom.pipeline.executors import LocalExecutor, SubprocessExecutor
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.provenance.models import ProvenanceCaptureOptions
 
@@ -66,7 +67,10 @@ def _request_with_executor(target: str, *, executor: str, run_uri: str) -> RunRe
 
 
 def _run_store(tmp_path: Path):
-    return create_authority_backed_serial_run_store(tmp_path / "runs")
+    return create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
 
 
 def test_local_and_subprocess_success_runs_are_equivalent(tmp_path: Path) -> None:

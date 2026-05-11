@@ -34,6 +34,7 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
@@ -47,7 +48,10 @@ def write_submitted_slurm_fixture(
 ) -> tuple[Any, str, Path]:
     """Persist a submitted afterok manifest and registry for status tests."""
 
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_uri = path_to_run_uri(tmp_path / "runs" / "submitted-slurm")
     store.create_run(run_uri)
     submission = build_afterok_planned_submission(

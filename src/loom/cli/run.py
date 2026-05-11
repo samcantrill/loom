@@ -253,6 +253,11 @@ def build_run_result(
 ) -> RunCliResult:
     """Execute a pipeline and build the CLI-specific run result."""
 
+    if run_options.executor_explicit and run_options.executor not in {
+        "local",
+        "subprocess",
+    }:
+        raise UnsupportedExecutorError(cast(str, run_options.executor))
     store = _create_default_run_store(authority_config=authority_config)
     composed = _compose_config(
         config_options.config_path,
@@ -337,6 +342,7 @@ def _handle_dry_run(
             notes=run_options.notes,
         ),
         selector_options=selector_options,
+        authority_config=authority_config,
     )
     if output_format is OutputFormat.JSON:
         sys.stdout.write(

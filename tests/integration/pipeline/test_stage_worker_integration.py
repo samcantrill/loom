@@ -24,6 +24,7 @@ from loom.pipeline.stores import (
     path_to_run_uri,
 )
 from loom.pipeline.stores.service_authority import LocalAuthorityService
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
 def _spec(
@@ -46,7 +47,10 @@ def _spec(
 
 
 def _prepare(tmp_path: Path, *, target: str) -> tuple[Any, str]:
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     return _prepare_with_store(tmp_path, store=store, target=target)
 
 
@@ -114,36 +118,44 @@ def test_direct_worker_failure_writes_failed_result_handoff(tmp_path: Path) -> N
 def test_direct_worker_cli_success_smoke(tmp_path: Path) -> None:
     from loom.cli.main import main
 
-    _store, run_uri = _prepare(
-        tmp_path,
-        target="tests.support.pipeline_execution_stages.JsonProducerStage",
-    )
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert (
-        main(
-            [
-                "stage",
-                "run",
-                "--run-uri",
-                run_uri,
-                "--stage",
-                "build",
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-            stderr=stderr,
+    with LocalAuthorityService.start() as service:
+        config = service.config()
+        store = create_authority_backed_serial_run_store(
+            tmp_path / "runs",
+            authority_config=config,
         )
-        == 0
-    )
+        _store, run_uri = _prepare_with_store(
+            tmp_path,
+            store=store,
+            target="tests.support.pipeline_execution_stages.JsonProducerStage",
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
 
-    payload = json.loads(stdout.getvalue())
-    assert payload["schema_version"] == "loom.cli.stage.run.v1"
-    assert payload["ok"] is True
-    assert payload["result"]["stage_name"] == "build"
-    assert stderr.getvalue() == ""
+        assert (
+            main(
+                [
+                    "stage",
+                    "run",
+                    "--run-uri",
+                    run_uri,
+                    "--stage",
+                    "build",
+                    *authority_config_to_cli_args(config),
+                    "--format",
+                    "json",
+                ],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
+
+        payload = json.loads(stdout.getvalue())
+        assert payload["schema_version"] == "loom.cli.stage.run.v1"
+        assert payload["ok"] is True
+        assert payload["result"]["stage_name"] == "build"
+        assert stderr.getvalue() == ""
 
 
 def test_direct_worker_cli_uses_service_authority_config(tmp_path: Path) -> None:

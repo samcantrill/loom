@@ -144,7 +144,12 @@ def _run_uri(tmp_path: Path, name: str = "run1") -> str:
 
 
 def _run_store(tmp_path: Path):
-    return create_authority_backed_serial_run_store(tmp_path / "runs")
+    return create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(
+            clock=lambda: "2020-01-01T00:00:00Z"
+        ),
+    )
 
 
 def test_local_pipeline_run_and_resume_from_config(tmp_path: Path) -> None:

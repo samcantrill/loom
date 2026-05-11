@@ -22,6 +22,7 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
 def test_runs_index_json_contract(tmp_path: Path) -> None:
@@ -131,7 +132,10 @@ def _create_run(
     *,
     status: RunStatus,
 ) -> str:
-    store = create_authority_backed_serial_run_store(root)
+    store = create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_uri = path_to_run_uri(run_path)
     store.create_run(run_uri, metadata={"tags": {"project": "contract"}})
     store.write_run_status(

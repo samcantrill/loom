@@ -425,12 +425,16 @@ def test_slurm_run_preflight_fails_existing_active_submission(
 ) -> None:
     from loom.pipeline.execution import create_authority_backed_serial_run_store
     from loom.pipeline.stores import path_to_run_uri
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
     from loom.pipeline.submitted import (
         SubmittedOperationRecord,
         SubmittedOperationState,
     )
 
-    store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+    )
     run_uri = path_to_run_uri(tmp_path / "runs" / "active")
     store.create_run(run_uri)
     store.write_submitted_operation(

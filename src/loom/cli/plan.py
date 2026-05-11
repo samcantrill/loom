@@ -176,7 +176,6 @@ def build_plan_result(
 ) -> PlanCliResult:
     """Build the CLI-specific plan view."""
 
-    store = _create_default_run_store(authority_config=authority_config)
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -189,6 +188,12 @@ def build_plan_result(
         selector_options=selector_options,
         known_stage_ids=pipeline_result.spec.stage_names,
     )
+    if plan_options.resume:
+        store = _create_default_run_store(authority_config=authority_config)
+    elif runtime_options.run_uri is not None:
+        store = _create_read_only_plan_run_store()
+    else:
+        store = None
     run_uri = _resolve_run_uri_for_plan(
         store,
         runtime_options.run_uri,
@@ -200,7 +205,11 @@ def build_plan_result(
         and runtime_options.to_resume_options().enabled
         and run_uri is not None
     )
-    run_store, artifact_store, planner_run_uri = _stores_for_plan(store, run_uri)
+    run_store, artifact_store, planner_run_uri = _stores_for_plan(
+        store,
+        run_uri,
+        resume_enabled=resume_enabled,
+    )
     plan = _plan_pipeline(
         pipeline_result.spec,
         run_uri=planner_run_uri,
@@ -276,8 +285,14 @@ def _create_default_run_store(
     )
 
 
+def _create_read_only_plan_run_store() -> Any:
+    from loom.pipeline.stores import LocalRunStore
+
+    return LocalRunStore()
+
+
 def _resolve_run_uri_for_plan(
-    store: Any,
+    store: Any | None,
     run_uri: str | None,
     *,
     open_existing: bool,
@@ -292,6 +307,8 @@ def _resolve_run_uri_for_plan(
     if run_uri is None:
         return None
 
+    if store is None:
+        raise AssertionError("explicit plan run URI requires a run store")
     resolved = store.resolve_run_uri(run_uri)
     if open_existing:
         store.open_run(resolved)
@@ -305,7 +322,10 @@ def _resolve_run_uri_for_plan(
 
 
 def _stores_for_plan(
-    store: Any, run_uri: str | None
+    store: Any | None,
+    run_uri: str | None,
+    *,
+    resume_enabled: bool,
 ) -> tuple["RunStore", "ArtifactStore", str]:
     if run_uri is None:
         return (
@@ -313,9 +333,17 @@ def _stores_for_plan(
             cast("ArtifactStore", _UnavailableArtifactStore()),
             _HYPOTHETICAL_PLAN_RUN_URI,
         )
+    if not resume_enabled:
+        return (
+            cast("RunStore", _UnavailableRunStore()),
+            cast("ArtifactStore", _UnavailableArtifactStore()),
+            run_uri,
+        )
 
     from loom.pipeline.stores import LocalArtifactStore
 
+    if store is None:
+        raise AssertionError("resolved plan run URI requires a run store")
     return (
         cast("RunStore", store),
         LocalArtifactStore(store.local_artifact_root(run_uri)),

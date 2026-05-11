@@ -43,11 +43,20 @@ class _CountingRenewalAuthority(SQLitePerRunAuthorityStore):
         )
 
 
+def _run_store(root: Path):
+    return create_authority_backed_serial_run_store(
+        root,
+        authority_store=SQLitePerRunAuthorityStore(
+            clock=lambda: "2020-01-01T00:00:00Z"
+        ),
+    )
+
+
 def test_bounded_parallel_runs_independent_stages_concurrently(
     tmp_path: Path,
 ) -> None:
     marker_dir = tmp_path / "markers"
-    run_store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    run_store = _run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "parallel")
 
     result = PipelineRunner(run_store=run_store).run(
@@ -121,7 +130,7 @@ def test_parallel_stages_renew_active_stage_leases(tmp_path: Path) -> None:
 
 
 def test_explicit_single_parallelism_keeps_serial_local_path(tmp_path: Path) -> None:
-    run_store = create_authority_backed_serial_run_store(tmp_path / "runs")
+    run_store = _run_store(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "serial-explicit-one")
 
     result = PipelineRunner(run_store=run_store).run(

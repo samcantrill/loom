@@ -451,14 +451,9 @@ def create_service_authority_store(config: AuthorityConfig) -> ServiceAuthorityS
             "service authority clients must not use a direct state_path"
         )
     if config.endpoint is None:
-        if config.backend_kind is not AuthorityBackendKind.CO_LOCATED_SERVICE:
-            raise AuthorityStoreError(
-                f"{config.backend_kind.value} authority requires endpoint"
-            )
-        service = _shared_co_located_service()
-        return ServiceAuthorityStore(
-            service._proxy(),
-            _config_for_local_service(config, service),
+        raise AuthorityStoreError(
+            f"{config.backend_kind.value} authority requires an explicit endpoint; "
+            "start or select an authority service before constructing a client"
         )
     host, port = _parse_endpoint(config.endpoint)
     authkey = _decode_authkey(config.metadata.get(_AUTHKEY_METADATA_KEY))
