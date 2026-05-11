@@ -277,6 +277,32 @@ def test_import_authority_client_does_not_import_server_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_authority_registry_does_not_import_server_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.stores.authority_registry
+
+        for forbidden in (
+            "fastapi",
+            "starlette",
+            "loom.authority._repository",
+            "loom.authority.routes.mutations",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through authority_registry")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_diagnostics_root_is_lightweight() -> None:
     script = dedent(
         """
