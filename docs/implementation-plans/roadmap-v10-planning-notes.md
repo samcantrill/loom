@@ -15,26 +15,37 @@
   service-backed authority the default runtime path, rejects run-local SQLite
   as a supported runtime authority backend, and routes mutating runtime
   entrypoints through authority-backed stores.
-- Planning notes status: draft
-- Current discussion stage: Functionality and behavior confirmation readback
+- Planning notes status: implementation-plan refinement complete; plan quality
+  gate passed
+- Current discussion stage: Design-choice follow-up and implementation-plan
+  refinement complete; `docs/implementation-plans/implementation-plan-v10.md`
+  passed plan quality gate review on 2026-05-11
 - Stage gates:
   - Roadmap framing: version outcome, target audience, planning priority, and
-    service-supervisor rationale captured from discussion; awaiting final
-    stage readback confirmation
+    service-supervisor rationale captured from discussion; confirmed in
+    functionality/behavior readback on 2026-05-11
   - Intent discovery: goals, non-goals, constraints, and operational realities
-    captured from discussion; awaiting final stage readback confirmation
-  - Feature brainstorming: include/defer direction drafted; awaiting final
-    stage readback confirmation
-  - Functionality and behavior confirmation: behavior drafted; awaiting user
-    confirmation before context checkpoint and design decision review
-  - Context compaction/reset checkpoint: not started
-  - Design decision review: not started
-  - Phase shaping: not started
-  - Handoff: not started
+    captured from discussion; confirmed in functionality/behavior readback on
+    2026-05-11
+  - Feature brainstorming: include/defer direction confirmed in
+    functionality/behavior readback on 2026-05-11
+  - Functionality and behavior confirmation: confirmed by user on 2026-05-11
+  - Context compaction/reset checkpoint: recorded on 2026-05-11; next pass must
+    reload these notes and start design-decision triage without reopening
+    behavior unless the user explicitly asks
+  - Design decision review: complete after follow-up on 2026-05-11. The notes
+    record recommendations plus user-confirmed choices for transport, registry,
+    offline evidence eligibility, explicit state directories, hybrid import
+    with replay-level evidence, strict import collision rejection, and hybrid
+    resource lease admission behavior.
+  - Phase shaping: expanded 18-phase shape confirmed by user on 2026-05-11
+  - Handoff: user confirmed comprehensive implementation-plan drafting on
+    2026-05-11; draft created at
+    `docs/implementation-plans/implementation-plan-v10.md`
 - Related implementation plans:
+  - `docs/implementation-plans/implementation-plan-v10.md`
   - `docs/implementation-plans/implementation-plan-v9-post.md`
   - `docs/implementation-plans/implementation-plan-v9.md`
-  - No v10 implementation plan exists yet.
 - Related feature docs:
   - `docs/features/run-store.md`
   - `docs/features/state.md`
@@ -139,7 +150,7 @@ Feature brainstorming include/defer readback:
   high availability, external worker daemon management, remote artifact payload
   movement, cryptographic offline attestation, and domain-specific equivalence.
 
-Functionality and behavior confirmation draft:
+Functionality and behavior confirmation confirmed on 2026-05-11:
 
 - Online mode is preferred and strict. Explicit endpoints or registry-discovered
   endpoints must connect and pass health/readiness checks before lifecycle
@@ -166,16 +177,385 @@ Functionality and behavior confirmation draft:
 - Offline import turns accepted local evidence into authority-owned truth with
   import provenance and conflict/equivalence checks.
 
-Open readback questions before the checkpoint:
+User confirmation:
 
-1. Does this readback correctly capture the functionality and behavior you want
-   v10 to plan around?
+- The user confirmed that this readback correctly captures the functionality and
+  behavior v10 should plan around.
 
 Resolved repository-baseline question:
 
 - Local `develop` has been reconciled with `origin/develop`, so the v10
   implementation-plan draft should start from the completed v9-post service
   baseline now visible in the source tree.
+
+## Context Compaction/Reset Checkpoint
+
+Checkpoint status:
+
+- Recorded on 2026-05-11 after user confirmation of functionality and behavior.
+
+Notes path:
+
+- `docs/implementation-plans/roadmap-v10-planning-notes.md`
+
+Resume instruction:
+
+- Resume with `.codex/workflows/roadmap-version-planning.md` and this planning
+  notes file. Reload the confirmed functionality and behavior from this
+  checkpoint, the roadmap v10 entry, the v9-post implementation plan, relevant
+  feature docs, and current source boundaries. Do not reopen functionality or
+  behavior unless the user explicitly asks. Start the design decision review by
+  drafting and recording the maintainability/extensibility decision queue.
+  Record clear repo-supported recommendations directly, and ask the user only
+  about high-impact decisions with no strong default.
+
+Selected functionality:
+
+- Strict shared authority resolution across production-like mutating CLI,
+  Python, worker, submitted-job, SLURM, diagnostics, and preflight entrypoints.
+- DB-backed, supervisor-owned authority server with persistent per-run lifecycle,
+  stage lifecycle, submitted-operation, output-commit, audit, recovery, and
+  workspace coordination state.
+- Explicit service supervisor and registry for endpoint discovery, process
+  lifecycle, readiness, health, stale-process detection, generation checks, and
+  service-owned artifact directories.
+- Authority-backed generic workspace coordination, global counters, named
+  integer resource leases, and cross-run recovery scans through the same
+  authority server boundary.
+- Explicit offline-first execution that writes import evidence and uses only
+  run-local resource coordination until import.
+- True offline import that accepts local evidence into authority only after
+  equivalence and conflict checks.
+- Scheduler-ready request/decision value objects and ports, without implementing
+  a global workflow scheduler in v10.
+
+Confirmed behavior and defaults:
+
+- Online service-backed authority is the preferred default.
+- Explicit endpoints and registry-discovered endpoints must connect and pass
+  health/readiness checks before lifecycle mutation.
+- Missing or unreachable online authority fails closed by default with guidance
+  for starting/configuring the supervisor or selecting explicit offline-first
+  execution.
+- Runtime commands and Python helpers do not implicitly start in-memory or
+  DB-backed services.
+- Service startup belongs only to explicit supervisor commands or trusted
+  supervisor APIs.
+- Clients and workers must talk to the authority API and must not open the
+  authority DB directly.
+- The runner owns DAG orchestration and stage execution decisions. The authority
+  server owns accepted lifecycle, commit, lease, and resource mutations. The
+  supervisor owns server process lifecycle.
+- Online resource coordination is generic named integer lease admission through
+  authority. Offline resource coordination is run-local and records that no
+  cross-run guarantee existed.
+- Interrupted stage attempts restart from scratch on resume.
+- Terminal lifecycle states do not reopen through ordinary mutation.
+- `SUBMITTED -> RUNNING` is allowed only when Loom regains active execution
+  control after external scheduler acceptance.
+- Imported offline runs become authority-owned truth with import provenance
+  after accepted import.
+
+Explicit deferrals:
+
+- Hosted multi-tenant operations, authentication/authorization beyond trusted
+  local metadata, high availability, distributed consensus, full online
+  workflow scheduler, queues, worker daemons, full sweep execution semantics,
+  remote artifact payload movement, cryptographic offline attestation,
+  domain-specific equivalence, run bundles/exporters, and compatibility support
+  for old implicit local-only runtime behavior.
+
+Open design-review questions to triage after reset:
+
+- Registry scope and file location for ordinary local projects, shared HPC
+  allocations, and user-global managed services.
+- Minimum v10 DB shape: stdlib SQLite behind the authority server only versus a
+  backend interface with SQLite as the first implementation.
+- Supervisor transport: existing stdlib manager, FastAPI/HTTP, minimal stdlib
+  HTTP, or another protocol.
+- Service restart and lease-generation policy.
+- Offline import representation: replayed lifecycle transitions versus compact
+  imported snapshot with import provenance.
+- Evidence strength and artifact checksum requirements for accepted offline
+  imports.
+- Imported-run visibility in status, catalog, and diagnostics.
+- CLI ownership and names for service lifecycle and offline-first/import flows.
+- Fail-closed diagnostic and explicit restart command when a registry points to
+  an unavailable service but a DB/artifact directory still exists.
+
+## Design Decision Review Triage
+
+Triage status:
+
+- Started on 2026-05-11 after the context checkpoint. The confirmed
+  functionality and behavior are stable inputs and should not be reopened unless
+  the user explicitly asks.
+- Repo evidence reviewed: v10 roadmap entry, v9-post implementation plan,
+  `docs/structure.md`, `docs/features/run-store.md`,
+  `docs/features/execution.md`, `docs/features/slurm.md`,
+  `docs/features/sweeps.md`, current authority/service/coordination modules,
+  CLI command modules, and `pyproject.toml`.
+- Current user-facing decision batch: follow-up design-choice review complete;
+  next stage is implementation-plan refinement.
+
+Design-decision review queue:
+
+| Decision | Classification | Why it matters | User feedback needed | Status |
+| --- | --- | --- | --- | --- |
+| Authority ownership boundaries and naming | recorded recommendation | Keeps runner, resolver, client, server, supervisor, repository, and coordinator responsibilities separate so v10 does not grow into an implicit scheduler or direct database API. | None. Repo evidence strongly supports the existing ports-and-adapters boundary. | confirmed |
+| Shared online/offline authority resolution policy | recorded recommendation | Prevents per-entrypoint fallback behavior and keeps CLI, Python, workers, SLURM, diagnostics, and preflight consistent. | None. Functionality/behavior gate already confirmed strict online-first and explicit offline-first behavior. | confirmed |
+| Service-owned private repository with SQLite as first backend | recorded recommendation | Determines persistence boundaries and dependency cost. Clients must never open the authority DB directly. | None for the first implementation default. The plan can revisit when a hosted or multi-tenant backend is needed. | confirmed |
+| Supervisor transport and dependency policy | needs discussion | Affects health/readiness UX, dependency footprint, client protocol stability, and future hosted-service compatibility. | User selected FastAPI/HTTP for v10. | confirmed |
+| Registry scope, file layout, and restart UX | needs discussion | Determines how independent commands find the same service without accidental cross-project sharing, and how users recover from stopped or stale services. | User confirmed the workspace-local registry and fail-closed restart model. | confirmed |
+| Service restart, generation, and lease validity | recorded recommendation | Restart policy protects output commits and resource releases from stale controllers and workers after a service process restarts. | None. Repo lease/fencing patterns strongly support generation-based invalidation plus recovery. | confirmed |
+| Authority-backed workspace coordination through the same server boundary | recorded recommendation | Avoids a second operational service while preserving the existing separation between per-run lifecycle and cross-run coordination facts. | None. Functionality/behavior gate already confirmed this direction. | confirmed |
+| Offline evidence eligibility and equivalence strength | needs discussion | Determines whether import is strict enough to become authority truth without accidental legacy migration or weak artifact proof. | User confirmed v10-created manifests only and strong equivalence proof. | confirmed |
+| Imported-run visibility in status, catalog, and diagnostics | recorded recommendation | Keeps imported truth inspectable without inventing a separate lifecycle source. | None. Read-model and diagnostic patterns already support source/provenance labeling. | confirmed |
+| CLI command ownership for lifecycle, diagnostics, offline, and import flows | recorded recommendation | Keeps operational lifecycle commands distinct from existing backend diagnostics while preserving shared authority flags. | None unless the user wants to reopen command naming. | confirmed |
+| Stage interruption and stale-plan representation | recorded recommendation | Avoids unnecessary status enum churn while preserving restart-from-scratch semantics through attempts, reasons, and recovery records. | None. Existing status model and v9-post constraints favor reason/provenance records over new durable statuses. | confirmed |
+| Test and validation boundaries | recorded recommendation | Keeps default validation deterministic while still requiring service durability, concurrency, import, and failure-mode coverage. | None. Existing test markers and AGENTS checks give a clear default. | confirmed |
+
+Recorded recommendations:
+
+1. Keep authority ownership names and boundaries explicit:
+   `AuthorityResolver` selects online/offline policy, `AuthorityClient` is the
+   client-side protocol, `AuthorityServer` accepts/rejects lifecycle and
+   coordination mutations, `AuthoritySupervisor` owns process lifecycle and
+   registry metadata, and `AuthorityRepository` is private server persistence.
+   `PipelineRunner` continues to orchestrate one run and request authority
+   mutations; it must not start services as a hidden side effect.
+   Alternatives rejected: runner-owned service startup, direct client DB access,
+   authority-owned scheduling policy, and per-entrypoint authority resolution.
+   Revisit trigger: a future roadmap version introduces a real
+   `WorkflowScheduler` or hosted service operations.
+2. Use a service-owned repository abstraction with standard-library SQLite as
+   the first durable backend. The abstraction exists so PostgreSQL or another
+   managed database can be added later, but v10 should not add a mandatory
+   runtime dependency or expose SQL/schema details as public contract.
+   Alternatives rejected: client-opened SQLite, making PostgreSQL mandatory in
+   v10, DuckDB for authoritative writes, and public SQL tables. Debt accepted:
+   SQLite is local/single-service-writer infrastructure, not hosted
+   multi-tenant authority. Revisit trigger: production deployment needs
+   concurrent hosted service operations or external DB administration.
+3. On supervisor restart, use a new service generation and treat active leases
+   from the previous generation as non-committable until renewed, failed, or
+   recovered through authority. Persist run/stage/attempt/resource facts in the
+   DB, but fail closed for stale worker/controller commits that cannot prove the
+   current generation and fencing token. Alternatives rejected: preserving all
+   leases blindly across restart, and silently allowing stale commits based only
+   on old in-process state. Revisit trigger: a future HA/service-cluster design
+   introduces stronger session recovery.
+4. Put workspace coordination behind the same `AuthorityServer` boundary while
+   retaining a distinct `WorkspaceCoordinator`/`WorkspaceCoordinationStore`
+   protocol. Do not add a second resource supervisor service in v10.
+   Alternatives rejected: runner-only resource pools, separate resource service,
+   and scheduler policy embedded in authority persistence. Revisit trigger:
+   future sweep or scheduler work proves the single server boundary is too
+   coarse operationally.
+5. Mark accepted offline imports with import provenance visible to status,
+   catalog, diagnostics, and backend inspection, without making `imported` a new
+   ordinary lifecycle state. Alternatives rejected: hiding import status in a
+   private DB row, or creating a parallel imported-run catalog. Revisit trigger:
+   users need query/filter semantics that provenance labels cannot support.
+6. Keep `loom backend ...` for backend inspection/capability diagnostics and add
+   `loom authority ...` for service lifecycle, registry, doctor/status, and
+   offline import operations. Keep shared authority flags on mutating commands.
+   Prefer a short explicit offline flag such as `--offline` or
+   `--offline-first`, with final spelling chosen during implementation planning
+   against existing CLI conventions. Alternatives rejected: putting process
+   lifecycle under `loom backend`, and duplicating lifecycle commands in both
+   groups. Revisit trigger: CLI review finds the new group conflicts with
+   established user-facing vocabulary.
+7. Preserve the existing stage status enum unless implementation evidence shows
+   a real read-model need for `StageStatus.INTERRUPTED`. Represent interrupted
+   and stale-plan details with attempt records, lifecycle reasons, recovery
+   records, and diagnostics. Alternatives rejected: adding durable statuses
+   solely for UI phases, and treating `STALE` as active lifecycle truth where a
+   plan/reason record is enough. Revisit trigger: status/catalog consumers need
+   stable first-class interrupted-stage filtering.
+8. Keep validation local and deterministic by default. Add unit, contract, and
+   integration coverage for the service repository, resolver policy, registry
+   safety, restart/lease behavior, workspace coordination, and offline import.
+   Keep real network, external service, HPC, and multi-host suites opt-in unless
+   a deterministic local fixture can prove the behavior.
+
+User-confirmed design decisions:
+
+1. Use FastAPI/HTTP as the v10 supervisor and authority API transport.
+   User feedback: selected FastAPI from the transport options. Rationale:
+   FastAPI gives a clear operational endpoint model for liveness, readiness,
+   health, capabilities, diagnostics, and runtime client calls. It also maps
+   naturally to future managed-service or hosted-service deployments.
+   Alternatives rejected: extending the current stdlib `BaseManager` transport
+   as the product-facing supervisor API, and implementing a custom stdlib HTTP
+   protocol in v10. Maintainability impact: introduces runtime dependency and
+   API routing concerns, so implementation planning must isolate transport
+   handlers from authority mutation logic and keep request/response models
+   explicit. Extensibility impact: better future compatibility for external
+   tools, operational checks, and managed-service evolution. Debt and revisit
+   trigger: dependency cost is accepted for v10; revisit if FastAPI materially
+   complicates packaging, optional-dependency policy, or deterministic local
+   validation.
+2. Use a workspace-local registry for ordinary local services, with explicit
+   allocation-scoped and user-global discovery only when configured.
+   Selected approach: ordinary project services record registry metadata under
+   a workspace-local path such as `.loom/authority/registry.json`; service DB
+   and service-owned artifacts live under an explicit supervisor start
+   directory; allocation-scoped services use an explicit allocation registry
+   path; user-global services are opt-in through endpoint/reference/environment
+   configuration rather than default discovery. Stale registry behavior fails
+   closed before lifecycle mutation with diagnostics that identify unavailable,
+   stale, incompatible, or generation-mismatched authority and point to explicit
+   commands such as `loom authority status` and `loom authority restart
+   --state-dir ...`. Alternatives rejected: user-global discovery by default,
+   silent service restart from runtime commands, and treating a present DB path
+   as permission for clients to mutate state directly. Maintainability impact:
+   keeps discovery deterministic and project-scoped while making supervisor
+   ownership visible. Extensibility impact: leaves room for allocation and
+   managed-service profiles without changing the default local model. Debt and
+   revisit trigger: users must intentionally start/configure authority; revisit
+   if repeated local UX friction outweighs the safety benefit.
+3. Accept offline imports only from v10-created offline evidence manifests, with
+   strong equivalence proof.
+   User feedback: confirmed the recommended default and rejected best-effort
+   legacy/local-directory import. Selected approach: offline-first execution
+   writes versioned evidence manifests; import accepts only manifests that prove
+   the execution plan, config/provenance, stage graph/order, input
+   fingerprints, attempt terminal states, output refs, artifact checksums and
+   sizes when local payloads exist, failure/log refs, runtime metadata, and
+   schema versions. Import rejects incomplete, conflicting, stale, unsafe, or
+   schema-incompatible evidence. Alternatives rejected: best-effort import of
+   older local materialization directories, import based only on plan/input
+   fingerprints, and accepting missing payload/checksum evidence when payloads
+   are expected to exist locally. Maintainability impact: keeps the import
+   contract explicit and avoids turning historical local files into an
+   accidental authority migration layer. Extensibility impact: leaves room for
+   future import adapters or legacy migration tools without weakening the v10
+   authority contract. Debt and revisit trigger: old local run directories are
+   not importable through v10 offline import; revisit only if a future roadmap
+   explicitly designs legacy migration.
+
+## Design Choice Follow-Up Review
+
+Follow-up status:
+
+- Started after implementation-plan draft creation because the earlier notes
+  marked design decision review complete too aggressively.
+- Confirmed functionality and behavior remain stable inputs.
+- The current implementation plan should be refined from these confirmed
+  decisions before plan quality gate review.
+
+Follow-up triage:
+
+| Decision | Classification | Why it matters | User feedback needed | Status |
+| --- | --- | --- | --- | --- |
+| Transport choice: FastAPI/HTTP | already confirmed | Affects dependency footprint, health/readiness UX, and hosted-service compatibility. | None unless user reopens it. | confirmed |
+| Registry scope: workspace-local default with explicit allocation/global references | already confirmed | Affects discovery safety and accidental cross-project sharing. | None unless user reopens it. | confirmed |
+| Offline import eligibility: v10 evidence manifests only | already confirmed | Determines whether import can safely create authority truth. | None unless user reopens it. | confirmed |
+| Authority boundary and naming | recorded recommendation | Keeps resolver, client, server, supervisor, repository, coordinator, and runner responsibilities separate. | None. Repo evidence strongly supports this separation. | recorded |
+| Private SQLite repository with backend port | recorded recommendation | Keeps DB details private while leaving room for future managed repositories. | None. SQLite is the minimal local durable backend. | recorded |
+| Service generation and stale lease policy | recorded recommendation | Prevents stale workers/controllers from committing after restart. | None unless user wants different restart recovery semantics. | recorded |
+| State directory ownership and default placement | needs discussion | Determines whether `loom authority start` is explicit but slightly verbose, or convenient but easier to confuse with hidden local state. | User selected explicit state directory only. | confirmed |
+| Offline import write model | needs discussion | Determines whether imported runs replay lifecycle events, write compact accepted snapshots, or use a hybrid provenance-preserving import. | User selected hybrid with replay-level information. | confirmed |
+| Import collision policy | needs discussion | Determines how import behaves when a target run URI already exists or overlaps with authority state. | User selected strict reject for now. | confirmed |
+| Resource lease admission behavior | needs discussion | Determines whether resource pressure fails immediately, waits with timeout, or records waitable decisions for future schedulers. | User confirmed hybrid: default fail fast, explicit bounded wait/timeout policy, and structured accepted/rejected/blocked decisions. | confirmed |
+| Schema migration policy for the private authority DB | recorded recommendation | Determines v10 durability compatibility behavior. | None. Since v10 creates the first private service DB, fail loudly on unsupported schemas and add migrations only when schema changes later. | recorded |
+| Imported-run lifecycle visibility | recorded recommendation | Avoids inventing an `imported` lifecycle state while keeping provenance visible. | None unless user wants first-class imported filtering. | recorded |
+
+Follow-up discussion batches:
+
+1. State directory ownership/default placement, offline import write model, and
+   import collision policy. Confirmed on 2026-05-11.
+2. Resource lease admission behavior. Confirmed on 2026-05-11.
+3. Final design readback and implementation-plan refinement notes. Recorded on
+   2026-05-11.
+
+User-confirmed follow-up design decisions:
+
+1. Require explicit supervisor state directories in v10.
+   User feedback: selected "explicit only". Selected approach:
+   `loom authority start` requires a state directory argument or equivalent
+   explicit configuration; runtime commands still never create or infer an
+   authority state directory. Workspace registry records may point to the
+   selected state directory after the supervisor starts, but the registry does
+   not define a hidden default location for new service state. Alternatives
+   rejected: workspace-local default state directory and profile-based
+   workspace defaults. Maintainability impact: keeps service-owned DB/artifact
+   state visibly operator-owned and avoids confusing registry discovery with
+   implicit persistence creation. Extensibility impact: leaves allocation and
+   managed-service profiles free to define their own explicit state references
+   later. Debt and revisit trigger: local startup is more verbose; revisit only
+   if v10 usage shows explicit state-dir selection is a dominant friction point.
+2. Use a hybrid offline import write model with replay-level information.
+   User feedback: selected "hybrid", with the additional requirement that the
+   import preserve replay-level information. Selected approach: an accepted
+   import writes authoritative current run/stage/attempt/output/artifact facts
+   plus import provenance, and also persists an import evidence/audit timeline
+   detailed enough to inspect the offline lifecycle at replay-level granularity.
+   The authority must not pretend those offline events were originally
+   authority-controlled online mutations, but it must retain enough ordered
+   evidence for audit, diagnostics, and later replay-style analysis.
+   Alternatives rejected: pure replay as if the authority originally observed
+   each event, and compact final snapshot without detailed offline event
+   history. Maintainability impact: separates accepted authority truth from
+   evidence provenance while preserving detailed auditability. Extensibility
+   impact: leaves room for future replay tools, richer import verification, and
+   timeline views without weakening authority truth. Debt and revisit trigger:
+   import schema is larger; revisit if the audit timeline duplicates too much
+   data or becomes hard to query.
+3. Use strict import collision rejection in v10.
+   User feedback: selected "strict reject for now". Selected approach: if the
+   target run URI or equivalent identity already exists in authority state, the
+   import is rejected with structured diagnostics and no mutation. V10 may
+   define the import policy model so future replace/fork behaviors are possible,
+   but it should not implement overwrite or fork-on-collision behavior.
+   Alternatives rejected: explicit replace and automatic fork/new URI import.
+   Maintainability impact: keeps the first import transaction atomic and easy to
+   reason about. Extensibility impact: future migration or repair workflows can
+   add collision strategies without changing strict default semantics. Debt and
+   revisit trigger: users must choose a clean target authority/run identity;
+   revisit when a roadmap version adds migration, repair, or archival import.
+4. Use hybrid resource lease admission behavior.
+   User feedback: confirmed the recommended hybrid model. Selected approach:
+   resource admission defaults to fail fast when capacity is unavailable, but
+   callers may explicitly provide a bounded wait/timeout policy. The authority
+   returns structured admission decisions that can distinguish accepted with
+   leases, rejected with reasons, and blocked/waitable with diagnostics. V10
+   runners may wait only when the caller selected a bounded wait policy; v10
+   does not add an unbounded queue, priority scheduler, or global placement
+   policy. Alternatives rejected: always fail fast, always wait, and returning
+   waitable decisions without runner support for explicit bounded waiting.
+   Maintainability impact: keeps default execution deterministic while making
+   wait behavior explicit and testable. Extensibility impact: preserves a
+   scheduler-ready request/decision model for later workflow scheduler work.
+   Debt and revisit trigger: no fairness, priority, or distributed placement
+   semantics are implemented; revisit when a future scheduler roadmap needs
+   queued admission policy.
+
+Final design readback:
+
+- V10 uses FastAPI/HTTP as an isolated authority transport.
+- Authority is owned through explicit ports: resolver, client, server,
+  supervisor, repository, and workspace coordinator.
+- The private service repository starts with SQLite behind the server only.
+- Supervisor state directories are explicit only; registry records discover an
+  already-started authority but do not create hidden default service state.
+- Registry discovery is workspace-local by default, with allocation/global
+  references only when explicitly configured.
+- Service restart uses generation/fencing to prevent stale lease commits.
+- Workspace coordination moves behind the authority server boundary.
+- Resource leases are generic named integer leases with default fail-fast
+  admission and explicit bounded wait/timeout support.
+- Existing `direct_database` authority configuration is rejected/reserved for
+  v10 runtime mutation with diagnostics; it is not a compatibility fallback.
+- Offline import accepts only v10-created evidence manifests.
+- Offline import writes accepted authority facts plus import provenance and
+  replay-level evidence/audit information.
+- Offline import strictly rejects existing target run identities in v10.
+- Existing deferred-finalization envelopes remain a separate weaker profile and
+  are not converted into v10 offline import evidence.
+- Imported-run visibility uses provenance/read-model labeling rather than a new
+  ordinary lifecycle state.
 
 ## User Understanding And Expectation Probe
 
@@ -236,9 +616,8 @@ Confirmed expectations from this discussion:
 - The supervisor should place artifacts in an explicit directory specified
   when the supervisor is started.
 - The supervisor should expose service endpoints for status, readiness, health,
-  and runtime clients. FastAPI is a possible implementation option to evaluate,
-  but v10 planning must weigh dependency cost against stdlib or smaller
-  transports.
+  and runtime clients. FastAPI/HTTP is the selected v10 transport; dependency
+  cost is accepted and must be isolated behind the transport boundary.
 - Restart behavior should be explicit. Connecting services should be able to
   distinguish unavailable, starting, ready, unhealthy, stale, and incompatible
   supervisor states.
@@ -278,25 +657,14 @@ Key uncertainty to resolve before implementation planning:
   transport, HTTP/FastAPI, another ASGI stack, or an internal protocol with
   optional HTTP diagnostics.
 
-Remaining questions to ask the user during planning:
+Resolved pre-triage design questions:
 
-1. Should service lifecycle commands be under `loom authority ...`,
-   `loom backend ...`, or both?
-2. Where should local project service registry files live?
-3. If a registry points to a stopped service but the DB exists, what exact
-   fail-closed diagnostic and explicit restart command should Loom show?
-4. Is stdlib SQLite behind the authority server an acceptable first durable DB
-   backend if clients never open it directly?
-5. Should imported offline runs be visually marked as imported in status,
-   catalog, and diagnostics?
-6. Should offline import require v10-created evidence manifests, or should it
-   attempt best-effort import of older local materialization directories?
-7. What level of proof is required for "equivalent" offline import?
-8. Should service-backed workspace coordination become required before v12
-   sweeps, or can v12 begin with sequential sweeps and optional service
-   coordination?
-9. Should the supervisor API use FastAPI/HTTP for operational clarity, or avoid
-   that dependency until there is a stronger need?
+These were captured before the formal design-decision review queue and have now
+been resolved or covered by recorded recommendations.
+
+1. Offline import requires v10-created evidence manifests.
+2. Equivalent import requires strong plan, config/provenance, stage, input,
+   output, artifact, failure/log, runtime metadata, and schema-version evidence.
 
 ## Current v9-Post Baseline
 
@@ -865,9 +1233,10 @@ Resolved lifecycle policy:
   behavior should create new attempts, replacement runs, or explicit
   supersession records rather than rewriting terminal facts.
 - Offline import converts local evidence into authority truth when accepted.
-  Import may either replay lifecycle events or create an imported authoritative
-  snapshot, but the accepted result becomes authority-owned truth with import
-  provenance.
+  V10 should use a hybrid write model: accepted authority facts plus import
+  provenance and replay-level offline evidence/audit information. The accepted
+  result becomes authority-owned truth, but the import must not pretend offline
+  events were originally authority-observed online mutations.
 
 V10 should reject any unmodelled transition with a structured reason. A caller
 may request a transition; only authority can accept it.
@@ -1239,63 +1608,201 @@ checking existing CLI structure.
 
 ## Candidate Phase Shape
 
-Potential phases for the future implementation plan:
+Phase-shaping user feedback:
 
-1. **Ports And Resolution**
-   - Define authority resolution, client/server ports, repository boundaries,
-     mode policy, registry schema, CLI/API flag shape, and conformance tests
-     before converting callers.
-2. **DB-Backed Authority Core**
-   - Add persistent DB-backed authority server implementation for per-run lifecycle,
-     storage abstraction, conformance, restart durability, acknowledged
-     mutations, health/readiness/liveness endpoints, supervisor artifact
-     ownership, and no direct client DB access.
-3. **Runtime Entrypoint Migration**
-   - Convert `loom run`, Python helpers, `PipelineRunner`, worker entrypoints,
-     stage-job execution, prepared-run continuation, SLURM live mutation paths,
-     diagnostics, and preflight to shared authority-first online/offline
-     behavior.
-4. **Resource And Workspace Coordination**
-   - Implement authority-backed `WorkspaceCoordinationStore` behavior, generic
-     resource leases, counters, run/trial references, cross-run recovery, and
-     scheduler-ready request/decision value objects without implementing full
-     workflow scheduling policy.
-5. **Offline Evidence And Import**
-   - Define offline evidence records, equivalence checks, import transaction,
-     CLI/API, and accepted/rejected import tests.
+- The initial five-to-six phase shape is too coarse for v10. Each coarse phase
+  contains important design and implementation choices that should receive a
+  focused phase plan and review. The implementation plan should therefore use a
+  larger number of smaller phases and should not merge adjacent phases merely
+  for convenience.
 
-Phase boundaries should be reviewed after the code inventory. If the DB schema
-and authority supervisor are too large for one phase, split the DB-backed
-authority core into schema/conformance and supervisor lifecycle phases. If
-runtime adoption is too broad for one phase, split it by entrypoint class while
-preserving the hard rule that no converted mutating path keeps the old local
-lifecycle mutation behavior.
+Expanded candidate phases for the future implementation plan:
+
+1. **Authority Mode And Resolver Contracts**
+   - Define online/offline mode records, authority-resolution outcomes,
+     failure-closed diagnostics, shared config/env/CLI inputs, and strict
+     no-implicit-start policy. No server, DB, or runtime caller migration yet.
+2. **Authority Client And Server Protocol Models**
+   - Define transport-independent request, response, acknowledgement, rejection,
+     revision, capability, readiness, and error-envelope models used by the
+     FastAPI layer and tests.
+3. **FastAPI Transport Skeleton**
+   - Add the FastAPI application boundary, route ownership split between
+     operational supervisor routes and authority mutation routes, dependency
+     isolation, local deterministic test fixture, and health/readiness/liveness
+     stubs without durable lifecycle mutation.
+4. **Private Repository Schema And Versioning**
+   - Add the service-owned SQLite repository foundation, private schema helpers,
+     schema version checks, transaction wrapper, generation metadata, and tests
+     proving clients cannot treat the DB as a public API.
+5. **Run Lifecycle Repository**
+   - Implement persistent run admission, run transitions, controller leases,
+     snapshots, audit events, cleanup/recovery records, and conformance coverage
+     at repository level only.
+6. **Stage Lifecycle Repository**
+   - Implement persistent stage transitions, attempt allocation, stage leases,
+     submitted-operation records, output commits, artifact facts, fencing, and
+     stale-commit rejection at repository level only.
+7. **Authority Server Mutation API**
+   - Wire the repository into the FastAPI authority routes and client protocol,
+     including accepted/rejected mutation acknowledgements, capability reporting,
+     timeout/error mapping, and conformance against the service boundary.
+8. **Workspace Registry Records**
+   - Implement workspace-local registry records under `.loom/authority/`,
+     atomic registry updates, redacted metadata, workspace/generation checks,
+     allocation-scoped registry hooks, and stale/unavailable/incompatible
+     registry diagnostics. No process lifecycle commands yet.
+9. **Supervisor Lifecycle Commands**
+   - Implement explicit `loom authority start`, `status`, `doctor`, `stop`, and
+     `restart` behavior with FastAPI health/readiness checks, required explicit
+     supervisor state directory selection, service generation handling, and
+     fail-closed restart guidance.
+10. **Strict Resolver And Factory Adoption**
+    - Change shared Python factories and CLI authority resolution to use the
+      new resolver policy: configured endpoint or registry connects and
+      health-checks; missing authority fails by default; offline-first is an
+      explicit resolver outcome; `direct_database` is rejected/reserved for v10
+      runtime mutation with diagnostics. Do not migrate every runtime entrypoint
+      yet.
+11. **Python Runner And `loom run` Online Path**
+    - Convert `PipelineRunner`, `run_pipeline`, Python execution helpers, and
+      `loom run` online execution to the strict resolver and service-backed
+      authority client while preserving runner-owned DAG orchestration.
+12. **Local/Subprocess Worker Continuation Paths**
+    - Convert subprocess workers, `loom stage run`, `loom stage-job run`, and
+      `loom prepared-run continue` to carry and enforce authority references,
+      generation/fencing facts, lease renewal/revalidation, and fail-closed
+      mutation behavior.
+13. **SLURM Live Operation Paths**
+    - Convert SLURM live submission, generated handoff commands, scheduler
+      status observation, cancellation, and continuation behavior to the shared
+      authority resolver and service-backed mutation policy, rejecting
+      `direct_database` as a v10 live-worker mutation profile and preserving
+      deferred-finalization as a distinct weaker profile rather than an offline
+      import input.
+14. **Diagnostics, Preflight, And Read-Only Source Labeling**
+    - Update backend diagnostics, preflight, status/catalog-related read models,
+      and read-only local inspection surfaces to report selected authority,
+      registry source, DB/service profile, capabilities, online/offline policy,
+      and whether displayed state is authoritative service truth or local
+      materialized/evidence state.
+15. **Workspace Coordination Service API**
+    - Bring `WorkspaceCoordinationStore` behavior behind the authority server:
+      workspace/sweep records, trial references, counters, non-resource leases,
+      run URI references, recovery scans, capability diagnostics, and
+      conformance against the service boundary. Existing resource
+      limit/resource lease protocol methods should report unsupported capability
+      until Phase 16.
+16. **Resource Leases And Scheduler-Ready Admission**
+    - Add generic named integer resource limits and leases through
+      `AuthorityClient`/`WorkspaceCoordinator`, runner resource admission before
+      launch, release/failure/recovery behavior, supported service-backed
+      implementations for existing resource methods, and scheduler-ready
+      request/decision value objects without implementing a global scheduler.
+17. **Offline Evidence Writer**
+    - Add explicit offline-first execution mode, run-local resource coordination
+      evidence, versioned offline evidence manifests, local event/audit logs,
+      required provenance/fingerprint/checksum capture, and diagnostics that
+      state no authority truth exists yet. Do not convert deferred-finalization
+      envelopes into offline evidence.
+18. **Offline Import Transaction**
+    - Add the import API/CLI, strong equivalence checker, conflict/collision
+      policy, atomic authority import transaction, import provenance visible in
+      status/catalog/diagnostics, and accepted/rejected import coverage. Do not
+      import deferred-finalization envelopes.
+
+Phase-boundary constraints:
+
+- Each phase should have its own phase execution plan with design impact,
+  future compatibility, alternatives rejected, debt, and suite obligations.
+- Adjacent phases may be split further after source inventory if a phase still
+  crosses too many design boundaries. They should be merged only with a clear
+  reviewability reason recorded in the implementation plan.
+- Runtime migration phases must preserve the hard rule that no converted
+  mutating path keeps the old implicit local lifecycle mutation behavior.
+- FastAPI dependency and packaging details belong in the transport phase and
+  must be visible in the implementation plan's dependency/debt discussion.
+- Offline import phases must not broaden into historical local-run migration.
+
+Phase-shaping confirmation:
+
+- The user confirmed the expanded 18-phase shape on 2026-05-11 and wants the
+  implementation plan to preserve smaller review units for design-heavy v10
+  work.
 
 ## Open Questions
 
-- Where should the registry live for ordinary local projects, shared HPC
-  allocations, and user-global managed services?
-- What is the minimum DB backend for v10: stdlib SQLite behind the authority
-  server only, or an abstract service DB interface plus one SQLite
-  implementation?
-- Should supervisor transport use FastAPI/HTTP, stdlib manager, stdlib HTTP, or
-  another protocol?
-- How should service-owned leases behave after service restart: expire all
-  active leases, preserve unexpired leases with generation checks, or require a
-  recovery action?
-- Should offline import recreate intermediate lifecycle transitions or record a
-  compact imported snapshot with import provenance?
-- What artifact checksum guarantees are required for accepting offline imports
-  when payloads are remote, missing, or intentionally metadata-only?
-- Should imported offline runs be marked as `imported` in metadata only, or is
-  a first-class lifecycle reason enough?
-- Which commands own service lifecycle UX: existing `loom backend ...`,
-  a new `loom authority ...`, or both?
-- What should happen when a workspace registry points to an unavailable service
-  but the DB path is present: what diagnostic should runtime clients show, and
-  which explicit supervisor command or trusted API call owns restart?
-- What exact name should the offline-first flag/API use, and should it be
-  available for all executors at v10 launch?
+- Final CLI spelling for offline-first mode and import commands should be chosen
+  during implementation planning after checking existing CLI conventions.
+- Phase execution plans may split any v10 phase further if source inventory
+  shows the phase still crosses too many review boundaries.
+
+## Handoff Notes
+
+Implementation-plan draft status:
+
+- User confirmed comprehensive implementation-plan drafting on 2026-05-11.
+- Draft created at `docs/implementation-plans/implementation-plan-v10.md`.
+- Design-choice follow-up completed on 2026-05-11.
+- Implementation-plan refinement completed on 2026-05-11.
+- Initial `loom_plan_reviewer` quality gate review found three blocking issues:
+  Phase 15/16 resource-lease boundary, deferred-finalization disposition, and
+  `direct_database` disposition. A bounded refinement pass addressed those
+  findings on 2026-05-11.
+- Confirmation review passed on 2026-05-11 with no blocking findings.
+- Next workflow step is Phase 1 selection and phase execution planning.
+
+Implementation-plan draft inputs:
+
+- Confirmed v10 outcome: DB-backed FastAPI authority server, explicit
+  supervisor and workspace-local registry, strict online/offline resolver
+  policy, service-backed workspace coordination, generic resource leases, and
+  true offline import from v10-created evidence manifests only.
+- Confirmed design decisions: ports-and-adapters authority ownership; FastAPI
+  transport; service-owned private SQLite repository with a backend abstraction;
+  generation-based restart/lease invalidation; workspace-local registry with
+  fail-closed stale-service diagnostics; `loom authority ...` for lifecycle and
+  import operations; explicit supervisor state directories; hybrid resource
+  admission; `direct_database` rejected/reserved for v10 runtime mutation;
+  deferred finalization remains separate from offline import; imported-run
+  provenance and replay-level evidence visible through read models; no
+  historical local-run import through v10 offline import.
+- Confirmed phase shape: 18 small phases covering resolver contracts, protocol
+  models, FastAPI skeleton, repository schema, run lifecycle, stage lifecycle,
+  mutation API, registry records, supervisor commands, resolver/factory
+  adoption, online `loom run`, worker continuations, SLURM live paths,
+  diagnostics/read labeling, workspace coordination, resource leases, offline
+  evidence writer, and offline import transaction.
+
+Plan-quality-gate risks:
+
+- FastAPI adds runtime dependency and packaging/test-surface debt that must be
+  justified in the implementation plan.
+- Runtime migration touches many entrypoints; implementation planning must keep
+  phases small and preserve no-implicit-local-authority behavior as each path is
+  converted.
+- Service-owned SQLite must not be confused with client-opened SQLite authority.
+- Existing direct-database configuration must not remain a live mutation
+  compatibility path.
+- Existing coordination resource lease methods must have a clear unsupported
+  Phase 15 state and supported Phase 16 state.
+- Deferred-finalization envelopes must not be confused with true offline import
+  evidence.
+- Offline import must not become a legacy migration path or weaken authority
+  equivalence guarantees.
+- Residual implementation risk from confirmation review: Phase 15 must keep
+  service-backed coordination conformance clear when resource methods are
+  unsupported until Phase 16, because current local coordination tests exercise
+  resource-capable protocol methods.
+
+Assumptions to carry forward:
+
+- Local `develop` contains the completed v9-post service baseline.
+- Default validation should remain deterministic and local; external network,
+  real HPC, and multi-host checks stay opt-in unless a local fixture can prove
+  the behavior.
+- Implementation planning should verify current source paths before naming new
+  public APIs or final CLI flags.
 
 ## Notes For Implementation Planning
 
