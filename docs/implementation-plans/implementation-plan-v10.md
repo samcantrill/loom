@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 6 PR open; automated review and merge gate pending
+- Phase work status: Phase 6 merged; ready for Phase 7 planning
 
 Related artifacts and references:
 
@@ -899,7 +899,7 @@ Phase 5 merged on 2026-05-11:
 
 ### Phase 6: Stage Lifecycle Repository
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-stage-lifecycle`
 - PR: https://github.com/samcantrill/loom/pull/124
 
@@ -981,11 +981,12 @@ facts, and compatibility with current stage execution paths.
 
 **Completion Summary**
 
-Phase 6 PR opened on 2026-05-11:
+Phase 6 merged on 2026-05-11:
 
 - Branch: `codex/authority-stage-lifecycle`
 - PR: https://github.com/samcantrill/loom/pull/124
 - Target branch: `develop`
+- Merge commit: `402be7fb775d0e244bf8aeb01a57f0f07a30fb74`
 - Implementation summary: advanced the private authority repository to schema
   version 3 with cross-run stage state, attempts, stage leases, output commits,
   and artifact facts. Added private stage transition, attempt allocation,
@@ -1000,9 +1001,14 @@ Phase 6 PR opened on 2026-05-11:
   validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed
   with overall 1683 passed, 12 skipped, and 1277 deselected after an isolated
   unrelated flaky integration test passed on rerun.
-- Stack maintenance: root phase PR targets `develop`; no successor branch
-  depends on `codex/authority-stage-lifecycle` yet.
-- Follow-up notes: automated PR review and GitHub CI/merge remain pending.
+- GitHub CI: `checks` succeeded before merge on 2026-05-11.
+- Automated review: manager review found no scope, private-boundary,
+  stage-lifecycle, lease/fencing, stale-generation, PR-body, or
+  validation-evidence blockers.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-stage-lifecycle` at merge time.
+- Follow-up notes: Phase 7 can wire the private repository to FastAPI mutation
+  routes and client protocol behavior without exposing private DB access.
 
 ### Phase 7: Authority Server Mutation API
 
