@@ -199,7 +199,8 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-11 by managing agent after
+  implementation and validation; no code changes were required
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -207,10 +208,29 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-11.
 - Final phase execution plan: completed by managing agent on 2026-05-11.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: extended the private authority repository to schema
+  version 2 with cross-run run lifecycle tables, monotonic repository
+  revisions, run admission and transitions, expected-revision checks,
+  controller lease acquire/renew/release/fail with fencing and TTL checks,
+  submitted operation persistence, audit event persistence, cleanup candidate
+  records, recovery records, and run-level recovery scanning. The work stayed
+  private to `loom.authority._repository` and did not add route, stage,
+  attempt, output, artifact, runtime, or public export behavior.
+- Implementation validation: targeted `ruff`, `pyright`, and focused package,
+  unit, contract, and integration pytest passed for the repository changes.
+  Final `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed, including Ruff,
+  Pyright, default pytest with 1227 passed, 18 skipped, 14 deselected,
+  config-extra pytest with 420 passed and 1256 deselected, and package build.
+  Final `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall
+  1673 passed, 12 skipped, and 1267 deselected.
+- Refinement summary: bounded implementation review inspected private import
+  boundaries, schema-version behavior, run-only scope, revision/fencing checks,
+  controller lease persistence, cleanup/recovery queryability, and suite
+  evidence. No scope or correctness blockers were found, and no code changes
+  were required after validation.
+- Blocker-resolution summary: not needed; 0/3 blocker-resolution passes used.
+- PR preparation: PR body prepared in
+  `docs/phases/authority-run-lifecycle-pr-body.md`; PR opening pending.
+- Stack maintenance: root phase targets `develop`; no successor branch depends
+  on `codex/authority-run-lifecycle` yet.
+- Remaining blockers: none known.
