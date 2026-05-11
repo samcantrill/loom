@@ -332,5 +332,12 @@ make test-summary
   - Corrections made: updated the public PR body's GitHub checks row so it no
     longer described the earlier draft-only state; no source or test changes
     were made.
+  - PR opened: https://github.com/samcantrill/loom/pull/119.
+  - PR verification: `gh pr view 119 --json baseRefName,headRefName,state,url`
+    returned base `develop`, head `codex/authority-mode-resolution`, state
+    `OPEN`, and URL `https://github.com/samcantrill/loom/pull/119`.
+  - Merge eligibility: root phase PR targeting `develop`; merge-eligible only
+    after automated review and GitHub/validation gates pass. Stack predecessor
+    remains none.
 - Stack maintenance: not applicable yet.
 - Remaining blockers: none.
