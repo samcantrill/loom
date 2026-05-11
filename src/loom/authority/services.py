@@ -18,6 +18,7 @@ from loom.pipeline.stores import (
 
 DEFAULT_AUTHORITY_SERVICE_GENERATION = "authority-fastapi-skeleton"
 DEFAULT_AUTHORITY_BACKEND_NAME = "fastapi-authority-skeleton"
+AUTHORITY_SERVICES_STATE_KEY = "authority_services"
 
 
 class AuthorityRouteGroup(StrEnum):
@@ -126,6 +127,7 @@ def _non_empty_string(value: object, field: str) -> str:
 __all__ = [
     "DEFAULT_AUTHORITY_BACKEND_NAME",
     "DEFAULT_AUTHORITY_SERVICE_GENERATION",
+    "AUTHORITY_SERVICES_STATE_KEY",
     "AuthorityAppServices",
     "AuthorityRouteGroup",
     "default_authority_capabilities",
