@@ -210,6 +210,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used
+- PR body draft: completed
+- PR body refine: pending
 - PR review: unused
 - Blocker resolution: 1/3 used
 
@@ -283,6 +285,39 @@ make test-summary
     passed with 37 tests, and
     `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/unit/loom/pipeline/stores/test_store_errors.py`
     passed.
-- PR preparation: pending.
+- PR preparation draft:
+  - Metadata: completed on 2026-05-11 in
+    `/home/samcantrill/work/loom-worktrees/authority-mode-resolution` on
+    branch `codex/authority-mode-resolution`.
+  - PR facts confirmed: title
+    `DB-Backed Authority Supervisor And Offline Import - Phase 1: Authority Mode And Resolver Contracts`;
+    PR body path `docs/phases/authority-mode-resolution-pr-body.md`; target
+    branch `develop`; stack predecessor none; root phase merge-eligible only
+    after PR targets `develop` and automated gates pass.
+  - Draft-only status: PR body draft completed from
+    `.codex/templates/phase-pr-body.md`; PR body refine pass remains pending
+    because this phase is on the expanded path. PR creation was not attempted
+    in this draft pass.
+  - Final validation evidence:
+    - Sandboxed `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed Ruff and
+      Pyright, then failed in the default harness because local service tests
+      could not create sockets (`PermissionError: Operation not permitted`).
+      Escalated rerun passed: Ruff passed, Pyright reported 0 errors, default
+      isolated harness passed with 1173 passed, 18 skipped, and 14 deselected;
+      config-extra passed with 420 passed and 1202 deselected; `uv build`
+      produced sdist and wheel artifacts.
+    - Sandboxed `UV_CACHE_DIR=/tmp/uv-cache make test-summary` wrote a failed
+      summary for the same socket-permission limitation. Escalated rerun
+      passed and wrote `build/test-summary.md` at
+      2026-05-11T05:01:24+00:00 with package 61 passed/1 skipped, unit 878
+      passed/1 skipped, contract 120 passed/2 skipped, integration 101
+      passed/8 skipped/10 deselected, e2e 39 passed/1 deselected,
+      config-extra 420 passed/1202 deselected, and overall 1619 passed/12
+      skipped/1213 deselected.
+  - Pre-submit blocker gate: passed after reviewing the v10 implementation
+    plan, phase execution plan, final diff against `develop`, PR body draft,
+    validation evidence, scope boundary, and known risks. No additional
+    blockers found; no implementation refinement was performed during PR
+    preparation.
 - Stack maintenance: not applicable yet.
 - Remaining blockers: none.
