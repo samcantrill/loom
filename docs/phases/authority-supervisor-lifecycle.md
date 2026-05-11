@@ -198,7 +198,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted validation and full PR gates passed after the implementation commit
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -206,10 +206,10 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-11.
 - Final phase execution plan: completed by managing agent on 2026-05-11.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
+- Implementation summary: added an explicit `loom authority` lifecycle command group with `start`, `status`, `doctor`, `stop`, and `restart`; added authority-owned supervisor process/state/registry helpers; added a private FastAPI server entrypoint backed by the authority repository; added generation rotation on restart; added `uvicorn` as the bounded ASGI server dependency needed to run the existing FastAPI app; and covered package boundaries, unit helpers, contract readiness-to-registry compatibility, integration process lifecycle, and e2e CLI lifecycle smoke behavior.
+- Implementation validation: targeted Ruff passed; targeted Pyright passed; targeted pytest passed with 54 selected tests. `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff clean, Pyright clean, default pytest 1284 passed / 18 skipped / 14 deselected, config-extra 420 passed / 1313 deselected, and build success. `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 68 passed / 1 skipped, unit 930 passed / 1 skipped, contract 146 passed / 2 skipped, integration 126 passed / 8 skipped / 10 deselected, e2e 40 passed / 1 deselected, and config-extra 420 passed / 1313 deselected.
+- Refinement summary: no separate refiner pass was needed; one implementation-pass cleanup ensured failed state/registry publication terminates a started server.
+- Blocker-resolution summary: none used.
+- PR preparation: PR body drafted in `docs/phases/authority-supervisor-lifecycle-pr-body.md`; PR not yet opened.
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none.
