@@ -211,7 +211,7 @@ make test-summary
 
 - Phase implementation refinement: used
 - PR body draft: completed
-- PR body refine: pending
+- PR body refine: completed
 - PR review: unused
 - Blocker resolution: 1/3 used
 
@@ -319,5 +319,18 @@ make test-summary
     validation evidence, scope boundary, and known risks. No additional
     blockers found; no implementation refinement was performed during PR
     preparation.
+- PR body refine/open pass:
+  - Metadata: completed on 2026-05-11 in
+    `/home/samcantrill/work/loom-worktrees/authority-mode-resolution` on
+    branch `codex/authority-mode-resolution`.
+  - PR body verification: matched the v10 implementation plan, Phase 1
+    execution plan, final diff against `develop`, acceptance criteria, scope
+    boundaries, assumptions, risks, and final validation evidence. No future
+    phase work, runtime factory adoption, FastAPI/server work, registry file IO,
+    supervisor lifecycle behavior, durable repository work, offline evidence,
+    or offline import behavior was found in the Phase 1 diff.
+  - Corrections made: updated the public PR body's GitHub checks row so it no
+    longer described the earlier draft-only state; no source or test changes
+    were made.
 - Stack maintenance: not applicable yet.
 - Remaining blockers: none.
