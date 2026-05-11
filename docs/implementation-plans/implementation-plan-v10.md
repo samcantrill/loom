@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 7 merged; ready for Phase 8 planning
+- Phase work status: Phase 8 PR open in #126; automated review and merge gate pending
 
 Related artifacts and references:
 
@@ -1124,9 +1124,9 @@ Phase 7 merged on 2026-05-11:
 
 ### Phase 8: Workspace Registry Records
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-registry-records`
-- PR: TBD
+- PR: [#126](https://github.com/samcantrill/loom/pull/126)
 
 **Goal**
 
@@ -1207,7 +1207,26 @@ and how stale records guide users toward explicit status/restart commands.
 
 **Completion Summary**
 
-TBD.
+- Phase execution plan: `docs/phases/authority-registry-records.md`.
+- PR body: `docs/phases/authority-registry-records-pr-body.md`.
+- Worktree: `/home/samcantrill/work/loom-worktrees/authority-registry-records`.
+- Stack target: `develop`; verified PR target is `develop` with head
+  `codex/authority-registry-records`.
+- Implementation summary: added versioned workspace and allocation-scoped
+  registry records, deterministic `.loom/authority/` path helpers, atomic JSON
+  write/read helpers, recursive sensitive metadata redaction, endpoint safety
+  checks, fail-closed validation statuses, resolver-hint conversion, and
+  service-health fact conversion.
+- Validation: targeted Ruff passed; targeted Pyright passed; targeted pytest
+  passed with 74 passed. `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed
+  with Ruff clean, Pyright clean, default pytest 1268 passed / 18 skipped /
+  14 deselected, config-extra 420 passed / 1297 deselected, and build success.
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 67 passed /
+  1 skipped, unit 919 passed / 1 skipped, contract 145 passed / 2 skipped,
+  integration 124 passed / 8 skipped / 10 deselected, e2e 39 passed /
+  1 deselected, and config-extra 420 passed / 1297 deselected.
+- Follow-up notes: automated review, GitHub CI, merge, and post-merge metadata
+  update remain pending.
 
 ### Phase 9: Supervisor Lifecycle Commands
 
