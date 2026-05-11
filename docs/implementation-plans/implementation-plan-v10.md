@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 5 merged; ready for Phase 6 planning
+- Phase work status: Phase 6 PR open; automated review and merge gate pending
 
 Related artifacts and references:
 
@@ -899,9 +899,9 @@ Phase 5 merged on 2026-05-11:
 
 ### Phase 6: Stage Lifecycle Repository
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-stage-lifecycle`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/124
 
 **Goal**
 
@@ -981,7 +981,28 @@ facts, and compatibility with current stage execution paths.
 
 **Completion Summary**
 
-TBD.
+Phase 6 PR opened on 2026-05-11:
+
+- Branch: `codex/authority-stage-lifecycle`
+- PR: https://github.com/samcantrill/loom/pull/124
+- Target branch: `develop`
+- Implementation summary: advanced the private authority repository to schema
+  version 3 with cross-run stage state, attempts, stage leases, output commits,
+  and artifact facts. Added private stage transition, attempt allocation,
+  stage lease renew/release/fail, terminal attempt, and output commit methods
+  with expected-revision, service-generation, TTL, and fencing checks. Run
+  snapshots now include durable stage attempts, active leases, latest commits,
+  and artifact facts. The work remains private to
+  `loom.authority._repository` and does not add route, runtime, registry,
+  supervisor, resource-admission, or offline-import behavior.
+- Validation before PR: targeted Ruff, Pyright, and focused package/unit/
+  contract/integration pytest passed. `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed
+  with overall 1683 passed, 12 skipped, and 1277 deselected after an isolated
+  unrelated flaky integration test passed on rerun.
+- Stack maintenance: root phase PR targets `develop`; no successor branch
+  depends on `codex/authority-stage-lifecycle` yet.
+- Follow-up notes: automated PR review and GitHub CI/merge remain pending.
 
 ### Phase 7: Authority Server Mutation API
 
