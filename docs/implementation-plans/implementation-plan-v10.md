@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 2 PR open; automated review and merge gate pending
+- Phase work status: Phase 2 merged; ready for Phase 3 planning
 
 Related artifacts and references:
 
@@ -460,7 +460,7 @@ Phase 1 merged on 2026-05-11:
 
 ### Phase 2: Authority Client And Server Protocol Models
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-protocol-models`
 - PR: https://github.com/samcantrill/loom/pull/120
 
@@ -545,19 +545,28 @@ and ensure there are no SQL or FastAPI details in the public model layer.
 
 **Completion Summary**
 
-Phase 2 PR opened on 2026-05-11:
+Phase 2 merged on 2026-05-11:
 
 - Branch: `codex/authority-protocol-models`
 - PR: https://github.com/samcantrill/loom/pull/120
 - Target branch: `develop`
+- Merge commit: `fde4041e6d46249eb519fac98aed7cf84c61eb45`
 - Implementation summary: added transport-independent authority protocol value
   models, public store exports, version/schema readiness payloads, request and
   response envelopes, accepted/rejected result shapes, explicit fence fields,
-  structured rejection categories, and package, unit, and contract coverage.
-- Validation before PR: `make validate-pr` passed; `make test-summary` passed
-  with overall 1633 passed, 12 skipped, and 1227 deselected.
-- Stack maintenance: root phase PR targets `develop`; no successor branch
-  depends on `codex/authority-protocol-models` yet.
+  structured rejection categories, package, unit, and contract coverage,
+  readiness conflict validation, serialized local event appends, and
+  high-entropy atomic temp paths for parallel run-store writes.
+- Validation before merge: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall
+  1636 passed, 12 skipped, and 1230 deselected.
+- GitHub CI: `checks` succeeded before merge on 2026-05-11.
+- Automated review: reviewer found a readiness-version conflict bug and a CI
+  event-sequence race; blocker resolution fixed both and the later same-target
+  atomic temp-file collision exposed by CI, with no blocking findings remaining
+  at merge time.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-protocol-models` at merge time.
 - Follow-up notes: Phase 3 should adapt these plain-data values into FastAPI
   route payloads without moving transport or repository concerns back into the
   protocol model module.
