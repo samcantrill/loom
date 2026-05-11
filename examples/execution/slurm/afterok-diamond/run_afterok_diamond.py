@@ -13,7 +13,12 @@ from typing import Any
 from uuid import uuid4
 
 from loom.cli.main import main as loom_main
-from loom.pipeline.stores import path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import (
+    authority_config_to_cli_args,
+    path_to_run_uri,
+    run_uri_to_path,
+)
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 HERE = Path(__file__).resolve().parent
@@ -28,20 +33,23 @@ def main() -> None:
     run_uri = path_to_run_uri(run_root / f"afterok-diamond-{uuid4().hex[:8]}")
     config_path = HERE / "pipeline.yaml"
 
-    with controlled_environment():
-        payload = run_cli_json(
-            [
-                "run",
-                str(config_path),
-                "--executor",
-                "slurm-afterok",
-                "--dry-run",
-                "--run-uri",
-                run_uri,
-                "--format",
-                "json",
-            ]
-        )
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        with controlled_environment():
+            payload = run_cli_json(
+                [
+                    "run",
+                    str(config_path),
+                    "--executor",
+                    "slurm-afterok",
+                    "--dry-run",
+                    "--run-uri",
+                    run_uri,
+                    *authority_args,
+                    "--format",
+                    "json",
+                ]
+            )
 
     result = require_mapping(payload["result"])
     manifest_path = Path(require_string(result["manifest_path"]))

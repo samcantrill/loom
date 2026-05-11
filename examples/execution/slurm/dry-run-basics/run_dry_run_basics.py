@@ -13,7 +13,8 @@ from typing import Any
 from uuid import uuid4
 
 from loom.cli.main import main as loom_main
-from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 HERE = Path(__file__).resolve().parent
@@ -26,11 +27,13 @@ def main() -> None:
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     config_path = HERE / "pipeline.yaml"
 
-    with scheduler_commands_unavailable():
-        summaries = [
-            run_dry_run(config_path, run_root, "slurm-single-job"),
-            run_dry_run(config_path, run_root, "slurm-afterok"),
-        ]
+    with LocalAuthorityService.start() as service:
+        authority_args = authority_config_to_cli_args(service.config())
+        with scheduler_commands_unavailable():
+            summaries = [
+                run_dry_run(config_path, run_root, "slurm-single-job", authority_args),
+                run_dry_run(config_path, run_root, "slurm-afterok", authority_args),
+            ]
 
     print("slurm_dry_run_basics:")
     for summary in summaries:
@@ -45,7 +48,12 @@ def main() -> None:
         print(f"    scheduler_ids_absent: {summary['scheduler_ids_absent']}")
 
 
-def run_dry_run(config_path: Path, run_root: Path, mode: str) -> dict[str, Any]:
+def run_dry_run(
+    config_path: Path,
+    run_root: Path,
+    mode: str,
+    authority_args: tuple[str, ...],
+) -> dict[str, Any]:
     run_uri = path_to_run_uri(run_root / f"{mode}-{uuid4().hex[:8]}")
     payload = run_cli_json(
         [
@@ -56,6 +64,7 @@ def run_dry_run(config_path: Path, run_root: Path, mode: str) -> dict[str, Any]:
             "--dry-run",
             "--run-uri",
             run_uri,
+            *authority_args,
             "--format",
             "json",
         ]

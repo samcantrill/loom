@@ -7,10 +7,16 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any, cast
 from uuid import uuid4
 
 from loom.cli.main import main as loom_main
-from loom.pipeline.stores import LocalRunArtifactStore, path_to_run_uri
+from loom.pipeline.stores import (
+    LocalRunArtifactStore,
+    authority_config_to_cli_args,
+    path_to_run_uri,
+)
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 HERE = Path(__file__).resolve().parent
@@ -35,23 +41,26 @@ def main() -> None:
             "json",
         ]
     )
-    run = _run_cli(
-        [
-            "run",
-            str(config_path),
-            "--run-uri",
-            run_uri,
-            "--tag",
-            "invocation=cli",
-            "--note",
-            "runtime example executed",
-            "--format",
-            "json",
-        ]
-    )
-    metadata = LocalRunArtifactStore(run_root).read_runtime_metadata(run_uri)
-    if metadata is None:
+    with LocalAuthorityService.start() as service:
+        run = _run_cli(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--tag",
+                "invocation=cli",
+                "--note",
+                "runtime example executed",
+                *authority_config_to_cli_args(service.config()),
+                "--format",
+                "json",
+            ]
+        )
+    raw_metadata = LocalRunArtifactStore(run_root).read_runtime_metadata(run_uri)
+    if raw_metadata is None:
         raise RuntimeError("runtime metadata was not written")
+    metadata = cast(dict[str, Any], raw_metadata)
 
     print(f"run_uri: {run_uri}")
     print(f"preflight_status: {preflight['result']['status']}")
@@ -61,7 +70,7 @@ def main() -> None:
     print(f"runtime_stage_count: {len(metadata['stages'])}")
 
 
-def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, object]:
+def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
     stdout = io.StringIO()
     stderr = io.StringIO()
     code = loom_main(argv, stdout=stdout, stderr=stderr)

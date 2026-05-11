@@ -11,7 +11,8 @@ import pytest
 
 from loom.cli.main import main
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner
-from loom.pipeline.stores import path_to_run_uri
+from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 pytestmark = [pytest.mark.e2e, pytest.mark.optional_dependency]
 
@@ -43,19 +44,21 @@ def test_cli_slurm_live_submit_status_cancel_flow_stays_artifact_safe(
     run_path = tmp_path / "runs" / "flow"
     run_uri = path_to_run_uri(run_path)
 
-    payload = _run_cli_json(
-        [
-            "run",
-            str(config_path),
-            "--executor",
-            "slurm-afterok",
-            "--run-uri",
-            run_uri,
-            "--format",
-            "json",
-        ],
-        expected_code=7,
-    )
+    with LocalAuthorityService.start() as service:
+        payload = _run_cli_json(
+            [
+                "run",
+                str(config_path),
+                "--executor",
+                "slurm-afterok",
+                "--run-uri",
+                run_uri,
+                *authority_config_to_cli_args(service.config()),
+                "--format",
+                "json",
+            ],
+            expected_code=7,
+        )
 
     assert payload["error"]["code"] == "cli.run.slurm_live_authority_unsupported"
     assert payload["error"]["details"]["authority_admission"]["supported"] is False

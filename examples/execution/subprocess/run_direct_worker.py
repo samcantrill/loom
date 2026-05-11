@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from loom.cli.main import main as loom_main
@@ -18,7 +19,12 @@ from loom.pipeline.execution import (
 )
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
-from loom.pipeline.stores import LocalArtifactStore, path_to_run_uri
+from loom.pipeline.stores import (
+    LocalArtifactStore,
+    authority_config_to_cli_args,
+    path_to_run_uri,
+)
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 HERE = Path(__file__).resolve().parent
@@ -30,51 +36,64 @@ def main() -> None:
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_uri = path_to_run_uri(run_root / f"direct-worker-{uuid4().hex[:8]}")
     config_path = HERE / "pipeline.yaml"
-    store = create_authority_backed_serial_run_store(run_root)
-    store.create_run(run_uri)
-    validation = validate_pipeline_config(compose_config(config_path).resolved)
-    artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
-    plan = plan_pipeline(
-        validation.spec,
-        run_uri=run_uri,
-        run_store=store,
-        artifact_store=artifact_store,
-        persist=True,
-    )
-    stage = validation.spec.get_stage("seed")
-    prepare_stage_attempt(
-        run_store=store,
-        run_uri=run_uri,
-        stage=stage,
-        stage_plan=plan.ordered_stage_plans[0],
-        resolved_runtime=ResolvedStageRuntimeOptions(stage_id="seed", executor="local"),
-    )
+    with LocalAuthorityService.start() as service:
+        authority_config = service.config()
+        authority_args = authority_config_to_cli_args(authority_config)
+        store = create_authority_backed_serial_run_store(
+            run_root,
+            authority_config=authority_config,
+        )
+        store.create_run(run_uri)
+        validation = validate_pipeline_config(compose_config(config_path).resolved)
+        artifact_store = LocalArtifactStore(store.local_artifact_root(run_uri))
+        plan = plan_pipeline(
+            validation.spec,
+            run_uri=run_uri,
+            run_store=store,
+            artifact_store=artifact_store,
+            persist=True,
+        )
+        stage = validation.spec.get_stage("seed")
+        prepare_stage_attempt(
+            run_store=store,
+            run_uri=run_uri,
+            stage=stage,
+            stage_plan=plan.ordered_stage_plans[0],
+            resolved_runtime=ResolvedStageRuntimeOptions(
+                stage_id="seed",
+                executor="local",
+            ),
+        )
 
-    worker = _run_cli(
-        [
-            "stage",
-            "run",
-            "--run-uri",
-            run_uri,
-            "--stage",
-            "seed",
-            "--format",
-            "json",
-        ]
-    )
-    result = worker["result"]
+        worker = _run_cli(
+            [
+                "stage",
+                "run",
+                "--run-uri",
+                run_uri,
+                "--stage",
+                "seed",
+                *authority_args,
+                "--format",
+                "json",
+            ]
+        )
+        result = worker["result"]
+        parent_outputs_persisted = (
+            store.read_stage_outputs(run_uri, "seed") is not None
+        )
 
     print(f"run_uri: {run_uri}")
     print(f"worker_status: {result['status']}")
     print(f"worker_output_count: {len(result['outputs'])}")
-    print(f"parent_outputs_persisted: {store.read_stage_outputs(run_uri, 'seed') is not None}")
+    print(f"parent_outputs_persisted: {parent_outputs_persisted}")
 
 
 def _configure_import_path() -> None:
     sys.path.insert(0, str(HERE))
 
 
-def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, object]:
+def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
     stdout = io.StringIO()
     stderr = io.StringIO()
     code = loom_main(argv, stdout=stdout, stderr=stderr)
