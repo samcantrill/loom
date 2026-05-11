@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 8 PR open in #126; automated review and merge gate pending
+- Phase work status: Phase 8 merged; ready for Phase 9 planning
 
 Related artifacts and references:
 
@@ -1124,7 +1124,7 @@ Phase 7 merged on 2026-05-11:
 
 ### Phase 8: Workspace Registry Records
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-registry-records`
 - PR: [#126](https://github.com/samcantrill/loom/pull/126)
 
@@ -1212,21 +1212,31 @@ and how stale records guide users toward explicit status/restart commands.
 - Worktree: `/home/samcantrill/work/loom-worktrees/authority-registry-records`.
 - Stack target: `develop`; verified PR target is `develop` with head
   `codex/authority-registry-records`.
+- Merge: PR #126 squash-merged to `develop` on 2026-05-11 with merge commit
+  `b1bf0a93c07ed47485c2550e73159b6b086aef85`.
 - Implementation summary: added versioned workspace and allocation-scoped
   registry records, deterministic `.loom/authority/` path helpers, atomic JSON
   write/read helpers, recursive sensitive metadata redaction, endpoint safety
-  checks, fail-closed validation statuses, resolver-hint conversion, and
-  service-health fact conversion.
+  checks that preserve non-sensitive query strings, fail-closed validation
+  statuses, resolver-hint conversion, and service-health fact conversion.
 - Validation: targeted Ruff passed; targeted Pyright passed; targeted pytest
-  passed with 74 passed. `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed
-  with Ruff clean, Pyright clean, default pytest 1268 passed / 18 skipped /
-  14 deselected, config-extra 420 passed / 1297 deselected, and build success.
+  passed with 18 registry tests after the automated review fix.
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed with Ruff clean, Pyright
+  clean, default pytest 1271 passed / 18 skipped / 14 deselected,
+  config-extra 420 passed / 1300 deselected, and build success.
   `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package 67 passed /
-  1 skipped, unit 919 passed / 1 skipped, contract 145 passed / 2 skipped,
-  integration 124 passed / 8 skipped / 10 deselected, e2e 39 passed /
-  1 deselected, and config-extra 420 passed / 1297 deselected.
-- Follow-up notes: automated review, GitHub CI, merge, and post-merge metadata
-  update remain pending.
+  1 skipped, unit 921 passed / 1 skipped, contract 145 passed / 2 skipped,
+  integration 125 passed / 8 skipped / 10 deselected, e2e 39 passed /
+  1 deselected, and config-extra 420 passed / 1300 deselected.
+- Review and CI: managing-agent automated review completed on 2026-05-11; one
+  bounded fix hardened malformed JSON validation and endpoint query preservation.
+  GitHub CI `checks` passed in 2m33s on
+  <https://github.com/samcantrill/loom/actions/runs/25666089159/job/75338797631>.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-registry-records` at merge time, and the
+  remote branch was deleted by the merge command.
+- Follow-up notes: Phase 9 can write these workspace-local records from
+  supervisor lifecycle commands.
 
 ### Phase 9: Supervisor Lifecycle Commands
 
