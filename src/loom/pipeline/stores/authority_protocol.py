@@ -267,6 +267,7 @@ class AuthorityProtocolRequest:
     stage_name: str | None = None
     submission_id: str | None = None
     lease_id: str | None = None
+    fencing_token: str | None = None
     owner_id: str | None = None
     expected_revision: BackendRevision | None = None
     body: Mapping[str, PlainData] = field(default_factory=dict)
@@ -290,6 +291,12 @@ class AuthorityProtocolRequest:
             )
         if self.lease_id is not None:
             object.__setattr__(self, "lease_id", _non_empty(self.lease_id, "lease_id"))
+        if self.fencing_token is not None:
+            object.__setattr__(
+                self,
+                "fencing_token",
+                _non_empty(self.fencing_token, "fencing_token"),
+            )
         if self.owner_id is not None:
             object.__setattr__(self, "owner_id", _non_empty(self.owner_id, "owner_id"))
         if self.expected_revision is not None and not isinstance(
@@ -307,6 +314,7 @@ class AuthorityProtocolRequest:
             "stage_name": self.stage_name,
             "submission_id": self.submission_id,
             "lease_id": self.lease_id,
+            "fencing_token": self.fencing_token,
             "owner_id": self.owner_id,
             "expected_revision": None
             if self.expected_revision is None
@@ -325,6 +333,7 @@ class AuthorityProtocolRequest:
                 "stage_name",
                 "submission_id",
                 "lease_id",
+                "fencing_token",
                 "owner_id",
                 "expected_revision",
                 "body",
@@ -340,6 +349,9 @@ class AuthorityProtocolRequest:
                 mapping.get("submission_id"), "submission_id"
             ),
             lease_id=_optional_string(mapping.get("lease_id"), "lease_id"),
+            fencing_token=_optional_string(
+                mapping.get("fencing_token"), "fencing_token"
+            ),
             owner_id=_optional_string(mapping.get("owner_id"), "owner_id"),
             expected_revision=None
             if expected is None
@@ -471,6 +483,8 @@ class AuthorityProtocolResult:
 
     revision: BackendRevision | None = None
     service_generation: str | None = None
+    lease_id: str | None = None
+    fencing_token: str | None = None
     lease: LeaseRecord | None = None
     snapshot: AuthoritativeRunSnapshot | None = None
     stage_attempt: StageAttempt | None = None
@@ -491,6 +505,25 @@ class AuthorityProtocolResult:
                 _non_empty(self.service_generation, "service_generation"),
             )
         _optional_instance(self.lease, LeaseRecord, "lease")
+        lease_id = self.lease_id
+        fencing_token = self.fencing_token
+        if self.lease is not None:
+            if lease_id is None:
+                lease_id = self.lease.lease_id
+            elif lease_id != self.lease.lease_id:
+                raise AuthorityProtocolError("lease_id must match lease.lease_id")
+            if fencing_token is None:
+                fencing_token = self.lease.fencing_token
+            elif fencing_token != self.lease.fencing_token:
+                raise AuthorityProtocolError(
+                    "fencing_token must match lease.fencing_token"
+                )
+        object.__setattr__(self, "lease_id", _optional_string(lease_id, "lease_id"))
+        object.__setattr__(
+            self,
+            "fencing_token",
+            _optional_string(fencing_token, "fencing_token"),
+        )
         _optional_instance(self.snapshot, AuthoritativeRunSnapshot, "snapshot")
         _optional_instance(self.stage_attempt, StageAttempt, "stage_attempt")
         _optional_instance(self.output_commit, OutputCommitRecord, "output_commit")
@@ -533,6 +566,8 @@ class AuthorityProtocolResult:
         return {
             "revision": None if self.revision is None else self.revision.to_dict(),
             "service_generation": self.service_generation,
+            "lease_id": self.lease_id,
+            "fencing_token": self.fencing_token,
             "lease": None if self.lease is None else self.lease.to_dict(),
             "snapshot": None if self.snapshot is None else self.snapshot.to_dict(),
             "stage_attempt": None
@@ -565,6 +600,8 @@ class AuthorityProtocolResult:
             {
                 "revision",
                 "service_generation",
+                "lease_id",
+                "fencing_token",
                 "lease",
                 "snapshot",
                 "stage_attempt",
@@ -584,6 +621,10 @@ class AuthorityProtocolResult:
             ),
             service_generation=_optional_string(
                 mapping.get("service_generation"), "service_generation"
+            ),
+            lease_id=_optional_string(mapping.get("lease_id"), "lease_id"),
+            fencing_token=_optional_string(
+                mapping.get("fencing_token"), "fencing_token"
             ),
             lease=_optional_record(mapping.get("lease"), LeaseRecord.from_dict),
             snapshot=_optional_record(

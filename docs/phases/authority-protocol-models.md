@@ -220,7 +220,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-11 by `loom_phase_refiner`
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -228,9 +228,9 @@ make test-summary
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-11.
 - Final phase execution plan: completed by `loom_phase_planner` on 2026-05-11.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: tightened public envelope field names, operation-family granularity, nested-record reuse rules, and the no-adapter-conformance boundary for Phase 2.
+- Implementation summary: added transport-independent authority protocol value models, public store exports, package import-boundary coverage, unit validation/round-trip coverage, and contract golden-shape coverage.
+- Implementation validation: `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/authority_protocol.py src/loom/pipeline/stores/__init__.py tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/contracts/test_authority_protocol_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py` passed; `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores/authority_protocol.py tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/contracts/test_authority_protocol_contract.py` passed with 0 errors; `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/contracts/test_authority_protocol_contract.py` passed with 25 tests.
+- Refinement summary: tightened public envelope field names, operation-family granularity, nested-record reuse rules, and the no-adapter-conformance boundary for Phase 2. Implementation refinement added explicit `fencing_token` protocol envelope support, checked result lease/fencing consistency, expanded unit coverage for fenced envelopes, and added contract golden shapes for readiness, fenced mutation acknowledgements, snapshots, stale-generation rejections, and unsupported-capability rejections.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not applicable yet.

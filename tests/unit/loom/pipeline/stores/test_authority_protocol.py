@@ -150,6 +150,8 @@ def test_protocol_request_round_trips_identifiers_revision_and_body() -> None:
         metadata=metadata,
         run_uri="file:///runs/r1",
         stage_name="build",
+        lease_id="lease-1",
+        fencing_token="fence-1",
         owner_id="worker-1",
         expected_revision=_revision(),
         body={"status": "RUNNING", "reason": {"code": "started"}},
@@ -159,6 +161,8 @@ def test_protocol_request_round_trips_identifiers_revision_and_body() -> None:
     metadata_payload = cast("dict[str, object]", payload["metadata"])
 
     assert metadata_payload["operation_kind"] == "stage_attempt"
+    assert payload["lease_id"] == "lease-1"
+    assert payload["fencing_token"] == "fence-1"
     assert payload["expected_revision"] == _revision().to_dict()
     assert payload["body"] == {"status": "RUNNING", "reason": {"code": "started"}}
     assert AuthorityProtocolRequest.from_dict(payload) == request
@@ -293,6 +297,8 @@ def test_protocol_result_carries_authority_read_models() -> None:
     payload = result.to_dict()
 
     assert payload["revision"] == revision.to_dict()
+    assert payload["lease_id"] == lease.lease_id
+    assert payload["fencing_token"] == lease.fencing_token
     assert payload["lease"] == lease.to_dict()
     assert payload["snapshot"] == snapshot.to_dict()
     assert payload["stage_attempt"] == attempt.to_dict()
@@ -303,6 +309,9 @@ def test_protocol_result_carries_authority_read_models() -> None:
     assert payload["cleanup_candidates"] == [cleanup.to_dict()]
     assert payload["recovery_records"] == [recovery.to_dict()]
     assert AuthorityProtocolResult.from_dict(payload) == result
+
+    with pytest.raises(AuthorityProtocolError, match="fencing_token must match"):
+        AuthorityProtocolResult(lease=lease, fencing_token="different-fence")
 
 
 def test_protocol_response_enforces_accepted_or_rejected_payloads() -> None:
