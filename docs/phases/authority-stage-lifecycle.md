@@ -199,7 +199,9 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-11 by managing agent after
+  implementation and validation; no code changes were required after the final
+  validation pass
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -207,10 +209,33 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-11.
 - Final phase execution plan: completed by managing agent on 2026-05-11.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: extended the private authority repository to schema
+  version 3 with cross-run stage state, attempts, stage leases, output commits,
+  and artifact facts. Added private stage transition, attempt allocation, stage
+  lease renew/release/fail, terminal attempt, and output commit methods with
+  expected-revision, service-generation, TTL, and fencing checks. Run snapshots
+  now include durable stage attempts, active leases, latest commits, and
+  artifact facts. The work stayed private to `loom.authority._repository` and
+  did not add route, runtime, registry, supervisor, resource-admission, or
+  offline-import behavior.
+- Implementation validation: targeted `ruff`, `pyright`, and focused package,
+  unit, contract, and integration pytest passed for the repository changes.
+  Final `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed, including Ruff,
+  Pyright, default pytest with 1237 passed, 18 skipped, 14 deselected,
+  config-extra pytest with 420 passed and 1266 deselected, and package build.
+  The first `make test-summary` run hit one unrelated flaky parallel-execution
+  integration failure; the isolated test passed on rerun, and the final
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` rerun passed with overall
+  1683 passed, 12 skipped, and 1277 deselected.
+- Refinement summary: bounded implementation review inspected private import
+  boundaries, schema-version behavior, stage-only scope, expected-revision and
+  service-generation checks, stage lease fencing/expiry behavior, output commit
+  conflicts, artifact fact persistence, stage-aware snapshots, and suite
+  evidence. No scope or correctness blockers were found, and no code changes
+  were required after the final validation pass.
+- Blocker-resolution summary: not needed; 0/3 blocker-resolution passes used.
+- PR preparation: PR body prepared in
+  `docs/phases/authority-stage-lifecycle-pr-body.md`; PR opening pending.
+- Stack maintenance: root phase targets `develop`; no successor branch depends
+  on `codex/authority-stage-lifecycle` yet.
+- Remaining blockers: none known.
