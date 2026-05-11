@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 1 PR open
+- Phase work status: Phase 1 merged; ready for Phase 2 planning
 
 Related artifacts and references:
 
@@ -345,7 +345,7 @@ Review history:
 
 ### Phase 1: Authority Mode And Resolver Contracts
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-mode-resolution`
 - PR: https://github.com/samcantrill/loom/pull/119
 
@@ -436,11 +436,12 @@ complete enough for later CLI and runner migration.
 
 **Completion Summary**
 
-Phase 1 PR opened on 2026-05-11:
+Phase 1 merged on 2026-05-11:
 
 - Branch: `codex/authority-mode-resolution`
 - PR: https://github.com/samcantrill/loom/pull/119
 - Target branch: `develop`
+- Merge commit: `9007c8c1cdd163d82eae81aa799da6cfdf217954`
 - Implementation summary: added side-effect-free authority resolver contracts,
   explicit online/offline outcomes, supplied registry/health facts, reserved
   direct-database diagnostics, opt-in CLI resolver-mode parsing, and package,
@@ -448,6 +449,12 @@ Phase 1 PR opened on 2026-05-11:
 - Validation before PR: `make validate-pr` passed after escalation for local
   socket permissions; `make test-summary` passed with overall 1619 passed, 12
   skipped, and 1213 deselected.
+- GitHub CI: `checks` succeeded before merge on 2026-05-11.
+- Automated review: manager review found no blocking scope, correctness, or
+  test-evidence issues after the pre-submit blocker fix recorded in the phase
+  artifact.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-mode-resolution` at merge time.
 - Follow-up notes: current runtime factories intentionally keep existing
   compatibility behavior until Phase 10 adopts strict resolver outcomes.
 
