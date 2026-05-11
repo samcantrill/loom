@@ -208,7 +208,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed as a separate agent pass; the managing agent performed bounded validation fixes before PR preparation
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -230,15 +230,19 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright` passed with 0 errors.
   - Targeted non-socket pytest passed: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_authority_factory.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/integration/pipeline/test_run_catalog_compare.py tests/integration/pipeline/test_run_catalog_direct_scan.py tests/integration/pipeline/test_run_catalog_sqlite.py tests/integration/pipeline/test_run_catalog_current_list.py tests/support/slurm_status_fixtures.py tests/integration/pipeline/test_cli_runs.py tests/unit/loom/cli/test_plan.py` produced 78 passed.
   - Targeted config-extra/no-service CLI pytest passed: `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev --extra config pytest tests/e2e/test_cli_core.py::test_cli_validate_plan_and_json_outputs tests/e2e/test_cli_core.py::test_cli_continuation_commands_reject_recursive_executors_as_json tests/e2e/test_cli_core.py::test_cli_run_dry_run_does_not_execute_or_allocate tests/e2e/test_cli_core.py::test_cli_rejects_deferred_executor_and_plain_run_uri tests/integration/config/test_cli_plan.py::test_plan_fresh_without_run_uri_does_not_create_default_run_root tests/integration/config/test_cli_plan.py::test_plan_explicit_new_run_uri_is_read_only tests/integration/config/test_cli_plan.py::test_plan_existing_run_uri_without_resume_fails` produced 7 passed.
-  - Socket/process-manager tests could not be rerun in this sandbox after implementation because local socket creation requires escalation and escalation was rejected by the platform usage limit. Earlier focused service tests for the first implementation slice passed under escalation before the limit was hit.
-  - `make validate-pr` and `make test-summary` have not run for this phase in the current session because the required socket-capable escalation is unavailable.
+  - Targeted strict-authority fallout pytest passed under socket-capable escalation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/e2e/test_cli_slurm_cancellation.py tests/e2e/test_cli_slurm_scheduler_status.py tests/integration/pipeline/test_subprocess_executor_integration.py tests/unit/loom/cli/test_run.py::test_run_default_store_is_authority_backed_serial_store tests/unit/loom/diagnostics/test_backend_diagnostics.py::test_inspect_backend_rejects_missing_authority_backend tests/unit/loom/diagnostics/test_diagnostics_preflight.py::test_slurm_run_preflight_fails_existing_active_submission tests/unit/loom/pipeline/stores/test_store_errors.py::test_store_error_exports tests/unit/loom/runs/test_direct_scan_helpers.py` produced 24 passed.
+  - Targeted config-extra and example pytest passed under socket-capable escalation: `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/e2e/test_cli_slurm_live_operations_flow.py tests/integration/config/test_cli_run.py tests/integration/docs/test_v0_python_examples.py::test_smoke_example_scripts_execute` produced 30 passed.
+  - Standalone e2e pytest passed under socket-capable escalation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/e2e` produced 41 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed after final commits: Ruff passed, Pyright passed with 0 errors, default harness passed with 1294 passed / 18 skipped / 14 deselected, config-extra passed with 420 passed / 1323 deselected, and `uv build` produced the source distribution and wheel.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote `build/test-summary.md`: package 69 passed / 1 skipped; unit 939 passed / 1 skipped; contract 146 passed / 2 skipped; integration 126 passed / 8 skipped / 10 deselected; e2e 40 passed / 1 deselected; config-extra 420 passed / 1323 deselected; overall 1740 passed / 12 skipped / 1334 deselected.
 - Refinement summary:
-  - Not run as a separate refinement pass yet. Current local fixes were made by the managing agent before the implementation commit/PR checkpoint.
+  - No separate `loom_phase_refiner` pass was run. The managing agent completed bounded validation fixes for strict authority fallout, config-extra examples, and standalone e2e coverage.
 - Blocker-resolution summary:
-  - 0/3 phase blocker-resolution passes used. Current blocker is environmental: git metadata and socket-capable validation require escalation, but the platform rejected escalation because the session hit the usage limit.
+  - 0/3 phase blocker-resolution passes used; no known implementation blockers remain.
 - PR preparation:
-  - Not started. Local git staging failed because the worktree git metadata is read-only in the sandbox (`index.lock` could not be created), and the required escalation for `git add` was rejected by the platform usage limit.
+  - PR body draft completed at `docs/phases/authority-resolver-adoption-pr-body.md` with final validation evidence.
+  - PR body refine pass not needed; the draft matches the phase scope, implementation diff, and suite evidence.
 - Stack maintenance:
   - None performed. This is a root phase branch targeting `develop`; no successor branch has been created.
 - Remaining blockers:
-  - Commit, full validation, PR body preparation, push, PR creation, CI, automated review, merge, metadata update, and cleanup are blocked until escalation/local git metadata writes and network operations are available again.
+  - None known before PR preparation.
