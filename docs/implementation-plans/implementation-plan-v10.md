@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 5 PR open; automated review and merge gate pending
+- Phase work status: Phase 5 merged; ready for Phase 6 planning
 
 Related artifacts and references:
 
@@ -790,7 +790,7 @@ Phase 4 merged on 2026-05-11:
 
 ### Phase 5: Run Lifecycle Repository
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-run-lifecycle`
 - PR: https://github.com/samcantrill/loom/pull/123
 
@@ -869,11 +869,12 @@ whether audit data is sufficient without being over-modeled.
 
 **Completion Summary**
 
-Phase 5 PR opened on 2026-05-11:
+Phase 5 merged on 2026-05-11:
 
 - Branch: `codex/authority-run-lifecycle`
 - PR: https://github.com/samcantrill/loom/pull/123
 - Target branch: `develop`
+- Merge commit: `d08823733bc9c63ae67af510245b220360d8a746`
 - Implementation summary: advanced the private authority repository to schema
   version 2 with cross-run run lifecycle tables, repository revisions, run
   admission and transitions, expected-revision checks, controller lease
@@ -886,9 +887,15 @@ Phase 5 PR opened on 2026-05-11:
   contract/integration pytest passed. `UV_CACHE_DIR=/tmp/uv-cache make
   validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed
   with overall 1673 passed, 12 skipped, and 1267 deselected.
-- Stack maintenance: root phase PR targets `develop`; no successor branch
-  depends on `codex/authority-run-lifecycle` yet.
-- Follow-up notes: automated PR review and GitHub CI/merge remain pending.
+- GitHub CI: `checks` succeeded before merge on 2026-05-11.
+- Automated review: manager review found no scope, private-boundary,
+  schema-versioning, revision/fencing, controller-lease, cleanup/recovery,
+  PR-body, or validation-evidence blockers.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-run-lifecycle` at merge time.
+- Follow-up notes: Phase 6 can extend the private repository with stage,
+  attempt, output, artifact, and stage-lease behavior on top of schema version
+  2 or a deliberate successor version.
 
 ### Phase 6: Stage Lifecycle Repository
 
