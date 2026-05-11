@@ -204,7 +204,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used on 2026-05-11 by managing agent
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -212,10 +212,34 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-11.
 - Final phase execution plan: completed by managing agent on 2026-05-11.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added FastAPI as the explicit runtime service
+  dependency and `httpx` as dev-only TestClient support; introduced the
+  lightweight `loom.authority` package, `create_authority_app`, injected
+  service facts, supervisor health/live/ready/version/capability routes, and a
+  non-mutating authority route-group boundary for future mutation APIs. Route
+  responses return plain protocol-compatible dictionaries and disable FastAPI
+  response-model generation so Phase 2 protocol value objects remain the schema
+  authority.
+- Implementation validation: targeted `UV_CACHE_DIR=/tmp/uv-cache uv run ruff
+  check src/loom/authority tests/unit/loom/authority
+  tests/contracts/test_authority_fastapi_skeleton_contract.py
+  tests/integration/authority tests/package/test_import_boundaries.py
+  tests/package/test_pipeline_store_api.py` passed; targeted
+  `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/authority
+  tests/unit/loom/authority
+  tests/contracts/test_authority_fastapi_skeleton_contract.py
+  tests/integration/authority` passed with 0 errors; targeted
+  TestClient unit/contract/integration tests passed with 8 tests. Final
+  PR validation after the implementation refinement:
+  `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache
+  make test-summary` passed with overall 1646 passed, 12 skipped, and 1240
+  deselected. TestClient and existing manager-backed package tests were run
+  outside the sandbox because sandbox execution hangs or blocks local socket
+  creation.
+- Refinement summary: centralized the FastAPI app-state dependency key so app
+  construction and dependency lookup share one constant; no public route or
+  payload shape changed.
+- Blocker-resolution summary: not needed; blocker budget remains 0/3 used.
+- PR preparation: pending.
+- Stack maintenance: not applicable yet.
+- Remaining blockers: none.
