@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: ready for Phase 1 planning
+- Phase work status: Phase 1 PR open
 
 Related artifacts and references:
 
@@ -345,9 +345,9 @@ Review history:
 
 ### Phase 1: Authority Mode And Resolver Contracts
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-mode-resolution`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/119
 
 **Goal**
 
@@ -436,7 +436,20 @@ complete enough for later CLI and runner migration.
 
 **Completion Summary**
 
-TBD.
+Phase 1 PR opened on 2026-05-11:
+
+- Branch: `codex/authority-mode-resolution`
+- PR: https://github.com/samcantrill/loom/pull/119
+- Target branch: `develop`
+- Implementation summary: added side-effect-free authority resolver contracts,
+  explicit online/offline outcomes, supplied registry/health facts, reserved
+  direct-database diagnostics, opt-in CLI resolver-mode parsing, and package,
+  unit, contract, and integration coverage.
+- Validation before PR: `make validate-pr` passed after escalation for local
+  socket permissions; `make test-summary` passed with overall 1619 passed, 12
+  skipped, and 1213 deselected.
+- Follow-up notes: current runtime factories intentionally keep existing
+  compatibility behavior until Phase 10 adopts strict resolver outcomes.
 
 ### Phase 2: Authority Client And Server Protocol Models
 
