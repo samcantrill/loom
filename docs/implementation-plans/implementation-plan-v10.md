@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 2 merged; ready for Phase 3 planning
+- Phase work status: Phase 3 PR open; automated review and merge gate pending
 
 Related artifacts and references:
 
@@ -573,9 +573,9 @@ Phase 2 merged on 2026-05-11:
 
 ### Phase 3: FastAPI Transport Skeleton
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-fastapi-skeleton`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/121
 
 **Goal**
 
@@ -655,7 +655,24 @@ whether the route split is clear enough for future phases.
 
 **Completion Summary**
 
-TBD.
+Phase 3 PR opened on 2026-05-11:
+
+- Branch: `codex/authority-fastapi-skeleton`
+- PR: https://github.com/samcantrill/loom/pull/121
+- Target branch: `develop`
+- Implementation summary: added FastAPI as the explicit runtime service
+  dependency, `httpx` as dev-only TestClient support, the lightweight
+  `loom.authority` package, in-process app construction, injected service
+  facts, supervisor health/live/ready/version/capability routes, and a
+  non-mutating `/v1/authority` route-group boundary for future mutation APIs.
+- Validation before PR: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed;
+  `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with overall 1646
+  passed, 12 skipped, and 1240 deselected.
+- Stack maintenance: root phase PR targets `develop`; no successor branch
+  depends on `codex/authority-fastapi-skeleton` yet.
+- Follow-up notes: Phase 4 can use the injected service/repository boundary for
+  private schema/versioning work without moving FastAPI imports into core store
+  protocol modules.
 
 ### Phase 4: Private Repository Schema And Versioning
 
