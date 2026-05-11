@@ -9,6 +9,7 @@ from loom.pipeline.stores import (
     AuthorityConfig,
     AuthorityDeploymentProfile,
     AuthorityReference,
+    AuthorityRegistryRecord,
     AuthorityRegistryHint,
     AuthorityResolutionFailureKind,
     AuthorityResolutionMode,
@@ -16,6 +17,8 @@ from loom.pipeline.stores import (
     AuthorityResolverInput,
     AuthorityServiceHealth,
     AuthorityServiceHealthState,
+    AuthorityRegistryValidationStatus,
+    validate_authority_registry_record,
     resolve_authority,
 )
 
@@ -146,3 +149,69 @@ def test_authority_resolution_contract_exposes_typed_failures(
     assert data["outcome_kind"] == "failed"
     assert data["failure_kind"] == failure_kind.value
     assert result.diagnostics[0].code.startswith("authority_resolution.")
+
+
+@pytest.mark.parametrize(
+    ("validation_status", "expected_failure"),
+    [
+        (
+            AuthorityRegistryValidationStatus.STALE,
+            AuthorityResolutionFailureKind.STALE_REGISTRY,
+        ),
+        (
+            AuthorityRegistryValidationStatus.WRONG_WORKSPACE,
+            AuthorityResolutionFailureKind.WRONG_WORKSPACE,
+        ),
+        (
+            AuthorityRegistryValidationStatus.INCOMPATIBLE_GENERATION,
+            AuthorityResolutionFailureKind.INCOMPATIBLE_GENERATION,
+        ),
+        (
+            AuthorityRegistryValidationStatus.UNAVAILABLE_SERVICE,
+            AuthorityResolutionFailureKind.UNAVAILABLE_SERVICE,
+        ),
+    ],
+)
+def test_authority_registry_validation_contract_maps_to_resolver_failures(
+    validation_status: AuthorityRegistryValidationStatus,
+    expected_failure: AuthorityResolutionFailureKind,
+) -> None:
+    record = AuthorityRegistryRecord(
+        reference=AuthorityReference(
+            backend_kind=AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.ALLOCATION_SCOPED,
+            reference_id="registry-authority",
+            endpoint="tcp://127.0.0.1:1",
+            workspace_id="workspace-a",
+            state_path="/tmp/authority-state",
+        ),
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+        state_dir="/tmp/authority-state",
+        expires_at="2026-05-11T09:59:59Z"
+        if validation_status is AuthorityRegistryValidationStatus.STALE
+        else None,
+        service_health_state=AuthorityServiceHealthState.UNAVAILABLE
+        if validation_status is AuthorityRegistryValidationStatus.UNAVAILABLE_SERVICE
+        else AuthorityServiceHealthState.READY,
+    )
+    validation = validate_authority_registry_record(
+        record,
+        expected_workspace_id="workspace-b"
+        if validation_status is AuthorityRegistryValidationStatus.WRONG_WORKSPACE
+        else "workspace-a",
+        expected_generation="generation-old"
+        if validation_status is AuthorityRegistryValidationStatus.INCOMPATIBLE_GENERATION
+        else "generation-1",
+        now="2026-05-11T10:00:00Z",
+    )
+
+    assert validation.status is validation_status
+    result = resolve_authority(
+        AuthorityResolverInput(
+            registry_hint=validation.registry_hint,
+            service_health=validation.service_health,
+        )
+    )
+
+    assert result.failure_kind is expected_failure
