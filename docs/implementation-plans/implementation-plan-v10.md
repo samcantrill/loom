@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 9 merged; ready for Phase 10 planning
+- Phase work status: Phase 10 PR open; Phase 11 pending
 
 Related artifacts and references:
 
@@ -1359,9 +1359,9 @@ development use.
 
 ### Phase 10: Strict Resolver And Factory Adoption
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-resolver-adoption`
-- PR: TBD
+- PR: <https://github.com/samcantrill/loom/pull/128>
 
 **Goal**
 
@@ -1447,7 +1447,26 @@ clarity of user-facing failure messages.
 
 **Completion Summary**
 
-TBD.
+- Phase execution plan:
+  `docs/phases/authority-resolver-adoption.md`
+- PR body: `docs/phases/authority-resolver-adoption-pr-body.md`
+- Stack target: root phase PR targeting `develop`
+- Implementation summary: added strict resolver-backed authority factory
+  helpers, routed central run-store factories through explicit authority
+  resolution, removed endpoint-less hidden service startup from public factory
+  paths, preserved trusted `authority_store=` injection, kept read-only planning
+  from constructing mutation stores, and updated diagnostics/catalog behavior
+  for missing authority.
+- Test and example updates: mutation-capable tests, CLI flows, subprocess/SLURM
+  paths, and executable examples now use explicit service configs or injected
+  stores where authority state crosses process boundaries.
+- Validation: `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed with overall 1740 passed / 0 failed / 0 errors / 12 skipped / 1334
+  deselected.
+- Follow-up notes: Phase 11 should adapt `PipelineRunner` and `loom run` onto
+  service-backed online mutation. Phases 12 and 13 still own continuation,
+  worker, subprocess, and SLURM migration. Phase 17 owns true offline evidence
+  writer/import behavior.
 
 ### Phase 11: Python Runner And `loom run` Online Path
 
