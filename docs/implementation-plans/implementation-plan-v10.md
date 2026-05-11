@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 6 merged; ready for Phase 7 planning
+- Phase work status: Phase 7 PR open; automated review and merge gate pending
 
 Related artifacts and references:
 
@@ -1012,9 +1012,9 @@ Phase 6 merged on 2026-05-11:
 
 ### Phase 7: Authority Server Mutation API
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-mutation-api`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/125
 
 **Goal**
 
@@ -1095,7 +1095,26 @@ coverage, and whether repository errors are faithfully represented.
 
 **Completion Summary**
 
-TBD.
+Phase 7 PR opened on 2026-05-11:
+
+- Branch: `codex/authority-mutation-api`
+- PR: https://github.com/samcantrill/loom/pull/125
+- Target branch: `develop`
+- Implementation summary: added a repository-backed mutation service that maps
+  protocol envelopes to private repository run, stage, lease,
+  submitted-operation, and output-commit methods; added FastAPI mutation
+  routes under `/v1/authority`; added a repository-free stdlib HTTP
+  `AuthorityClient`; updated repository-backed service capabilities and
+  manifest behavior; and added package, unit, contract, and integration
+  coverage for structured acknowledgements and rejections.
+- Validation before PR: targeted Ruff, Pyright, and focused package/unit/
+  contract/integration pytest passed. `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed after public export tests were updated for the new
+  client surface; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with
+  overall 1694 passed, 12 skipped, and 1288 deselected.
+- Stack maintenance: root phase PR targets `develop`; no successor branch
+  depends on `codex/authority-mutation-api` yet.
+- Follow-up notes: automated PR review and GitHub CI/merge remain pending.
 
 ### Phase 8: Workspace Registry Records
 
