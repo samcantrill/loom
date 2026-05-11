@@ -41,20 +41,20 @@ phases.
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Ruff passed; Pyright passed; default pytest passed with 1268 passed, 18 skipped, 14 deselected; config-extra passed with 420 passed, 1297 deselected; build succeeded. |
-| `make test-summary` | Passed | Overall 1714 passed, 12 skipped, 1308 deselected. |
+| `make validate-pr` | Passed | Ruff passed; Pyright passed; default pytest passed with 1271 passed, 18 skipped, 14 deselected; config-extra passed with 420 passed, 1300 deselected; build succeeded. |
+| `make test-summary` | Passed | Overall 1717 passed, 12 skipped, 1311 deselected. |
 | GitHub checks | Pending | To run after PR creation. |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: |
-| package | passed | 67 | 1 | 0 | 14.28s |
-| unit | passed | 919 | 1 | 0 | 45.41s |
-| contract | passed | 145 | 2 | 0 | 15.21s |
-| integration | passed | 124 | 8 | 10 | 64.87s |
-| e2e | passed | 39 | 0 | 1 | 35.66s |
-| config-extra | passed | 420 | 0 | 1297 | 64.39s |
+| package | passed | 67 | 1 | 0 | 14.50s |
+| unit | passed | 921 | 1 | 0 | 45.48s |
+| contract | passed | 145 | 2 | 0 | 14.89s |
+| integration | passed | 125 | 8 | 10 | 64.00s |
+| e2e | passed | 39 | 0 | 1 | 35.70s |
+| config-extra | passed | 420 | 0 | 1300 | 63.24s |
 
 ## Risks / Follow-Ups
 
