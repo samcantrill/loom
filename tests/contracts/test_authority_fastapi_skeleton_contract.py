@@ -10,6 +10,8 @@ from loom.authority._repository import initialize_authority_repository
 from loom.authority.services import AuthorityAppServices, AuthorityRouteGroup
 from loom.pipeline.stores import (
     AUTHORITY_MUTATION_RUN_ADMIT_PATH,
+    AuthorityBackendKind,
+    AuthorityDeploymentProfile,
     AuthorityProtocolReadiness,
     AuthorityProtocolErrorCategory,
     AuthorityProtocolMetadata,
@@ -17,7 +19,10 @@ from loom.pipeline.stores import (
     AuthorityProtocolRequest,
     AuthorityProtocolResponse,
     AuthorityProtocolVersion,
+    AuthorityReference,
+    AuthorityRegistryRecord,
     AuthorityReadinessState,
+    AuthorityServiceHealthState,
     BackendCapabilitySet,
 )
 
@@ -125,3 +130,35 @@ def test_repository_backed_mutation_route_returns_protocol_ack(tmp_path) -> None
     assert response.result is not None
     assert response.result.revision is not None
     assert response.result.service_generation == "generation-1"
+
+
+def test_repository_backed_readiness_can_seed_registry_record(tmp_path) -> None:
+    from loom.authority.services import repository_authority_services
+
+    repository = initialize_authority_repository(
+        tmp_path,
+        service_generation="generation-1",
+    )
+    services = repository_authority_services(repository, workspace_id="workspace-a")
+    readiness = services.readiness_report
+
+    record = AuthorityRegistryRecord(
+        reference=AuthorityReference(
+            backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+            reference_id="local-authority-supervisor",
+            endpoint="http://127.0.0.1:8765",
+            workspace_id="workspace-a",
+            state_path=str(tmp_path),
+        ),
+        service_generation=services.service_generation,
+        workspace_id="workspace-a",
+        state_dir=str(tmp_path),
+        protocol_version=readiness.version,
+        capabilities=readiness.capabilities,
+        service_health_state=AuthorityServiceHealthState.READY,
+    )
+
+    assert record.protocol_compatible is True
+    assert record.service_generation == "generation-1"
+    assert record.capabilities == readiness.capabilities
