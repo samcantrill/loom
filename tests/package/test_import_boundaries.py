@@ -171,7 +171,13 @@ def test_import_authority_root_does_not_import_fastapi() -> None:
 
         import loom.authority
 
-        for forbidden in ("fastapi", "starlette", "pydantic"):
+        for forbidden in (
+            "fastapi",
+            "starlette",
+            "pydantic",
+            "sqlite3",
+            "loom.authority._repository",
+        ):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} imported through loom.authority")
         if "loom.pipeline" in sys.modules:
@@ -185,6 +191,13 @@ def test_import_authority_root_does_not_import_fastapi() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_authority_root_does_not_export_private_repository() -> None:
+    import loom.authority as authority
+
+    assert not hasattr(authority, "AuthorityRepository")
+    assert not hasattr(authority, "initialize_authority_repository")
 
 
 def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> None:
