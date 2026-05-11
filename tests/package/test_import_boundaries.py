@@ -22,7 +22,7 @@ def test_import_does_not_import_deferred_modules() -> None:
         for forbidden in ("loom.config", "loom.pipeline", "loom.cli"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported eagerly")
-        for forbidden in ("omegaconf", "yaml", "pydantic"):
+        for forbidden in ("omegaconf", "yaml", "pydantic", "fastapi", "starlette"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported eagerly")
         print("ok")
@@ -150,9 +150,32 @@ def test_import_pipeline_does_not_import_forbidden_runtime_layers() -> None:
 
         import loom.pipeline
 
-        for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors"):
+        for forbidden in ("loom.config", "loom.cli", "loom.pipeline.execution", "loom.pipeline.executors", "fastapi", "starlette"):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.pipeline")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_import_authority_root_does_not_import_fastapi() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.authority
+
+        for forbidden in ("fastapi", "starlette", "pydantic"):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through loom.authority")
+        if "loom.pipeline" in sys.modules:
+            raise SystemExit("loom.pipeline imported through loom.authority")
         print("ok")
         """
     )

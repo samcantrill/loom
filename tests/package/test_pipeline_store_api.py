@@ -248,6 +248,7 @@ def test_pipeline_store_public_exports() -> None:
         "loom.cli",
         "sqlite3",
         "fastapi",
+        "starlette",
         "pydantic",
         "loom.pipeline.stores.service_authority",
         "loom.pipeline.stores.sqlite_authority",
