@@ -1,0 +1,808 @@
+"""Server-side authority mutation protocol adapter."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import cast
+
+from loom.artifacts import ArtifactRef
+from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.stores import (
+    AuthorityProtocolErrorCategory,
+    AuthorityProtocolMetadata,
+    AuthorityProtocolOperationKind,
+    AuthorityProtocolRejection,
+    AuthorityProtocolRequest,
+    AuthorityProtocolResponse,
+    AuthorityProtocolResult,
+    ArtifactFactRecord,
+    AuthoritativeRunSnapshot,
+    BackendRevision,
+    CleanupCandidate,
+    LeaseRecord,
+    LifecycleReason,
+    OutputCommitRecord,
+    StageAttempt,
+    accepted_authority_response,
+    rejected_authority_response,
+)
+from loom.pipeline.submitted import SubmittedOperationRecord
+from loom.serialization import PlainData
+
+from ._repository import (
+    AuthorityRepository,
+    AuthorityRepositoryCompatibilityError,
+    AuthorityRepositoryCompatibilityKind,
+    AuthorityRepositoryError,
+)
+
+
+class AuthorityMutationOperation(StrEnum):
+    """Server-supported mutation route operations."""
+
+    ADMIT_RUN = "admit_run"
+    OPEN_RUN = "open_run"
+    TRANSITION_RUN = "transition_run"
+    ACQUIRE_CONTROLLER_LEASE = "acquire_controller_lease"
+    RENEW_CONTROLLER_LEASE = "renew_controller_lease"
+    RELEASE_CONTROLLER_LEASE = "release_controller_lease"
+    FAIL_CONTROLLER_LEASE = "fail_controller_lease"
+    WRITE_SUBMITTED_OPERATION = "write_submitted_operation"
+    READ_SUBMITTED_OPERATION = "read_submitted_operation"
+    LIST_SUBMITTED_OPERATIONS = "list_submitted_operations"
+    TRANSITION_STAGE = "transition_stage"
+    ALLOCATE_STAGE_ATTEMPT = "allocate_stage_attempt"
+    RENEW_STAGE_LEASE = "renew_stage_lease"
+    RELEASE_STAGE_LEASE = "release_stage_lease"
+    FAIL_STAGE_LEASE = "fail_stage_lease"
+    FINISH_STAGE_ATTEMPT = "finish_stage_attempt"
+    RECORD_OUTPUT_COMMIT = "record_output_commit"
+
+
+class AuthorityMutationValidationError(ValueError):
+    """Raised when a mutation request body cannot be adapted."""
+
+
+_OPERATION_KIND_BY_MUTATION: Mapping[
+    AuthorityMutationOperation,
+    AuthorityProtocolOperationKind,
+] = {
+    AuthorityMutationOperation.ADMIT_RUN: AuthorityProtocolOperationKind.RUN_LIFECYCLE,
+    AuthorityMutationOperation.OPEN_RUN: AuthorityProtocolOperationKind.RUN_SNAPSHOT,
+    AuthorityMutationOperation.TRANSITION_RUN: (
+        AuthorityProtocolOperationKind.RUN_LIFECYCLE
+    ),
+    AuthorityMutationOperation.ACQUIRE_CONTROLLER_LEASE: (
+        AuthorityProtocolOperationKind.LEASE
+    ),
+    AuthorityMutationOperation.RENEW_CONTROLLER_LEASE: (
+        AuthorityProtocolOperationKind.LEASE
+    ),
+    AuthorityMutationOperation.RELEASE_CONTROLLER_LEASE: (
+        AuthorityProtocolOperationKind.LEASE
+    ),
+    AuthorityMutationOperation.FAIL_CONTROLLER_LEASE: (
+        AuthorityProtocolOperationKind.LEASE
+    ),
+    AuthorityMutationOperation.WRITE_SUBMITTED_OPERATION: (
+        AuthorityProtocolOperationKind.SUBMITTED_OPERATION
+    ),
+    AuthorityMutationOperation.READ_SUBMITTED_OPERATION: (
+        AuthorityProtocolOperationKind.SUBMITTED_OPERATION
+    ),
+    AuthorityMutationOperation.LIST_SUBMITTED_OPERATIONS: (
+        AuthorityProtocolOperationKind.SUBMITTED_OPERATION
+    ),
+    AuthorityMutationOperation.TRANSITION_STAGE: (
+        AuthorityProtocolOperationKind.STAGE_LIFECYCLE
+    ),
+    AuthorityMutationOperation.ALLOCATE_STAGE_ATTEMPT: (
+        AuthorityProtocolOperationKind.STAGE_ATTEMPT
+    ),
+    AuthorityMutationOperation.RENEW_STAGE_LEASE: AuthorityProtocolOperationKind.LEASE,
+    AuthorityMutationOperation.RELEASE_STAGE_LEASE: AuthorityProtocolOperationKind.LEASE,
+    AuthorityMutationOperation.FAIL_STAGE_LEASE: AuthorityProtocolOperationKind.LEASE,
+    AuthorityMutationOperation.FINISH_STAGE_ATTEMPT: (
+        AuthorityProtocolOperationKind.STAGE_ATTEMPT
+    ),
+    AuthorityMutationOperation.RECORD_OUTPUT_COMMIT: (
+        AuthorityProtocolOperationKind.OUTPUT_COMMIT
+    ),
+}
+
+_COMPATIBILITY_CATEGORY_BY_KIND: Mapping[
+    AuthorityRepositoryCompatibilityKind,
+    AuthorityProtocolErrorCategory,
+] = {
+    AuthorityRepositoryCompatibilityKind.MISSING: (
+        AuthorityProtocolErrorCategory.UNAVAILABLE_SERVICE
+    ),
+    AuthorityRepositoryCompatibilityKind.UNSUPPORTED_OLDER: (
+        AuthorityProtocolErrorCategory.VALIDATION
+    ),
+    AuthorityRepositoryCompatibilityKind.UNSUPPORTED_NEWER: (
+        AuthorityProtocolErrorCategory.VALIDATION
+    ),
+    AuthorityRepositoryCompatibilityKind.CORRUPT: (
+        AuthorityProtocolErrorCategory.VALIDATION
+    ),
+}
+
+
+class AuthorityMutationService:
+    """Apply protocol mutation requests to a private authority repository."""
+
+    def __init__(
+        self,
+        repository: AuthorityRepository,
+        *,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> None:
+        self._repository = repository
+        identity = repository.read_identity()
+        self._service_generation = service_generation or identity.service_generation
+        self._workspace_id = workspace_id
+
+    @property
+    def service_generation(self) -> str:
+        return self._service_generation
+
+    @property
+    def workspace_id(self) -> str | None:
+        return self._workspace_id
+
+    def handle(
+        self,
+        operation: AuthorityMutationOperation,
+        payload: Mapping[str, object],
+    ) -> AuthorityProtocolResponse:
+        """Return a structured protocol response for one mutation payload."""
+
+        metadata = _fallback_metadata(
+            operation,
+            payload,
+            service_generation=self._service_generation,
+            workspace_id=self._workspace_id,
+        )
+        try:
+            request = AuthorityProtocolRequest.from_dict(payload)
+            metadata = request.metadata
+            result = self._dispatch(operation, request)
+            return accepted_authority_response(metadata, result)
+        except AuthorityRepositoryCompatibilityError as exc:
+            return rejected_authority_response(
+                metadata,
+                _compatibility_rejection(exc),
+            )
+        except AuthorityRepositoryError as exc:
+            return rejected_authority_response(
+                metadata,
+                _repository_rejection(exc, request_detail=_request_detail(payload)),
+            )
+        except (AuthorityMutationValidationError, TypeError, ValueError) as exc:
+            return rejected_authority_response(
+                metadata,
+                AuthorityProtocolRejection(
+                    category=AuthorityProtocolErrorCategory.VALIDATION,
+                    code="authority_mutation_validation",
+                    message=str(exc),
+                    detail=_request_detail(payload),
+                ),
+            )
+        except Exception as exc:
+            return rejected_authority_response(
+                metadata,
+                AuthorityProtocolRejection(
+                    category=AuthorityProtocolErrorCategory.INTERNAL_ERROR,
+                    code="authority_mutation_internal_error",
+                    message="authority mutation failed",
+                    detail={"error_type": type(exc).__name__},
+                ),
+            )
+
+    def _dispatch(
+        self,
+        operation: AuthorityMutationOperation,
+        request: AuthorityProtocolRequest,
+    ) -> AuthorityProtocolResult:
+        match operation:
+            case AuthorityMutationOperation.ADMIT_RUN:
+                return self._admit_run(request)
+            case AuthorityMutationOperation.OPEN_RUN:
+                return self._open_run(request)
+            case AuthorityMutationOperation.TRANSITION_RUN:
+                return self._transition_run(request)
+            case AuthorityMutationOperation.ACQUIRE_CONTROLLER_LEASE:
+                return self._acquire_controller_lease(request)
+            case AuthorityMutationOperation.RENEW_CONTROLLER_LEASE:
+                return self._renew_controller_lease(request)
+            case AuthorityMutationOperation.RELEASE_CONTROLLER_LEASE:
+                return self._release_controller_lease(request)
+            case AuthorityMutationOperation.FAIL_CONTROLLER_LEASE:
+                return self._fail_controller_lease(request)
+            case AuthorityMutationOperation.WRITE_SUBMITTED_OPERATION:
+                return self._write_submitted_operation(request)
+            case AuthorityMutationOperation.READ_SUBMITTED_OPERATION:
+                return self._read_submitted_operation(request)
+            case AuthorityMutationOperation.LIST_SUBMITTED_OPERATIONS:
+                return self._list_submitted_operations(request)
+            case AuthorityMutationOperation.TRANSITION_STAGE:
+                return self._transition_stage(request)
+            case AuthorityMutationOperation.ALLOCATE_STAGE_ATTEMPT:
+                return self._allocate_stage_attempt(request)
+            case AuthorityMutationOperation.RENEW_STAGE_LEASE:
+                return self._renew_stage_lease(request)
+            case AuthorityMutationOperation.RELEASE_STAGE_LEASE:
+                return self._release_stage_lease(request)
+            case AuthorityMutationOperation.FAIL_STAGE_LEASE:
+                return self._fail_stage_lease(request)
+            case AuthorityMutationOperation.FINISH_STAGE_ATTEMPT:
+                return self._finish_stage_attempt(request)
+            case AuthorityMutationOperation.RECORD_OUTPUT_COMMIT:
+                return self._record_output_commit(request)
+
+    def _admit_run(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+        revision = self._repository.admit_run(
+            _required_run_uri(request),
+            status=RunStatus(_body_value(request, "status", RunStatus.CREATED.value)),
+            metadata=_optional_body_mapping(request, "metadata"),
+        )
+        return _result(revision=revision, service_generation=self._service_generation)
+
+    def _open_run(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            snapshot=snapshot,
+            service_generation=self._service_generation,
+        )
+
+    def _transition_run(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        transition = self._repository.transition_run(
+            _required_run_uri(request),
+            from_status=RunStatus(_required_body_value(request, "from_status")),
+            to_status=RunStatus(_required_body_value(request, "to_status")),
+            expected_revision=request.expected_revision,
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=transition.revision,
+            service_generation=self._service_generation,
+            body={"transition": transition.to_dict()},
+        )
+
+    def _acquire_controller_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.acquire_controller_lease(
+            _required_run_uri(request),
+            owner_id=_required_owner_id(request),
+            lease_ttl_seconds=_required_positive_seconds(request),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _renew_controller_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.renew_controller_lease(
+            _required_run_uri(request),
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            lease_ttl_seconds=_required_positive_seconds(request),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _release_controller_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.release_controller_lease(
+            _required_run_uri(request),
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            expected_revision=request.expected_revision,
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _fail_controller_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.fail_controller_lease(
+            _required_run_uri(request),
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            reason=_required_reason(request),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _write_submitted_operation(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        record = SubmittedOperationRecord.from_dict(_required_body_value(request, "record"))
+        revision = self._repository.write_submitted_operation(
+            _required_run_uri(request),
+            record,
+            expected_revision=request.expected_revision,
+        )
+        return _result(revision=revision, service_generation=self._service_generation)
+
+    def _read_submitted_operation(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        operation = self._repository.read_submitted_operation(
+            _required_run_uri(request),
+            _required_submission_id(request),
+        )
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            submitted_operation=operation,
+            service_generation=self._service_generation,
+        )
+
+    def _list_submitted_operations(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        operations = self._repository.list_submitted_operations(_required_run_uri(request))
+        snapshot = self._repository.open_run(_required_run_uri(request))
+        return _result(
+            revision=snapshot.revision,
+            submitted_operations=operations,
+            service_generation=self._service_generation,
+        )
+
+    def _transition_stage(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        from_status_value = request.body.get("from_status")
+        transition = self._repository.transition_stage(
+            _required_run_uri(request),
+            _required_stage_name(request),
+            from_status=None
+            if from_status_value is None
+            else StageStatus(cast(str, from_status_value)),
+            to_status=StageStatus(_required_body_value(request, "to_status")),
+            expected_revision=request.expected_revision,
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=transition.revision,
+            service_generation=self._service_generation,
+            body={"transition": transition.to_dict()},
+        )
+
+    def _allocate_stage_attempt(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        allocation = self._repository.allocate_stage_attempt(
+            _required_run_uri(request),
+            _required_stage_name(request),
+            owner_id=_required_owner_id(request),
+            lease_ttl_seconds=_optional_positive_seconds(request),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=allocation.attempt.revision,
+            service_generation=self._service_generation,
+            stage_attempt=allocation.attempt,
+            lease=allocation.lease,
+        )
+
+    def _renew_stage_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.renew_stage_lease(
+            _required_run_uri(request),
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            lease_ttl_seconds=_required_positive_seconds(request),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _release_stage_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.release_stage_lease(
+            _required_run_uri(request),
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            expected_revision=request.expected_revision,
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _fail_stage_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.fail_stage_lease(
+            _required_run_uri(request),
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            reason=_required_reason(request),
+            expected_revision=request.expected_revision,
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _finish_stage_attempt(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        attempt = self._repository.finish_stage_attempt(
+            _required_run_uri(request),
+            _required_stage_name(request),
+            attempt_id=_required_body_string(request, "attempt_id"),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            to_status=StageStatus(_required_body_value(request, "to_status")),
+            expected_revision=request.expected_revision,
+            service_generation=request.metadata.service_generation,
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=attempt.revision,
+            service_generation=self._service_generation,
+            stage_attempt=attempt,
+        )
+
+    def _record_output_commit(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        commit = self._repository.record_output_commit(
+            _required_run_uri(request),
+            _required_stage_name(request),
+            attempt_id=_required_body_string(request, "attempt_id"),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            outputs=_outputs(request),
+            expected_revision=request.expected_revision,
+            service_generation=request.metadata.service_generation,
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=commit.commit.revision,
+            service_generation=self._service_generation,
+            output_commit=commit.commit,
+            artifact_facts=commit.artifact_facts,
+            cleanup_candidates=commit.cleanup_candidates,
+        )
+
+
+def unsupported_mutation_response(
+    operation: AuthorityMutationOperation,
+    payload: Mapping[str, object],
+    *,
+    service_generation: str,
+    workspace_id: str | None,
+) -> AuthorityProtocolResponse:
+    """Return a structured unsupported-capability response for skeleton apps."""
+
+    metadata = _fallback_metadata(
+        operation,
+        payload,
+        service_generation=service_generation,
+        workspace_id=workspace_id,
+    )
+    return rejected_authority_response(
+        metadata,
+        AuthorityProtocolRejection(
+            category=AuthorityProtocolErrorCategory.UNSUPPORTED_CAPABILITY,
+            code="authority_mutations_not_configured",
+            message="authority mutation service is not configured",
+            detail={"operation": operation.value},
+        ),
+    )
+
+
+def operation_kind_for(
+    operation: AuthorityMutationOperation,
+) -> AuthorityProtocolOperationKind:
+    """Return the protocol operation family for a route operation."""
+
+    return _OPERATION_KIND_BY_MUTATION[operation]
+
+
+def _result(
+    *,
+    revision: BackendRevision | None = None,
+    service_generation: str | None = None,
+    lease: LeaseRecord | None = None,
+    snapshot: AuthoritativeRunSnapshot | None = None,
+    stage_attempt: StageAttempt | None = None,
+    output_commit: OutputCommitRecord | None = None,
+    submitted_operation: SubmittedOperationRecord | None = None,
+    artifact_facts: tuple[ArtifactFactRecord, ...] = (),
+    submitted_operations: tuple[SubmittedOperationRecord, ...] = (),
+    cleanup_candidates: tuple[CleanupCandidate, ...] = (),
+    body: Mapping[str, PlainData] | None = None,
+) -> AuthorityProtocolResult:
+    return AuthorityProtocolResult(
+        revision=revision,
+        service_generation=service_generation,
+        lease=lease,
+        snapshot=snapshot,
+        stage_attempt=stage_attempt,
+        output_commit=output_commit,
+        submitted_operation=submitted_operation,
+        artifact_facts=artifact_facts,
+        submitted_operations=submitted_operations,
+        cleanup_candidates=cleanup_candidates,
+        body={} if body is None else body,
+    )
+
+
+def _required_run_uri(request: AuthorityProtocolRequest) -> str:
+    if request.run_uri is None:
+        raise AuthorityMutationValidationError("run_uri is required")
+    return request.run_uri
+
+
+def _required_stage_name(request: AuthorityProtocolRequest) -> str:
+    if request.stage_name is None:
+        raise AuthorityMutationValidationError("stage_name is required")
+    return request.stage_name
+
+
+def _required_submission_id(request: AuthorityProtocolRequest) -> str:
+    if request.submission_id is None:
+        raise AuthorityMutationValidationError("submission_id is required")
+    return request.submission_id
+
+
+def _required_lease_id(request: AuthorityProtocolRequest) -> str:
+    if request.lease_id is None:
+        raise AuthorityMutationValidationError("lease_id is required")
+    return request.lease_id
+
+
+def _required_fencing_token(request: AuthorityProtocolRequest) -> str:
+    if request.fencing_token is None:
+        raise AuthorityMutationValidationError("fencing_token is required")
+    return request.fencing_token
+
+
+def _required_owner_id(request: AuthorityProtocolRequest) -> str:
+    if request.owner_id is None:
+        raise AuthorityMutationValidationError("owner_id is required")
+    return request.owner_id
+
+
+def _required_body_value(
+    request: AuthorityProtocolRequest,
+    field: str,
+) -> PlainData:
+    if field not in request.body:
+        raise AuthorityMutationValidationError(f"{field} is required")
+    return request.body[field]
+
+
+def _body_value(
+    request: AuthorityProtocolRequest,
+    field: str,
+    default: PlainData,
+) -> PlainData:
+    return request.body.get(field, default)
+
+
+def _required_body_string(request: AuthorityProtocolRequest, field: str) -> str:
+    value = _required_body_value(request, field)
+    if not isinstance(value, str) or not value:
+        raise AuthorityMutationValidationError(f"{field} must be a non-empty string")
+    return value
+
+
+def _optional_body_mapping(
+    request: AuthorityProtocolRequest,
+    field: str,
+) -> Mapping[str, PlainData] | None:
+    value = request.body.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        raise AuthorityMutationValidationError(f"{field} must be a mapping")
+    return cast(Mapping[str, PlainData], value)
+
+
+def _required_positive_seconds(request: AuthorityProtocolRequest) -> int:
+    value = _required_body_value(request, "lease_ttl_seconds")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AuthorityMutationValidationError(
+            "lease_ttl_seconds must be a positive integer"
+        )
+    return value
+
+
+def _optional_positive_seconds(request: AuthorityProtocolRequest) -> int | None:
+    value = request.body.get("lease_ttl_seconds")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AuthorityMutationValidationError(
+            "lease_ttl_seconds must be a positive integer"
+        )
+    return value
+
+
+def _optional_reason(request: AuthorityProtocolRequest) -> LifecycleReason | None:
+    reason = request.body.get("reason")
+    if reason is None:
+        return None
+    return LifecycleReason.from_dict(reason)
+
+
+def _required_reason(request: AuthorityProtocolRequest) -> LifecycleReason:
+    reason = _optional_reason(request)
+    if reason is None:
+        raise AuthorityMutationValidationError("reason is required")
+    return reason
+
+
+def _outputs(request: AuthorityProtocolRequest) -> Mapping[str, ArtifactRef]:
+    value = _required_body_value(request, "outputs")
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        raise AuthorityMutationValidationError("outputs must be a mapping")
+    return {
+        key: ArtifactRef.from_dict(artifact)
+        for key, artifact in cast(Mapping[str, object], value).items()
+    }
+
+
+def _fallback_metadata(
+    operation: AuthorityMutationOperation,
+    payload: Mapping[str, object],
+    *,
+    service_generation: str,
+    workspace_id: str | None,
+) -> AuthorityProtocolMetadata:
+    request_id = "invalid-request"
+    operation_kind = operation_kind_for(operation)
+    idempotency_key = None
+    raw_metadata = payload.get("metadata")
+    if isinstance(raw_metadata, Mapping):
+        raw_request_id = raw_metadata.get("request_id")
+        if isinstance(raw_request_id, str) and raw_request_id:
+            request_id = raw_request_id
+        raw_operation_kind = raw_metadata.get("operation_kind")
+        if isinstance(raw_operation_kind, str):
+            try:
+                operation_kind = AuthorityProtocolOperationKind(raw_operation_kind)
+            except ValueError:
+                operation_kind = operation_kind_for(operation)
+        raw_idempotency_key = raw_metadata.get("idempotency_key")
+        if isinstance(raw_idempotency_key, str) and raw_idempotency_key:
+            idempotency_key = raw_idempotency_key
+    return AuthorityProtocolMetadata(
+        request_id=request_id,
+        operation_kind=operation_kind,
+        service_generation=service_generation,
+        workspace_id=workspace_id,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _compatibility_rejection(
+    exc: AuthorityRepositoryCompatibilityError,
+) -> AuthorityProtocolRejection:
+    return AuthorityProtocolRejection(
+        category=_COMPATIBILITY_CATEGORY_BY_KIND[exc.failure.kind],
+        code=exc.failure.code,
+        message=exc.failure.message,
+        detail=exc.failure.to_dict(),
+    )
+
+
+def _repository_rejection(
+    exc: AuthorityRepositoryError,
+    *,
+    request_detail: Mapping[str, PlainData],
+) -> AuthorityProtocolRejection:
+    message = str(exc)
+    category = _repository_category(message)
+    return AuthorityProtocolRejection(
+        category=category,
+        code=_repository_code(category, message),
+        message=message,
+        detail=request_detail,
+    )
+
+
+def _repository_category(message: str) -> AuthorityProtocolErrorCategory:
+    if message == "stale service generation":
+        return AuthorityProtocolErrorCategory.STALE_GENERATION
+    if message == "stale or foreign fencing token":
+        return AuthorityProtocolErrorCategory.STALE_FENCING
+    if "lease has expired" in message or "lease is not active" in message:
+        return AuthorityProtocolErrorCategory.STALE_FENCING
+    if message.startswith("stale "):
+        return AuthorityProtocolErrorCategory.STALE_REVISION
+    if (
+        "already" in message
+        or "terminal" in message
+        or "not running" in message
+        or "active lease" in message
+    ):
+        return AuthorityProtocolErrorCategory.CONFLICT
+    return AuthorityProtocolErrorCategory.VALIDATION
+
+
+def _repository_code(
+    category: AuthorityProtocolErrorCategory,
+    message: str,
+) -> str:
+    if category is AuthorityProtocolErrorCategory.STALE_GENERATION:
+        return "authority_repository_stale_generation"
+    if category is AuthorityProtocolErrorCategory.STALE_REVISION:
+        return "authority_repository_stale_revision"
+    if category is AuthorityProtocolErrorCategory.STALE_FENCING:
+        return "authority_repository_stale_fencing"
+    if category is AuthorityProtocolErrorCategory.CONFLICT:
+        return "authority_repository_conflict"
+    if "unknown run" in message:
+        return "authority_repository_unknown_run"
+    return "authority_repository_validation"
+
+
+def _request_detail(payload: Mapping[str, object]) -> Mapping[str, PlainData]:
+    detail: dict[str, PlainData] = {}
+    run_uri = payload.get("run_uri")
+    if isinstance(run_uri, str):
+        detail["run_uri"] = run_uri
+    stage_name = payload.get("stage_name")
+    if isinstance(stage_name, str):
+        detail["stage_name"] = stage_name
+    lease_id = payload.get("lease_id")
+    if isinstance(lease_id, str):
+        detail["lease_id"] = lease_id
+    expected_revision = payload.get("expected_revision")
+    if isinstance(expected_revision, Mapping):
+        detail["expected_revision"] = dict(cast(Mapping[str, PlainData], expected_revision))
+    return detail
+
+
+__all__ = [
+    "AuthorityMutationOperation",
+    "AuthorityMutationService",
+    "AuthorityMutationValidationError",
+    "operation_kind_for",
+    "unsupported_mutation_response",
+]
