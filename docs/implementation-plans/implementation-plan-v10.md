@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 7 PR open; automated review and merge gate pending
+- Phase work status: Phase 7 merged; ready for Phase 8 planning
 
 Related artifacts and references:
 
@@ -1012,7 +1012,7 @@ Phase 6 merged on 2026-05-11:
 
 ### Phase 7: Authority Server Mutation API
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-mutation-api`
 - PR: https://github.com/samcantrill/loom/pull/125
 
@@ -1095,11 +1095,12 @@ coverage, and whether repository errors are faithfully represented.
 
 **Completion Summary**
 
-Phase 7 PR opened on 2026-05-11:
+Phase 7 merged on 2026-05-11:
 
 - Branch: `codex/authority-mutation-api`
 - PR: https://github.com/samcantrill/loom/pull/125
 - Target branch: `develop`
+- Merge commit: `5dbb72757b24406f3a41847a546bea2a1a4b4246`
 - Implementation summary: added a repository-backed mutation service that maps
   protocol envelopes to private repository run, stage, lease,
   submitted-operation, and output-commit methods; added FastAPI mutation
@@ -1112,9 +1113,14 @@ Phase 7 PR opened on 2026-05-11:
   validate-pr` passed after public export tests were updated for the new
   client surface; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with
   overall 1694 passed, 12 skipped, and 1288 deselected.
-- Stack maintenance: root phase PR targets `develop`; no successor branch
-  depends on `codex/authority-mutation-api` yet.
-- Follow-up notes: automated PR review and GitHub CI/merge remain pending.
+- GitHub CI: `checks` succeeded before merge on 2026-05-11.
+- Automated review: manager review found no scope, route/service/client
+  separation, private-boundary, protocol-mapping, PR-body, or
+  validation-evidence blockers.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-mutation-api` at merge time.
+- Follow-up notes: Phase 8 can add workspace-local registry records that
+  describe authority allocation without making stale records safe to use.
 
 ### Phase 8: Workspace Registry Records
 
