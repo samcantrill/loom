@@ -199,9 +199,14 @@ def _scan_candidate(
             run_uri=run_uri,
             path=candidate,
         )
-    return extract_current_summary_with_warning_record(
-        store, run_uri=run_uri, path=candidate
+    record, warning = extract_current_summary_with_warning_record(
+        store,
+        run_uri=run_uri,
+        path=candidate,
     )
+    if record is None and _authority_marker_exists(candidate):
+        warning = _missing_authority_warning_for_unfresh_marker(warning, path=candidate)
+    return record, warning
 
 
 class _AuthoritativeSummaryStore:
@@ -473,6 +478,22 @@ def _authority_scan_context() -> _AuthorityScanContext:
 
 def _authority_marker_exists(candidate: Path) -> bool:
     return (candidate / ".loom").exists()
+
+
+def _missing_authority_warning_for_unfresh_marker(
+    warning: CatalogWarning | None, *, path: Path
+) -> CatalogWarning | None:
+    if (
+        warning is not None
+        and warning.code is CatalogWarningCode.PARTIAL_RUN
+        and warning.message == "run has no freshness metadata"
+    ):
+        return _warning(
+            CatalogWarningCode.PARTIAL_RUN,
+            "run authoritative backend is missing",
+            path=path,
+        )
+    return warning
 
 
 def _warning(

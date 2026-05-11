@@ -10,6 +10,8 @@ import pytest
 
 from loom.cli.main import main
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner, SlurmCommandResult
+from loom.pipeline.stores import authority_config_to_cli_args
+from loom.pipeline.stores.service_authority import LocalAuthorityService
 from tests.support.slurm_status_fixtures import write_submitted_slurm_fixture
 
 pytestmark = pytest.mark.e2e
@@ -37,50 +39,54 @@ def test_cli_status_jobs_reports_fake_scheduler_states(
 ) -> None:
     import loom.cli.status as status_command
 
-    _, run_uri, _ = write_submitted_slurm_fixture(
-        tmp_path,
-        {"extract": ()},
-        starting_job_id=100,
-    )
-    runner = FakeSlurmCommandRunner(
-        scripted_results={
-            "sacct": (
-                SlurmCommandResult(
-                    command="sacct",
-                    argv=("sacct",),
-                    returncode=0,
-                    stdout=sacct_output,
-                ),
-            ),
-            "squeue": (
-                SlurmCommandResult(
-                    command="squeue",
-                    argv=("squeue",),
-                    returncode=0,
-                    stdout=squeue_output,
-                ),
-            ),
-        },
-        unavailable_commands=unavailable,
-    )
-    monkeypatch.setattr(
-        status_command,
-        "_build_slurm_status_command_runner",
-        lambda: runner,
-    )
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
-    assert (
-        main(
-            ["status", run_uri, "--jobs", "--format", "json"],
-            stdout=stdout,
-            stderr=stderr,
+    with LocalAuthorityService.start() as service:
+        authority_config = service.config()
+        authority_args = authority_config_to_cli_args(authority_config)
+        _, run_uri, _ = write_submitted_slurm_fixture(
+            tmp_path,
+            {"extract": ()},
+            starting_job_id=100,
+            authority_config=authority_config,
         )
-        == 0
-    )
+        runner = FakeSlurmCommandRunner(
+            scripted_results={
+                "sacct": (
+                    SlurmCommandResult(
+                        command="sacct",
+                        argv=("sacct",),
+                        returncode=0,
+                        stdout=sacct_output,
+                    ),
+                ),
+                "squeue": (
+                    SlurmCommandResult(
+                        command="squeue",
+                        argv=("squeue",),
+                        returncode=0,
+                        stdout=squeue_output,
+                    ),
+                ),
+            },
+            unavailable_commands=unavailable,
+        )
+        monkeypatch.setattr(
+            status_command,
+            "_build_slurm_status_command_runner",
+            lambda: runner,
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
 
-    payload = json.loads(stdout.getvalue())
+        assert (
+            main(
+                ["status", run_uri, "--jobs", *authority_args, "--format", "json"],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            == 0
+        )
+
+        payload = json.loads(stdout.getvalue())
 
     assert stderr.getvalue() == ""
     assert payload["schema_version"] == "loom.cli.status.jobs.v1"
