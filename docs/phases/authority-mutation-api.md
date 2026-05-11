@@ -138,13 +138,13 @@ The route names and client methods should leave room for later registry, supervi
 ### Unit Suite
 
 - Status: required
-- Expected paths: `tests/unit/loom/authority/test_app.py`, new `tests/unit/loom/authority/test_mutation_service.py`, new `tests/unit/loom/pipeline/stores/test_authority_client.py`
+- Expected paths: `tests/unit/loom/authority/test_app.py`, `tests/unit/loom/pipeline/stores/test_authority_client.py`, and public export coverage in `tests/unit/loom/pipeline/stores/test_store_errors.py`
 - Required assertions or deferral reason: service result/rejection mapping, manifest capability flags, client URL construction, response parsing, timeout/connection/invalid-payload rejection mapping, and no SQL path exposure.
 
 ### Contract Suite
 
 - Status: required
-- Expected paths: `tests/contracts/test_authority_fastapi_skeleton_contract.py`, new or updated authority client/protocol contract tests
+- Expected paths: `tests/contracts/test_authority_fastapi_skeleton_contract.py`
 - Required assertions or deferral reason: route response shapes use protocol envelopes for success, conflict, stale generation, stale fencing, stale revision, unsupported capability, and internal/unavailable errors.
 
 ### Integration Suite
@@ -198,7 +198,8 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed after targeted validation and
+  full PR validation passed
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -206,10 +207,29 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-11.
 - Final phase execution plan: completed by managing agent on 2026-05-11.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
+- Implementation summary: added a repository-backed authority mutation service
+  that maps generic protocol envelopes to private repository run, stage,
+  lease, submitted-operation, and output-commit methods; added FastAPI
+  mutation routes under `/v1/authority`; added a repository-free stdlib HTTP
+  `AuthorityClient`; updated repository-backed service capabilities and
+  manifest behavior; and added package, unit, contract, and integration
+  coverage for route responses, client transport errors, public exports,
+  private import boundaries, in-process mutation flows, stale generation,
+  stale fencing, conflict, and validation rejections.
+- Implementation validation: targeted Ruff and Pyright passed for the changed
+  source and tests. Targeted pytest passed with 63 package/unit/contract/
+  integration tests. Initial `make validate-pr` found only stale public export
+  expectations; after updating those tests, `UV_CACHE_DIR=/tmp/uv-cache make
+  validate-pr` passed with Ruff, Pyright, default pytest at 1248 passed, 18
+  skipped, 14 deselected, config-extra pytest at 420 passed and 1277
+  deselected, and package build. `UV_CACHE_DIR=/tmp/uv-cache make
+  test-summary` passed with overall 1694 passed, 12 skipped, and 1288
+  deselected.
+- Refinement summary: not needed; the only validation blocker was expected
+  public export test coverage for the new client surface and was fixed in the
+  implementation pass.
+- Blocker-resolution summary: not needed; 0/3 blocker-resolution passes used.
 - PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Stack maintenance: root phase branch targets `develop`; no successor branch
+  depends on `codex/authority-mutation-api` yet.
+- Remaining blockers: none known.
