@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 11 merged; Phase 12 pending
+- Phase work status: Phase 12 merged; Phase 13 pending
 
 Related artifacts and references:
 
@@ -1598,7 +1598,7 @@ error UX, and ensuring only Phase 11 paths changed.
 
 ### Phase 12: Local/Subprocess Worker Continuation Paths
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-worker-continuations`
 - PR: <https://github.com/samcantrill/loom/pull/130>
 
@@ -1701,10 +1701,14 @@ coverage around failed continuations.
   69 passed / 1 skipped, unit 948 passed / 1 skipped, contract 146 passed / 2
   skipped, integration 127 passed / 8 skipped / 10 deselected, e2e 39 passed /
   2 deselected, and config-extra 422 passed / 1332 deselected.
-- Review and CI: pending.
-- Merge metadata: pending.
-- Stack maintenance: root phase PR opened against `develop`; no successor branch
-  depends on `codex/authority-worker-continuations`.
+- Review and CI: managing-agent automated review completed with no blocking
+  findings; GitHub CI `checks` passed on
+  <https://github.com/samcantrill/loom/actions/runs/25707106589/job/75479503915>.
+- Merge metadata: PR #130 was squash-merged into `develop` as `f5b4ac6` after
+  confirming the PR target was exactly `develop`, the PR was open, and CI had
+  passed.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-worker-continuations` at merge time.
 - Follow-up notes: no production runtime changes were required for Phase 12;
   prepared-run replay remains intentionally fail-closed, and SLURM live
   continuation migration remains Phase 13 scope.
