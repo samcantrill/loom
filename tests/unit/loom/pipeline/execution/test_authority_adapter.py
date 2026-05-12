@@ -5,9 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TypedDict, cast
+from urllib.parse import urlsplit
 
 import pytest
+from fastapi.testclient import TestClient
 
+from loom.authority.app import create_authority_app
+from loom.authority._repository import initialize_authority_repository
+from loom.authority.services import repository_authority_services
 from loom.artifacts import ArtifactRef
 from loom.pipeline import (
     OutputSpec,
@@ -19,6 +24,7 @@ from loom.pipeline import (
 )
 from loom.pipeline.execution.authority_adapter import (
     AuthorityBackedSerialRunStore,
+    AuthorityClientBackedPerRunAuthorityStore,
     create_authority_backed_serial_run_store,
 )
 from loom.pipeline.execution.continuation import (
@@ -37,7 +43,9 @@ from loom.pipeline.runtime import (
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus
 from loom.pipeline.stores import (
     AuthorityBackendKind,
+    AuthorityClient,
     AuthorityConfig,
+    AuthorityDeploymentProfile,
     AuthorityFactoryError,
     AuthorityStoreError,
     LocalArtifactStore,
@@ -94,6 +102,48 @@ def _store(tmp_path: Path, authority: PerRunAuthorityStore):
     return create_authority_backed_serial_run_store(
         tmp_path / "runs",
         authority_store=authority,
+    )
+
+
+def _http_authority_run_store(tmp_path: Path) -> AuthorityBackedSerialRunStore:
+    repository = initialize_authority_repository(
+        tmp_path / "authority",
+        service_generation="generation-1",
+    )
+    services = repository_authority_services(
+        repository,
+        workspace_id="workspace-a",
+    )
+    app_client = TestClient(create_authority_app(services=services))
+
+    def transport(
+        url: str,
+        payload: Mapping[str, PlainData],
+        _timeout_seconds: float | None,
+    ) -> Mapping[str, object]:
+        response = app_client.post(urlsplit(url).path, json=payload)
+        assert response.status_code == 200
+        parsed = response.json()
+        assert isinstance(parsed, dict)
+        return parsed
+
+    config = AuthorityConfig(
+        backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+        deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+        endpoint="http://authority.test",
+        workspace_id="workspace-a",
+        reference_id="test-http-authority",
+    )
+    assert config.endpoint is not None
+    authority_store = AuthorityClientBackedPerRunAuthorityStore(
+        client=AuthorityClient(config.endpoint, transport=transport),
+        config=config,
+        readiness=services.readiness_report,
+    )
+    return AuthorityBackedSerialRunStore(
+        local_store=LocalRunStore(tmp_path / "runs"),
+        authority_store=authority_store,
+        authority_config=config,
     )
 
 
@@ -284,6 +334,29 @@ def test_authority_backed_serial_run_commits_outputs_and_releases_leases(
     assert all(stage.artifact_facts for stage in snapshot.stages)
     assert all(stage.active_lease is None for stage in snapshot.stages)
     assert not (tmp_path / "runs" / "run1" / "run.lock").exists()
+
+
+def test_authority_backed_serial_run_executes_through_http_authority_client(
+    tmp_path: Path,
+) -> None:
+    run_store = _http_authority_run_store(tmp_path)
+    run_uri = _run_uri(tmp_path)
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
+    )
+
+    assert result.status is RunStatus.SUCCEEDED
+    snapshot = run_store.authority_store.snapshot(run_uri)
+    assert snapshot.status is RunStatus.SUCCEEDED
+    assert {stage.stage_name: stage.status for stage in snapshot.stages} == {
+        "build": StageStatus.SUCCEEDED,
+        "report": StageStatus.SUCCEEDED,
+    }
+    assert all(stage.latest_commit is not None for stage in snapshot.stages)
+    assert all(stage.active_lease is None for stage in snapshot.stages)
+    assert set(run_store.read_artifact_index(run_uri)) == {"build.data", "report.text"}
+    assert (run_uri_to_path(run_uri) / "status.json").is_file()
 
 
 def test_authority_backed_reads_ignore_conflicting_local_live_state(
