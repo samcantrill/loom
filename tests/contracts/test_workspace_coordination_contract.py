@@ -1,28 +1,56 @@
 """Contract tests for workspace and sweep coordination stores."""
 
+from __future__ import annotations
+
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
+from loom.authority._repository import initialize_authority_repository
+from loom.authority.mutation_service import (
+    AuthorityMutationOperation,
+    AuthorityMutationService,
+)
 from loom.pipeline.stores import (
+    AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH,
+    AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH,
+    AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_COUNTER_READ_PATH,
+    AUTHORITY_COORDINATION_LEASE_FAIL_PATH,
+    AUTHORITY_COORDINATION_LEASE_RELEASE_PATH,
+    AUTHORITY_COORDINATION_LEASE_RENEW_PATH,
+    AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
+    AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_TRIAL_LIST_PATH,
+    AUTHORITY_COORDINATION_TRIAL_RECORD_PATH,
+    AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH,
+    AuthorityClient,
     BackendCapability,
     BackendRevision,
     CapabilityScope,
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
+    CoordinationStoreError,
     LeaseKind,
     LeaseState,
     LifecycleReason,
     RecoveryKind,
+    ServiceWorkspaceCoordinationStore,
+    SweepIdentity,
     TrialLeaseRecord,
     TrialReference,
     TrialState,
     WorkspaceCoordinationStore,
     WorkspaceIdentity,
-    SweepIdentity,
     coordination_requirement_diagnostics,
 )
+from loom.serialization import PlainData
 from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
 from tests.support.authority_stores import InMemoryWorkspaceCoordinationStore
 
@@ -43,9 +71,51 @@ class CoordinationStoreCase:
     name: str
     store: WorkspaceCoordinationStore
     clock: FrozenClock | None = None
+    supports_resources: bool = True
 
 
-@pytest.fixture(params=["in-memory", "sqlite"])
+_COORDINATION_OPERATIONS = {
+    AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH: (
+        AuthorityMutationOperation.CREATE_WORKSPACE
+    ),
+    AUTHORITY_COORDINATION_SWEEP_CREATE_PATH: AuthorityMutationOperation.CREATE_SWEEP,
+    AUTHORITY_COORDINATION_TRIAL_RECORD_PATH: AuthorityMutationOperation.RECORD_TRIAL,
+    AUTHORITY_COORDINATION_TRIAL_LIST_PATH: AuthorityMutationOperation.LIST_TRIALS,
+    AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH: (
+        AuthorityMutationOperation.ACQUIRE_TRIAL_LEASE
+    ),
+    AUTHORITY_COORDINATION_LEASE_RENEW_PATH: (
+        AuthorityMutationOperation.RENEW_COORDINATION_LEASE
+    ),
+    AUTHORITY_COORDINATION_LEASE_RELEASE_PATH: (
+        AuthorityMutationOperation.RELEASE_COORDINATION_LEASE
+    ),
+    AUTHORITY_COORDINATION_LEASE_FAIL_PATH: (
+        AuthorityMutationOperation.FAIL_COORDINATION_LEASE
+    ),
+    AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH: (
+        AuthorityMutationOperation.SET_COUNTER_LIMIT
+    ),
+    AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH: (
+        AuthorityMutationOperation.INCREMENT_COUNTER
+    ),
+    AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH: (
+        AuthorityMutationOperation.DECREMENT_COUNTER
+    ),
+    AUTHORITY_COORDINATION_COUNTER_READ_PATH: AuthorityMutationOperation.READ_COUNTER,
+    AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH: (
+        AuthorityMutationOperation.SCAN_COORDINATION_RECOVERY
+    ),
+    AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH: (
+        AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE
+    ),
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH: (
+        AuthorityMutationOperation.SET_RESOURCE_LIMIT
+    ),
+}
+
+
+@pytest.fixture(params=["in-memory", "sqlite", "service"])
 def coordination_case(
     request: pytest.FixtureRequest, tmp_path: Path
 ) -> CoordinationStoreCase:
@@ -57,11 +127,35 @@ def coordination_case(
     clock = FrozenClock()
     return CoordinationStoreCase(
         name="sqlite",
-        store=SQLiteWorkspaceCoordinationStore(
-            tmp_path / "workspace" / ".loom" / "coordination.sqlite3",
+            store=SQLiteWorkspaceCoordinationStore(
+                tmp_path / "workspace" / ".loom" / "coordination.sqlite3",
+                clock=clock,
+            ),
             clock=clock,
+        )
+    repository = initialize_authority_repository(
+        tmp_path / "authority",
+        service_generation="generation-1",
+    )
+    service = AuthorityMutationService(repository)
+
+    def transport(
+        url: str,
+        payload: Mapping[str, PlainData],
+        _timeout_seconds: float | None,
+    ) -> Mapping[str, object]:
+        path = urlsplit(url).path
+        operation = _COORDINATION_OPERATIONS[path]
+        return service.handle(operation, payload).to_dict()
+
+    return CoordinationStoreCase(
+        name="service",
+        store=ServiceWorkspaceCoordinationStore(
+            AuthorityClient("http://authority.test", transport=transport),
+            workspace_id="workspace-1",
+            service_generation="generation-1",
         ),
-        clock=clock,
+        supports_resources=False,
     )
 
 
@@ -112,18 +206,19 @@ def test_workspace_coordination_contract_records_cross_run_facts_only(
     assert trial_lease.lease.kind is LeaseKind.TRIAL
     assert TrialLeaseRecord.from_dict(trial_lease.to_dict()) == trial_lease
 
-    resource = store.acquire_resource_lease(
-        "workspace-1",
-        "gpu",
-        owner_id="sweep-worker",
-        amount=2,
-        lease_ttl_seconds=30,
-    )
-    assert resource.workspace_id == "workspace-1"
-    assert resource.resource_key == "gpu"
-    assert resource.amount == 2
-    assert resource.lease.kind is LeaseKind.RESOURCE
-    assert type(resource).from_dict(resource.to_dict()) == resource
+    if coordination_case.supports_resources:
+        resource = store.acquire_resource_lease(
+            "workspace-1",
+            "gpu",
+            owner_id="sweep-worker",
+            amount=2,
+            lease_ttl_seconds=30,
+        )
+        assert resource.workspace_id == "workspace-1"
+        assert resource.resource_key == "gpu"
+        assert resource.amount == 2
+        assert resource.lease.kind is LeaseKind.RESOURCE
+        assert type(resource).from_dict(resource.to_dict()) == resource
 
     counter = store.increment_counter("workspace-1", "active_trials")
     assert isinstance(counter, ConcurrencyCounter)
@@ -133,7 +228,7 @@ def test_workspace_coordination_contract_records_cross_run_facts_only(
 
     _advance(coordination_case, 31)
     recovery_records = store.scan_recovery("workspace-1")
-    assert len(recovery_records) == 2
+    assert len(recovery_records) == (2 if coordination_case.supports_resources else 1)
     assert all(
         isinstance(record, CoordinationRecoveryRecord) for record in recovery_records
     )
@@ -142,11 +237,16 @@ def test_workspace_coordination_contract_records_cross_run_facts_only(
         for record in recovery_records
         if record.trial_id is not None
     } == {("workspace-1", "sweep-1", "trial-1")}
+    expected_resource_recovery = (
+        {("workspace-1", "gpu", 2)}
+        if coordination_case.supports_resources
+        else set()
+    )
     assert {
         (record.workspace_id, record.resource_key, record.amount)
         for record in recovery_records
         if record.resource_key is not None
-    } == {("workspace-1", "gpu", 2)}
+    } == expected_resource_recovery
     assert {record.recovery.kind for record in recovery_records} == {
         RecoveryKind.EXPIRED_LEASE
     }
@@ -231,32 +331,44 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
             reason=LifecycleReason(code="worker_failed"),
         )
 
-    resource_limit = store.set_resource_limit("workspace-1", "gpu", limit=2)
-    assert resource_limit.counter_name == "resource:gpu"
-    first_resource = store.acquire_resource_lease(
-        "workspace-1",
-        "gpu",
-        owner_id="worker-1",
-        amount=2,
-        lease_ttl_seconds=1,
-    )
-    with pytest.raises(ValueError, match="resource limit"):
-        store.acquire_resource_lease(
+    if coordination_case.supports_resources:
+        resource_limit = store.set_resource_limit("workspace-1", "gpu", limit=2)
+        assert resource_limit.counter_name == "resource:gpu"
+        first_resource = store.acquire_resource_lease(
+            "workspace-1",
+            "gpu",
+            owner_id="worker-1",
+            amount=2,
+            lease_ttl_seconds=1,
+        )
+        with pytest.raises(ValueError, match="resource limit"):
+            store.acquire_resource_lease(
+                "workspace-1",
+                "gpu",
+                owner_id="worker-2",
+                amount=1,
+                lease_ttl_seconds=10,
+            )
+        _advance(coordination_case, 2)
+        recovered_resource = store.acquire_resource_lease(
             "workspace-1",
             "gpu",
             owner_id="worker-2",
             amount=1,
             lease_ttl_seconds=10,
         )
-    _advance(coordination_case, 2)
-    recovered_resource = store.acquire_resource_lease(
-        "workspace-1",
-        "gpu",
-        owner_id="worker-2",
-        amount=1,
-        lease_ttl_seconds=10,
-    )
-    assert recovered_resource.lease.lease_id != first_resource.lease.lease_id
+        assert recovered_resource.lease.lease_id != first_resource.lease.lease_id
+    else:
+        with pytest.raises(CoordinationStoreError, match="unsupported_resource"):
+            store.acquire_resource_lease(
+                "workspace-1",
+                "gpu",
+                owner_id="worker-1",
+                amount=1,
+                lease_ttl_seconds=1,
+            )
+        with pytest.raises(CoordinationStoreError, match="unsupported_resource"):
+            store.set_resource_limit("workspace-1", "gpu", limit=1)
 
     limited = store.set_counter_limit("workspace-1", "active_trials", limit=1)
     assert limited.value == 0

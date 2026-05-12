@@ -16,6 +16,14 @@ from .authority_resolution import (
     AuthorityResolverDiagnostic,
 )
 from .capabilities import BackendCapabilitySet, StoreDiagnostic
+from .coordination import (
+    ConcurrencyCounter,
+    CoordinationRecoveryRecord,
+    SweepIdentity,
+    TrialLeaseRecord,
+    TrialReference,
+    WorkspaceIdentity,
+)
 from .read_models import (
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
@@ -52,6 +60,7 @@ class AuthorityProtocolOperationKind(StrEnum):
     OUTPUT_COMMIT = "output_commit"
     ARTIFACT_FACTS = "artifact_facts"
     LEASE = "lease"
+    WORKSPACE_COORDINATION = "workspace_coordination"
     RECOVERY_SCAN = "recovery_scan"
     CLEANUP_CANDIDATES = "cleanup_candidates"
 
@@ -509,10 +518,17 @@ class AuthorityProtocolResult:
     stage_attempt: StageAttempt | None = None
     output_commit: OutputCommitRecord | None = None
     submitted_operation: SubmittedOperationRecord | None = None
+    workspace: WorkspaceIdentity | None = None
+    sweep: SweepIdentity | None = None
+    trial: TrialReference | None = None
+    trial_lease: TrialLeaseRecord | None = None
+    counter: ConcurrencyCounter | None = None
     artifact_facts: tuple[ArtifactFactRecord, ...] = ()
     submitted_operations: tuple[SubmittedOperationRecord, ...] = ()
+    trials: tuple[TrialReference, ...] = ()
     cleanup_candidates: tuple[CleanupCandidate, ...] = ()
     recovery_records: tuple[RecoveryRecord, ...] = ()
+    coordination_recovery_records: tuple[CoordinationRecoveryRecord, ...] = ()
     body: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -551,6 +567,11 @@ class AuthorityProtocolResult:
             SubmittedOperationRecord,
             "submitted_operation",
         )
+        _optional_instance(self.workspace, WorkspaceIdentity, "workspace")
+        _optional_instance(self.sweep, SweepIdentity, "sweep")
+        _optional_instance(self.trial, TrialReference, "trial")
+        _optional_instance(self.trial_lease, TrialLeaseRecord, "trial_lease")
+        _optional_instance(self.counter, ConcurrencyCounter, "counter")
         object.__setattr__(
             self,
             "artifact_facts",
@@ -567,6 +588,11 @@ class AuthorityProtocolResult:
         )
         object.__setattr__(
             self,
+            "trials",
+            _tuple_of(self.trials, TrialReference, "trials"),
+        )
+        object.__setattr__(
+            self,
             "cleanup_candidates",
             _tuple_of(
                 self.cleanup_candidates,
@@ -578,6 +604,15 @@ class AuthorityProtocolResult:
             self,
             "recovery_records",
             _tuple_of(self.recovery_records, RecoveryRecord, "recovery_records"),
+        )
+        object.__setattr__(
+            self,
+            "coordination_recovery_records",
+            _tuple_of(
+                self.coordination_recovery_records,
+                CoordinationRecoveryRecord,
+                "coordination_recovery_records",
+            ),
         )
         object.__setattr__(self, "body", _plain_mapping(self.body, "body"))
 
@@ -598,15 +633,26 @@ class AuthorityProtocolResult:
             "submitted_operation": None
             if self.submitted_operation is None
             else self.submitted_operation.to_dict(),
+            "workspace": None if self.workspace is None else self.workspace.to_dict(),
+            "sweep": None if self.sweep is None else self.sweep.to_dict(),
+            "trial": None if self.trial is None else self.trial.to_dict(),
+            "trial_lease": None
+            if self.trial_lease is None
+            else self.trial_lease.to_dict(),
+            "counter": None if self.counter is None else self.counter.to_dict(),
             "artifact_facts": [fact.to_dict() for fact in self.artifact_facts],
             "submitted_operations": [
                 operation.to_dict() for operation in self.submitted_operations
             ],
+            "trials": [trial.to_dict() for trial in self.trials],
             "cleanup_candidates": [
                 candidate.to_dict() for candidate in self.cleanup_candidates
             ],
             "recovery_records": [
                 record.to_dict() for record in self.recovery_records
+            ],
+            "coordination_recovery_records": [
+                record.to_dict() for record in self.coordination_recovery_records
             ],
             "body": dict(self.body),
         }
@@ -626,10 +672,17 @@ class AuthorityProtocolResult:
                 "stage_attempt",
                 "output_commit",
                 "submitted_operation",
+                "workspace",
+                "sweep",
+                "trial",
+                "trial_lease",
+                "counter",
                 "artifact_facts",
                 "submitted_operations",
+                "trials",
                 "cleanup_candidates",
                 "recovery_records",
+                "coordination_recovery_records",
                 "body",
             },
             "AuthorityProtocolResult",
@@ -659,6 +712,15 @@ class AuthorityProtocolResult:
                 mapping.get("submitted_operation"),
                 SubmittedOperationRecord.from_dict,
             ),
+            workspace=_optional_record(
+                mapping.get("workspace"), WorkspaceIdentity.from_dict
+            ),
+            sweep=_optional_record(mapping.get("sweep"), SweepIdentity.from_dict),
+            trial=_optional_record(mapping.get("trial"), TrialReference.from_dict),
+            trial_lease=_optional_record(
+                mapping.get("trial_lease"), TrialLeaseRecord.from_dict
+            ),
+            counter=_optional_record(mapping.get("counter"), ConcurrencyCounter.from_dict),
             artifact_facts=tuple(
                 ArtifactFactRecord.from_dict(item)
                 for item in _sequence(
@@ -671,6 +733,10 @@ class AuthorityProtocolResult:
                     mapping.get("submitted_operations", ()), "submitted_operations"
                 )
             ),
+            trials=tuple(
+                TrialReference.from_dict(item)
+                for item in _sequence(mapping.get("trials", ()), "trials")
+            ),
             cleanup_candidates=tuple(
                 CleanupCandidate.from_dict(item)
                 for item in _sequence(
@@ -681,6 +747,13 @@ class AuthorityProtocolResult:
                 RecoveryRecord.from_dict(item)
                 for item in _sequence(
                     mapping.get("recovery_records", ()), "recovery_records"
+                )
+            ),
+            coordination_recovery_records=tuple(
+                CoordinationRecoveryRecord.from_dict(item)
+                for item in _sequence(
+                    mapping.get("coordination_recovery_records", ()),
+                    "coordination_recovery_records",
                 )
             ),
             body=_plain_mapping(mapping.get("body", {}), "body"),

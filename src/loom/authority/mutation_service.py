@@ -24,6 +24,12 @@ from loom.pipeline.stores import (
     LifecycleReason,
     OutputCommitRecord,
     StageAttempt,
+    SweepIdentity,
+    ConcurrencyCounter,
+    CoordinationRecoveryRecord,
+    TrialLeaseRecord,
+    TrialReference,
+    WorkspaceIdentity,
     accepted_authority_response,
     rejected_authority_response,
 )
@@ -58,10 +64,36 @@ class AuthorityMutationOperation(StrEnum):
     FAIL_STAGE_LEASE = "fail_stage_lease"
     FINISH_STAGE_ATTEMPT = "finish_stage_attempt"
     RECORD_OUTPUT_COMMIT = "record_output_commit"
+    CREATE_WORKSPACE = "create_workspace"
+    CREATE_SWEEP = "create_sweep"
+    RECORD_TRIAL = "record_trial"
+    LIST_TRIALS = "list_trials"
+    ACQUIRE_TRIAL_LEASE = "acquire_trial_lease"
+    RENEW_COORDINATION_LEASE = "renew_coordination_lease"
+    RELEASE_COORDINATION_LEASE = "release_coordination_lease"
+    FAIL_COORDINATION_LEASE = "fail_coordination_lease"
+    SET_COUNTER_LIMIT = "set_counter_limit"
+    INCREMENT_COUNTER = "increment_counter"
+    DECREMENT_COUNTER = "decrement_counter"
+    READ_COUNTER = "read_counter"
+    SCAN_COORDINATION_RECOVERY = "scan_coordination_recovery"
+    ACQUIRE_RESOURCE_LEASE = "acquire_resource_lease"
+    SET_RESOURCE_LIMIT = "set_resource_limit"
 
 
 class AuthorityMutationValidationError(ValueError):
     """Raised when a mutation request body cannot be adapted."""
+
+
+class AuthorityMutationUnsupportedCapabilityError(ValueError):
+    """Raised when a valid operation is reserved for a later phase."""
+
+    def __init__(
+        self, *, capability: str, operation: AuthorityMutationOperation
+    ) -> None:
+        super().__init__(f"{capability} is unsupported until Phase 16")
+        self.capability = capability
+        self.operation = operation
 
 
 _OPERATION_KIND_BY_MUTATION: Mapping[
@@ -108,6 +140,51 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
     ),
     AuthorityMutationOperation.RECORD_OUTPUT_COMMIT: (
         AuthorityProtocolOperationKind.OUTPUT_COMMIT
+    ),
+    AuthorityMutationOperation.CREATE_WORKSPACE: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.CREATE_SWEEP: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.RECORD_TRIAL: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.LIST_TRIALS: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.ACQUIRE_TRIAL_LEASE: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.RENEW_COORDINATION_LEASE: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.RELEASE_COORDINATION_LEASE: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.FAIL_COORDINATION_LEASE: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.SET_COUNTER_LIMIT: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.INCREMENT_COUNTER: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.DECREMENT_COUNTER: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.READ_COUNTER: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.SCAN_COORDINATION_RECOVERY: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.SET_RESOURCE_LIMIT: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
     ),
 }
 
@@ -181,6 +258,19 @@ class AuthorityMutationService:
                 metadata,
                 _repository_rejection(exc, request_detail=_request_detail(payload)),
             )
+        except AuthorityMutationUnsupportedCapabilityError as exc:
+            return rejected_authority_response(
+                metadata,
+                AuthorityProtocolRejection(
+                    category=AuthorityProtocolErrorCategory.UNSUPPORTED_CAPABILITY,
+                    code="authority_coordination_unsupported_resource",
+                    message=str(exc),
+                    detail={
+                        "capability": exc.capability,
+                        "operation": exc.operation.value,
+                    },
+                ),
+            )
         except (AuthorityMutationValidationError, TypeError, ValueError) as exc:
             return rejected_authority_response(
                 metadata,
@@ -242,6 +332,36 @@ class AuthorityMutationService:
                 return self._finish_stage_attempt(request)
             case AuthorityMutationOperation.RECORD_OUTPUT_COMMIT:
                 return self._record_output_commit(request)
+            case AuthorityMutationOperation.CREATE_WORKSPACE:
+                return self._create_workspace(request)
+            case AuthorityMutationOperation.CREATE_SWEEP:
+                return self._create_sweep(request)
+            case AuthorityMutationOperation.RECORD_TRIAL:
+                return self._record_trial(request)
+            case AuthorityMutationOperation.LIST_TRIALS:
+                return self._list_trials(request)
+            case AuthorityMutationOperation.ACQUIRE_TRIAL_LEASE:
+                return self._acquire_trial_lease(request)
+            case AuthorityMutationOperation.RENEW_COORDINATION_LEASE:
+                return self._renew_coordination_lease(request)
+            case AuthorityMutationOperation.RELEASE_COORDINATION_LEASE:
+                return self._release_coordination_lease(request)
+            case AuthorityMutationOperation.FAIL_COORDINATION_LEASE:
+                return self._fail_coordination_lease(request)
+            case AuthorityMutationOperation.SET_COUNTER_LIMIT:
+                return self._set_counter_limit(request)
+            case AuthorityMutationOperation.INCREMENT_COUNTER:
+                return self._increment_counter(request)
+            case AuthorityMutationOperation.DECREMENT_COUNTER:
+                return self._decrement_counter(request)
+            case AuthorityMutationOperation.READ_COUNTER:
+                return self._read_counter(request)
+            case AuthorityMutationOperation.SCAN_COORDINATION_RECOVERY:
+                return self._scan_coordination_recovery(request)
+            case AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE:
+                return self._unsupported_resource(request, "resource_leases")
+            case AuthorityMutationOperation.SET_RESOURCE_LIMIT:
+                return self._unsupported_resource(request, "resource_limits")
 
     def _admit_run(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
         revision = self._repository.admit_run(
@@ -507,6 +627,171 @@ class AuthorityMutationService:
             cleanup_candidates=commit.cleanup_candidates,
         )
 
+    def _create_workspace(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        workspace = WorkspaceIdentity.from_dict(_required_body_value(request, "workspace"))
+        revision = self._repository.create_workspace(workspace)
+        return _result(
+            revision=revision,
+            service_generation=self._service_generation,
+            workspace=workspace,
+        )
+
+    def _create_sweep(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+        sweep = SweepIdentity.from_dict(_required_body_value(request, "sweep"))
+        revision = self._repository.create_sweep(sweep)
+        return _result(
+            revision=revision,
+            service_generation=self._service_generation,
+            sweep=sweep,
+        )
+
+    def _record_trial(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+        trial = TrialReference.from_dict(_required_body_value(request, "trial"))
+        revision = self._repository.record_trial(trial)
+        return _result(
+            revision=revision,
+            service_generation=self._service_generation,
+            trial=trial,
+        )
+
+    def _list_trials(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+        trials = self._repository.list_trials(_required_body_string(request, "sweep_id"))
+        return _result(service_generation=self._service_generation, trials=trials)
+
+    def _acquire_trial_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.acquire_trial_lease(
+            _required_body_string(request, "sweep_id"),
+            _required_body_string(request, "trial_id"),
+            owner_id=_required_owner_id(request),
+            lease_ttl_seconds=_required_positive_seconds(request),
+        )
+        return _result(
+            revision=lease.lease.revision,
+            service_generation=self._service_generation,
+            lease=lease.lease,
+            trial_lease=lease,
+        )
+
+    def _renew_coordination_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.renew_coordination_lease(
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            lease_ttl_seconds=_required_positive_seconds(request),
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _release_coordination_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.release_coordination_lease(
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            reason=_optional_reason(request),
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _fail_coordination_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.fail_coordination_lease(
+            _required_lease_id(request),
+            owner_id=_required_owner_id(request),
+            fencing_token=_required_fencing_token(request),
+            reason=_required_reason(request),
+        )
+        return _result(
+            revision=lease.revision,
+            service_generation=self._service_generation,
+            lease=lease,
+        )
+
+    def _set_counter_limit(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        counter = self._repository.set_counter_limit(
+            _required_body_string(request, "workspace_id"),
+            _required_body_string(request, "counter_name"),
+            limit=_optional_body_int(request, "limit"),
+        )
+        return _result(
+            revision=counter.revision,
+            service_generation=self._service_generation,
+            counter=counter,
+        )
+
+    def _increment_counter(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        counter = self._repository.increment_counter(
+            _required_body_string(request, "workspace_id"),
+            _required_body_string(request, "counter_name"),
+            amount=_optional_body_positive_int(request, "amount", default=1),
+            limit=_optional_body_int(request, "limit"),
+        )
+        return _result(
+            revision=counter.revision,
+            service_generation=self._service_generation,
+            counter=counter,
+        )
+
+    def _decrement_counter(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        counter = self._repository.decrement_counter(
+            _required_body_string(request, "workspace_id"),
+            _required_body_string(request, "counter_name"),
+            amount=_optional_body_positive_int(request, "amount", default=1),
+        )
+        return _result(
+            revision=counter.revision,
+            service_generation=self._service_generation,
+            counter=counter,
+        )
+
+    def _read_counter(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
+        counter = self._repository.read_counter(
+            _required_body_string(request, "workspace_id"),
+            _required_body_string(request, "counter_name"),
+        )
+        return _result(service_generation=self._service_generation, counter=counter)
+
+    def _scan_coordination_recovery(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        records = self._repository.scan_coordination_recovery(
+            _required_body_string(request, "workspace_id")
+        )
+        return _result(
+            service_generation=self._service_generation,
+            coordination_recovery_records=records,
+        )
+
+    def _unsupported_resource(
+        self, _request: AuthorityProtocolRequest, capability: str
+    ) -> AuthorityProtocolResult:
+        raise AuthorityMutationUnsupportedCapabilityError(
+            capability=capability,
+            operation=AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE
+            if capability == "resource_leases"
+            else AuthorityMutationOperation.SET_RESOURCE_LIMIT,
+        )
+
 
 def unsupported_mutation_response(
     operation: AuthorityMutationOperation,
@@ -551,9 +836,16 @@ def _result(
     stage_attempt: StageAttempt | None = None,
     output_commit: OutputCommitRecord | None = None,
     submitted_operation: SubmittedOperationRecord | None = None,
+    workspace: WorkspaceIdentity | None = None,
+    sweep: SweepIdentity | None = None,
+    trial: TrialReference | None = None,
+    trial_lease: TrialLeaseRecord | None = None,
+    counter: ConcurrencyCounter | None = None,
     artifact_facts: tuple[ArtifactFactRecord, ...] = (),
     submitted_operations: tuple[SubmittedOperationRecord, ...] = (),
+    trials: tuple[TrialReference, ...] = (),
     cleanup_candidates: tuple[CleanupCandidate, ...] = (),
+    coordination_recovery_records: tuple[CoordinationRecoveryRecord, ...] = (),
     body: Mapping[str, PlainData] | None = None,
 ) -> AuthorityProtocolResult:
     return AuthorityProtocolResult(
@@ -564,9 +856,16 @@ def _result(
         stage_attempt=stage_attempt,
         output_commit=output_commit,
         submitted_operation=submitted_operation,
+        workspace=workspace,
+        sweep=sweep,
+        trial=trial,
+        trial_lease=trial_lease,
+        counter=counter,
         artifact_facts=artifact_facts,
         submitted_operations=submitted_operations,
+        trials=trials,
         cleanup_candidates=cleanup_candidates,
+        coordination_recovery_records=coordination_recovery_records,
         body={} if body is None else body,
     )
 
@@ -660,6 +959,24 @@ def _optional_positive_seconds(request: AuthorityProtocolRequest) -> int | None:
         raise AuthorityMutationValidationError(
             "lease_ttl_seconds must be a positive integer"
         )
+    return value
+
+
+def _optional_body_int(request: AuthorityProtocolRequest, field: str) -> int | None:
+    value = request.body.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AuthorityMutationValidationError(f"{field} must be an integer or null")
+    return value
+
+
+def _optional_body_positive_int(
+    request: AuthorityProtocolRequest, field: str, *, default: int
+) -> int:
+    value = request.body.get(field, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AuthorityMutationValidationError(f"{field} must be a positive integer")
     return value
 
 

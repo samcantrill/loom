@@ -15,9 +15,16 @@ from loom.pipeline.stores import (
     AuthorityProtocolOperationKind,
     AuthorityProtocolRequest,
     AuthorityProtocolResult,
+    BackendRevision,
+    TrialReference,
+    TrialState,
+    WorkspaceIdentity,
     accepted_authority_response,
 )
 from loom.pipeline.stores.authority_client import (
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH,
     AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH,
     AUTHORITY_MUTATION_STAGE_LEASE_RENEW_PATH,
     AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH,
@@ -187,3 +194,76 @@ def test_authority_client_sends_submitted_operation_payload() -> None:
     body = cast(Mapping[str, PlainData], payload["body"])
     submitted = cast(Mapping[str, PlainData], body["record"])
     assert submitted["submission_id"] == "sub-1"
+
+
+def test_authority_client_sends_workspace_coordination_payloads() -> None:
+    captured: list[tuple[str, Mapping[str, PlainData]]] = []
+
+    def transport(
+        url: str,
+        payload: Mapping[str, PlainData],
+        _timeout_seconds: float | None,
+    ) -> Mapping[str, object]:
+        captured.append((url, payload))
+        metadata = AuthorityProtocolMetadata.from_dict(payload["metadata"])
+        return accepted_authority_response(
+            metadata,
+            AuthorityProtocolResult(service_generation="generation-1"),
+        ).to_dict()
+
+    client = AuthorityClient("http://authority.example", transport=transport)
+    workspace = WorkspaceIdentity(
+        workspace_id="workspace-1",
+        root_uri="file:///workspace",
+        metadata={"team": "analysis"},
+    )
+    trial = TrialReference(
+        trial_id="trial-1",
+        sweep_id="sweep-1",
+        run_uri="file:///runs/trial-1",
+        state=TrialState.PENDING,
+        revision=BackendRevision(sequence=1, token="trial-rev"),
+    )
+
+    client.create_workspace(workspace, request_id="workspace-create-1")
+    client.record_trial(
+        trial,
+        request_id="trial-record-1",
+        workspace_id="workspace-1",
+    )
+    client.acquire_trial_lease(
+        "sweep-1",
+        "trial-1",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+        request_id="trial-lease-1",
+        workspace_id="workspace-1",
+    )
+    client.set_resource_limit("workspace-1", "gpu", limit=2)
+
+    assert captured[0][0].endswith(AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH)
+    first_body = cast(Mapping[str, PlainData], captured[0][1]["body"])
+    assert first_body["workspace"] == workspace.to_dict()
+    first_metadata = AuthorityProtocolMetadata.from_dict(captured[0][1]["metadata"])
+    assert (
+        first_metadata.operation_kind
+        is AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    )
+    assert first_metadata.workspace_id == "workspace-1"
+    trial_body = cast(Mapping[str, PlainData], captured[1][1]["body"])
+    assert trial_body["trial"] == trial.to_dict()
+    assert captured[2][0].endswith(AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH)
+    assert captured[2][1]["owner_id"] == "worker-1"
+    lease_body = cast(Mapping[str, PlainData], captured[2][1]["body"])
+    assert lease_body == {
+        "sweep_id": "sweep-1",
+        "trial_id": "trial-1",
+        "lease_ttl_seconds": 30,
+    }
+    assert captured[3][0].endswith(AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH)
+    resource_body = cast(Mapping[str, PlainData], captured[3][1]["body"])
+    assert resource_body == {
+        "workspace_id": "workspace-1",
+        "resource_key": "gpu",
+        "limit": 2,
+    }

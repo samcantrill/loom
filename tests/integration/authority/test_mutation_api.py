@@ -17,6 +17,12 @@ from loom.pipeline.stores import (
     AuthorityClient,
     AuthorityProtocolErrorCategory,
     AuthorityProtocolResponse,
+    BackendRevision,
+    LeaseState,
+    SweepIdentity,
+    TrialReference,
+    TrialState,
+    WorkspaceIdentity,
 )
 from loom.pipeline.submitted import (
     SubmittedOperationRecord,
@@ -304,6 +310,123 @@ def test_mutation_api_handles_leases_and_submitted_operations(tmp_path) -> None:
     assert listed.accepted is True
     assert listed.result is not None
     assert listed.result.submitted_operations == (record,)
+
+
+def test_mutation_api_serves_workspace_coordination_routes(tmp_path) -> None:
+    client = _client(tmp_path)
+    workspace = WorkspaceIdentity(
+        workspace_id="workspace-a",
+        root_uri="file:///workspace",
+        metadata={"owner": "integration"},
+    )
+    created_workspace = client.create_workspace(
+        workspace,
+        request_id="workspace-create-1",
+        service_generation="generation-1",
+    )
+    assert created_workspace.accepted is True
+    assert created_workspace.result is not None
+    assert created_workspace.result.workspace == workspace
+
+    sweep = SweepIdentity(sweep_id="sweep-1", workspace_id="workspace-a")
+    created_sweep = client.create_sweep(
+        sweep,
+        request_id="sweep-create-1",
+        service_generation="generation-1",
+    )
+    assert created_sweep.accepted is True
+
+    trial = TrialReference(
+        trial_id="trial-1",
+        sweep_id="sweep-1",
+        run_uri="file:///runs/trial-1",
+        state=TrialState.PENDING,
+        revision=BackendRevision(sequence=1, token="trial-rev"),
+    )
+    recorded = client.record_trial(
+        trial,
+        request_id="trial-record-1",
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert recorded.accepted is True
+    assert recorded.result is not None
+    assert recorded.result.trial == trial
+
+    listed = client.list_trials(
+        "sweep-1",
+        request_id="trial-list-1",
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert listed.accepted is True
+    assert listed.result is not None
+    assert listed.result.trials == (trial,)
+
+    trial_lease = client.acquire_trial_lease(
+        "sweep-1",
+        "trial-1",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+        request_id="trial-lease-1",
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert trial_lease.accepted is True
+    assert trial_lease.result is not None
+    assert trial_lease.result.trial_lease is not None
+
+    released = client.release_coordination_lease(
+        trial_lease.result.trial_lease.lease.lease_id,
+        owner_id="worker-1",
+        fencing_token=trial_lease.result.trial_lease.lease.fencing_token,
+        request_id="trial-lease-release-1",
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert released.accepted is True
+    assert released.result is not None
+    assert released.result.lease is not None
+    assert released.result.lease.state is LeaseState.RELEASED
+
+    counter = client.increment_counter(
+        "workspace-a",
+        "active_trials",
+        amount=1,
+        limit=2,
+        request_id="counter-increment-1",
+        service_generation="generation-1",
+    )
+    assert counter.accepted is True
+    assert counter.result is not None
+    assert counter.result.counter is not None
+    assert counter.result.counter.value == 1
+
+    recovery = client.scan_coordination_recovery(
+        "workspace-a",
+        request_id="recovery-scan-1",
+        service_generation="generation-1",
+    )
+    assert recovery.accepted is True
+    assert recovery.result is not None
+    assert recovery.result.coordination_recovery_records == ()
+
+    resource = client.acquire_resource_lease(
+        "workspace-a",
+        "gpu",
+        owner_id="worker-1",
+        amount=1,
+        lease_ttl_seconds=30,
+        request_id="resource-lease-1",
+        service_generation="generation-1",
+    )
+    assert resource.accepted is False
+    assert resource.rejection is not None
+    assert (
+        resource.rejection.category
+        is AuthorityProtocolErrorCategory.UNSUPPORTED_CAPABILITY
+    )
+    assert resource.rejection.code == "authority_coordination_unsupported_resource"
 
 
 def test_route_level_invalid_request_returns_protocol_rejection(tmp_path) -> None:

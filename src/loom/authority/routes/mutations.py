@@ -5,6 +5,21 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from loom.pipeline.stores import (
+    AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH,
+    AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH,
+    AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_COUNTER_READ_PATH,
+    AUTHORITY_COORDINATION_LEASE_FAIL_PATH,
+    AUTHORITY_COORDINATION_LEASE_RELEASE_PATH,
+    AUTHORITY_COORDINATION_LEASE_RENEW_PATH,
+    AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
+    AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
+    AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_TRIAL_LIST_PATH,
+    AUTHORITY_COORDINATION_TRIAL_RECORD_PATH,
+    AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH,
     AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH,
     AUTHORITY_MUTATION_OPEN_RUN_PATH,
     AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH,
@@ -275,6 +290,243 @@ def record_output_commit(
         payload,
         services,
     )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def create_workspace(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Create a workspace identity in service-owned coordination state."""
+
+    return _handle(AuthorityMutationOperation.CREATE_WORKSPACE, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_SWEEP_CREATE_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def create_sweep(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Create a sweep identity in service-owned coordination state."""
+
+    return _handle(AuthorityMutationOperation.CREATE_SWEEP, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_TRIAL_RECORD_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def record_trial(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Record a trial reference in service-owned coordination state."""
+
+    return _handle(AuthorityMutationOperation.RECORD_TRIAL, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_TRIAL_LIST_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def list_trials(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """List trial references from service-owned coordination state."""
+
+    return _handle(AuthorityMutationOperation.LIST_TRIALS, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def acquire_trial_lease(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Acquire a trial coordination lease."""
+
+    return _handle(
+        AuthorityMutationOperation.ACQUIRE_TRIAL_LEASE,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_LEASE_RENEW_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def renew_coordination_lease(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Renew a workspace coordination lease."""
+
+    return _handle(
+        AuthorityMutationOperation.RENEW_COORDINATION_LEASE,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_LEASE_RELEASE_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def release_coordination_lease(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Release a workspace coordination lease."""
+
+    return _handle(
+        AuthorityMutationOperation.RELEASE_COORDINATION_LEASE,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_LEASE_FAIL_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def fail_coordination_lease(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Fail a workspace coordination lease."""
+
+    return _handle(
+        AuthorityMutationOperation.FAIL_COORDINATION_LEASE,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def set_counter_limit(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Set a non-resource coordination counter limit."""
+
+    return _handle(AuthorityMutationOperation.SET_COUNTER_LIMIT, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def increment_counter(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Increment a non-resource coordination counter."""
+
+    return _handle(AuthorityMutationOperation.INCREMENT_COUNTER, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def decrement_counter(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Decrement a non-resource coordination counter."""
+
+    return _handle(AuthorityMutationOperation.DECREMENT_COUNTER, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_COUNTER_READ_PATH.removeprefix(MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def read_counter(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Read a non-resource coordination counter."""
+
+    return _handle(AuthorityMutationOperation.READ_COUNTER, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def scan_coordination_recovery(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Scan non-resource workspace coordination recovery records."""
+
+    return _handle(
+        AuthorityMutationOperation.SCAN_COORDINATION_RECOVERY,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def acquire_resource_lease(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Report resource leases as unsupported until the resource phase."""
+
+    return _handle(
+        AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def set_resource_limit(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Report resource limits as unsupported until the resource phase."""
+
+    return _handle(AuthorityMutationOperation.SET_RESOURCE_LIMIT, payload, services)
 
 
 def _handle(

@@ -26,6 +26,7 @@ from .authority_protocol import (
     AuthorityProtocolResponse,
     rejected_authority_response,
 )
+from .coordination import SweepIdentity, TrialReference, WorkspaceIdentity
 from .read_models import BackendRevision, LifecycleReason
 
 
@@ -73,6 +74,51 @@ AUTHORITY_MUTATION_SUBMITTED_READ_PATH = (
 )
 AUTHORITY_MUTATION_SUBMITTED_LIST_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/submitted/list"
+)
+AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/workspaces/create"
+)
+AUTHORITY_COORDINATION_SWEEP_CREATE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/sweeps/create"
+)
+AUTHORITY_COORDINATION_TRIAL_RECORD_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/trials/record"
+)
+AUTHORITY_COORDINATION_TRIAL_LIST_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/trials/list"
+)
+AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/trials/leases/acquire"
+)
+AUTHORITY_COORDINATION_LEASE_RENEW_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/leases/renew"
+)
+AUTHORITY_COORDINATION_LEASE_RELEASE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/leases/release"
+)
+AUTHORITY_COORDINATION_LEASE_FAIL_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/leases/fail"
+)
+AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/counters/limit"
+)
+AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/counters/increment"
+)
+AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/counters/decrement"
+)
+AUTHORITY_COORDINATION_COUNTER_READ_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/counters/read"
+)
+AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/recovery/scan"
+)
+AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/resources/leases/acquire"
+)
+AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/resources/limit"
 )
 
 AuthorityHttpTransport = Callable[
@@ -621,6 +667,333 @@ class AuthorityClient:
             ),
         )
 
+    def create_workspace(
+        self,
+        identity: WorkspaceIdentity,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Create a workspace identity through the authority service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH,
+            body={"workspace": identity.to_dict()},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=identity.workspace_id,
+        )
+
+    def create_sweep(
+        self,
+        identity: SweepIdentity,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Create a sweep identity through the authority service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
+            body={"sweep": identity.to_dict()},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=identity.workspace_id,
+        )
+
+    def record_trial(
+        self,
+        trial: TrialReference,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Record a sweep trial reference through the authority service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_TRIAL_RECORD_PATH,
+            body={"trial": trial.to_dict()},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def list_trials(
+        self,
+        sweep_id: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """List trial references for a sweep through the service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_TRIAL_LIST_PATH,
+            body={"sweep_id": sweep_id},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def acquire_trial_lease(
+        self,
+        sweep_id: str,
+        trial_id: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Acquire a trial coordination lease through the service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
+            owner_id=owner_id,
+            body={
+                "sweep_id": sweep_id,
+                "trial_id": trial_id,
+                "lease_ttl_seconds": lease_ttl_seconds,
+            },
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def renew_coordination_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Renew a workspace coordination lease through the service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_LEASE_RENEW_PATH,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            body={"lease_ttl_seconds": lease_ttl_seconds},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def release_coordination_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Release a workspace coordination lease through the service."""
+
+        body: dict[str, PlainData] = {}
+        if reason is not None:
+            body["reason"] = reason.to_dict()
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_LEASE_RELEASE_PATH,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            body=body,
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def fail_coordination_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Fail a workspace coordination lease through the service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_LEASE_FAIL_PATH,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            body={"reason": reason.to_dict()},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def set_counter_limit(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        limit: int | None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Set a non-resource coordination counter limit."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH,
+            body={
+                "workspace_id": workspace_id,
+                "counter_name": counter_name,
+                "limit": limit,
+            },
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def increment_counter(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        amount: int = 1,
+        limit: int | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Increment a non-resource coordination counter."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH,
+            body={
+                "workspace_id": workspace_id,
+                "counter_name": counter_name,
+                "amount": amount,
+                "limit": limit,
+            },
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def decrement_counter(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        amount: int = 1,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Decrement a non-resource coordination counter."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH,
+            body={
+                "workspace_id": workspace_id,
+                "counter_name": counter_name,
+                "amount": amount,
+            },
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def read_counter(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Read a non-resource coordination counter."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_COUNTER_READ_PATH,
+            body={"workspace_id": workspace_id, "counter_name": counter_name},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def scan_coordination_recovery(
+        self,
+        workspace_id: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Scan workspace coordination recovery records."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH,
+            body={"workspace_id": workspace_id},
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def acquire_resource_lease(
+        self,
+        workspace_id: str,
+        resource_key: str,
+        *,
+        owner_id: str,
+        amount: int,
+        lease_ttl_seconds: int,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Request a resource lease; unsupported by the Phase 15 service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
+            owner_id=owner_id,
+            body={
+                "workspace_id": workspace_id,
+                "resource_key": resource_key,
+                "amount": amount,
+                "lease_ttl_seconds": lease_ttl_seconds,
+            },
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def set_resource_limit(
+        self,
+        workspace_id: str,
+        resource_key: str,
+        *,
+        limit: int | None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Set a resource limit; unsupported by the Phase 15 service."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
+            body={
+                "workspace_id": workspace_id,
+                "resource_key": resource_key,
+                "limit": limit,
+            },
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
     def _lease_request(
         self,
         path: str,
@@ -655,6 +1028,34 @@ class AuthorityClient:
                 owner_id=owner_id,
                 fencing_token=fencing_token,
                 expected_revision=expected_revision,
+                body=body,
+            ),
+        )
+
+    def _coordination_request(
+        self,
+        path: str,
+        *,
+        body: Mapping[str, PlainData],
+        lease_id: str | None = None,
+        owner_id: str | None = None,
+        fencing_token: str | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        return self.send(
+            path,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.WORKSPACE_COORDINATION,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
                 body=body,
             ),
         )
@@ -747,6 +1148,21 @@ __all__ = [
     "AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH",
     "AUTHORITY_MUTATION_SUBMITTED_READ_PATH",
     "AUTHORITY_MUTATION_SUBMITTED_LIST_PATH",
+    "AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH",
+    "AUTHORITY_COORDINATION_SWEEP_CREATE_PATH",
+    "AUTHORITY_COORDINATION_TRIAL_RECORD_PATH",
+    "AUTHORITY_COORDINATION_TRIAL_LIST_PATH",
+    "AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH",
+    "AUTHORITY_COORDINATION_LEASE_RENEW_PATH",
+    "AUTHORITY_COORDINATION_LEASE_RELEASE_PATH",
+    "AUTHORITY_COORDINATION_LEASE_FAIL_PATH",
+    "AUTHORITY_COORDINATION_COUNTER_LIMIT_SET_PATH",
+    "AUTHORITY_COORDINATION_COUNTER_INCREMENT_PATH",
+    "AUTHORITY_COORDINATION_COUNTER_DECREMENT_PATH",
+    "AUTHORITY_COORDINATION_COUNTER_READ_PATH",
+    "AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH",
+    "AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH",
+    "AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH",
     "AuthorityClient",
     "AuthorityClientError",
     "AuthorityHttpTransport",

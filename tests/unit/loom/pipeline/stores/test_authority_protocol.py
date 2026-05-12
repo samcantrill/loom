@@ -33,6 +33,8 @@ from loom.pipeline.stores import (
     CapabilityScope,
     CleanupCandidate,
     CleanupCandidateKind,
+    ConcurrencyCounter,
+    CoordinationRecoveryRecord,
     DiagnosticSeverity,
     LeaseKind,
     LeaseRecord,
@@ -45,6 +47,11 @@ from loom.pipeline.stores import (
     StageAttempt,
     StageLifecycleSnapshot,
     StoreDiagnostic,
+    SweepIdentity,
+    TrialLeaseRecord,
+    TrialReference,
+    TrialState,
+    WorkspaceIdentity,
     accepted_authority_response,
     protocol_versions_compatible,
     rejected_authority_response,
@@ -329,6 +336,84 @@ def test_protocol_result_carries_authority_read_models() -> None:
 
     with pytest.raises(AuthorityProtocolError, match="fencing_token must match"):
         AuthorityProtocolResult(lease=lease, fencing_token="different-fence")
+
+
+def test_protocol_result_carries_workspace_coordination_models() -> None:
+    revision = _revision()
+    workspace = WorkspaceIdentity(
+        workspace_id="workspace-1",
+        root_uri="file:///workspace",
+        metadata={"owner": "team-a"},
+    )
+    sweep = SweepIdentity(
+        sweep_id="sweep-1",
+        workspace_id="workspace-1",
+        metadata={"strategy": "grid"},
+    )
+    trial = TrialReference(
+        trial_id="trial-1",
+        sweep_id="sweep-1",
+        run_uri="file:///runs/trial-1",
+        state=TrialState.PENDING,
+        revision=revision,
+        metadata={"candidate": 1},
+    )
+    lease = LeaseRecord(
+        lease_id="trial-lease-1",
+        kind=LeaseKind.TRIAL,
+        owner_id="worker-1",
+        fencing_token="trial-fence-1",
+        acquired_at=_TS,
+        renewed_at=_TS,
+        expires_at="2020-01-01T00:01:00Z",
+        revision=revision,
+    )
+    trial_lease = TrialLeaseRecord(
+        workspace_id="workspace-1",
+        sweep_id="sweep-1",
+        trial_id="trial-1",
+        lease=lease,
+    )
+    counter = ConcurrencyCounter(
+        counter_name="active_trials",
+        value=1,
+        limit=4,
+        revision=revision,
+    )
+    recovery = CoordinationRecoveryRecord(
+        workspace_id="workspace-1",
+        sweep_id="sweep-1",
+        trial_id="trial-1",
+        recovery=RecoveryRecord(
+            recovery_id="coordination-recovery-1",
+            kind=RecoveryKind.EXPIRED_LEASE,
+            reason=LifecycleReason(code="lease_expired"),
+            detected_at="2020-01-01T00:00:10Z",
+            revision=revision,
+        ),
+    )
+    result = AuthorityProtocolResult(
+        revision=revision,
+        workspace=workspace,
+        sweep=sweep,
+        trial=trial,
+        trial_lease=trial_lease,
+        lease=lease,
+        counter=counter,
+        trials=(trial,),
+        coordination_recovery_records=(recovery,),
+    )
+
+    payload = result.to_dict()
+
+    assert payload["workspace"] == workspace.to_dict()
+    assert payload["sweep"] == sweep.to_dict()
+    assert payload["trial"] == trial.to_dict()
+    assert payload["trial_lease"] == trial_lease.to_dict()
+    assert payload["counter"] == counter.to_dict()
+    assert payload["trials"] == [trial.to_dict()]
+    assert payload["coordination_recovery_records"] == [recovery.to_dict()]
+    assert AuthorityProtocolResult.from_dict(payload) == result
 
 
 def test_protocol_response_enforces_accepted_or_rejected_payloads() -> None:
