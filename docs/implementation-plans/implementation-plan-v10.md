@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 17 pr_open; Phase 18 pending
+- Phase work status: Phase 17 merged; Phase 18 pending
 
 Related artifacts and references:
 
@@ -2191,7 +2191,7 @@ semantics.
 
 ### Phase 17: Offline Evidence Writer
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-offline-evidence`
 - PR: https://github.com/samcantrill/loom/pull/135
 
@@ -2277,7 +2277,7 @@ and the absence of online fallback behavior.
 
 **Completion Summary**
 
-Phase 17 PR opened on 2026-05-12:
+Phase 17 merged on 2026-05-12:
 
 - Branch: `codex/authority-offline-evidence`
 - Phase execution plan: `docs/phases/authority-offline-evidence.md`
@@ -2300,11 +2300,20 @@ Phase 17 PR opened on 2026-05-12:
   config-extra `424 passed, 1366 deselected`.
 - PR verification: `gh pr view 135 --json baseRefName,headRefName,state,url`
   confirmed base `develop`, head `codex/authority-offline-evidence`, and state
-  `OPEN`.
-- Stack maintenance: root PR opened against `develop`; no predecessor branch
-  and no successor branch currently depends on this branch.
-- Remaining blockers: none at PR-open time; GitHub CI and automated review are
-  pending.
+  `OPEN` after PR creation.
+- Automated review: manager review found no scope, source-labeling,
+  online-fallback, import-boundary, manifest-contract, validation-evidence, or
+  PR-body blockers.
+- GitHub CI: `checks` succeeded on PR #135 after the final post-review
+  documentation update.
+- Merge verification: final pre-merge `gh pr view` confirmed base `develop`,
+  head `codex/authority-offline-evidence`, state `OPEN`, merge state `CLEAN`,
+  and CI `SUCCESS`.
+- Merge: PR #135 squash-merged into `develop` on 2026-05-12 at merge commit
+  `6ab0e9aa3d39cc49129a93032fe36152e2db0d43`.
+- Stack maintenance: root PR merged into `develop`; no predecessor or successor
+  branch depended on `codex/authority-offline-evidence` at merge time.
+- Remaining blockers: none.
 
 ### Phase 18: Offline Import Transaction
 
