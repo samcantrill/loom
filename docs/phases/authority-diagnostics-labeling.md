@@ -169,7 +169,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
-- Implementation summary: added shared plain-data source-label helpers; labeled backend diagnostics, capabilities, status/stage/submitted-operation summaries, artifact/log summaries, preflight details, run catalog summaries, and catalog warnings; added concise CLI source output and representative unit, contract, and integration assertions. Runtime behavior remains read-only and mutation paths are unchanged.
+- Implementation summary: added shared plain-data source-label helpers in `loom.state_sources`; labeled backend diagnostics, capabilities, status/stage/submitted-operation summaries, artifact/log summaries, preflight details, run catalog summaries, and catalog warnings; added concise CLI source output and representative unit, contract, integration, and import-boundary assertions. Runtime behavior remains read-only and mutation paths are unchanged.
 - Validation so far:
   - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...` passed for touched diagnostics, CLI, run-catalog, unit, contract, and integration paths.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright ...` passed for the same focused paths.
@@ -178,6 +178,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py` passed: 34 passed.
   - The non-extra focused pytest command against optional config diagnostics was superseded by the `--extra config` run because those tests require the config extra.
   - Initial `make validate-pr` failed only on `tests/unit/loom/runs/test_run_catalog_models.py::test_run_summary_uses_run_uri_and_plain_serialization`; the assertion was updated to verify additive `state_source` serialization for run, stage, artifact, and submitted-operation summaries. Focused reruns of Ruff, Pyright, and that unit file passed.
-  - Final `make validate-pr` passed: Ruff passed; Pyright passed; default harness passed with 1309 passed, 19 skipped, 14 deselected; config-extra harness passed with 422 passed, 1338 deselected; package build succeeded.
-  - Final `make test-summary` passed and wrote `build/test-summary.md`: overall 1757 passed, 12 skipped, 1350 deselected; package 69 passed; unit 954 passed; contract 146 passed; integration 127 passed; e2e 39 passed; config-extra 422 passed.
+  - Automated review found an import-boundary issue: `loom.runs` must not import `loom.diagnostics`. The source-label helpers were moved to neutral `loom.state_sources`, and `tests/package/test_import_boundaries.py` now asserts `import loom.runs` does not import diagnostics.
+  - Final `make validate-pr` passed after the boundary fix: Ruff passed; Pyright passed; default harness passed with 1310 passed, 19 skipped, 14 deselected; config-extra harness passed with 422 passed, 1339 deselected; package build succeeded.
+  - Final `make test-summary` passed and wrote `build/test-summary.md`: overall 1758 passed, 12 skipped, 1351 deselected; package 70 passed; unit 954 passed; contract 146 passed; integration 127 passed; e2e 39 passed; config-extra 422 passed.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
