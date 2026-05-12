@@ -24,7 +24,7 @@ New tests implemented:
 | Targeted Ruff/Pyright/Pytest | Passed | Ruff and Pyright passed on changed implementation/tests; focused pytest passed for manifest, CLI, package, contract, config integration, and e2e offline-first coverage. |
 | `make validate-pr` | Passed | Ruff, Pyright, default `1336 passed, 19 skipped, 14 deselected`, config-extra `424 passed, 1366 deselected`, and build succeeded. |
 | `make test-summary` | Passed | Suite table below. |
-| GitHub checks | Pending | To be recorded after PR creation. |
+| GitHub checks | Passed | `checks` completed successfully on PR #135 before the post-review documentation update. |
 
 ### Test Suite Summary
 
