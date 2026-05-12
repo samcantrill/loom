@@ -2001,6 +2001,7 @@ class PipelineRunner:
             message=str(exc) or type(exc).__name__,
             executor=str(getattr(self.executor, "name", "unknown")),
             exception_type=f"{type(exc).__module__}.{type(exc).__name__}",
+            details=exc.to_dict() if isinstance(exc, ResourceAdmissionError) else None,
         )
 
     def _failure(

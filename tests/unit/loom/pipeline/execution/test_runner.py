@@ -494,6 +494,8 @@ def test_runner_fails_fast_when_stage_resources_are_unavailable(
     assert failed.failure.failure_type == "resource_admission"
     assert failed.failure.exception_type is not None
     assert failed.failure.exception_type.endswith("ResourceAdmissionError")
+    assert failed.failure.details["code"] == "resource_admission.rejected"
+    assert failed.failure.details["context"] != {}
     assert executor.requests == []
 
 
