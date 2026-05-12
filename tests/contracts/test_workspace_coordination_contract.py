@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from loom.authority._repository import initialize_authority_repository
+from loom.authority._repository import AuthorityRepository
 from loom.authority.mutation_service import (
     AuthorityMutationOperation,
     AuthorityMutationService,
@@ -124,19 +124,19 @@ def coordination_case(
             name="in-memory",
             store=InMemoryWorkspaceCoordinationStore(),
         )
-    clock = FrozenClock()
-    return CoordinationStoreCase(
-        name="sqlite",
+    if request.param == "sqlite":
+        clock = FrozenClock()
+        return CoordinationStoreCase(
+            name="sqlite",
             store=SQLiteWorkspaceCoordinationStore(
                 tmp_path / "workspace" / ".loom" / "coordination.sqlite3",
                 clock=clock,
             ),
             clock=clock,
         )
-    repository = initialize_authority_repository(
-        tmp_path / "authority",
-        service_generation="generation-1",
-    )
+    clock = FrozenClock()
+    repository = AuthorityRepository(tmp_path / "authority", clock=clock)
+    repository.initialize(service_generation="generation-1")
     service = AuthorityMutationService(repository)
 
     def transport(
@@ -155,7 +155,7 @@ def coordination_case(
             workspace_id="workspace-1",
             service_generation="generation-1",
         ),
-        supports_resources=False,
+        clock=clock,
     )
 
 

@@ -35,10 +35,12 @@ from loom.pipeline.stores import (
     BackendCapabilitySet,
     CapabilityScope,
     LocalRunStore,
+    WorkspaceIdentity,
     path_to_run_uri,
     run_uri_to_path,
 )
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
 from loom.provenance.models import ProvenanceCaptureOptions
 from loom.serialization import PlainData
 from tests.support.authority_stores import InMemoryPerRunAuthorityStore
@@ -117,6 +119,25 @@ def _authority_run_store(tmp_path: Path) -> AuthorityBackedSerialRunStore:
             clock=lambda: "2020-01-01T00:00:00Z"
         ),
     )
+
+
+def _authority_run_store_with_coordination(
+    tmp_path: Path,
+) -> tuple[AuthorityBackedSerialRunStore, SQLiteWorkspaceCoordinationStore]:
+    coordination_store = SQLiteWorkspaceCoordinationStore(
+        tmp_path / "coordination.sqlite3",
+        clock=lambda: "2020-01-01T00:00:00Z",
+    )
+    coordination_store.create_workspace(WorkspaceIdentity(workspace_id="workspace-1"))
+    run_store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(
+            clock=lambda: "2020-01-01T00:00:00Z"
+        ),
+        workspace_coordination_store=coordination_store,
+        authority_config={"backend_kind": "test_fake", "workspace_id": "workspace-1"},
+    )
+    return run_store, coordination_store
 
 
 def _run_uri(tmp_path: Path) -> str:
@@ -383,6 +404,97 @@ def test_runner_passes_resolved_runtime_to_stage_execution_request(
     entries = cast(Mapping[str, PlainData], resources["entries"])
     cpu = cast(Mapping[str, PlainData], entries["cpu"])
     assert cpu["amount"] == 2
+
+
+def test_runner_acquires_and_releases_stage_resource_admission(
+    tmp_path: Path,
+) -> None:
+    run_store, coordination_store = _authority_run_store_with_coordination(tmp_path)
+    coordination_store.set_resource_limit("workspace-1", "cpu", limit=1)
+    executor = TrackingExecutor()
+
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            options={
+                "stage_options": {
+                    "build": {
+                        "resources": {
+                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
+                        }
+                    }
+                },
+            },
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert len(executor.requests) == 1
+    counter = coordination_store.set_resource_limit("workspace-1", "cpu", limit=1)
+    assert counter.value == 0
+
+
+def test_runner_fails_fast_when_stage_resources_are_unavailable(
+    tmp_path: Path,
+) -> None:
+    run_store, coordination_store = _authority_run_store_with_coordination(tmp_path)
+    coordination_store.set_resource_limit("workspace-1", "cpu", limit=1)
+    coordination_store.acquire_resource_lease(
+        "workspace-1",
+        "cpu",
+        owner_id="existing-worker",
+        amount=1,
+        lease_ttl_seconds=30,
+    )
+    executor = TrackingExecutor()
+
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            options={
+                "stage_options": {
+                    "build": {
+                        "resources": {
+                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
+                        }
+                    }
+                },
+            },
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    failed = result.stage_results["build"]
+    assert result.status == RunStatus.FAILED
+    assert failed.status == StageStatus.FAILED
+    assert failed.failure is not None
+    assert failed.failure.failure_type == "resource_admission"
+    assert failed.failure.exception_type is not None
+    assert failed.failure.exception_type.endswith("ResourceAdmissionError")
+    assert executor.requests == []
 
 
 def test_runner_prepares_worker_attempt_for_subprocess_without_constructing_stage(

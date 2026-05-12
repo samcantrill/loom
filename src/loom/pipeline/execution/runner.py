@@ -22,7 +22,9 @@ from loom.pipeline.planning import (
     build_stage_fingerprint,
     plan_pipeline,
 )
+from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.runtime import (
+    ExecutionOptions,
     ParallelExecutionOptions,
     ResolvedStageRuntimeOptions,
     RunOptions,
@@ -40,6 +42,7 @@ from loom.pipeline.stores import (
     BackendCapability,
     CapabilityScope,
     DiagnosticSeverity,
+    LifecycleReason,
     LocalArtifactStore,
     LocalRunStore,
     LocalRunStorePaths,
@@ -83,6 +86,16 @@ from .models import (
     StageExecutionRequest,
     StageExecutionResult,
     StageRunResult,
+)
+from .resource_admission import (
+    DEFAULT_RESOURCE_LEASE_TTL_SECONDS,
+    ResourceAdmissionDecision,
+    ResourceAdmissionError,
+    ResourceAdmissionRequest,
+    ResourceAdmissionStatus,
+    acquire_resource_admission,
+    release_resource_admission,
+    resource_requests_from_runtime,
 )
 from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_attempts import prepare_stage_attempt
@@ -964,6 +977,7 @@ class PipelineRunner:
         attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
         stage_started_at: str | None = None
         local_run_store = self._require_local_run_store()
+        resource_admission: ResourceAdmissionDecision | None = None
         try:
             inputs = bind_stage_inputs(
                 stage=stage,
@@ -980,6 +994,11 @@ class PipelineRunner:
             )
             self.run_store.write_stage_fingerprint(
                 run_uri, stage.name, fingerprint.to_dict(), attempt=attempt
+            )
+            resource_admission = self._acquire_stage_resource_admission(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                resolved_runtime=resolved_runtime,
             )
             self.run_store.prepare_stage_workspace(run_uri, stage.name)
             running_at = self.clock()
@@ -1083,6 +1102,9 @@ class PipelineRunner:
                 started_at=stage_started_at,
                 finished_at=failure.failed_at,
             )
+        finally:
+            if resource_admission is not None:
+                self._release_stage_resource_admission(resource_admission)
 
     def _run_prepared_worker_stage(
         self,
@@ -1104,6 +1126,7 @@ class PipelineRunner:
         attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
         stage_started_at: str | None = None
         local_run_store = self._require_local_run_store()
+        resource_admission: ResourceAdmissionDecision | None = None
         try:
             prepared = prepare_stage_attempt(
                 run_store=self.run_store,
@@ -1121,6 +1144,11 @@ class PipelineRunner:
             attempt = prepared.attempt
             inputs = prepared.inputs
             fingerprint = cast(StageFingerprintRecord, prepared.fingerprint)
+            resource_admission = self._acquire_stage_resource_admission(
+                run_uri=run_uri,
+                stage_name=stage.name,
+                resolved_runtime=resolved_runtime,
+            )
             running_at = self.clock()
             write_stage_running(
                 self.run_store,
@@ -1229,6 +1257,9 @@ class PipelineRunner:
                 started_at=stage_started_at,
                 finished_at=failure.failed_at,
             )
+        finally:
+            if resource_admission is not None:
+                self._release_stage_resource_admission(resource_admission)
 
     def _commit_stage_execution_result(
         self,
@@ -1314,6 +1345,83 @@ class PipelineRunner:
                 f"stage lease renewal failed: {type(error).__name__}"
             ) from error
         return execution_result
+
+    def _acquire_stage_resource_admission(
+        self,
+        *,
+        run_uri: str,
+        stage_name: str,
+        resolved_runtime: ResolvedStageRuntimeOptions,
+    ) -> ResourceAdmissionDecision | None:
+        resources = resource_requests_from_runtime(
+            cast("ResourceRequest", resolved_runtime.resources)
+        )
+        if not resources:
+            return None
+        coordination_store = getattr(
+            self.run_store,
+            "workspace_coordination_store",
+            None,
+        )
+        if coordination_store is None:
+            return None
+        workspace_id = getattr(self.run_store, "workspace_id", None)
+        if not isinstance(workspace_id, str) or not workspace_id:
+            raise ResourceAdmissionError(
+                "resource admission requires an authority workspace_id",
+                code="resource_admission.missing_workspace",
+                context={"run_uri": run_uri, "stage_name": stage_name},
+            )
+        owner_id = str(getattr(self.run_store, "owner_id", "serial-controller"))
+        execution = cast(ExecutionOptions, resolved_runtime.execution)
+        settings = execution.settings
+        request = ResourceAdmissionRequest(
+            run_uri=run_uri,
+            stage_name=stage_name,
+            workspace_id=workspace_id,
+            owner_id=f"{owner_id}:{stage_name}",
+            resources=resources,
+            lease_ttl_seconds=_resource_lease_ttl_seconds(settings),
+            wait_timeout_seconds=_resource_wait_timeout_seconds(settings),
+            poll_interval_seconds=_resource_poll_interval_seconds(settings),
+        )
+        decision = acquire_resource_admission(coordination_store, request)
+        if decision.admitted:
+            return decision
+        raise ResourceAdmissionError(
+            decision.message or "resource capacity is unavailable",
+            code="resource_admission.blocked"
+            if decision.status is ResourceAdmissionStatus.BLOCKED
+            else "resource_admission.rejected",
+            context=decision.to_dict(),
+        )
+
+    def _release_stage_resource_admission(
+        self, decision: ResourceAdmissionDecision
+    ) -> None:
+        coordination_store = getattr(
+            self.run_store,
+            "workspace_coordination_store",
+            None,
+        )
+        if coordination_store is None:
+            return
+        try:
+            release_resource_admission(
+                coordination_store,
+                decision,
+                reason=LifecycleReason(
+                    code="resource_admission_released",
+                    message=(
+                        "released resource admission leases for stage "
+                        f"{decision.request.stage_name}"
+                    ),
+                ),
+            )
+        except Exception:
+            # The stage terminal state is already recorded; stale release failures
+            # fall back to the coordination store's lease expiry recovery.
+            return
 
     def _require_local_run_store(self) -> LocalRunStorePaths:
         if not isinstance(self.run_store, LocalRunStorePaths):
@@ -1993,7 +2101,39 @@ def _first_stage_failure(
     return None, None
 
 
+def _resource_lease_ttl_seconds(settings: Mapping[str, PlainData]) -> int:
+    value = settings.get("resource_lease_ttl_seconds", DEFAULT_RESOURCE_LEASE_TTL_SECONDS)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ResourceAdmissionError(
+            "resource_lease_ttl_seconds must be a positive integer",
+            code="resource_admission.invalid_settings",
+        )
+    return value
+
+
+def _resource_wait_timeout_seconds(settings: Mapping[str, PlainData]) -> float:
+    value = settings.get("resource_admission_timeout_seconds", 0.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ResourceAdmissionError(
+            "resource_admission_timeout_seconds must be non-negative",
+            code="resource_admission.invalid_settings",
+        )
+    return float(value)
+
+
+def _resource_poll_interval_seconds(settings: Mapping[str, PlainData]) -> float:
+    value = settings.get("resource_admission_poll_seconds", 1.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ResourceAdmissionError(
+            "resource_admission_poll_seconds must be positive",
+            code="resource_admission.invalid_settings",
+        )
+    return float(value)
+
+
 def _failure_type_for_exception(exc: BaseException) -> str:
+    if isinstance(exc, ResourceAdmissionError):
+        return "resource_admission"
     if isinstance(exc, OutputValidationError):
         return "output_validation"
     if isinstance(exc, _TargetConstructionError):

@@ -24,6 +24,7 @@ from loom.pipeline.stores.authority import (
 from loom.pipeline.stores.coordination import (
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
+    ResourceLeaseRecord,
     SweepIdentity,
     TrialLeaseRecord,
     TrialReference,
@@ -1417,6 +1418,25 @@ class AuthorityRepository:
             lease_ttl_seconds=lease_ttl_seconds,
         )
 
+    def acquire_resource_lease(
+        self,
+        workspace_id: str,
+        resource_key: str,
+        *,
+        owner_id: str,
+        amount: int,
+        lease_ttl_seconds: int,
+    ) -> ResourceLeaseRecord:
+        """Acquire a service-owned generic resource lease."""
+
+        return self._coordination_store().acquire_resource_lease(
+            workspace_id,
+            resource_key,
+            owner_id=owner_id,
+            amount=amount,
+            lease_ttl_seconds=lease_ttl_seconds,
+        )
+
     def renew_coordination_lease(
         self,
         lease_id: str,
@@ -1479,6 +1499,17 @@ class AuthorityRepository:
             limit=limit,
         )
 
+    def set_resource_limit(
+        self, workspace_id: str, resource_key: str, *, limit: int | None
+    ) -> ConcurrencyCounter:
+        """Set a service-owned generic resource limit."""
+
+        return self._coordination_store().set_resource_limit(
+            workspace_id,
+            resource_key,
+            limit=limit,
+        )
+
     def increment_counter(
         self,
         workspace_id: str,
@@ -1517,10 +1548,9 @@ class AuthorityRepository:
     def scan_coordination_recovery(
         self, workspace_id: str
     ) -> tuple[CoordinationRecoveryRecord, ...]:
-        """Scan service-owned non-resource coordination recovery facts."""
+        """Scan service-owned coordination recovery facts."""
 
-        records = self._coordination_store().scan_recovery(workspace_id)
-        return tuple(record for record in records if record.resource_key is None)
+        return self._coordination_store().scan_recovery(workspace_id)
 
     def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
         """Return persisted and currently detectable run-level recovery facts."""

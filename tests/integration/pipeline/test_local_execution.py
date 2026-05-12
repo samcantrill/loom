@@ -28,6 +28,8 @@ from loom.pipeline.stores import (
     AuthorityDeploymentProfile,
     LocalArtifactStore,
     LocalRunStore,
+    ServiceWorkspaceCoordinationStore,
+    WorkspaceIdentity,
     path_to_run_uri,
 )
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
@@ -93,8 +95,9 @@ def _http_authority_run_store(tmp_path: Path) -> AuthorityBackedSerialRunStore:
         reference_id="test-http-authority",
     )
     assert config.endpoint is not None
+    authority_client = AuthorityClient(config.endpoint, transport=transport)
     authority_store = AuthorityClientBackedPerRunAuthorityStore(
-        client=AuthorityClient(config.endpoint, transport=transport),
+        client=authority_client,
         config=config,
         readiness=services.readiness_report,
     )
@@ -102,6 +105,11 @@ def _http_authority_run_store(tmp_path: Path) -> AuthorityBackedSerialRunStore:
         local_store=LocalRunStore(tmp_path / "runs"),
         authority_store=authority_store,
         authority_config=config,
+        workspace_coordination_store=ServiceWorkspaceCoordinationStore(
+            authority_client,
+            workspace_id="workspace-a",
+            service_generation="generation-1",
+        ),
     )
 
 
@@ -165,6 +173,41 @@ def test_local_runner_executes_pipeline_through_http_authority_client(
     ]
     assert (tmp_path / "runs" / "http-run" / "plan.json").is_file()
     assert set(run_store.read_artifact_index(run_uri)) == {"build.data", "report.text"}
+
+
+def test_local_runner_uses_http_authority_resource_admission(
+    tmp_path: Path,
+) -> None:
+    run_store = _http_authority_run_store(tmp_path)
+    coordination_store = run_store.workspace_coordination_store
+    assert isinstance(coordination_store, ServiceWorkspaceCoordinationStore)
+    coordination_store.create_workspace(WorkspaceIdentity(workspace_id="workspace-a"))
+    coordination_store.set_resource_limit("workspace-a", "cpu", limit=1)
+    run_uri = _run_uri(tmp_path, "http-resource-run")
+
+    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
+        RunRequest(
+            config=local_execution_config(),
+            run_uri=run_uri,
+            options={
+                "stage_options": {
+                    "build": {
+                        "resources": {
+                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
+                        }
+                    },
+                    "report": {
+                        "resources": {
+                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
+                        }
+                    },
+                }
+            },
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert coordination_store.set_resource_limit("workspace-a", "cpu", limit=1).value == 0
 
 
 def test_local_runner_persists_composed_config_manifest_without_resolved_snapshots(

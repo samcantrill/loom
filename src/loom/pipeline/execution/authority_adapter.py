@@ -28,7 +28,9 @@ from loom.pipeline.stores import (
     LocalRunStore,
     OutputCommit,
     PerRunAuthorityStore,
+    ServiceWorkspaceCoordinationStore,
     StatusTransition,
+    WorkspaceCoordinationStore,
     config_from_authority_reference,
     create_authority_client,
     format_artifact_key,
@@ -535,6 +537,8 @@ class AuthorityBackedSerialRunStore:
         local_store: LocalRunStore,
         authority_store: PerRunAuthorityStore,
         authority_config: AuthorityConfig | None = None,
+        workspace_coordination_store: WorkspaceCoordinationStore | None = None,
+        workspace_id: str | None = None,
         owner_id: str = "serial-controller",
     ) -> None:
         if not isinstance(local_store, LocalRunStore):
@@ -545,10 +549,12 @@ class AuthorityBackedSerialRunStore:
             raise ValueError("owner_id must be non-empty")
         self.local_store = local_store
         self.authority_store = authority_store
+        self.workspace_coordination_store = workspace_coordination_store
         self._authority_config = authority_config or _config_from_authority_store(
             authority_store,
             fallback=AuthorityConfig(backend_kind=AuthorityBackendKind.TEST_FAKE),
         )
+        self.workspace_id = workspace_id or self._authority_config.workspace_id
         self.owner_id = owner_id
         self._attempt_leases: dict[tuple[str, str, int], _AttemptLease] = {}
         self._controller_leases: dict[str, _ControllerLease] = {}
@@ -1288,6 +1294,7 @@ def create_authority_backed_serial_run_store(
     authority_store: PerRunAuthorityStore | None = None,
     authority_mode: AuthorityResolutionMode = AuthorityResolutionMode.ONLINE_MUTATION,
     workspace_root: str | Path | None = None,
+    workspace_coordination_store: WorkspaceCoordinationStore | None = None,
     allocation_id: str | None = None,
     expected_workspace_id: str | None = None,
     expected_generation: str | None = None,
@@ -1295,6 +1302,7 @@ def create_authority_backed_serial_run_store(
 ) -> AuthorityBackedSerialRunStore:
     """Create the default authority-backed local serial run store."""
 
+    readiness: AuthorityProtocolReadiness | None = None
     if authority_store is None:
         input_config = _resolve_authority_config(authority_config, authority_store)
         if input_config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
@@ -1312,10 +1320,11 @@ def create_authority_backed_serial_run_store(
             purpose="authority-backed serial run-store factory",
         )
         resolved_config = config_from_authority_reference(reference)
+        readiness = resolution.readiness
         authority_store = _authority_store_from_config(
             resolved_config,
             resolution=resolution.result,
-            readiness=resolution.readiness,
+            readiness=readiness,
         )
         resolved_config = _config_from_authority_store(
             authority_store,
@@ -1324,10 +1333,18 @@ def create_authority_backed_serial_run_store(
     else:
         resolved_config = _resolve_authority_config(authority_config, authority_store)
 
+    coordination_store = workspace_coordination_store
+    if coordination_store is None:
+        coordination_store = _coordination_store_from_config(
+            resolved_config,
+            readiness=readiness,
+        )
     return AuthorityBackedSerialRunStore(
         local_store=LocalRunStore(root),
         authority_store=authority_store,
         authority_config=resolved_config,
+        workspace_coordination_store=coordination_store,
+        workspace_id=_coordination_workspace_id(resolved_config, readiness),
         owner_id=owner_id,
     )
 
@@ -1398,6 +1415,29 @@ def _authority_store_from_config(
         "authority-backed serial store does not support backend "
         f"{config.backend_kind.value}"
     )
+
+
+def _coordination_store_from_config(
+    config: AuthorityConfig,
+    *,
+    readiness: AuthorityProtocolReadiness | None,
+) -> WorkspaceCoordinationStore | None:
+    if config.endpoint is None or not config.endpoint.startswith(("http://", "https://")):
+        return None
+    return ServiceWorkspaceCoordinationStore(
+        create_authority_client(config),
+        workspace_id=_coordination_workspace_id(config, readiness),
+        service_generation=None if readiness is None else readiness.service_generation,
+    )
+
+
+def _coordination_workspace_id(
+    config: AuthorityConfig,
+    readiness: AuthorityProtocolReadiness | None,
+) -> str | None:
+    if readiness is not None and readiness.workspace_id is not None:
+        return readiness.workspace_id
+    return config.workspace_id
 
 
 def _transition_from_result(

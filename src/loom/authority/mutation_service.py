@@ -27,6 +27,7 @@ from loom.pipeline.stores import (
     SweepIdentity,
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
+    ResourceLeaseRecord,
     TrialLeaseRecord,
     TrialReference,
     WorkspaceIdentity,
@@ -83,17 +84,6 @@ class AuthorityMutationOperation(StrEnum):
 
 class AuthorityMutationValidationError(ValueError):
     """Raised when a mutation request body cannot be adapted."""
-
-
-class AuthorityMutationUnsupportedCapabilityError(ValueError):
-    """Raised when a valid operation is reserved for a later phase."""
-
-    def __init__(
-        self, *, capability: str, operation: AuthorityMutationOperation
-    ) -> None:
-        super().__init__(f"{capability} is unsupported until Phase 16")
-        self.capability = capability
-        self.operation = operation
 
 
 _OPERATION_KIND_BY_MUTATION: Mapping[
@@ -258,20 +248,7 @@ class AuthorityMutationService:
                 metadata,
                 _repository_rejection(exc, request_detail=_request_detail(payload)),
             )
-        except AuthorityMutationUnsupportedCapabilityError as exc:
-            return rejected_authority_response(
-                metadata,
-                AuthorityProtocolRejection(
-                    category=AuthorityProtocolErrorCategory.UNSUPPORTED_CAPABILITY,
-                    code="authority_coordination_unsupported_resource",
-                    message=str(exc),
-                    detail={
-                        "capability": exc.capability,
-                        "operation": exc.operation.value,
-                    },
-                ),
-            )
-        except (AuthorityMutationValidationError, TypeError, ValueError) as exc:
+        except (AuthorityMutationValidationError, TypeError) as exc:
             return rejected_authority_response(
                 metadata,
                 AuthorityProtocolRejection(
@@ -280,6 +257,11 @@ class AuthorityMutationService:
                     message=str(exc),
                     detail=_request_detail(payload),
                 ),
+            )
+        except ValueError as exc:
+            return rejected_authority_response(
+                metadata,
+                _value_error_rejection(exc, request_detail=_request_detail(payload)),
             )
         except Exception as exc:
             return rejected_authority_response(
@@ -359,9 +341,9 @@ class AuthorityMutationService:
             case AuthorityMutationOperation.SCAN_COORDINATION_RECOVERY:
                 return self._scan_coordination_recovery(request)
             case AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE:
-                return self._unsupported_resource(request, "resource_leases")
+                return self._acquire_resource_lease(request)
             case AuthorityMutationOperation.SET_RESOURCE_LIMIT:
-                return self._unsupported_resource(request, "resource_limits")
+                return self._set_resource_limit(request)
 
     def _admit_run(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
         revision = self._repository.admit_run(
@@ -676,6 +658,23 @@ class AuthorityMutationService:
             trial_lease=lease,
         )
 
+    def _acquire_resource_lease(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        lease = self._repository.acquire_resource_lease(
+            _required_body_string(request, "workspace_id"),
+            _required_body_string(request, "resource_key"),
+            owner_id=_required_owner_id(request),
+            amount=_optional_body_positive_int(request, "amount", default=1),
+            lease_ttl_seconds=_required_positive_seconds(request),
+        )
+        return _result(
+            revision=lease.lease.revision,
+            service_generation=self._service_generation,
+            lease=lease.lease,
+            resource_lease=lease,
+        )
+
     def _renew_coordination_lease(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
@@ -735,6 +734,20 @@ class AuthorityMutationService:
             counter=counter,
         )
 
+    def _set_resource_limit(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        counter = self._repository.set_resource_limit(
+            _required_body_string(request, "workspace_id"),
+            _required_body_string(request, "resource_key"),
+            limit=_optional_body_int(request, "limit"),
+        )
+        return _result(
+            revision=counter.revision,
+            service_generation=self._service_generation,
+            counter=counter,
+        )
+
     def _increment_counter(
         self, request: AuthorityProtocolRequest
     ) -> AuthorityProtocolResult:
@@ -781,17 +794,6 @@ class AuthorityMutationService:
             service_generation=self._service_generation,
             coordination_recovery_records=records,
         )
-
-    def _unsupported_resource(
-        self, _request: AuthorityProtocolRequest, capability: str
-    ) -> AuthorityProtocolResult:
-        raise AuthorityMutationUnsupportedCapabilityError(
-            capability=capability,
-            operation=AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE
-            if capability == "resource_leases"
-            else AuthorityMutationOperation.SET_RESOURCE_LIMIT,
-        )
-
 
 def unsupported_mutation_response(
     operation: AuthorityMutationOperation,
@@ -840,6 +842,7 @@ def _result(
     sweep: SweepIdentity | None = None,
     trial: TrialReference | None = None,
     trial_lease: TrialLeaseRecord | None = None,
+    resource_lease: ResourceLeaseRecord | None = None,
     counter: ConcurrencyCounter | None = None,
     artifact_facts: tuple[ArtifactFactRecord, ...] = (),
     submitted_operations: tuple[SubmittedOperationRecord, ...] = (),
@@ -860,6 +863,7 @@ def _result(
         sweep=sweep,
         trial=trial,
         trial_lease=trial_lease,
+        resource_lease=resource_lease,
         counter=counter,
         artifact_facts=artifact_facts,
         submitted_operations=submitted_operations,
@@ -1063,6 +1067,26 @@ def _repository_rejection(
     )
 
 
+def _value_error_rejection(
+    exc: ValueError,
+    *,
+    request_detail: Mapping[str, PlainData],
+) -> AuthorityProtocolRejection:
+    message = str(exc)
+    category = _repository_category(message)
+    code = (
+        "authority_mutation_conflict"
+        if category is AuthorityProtocolErrorCategory.CONFLICT
+        else "authority_mutation_validation"
+    )
+    return AuthorityProtocolRejection(
+        category=category,
+        code=code,
+        message=message,
+        detail=request_detail,
+    )
+
+
 def _repository_category(message: str) -> AuthorityProtocolErrorCategory:
     if message == "stale service generation":
         return AuthorityProtocolErrorCategory.STALE_GENERATION
@@ -1077,6 +1101,8 @@ def _repository_category(message: str) -> AuthorityProtocolErrorCategory:
         or "terminal" in message
         or "not running" in message
         or "active lease" in message
+        or "counter limit" in message
+        or "resource limit" in message
     ):
         return AuthorityProtocolErrorCategory.CONFLICT
     return AuthorityProtocolErrorCategory.VALIDATION

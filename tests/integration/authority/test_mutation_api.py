@@ -18,6 +18,7 @@ from loom.pipeline.stores import (
     AuthorityProtocolErrorCategory,
     AuthorityProtocolResponse,
     BackendRevision,
+    LeaseKind,
     LeaseState,
     SweepIdentity,
     TrialReference,
@@ -411,6 +412,18 @@ def test_mutation_api_serves_workspace_coordination_routes(tmp_path) -> None:
     assert recovery.result is not None
     assert recovery.result.coordination_recovery_records == ()
 
+    limit = client.set_resource_limit(
+        "workspace-a",
+        "gpu",
+        limit=1,
+        request_id="resource-limit-1",
+        service_generation="generation-1",
+    )
+    assert limit.accepted is True
+    assert limit.result is not None
+    assert limit.result.counter is not None
+    assert limit.result.counter.counter_name == "resource:gpu"
+
     resource = client.acquire_resource_lease(
         "workspace-a",
         "gpu",
@@ -420,13 +433,25 @@ def test_mutation_api_serves_workspace_coordination_routes(tmp_path) -> None:
         request_id="resource-lease-1",
         service_generation="generation-1",
     )
-    assert resource.accepted is False
-    assert resource.rejection is not None
-    assert (
-        resource.rejection.category
-        is AuthorityProtocolErrorCategory.UNSUPPORTED_CAPABILITY
+    assert resource.accepted is True
+    assert resource.result is not None
+    assert resource.result.resource_lease is not None
+    assert resource.result.resource_lease.resource_key == "gpu"
+    assert resource.result.resource_lease.amount == 1
+    assert resource.result.resource_lease.lease.kind is LeaseKind.RESOURCE
+
+    blocked = client.acquire_resource_lease(
+        "workspace-a",
+        "gpu",
+        owner_id="worker-2",
+        amount=1,
+        lease_ttl_seconds=30,
+        request_id="resource-lease-2",
+        service_generation="generation-1",
     )
-    assert resource.rejection.code == "authority_coordination_unsupported_resource"
+    assert blocked.accepted is False
+    assert blocked.rejection is not None
+    assert blocked.rejection.category is AuthorityProtocolErrorCategory.CONFLICT
 
 
 def test_route_level_invalid_request_returns_protocol_rejection(tmp_path) -> None:
