@@ -162,13 +162,19 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded-path phase may use one bounded pass if validation or coverage exposes a concrete gap
+- Phase implementation refinement: explicitly not needed after managing-agent diff review and targeted validation; no separate refiner pass consumed
 - PR review: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
-- Implementation summary: pending.
-- Validation: pending.
+- Implementation summary: added shared plain-data source-label helpers; labeled backend diagnostics, capabilities, status/stage/submitted-operation summaries, artifact/log summaries, preflight details, run catalog summaries, and catalog warnings; added concise CLI source output and representative unit, contract, and integration assertions. Runtime behavior remains read-only and mutation paths are unchanged.
+- Validation so far:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...` passed for touched diagnostics, CLI, run-catalog, unit, contract, and integration paths.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright ...` passed for the same focused paths.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest ...` passed for the combined Phase 14 focused slice: 115 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_cli_runs_contract.py tests/contracts/test_run_catalog_contract.py tests/integration/pipeline/test_cli_runs.py tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_direct_scan.py tests/unit/loom/runs/test_direct_scan_helpers.py` passed: 20 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py` passed: 34 passed.
+  - The non-extra focused pytest command against optional config diagnostics was superseded by the `--extra config` run because those tests require the config extra.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
