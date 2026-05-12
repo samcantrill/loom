@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 14 merged; Phase 15 pr_open
+- Phase work status: Phase 15 merged; Phase 16 pending
 
 Related artifacts and references:
 
@@ -1949,7 +1949,7 @@ Phase 14 merged on 2026-05-12:
 
 ### Phase 15: Workspace Coordination Service API
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-workspace-coordination`
 - PR: https://github.com/samcantrill/loom/pull/133
 
@@ -2059,7 +2059,13 @@ resource methods fail explicitly until Phase 16.
   contract 151 passed / 2 skipped, integration 128 passed / 8 skipped /
   10 deselected, e2e 39 passed / 2 deselected, and config-extra 422 passed /
   1350 deselected.
-- Stack maintenance: root PR targets `develop`; no predecessor branch.
+- Automated review and merge: manager review found no blocking findings; final
+  pre-merge check verified PR #133 targeted `develop`, CI `checks` succeeded,
+  and merge state was `CLEAN`.
+- Merge: PR #133 squash-merged into `develop` on 2026-05-12 at merge commit
+  `01098f9778968b94663d06b38561da9a66b710eb`.
+- Stack maintenance: root PR merged into `develop`; no predecessor or successor
+  branch.
 
 ### Phase 16: Resource Leases And Scheduler-Ready Admission
 
