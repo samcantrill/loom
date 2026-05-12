@@ -221,10 +221,12 @@ make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-12.
 - Final phase execution plan: refined by managing agent on 2026-05-12; confirmed the neutral manifest module boundary, lazy execution facade updates, explicit offline adapter/factory, and additive CLI reporting path.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added the strict `loom.pipeline.offline_evidence` manifest schema, atomic writer/reader helpers, local artifact checksum facts, and diagnostics for incomplete evidence; added the explicit `OfflineEvidenceRunStore` adapter/factory; wired `PipelineRunner` to admit only explicit offline evidence stores, keep raw `LocalRunStore` rejected, write terminal manifests, and keep online authority failure behavior fail-closed; wired `loom run --offline-first`/`--authority-mode offline_first`, preflight labeling, and CLI JSON/text evidence summaries.
+- Implementation validation: targeted checks passed for Ruff, Pyright, manifest/CLI/package/contract tests, and config/e2e offline-first smoke tests; `make validate-pr` passed with Ruff, Pyright, default harness `1336 passed, 19 skipped, 14 deselected`, config-extra harness `424 passed, 1366 deselected`, and package build; `make test-summary` passed with package `70 passed, 1 skipped`, unit `971 passed, 1 skipped`, contract `154 passed, 2 skipped`, integration `128 passed, 8 skipped, 10 deselected`, e2e `40 passed, 2 deselected`, and config-extra `424 passed, 1366 deselected`.
+- Refinement summary: one focused implementation/test fix was applied after the first full validation run exposed stale CLI unit-test doubles that did not accept the new `authority_mode` plumbing; no production behavior change was needed for that blocker.
+- Phase implementation refinement: not needed beyond manager-local focused fix after validation.
+- PR review: unused; pending automated manager review after PR creation.
+- Blocker-resolution summary: 0/3 blocker-resolution passes used; no open implementation blockers remain.
+- PR preparation: final PR body prepared at `docs/phases/authority-offline-evidence-pr-body.md`; intended PR target remains `develop`.
+- Stack maintenance: root phase; no predecessor branch and no successor branch currently depends on this branch.
+- Remaining blockers: none.
