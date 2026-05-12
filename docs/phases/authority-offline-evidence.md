@@ -19,9 +19,9 @@
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and confirmation review; evidence is recorded in `docs/implementation-plans/implementation-plan-v10.md`
 - Plan quality gate loop budget: consumed before phase work; no blocking findings remain.
 - Draft pass: completed by managing agent on 2026-05-12
-- Refine pass: pending expanded-path source-boundary confirmation
+- Refine pass: completed by managing agent on 2026-05-12 after confirming execution facade, local-store, CLI, and materialization checksum boundaries
 - Setup limitations: none; GitHub auth and current `develop` were available when the worktree was created.
-- Blockers: none; refine pass must complete before implementation.
+- Blockers: none; implementation may begin from this refined phase execution plan.
 
 ## Objective
 
@@ -60,13 +60,15 @@ to Phase 18.
 - `LocalRunStore` already persists run status, plan, runtime metadata, config manifests, provenance documents, stage statuses, stage inputs, stage fingerprints, stage outputs, stage failures, logs, artifact indexes, and event logs.
 - `ExecutionPlan`, status records, event records, `ResourceRequest`, and `ArtifactRef` already provide plain-data serialization suitable for a manifest contract.
 - Phase 16 resource admission returns no decision when no coordination store is present; offline evidence can record requested resources without introducing a service resource lease.
+- `loom.pipeline.execution.__init__` uses a lazy export facade; any new offline execution helpers exported there must update the exact package API test.
+- `loom.pipeline.stores.materialization_read_models` already contains local-file URI/checksum helpers; Phase 17 should reuse the same URI/chksum conventions or small standard-library equivalents without importing CLI or authority server code.
 - CLI result payloads are additive dataclasses, so offline evidence paths can be surfaced without changing successful run semantics for online mode.
 
 ## In-Scope Work
 
-- Add offline evidence manifest value models with strict schema version, kind, source label, diagnostics, run facts, plan facts, runtime/config/provenance facts, stage evidence, artifact facts, log references, resource requests, and audit events.
+- Add offline evidence manifest value models in `src/loom/pipeline/offline_evidence.py` with strict schema version, kind, source label, diagnostics, run facts, plan facts, runtime/config/provenance facts, stage evidence, artifact facts, log references, resource requests, and audit events.
 - Add a writer that reads a completed local run directory through public local-store methods and writes `offline-evidence/manifest.json` atomically.
-- Add an explicit offline run-store adapter/factory so `PipelineRunner` can run local serial execution only when offline-first mode was selected.
+- Add an explicit offline run-store adapter/factory, exported through the execution facade, so `PipelineRunner` can run local serial execution only when offline-first mode was selected.
 - Preserve the existing `LocalRunStore` rejection for accidental direct runner use.
 - Wire `loom run --offline-first` and `--authority-mode offline_first` to the offline adapter, and ensure default online mutation still resolves through authority.
 - Add non-authoritative diagnostics/source metadata to offline run metadata and CLI JSON/text summaries.
@@ -92,7 +94,7 @@ to Phase 18.
 
 ## Scope Contract
 
-Offline execution is explicit. `PipelineRunner` may accept an offline adapter that marks itself as non-authoritative evidence, but raw `LocalRunStore` remains rejected. The evidence manifest is plain JSON with a fixed schema version and `kind`, carries `state_source.authoritative: false`, validates known fields strictly, and records diagnostics instead of silently omitting missing required facts. Online authority-backed runs do not write offline manifests unless the caller explicitly selected offline-first mode.
+Offline execution is explicit. `PipelineRunner` may accept an offline adapter that marks itself as non-authoritative evidence, but raw `LocalRunStore` remains rejected. The evidence manifest is plain JSON with a fixed schema version and `kind`, carries `state_source.authoritative: false`, validates known fields strictly, and records diagnostics instead of silently omitting missing required facts. Online authority-backed runs do not write offline manifests unless the caller explicitly selected offline-first mode. The neutral manifest module must not import `loom.cli`, `loom.authority._repository`, FastAPI, or server route modules.
 
 ## Design Impact
 
@@ -133,8 +135,8 @@ mutating authority state.
 
 ## Implementation Steps
 
-1. Add strict offline evidence manifest models and read/write helpers with local artifact checksum/size diagnostics.
-2. Add an explicit offline serial run-store adapter/factory that delegates to `LocalRunStore`, marks source as offline evidence, and remains separate from raw `LocalRunStore`.
+1. Add strict offline evidence manifest models and read/write helpers in `src/loom/pipeline/offline_evidence.py` with local artifact checksum/size diagnostics.
+2. Add `OfflineEvidenceRunStore`/`create_offline_evidence_run_store` that delegates to `LocalRunStore`, marks source as offline evidence, exposes manifest path/read helpers, and remains separate from raw `LocalRunStore`.
 3. Teach `PipelineRunner` to skip authority capability admission only for the offline adapter and to write the offline manifest after terminal run state.
 4. Wire CLI authority mode parsing for `loom run`, create the offline adapter only for explicit offline-first selection, and surface evidence manifest path/source in results.
 5. Add unit and contract coverage for manifest validation, incomplete evidence diagnostics, event ordering, artifact facts, and no server-private imports.
@@ -206,7 +208,7 @@ make test-summary
 
 - Safe implementation slices: manifest models/helpers first; offline adapter/factory second; runner terminal manifest write third; CLI wiring/reporting fourth; fixtures and full-suite coverage last.
 - Tests to run with each slice: model unit/contract tests after manifest work; runner unit/integration tests after adapter/runner work; CLI unit/e2e tests after CLI wiring.
-- Decisions the executor must not revisit: offline mode is explicit only; raw `LocalRunStore` remains rejected by `PipelineRunner`; no import transaction or authority repository mutation is in scope; manifest source is non-authoritative.
+- Decisions the executor must not revisit: offline mode is explicit only; raw `LocalRunStore` remains rejected by `PipelineRunner`; no import transaction or authority repository mutation is in scope; manifest source is non-authoritative; manifest models live in the neutral pipeline layer, while runner/CLI wiring lives in execution/CLI.
 - Conditions that require stopping for the manager: source review proves local status/plan/event data cannot identify a complete terminal run, or CLI offline selection conflicts with an already public option.
 
 ## Refinement And Review Budget Status
@@ -218,7 +220,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
-- Final phase execution plan:
+- Final phase execution plan: refined by managing agent on 2026-05-12; confirmed the neutral manifest module boundary, lazy execution facade updates, explicit offline adapter/factory, and additive CLI reporting path.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
