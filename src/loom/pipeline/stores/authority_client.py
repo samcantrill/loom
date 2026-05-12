@@ -12,6 +12,7 @@ from urllib import error, request
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.status import RunStatus, StageStatus
+from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 
@@ -42,6 +43,36 @@ AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH = (
 )
 AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/stages/outputs/commit"
+)
+AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/leases/acquire"
+)
+AUTHORITY_MUTATION_CONTROLLER_LEASE_RENEW_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/leases/renew"
+)
+AUTHORITY_MUTATION_CONTROLLER_LEASE_RELEASE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/leases/release"
+)
+AUTHORITY_MUTATION_CONTROLLER_LEASE_FAIL_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/leases/fail"
+)
+AUTHORITY_MUTATION_STAGE_LEASE_RENEW_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/stages/leases/renew"
+)
+AUTHORITY_MUTATION_STAGE_LEASE_RELEASE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/stages/leases/release"
+)
+AUTHORITY_MUTATION_STAGE_LEASE_FAIL_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/stages/leases/fail"
+)
+AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/submitted/write"
+)
+AUTHORITY_MUTATION_SUBMITTED_READ_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/submitted/read"
+)
+AUTHORITY_MUTATION_SUBMITTED_LIST_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/submitted/list"
 )
 
 AuthorityHttpTransport = Callable[
@@ -205,6 +236,119 @@ class AuthorityClient:
             ),
         )
 
+    def acquire_controller_lease(
+        self,
+        run_uri: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Acquire a run controller lease through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.LEASE,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                owner_id=owner_id,
+                expected_revision=expected_revision,
+                body={"lease_ttl_seconds": lease_ttl_seconds},
+            ),
+        )
+
+    def renew_controller_lease(
+        self,
+        run_uri: str,
+        *,
+        lease_id: str,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Renew a run controller lease through the service."""
+
+        return self._lease_request(
+            AUTHORITY_MUTATION_CONTROLLER_LEASE_RENEW_PATH,
+            run_uri=run_uri,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            lease_ttl_seconds=lease_ttl_seconds,
+            expected_revision=expected_revision,
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def release_controller_lease(
+        self,
+        run_uri: str,
+        *,
+        lease_id: str,
+        owner_id: str,
+        fencing_token: str,
+        expected_revision: BackendRevision | None = None,
+        reason: LifecycleReason | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Release a run controller lease through the service."""
+
+        return self._lease_request(
+            AUTHORITY_MUTATION_CONTROLLER_LEASE_RELEASE_PATH,
+            run_uri=run_uri,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            expected_revision=expected_revision,
+            reason=reason,
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def fail_controller_lease(
+        self,
+        run_uri: str,
+        *,
+        lease_id: str,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Fail a run controller lease through the service."""
+
+        return self._lease_request(
+            AUTHORITY_MUTATION_CONTROLLER_LEASE_FAIL_PATH,
+            run_uri=run_uri,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            expected_revision=expected_revision,
+            reason=reason,
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
     def transition_stage(
         self,
         run_uri: str,
@@ -273,6 +417,90 @@ class AuthorityClient:
             ),
         )
 
+    def renew_stage_lease(
+        self,
+        run_uri: str,
+        *,
+        lease_id: str,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Renew a stage lease through the service."""
+
+        return self._lease_request(
+            AUTHORITY_MUTATION_STAGE_LEASE_RENEW_PATH,
+            run_uri=run_uri,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            lease_ttl_seconds=lease_ttl_seconds,
+            expected_revision=expected_revision,
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def release_stage_lease(
+        self,
+        run_uri: str,
+        *,
+        lease_id: str,
+        owner_id: str,
+        fencing_token: str,
+        expected_revision: BackendRevision | None = None,
+        reason: LifecycleReason | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Release a stage lease through the service."""
+
+        return self._lease_request(
+            AUTHORITY_MUTATION_STAGE_LEASE_RELEASE_PATH,
+            run_uri=run_uri,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            expected_revision=expected_revision,
+            reason=reason,
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
+    def fail_stage_lease(
+        self,
+        run_uri: str,
+        *,
+        lease_id: str,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Fail a stage lease through the service."""
+
+        return self._lease_request(
+            AUTHORITY_MUTATION_STAGE_LEASE_FAIL_PATH,
+            run_uri=run_uri,
+            lease_id=lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            expected_revision=expected_revision,
+            reason=reason,
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
     def record_output_commit(
         self,
         run_uri: str,
@@ -311,6 +539,123 @@ class AuthorityClient:
                     },
                     "reason": None if reason is None else reason.to_dict(),
                 },
+            ),
+        )
+
+    def write_submitted_operation(
+        self,
+        run_uri: str,
+        record: SubmittedOperationRecord,
+        *,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Persist a submitted-operation record through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.SUBMITTED_OPERATION,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                expected_revision=expected_revision,
+                body={"record": record.to_dict()},
+            ),
+        )
+
+    def read_submitted_operation(
+        self,
+        run_uri: str,
+        submission_id: str,
+        *,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Read a submitted-operation record through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_SUBMITTED_READ_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.SUBMITTED_OPERATION,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                submission_id=submission_id,
+                expected_revision=expected_revision,
+            ),
+        )
+
+    def list_submitted_operations(
+        self,
+        run_uri: str,
+        *,
+        expected_revision: BackendRevision | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """List submitted-operation records through the service."""
+
+        return self.send(
+            AUTHORITY_MUTATION_SUBMITTED_LIST_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.SUBMITTED_OPERATION,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                expected_revision=expected_revision,
+            ),
+        )
+
+    def _lease_request(
+        self,
+        path: str,
+        *,
+        run_uri: str,
+        lease_id: str,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int | None = None,
+        expected_revision: BackendRevision | None = None,
+        reason: LifecycleReason | None = None,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        body: dict[str, PlainData] = {}
+        if lease_ttl_seconds is not None:
+            body["lease_ttl_seconds"] = lease_ttl_seconds
+        if reason is not None:
+            body["reason"] = reason.to_dict()
+        return self.send(
+            path,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.LEASE,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                expected_revision=expected_revision,
+                body=body,
             ),
         )
 
@@ -392,6 +737,16 @@ __all__ = [
     "AUTHORITY_MUTATION_STAGE_TRANSITION_PATH",
     "AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH",
     "AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH",
+    "AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH",
+    "AUTHORITY_MUTATION_CONTROLLER_LEASE_RENEW_PATH",
+    "AUTHORITY_MUTATION_CONTROLLER_LEASE_RELEASE_PATH",
+    "AUTHORITY_MUTATION_CONTROLLER_LEASE_FAIL_PATH",
+    "AUTHORITY_MUTATION_STAGE_LEASE_RENEW_PATH",
+    "AUTHORITY_MUTATION_STAGE_LEASE_RELEASE_PATH",
+    "AUTHORITY_MUTATION_STAGE_LEASE_FAIL_PATH",
+    "AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH",
+    "AUTHORITY_MUTATION_SUBMITTED_READ_PATH",
+    "AUTHORITY_MUTATION_SUBMITTED_LIST_PATH",
     "AuthorityClient",
     "AuthorityClientError",
     "AuthorityHttpTransport",

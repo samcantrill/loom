@@ -12,28 +12,43 @@ from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
 from loom.pipeline.stores import (
+    AttemptAllocation,
     AuthorityBackendKind,
+    AuthorityClient,
     AuthorityConfig,
     AuthorityFactoryError,
+    AuthorityProtocolReadiness,
+    AuthorityProtocolResponse,
+    AuthorityProtocolResult,
     AuthorityResolutionMode,
     AuthorityResolutionResult,
     AuthorityStoreError,
+    BackendCapabilitySet,
+    LeaseKind,
     LocalRunStore,
+    OutputCommit,
     PerRunAuthorityStore,
+    StatusTransition,
     config_from_authority_reference,
+    create_authority_client,
     format_artifact_key,
     require_online_authority,
     resolve_authority_for_factory,
 )
 from loom.pipeline.stores.inspection import RunStateInspection
 from loom.pipeline.stores.read_models import (
+    AuthoritativeRunSnapshot,
+    BackendRevision,
+    CleanupCandidate,
     LeaseRecord,
     LifecycleReason,
+    RecoveryRecord,
     StageAttempt,
     StageLifecycleSnapshot,
 )
 from loom.pipeline.stores.run_store import RunFreshnessRecord
 from loom.pipeline.stores.run_uri import validate_run_uri
+from loom.pipeline.stores.schema_policy import AuthoritySchemaCheck
 from loom.pipeline.submitted import (
     SubmittedOperationRecord,
     latest_active_submitted_operation,
@@ -59,6 +74,456 @@ class _AttemptLease:
 class _ControllerLease:
     owner_id: str
     lease: LeaseRecord
+
+
+class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
+    """Per-run authority adapter backed by the repository-free HTTP client."""
+
+    def __init__(
+        self,
+        *,
+        client: AuthorityClient,
+        config: AuthorityConfig,
+        readiness: AuthorityProtocolReadiness,
+    ) -> None:
+        if not isinstance(client, AuthorityClient):
+            raise TypeError("client must be AuthorityClient")
+        if not isinstance(config, AuthorityConfig):
+            raise TypeError("config must be AuthorityConfig")
+        if not isinstance(readiness, AuthorityProtocolReadiness):
+            raise TypeError("readiness must be AuthorityProtocolReadiness")
+        self._client = client
+        self._config = config
+        self._readiness = readiness
+        self._capabilities = readiness.capabilities or BackendCapabilitySet(
+            backend_name="http-authority",
+            records=(),
+        )
+        self._leases: dict[str, LeaseRecord] = {}
+        self._event_sequences: dict[str, int] = {}
+
+    @property
+    def authority_config(self) -> AuthorityConfig:
+        return self._config
+
+    def capabilities(self) -> BackendCapabilitySet:
+        return self._capabilities
+
+    def check_schema(self, run_uri: str) -> AuthoritySchemaCheck:
+        _ = run_uri
+        return self._readiness.version.schema_check
+
+    def create_run(
+        self,
+        run_uri: str,
+        *,
+        status: RunStatus = RunStatus.CREATED,
+        metadata: Mapping[str, PlainData] | None = None,
+    ) -> BackendRevision:
+        result = self._result(
+            self._client.admit_run(
+                run_uri,
+                status=status,
+                metadata=metadata,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="admit run",
+        )
+        if result.revision is None:
+            raise AuthorityStoreError("authority admit run response omitted revision")
+        return result.revision
+
+    def open_run(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        result = self._result(
+            self._client.open_run(
+                run_uri,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="open run",
+        )
+        if result.snapshot is None:
+            raise AuthorityStoreError("authority open run response omitted snapshot")
+        self._remember_snapshot_leases(result.snapshot)
+        return result.snapshot
+
+    def transition_run(
+        self,
+        run_uri: str,
+        *,
+        from_status: RunStatus,
+        to_status: RunStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition:
+        result = self._result(
+            self._client.transition_run(
+                run_uri,
+                from_status=from_status,
+                to_status=to_status,
+                reason=reason,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="transition run",
+        )
+        return _transition_from_result(result, "transition run")
+
+    def transition_stage(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        from_status: StageStatus | None,
+        to_status: StageStatus,
+        reason: LifecycleReason | None = None,
+    ) -> StatusTransition:
+        result = self._result(
+            self._client.transition_stage(
+                run_uri,
+                stage_name,
+                from_status=from_status,
+                to_status=to_status,
+                reason=reason,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="transition stage",
+        )
+        return _transition_from_result(result, "transition stage")
+
+    def allocate_stage_attempt(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int | None = None,
+    ) -> AttemptAllocation:
+        result = self._result(
+            self._client.allocate_stage_attempt(
+                run_uri,
+                stage_name,
+                owner_id=owner_id,
+                lease_ttl_seconds=lease_ttl_seconds,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="allocate stage attempt",
+        )
+        if result.stage_attempt is None:
+            raise AuthorityStoreError(
+                "authority allocate stage attempt response omitted attempt"
+            )
+        if result.lease is not None:
+            self._remember_lease(result.lease)
+        return AttemptAllocation(attempt=result.stage_attempt, lease=result.lease)
+
+    def acquire_controller_lease(
+        self,
+        run_uri: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        result = self._result(
+            self._client.acquire_controller_lease(
+                run_uri,
+                owner_id=owner_id,
+                lease_ttl_seconds=lease_ttl_seconds,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="acquire controller lease",
+        )
+        return self._lease_from_result(result, "acquire controller lease")
+
+    def renew_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        lease = self._known_lease(lease_id)
+        if lease.kind is LeaseKind.CONTROLLER:
+            response = self._client.renew_controller_lease(
+                _lease_run_uri(lease),
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                lease_ttl_seconds=lease_ttl_seconds,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            )
+        elif lease.kind is LeaseKind.STAGE:
+            response = self._client.renew_stage_lease(
+                _lease_run_uri(lease),
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                lease_ttl_seconds=lease_ttl_seconds,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            )
+        else:
+            raise AuthorityStoreError(f"cannot renew {lease.kind.value} lease")
+        return self._lease_from_result(
+            self._result(response, operation="renew lease"),
+            "renew lease",
+        )
+
+    def release_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord:
+        lease = self._known_lease(lease_id)
+        if lease.kind is LeaseKind.CONTROLLER:
+            response = self._client.release_controller_lease(
+                _lease_run_uri(lease),
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                reason=reason,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            )
+        elif lease.kind is LeaseKind.STAGE:
+            response = self._client.release_stage_lease(
+                _lease_run_uri(lease),
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                reason=reason,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            )
+        else:
+            raise AuthorityStoreError(f"cannot release {lease.kind.value} lease")
+        return self._lease_from_result(
+            self._result(response, operation="release lease"),
+            "release lease",
+        )
+
+    def fail_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord:
+        lease = self._known_lease(lease_id)
+        if lease.kind is LeaseKind.CONTROLLER:
+            response = self._client.fail_controller_lease(
+                _lease_run_uri(lease),
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                reason=reason,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            )
+        elif lease.kind is LeaseKind.STAGE:
+            response = self._client.fail_stage_lease(
+                _lease_run_uri(lease),
+                lease_id=lease_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                reason=reason,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            )
+        else:
+            raise AuthorityStoreError(f"cannot fail {lease.kind.value} lease")
+        return self._lease_from_result(
+            self._result(response, operation="fail lease"),
+            "fail lease",
+        )
+
+    def write_submitted_operation(
+        self, run_uri: str, record: SubmittedOperationRecord
+    ) -> BackendRevision:
+        result = self._result(
+            self._client.write_submitted_operation(
+                run_uri,
+                record,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="write submitted operation",
+        )
+        if result.revision is None:
+            raise AuthorityStoreError(
+                "authority write submitted operation response omitted revision"
+            )
+        return result.revision
+
+    def read_submitted_operation(
+        self, run_uri: str, submission_id: str
+    ) -> SubmittedOperationRecord | None:
+        result = self._result(
+            self._client.read_submitted_operation(
+                run_uri,
+                submission_id,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="read submitted operation",
+        )
+        return result.submitted_operation
+
+    def list_submitted_operations(
+        self, run_uri: str
+    ) -> tuple[SubmittedOperationRecord, ...]:
+        result = self._result(
+            self._client.list_submitted_operations(
+                run_uri,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="list submitted operations",
+        )
+        return result.submitted_operations
+
+    def record_output_commit(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        attempt_id: str,
+        fencing_token: str,
+        outputs: Mapping[str, ArtifactRef],
+        reason: LifecycleReason | None = None,
+    ) -> OutputCommit:
+        owner_id = self._owner_for_stage_lease(run_uri, stage_name, fencing_token)
+        result = self._result(
+            self._client.record_output_commit(
+                run_uri,
+                stage_name,
+                attempt_id=attempt_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+                outputs=outputs,
+                reason=reason,
+                service_generation=self._service_generation,
+                workspace_id=self._workspace_id,
+            ),
+            operation="record output commit",
+        )
+        if result.output_commit is None:
+            raise AuthorityStoreError(
+                "authority record output commit response omitted output commit"
+            )
+        return OutputCommit(
+            commit=result.output_commit,
+            artifact_facts=result.artifact_facts,
+            cleanup_candidates=result.cleanup_candidates,
+        )
+
+    def append_audit_event(
+        self, run_uri: str, event: PipelineEvent
+    ) -> PipelineEventRecord:
+        # The HTTP mutation protocol has no audit-event route yet. Keep runner
+        # events local in Phase 11 while lifecycle mutations go through HTTP.
+        sequence = self._event_sequences.get(run_uri, 0) + 1
+        self._event_sequences[run_uri] = sequence
+        payload = cast(
+            Mapping[str, PlainData],
+            thaw_plain_data(event.payload, path="event.payload"),
+        )
+        return PipelineEventRecord(
+            run_uri=run_uri,
+            sequence=sequence,
+            timestamp=event.timestamp or utc_timestamp(),
+            scope=event.scope,
+            event_type=event.event_type,
+            payload=payload,
+        )
+
+    def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
+        return self.open_run(run_uri)
+
+    def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
+        _ = run_uri
+        return ()
+
+    def list_cleanup_candidates(self, run_uri: str) -> tuple[CleanupCandidate, ...]:
+        return self.open_run(run_uri).cleanup_candidates
+
+    @property
+    def _service_generation(self) -> str | None:
+        return self._readiness.service_generation
+
+    @property
+    def _workspace_id(self) -> str | None:
+        return self._readiness.workspace_id
+
+    def _result(
+        self,
+        response: AuthorityProtocolResponse,
+        *,
+        operation: str,
+    ) -> AuthorityProtocolResult:
+        if response.accepted and response.result is not None:
+            return response.result
+        if response.rejection is not None:
+            raise AuthorityStoreError(
+                f"authority rejected {operation}: {response.rejection.message}"
+            )
+        raise AuthorityStoreError(f"authority {operation} response was incomplete")
+
+    def _lease_from_result(
+        self,
+        result: AuthorityProtocolResult,
+        operation: str,
+    ) -> LeaseRecord:
+        if result.lease is None:
+            raise AuthorityStoreError(f"authority {operation} response omitted lease")
+        return self._remember_lease(result.lease)
+
+    def _remember_lease(self, lease: LeaseRecord) -> LeaseRecord:
+        self._leases[lease.lease_id] = lease
+        return lease
+
+    def _remember_snapshot_leases(self, snapshot: AuthoritativeRunSnapshot) -> None:
+        for stage in snapshot.stages:
+            if stage.active_lease is not None:
+                self._remember_lease(stage.active_lease)
+
+    def _known_lease(self, lease_id: str) -> LeaseRecord:
+        lease = self._leases.get(lease_id)
+        if lease is None:
+            raise AuthorityStoreError(f"unknown authority lease: {lease_id}")
+        return lease
+
+    def _owner_for_stage_lease(
+        self, run_uri: str, stage_name: str, fencing_token: str
+    ) -> str:
+        for lease in self._leases.values():
+            if (
+                lease.kind is LeaseKind.STAGE
+                and lease.run_uri == run_uri
+                and lease.stage_name == stage_name
+                and lease.fencing_token == fencing_token
+            ):
+                return lease.owner_id
+        snapshot = self.open_run(run_uri)
+        for stage in snapshot.stages:
+            lease = stage.active_lease
+            if (
+                stage.stage_name == stage_name
+                and lease is not None
+                and lease.fencing_token == fencing_token
+            ):
+                self._remember_lease(lease)
+                return lease.owner_id
+        raise AuthorityStoreError("unknown authority stage lease fencing token")
 
 
 class AuthorityBackedSerialRunStore:
@@ -850,6 +1315,7 @@ def create_authority_backed_serial_run_store(
         authority_store = _authority_store_from_config(
             resolved_config,
             resolution=resolution.result,
+            readiness=resolution.readiness,
         )
         resolved_config = _config_from_authority_store(
             authority_store,
@@ -901,21 +1367,24 @@ def _authority_store_from_config(
     config: AuthorityConfig,
     *,
     resolution: AuthorityResolutionResult | None = None,
+    readiness: AuthorityProtocolReadiness | None = None,
 ) -> PerRunAuthorityStore:
     if config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
         raise AuthorityStoreError(_removed_sqlite_authority_message())
     if config.endpoint is not None and config.endpoint.startswith(
         ("http://", "https://")
     ):
-        raise AuthorityFactoryError(
-            "authority-backed serial run store cannot adapt HTTP authority endpoints "
-            "until the runner online path migrates to AuthorityClient",
-            code="authority_factory.http_store_adapter_deferred",
-            resolution=resolution,
-            context={
-                "endpoint": config.endpoint,
-                "deferred_to": "v10_phase_11",
-            },
+        if readiness is None:
+            raise AuthorityFactoryError(
+                "authority-backed serial run store requires HTTP readiness facts",
+                code="authority_factory.missing_readiness",
+                resolution=resolution,
+                context={"endpoint": config.endpoint},
+            )
+        return AuthorityClientBackedPerRunAuthorityStore(
+            client=create_authority_client(config),
+            config=config,
+            readiness=readiness,
         )
     if config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
@@ -929,6 +1398,22 @@ def _authority_store_from_config(
         "authority-backed serial store does not support backend "
         f"{config.backend_kind.value}"
     )
+
+
+def _transition_from_result(
+    result: AuthorityProtocolResult,
+    operation: str,
+) -> StatusTransition:
+    transition = result.body.get("transition")
+    if transition is None:
+        raise AuthorityStoreError(f"authority {operation} response omitted transition")
+    return StatusTransition.from_dict(transition)
+
+
+def _lease_run_uri(lease: LeaseRecord) -> str:
+    if lease.run_uri is None:
+        raise AuthorityStoreError("authority lease is missing run_uri")
+    return lease.run_uri
 
 
 def _removed_sqlite_authority_message() -> str:
@@ -1057,5 +1542,6 @@ def _value_mismatches(
 
 __all__ = [
     "AuthorityBackedSerialRunStore",
+    "AuthorityClientBackedPerRunAuthorityStore",
     "create_authority_backed_serial_run_store",
 ]
