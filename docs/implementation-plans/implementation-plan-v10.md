@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 14 merged; Phase 15 pending
+- Phase work status: Phase 14 merged; Phase 15 pr_open
 
 Related artifacts and references:
 
@@ -1949,9 +1949,9 @@ Phase 14 merged on 2026-05-12:
 
 ### Phase 15: Workspace Coordination Service API
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-workspace-coordination`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/133
 
 **Goal**
 
@@ -2046,7 +2046,20 @@ resource methods fail explicitly until Phase 16.
 
 **Completion Summary**
 
-TBD.
+- Phase execution plan: `docs/phases/authority-workspace-coordination.md`
+- PR body: `docs/phases/authority-workspace-coordination-pr-body.md`
+- Implementation summary: added typed workspace-coordination protocol result
+  fields, authority client route constants and methods, mutation service/routes,
+  private service-owned coordination state, and a service-backed
+  `WorkspaceCoordinationStore` adapter.
+- Resource leases and resource limits remain explicitly unsupported through the
+  service path until Phase 16.
+- Validation: final `make validate-pr` passed; final `make test-summary`
+  passed with package 70 passed / 1 skipped, unit 959 passed / 1 skipped,
+  contract 151 passed / 2 skipped, integration 128 passed / 8 skipped /
+  10 deselected, e2e 39 passed / 2 deselected, and config-extra 422 passed /
+  1350 deselected.
+- Stack maintenance: root PR targets `develop`; no predecessor branch.
 
 ### Phase 16: Resource Leases And Scheduler-Ready Admission
 
