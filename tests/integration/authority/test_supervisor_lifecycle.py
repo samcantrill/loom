@@ -11,6 +11,7 @@ from loom.authority.supervisor import (
     AuthoritySupervisorProcessState,
     AuthoritySupervisorReadiness,
     inspect_authority_supervisor,
+    restart_authority_supervisor,
     start_authority_supervisor,
     stop_authority_supervisor,
 )
@@ -27,6 +28,7 @@ def test_supervisor_lifecycle_starts_writes_registry_and_stops(tmp_path: Path) -
     port = _free_port()
     state_dir = tmp_path / "state"
     workspace = tmp_path / "workspace"
+    second_port = _free_port()
 
     try:
         started = start_authority_supervisor(
@@ -44,6 +46,26 @@ def test_supervisor_lifecycle_starts_writes_registry_and_stops(tmp_path: Path) -
         assert status.registry_status is AuthorityRegistryValidationStatus.VALID
         assert record.reference.endpoint == f"http://127.0.0.1:{port}"
         assert record.state_dir == str(state_dir.resolve())
+
+        restarted = restart_authority_supervisor(
+            state_dir=state_dir,
+            workspace_root=workspace,
+            workspace_id="workspace-a",
+            port=second_port,
+        )
+        assert restarted.ok is True
+        assert restarted.readiness is AuthoritySupervisorReadiness.READY
+        assert restarted.process_state is AuthoritySupervisorProcessState.RUNNING
+        assert restarted.service_generation != started.service_generation
+        assert started.pid != restarted.pid
+
+        status_after_restart = inspect_authority_supervisor(workspace_root=workspace)
+        assert status_after_restart.ok is True
+        assert status_after_restart.process_state is AuthoritySupervisorProcessState.RUNNING
+        assert status_after_restart.readiness is AuthoritySupervisorReadiness.READY
+        assert (
+            status_after_restart.service_generation == restarted.service_generation
+        )
     finally:
         stopped = stop_authority_supervisor(
             state_dir=state_dir,

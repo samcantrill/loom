@@ -33,12 +33,43 @@ REQUIRED_MANIFEST_FIELDS = {
     "introduced_in",
     "status",
     "validation",
+    "surface",
     "entrypoints",
     "tags",
 }
 VALID_STATUSES = {"runnable", "illustrative", "deferred"}
 VALID_VALIDATION_TIERS = {"smoke", "full", "manual"}
 VALID_LEVELS = {"introductory", "intermediate", "advanced"}
+VALID_SURFACES = {"cli", "python_api", "internal_demo"}
+INTERNAL_DEMO_EXAMPLES = {
+    "operations.authority-backend-diagnostics",
+    "operations.submitted-status",
+}
+PYTHON_API_EXAMPLES = {
+    "execution.local",
+    "execution.python-run-options",
+    "operations.captured-logs",
+    "operations.resource-leases",
+}
+USER_FACING_V10_EXAMPLES = {
+    "execution.offline-first-import": "smoke",
+    "operations.authority-lifecycle": "smoke",
+    "operations.offline-import-rejections": "full",
+    "operations.resource-leases": "full",
+}
+NON_USER_FACING_V10_EXAMPLES = {
+    "operations.authority-backend-diagnostics": "smoke",
+}
+CO_LOCATED_VARIANT_EXAMPLES = {
+    "execution.runtime-profile",
+    "execution.subprocess",
+    "execution.offline-first-import",
+    "execution.slurm.dry-run-basics",
+    "execution.slurm.afterok-diamond",
+    "operations.local-diagnostics",
+    "operations.failing-run",
+    "operations.offline-import-rejections",
+}
 
 
 def _config_path(base: Path) -> Path:
@@ -102,6 +133,7 @@ def test_examples_catalog_manifests_are_valid() -> None:
         status = _required_string(manifest, "status", manifest_path)
         validation = _required_string(manifest, "validation", manifest_path)
         level = _required_string(manifest, "level", manifest_path)
+        surface = _required_string(manifest, "surface", manifest_path)
 
         assert set(manifest) >= REQUIRED_MANIFEST_FIELDS
         assert example_id == expected_id
@@ -113,6 +145,8 @@ def test_examples_catalog_manifests_are_valid() -> None:
         assert status in VALID_STATUSES
         assert validation in VALID_VALIDATION_TIERS
         assert level in VALID_LEVELS
+        assert surface in VALID_SURFACES
+        assert surface == _expected_surface(example_id)
         assert _required_string(manifest, "title", manifest_path)
         assert _required_string(manifest, "summary", manifest_path)
         assert _required_string(manifest, "introduced_in", manifest_path)
@@ -134,6 +168,90 @@ def test_config_docs_warn_against_plaintext_secret_overrides() -> None:
     assert "plaintext_secret_override_warnings" in config_docs
 
 
+def test_v10_authority_examples_are_cataloged_and_documented() -> None:
+    manifests = _example_manifest_map()
+
+    for example_id, validation in USER_FACING_V10_EXAMPLES.items():
+        manifest = manifests[example_id]
+        assert manifest["introduced_in"] == "v10"
+        assert manifest["status"] == "runnable"
+        assert manifest["validation"] == validation
+        assert manifest["surface"] != "internal_demo"
+
+    for example_id, validation in NON_USER_FACING_V10_EXAMPLES.items():
+        manifest = manifests[example_id]
+        assert manifest["introduced_in"] == "v10"
+        assert manifest["status"] == "runnable"
+        assert manifest["validation"] == validation
+        assert manifest["surface"] == "internal_demo"
+
+    examples_readme = (EXAMPLES_ROOT / "README.md").read_text(encoding="utf-8")
+    coverage_doc = (
+        EXAMPLES_ROOT.parent / "docs" / "features" / "authority-example-coverage.md"
+    ).read_text(encoding="utf-8")
+
+    assert "authority-example-coverage.md" in examples_readme
+    assert "Not Currently User-Facing" in coverage_doc
+    assert "co_located_service" in coverage_doc
+    for example_id in USER_FACING_V10_EXAMPLES:
+        assert example_id in coverage_doc
+    for example_id in NON_USER_FACING_V10_EXAMPLES:
+        assert example_id in coverage_doc
+
+
+def test_internal_demos_are_excluded_from_primary_catalogs() -> None:
+    top_level = (EXAMPLES_ROOT / "README.md").read_text(encoding="utf-8")
+    operations_readme = (EXAMPLES_ROOT / "operations" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    primary_sections = (
+        _readme_section(operations_readme, "CLI Workflows"),
+        _readme_section(operations_readme, "Public Python API Workflows"),
+        _readme_section(operations_readme, "Run"),
+    )
+
+    for example_id in INTERNAL_DEMO_EXAMPLES:
+        assert example_id not in top_level
+        for section in primary_sections:
+            assert example_id not in section
+        assert _example_script_path(example_id) not in _readme_section(
+            operations_readme, "Run"
+        )
+
+
+def test_cli_examples_include_workflow_and_variants_sections() -> None:
+    for manifest_path, manifest in _example_manifests():
+        if manifest.get("surface") != "cli":
+            continue
+        readme = (manifest_path.parent / "README.md").read_text(encoding="utf-8")
+        assert "## Workflow" in readme
+        assert "## Variants" in readme
+
+
+def test_relevant_cli_examples_include_co_located_variants() -> None:
+    for example_id in CO_LOCATED_VARIANT_EXAMPLES:
+        readme = _example_readme_path(example_id).read_text(encoding="utf-8")
+        assert "--authority-backend co_located_service" in readme
+        assert "--authority-profile co_located" in readme
+
+
+def test_python_api_examples_identify_their_public_surface() -> None:
+    for manifest_path, manifest in _example_manifests():
+        if manifest.get("surface") != "python_api":
+            continue
+        readme = (manifest_path.parent / "README.md").read_text(encoding="utf-8")
+        assert "## Public Python Surface" in readme
+
+
+def test_offline_first_import_readme_describes_before_and_after_import() -> None:
+    readme = _example_readme_path("execution.offline-first-import").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Before import, `loom status RUN_URI` is expected to fail" in readme
+    assert "post-import authoritative status view" in readme or "post-import" in readme
+
+
 def _example_manifest_paths() -> list[Path]:
     return sorted(EXAMPLES_ROOT.rglob("example.yaml"))
 
@@ -142,11 +260,54 @@ def _example_manifests() -> list[tuple[Path, dict[str, object]]]:
     return [(path, _load_manifest(path)) for path in _example_manifest_paths()]
 
 
+def _example_manifest_map() -> dict[str, dict[str, object]]:
+    return {
+        _required_string(manifest, "id", path): manifest
+        for path, manifest in _example_manifests()
+    }
+
+
 def _load_manifest(path: Path) -> dict[str, object]:
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(loaded, dict):
         raise AssertionError(f"{path} must contain a mapping")
     return cast(dict[str, object], loaded)
+
+
+def _expected_surface(example_id: str) -> str:
+    if example_id.startswith("authoring."):
+        return "python_api"
+    if example_id in PYTHON_API_EXAMPLES:
+        return "python_api"
+    if example_id in INTERNAL_DEMO_EXAMPLES:
+        return "internal_demo"
+    return "cli"
+
+
+def _example_readme_path(example_id: str) -> Path:
+    return EXAMPLES_ROOT.joinpath(*example_id.split("."), "README.md")
+
+
+def _example_script_path(example_id: str) -> str:
+    manifest_path = EXAMPLES_ROOT.joinpath(*example_id.split("."), "example.yaml")
+    manifest = _example_manifest_map()[example_id]
+    entrypoints = _entrypoint_mappings(
+        manifest,
+        manifest_path,
+    )
+    relative_parent = manifest_path.parent.relative_to(EXAMPLES_ROOT.parent)
+    return str(relative_parent / _required_string(entrypoints[0], "path", manifest_path))
+
+
+def _readme_section(text: str, heading: str) -> str:
+    marker = f"## {heading}\n"
+    if marker not in text:
+        raise AssertionError(f"missing README section {heading!r}")
+    _, remainder = text.split(marker, 1)
+    next_heading = remainder.find("\n## ")
+    if next_heading == -1:
+        return remainder
+    return remainder[:next_heading]
 
 
 def _example_entrypoints(validation: str) -> list[tuple[str, Path]]:
@@ -258,3 +419,8 @@ def test_smoke_example_scripts_execute(
     )
 
     assert result.stdout.strip()
+    if example_id == "execution.offline-first-import":
+        assert "offline_source: offline_evidence" in result.stdout
+        assert "pre_import_status_code:" in result.stdout
+        assert "post_import_status_source: authoritative_service_truth" in result.stdout
+        assert "post_import_import_source: offline_evidence" in result.stdout

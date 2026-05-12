@@ -14,7 +14,13 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.cli.main import main
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import (
+    LocalRunStore,
+    WorkspaceIdentity,
+    create_authority_client,
+    path_to_run_uri,
+    run_uri_to_path,
+)
 
 
 pytestmark = [pytest.mark.e2e, pytest.mark.optional_dependency]
@@ -22,6 +28,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.optional_dependency]
 
 def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
     port = _free_port()
+    restart_port = _free_port()
     state_dir = tmp_path / "state"
     workspace = tmp_path / "workspace"
 
@@ -70,6 +77,37 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
         assert status_payload["result"]["process_state"] == "running"
         assert status_payload["result"]["registry_status"] == "valid"
 
+        restart_stdout = io.StringIO()
+        assert (
+            main(
+                [
+                    "authority",
+                    "restart",
+                    "--state-dir",
+                    str(state_dir),
+                    "--workspace-root",
+                    str(workspace),
+                    "--workspace-id",
+                    "workspace-a",
+                    "--port",
+                    str(restart_port),
+                    "--format",
+                    "json",
+                ],
+                stdout=restart_stdout,
+            )
+            == 0
+        )
+        restart_payload = json.loads(restart_stdout.getvalue())
+        assert restart_payload["result"]["readiness"] == "ready"
+        assert restart_payload["result"]["command"] == "restart"
+        assert restart_payload["result"]["process_state"] == "running"
+        assert restart_payload["result"]["service_generation"] != start_payload["result"][
+            "service_generation"
+        ]
+        assert restart_payload["result"]["process_state"] == "running"
+        assert restart_payload["result"]["pid"] != start_payload["result"]["pid"]
+
         doctor_stdout = io.StringIO()
         assert (
             main(
@@ -86,6 +124,25 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
             == 0
         )
         assert json.loads(doctor_stdout.getvalue())["ok"] is True
+        active_endpoint = restart_payload["result"]["endpoint"]
+        authority_client = create_authority_client(
+            {
+                "backend_kind": "managed_service",
+                "deployment_profile": "managed_service",
+                "endpoint": active_endpoint,
+                "workspace_id": "workspace-a",
+            }
+        )
+        workspace_response = authority_client.create_workspace(
+            WorkspaceIdentity(
+                workspace_id="workspace-a",
+                root_uri=workspace.resolve().as_uri(),
+            ),
+            request_id="e2e-workspace-create",
+            service_generation=restart_payload["result"]["service_generation"],
+        )
+        assert workspace_response.result is not None
+        assert workspace_response.result.workspace is not None
 
         config_path = tmp_path / "pipeline.yaml"
         config_path.write_text(
@@ -117,7 +174,7 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
                     "--authority-profile",
                     "managed_service",
                     "--authority-endpoint",
-                    start_payload["result"]["endpoint"],
+                    active_endpoint,
                     "--authority-workspace",
                     "workspace-a",
                     "--format",
@@ -162,7 +219,7 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
                     "--authority-profile",
                     "managed_service",
                     "--authority-endpoint",
-                    start_payload["result"]["endpoint"],
+                    active_endpoint,
                     "--authority-workspace",
                     "workspace-a",
                     "--format",
@@ -196,7 +253,7 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
                     "--authority-profile",
                     "managed_service",
                     "--authority-endpoint",
-                    start_payload["result"]["endpoint"],
+                    active_endpoint,
                     "--authority-workspace",
                     "workspace-a",
                     "--format",

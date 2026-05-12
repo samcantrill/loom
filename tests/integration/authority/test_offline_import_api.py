@@ -20,6 +20,7 @@ from loom.authority.app import create_authority_app
 from loom.authority.services import repository_authority_services
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_offline_evidence_run_store
+from loom.pipeline.events import PipelineEventRecord
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
@@ -28,6 +29,7 @@ from loom.pipeline.stores import (
     path_to_run_uri,
 )
 from loom.serialization import PlainData
+from loom.serialization import thaw_plain_data
 from tests.support.pipeline_execution_configs import local_execution_config
 
 
@@ -75,6 +77,8 @@ def test_offline_import_api_imports_manifest_and_exposes_snapshot(
     import_provenance = snapshot.metadata["authority_import"]
     assert isinstance(import_provenance, Mapping)
     assert import_provenance["source"] == "offline_evidence"
+    events = repository.list_audit_events(manifest.run_uri)
+    _assert_replay_events_match_manifest(manifest, events)
 
 
 def test_offline_import_api_rejects_invalid_manifest_without_mutating(
@@ -126,6 +130,30 @@ def _client(repository: AuthorityRepository) -> AuthorityClient:
         return cast(Mapping[str, object], parsed)
 
     return AuthorityClient("http://authority.test", transport=transport)
+
+
+def _assert_replay_events_match_manifest(
+    manifest: OfflineEvidenceManifest,
+    events: tuple[PipelineEventRecord, ...] | list[PipelineEventRecord],
+) -> None:
+    replay_events = tuple(
+        event
+        for event in events
+        if event.event_type.startswith("offline_import.replay.")
+    )
+    manifest_events = tuple(
+        PipelineEventRecord.from_dict(event) for event in manifest.events
+    )
+    assert len(replay_events) == len(manifest_events)
+    for manifest_event, replay_event in zip(replay_events, manifest_events):
+        assert replay_event.event_type == f"offline_import.replay.{manifest_event.event_type}"
+        payload = cast(Mapping[str, object], replay_event.payload)
+        offline_event = cast(Mapping[str, object], payload["offline_event"])
+        assert PipelineEventRecord.from_dict(thaw_plain_data(offline_event)) == manifest_event
+        assert offline_event["run_uri"] == manifest.run_uri
+        assert offline_event["sequence"] == manifest_event.sequence
+        assert replay_event.sequence == manifest_event.sequence + 1
+        assert offline_event["event_type"] == manifest_event.event_type
 
 
 def _complete_manifest(tmp_path: Path, *, name: str = "offline-run") -> OfflineEvidenceManifest:

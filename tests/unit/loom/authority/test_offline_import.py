@@ -21,9 +21,11 @@ from loom.authority.offline_import import (
 )
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_offline_evidence_run_store
+from loom.pipeline.events import PipelineEventRecord
 from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import path_to_run_uri
+from loom.serialization import thaw_plain_data
 from tests.support.pipeline_execution_configs import local_execution_config
 
 
@@ -49,7 +51,15 @@ def test_offline_import_accepts_complete_manifest_and_writes_authority_facts(
     )
 
     snapshot = repository.open_run(manifest.run_uri)
-    event_types = [event.event_type for event in repository.list_audit_events(manifest.run_uri)]
+    audit_events = repository.list_audit_events(manifest.run_uri)
+    event_types = [event.event_type for event in audit_events]
+    replay_events = [
+        event
+        for event in audit_events
+        if event.event_type.startswith("offline_import.replay")
+    ]
+    _assert_replay_events_match_manifest(manifest, replay_events)
+
     assert result.run_uri == manifest.run_uri
     assert result.status == RunStatus.SUCCEEDED.value
     assert result.imported_stage_count == len(manifest.stages)
@@ -64,7 +74,36 @@ def test_offline_import_accepts_complete_manifest_and_writes_authority_facts(
     assert import_provenance["source"] == "offline_evidence"
     assert import_provenance["workspace_id"] == "workspace-a"
     assert event_types[0] == "offline_import.accepted"
+    assert len(replay_events) == len(manifest.events)
+    assert replay_events[0].event_type == "offline_import.replay.run.created"
+    assert replay_events[-1].event_type == "offline_import.replay.run.completed"
     assert "offline_import.replay.run.completed" in event_types
+
+
+def _assert_replay_events_match_manifest(
+    manifest: OfflineEvidenceManifest,
+    replay_events: tuple[PipelineEventRecord, ...] | list[PipelineEventRecord],
+) -> None:
+    manifest_events = tuple(
+        PipelineEventRecord.from_dict(event) for event in manifest.events
+    )
+    assert len(replay_events) == len(manifest_events)
+
+    for manifest_event, replay_event in zip(
+        manifest_events, cast(tuple[PipelineEventRecord, ...], tuple(replay_events))
+    ):
+        assert replay_event.event_type == f"offline_import.replay.{manifest_event.event_type}"
+        assert replay_event.sequence == manifest_event.sequence + 1
+        assert replay_event.scope == manifest_event.scope
+        assert replay_event.timestamp == manifest_event.timestamp
+        payload = cast(Mapping[str, object], replay_event.payload)
+        offline_event = cast(Mapping[str, object], payload["offline_event"])
+        assert PipelineEventRecord.from_dict(thaw_plain_data(offline_event)) == manifest_event
+        assert offline_event["run_uri"] == manifest.run_uri
+        assert offline_event["sequence"] == manifest_event.sequence
+        assert offline_event["event_type"] == manifest_event.event_type
+        assert offline_event["scope"] == manifest_event.scope.to_dict()
+        assert offline_event["timestamp"] == manifest_event.timestamp
 
 
 def test_offline_import_rejects_existing_run_identity(tmp_path: Path) -> None:

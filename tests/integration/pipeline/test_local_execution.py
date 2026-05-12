@@ -210,6 +210,48 @@ def test_local_runner_uses_http_authority_resource_admission(
     assert coordination_store.set_resource_limit("workspace-a", "cpu", limit=1).value == 0
 
 
+def test_local_runner_http_authority_resource_admission_rejection_blocks_stage_execution(
+    tmp_path: Path,
+) -> None:
+    run_store = _http_authority_run_store(tmp_path)
+    coordination_store = run_store.workspace_coordination_store
+    assert isinstance(coordination_store, ServiceWorkspaceCoordinationStore)
+    coordination_store.create_workspace(WorkspaceIdentity(workspace_id="workspace-a"))
+    coordination_store.set_resource_limit("workspace-a", "cpu", limit=1)
+    coordination_store.acquire_resource_lease(
+        "workspace-a",
+        "cpu",
+        owner_id="existing-worker",
+        amount=1,
+        lease_ttl_seconds=30,
+    )
+    run_uri = _run_uri(tmp_path, "http-resource-reject-run")
+
+    result = PipelineRunner(run_store=run_store, clock=_sequence_clock()).run(
+        RunRequest(
+            config=local_execution_config(),
+            run_uri=run_uri,
+            options={
+                "stage_options": {
+                    "build": {
+                        "resources": {
+                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
+                        }
+                    }
+                }
+            },
+        )
+    )
+
+    assert result.status == RunStatus.FAILED
+    failed = result.stage_results["build"]
+    assert failed.status == StageStatus.FAILED
+    assert failed.failure is not None
+    assert failed.failure.failure_type == "resource_admission"
+    assert failed.failure.details["code"] == "resource_admission.rejected"
+    assert all(event.event_type != "stage.started" for event in run_store.read_events(run_uri))
+
+
 def test_local_runner_persists_composed_config_manifest_without_resolved_snapshots(
     tmp_path: Path,
 ) -> None:

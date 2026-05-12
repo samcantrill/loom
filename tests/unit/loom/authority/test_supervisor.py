@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
 from loom.authority._repository import initialize_authority_repository
 from loom.authority.supervisor import (
@@ -14,6 +16,7 @@ from loom.authority.supervisor import (
     AuthoritySupervisorState,
     inspect_authority_supervisor,
     rotate_authority_repository_generation,
+    restart_authority_supervisor,
     start_authority_supervisor,
     stop_authority_supervisor,
     supervisor_state_path,
@@ -24,6 +27,7 @@ from loom.pipeline.stores import (
     AuthorityServiceHealthState,
     read_authority_registry_record,
 )
+from loom.serialization import json_loads
 
 
 pytestmark = pytest.mark.unit
@@ -151,6 +155,87 @@ def test_rotate_generation_updates_existing_repository(tmp_path: Path) -> None:
     )
 
     assert identity.service_generation == "new"
+
+
+def test_restart_rotates_service_generation_and_restarts_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with patch("loom.authority.supervisor.subprocess.Popen", _FakeProcess):
+        monkeypatch.setattr(
+            "loom.authority.supervisor._wait_until_ready",
+            lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
+        )
+        monkeypatch.setattr(
+            "loom.authority.supervisor._terminate_process",
+            lambda pid, *, timeout_seconds: True,
+        )
+
+        started = start_authority_supervisor(
+            state_dir=tmp_path / "state",
+            workspace_root=tmp_path / "workspace",
+            workspace_id="workspace-a",
+            port=8768,
+        )
+        restarted = restart_authority_supervisor(
+            state_dir=tmp_path / "state",
+            workspace_root=tmp_path / "workspace",
+            workspace_id="workspace-a",
+            port=8768,
+        )
+
+        assert restarted.command == "restart"
+        assert restarted.ok is True
+        assert restarted.process_state is AuthoritySupervisorProcessState.RUNNING
+        assert restarted.readiness is AuthoritySupervisorReadiness.READY
+        assert restarted.service_generation != started.service_generation
+
+
+def test_stale_state_reports_unavailable_and_unready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with patch("loom.authority.supervisor.subprocess.Popen", _FakeProcess):
+        monkeypatch.setattr(
+            "loom.authority.supervisor._wait_until_ready",
+            lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
+        )
+
+        start_authority_supervisor(
+            state_dir=tmp_path / "state",
+            workspace_root=tmp_path / "workspace",
+            workspace_id="workspace-a",
+            port=8769,
+        )
+        state_path = supervisor_state_path(tmp_path / "state")
+        state_payload = json_loads(state_path.read_text(encoding="utf-8"))
+        state = AuthoritySupervisorState.from_dict(state_payload)
+        stale = AuthoritySupervisorState(
+            pid=state.pid + 1,
+            endpoint=state.endpoint,
+            state_dir=state.state_dir,
+            workspace_root=state.workspace_root,
+            workspace_id=state.workspace_id,
+            service_generation=state.service_generation,
+            host=state.host,
+            port=state.port,
+            started_at=state.started_at,
+            updated_at=state.updated_at,
+        )
+        state_path.write_text(
+            json.dumps(stale.to_dict(), sort_keys=True),
+            encoding="utf-8",
+        )
+
+        result = inspect_authority_supervisor(
+            workspace_root=tmp_path / "workspace",
+            workspace_id="workspace-a",
+        )
+
+        assert result.command == "status"
+        assert result.ok is False
+        assert result.process_state is AuthoritySupervisorProcessState.STALE
+        assert result.readiness is AuthoritySupervisorReadiness.UNAVAILABLE
 
 
 def test_inspect_reports_missing_registry_fail_closed(tmp_path: Path) -> None:
