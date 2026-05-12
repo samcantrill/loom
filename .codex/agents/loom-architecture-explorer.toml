@@ -1,7 +1,7 @@
 name = "loom_architecture_explorer"
 description = "Read-only explorer for Loom architecture boundaries, import paths, and implementation-plan context."
 model = "gpt-5.4-mini"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 nickname_candidates = ["Architecture Explorer", "Boundary Mapper", "Code Mapper"]
 developer_instructions = """

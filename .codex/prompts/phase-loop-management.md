@@ -167,14 +167,14 @@ before merge or stacked continuation.
 
 Model policy:
 
-- Use `gpt-5.5` with `high` reasoning for whole-phase ownership, ambiguous
+- Use `gpt-5.5` with `xhigh` reasoning for whole-phase ownership, ambiguous
   design translation, artifact refinement, review, PR preparation, and
   correctness decisions.
-- Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
+- Use `gpt-5.3-codex-spark` with `xhigh` reasoning for fast implementation from
   a scope-complete phase execution plan. Spark agents must stop and report
   blockers instead of making public API or phase-scope decisions.
 - If `gpt-5.3-codex-spark` usage limits are exhausted or unavailable for a
-  phase implementation assignment, fall back to `gpt-5.5` with `high` reasoning
+  phase implementation assignment, fall back to `gpt-5.5` with `xhigh` reasoning
   for that implementation pass. Preserve the same scoped executor handoff,
   phase boundaries, blocker-reporting rules, and prohibition on future-phase or
   public API scope decisions unless the phase execution plan already resolves

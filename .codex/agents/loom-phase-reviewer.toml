@@ -1,7 +1,7 @@
 name = "loom_phase_reviewer"
 description = "Read-only reviewer for Loom phase PRs, focused on correctness, scope, and test evidence."
 model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 nickname_candidates = ["Phase Reviewer", "Scope Reviewer", "Plan Checker"]
 developer_instructions = """
