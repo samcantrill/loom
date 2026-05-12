@@ -178,4 +178,6 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py` passed: 34 passed.
   - The non-extra focused pytest command against optional config diagnostics was superseded by the `--extra config` run because those tests require the config extra.
   - Initial `make validate-pr` failed only on `tests/unit/loom/runs/test_run_catalog_models.py::test_run_summary_uses_run_uri_and_plain_serialization`; the assertion was updated to verify additive `state_source` serialization for run, stage, artifact, and submitted-operation summaries. Focused reruns of Ruff, Pyright, and that unit file passed.
+  - Final `make validate-pr` passed: Ruff passed; Pyright passed; default harness passed with 1309 passed, 19 skipped, 14 deselected; config-extra harness passed with 422 passed, 1338 deselected; package build succeeded.
+  - Final `make test-summary` passed and wrote `build/test-summary.md`: overall 1757 passed, 12 skipped, 1350 deselected; package 69 passed; unit 954 passed; contract 146 passed; integration 127 passed; e2e 39 passed; config-extra 422 passed.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
