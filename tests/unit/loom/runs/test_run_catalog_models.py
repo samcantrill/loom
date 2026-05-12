@@ -90,7 +90,20 @@ def test_run_summary_uses_run_uri_and_plain_serialization() -> None:
     assert data["run_uri"] == "file:///runs/a"
     assert "run_id" not in data
     assert data["tags"] == {"project": "demo"}
-    assert data["stages"] == [
+    run_source = cast(dict[str, object], data["state_source"])
+    stages = cast(list[dict[str, object]], data["stages"])
+    stage_source = cast(dict[str, object], stages[0].pop("state_source"))
+    artifacts = cast(list[dict[str, object]], data["artifacts"])
+    artifact_source = cast(dict[str, object], artifacts[0]["state_source"])
+    submitted_operations = cast(list[dict[str, object]], data["submitted_operations"])
+    submitted_source = cast(
+        dict[str, object], submitted_operations[0]["state_source"]
+    )
+    assert run_source["label"] == "unknown"
+    assert stage_source["label"] == "unknown"
+    assert artifact_source["label"] == "unknown"
+    assert submitted_source["label"] == "unknown"
+    assert stages == [
         {
             "stage_name": "build",
             "status": "SUCCEEDED",
