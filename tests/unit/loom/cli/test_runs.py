@@ -151,6 +151,7 @@ def test_runs_list_builds_filters_and_formats_text(
     ]
     assert "runs list /tmp/runs: 1 run" in stdout.getvalue()
     assert "SUCCEEDED file:///tmp/runs/a" in stdout.getvalue()
+    assert "source=unknown" in stdout.getvalue()
     assert stderr.getvalue() == ""
 
 

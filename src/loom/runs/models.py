@@ -8,6 +8,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
+from loom.state_sources import unknown_source
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .errors import CatalogValidationError
@@ -96,6 +97,7 @@ class ArtifactSummary:
     fingerprint: str | None = None
     producer_stage: str | None = None
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
 
     def __post_init__(self) -> None:
         _validate_non_empty(self.run_uri, "run_uri")
@@ -111,6 +113,11 @@ class ArtifactSummary:
             "metadata",
             freeze_plain_data(self.metadata, path="metadata"),
         )
+        object.__setattr__(
+            self,
+            "state_source",
+            freeze_plain_data(self.state_source, path="state_source"),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -123,6 +130,7 @@ class ArtifactSummary:
             "fingerprint": self.fingerprint,
             "producer_stage": self.producer_stage,
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
+            "state_source": thaw_plain_data(self.state_source, path="state_source"),
         }
 
 
@@ -137,6 +145,7 @@ class StageSummary:
     started_at: str | None = None
     finished_at: str | None = None
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
 
     def __post_init__(self) -> None:
         _validate_non_empty(self.stage_name, "stage_name")
@@ -155,6 +164,11 @@ class StageSummary:
             "metadata",
             freeze_plain_data(self.metadata, path="metadata"),
         )
+        object.__setattr__(
+            self,
+            "state_source",
+            freeze_plain_data(self.state_source, path="state_source"),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -165,6 +179,7 @@ class StageSummary:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "metadata": thaw_plain_data(self.metadata, path="metadata"),
+            "state_source": thaw_plain_data(self.state_source, path="state_source"),
         }
 
 
@@ -180,6 +195,7 @@ class SubmittedOperationSummary:
     updated_at: str
     active: bool = False
     summary_counts: Mapping[str, int] = field(default_factory=dict)
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -198,6 +214,11 @@ class SubmittedOperationSummary:
             "summary_counts",
             _validate_int_mapping(self.summary_counts, "summary_counts"),
         )
+        object.__setattr__(
+            self,
+            "state_source",
+            freeze_plain_data(self.state_source, path="state_source"),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -209,6 +230,7 @@ class SubmittedOperationSummary:
             "updated_at": self.updated_at,
             "active": self.active,
             "summary_counts": dict(self.summary_counts),
+            "state_source": thaw_plain_data(self.state_source, path="state_source"),
         }
 
 
@@ -234,6 +256,7 @@ class RunSummary:
     stages: Sequence[StageSummary] = ()
     artifacts: Sequence[ArtifactSummary] = ()
     submitted_operations: Sequence[SubmittedOperationSummary] = ()
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
 
     def __post_init__(self) -> None:
         _validate_non_empty(self.run_uri, "run_uri")
@@ -275,6 +298,11 @@ class RunSummary:
                 "submitted_operations",
             ),
         )
+        object.__setattr__(
+            self,
+            "state_source",
+            freeze_plain_data(self.state_source, path="state_source"),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -293,6 +321,7 @@ class RunSummary:
             "git_commit": self.git_commit,
             "executor": self.executor,
             "backend": self.backend,
+            "state_source": thaw_plain_data(self.state_source, path="state_source"),
             "stages": [stage.to_dict() for stage in self.stages],
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
             "submitted_operations": [

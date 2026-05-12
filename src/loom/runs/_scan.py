@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.state_sources import (
+    authoritative_service_source,
+    local_materialization_source,
+    unavailable_authority_source,
+)
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
@@ -314,6 +319,11 @@ class _AuthoritativeSummaryStore:
     ) -> tuple[SubmittedOperationRecord, ...]:
         return self._snapshot(run_uri).submitted_operations
 
+    def summary_state_source(self, _run_uri: str) -> dict[str, PlainData]:
+        return authoritative_service_source(
+            backend_name=self._authority_store.capabilities().backend_name
+        )
+
     def _snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
         return read_authoritative_run(
             self._authority_store,
@@ -408,12 +418,27 @@ def _authority_store_for_candidate(
                             "authority-backed lifecycle state is required"
                         ),
                         path=candidate,
+                        details={
+                            "state_source": local_materialization_source(
+                                path=str(candidate)
+                            ),
+                            "guidance": (
+                                "start/status/restart the selected authority "
+                                "or choose explicit offline mode"
+                            ),
+                        },
                     )
                 return None, None
             return None, _warning(
                 CatalogWarningCode.PARTIAL_RUN,
                 "configured authority service is unavailable",
                 path=candidate,
+                details={
+                    "state_source": unavailable_authority_source(
+                        reason="configured_service_unavailable"
+                    ),
+                    "guidance": "check `loom authority status` or restart the authority",
+                },
             )
         check = authority_store.check_schema(run_uri)
         if check.failure is None:
@@ -425,6 +450,12 @@ def _authority_store_for_candidate(
                         CatalogWarningCode.PARTIAL_RUN,
                         "run authoritative backend is missing",
                         path=candidate,
+                        details={
+                            "state_source": unavailable_authority_source(
+                                reason="backend_missing"
+                            ),
+                            "guidance": "start or restore the selected authority",
+                        },
                     )
                 return None, _warning(
                     CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
@@ -433,6 +464,15 @@ def _authority_store_for_candidate(
                         "authority-backed lifecycle state is required"
                     ),
                     path=candidate,
+                    details={
+                        "state_source": local_materialization_source(
+                            path=str(candidate)
+                        ),
+                        "guidance": (
+                            "start/status/restart the selected authority "
+                            "or choose explicit offline mode"
+                        ),
+                    },
                 )
             return cast(PerRunAuthorityStore, authority_store), None
         raise CorruptStoreDocumentError(check.failure.message)
@@ -442,17 +482,32 @@ def _authority_store_for_candidate(
             CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
             "run-local SQLite authority is no longer a supported runtime backend",
             path=candidate,
+            details={
+                "state_source": local_materialization_source(path=str(candidate)),
+                "guidance": "select a service authority endpoint",
+            },
         )
     if _authority_marker_exists(candidate):
         return None, _warning(
             CatalogWarningCode.PARTIAL_RUN,
             "run authoritative backend is missing",
             path=candidate,
+            details={
+                "state_source": unavailable_authority_source(reason="backend_missing"),
+                "guidance": "start or restore the selected authority",
+            },
         )
     return None, _warning(
         CatalogWarningCode.LOCAL_LIFECYCLE_UNSUPPORTED,
         "run has local-only lifecycle state; service authority-backed lifecycle state is required",
         path=candidate,
+        details={
+            "state_source": local_materialization_source(path=str(candidate)),
+            "guidance": (
+                "start/status/restart the selected authority or choose explicit "
+                "offline mode"
+            ),
+        },
     )
 
 
@@ -492,6 +547,10 @@ def _missing_authority_warning_for_unfresh_marker(
             CatalogWarningCode.PARTIAL_RUN,
             "run authoritative backend is missing",
             path=path,
+            details={
+                "state_source": unavailable_authority_source(reason="backend_missing"),
+                "guidance": "start or restore the selected authority",
+            },
         )
     return warning
 
@@ -501,11 +560,13 @@ def _warning(
     message: str,
     *,
     path: Path | None = None,
+    details: dict[str, PlainData] | None = None,
 ) -> CatalogWarning:
     return CatalogWarning(
         code=code,
         message=message,
         path=None if path is None else str(path),
+        details={} if details is None else details,
     )
 
 

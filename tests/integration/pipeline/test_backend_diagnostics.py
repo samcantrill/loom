@@ -55,6 +55,7 @@ def test_backend_inspection_reports_materialization_warnings_without_mutation(
     )
 
     assert result.status == "SUCCEEDED"
+    assert result.state_source["label"] == "authoritative_service_truth"
     warning_codes = {str(warning["code"]) for warning in result.warnings}
     assert warning_codes >= {"missing_materialized_ref", "stale_projection"}
     assert authority.snapshot(run_uri).revision.sequence == before
@@ -79,6 +80,7 @@ def test_backend_capability_requirements_are_diagnostic_only(
     )
 
     assert result.has_error_diagnostics is True
+    assert result.state_source["label"] == "authoritative_service_truth"
     assert {str(diagnostic["code"]) for diagnostic in result.diagnostics} == {
         "unsafe_remote_coordination",
         "unsafe_shared_filesystem",
@@ -101,6 +103,7 @@ def test_backend_capabilities_report_service_topology(tmp_path: Path) -> None:
         )
 
         assert result.backend_name == "local-authority-service"
+        assert result.state_source["label"] == "authoritative_service_truth"
         assert result.requirements == {
             "shared_filesystem": True,
             "remote": True,

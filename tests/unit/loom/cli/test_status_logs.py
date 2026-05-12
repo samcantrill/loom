@@ -72,7 +72,9 @@ def test_status_json_uses_diagnostics_payload(monkeypatch: pytest.MonkeyPatch) -
     payload = json.loads(stdout.getvalue())
     assert payload["schema_version"] == status_command.STATUS_RESULT_SCHEMA_VERSION
     assert payload["result"]["status"] == "SUBMITTED"
+    assert payload["result"]["state_source"]["label"] == "unknown"
     assert payload["result"]["submitted_operations"][0]["submission_id"] == "sub-1"
+    assert payload["result"]["stages"][0]["state_source"]["label"] == "unknown"
     assert payload["result"]["stages"][0]["stage_name"] == "build"
     assert stderr.getvalue() == ""
 

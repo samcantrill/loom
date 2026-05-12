@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from loom.artifacts import ArtifactRef
+from loom.state_sources import local_materialization_source
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores import (
@@ -194,6 +195,7 @@ def _extract_summary(store: _SummaryStore, *, run_uri: str, path: Path) -> RunSu
     git = store.read_provenance_document(run_uri, "git") or {}
     artifacts = store.read_artifact_index(run_uri)
     submitted_operations = tuple(store.list_submitted_operations(run_uri))
+    state_source = _summary_state_source(store, run_uri=run_uri, path=path)
 
     return RunSummary(
         run_uri=run_uri,
@@ -224,9 +226,15 @@ def _extract_summary(store: _SummaryStore, *, run_uri: str, path: Path) -> RunSu
         or _first_string(user_metadata, "executor"),
         backend=_first_string(runtime, "backend")
         or _first_submitted_backend(submitted_operations),
-        stages=_extract_stages(store, run_uri),
+        state_source=state_source,
+        stages=_extract_stages(store, run_uri, state_source=state_source),
         artifacts=tuple(
-            _artifact_summary(run_uri, logical_name, artifact)
+            _artifact_summary(
+                run_uri,
+                logical_name,
+                artifact,
+                state_source=state_source,
+            )
             for logical_name, artifact in sorted(artifacts.items())
         ),
         submitted_operations=tuple(
@@ -239,13 +247,19 @@ def _extract_summary(store: _SummaryStore, *, run_uri: str, path: Path) -> RunSu
                 updated_at=operation.updated_at,
                 active=operation.active,
                 summary_counts=operation.summary_counts,
+                state_source=state_source,
             )
             for operation in submitted_operations
         ),
     )
 
 
-def _extract_stages(store: _SummaryStore, run_uri: str) -> tuple[StageSummary, ...]:
+def _extract_stages(
+    store: _SummaryStore,
+    run_uri: str,
+    *,
+    state_source: Mapping[str, PlainData],
+) -> tuple[StageSummary, ...]:
     summaries: list[StageSummary] = []
     for stage_name in store.list_run_stages(run_uri):
         status = store.read_stage_status(run_uri, stage_name)
@@ -259,13 +273,18 @@ def _extract_stages(store: _SummaryStore, run_uri: str) -> tuple[StageSummary, .
                 started_at=None if status is None else status.started_at,
                 finished_at=None if status is None else status.finished_at,
                 metadata={} if status is None else status.metadata,
+                state_source=state_source,
             )
         )
     return tuple(summaries)
 
 
 def _artifact_summary(
-    run_uri: str, logical_name: str, artifact: ArtifactRef
+    run_uri: str,
+    logical_name: str,
+    artifact: ArtifactRef,
+    *,
+    state_source: Mapping[str, PlainData],
 ) -> ArtifactSummary:
     return ArtifactSummary(
         run_uri=run_uri,
@@ -277,7 +296,22 @@ def _artifact_summary(
         fingerprint=artifact.fingerprint,
         producer_stage=artifact.producer_stage,
         metadata=artifact.metadata,
+        state_source=state_source,
     )
+
+
+def _summary_state_source(
+    store: _SummaryStore,
+    *,
+    run_uri: str,
+    path: Path,
+) -> Mapping[str, PlainData]:
+    source = getattr(store, "summary_state_source", None)
+    if callable(source):
+        raw_source = source(run_uri)
+        if isinstance(raw_source, Mapping):
+            return cast(Mapping[str, PlainData], raw_source)
+    return local_materialization_source(path=str(path))
 
 
 def _extract_tags(

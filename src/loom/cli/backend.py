@@ -186,6 +186,7 @@ def _format_inspect_text(result: "BackendInspectionResult") -> str:
     lines = [
         f"backend inspect {result.run_uri}: {result.status}",
         f"backend: {result.backend_name}",
+        f"source: {_source_label(result.state_source)}",
         (
             "revision: "
             f"{result.revision.get('sequence')}:{result.revision.get('token')}"
@@ -217,6 +218,7 @@ def _format_capabilities_text(result: "BackendCapabilitiesResult") -> str:
     )
     lines = [
         f"backend capabilities {result.run_uri}: {result.backend_name}",
+        f"source: {_source_label(result.state_source)}",
         f"capabilities: {supported} supported of {len(result.capabilities)}",
     ]
     for capability in result.capabilities:
@@ -252,6 +254,13 @@ def _extend_warning_lines(
     lines.append("warnings:")
     for warning in warnings:
         lines.append(f"  {warning.get('code')}: {warning.get('message')}")
+
+
+def _source_label(source: Mapping[str, object]) -> str:
+    label = source.get("label", "unknown")
+    authoritative = source.get("authoritative")
+    suffix = "authoritative" if authoritative is True else "non-authoritative"
+    return f"{label} ({suffix})"
 
 
 def _warning_envelope(

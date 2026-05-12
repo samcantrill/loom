@@ -122,8 +122,11 @@ def test_inspect_run_status_uses_store_scan(tmp_path: Path) -> None:
 
     assert summary.run_uri == run_uri
     assert summary.status == "SUCCEEDED"
+    assert summary.state_source["label"] == "authoritative_service_truth"
     assert summary.stages[0].stage_name == "build"
     assert summary.stages[0].status == "SUCCEEDED"
+    assert summary.stages[0].state_source["label"] == "authoritative_service_truth"
+    assert summary.stages[0].log_source["label"] == "materialized_local_state"
     assert summary.stages[0].log_available == {"stdout": False, "stderr": False}
 
 
@@ -148,6 +151,10 @@ def test_inspect_run_status_includes_submitted_operation_summaries(
 
     assert summary.submitted_operations[0].submission_id == "sub-1"
     assert summary.submitted_operations[0].active is True
+    assert (
+        summary.submitted_operations[0].state_source["label"]
+        == "authoritative_service_truth"
+    )
     operations = cast(
         list[dict[str, object]], summary.to_dict()["submitted_operations"]
     )
@@ -220,6 +227,8 @@ def test_inspect_stage_logs_tails_each_stream(tmp_path: Path) -> None:
     assert summary.streams[0].line_count == 3
     assert summary.streams[0].displayed_line_count == 2
     assert summary.streams[0].truncated is True
+    assert summary.streams[0].state_source["label"] == "materialized_local_state"
+    assert summary.state_source["label"] == "materialized_local_state"
     assert summary.streams[1].content == "err\n"
 
 
@@ -264,6 +273,7 @@ def test_inspect_run_artifacts_sorts_and_summarizes_metadata(tmp_path: Path) -> 
     summary = inspect_run_artifacts(run_uri, run_store=store)
 
     assert summary.artifact_count == 2
+    assert summary.state_source["label"] == "materialized_local_state"
     assert [artifact.key for artifact in summary.artifacts] == [
         "build.data",
         "report.text",
@@ -274,6 +284,7 @@ def test_inspect_run_artifacts_sorts_and_summarizes_metadata(tmp_path: Path) -> 
     assert build.output_name == "data"
     assert build.metadata == {"label": "build/data"}
     assert build.provenance_available is True
+    assert build.state_source["label"] == "materialized_local_state"
     assert build.to_dict()["artifact_type"] == "json"
 
 
@@ -285,6 +296,7 @@ def test_inspect_run_artifact_includes_stage_provenance(tmp_path: Path) -> None:
     detail = inspect_run_artifact(run_uri, "build/data", run_store=store)
 
     assert detail.artifact.key == "build.data"
+    assert detail.state_source["label"] == "materialized_local_state"
     assert detail.stage_provenance == {"tool": "loom"}
     assert detail.to_dict()["stage_provenance"] == {"tool": "loom"}
 

@@ -64,6 +64,7 @@ def test_backend_inspect_json_outputs_authoritative_summary(
     assert payload["ok"] is True
     assert payload["result"]["status"] == "SUCCEEDED"
     assert payload["result"]["counts"]["stages"] == 2
+    assert payload["result"]["state_source"]["label"] == "authoritative_service_truth"
     assert stderr.getvalue() == ""
 
 
@@ -85,6 +86,7 @@ def test_backend_inspect_text_includes_revision_and_stage(
 
     output = stdout.getvalue()
     assert output.startswith(f"backend inspect {run_uri}: SUCCEEDED")
+    assert "source: authoritative_service_truth" in output
     assert "revision:" in output
     assert "stage build: SUCCEEDED" in output
     assert "stage report" not in output
@@ -112,6 +114,7 @@ def test_backend_capabilities_json_reports_backend_records(
     assert payload["schema_version"] == BACKEND_CAPABILITIES_SCHEMA_VERSION
     assert payload["ok"] is True
     assert payload["result"]["backend_name"] == "local-authority-service"
+    assert payload["result"]["state_source"]["label"] == "authoritative_service_truth"
     assert payload["result"]["capabilities"]
     assert stderr.getvalue() == ""
 

@@ -77,6 +77,7 @@ def test_inspect_backend_reports_authoritative_facts_without_mutation(
 
     assert result.status == "SUCCEEDED"
     assert result.backend_name == "sqlite-per-run-authority"
+    assert result.state_source["label"] == "authoritative_service_truth"
     assert result.revision["sequence"] == before.sequence
     assert result.counts["stages"] == 2
     assert result.counts["commits"] == 2
@@ -135,6 +136,7 @@ def test_capabilities_report_explicit_remote_requirement(tmp_path: Path) -> None
     )
 
     assert result.has_error_diagnostics is True
+    assert result.state_source["label"] == "authoritative_service_truth"
     assert result.diagnostics[0]["code"] == "unsafe_remote_coordination"
     assert "workspace or sweep coordination" in str(result.diagnostics[0]["message"])
     detail = result.diagnostics[0]["detail"]
