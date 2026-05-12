@@ -1598,9 +1598,9 @@ error UX, and ensuring only Phase 11 paths changed.
 
 ### Phase 12: Local/Subprocess Worker Continuation Paths
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-worker-continuations`
-- PR: TBD
+- PR: <https://github.com/samcantrill/loom/pull/130>
 
 **Goal**
 
@@ -1678,7 +1678,36 @@ coverage around failed continuations.
 
 **Completion Summary**
 
-TBD.
+- Phase execution plan:
+  `docs/phases/authority-worker-continuations.md`
+- PR body: `docs/phases/authority-worker-continuations-pr-body.md`
+- Stack target: root phase PR targeting `develop`
+- Implementation summary: confirmed Phase 11 runtime hooks already enforce the
+  required local/subprocess authority handoffs, then added regression coverage
+  for stage-worker fencing validation, subprocess authority config propagation,
+  CLI authority/fencing routing, prepared-run fail-closed authority store
+  creation, and supervisor-backed subprocess execution.
+- Test updates: added focused tests in
+  `tests/unit/loom/pipeline/execution/test_stage_worker.py`,
+  `tests/unit/loom/pipeline/executors/test_subprocess_executor.py`,
+  `tests/unit/loom/cli/test_stage_cli.py`,
+  `tests/unit/loom/cli/test_stage_job_cli.py`,
+  `tests/unit/loom/cli/test_prepared_run_cli.py`, and
+  `tests/e2e/test_authority_supervisor_cli.py`.
+- Validation: targeted Ruff/Pyright passed; focused unit coverage passed with
+  49 tests; focused supervisor e2e passed with 1 test; focused split-process
+  integration coverage passed with 11 tests; `UV_CACHE_DIR=/tmp/uv-cache make validate-pr`
+  passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed with package
+  69 passed / 1 skipped, unit 948 passed / 1 skipped, contract 146 passed / 2
+  skipped, integration 127 passed / 8 skipped / 10 deselected, e2e 39 passed /
+  2 deselected, and config-extra 422 passed / 1332 deselected.
+- Review and CI: pending.
+- Merge metadata: pending.
+- Stack maintenance: root phase PR opened against `develop`; no successor branch
+  depends on `codex/authority-worker-continuations`.
+- Follow-up notes: no production runtime changes were required for Phase 12;
+  prepared-run replay remains intentionally fail-closed, and SLURM live
+  continuation migration remains Phase 13 scope.
 
 ### Phase 13: SLURM Live Operation Paths
 
