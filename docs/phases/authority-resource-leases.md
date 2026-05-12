@@ -166,14 +166,14 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: not needed; targeted validation and full PR gates passed after one local manager fix for explicit authority-store factory behavior
-- PR review: unused
-- Blocker resolution: 0/3 used
+- Phase implementation refinement: not needed; targeted validation and full PR gates passed after local manager fixes for explicit authority-store factory behavior and persisted resource-admission failure details
+- PR review: used by managing agent on 2026-05-12; no blocking findings remain after the persisted failure-detail fix
+- Blocker resolution: 1/3 used for the post-review resource-admission failure-detail persistence fix
 
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
 - Refine plan: completed by managing agent on 2026-05-12; scoped Phase 16 to service-backed named integer resources and runner admission, with scheduler queues/fairness deferred.
-- Implementation summary: service-backed resource limit and resource lease operations now return typed protocol results; resource recovery scans include resource leases; runner admission converts positive integer runtime resource requests into authority leases, supports fail-fast and bounded-wait decisions, records resource-admission failures, and releases acquired leases on terminal stage paths. The authority-backed run-store factory now auto-attaches a service coordination adapter only for resolved HTTP authority paths, preserving explicit non-HTTP authority-store tests.
-- Validation: targeted Ruff, Pyright, and pytest passed for authority, stores, execution, package, contract, and integration coverage; first full `make validate-pr` exposed the explicit authority-store factory regression, which was fixed in rebased commit `9491a95`; final post-rebase `make validate-pr` passed with Ruff, Pyright, default harness `1329 passed, 19 skipped, 14 deselected`, config-extra `423 passed, 1358 deselected`, and build success. Post-rebase `make test-summary` passed with package `70 passed, 1 skipped`, unit `967 passed, 1 skipped`, contract `151 passed, 2 skipped`, integration `128 passed, 8 skipped, 10 deselected`, e2e `39 passed, 2 deselected`, and config-extra `423 passed, 1358 deselected`.
+- Implementation summary: service-backed resource limit and resource lease operations now return typed protocol results; resource recovery scans include resource leases; runner admission converts positive integer runtime resource requests into authority leases, supports fail-fast and bounded-wait decisions, persists structured resource-admission failure details, and releases acquired leases on terminal stage paths. The authority-backed run-store factory now auto-attaches a service coordination adapter only for resolved HTTP authority paths, preserving explicit non-HTTP authority-store tests.
+- Validation: targeted Ruff, Pyright, and pytest passed for authority, stores, execution, package, contract, and integration coverage; first full `make validate-pr` exposed the explicit authority-store factory regression, which was fixed in rebased commit `9491a95`; manager review then exposed missing persisted resource-admission failure details, fixed in commit `305cd16`; final post-fix `make validate-pr` passed with Ruff, Pyright, default harness `1329 passed, 19 skipped, 14 deselected`, config-extra `423 passed, 1358 deselected`, and build success. Final post-fix `make test-summary` passed with package `70 passed, 1 skipped`, unit `967 passed, 1 skipped`, contract `151 passed, 2 skipped`, integration `128 passed, 8 skipped, 10 deselected`, e2e `39 passed, 2 deselected`, and config-extra `423 passed, 1358 deselected`.
 - Stack maintenance: branch rebased onto `origin/develop` at `60583e8` after Phase 16 `pr_open` metadata was pushed; this remains a root phase branch targeting `develop`.
