@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 10 merged; Phase 11 pending
+- Phase work status: Phase 10 merged; Phase 11 pr_open
 
 Related artifacts and references:
 
@@ -1478,9 +1478,9 @@ clarity of user-facing failure messages.
 
 ### Phase 11: Python Runner And `loom run` Online Path
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-run-online-path`
-- PR: TBD
+- PR: <https://github.com/samcantrill/loom/pull/129>
 
 **Goal**
 
@@ -1563,7 +1563,32 @@ error UX, and ensuring only Phase 11 paths changed.
 
 **Completion Summary**
 
-TBD.
+- Phase execution plan:
+  `docs/phases/authority-run-online-path.md`
+- PR body: `docs/phases/authority-run-online-path-pr-body.md`
+- Stack target: root phase PR targeting `develop`
+- Implementation summary: added HTTP authority lease/submitted-operation client
+  calls, captured readiness facts during strict HTTP authority resolution,
+  introduced `AuthorityClientBackedPerRunAuthorityStore`, and wired ready HTTP
+  authority references into the primary `create_authority_backed_serial_run_store()`
+  path for Python runner and `loom run` online execution.
+- Test updates: added no-extra unit coverage for the HTTP-backed runner adapter,
+  mutation API integration coverage for leases/submitted operations,
+  config-extra local runner coverage through an in-process FastAPI authority,
+  and a supervisor-backed CLI smoke aligned with the existing optional-config
+  test policy.
+- Validation: targeted Ruff/Pyright passed; targeted pytest passed with 26
+  passed / 2 skipped; `tests/package/test_pipeline_store_api.py` passed with 11
+  tests; `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed; `UV_CACHE_DIR=/tmp/uv-cache make test-summary`
+  passed with package 69 passed / 1 skipped, unit 942 passed / 1 skipped,
+  contract 146 passed / 2 skipped, integration 127 passed / 8 skipped / 10
+  deselected, e2e 39 passed / 2 deselected, and config-extra 422 passed / 1326
+  deselected.
+- PR metadata: PR #129 opened from `codex/authority-run-online-path` to
+  `develop` and verified with `gh pr view`.
+- Follow-up notes: audit events remain local-only for HTTP-backed runner stores
+  until a service audit route exists. Phase 12 still owns continuation and
+  local/subprocess worker migration.
 
 ### Phase 12: Local/Subprocess Worker Continuation Paths
 
