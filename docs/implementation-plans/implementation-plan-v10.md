@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 16 merged; Phase 17 pending
+- Phase work status: Phase 17 pr_open; Phase 18 pending
 
 Related artifacts and references:
 
@@ -2191,9 +2191,9 @@ semantics.
 
 ### Phase 17: Offline Evidence Writer
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-offline-evidence`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/135
 
 **Goal**
 
@@ -2277,7 +2277,34 @@ and the absence of online fallback behavior.
 
 **Completion Summary**
 
-TBD.
+Phase 17 PR opened on 2026-05-12:
+
+- Branch: `codex/authority-offline-evidence`
+- Phase execution plan: `docs/phases/authority-offline-evidence.md`
+- PR body: `docs/phases/authority-offline-evidence-pr-body.md`
+- PR: https://github.com/samcantrill/loom/pull/135
+- Stack target: root phase PR targeting `develop`
+- Implementation summary: added strict offline evidence manifest models and
+  atomic writer/reader helpers; added the explicit offline evidence run-store
+  adapter/factory; wired `PipelineRunner` to write terminal non-authoritative
+  evidence only for explicit offline-first runs while keeping raw
+  `LocalRunStore` rejected; wired `loom run --offline-first` and
+  `--authority-mode offline_first` through preflight and CLI JSON/text output.
+- Validation before PR: targeted Ruff, Pyright, and focused manifest/CLI/
+  package/contract/config/e2e pytest passed. `make validate-pr` passed with
+  Ruff, Pyright, default harness `1336 passed, 19 skipped, 14 deselected`,
+  config-extra harness `424 passed, 1366 deselected`, and build success.
+  `make test-summary` passed with package `70 passed, 1 skipped`, unit
+  `971 passed, 1 skipped`, contract `154 passed, 2 skipped`, integration
+  `128 passed, 8 skipped, 10 deselected`, e2e `40 passed, 2 deselected`, and
+  config-extra `424 passed, 1366 deselected`.
+- PR verification: `gh pr view 135 --json baseRefName,headRefName,state,url`
+  confirmed base `develop`, head `codex/authority-offline-evidence`, and state
+  `OPEN`.
+- Stack maintenance: root PR opened against `develop`; no predecessor branch
+  and no successor branch currently depends on this branch.
+- Remaining blockers: none at PR-open time; GitHub CI and automated review are
+  pending.
 
 ### Phase 18: Offline Import Transaction
 
