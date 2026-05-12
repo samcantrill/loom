@@ -2069,9 +2069,9 @@ resource methods fail explicitly until Phase 16.
 
 ### Phase 16: Resource Leases And Scheduler-Ready Admission
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-resource-leases`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/134
 
 **Goal**
 
@@ -2165,7 +2165,23 @@ semantics.
 
 **Completion Summary**
 
-TBD.
+- Phase execution plan: `docs/phases/authority-resource-leases.md`.
+- PR #134 opened against `develop` from `codex/authority-resource-leases` after
+  rebasing onto `origin/develop` at `f97dd15`.
+- Implementation: service-backed resource limit and resource lease operations
+  now return typed protocol results; service recovery scans include resource
+  leases; runner admission leases positive integer runtime resource requests,
+  supports fail-fast and bounded-wait decisions, records resource-admission
+  failures, and releases acquired leases on terminal stage paths.
+- Validation: final post-rebase `make validate-pr` passed with Ruff, Pyright,
+  default harness 1329 passed / 19 skipped / 14 deselected, config-extra 423
+  passed / 1358 deselected, and build success. Post-rebase `make test-summary`
+  passed with package 70 passed / 1 skipped, unit 967 passed / 1 skipped,
+  contract 151 passed / 2 skipped, integration 128 passed / 8 skipped /
+  10 deselected, e2e 39 passed / 2 deselected, and config-extra 423 passed /
+  1358 deselected.
+- Follow-up: no stacked successor yet; branch remains a root PR targeting
+  `develop`.
 
 ### Phase 17: Offline Evidence Writer
 
