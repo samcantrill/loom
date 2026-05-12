@@ -162,7 +162,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: explicitly not needed after managing-agent diff review and targeted validation; no separate refiner pass consumed
+- Phase implementation refinement: used by managing-agent bounded validation fix after `make validate-pr` exposed one stale catalog-model serialization assertion
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -177,4 +177,5 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_cli_runs_contract.py tests/contracts/test_run_catalog_contract.py tests/integration/pipeline/test_cli_runs.py tests/integration/pipeline/test_run_catalog_current_list.py tests/integration/pipeline/test_run_catalog_direct_scan.py tests/unit/loom/runs/test_direct_scan_helpers.py` passed: 20 passed.
   - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package/test_import_boundaries.py` passed: 34 passed.
   - The non-extra focused pytest command against optional config diagnostics was superseded by the `--extra config` run because those tests require the config extra.
+  - Initial `make validate-pr` failed only on `tests/unit/loom/runs/test_run_catalog_models.py::test_run_summary_uses_run_uri_and_plain_serialization`; the assertion was updated to verify additive `state_source` serialization for run, stage, artifact, and submitted-operation summaries. Focused reruns of Ruff, Pyright, and that unit file passed.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
