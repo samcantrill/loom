@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 15 merged; Phase 16 pending
+- Phase work status: Phase 16 merged; Phase 17 pending
 
 Related artifacts and references:
 
@@ -2069,7 +2069,7 @@ resource methods fail explicitly until Phase 16.
 
 ### Phase 16: Resource Leases And Scheduler-Ready Admission
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-resource-leases`
 - PR: https://github.com/samcantrill/loom/pull/134
 
@@ -2167,21 +2167,27 @@ semantics.
 
 - Phase execution plan: `docs/phases/authority-resource-leases.md`.
 - PR #134 opened against `develop` from `codex/authority-resource-leases` after
-  rebasing onto `origin/develop` at `f97dd15`.
+  rebasing onto `origin/develop` at `60583e8`.
 - Implementation: service-backed resource limit and resource lease operations
   now return typed protocol results; service recovery scans include resource
   leases; runner admission leases positive integer runtime resource requests,
-  supports fail-fast and bounded-wait decisions, records resource-admission
-  failures, and releases acquired leases on terminal stage paths.
-- Validation: final post-rebase `make validate-pr` passed with Ruff, Pyright,
+  supports fail-fast and bounded-wait decisions, persists structured
+  resource-admission failure details, and releases acquired leases on terminal
+  stage paths.
+- Validation: final post-fix `make validate-pr` passed with Ruff, Pyright,
   default harness 1329 passed / 19 skipped / 14 deselected, config-extra 423
-  passed / 1358 deselected, and build success. Post-rebase `make test-summary`
+  passed / 1358 deselected, and build success. Post-fix `make test-summary`
   passed with package 70 passed / 1 skipped, unit 967 passed / 1 skipped,
   contract 151 passed / 2 skipped, integration 128 passed / 8 skipped /
   10 deselected, e2e 39 passed / 2 deselected, and config-extra 423 passed /
   1358 deselected.
-- Follow-up: no stacked successor yet; branch remains a root PR targeting
-  `develop`.
+- Automated review and merge: manager review found and fixed one persisted
+  failure-detail blocker; final pre-merge check verified PR #134 targeted
+  `develop`, CI `checks` succeeded, and merge state was `CLEAN`.
+- Merge: PR #134 squash-merged into `develop` on 2026-05-12 at merge commit
+  `2d615b78cfc5949352f775fd62ce2d3de635d54b`.
+- Stack maintenance: root PR merged into `develop`; no predecessor or successor
+  branch.
 
 ### Phase 17: Offline Evidence Writer
 
