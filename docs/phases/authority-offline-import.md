@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: final phase execution plan
 - Feature focus: DB-Backed Authority Supervisor And Offline Import
 - PR title: `DB-Backed Authority Supervisor And Offline Import - Phase 18: Offline Import Transaction`
 - Branch: `codex/authority-offline-import`
@@ -19,9 +19,9 @@
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and confirmation review; evidence is recorded in `docs/implementation-plans/implementation-plan-v10.md`
 - Plan quality gate loop budget: consumed before phase work; no blocking findings remain.
 - Draft pass: completed by managing agent on 2026-05-12
-- Refine pass: pending
+- Refine pass: completed by managing agent on 2026-05-12 after confirming repository transaction, protocol-result body, route/client, and provenance surfacing boundaries
 - Setup limitations: none; Phase 17 offline evidence writer is merged into `develop`.
-- Blockers: none identified in the draft pass.
+- Blockers: none; implementation may begin from this refined phase execution plan.
 
 ## Objective
 
@@ -58,8 +58,10 @@ movement, or overwrite/fork behavior.
 - Authority repository writes are private to `src/loom/authority/_repository.py`; public runtime code must continue through service/client abstractions.
 - Existing repository methods each open their own transaction, so Phase 18 needs a repository-owned import method or service helper that performs all inserts inside one `AuthorityRepository.transaction()` block.
 - The repository schema already stores runs, stages, attempts, output commits, artifact facts, submitted operations, cleanup/recovery records, and audit events. Import provenance can be represented through run metadata, lifecycle reasons, and audit events without a schema migration unless a blocker proves a dedicated table is required.
-- `AuthoritativeRunSnapshot` and diagnostics/status/catalog summaries use state-source metadata and read-model fields; imported state should be surfaced without confusing it with live online execution.
-- `AuthorityClient`, FastAPI mutation routes, and `AuthorityMutationService` already use neutral protocol envelopes and are the correct service boundary for CLI import.
+- `AuthorityProtocolResult.body` is the right initial response payload for import result facts, avoiding a broad protocol-field expansion for a single operation.
+- `AuthoritativeRunSnapshot` can be additively extended with run metadata/provenance read facts because `_run_snapshot()` already has access to `authority_runs.metadata_json`.
+- Diagnostics/status/catalog summaries use state-source metadata and read-model fields; imported state should be surfaced through additive `import_provenance` metadata without changing existing status semantics.
+- `AuthorityClient`, FastAPI mutation routes, and `AuthorityMutationService` already use neutral protocol envelopes and are the correct service boundary for CLI import. The import route can live under the authority mutation route group because it is a repository mutation, but it must keep a distinct `offline_import` operation name and path.
 - `loom authority` owns authority lifecycle subcommands; the import CLI can fit there without creating a broad top-level command.
 
 ## In-Scope Work
@@ -71,6 +73,7 @@ movement, or overwrite/fork behavior.
 - Add a CLI surface, tentatively `loom authority import-offline MANIFEST`, with standard authority-selection options and compact JSON/text output.
 - Expose import provenance in authoritative read/status/catalog/diagnostics surfaces through state-source/provenance metadata and imported audit facts.
 - Add rollback tests by forcing a mid-transaction failure after validation and proving no partial authoritative run can be read.
+- Add only small protocol/capability vocabulary needed by the import operation, such as `offline_import`, if the existing enums need a stable operation family or capability label.
 
 ## Out-of-Scope Work
 
@@ -88,6 +91,7 @@ movement, or overwrite/fork behavior.
 - Stage attempts can be reconstructed from offline stage status attempt numbers; missing attempt numbers are rejection-worthy for RUN stages and terminal outputs.
 - A failed stage without outputs imports as a terminal attempt without an output commit; a succeeded stage with outputs imports artifact facts and an output commit.
 - Static skipped/stale/blocked stages may be represented as terminal stage/attempt facts when the offline manifest contains terminal status evidence.
+- The repository should expose imported run metadata through snapshots; catalog integration can then consume import provenance through read-model metadata without scanning private database tables.
 
 ## Scope Contract
 
@@ -138,8 +142,8 @@ checks should fail closed until a compatibility adapter is intentionally added.
 ## Implementation Steps
 
 1. Add import rejection/result models and a pure validation/equivalence checker for `OfflineEvidenceManifest`.
-2. Add a repository-owned atomic import method that writes accepted facts and audit events in one transaction and rejects existing run URIs before insert.
-3. Add service/API/client plumbing for an offline-evidence import operation using authority protocol envelopes.
+2. Add a repository-owned atomic import method that writes accepted facts and audit events in one transaction and rejects existing run URIs before insert; use direct SQL inside that transaction rather than composing public repository methods that each commit independently.
+3. Add service/API/client plumbing for an offline-evidence import operation using authority protocol envelopes, a distinct import path, and `AuthorityProtocolResult.body` for accepted result facts.
 4. Add `loom authority import-offline MANIFEST` with JSON/text result formatting and authority selection.
 5. Add imported provenance visibility in status/catalog/diagnostics/read models with additive metadata.
 6. Add unit/contract/integration/e2e coverage for accepted import, rejection classes, collision, API/CLI boundary, and rollback.
@@ -209,7 +213,7 @@ make test-summary
 ## Handoff Notes For Implementation
 
 - Safe implementation slices: validator/result models first; repository atomic import second; service/route/client third; CLI/read-model visibility fourth; rejection/rollback/e2e tests last.
-- Decisions not to revisit: v10 manifests only, complete evidence only, reject-only collisions, single repository transaction, service/client boundary for CLI, no payload copy, no deferred-finalization conversion.
+- Decisions not to revisit: v10 manifests only, complete evidence only, reject-only collisions, single repository transaction, service/client boundary for CLI, no payload copy, no deferred-finalization conversion, import result facts in protocol `body` unless implementation exposes a hard blocker.
 - Conditions that require stopping for the manager: existing repository schema cannot express imported terminal run/stage/output facts without a migration, or service-route plumbing cannot support an atomic repository import without exposing private repository state.
 
 ## Refinement And Review Budget Status
@@ -221,7 +225,7 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
-- Final phase execution plan:
+- Final phase execution plan: refined by managing agent on 2026-05-12; confirmed protocol `body` result payload, additive snapshot metadata/provenance surfacing, distinct import route/client operation, and direct SQL inside one repository transaction for atomicity.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
