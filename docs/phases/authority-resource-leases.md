@@ -137,9 +137,9 @@ The admission model should keep room for later scheduler adapters, richer resour
 
 ### E2E Suite
 
-- Status: required when deterministic
+- Status: deferred for resource-specific coverage; full existing e2e suite remains required
 - Expected paths: existing local CLI run smoke with resource options if it can stay small and stable
-- Required assertions or deferral reason: prove a small local run can execute with service-backed resource admission enabled.
+- Required assertions or deferral reason: no user-facing CLI path exists in this phase to seed service resource limits before `loom run`; service-backed runner admission is covered in integration, and the existing e2e suite remains part of the final PR gate.
 
 ### Opt-In Suites
 
@@ -166,7 +166,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded-path phase may use one bounded pass after implementation if validation or coverage exposes a concrete gap
+- Phase implementation refinement: not needed; targeted validation and full PR gates passed after one local manager fix for explicit authority-store factory behavior
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -174,6 +174,6 @@ make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-12.
 - Refine plan: completed by managing agent on 2026-05-12; scoped Phase 16 to service-backed named integer resources and runner admission, with scheduler queues/fairness deferred.
-- Implementation summary: pending.
-- Validation: pending.
+- Implementation summary: service-backed resource limit and resource lease operations now return typed protocol results; resource recovery scans include resource leases; runner admission converts positive integer runtime resource requests into authority leases, supports fail-fast and bounded-wait decisions, records resource-admission failures, and releases acquired leases on terminal stage paths. The authority-backed run-store factory now auto-attaches a service coordination adapter only for resolved HTTP authority paths, preserving explicit non-HTTP authority-store tests.
+- Validation: targeted Ruff, Pyright, and pytest passed for authority, stores, execution, package, contract, and integration coverage; first full `make validate-pr` exposed the explicit authority-store factory regression, which was fixed in commit `0272e2f`; final `make validate-pr` passed with Ruff, Pyright, default harness `1329 passed, 19 skipped, 14 deselected`, config-extra `423 passed, 1358 deselected`, and build success. `make test-summary` passed with package `70 passed, 1 skipped`, unit `967 passed, 1 skipped`, contract `151 passed, 2 skipped`, integration `128 passed, 8 skipped, 10 deselected`, e2e `39 passed, 2 deselected`, and config-extra `423 passed, 1358 deselected`.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
