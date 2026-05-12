@@ -19,6 +19,7 @@ from loom.pipeline.execution.models import (
     STAGE_WORKER_RESULT_SCHEMA_VERSION,
 )
 from loom.pipeline.status import StageStatus
+from loom.pipeline.stores import AuthorityBackendKind, AuthorityDeploymentProfile
 
 
 pytestmark = pytest.mark.unit
@@ -121,6 +122,68 @@ def test_stage_run_failure_returns_one(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert "FAILED stage run file:///tmp/run build attempt 1: FAILED" in stdout.getvalue()
     assert "failure stage_exception: boom" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_stage_run_passes_authority_config_to_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def run_worker(
+        *,
+        run_uri: str,
+        stage_name: str,
+        attempt: int | None,
+        authority_config: object | None = None,
+    ) -> StageWorkerResult:
+        calls["run_uri"] = run_uri
+        calls["stage_name"] = stage_name
+        calls["attempt"] = attempt
+        calls["authority_config"] = authority_config
+        return _worker_result()
+
+    monkeypatch.setattr(stage_command, "_run_stage_worker", run_worker)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "stage",
+                "run",
+                "--run-uri",
+                "file:///tmp/run",
+                "--stage",
+                "build",
+                "--authority-backend",
+                "managed_service",
+                "--authority-profile",
+                "managed_service",
+                "--authority-endpoint",
+                "http://authority.test",
+                "--authority-workspace",
+                "workspace-a",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    authority_config = calls["authority_config"]
+    assert (
+        getattr(authority_config, "backend_kind")
+        is AuthorityBackendKind.MANAGED_SERVICE
+    )
+    assert (
+        getattr(authority_config, "deployment_profile")
+        is AuthorityDeploymentProfile.MANAGED_SERVICE
+    )
+    assert getattr(authority_config, "endpoint") == "http://authority.test"
+    assert getattr(authority_config, "workspace_id") == "workspace-a"
     assert stderr.getvalue() == ""
 
 
