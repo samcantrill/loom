@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: phase execution plan
+- Status: implementation complete; PR preparation pending
 - Feature focus: DB-Backed Authority Supervisor And Offline Import
 - PR title: `DB-Backed Authority Supervisor And Offline Import - Phase 12: Local/Subprocess Worker Continuation Paths`
 - Branch: `codex/authority-worker-continuations`
@@ -160,15 +160,43 @@ UV_CACHE_DIR=/tmp/uv-cache make validate-pr
 UV_CACHE_DIR=/tmp/uv-cache make test-summary
 ```
 
+## Implementation Summary
+
+- Confirmed the local/subprocess authority continuation behavior is already implemented through the Phase 11 runtime hooks: worker requests persist `authority_attempt` fencing metadata, stage workers validate that metadata before execution, stage jobs renew authority-backed leases before terminal mutation, subprocess commands propagate authority configuration, and prepared-run continuation creates authority-backed stores before failing closed.
+- Added focused stage-worker coverage for valid fencing, missing `authority_attempt` metadata, and stale/foreign fencing-token rejection before executor invocation.
+- Tightened subprocess command coverage to assert managed-service authority config propagation, including backend/profile/endpoint/workspace/reference arguments.
+- Added CLI tests proving `loom stage run`, `loom stage-job run`, and `loom prepared-run continue` route explicit authority config and fencing data through their continuation entrypoints.
+- Extended the supervisor-backed e2e smoke with a subprocess run against an online authority endpoint and verified the local worker result materialization remains available after authority-owned lifecycle mutation.
+- No production code changes were required in this phase; the smallest maintainable diff was to lock down the existing local/subprocess continuation paths with regression coverage.
+
+## Validation Results
+
+Targeted validation:
+
+| Command | Result |
+| --- | --- |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pyright ...` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/execution/test_stage_worker.py tests/unit/loom/pipeline/executors/test_subprocess_executor.py tests/unit/loom/cli/test_stage_cli.py tests/unit/loom/cli/test_stage_job_cli.py tests/unit/loom/cli/test_prepared_run_cli.py tests/unit/loom/pipeline/execution/test_authority_adapter.py` | passed, 49 tests in 6.78s |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/e2e/test_authority_supervisor_cli.py` | passed, 1 test in 2.97s |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_subprocess_executor_integration.py tests/integration/pipeline/test_stage_worker_integration.py tests/integration/pipeline/test_stage_job_continuation.py` | passed, 11 tests in 7.75s |
+
+PR gate validation:
+
+| Command | Result |
+| --- | --- |
+| `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | passed; Ruff, Pyright, config-extra harness, and package build completed successfully |
+| `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | passed; package 69 passed/1 skipped, unit 948 passed/1 skipped, contract 146 passed/2 skipped, integration 127 passed/8 skipped/10 deselected, e2e 39 passed/2 deselected, config-extra 422 passed/1332 deselected |
+
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded-path phase may use one bounded pass if validation or coverage exposes a concrete gap
+- Phase implementation refinement: not needed; targeted validation and full PR gates passed without exposing implementation or coverage gaps
 - PR review: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
-- Implementation summary: pending.
-- Validation: pending.
+- Implementation summary: completed; Phase 12 adds regression coverage around existing authority-backed local/subprocess continuation behavior and intentionally avoids unnecessary production rewrites.
+- Validation: targeted checks, `make validate-pr`, and `make test-summary` passed on 2026-05-12.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
