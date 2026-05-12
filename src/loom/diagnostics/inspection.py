@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.state_sources import (
@@ -99,6 +99,7 @@ class RunStatusSummary:
     status: str | None = None
     message: str | None = None
     artifact_count: int = 0
+    import_provenance: Mapping[str, PlainData] | None = None
     submitted_operations: tuple[SubmittedOperationSummary, ...] = ()
     stages: tuple[StageStatusSummary, ...] = ()
     state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
@@ -109,6 +110,9 @@ class RunStatusSummary:
             "status": self.status,
             "message": self.message,
             "artifact_count": self.artifact_count,
+            "import_provenance": None
+            if self.import_provenance is None
+            else dict(self.import_provenance),
             "state_source": dict(self.state_source),
             "submitted_operations": [
                 operation.to_dict() for operation in self.submitted_operations
@@ -249,6 +253,7 @@ def inspect_run_status(
             status=snapshot.status.value,
             message=None,
             artifact_count=sum(len(stage.artifact_facts) for stage in snapshot.stages),
+            import_provenance=_import_provenance(snapshot),
             state_source=source,
             submitted_operations=tuple(
                 SubmittedOperationSummary(
@@ -277,6 +282,16 @@ def inspect_run_status(
         )
 
     raise _local_lifecycle_unsupported(run_uri)
+
+
+def _import_provenance(snapshot: object) -> Mapping[str, PlainData] | None:
+    metadata = getattr(snapshot, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return None
+    value = metadata.get("authority_import")
+    if not isinstance(value, Mapping):
+        return None
+    return cast(Mapping[str, PlainData], value)
 
 
 def inspect_run_artifacts(

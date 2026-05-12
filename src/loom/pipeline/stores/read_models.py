@@ -860,6 +860,7 @@ class AuthoritativeRunSnapshot:
     cleanup_candidates: tuple[CleanupCandidate, ...] = ()
     materialized_refs: tuple[MaterializedRef, ...] = ()
     warnings: tuple[ReadModelWarning, ...] = ()
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_uri", _non_empty_string(self.run_uri, "run_uri"))
@@ -870,6 +871,7 @@ class AuthoritativeRunSnapshot:
             _positive_int(self.schema_version, "schema_version"),
         )
         _revision(self.revision)
+        object.__setattr__(self, "metadata", _plain_mapping(self.metadata, "metadata"))
         object.__setattr__(
             self, "stages", _tuple_of(self.stages, StageLifecycleSnapshot, "stages")
         )
@@ -902,6 +904,7 @@ class AuthoritativeRunSnapshot:
             "status": self.status.value,
             "schema_version": self.schema_version,
             "revision": self.revision.to_dict(),
+            "metadata": dict(self.metadata),
             "stages": [stage.to_dict() for stage in self.stages],
             "submitted_operations": [
                 operation.to_dict() for operation in self.submitted_operations
@@ -923,6 +926,7 @@ class AuthoritativeRunSnapshot:
                 "status",
                 "schema_version",
                 "revision",
+                "metadata",
                 "stages",
                 "submitted_operations",
                 "cleanup_candidates",
@@ -938,6 +942,7 @@ class AuthoritativeRunSnapshot:
                 _required(mapping, "schema_version"), "schema_version"
             ),
             revision=BackendRevision.from_dict(_required(mapping, "revision")),
+            metadata=_plain_mapping(mapping.get("metadata", {}), "metadata"),
             stages=tuple(
                 StageLifecycleSnapshot.from_dict(stage)
                 for stage in _sequence(mapping.get("stages", ()), "stages")

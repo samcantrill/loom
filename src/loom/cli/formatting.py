@@ -305,6 +305,16 @@ def format_status_text(result: object) -> str:
     source = getattr(result, "state_source", {})
     if isinstance(source, Mapping):
         lines.append(f"source: {source.get('label', 'unknown')}")
+    import_provenance = getattr(result, "import_provenance", None)
+    if isinstance(import_provenance, Mapping):
+        imported_at = import_provenance.get("imported_at", "<unknown>")
+        manifest_generated_at = import_provenance.get(
+            "manifest_generated_at", "<unknown>"
+        )
+        lines.append(
+            "imported_from: offline_evidence "
+            f"imported_at={imported_at} manifest_generated_at={manifest_generated_at}"
+        )
     submitted_operations = cast(
         Sequence[object], getattr(result, "submitted_operations", ())
     )

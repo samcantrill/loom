@@ -68,6 +68,7 @@ def test_authority_protocol_contract_exposes_stable_vocabulary() -> None:
         "workspace_coordination",
         "recovery_scan",
         "cleanup_candidates",
+        "offline_import",
     }
     assert {category.value for category in AuthorityProtocolErrorCategory} == {
         "resolver",

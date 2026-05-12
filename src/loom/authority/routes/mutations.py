@@ -21,6 +21,7 @@ from loom.pipeline.stores import (
     AUTHORITY_COORDINATION_TRIAL_RECORD_PATH,
     AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH,
     AUTHORITY_MUTATION_ALLOCATE_STAGE_ATTEMPT_PATH,
+    AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH,
     AUTHORITY_MUTATION_OPEN_RUN_PATH,
     AUTHORITY_MUTATION_RECORD_OUTPUT_COMMIT_PATH,
     AUTHORITY_MUTATION_ROUTE_PREFIX,
@@ -192,6 +193,23 @@ def list_submitted_operations(
 
     return _handle(
         AuthorityMutationOperation.LIST_SUBMITTED_OPERATIONS,
+        payload,
+        services,
+    )
+
+
+@router.post(
+    AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH.removeprefix(AUTHORITY_MUTATION_ROUTE_PREFIX),
+    response_model=None,
+)
+def import_offline_evidence(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Import a complete v10 offline evidence manifest."""
+
+    return _handle(
+        AuthorityMutationOperation.IMPORT_OFFLINE_EVIDENCE,
         payload,
         services,
     )

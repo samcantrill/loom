@@ -227,6 +227,7 @@ def read_authoritative_run(
         status=snapshot.status,
         schema_version=snapshot.schema_version,
         revision=snapshot.revision,
+        metadata=snapshot.metadata,
         stages=stages,
         submitted_operations=snapshot.submitted_operations,
         cleanup_candidates=snapshot.cleanup_candidates,

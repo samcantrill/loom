@@ -18,7 +18,9 @@ from loom.authority.services import (
 )
 from loom.pipeline.stores import (
     AuthorityReadinessState,
+    BackendCapability,
     BackendCapabilitySet,
+    CapabilityScope,
 )
 
 
@@ -63,6 +65,10 @@ def test_repository_services_configure_mutation_service(tmp_path) -> None:
     assert services.service_generation == "generation-1"
     assert services.workspace_id == "workspace-a"
     assert services.capabilities.backend_name == REPOSITORY_AUTHORITY_BACKEND_NAME
+    assert services.capabilities.supports(
+        BackendCapability.OFFLINE_IMPORT,
+        scope=CapabilityScope.PER_RUN,
+    )
     assert services.readiness_report.ready is True
 
 

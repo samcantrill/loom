@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.offline_evidence import OfflineEvidenceManifest, OfflineStageEvidence
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores.authority import (
     AttemptAllocation,
@@ -1252,6 +1253,189 @@ class AuthorityRepository:
                 )
             )
 
+    def import_offline_evidence_manifest(
+        self,
+        manifest: OfflineEvidenceManifest,
+        *,
+        imported_by: str = "offline-import",
+        workspace_id: str | None = None,
+    ) -> AuthoritativeRunSnapshot:
+        """Atomically import accepted v10 offline evidence into authority truth."""
+
+        if not isinstance(manifest, OfflineEvidenceManifest):
+            raise AuthorityRepositoryError(
+                "manifest must be an OfflineEvidenceManifest"
+            )
+        imported_by = _non_empty(imported_by, "imported_by")
+        if workspace_id is not None:
+            workspace_id = _non_empty(workspace_id, "workspace_id")
+        run_uri = _non_empty(manifest.run_uri, "run_uri")
+        with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM authority_runs WHERE run_uri = ?",
+                (run_uri,),
+            ).fetchone()
+            if existing is not None:
+                raise AuthorityRepositoryError(f"run already exists: {run_uri}")
+            now = self._now()
+            import_provenance = _offline_import_provenance(
+                manifest,
+                imported_at=now,
+                imported_by=imported_by,
+                workspace_id=workspace_id,
+            )
+            run_status = _offline_import_run_status(manifest)
+            run_metadata = dict(
+                _plain_mapping(run_status.get("metadata", {}), "metadata")
+            )
+            run_metadata["authority_import"] = import_provenance
+            run_revision = self._next_revision(conn)
+            conn.execute(
+                """
+                INSERT INTO authority_runs (
+                    run_uri, status, metadata_json, created_revision_sequence,
+                    updated_revision_sequence, reason_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_uri,
+                    RunStatus(cast(str, run_status["status"])).value,
+                    _json_dumps(run_metadata),
+                    run_revision.sequence,
+                    run_revision.sequence,
+                    _json_dumps(_offline_import_reason(import_provenance).to_dict()),
+                ),
+            )
+            _insert_import_audit_event(
+                conn,
+                run_uri=run_uri,
+                event_type="offline_import.accepted",
+                timestamp=now,
+                payload={
+                    "import_provenance": import_provenance,
+                    "stage_count": len(manifest.stages),
+                    "artifact_count": sum(
+                        len(stage.artifacts) for stage in manifest.stages
+                    ),
+                },
+                revision=run_revision,
+            )
+            latest_revision = run_revision
+            for stage in manifest.stages:
+                latest_revision = self._import_offline_stage(
+                    conn,
+                    manifest=manifest,
+                    stage=stage,
+                    import_provenance=import_provenance,
+                )
+            for event in manifest.events:
+                latest_revision = self._next_revision(conn)
+                record = PipelineEventRecord.from_dict(event)
+                _insert_import_audit_event(
+                    conn,
+                    run_uri=run_uri,
+                    event_type=f"offline_import.replay.{record.event_type}",
+                    timestamp=record.timestamp,
+                    payload={"offline_event": record.to_dict()},
+                    revision=latest_revision,
+                    scope=record.scope,
+                )
+            _touch_run(conn, run_uri=run_uri, revision=latest_revision)
+            return _run_snapshot(
+                conn,
+                run_uri=run_uri,
+                schema_version=self.schema_version,
+                now=now,
+            )
+
+    def _import_offline_stage(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        manifest: OfflineEvidenceManifest,
+        stage: OfflineStageEvidence,
+        import_provenance: Mapping[str, PlainData],
+    ) -> BackendRevision:
+        run_uri = manifest.run_uri
+        status_data = _offline_import_stage_status(stage)
+        status = StageStatus(cast(str, status_data["status"]))
+        attempt_number = cast(int, status_data["attempt"])
+        revision = self._next_revision(conn)
+        reason = _offline_import_reason(import_provenance, stage_name=stage.stage_name)
+        _upsert_stage(
+            conn,
+            run_uri=run_uri,
+            stage_name=stage.stage_name,
+            status=status,
+            revision=revision,
+            reason=reason,
+        )
+        attempt_id = f"{stage.stage_name}-{attempt_number}"
+        conn.execute(
+            """
+            INSERT INTO stage_attempts (
+                run_uri, attempt_id, stage_name, attempt_number, status,
+                owner_id, created_at, revision_sequence, reason_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_uri,
+                attempt_id,
+                stage.stage_name,
+                attempt_number,
+                status.value,
+                "offline-import",
+                cast(str, status_data.get("started_at") or manifest.generated_at),
+                revision.sequence,
+                _json_dumps(reason.to_dict()),
+            ),
+        )
+        output_refs = _offline_import_output_refs(stage)
+        if output_refs:
+            revision = self._next_revision(conn)
+            commit_id = f"{stage.stage_name}-{attempt_id}-offline-import-{revision.sequence}"
+            conn.execute(
+                """
+                INSERT INTO output_commits (
+                    commit_id, run_uri, stage_name, attempt_id, committed_at,
+                    revision_sequence, output_names_json, materialized_refs_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    commit_id,
+                    run_uri,
+                    stage.stage_name,
+                    attempt_id,
+                    cast(str, status_data.get("finished_at") or manifest.generated_at),
+                    revision.sequence,
+                    _json_dumps(list(output_refs)),
+                    _json_dumps([]),
+                ),
+            )
+            for name, artifact in output_refs.items():
+                conn.execute(
+                    """
+                    INSERT INTO artifact_facts (
+                        run_uri, stage_name, artifact_name, artifact_json,
+                        commit_id, revision_sequence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_uri,
+                        stage.stage_name,
+                        name,
+                        _json_dumps(artifact.to_dict()),
+                        commit_id,
+                        revision.sequence,
+                    ),
+                )
+        _touch_run(conn, run_uri=run_uri, revision=revision)
+        return revision
+
     def record_cleanup_candidate(
         self,
         run_uri: str,
@@ -2288,6 +2472,110 @@ def _run_snapshot(
         ),
         submitted_operations=_submitted_operations(conn, run_uri),
         cleanup_candidates=_cleanup_candidates(conn, run_uri),
+        metadata=_plain_mapping(_json_loads(cast(str, run_row["metadata_json"])), "metadata"),
+    )
+
+
+def _offline_import_provenance(
+    manifest: OfflineEvidenceManifest,
+    *,
+    imported_at: str,
+    imported_by: str,
+    workspace_id: str | None,
+) -> dict[str, PlainData]:
+    provenance: dict[str, PlainData] = {
+        "source": "offline_evidence",
+        "manifest_kind": manifest.kind,
+        "manifest_schema_version": manifest.schema_version,
+        "manifest_generated_at": manifest.generated_at,
+        "manifest_status": manifest.manifest_status.value,
+        "imported_at": imported_at,
+        "imported_by": imported_by,
+        "state_source": dict(manifest.state_source),
+        "diagnostic_count": len(manifest.diagnostics),
+    }
+    if workspace_id is not None:
+        provenance["workspace_id"] = workspace_id
+    return provenance
+
+
+def _offline_import_reason(
+    import_provenance: Mapping[str, PlainData],
+    *,
+    stage_name: str | None = None,
+) -> LifecycleReason:
+    detail: dict[str, PlainData] = {
+        "source": "offline_evidence",
+        "manifest_generated_at": import_provenance.get("manifest_generated_at"),
+        "imported_at": import_provenance.get("imported_at"),
+    }
+    if stage_name is not None:
+        detail["stage_name"] = stage_name
+    return LifecycleReason(
+        code="offline_import",
+        message="imported from v10 offline evidence",
+        detail=detail,
+    )
+
+
+def _offline_import_run_status(
+    manifest: OfflineEvidenceManifest,
+) -> Mapping[str, PlainData]:
+    if not isinstance(manifest.run_status, Mapping):
+        raise AuthorityRepositoryError("offline evidence run status is missing")
+    return manifest.run_status
+
+
+def _offline_import_stage_status(
+    stage: OfflineStageEvidence,
+) -> Mapping[str, PlainData]:
+    if not isinstance(stage.status, Mapping):
+        raise AuthorityRepositoryError(
+            f"offline evidence stage status is missing: {stage.stage_name}"
+        )
+    return stage.status
+
+
+def _offline_import_output_refs(
+    stage: OfflineStageEvidence,
+) -> dict[str, ArtifactRef]:
+    outputs: dict[str, ArtifactRef] = {}
+    for name, data in (stage.outputs or {}).items():
+        if not isinstance(data, Mapping):
+            raise AuthorityRepositoryError(
+                f"offline evidence output is invalid: {stage.stage_name}.{name}"
+            )
+        outputs[name] = ArtifactRef.from_dict(data)
+    return outputs
+
+
+def _insert_import_audit_event(
+    conn: sqlite3.Connection,
+    *,
+    run_uri: str,
+    event_type: str,
+    timestamp: str,
+    payload: Mapping[str, PlainData],
+    revision: BackendRevision,
+    scope: EventScope | None = None,
+) -> None:
+    event_scope = scope or EventScope.run()
+    conn.execute(
+        """
+        INSERT INTO audit_events (
+            run_uri, timestamp, scope_json, event_type, payload_json,
+            revision_sequence
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_uri,
+            timestamp,
+            _json_dumps(event_scope.to_dict()),
+            event_type,
+            _json_dumps(dict(payload)),
+            revision.sequence,
+        ),
     )
 
 
