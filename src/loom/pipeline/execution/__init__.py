@@ -44,6 +44,16 @@ if TYPE_CHECKING:
     from loom.pipeline.execution.models import redact_executor_metadata
     from loom.pipeline.execution.outputs import validate_stage_outputs
     from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+    from loom.pipeline.execution.resource_admission import (
+        ResourceAdmissionDecision,
+        ResourceAdmissionError,
+        ResourceAdmissionRequest,
+        ResourceAdmissionStatus,
+        ResourceLeaseRequest,
+        acquire_resource_admission,
+        release_resource_admission,
+        resource_requests_from_runtime,
+    )
     from loom.pipeline.execution.authority_adapter import (
         create_authority_backed_serial_run_store,
     )
@@ -79,6 +89,11 @@ def __getattr__(name: str) -> object:
         "RunRequest",
         "RunRequestError",
         "RunResult",
+        "ResourceAdmissionDecision",
+        "ResourceAdmissionError",
+        "ResourceAdmissionRequest",
+        "ResourceAdmissionStatus",
+        "ResourceLeaseRequest",
         "StageExecutionRequest",
         "StageExecutionResult",
         "StageExecutionRuntimeError",
@@ -92,10 +107,13 @@ def __getattr__(name: str) -> object:
         "UnsupportedContinuationExecutorError",
         "continue_prepared_run",
         "create_authority_backed_serial_run_store",
+        "acquire_resource_admission",
         "infer_stage_worker_attempt",
         "prepare_stage_attempt",
         "reconstruct_stage_execution_request",
         "redact_executor_metadata",
+        "release_resource_admission",
+        "resource_requests_from_runtime",
         "run_stage_worker",
         "run_stage_job",
         "run_pipeline",
@@ -142,6 +160,16 @@ def __getattr__(name: str) -> object:
             PreparedRunRecord,
         )
         from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
+        from loom.pipeline.execution.resource_admission import (
+            ResourceAdmissionDecision,
+            ResourceAdmissionError,
+            ResourceAdmissionRequest,
+            ResourceAdmissionStatus,
+            ResourceLeaseRequest,
+            acquire_resource_admission,
+            release_resource_admission,
+            resource_requests_from_runtime,
+        )
         from loom.pipeline.execution.authority_adapter import (
             create_authority_backed_serial_run_store,
         )
@@ -175,6 +203,11 @@ def __getattr__(name: str) -> object:
             "RunRequest": RunRequest,
             "RunRequestError": RunRequestError,
             "RunResult": RunResult,
+            "ResourceAdmissionDecision": ResourceAdmissionDecision,
+            "ResourceAdmissionError": ResourceAdmissionError,
+            "ResourceAdmissionRequest": ResourceAdmissionRequest,
+            "ResourceAdmissionStatus": ResourceAdmissionStatus,
+            "ResourceLeaseRequest": ResourceLeaseRequest,
             "StageExecutionRequest": StageExecutionRequest,
             "StageExecutionResult": StageExecutionResult,
             "StageExecutionRuntimeError": StageExecutionRuntimeError,
@@ -190,10 +223,13 @@ def __getattr__(name: str) -> object:
             "create_authority_backed_serial_run_store": (
                 create_authority_backed_serial_run_store
             ),
+            "acquire_resource_admission": acquire_resource_admission,
             "infer_stage_worker_attempt": infer_stage_worker_attempt,
             "prepare_stage_attempt": prepare_stage_attempt,
             "reconstruct_stage_execution_request": reconstruct_stage_execution_request,
             "redact_executor_metadata": redact_executor_metadata,
+            "release_resource_admission": release_resource_admission,
+            "resource_requests_from_runtime": resource_requests_from_runtime,
             "run_stage_worker": run_stage_worker,
             "run_stage_job": run_stage_job,
             "run_pipeline": run_pipeline,
@@ -223,6 +259,11 @@ __all__ = [
     "RunRequest",
     "RunRequestError",
     "RunResult",
+    "ResourceAdmissionDecision",
+    "ResourceAdmissionError",
+    "ResourceAdmissionRequest",
+    "ResourceAdmissionStatus",
+    "ResourceLeaseRequest",
     "StageExecutionRequest",
     "StageExecutionResult",
     "StageExecutionRuntimeError",
@@ -234,12 +275,15 @@ __all__ = [
     "StageWorkerResult",
     "StageWorkerStateError",
     "UnsupportedContinuationExecutorError",
+    "acquire_resource_admission",
     "continue_prepared_run",
     "create_authority_backed_serial_run_store",
     "infer_stage_worker_attempt",
     "prepare_stage_attempt",
     "reconstruct_stage_execution_request",
     "redact_executor_metadata",
+    "release_resource_admission",
+    "resource_requests_from_runtime",
     "run_stage_worker",
     "run_stage_job",
     "run_pipeline",

@@ -44,6 +44,7 @@ from loom.pipeline.stores import (
     OutputCommitRecord,
     RecoveryKind,
     RecoveryRecord,
+    ResourceLeaseRecord,
     StageAttempt,
     StageLifecycleSnapshot,
     StoreDiagnostic,
@@ -374,6 +375,21 @@ def test_protocol_result_carries_workspace_coordination_models() -> None:
         trial_id="trial-1",
         lease=lease,
     )
+    resource_lease = ResourceLeaseRecord(
+        workspace_id="workspace-1",
+        resource_key="gpu",
+        lease=LeaseRecord(
+            lease_id="resource-lease-1",
+            kind=LeaseKind.RESOURCE,
+            owner_id="worker-2",
+            fencing_token="resource-fence-1",
+            acquired_at=_TS,
+            renewed_at=_TS,
+            expires_at="2020-01-01T00:01:00Z",
+            revision=revision,
+        ),
+        amount=2,
+    )
     counter = ConcurrencyCounter(
         counter_name="active_trials",
         value=1,
@@ -398,6 +414,7 @@ def test_protocol_result_carries_workspace_coordination_models() -> None:
         sweep=sweep,
         trial=trial,
         trial_lease=trial_lease,
+        resource_lease=resource_lease,
         lease=lease,
         counter=counter,
         trials=(trial,),
@@ -410,6 +427,7 @@ def test_protocol_result_carries_workspace_coordination_models() -> None:
     assert payload["sweep"] == sweep.to_dict()
     assert payload["trial"] == trial.to_dict()
     assert payload["trial_lease"] == trial_lease.to_dict()
+    assert payload["resource_lease"] == resource_lease.to_dict()
     assert payload["counter"] == counter.to_dict()
     assert payload["trials"] == [trial.to_dict()]
     assert payload["coordination_recovery_records"] == [recovery.to_dict()]

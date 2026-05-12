@@ -12,11 +12,11 @@ from loom.authority.mutation_service import (
     AuthorityMutationService,
 )
 from loom.pipeline.stores import (
-    AuthorityProtocolErrorCategory,
     AuthorityProtocolMetadata,
     AuthorityProtocolOperationKind,
     AuthorityProtocolRequest,
     BackendRevision,
+    LeaseKind,
     SweepIdentity,
     TrialReference,
     TrialState,
@@ -73,7 +73,7 @@ def test_mutation_service_dispatches_workspace_coordination_operations(
     assert listed.result.trials == (trial,)
 
 
-def test_mutation_service_reports_resource_coordination_as_unsupported(
+def test_mutation_service_dispatches_resource_coordination_operations(
     tmp_path,
 ) -> None:
     repository = initialize_authority_repository(
@@ -81,6 +81,25 @@ def test_mutation_service_reports_resource_coordination_as_unsupported(
         service_generation="generation-1",
     )
     service = AuthorityMutationService(repository)
+    workspace = WorkspaceIdentity(workspace_id="workspace-1")
+
+    assert service.handle(
+        AuthorityMutationOperation.CREATE_WORKSPACE,
+        _request("create-workspace", {"workspace": workspace.to_dict()}),
+    ).accepted
+
+    limit = service.handle(
+        AuthorityMutationOperation.SET_RESOURCE_LIMIT,
+        _request(
+            "resource-limit-1",
+            {"workspace_id": "workspace-1", "resource_key": "gpu", "limit": 2},
+        ),
+    )
+    assert limit.accepted is True
+    assert limit.result is not None
+    assert limit.result.counter is not None
+    assert limit.result.counter.counter_name == "resource:gpu"
+    assert limit.result.counter.limit == 2
 
     response = service.handle(
         AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE,
@@ -99,13 +118,14 @@ def test_mutation_service_reports_resource_coordination_as_unsupported(
         ).to_dict(),
     )
 
-    assert response.accepted is False
-    assert response.rejection is not None
-    assert response.rejection.category is (
-        AuthorityProtocolErrorCategory.UNSUPPORTED_CAPABILITY
-    )
-    assert response.rejection.code == "authority_coordination_unsupported_resource"
-    assert response.rejection.detail["operation"] == "acquire_resource_lease"
+    assert response.accepted is True
+    assert response.result is not None
+    assert response.result.resource_lease is not None
+    assert response.result.resource_lease.workspace_id == "workspace-1"
+    assert response.result.resource_lease.resource_key == "gpu"
+    assert response.result.resource_lease.amount == 1
+    assert response.result.resource_lease.lease.kind is LeaseKind.RESOURCE
+    assert response.result.lease == response.result.resource_lease.lease
 
 
 def _request(

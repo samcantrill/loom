@@ -955,7 +955,7 @@ class AuthorityClient:
         request_id: str | None = None,
         service_generation: str | None = None,
     ) -> AuthorityProtocolResponse:
-        """Request a resource lease; unsupported by the Phase 15 service."""
+        """Request a resource lease from authority-backed coordination."""
 
         return self._coordination_request(
             AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
@@ -980,7 +980,7 @@ class AuthorityClient:
         request_id: str | None = None,
         service_generation: str | None = None,
     ) -> AuthorityProtocolResponse:
-        """Set a resource limit; unsupported by the Phase 15 service."""
+        """Set a resource limit in authority-backed coordination."""
 
         return self._coordination_request(
             AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,

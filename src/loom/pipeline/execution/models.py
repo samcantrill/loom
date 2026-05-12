@@ -45,6 +45,7 @@ _VALID_FAILURE_TYPES = {
     "output_validation",
     "target_construction",
     "plan_execution",
+    "resource_admission",
     "store_commit",
     "executor_infrastructure",
 }

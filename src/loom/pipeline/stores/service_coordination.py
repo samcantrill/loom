@@ -139,7 +139,7 @@ class ServiceWorkspaceCoordinationStore:
         amount: int,
         lease_ttl_seconds: int,
     ) -> ResourceLeaseRecord:
-        _accepted(
+        result = _accepted(
             self._client.acquire_resource_lease(
                 workspace_id,
                 resource_key,
@@ -149,7 +149,7 @@ class ServiceWorkspaceCoordinationStore:
                 service_generation=self._service_generation,
             )
         )
-        raise CoordinationStoreError("resource leases are unsupported until Phase 16")
+        return _required(result.resource_lease, "resource_lease")
 
     def renew_lease(
         self,
@@ -214,7 +214,7 @@ class ServiceWorkspaceCoordinationStore:
     def set_resource_limit(
         self, workspace_id: str, resource_key: str, *, limit: int | None
     ) -> ConcurrencyCounter:
-        _accepted(
+        result = _accepted(
             self._client.set_resource_limit(
                 workspace_id,
                 resource_key,
@@ -222,7 +222,7 @@ class ServiceWorkspaceCoordinationStore:
                 service_generation=self._service_generation,
             )
         )
-        raise CoordinationStoreError("resource limits are unsupported until Phase 16")
+        return _required(result.counter, "counter")
 
     def set_counter_limit(
         self, workspace_id: str, counter_name: str, *, limit: int | None

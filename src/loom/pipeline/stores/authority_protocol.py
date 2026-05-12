@@ -19,6 +19,7 @@ from .capabilities import BackendCapabilitySet, StoreDiagnostic
 from .coordination import (
     ConcurrencyCounter,
     CoordinationRecoveryRecord,
+    ResourceLeaseRecord,
     SweepIdentity,
     TrialLeaseRecord,
     TrialReference,
@@ -522,6 +523,7 @@ class AuthorityProtocolResult:
     sweep: SweepIdentity | None = None
     trial: TrialReference | None = None
     trial_lease: TrialLeaseRecord | None = None
+    resource_lease: ResourceLeaseRecord | None = None
     counter: ConcurrencyCounter | None = None
     artifact_facts: tuple[ArtifactFactRecord, ...] = ()
     submitted_operations: tuple[SubmittedOperationRecord, ...] = ()
@@ -571,6 +573,7 @@ class AuthorityProtocolResult:
         _optional_instance(self.sweep, SweepIdentity, "sweep")
         _optional_instance(self.trial, TrialReference, "trial")
         _optional_instance(self.trial_lease, TrialLeaseRecord, "trial_lease")
+        _optional_instance(self.resource_lease, ResourceLeaseRecord, "resource_lease")
         _optional_instance(self.counter, ConcurrencyCounter, "counter")
         object.__setattr__(
             self,
@@ -639,6 +642,9 @@ class AuthorityProtocolResult:
             "trial_lease": None
             if self.trial_lease is None
             else self.trial_lease.to_dict(),
+            "resource_lease": None
+            if self.resource_lease is None
+            else self.resource_lease.to_dict(),
             "counter": None if self.counter is None else self.counter.to_dict(),
             "artifact_facts": [fact.to_dict() for fact in self.artifact_facts],
             "submitted_operations": [
@@ -676,6 +682,7 @@ class AuthorityProtocolResult:
                 "sweep",
                 "trial",
                 "trial_lease",
+                "resource_lease",
                 "counter",
                 "artifact_facts",
                 "submitted_operations",
@@ -719,6 +726,9 @@ class AuthorityProtocolResult:
             trial=_optional_record(mapping.get("trial"), TrialReference.from_dict),
             trial_lease=_optional_record(
                 mapping.get("trial_lease"), TrialLeaseRecord.from_dict
+            ),
+            resource_lease=_optional_record(
+                mapping.get("resource_lease"), ResourceLeaseRecord.from_dict
             ),
             counter=_optional_record(mapping.get("counter"), ConcurrencyCounter.from_dict),
             artifact_facts=tuple(
