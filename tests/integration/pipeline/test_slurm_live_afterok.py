@@ -34,6 +34,7 @@ def test_live_afterok_submission_updates_manifest_registry_and_stage_statuses(
             "train": ("extract",),
             "report": ("features", "train"),
         },
+        authority_backed=True,
     )
     planning = plan_afterok_slurm_dry_run(
         run_store=store,
@@ -91,6 +92,7 @@ def test_live_afterok_partial_failure_persists_accepted_and_failed_facts(
             "features": ("extract",),
             "report": ("features",),
         },
+        authority_backed=True,
     )
     planning = plan_afterok_slurm_dry_run(
         run_store=store,
@@ -146,7 +148,11 @@ def test_live_afterok_partial_failure_persists_accepted_and_failed_facts(
 def test_live_afterok_submitted_stage_job_materializes_worker_request_at_start(
     tmp_path: Path,
 ) -> None:
-    store, run_uri = _prepared_store(tmp_path, {"extract": ()})
+    store, run_uri = _prepared_store(
+        tmp_path,
+        {"extract": ()},
+        authority_backed=True,
+    )
     config = _single_stage_config()
     serialized = json_dumps_pretty(config)
     store.write_config_snapshot(run_uri, "resolved", serialized)

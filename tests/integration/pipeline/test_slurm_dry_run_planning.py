@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from loom.pipeline.execution import (
     PREPARED_RUN_CONTINUATION_WHOLE_RUN,
     PREPARED_RUN_SCHEMA_VERSION,
     PreparedRunRecord,
+    create_authority_backed_serial_run_store,
 )
 from loom.pipeline.executors.slurm import (
     SlurmOptions,
@@ -30,7 +31,14 @@ from loom.pipeline.planning import (
     ResumeOptions,
     StagePlan,
 )
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityConfig,
+    AuthorityDeploymentProfile,
+    LocalRunStore,
+    path_to_run_uri,
+)
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
 def test_single_job_dry_run_writes_manifest_plan_and_script_under_run_dir(
@@ -142,9 +150,24 @@ def test_default_planning_ids_are_distinct_for_repeated_dry_runs(
 def _prepared_store(
     tmp_path: Path,
     stage_upstreams: dict[str, tuple[str, ...]],
-) -> tuple[LocalRunStore, str]:
+    *,
+    authority_backed: bool = False,
+) -> tuple[Any, str]:
     root = tmp_path / "runs"
-    store = LocalRunStore(root=root)
+    if authority_backed:
+        store = create_authority_backed_serial_run_store(
+            root,
+            authority_store=SQLitePerRunAuthorityStore(),
+            authority_config=AuthorityConfig(
+                backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+                deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+                endpoint="http://authority.test",
+                workspace_id="workspace-a",
+                reference_id="slurm-live-test",
+            ),
+        )
+    else:
+        store = LocalRunStore(root=root)
     run_uri = path_to_run_uri(root / "run-1")
     store.create_run(run_uri, metadata={"token": "SECRET_SHOULD_NOT_BE_COPIED"})
     plan = _execution_plan(run_uri, stage_upstreams)

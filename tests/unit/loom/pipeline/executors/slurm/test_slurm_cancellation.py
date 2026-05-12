@@ -14,13 +14,27 @@ from loom.pipeline.executors.slurm import (
     SlurmCommandResult,
     read_slurm_live_manifest,
 )
-from loom.pipeline.executors.slurm.cancellation import cancel_slurm_jobs
+from loom.pipeline.executors.slurm.cancellation import (
+    SlurmCancellationError,
+    cancel_slurm_jobs,
+)
 from loom.pipeline.status import StageStatus, StageStatusRecord
 from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.submitted import SubmittedOperationState
 from tests.support.slurm_status_fixtures import write_submitted_slurm_fixture
 
 pytestmark = pytest.mark.unit
+
+
+def test_cancel_slurm_jobs_requires_authority_backed_store(tmp_path: Path) -> None:
+    with pytest.raises(SlurmCancellationError) as exc_info:
+        cancel_slurm_jobs(
+            "file:///tmp/run",
+            run_store=LocalRunStore(tmp_path / "runs"),
+            command_runner=FakeSlurmCommandRunner(),
+        )
+
+    assert exc_info.value.code == "executor.slurm.cancel.missing_authority"
 
 
 def test_cancel_slurm_jobs_marks_run_and_submitted_stages_cancelled(
@@ -45,6 +59,11 @@ def test_cancel_slurm_jobs_marks_run_and_submitted_stages_cancelled(
     )
     attempts = cast(tuple[SlurmCancellationAttempt, ...], manifest.cancellation_attempts)
     registry = store.latest_submitted_operation(run_uri)
+    assert registry is not None
+    slurm_cancellation = cast(
+        dict[str, object], registry.backend_metadata["slurm_cancellation"]
+    )
+    authority = cast(dict[str, object], registry.backend_metadata["authority"])
 
     assert result.status == "CANCELLED"
     assert result.ok is True
@@ -53,7 +72,8 @@ def test_cancel_slurm_jobs_marks_run_and_submitted_stages_cancelled(
     assert _run_status(store, run_uri) == "CANCELLED"
     assert _stage_status(store, run_uri, "extract") is StageStatus.CANCELLED
     assert _stage_status(store, run_uri, "train") is StageStatus.CANCELLED
-    assert registry is not None
+    assert authority["mutation_source"] == "authority_service"
+    assert slurm_cancellation["mutation_source"] == "authority_service"
     assert registry.state is SubmittedOperationState.CANCELLED
     assert registry.active is False
 

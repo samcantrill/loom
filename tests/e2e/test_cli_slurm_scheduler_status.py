@@ -10,7 +10,11 @@ import pytest
 
 from loom.cli.main import main
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner, SlurmCommandResult
-from loom.pipeline.stores import authority_config_to_cli_args
+from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityDeploymentProfile,
+    authority_config_to_cli_args,
+)
 from loom.pipeline.stores.service_authority import LocalAuthorityService
 from tests.support.slurm_status_fixtures import write_submitted_slurm_fixture
 
@@ -40,7 +44,10 @@ def test_cli_status_jobs_reports_fake_scheduler_states(
     import loom.cli.status as status_command
 
     with LocalAuthorityService.start() as service:
-        authority_config = service.config()
+        authority_config = service.config(
+            backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+        )
         authority_args = authority_config_to_cli_args(authority_config)
         _, run_uri, _ = write_submitted_slurm_fixture(
             tmp_path,

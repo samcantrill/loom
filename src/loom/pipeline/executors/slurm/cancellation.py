@@ -14,6 +14,7 @@ from loom.serialization import PlainData, ensure_plain_data, json_loads
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import utc_timestamp
 
+from .authority import SlurmLiveAuthorityFacts, slurm_live_authority_facts
 from .commands import (
     SlurmCommandResult,
     SlurmCommandRunner,
@@ -171,6 +172,7 @@ def cancel_slurm_jobs(
             "job cancellation requires local run-store path helpers",
             code="executor.slurm.cancel.missing_local_paths",
         )
+    authority_facts = _require_slurm_live_authority(store)
 
     now = cancelled_at or utc_timestamp()
     record = store.latest_active_submitted_operation(run_uri)
@@ -277,7 +279,12 @@ def cancel_slurm_jobs(
         updated_at=now,
         state=registry_state,
         summary_counts=_registry_summary_counts(status, results),
-        backend_metadata=_updated_backend_metadata(record, results, captured_at=now),
+        backend_metadata=_updated_backend_metadata(
+            record,
+            results,
+            captured_at=now,
+            authority_facts=authority_facts,
+        ),
     )
     store.write_submitted_operation(run_uri, updated_record)
 
@@ -486,11 +493,14 @@ def _updated_backend_metadata(
     results: Sequence[SlurmJobCancellationResult],
     *,
     captured_at: str,
+    authority_facts: SlurmLiveAuthorityFacts,
 ) -> dict[str, PlainData]:
     metadata = dict(record.backend_metadata)
+    metadata["authority"] = authority_facts.to_metadata()
     metadata["slurm_cancellation"] = _plain_mapping(
         {
             "captured_at": captured_at,
+            "mutation_source": "authority_service",
             "jobs": [
                 {
                     "logical_key": result.logical_key,
@@ -504,6 +514,16 @@ def _updated_backend_metadata(
         path="submitted_operation.backend_metadata.slurm_cancellation",
     )
     return _plain_mapping(metadata, path="submitted_operation.backend_metadata")
+
+
+def _require_slurm_live_authority(store: RunStore) -> SlurmLiveAuthorityFacts:
+    facts = slurm_live_authority_facts(store)
+    if facts is None:
+        raise SlurmCancellationError(
+            "SLURM cancellation requires a service-profile authority-backed run store",
+            code="executor.slurm.cancel.missing_authority",
+        )
+    return facts
 
 
 def _registry_summary_counts(

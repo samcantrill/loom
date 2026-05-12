@@ -150,3 +150,21 @@ def test_live_worker_admission_rejects_deferred_profile_before_capability_checks
     assert not result.supported
     assert result.errors[0].code == "authority.unsupported_profile"
     assert "live submitted workers" in result.errors[0].message
+
+
+def test_live_worker_admission_rejects_direct_database_profile() -> None:
+    config = AuthorityConfig(
+        backend_kind=AuthorityBackendKind.DIRECT_DATABASE,
+        deployment_profile=AuthorityDeploymentProfile.DIRECT_DATABASE,
+    )
+
+    result = admit_authority_capabilities(
+        config=config,
+        capabilities=_capabilities(),
+        required=[RequiredAuthorityCapability.SLURM_LIVE_WORKER],
+    )
+
+    assert not result.supported
+    assert result.errors[0].code == "authority.unsupported_profile"
+    assert result.errors[0].deployment_profile == "direct_database"
+    assert "service authority" in result.errors[0].message

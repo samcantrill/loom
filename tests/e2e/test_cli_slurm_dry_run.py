@@ -136,6 +136,10 @@ def test_cli_slurm_dry_run_artifacts_cover_diamond_and_secret_boundary(
             "prepared-run",
             "continue",
         ]
+        assert (
+            "--authority-backend"
+            in single_manifest["jobs"][0]["command"]["command_args"]
+        )
         assert "scheduler_job_id" not in single_manifest["jobs"][0]
         assert single_plan["kind"] == "loom.slurm_dry_run_plan"
         assert "oc.env:LOOM_SLURM_E2E_SECRET_ROOT" in (
@@ -173,6 +177,7 @@ def test_cli_slurm_dry_run_artifacts_cover_diamond_and_secret_boundary(
             for command in afterok_result["generated_commands"]
         }
         assert commands["stage:extract"][:2] == ["loom", "stage-job"]
+        assert "--authority-backend" in commands["stage:extract"]
         assert commands["stage:report"][:4] == ["uv", "run", "loom", "stage-job"]
         assert commands["stage:report"][4:6] == ["run", "--run-uri"]
         scripts = {

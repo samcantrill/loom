@@ -166,10 +166,21 @@ def describe_authority_deployment(
                 ),
             )
         case AuthorityDeploymentProfile.DIRECT_DATABASE:
-            summary = _live_service_summary(
-                config,
+            summary = AuthorityDeploymentProfileSummary(
+                config=config,
                 service_lifetime="external-transactional-database",
-                extra_handoff_fields=("database_reference",),
+                live_worker_authority=False,
+                deferred_finalization=False,
+                multi_host_authority=False,
+                endpoint_required=False,
+                compute_to_authority_required=False,
+                required_handoff_fields=("database_reference",),
+                unavailable_features=(
+                    "live_submitted_workers",
+                    "live_worker_commits",
+                    "live_lease_renewal",
+                    "direct_database_runtime_mutation",
+                ),
             )
         case AuthorityDeploymentProfile.DEFERRED_FINALIZATION:
             summary = AuthorityDeploymentProfileSummary(

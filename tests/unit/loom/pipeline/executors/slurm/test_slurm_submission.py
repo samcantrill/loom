@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
+from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.executors.slurm import (
     FakeSlurmCommandRunner,
     SlurmActiveSubmissionError,
@@ -38,7 +39,14 @@ from loom.pipeline.planning import (
 )
 from loom.pipeline.status import RunStatus
 from loom.pipeline.status import StageStatus
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityConfig,
+    AuthorityDeploymentProfile,
+    LocalRunStore,
+    path_to_run_uri,
+)
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 pytestmark = pytest.mark.unit
@@ -74,7 +82,8 @@ def test_submit_single_job_slurm_persists_scheduler_identity(
     assert registry.active is True
     assert status is not None
     assert status.status is RunStatus.SUBMITTED
-    assert status.metadata["slurm"] == {"job_ids": ["1234"]}
+    authority = cast(Mapping[str, object], registry.backend_metadata["authority"])
+    assert authority["mutation_source"] == "authority_service"
 
 
 def test_submit_single_job_slurm_marks_unavailable_sbatch_failed(
@@ -103,7 +112,23 @@ def test_submit_single_job_slurm_marks_unavailable_sbatch_failed(
     assert registry is not None
     assert registry.state is SubmittedOperationState.FAILED
     assert registry.active is False
-    assert store.read_run_status(run_uri) is None
+    status = store.read_run_status(run_uri)
+    assert status is not None
+    assert status.status is RunStatus.CREATED
+
+
+def test_submit_single_job_slurm_requires_authority_backed_store(
+    tmp_path: Path,
+) -> None:
+    store, run_uri, planning = _planning_result(tmp_path, authority_backed=False)
+
+    with pytest.raises(SlurmSubmissionError, match="authority-backed"):
+        submit_single_job_slurm(
+            run_store=store,
+            run_uri=run_uri,
+            planning_result=planning,
+            command_runner=FakeSlurmCommandRunner(),
+        )
 
 
 def test_submit_single_job_slurm_rejects_existing_active_submission(
@@ -288,7 +313,27 @@ def test_submit_afterok_slurm_rejects_first_job_failure(
     assert manifest.submission_status is SlurmLiveSubmissionStatus.FAILED
     assert registry is not None
     assert registry.state is SubmittedOperationState.FAILED
-    assert store.read_run_status(run_uri) is None
+    status = store.read_run_status(run_uri)
+    assert status is not None
+    assert status.status is RunStatus.CREATED
+
+
+def test_submit_afterok_slurm_requires_authority_backed_store(
+    tmp_path: Path,
+) -> None:
+    store, run_uri, planning = _afterok_planning_result(
+        tmp_path,
+        {"extract": ()},
+        authority_backed=False,
+    )
+
+    with pytest.raises(SlurmSubmissionError, match="authority-backed"):
+        submit_afterok_slurm(
+            run_store=store,
+            run_uri=run_uri,
+            planning_result=planning,
+            command_runner=FakeSlurmCommandRunner(),
+        )
 
 
 def test_submit_afterok_slurm_rejects_existing_active_submission(
@@ -321,8 +366,10 @@ def test_submit_afterok_slurm_rejects_existing_active_submission(
 
 def _planning_result(
     tmp_path: Path,
-) -> tuple[LocalRunStore, str, SlurmDryRunPlanningResult]:
-    store = LocalRunStore(tmp_path / "runs")
+    *,
+    authority_backed: bool = True,
+) -> tuple[Any, str, SlurmDryRunPlanningResult]:
+    store = _run_store(tmp_path, authority_backed=authority_backed)
     run_uri = path_to_run_uri(tmp_path / "runs" / "demo")
     store.create_run(run_uri)
     submission = build_single_job_planned_submission(
@@ -373,8 +420,10 @@ def _planning_result(
 def _afterok_planning_result(
     tmp_path: Path,
     stage_upstreams: dict[str, tuple[str, ...]],
-) -> tuple[LocalRunStore, str, SlurmDryRunPlanningResult]:
-    store = LocalRunStore(tmp_path / "runs")
+    *,
+    authority_backed: bool = True,
+) -> tuple[Any, str, SlurmDryRunPlanningResult]:
+    store = _run_store(tmp_path, authority_backed=authority_backed)
     run_uri = path_to_run_uri(tmp_path / "runs" / "demo")
     store.create_run(run_uri)
     submission = build_afterok_planned_submission(
@@ -424,6 +473,22 @@ def _afterok_planning_result(
             manifest_artifact=manifest_artifact,
             plan_artifact=plan_artifact,
             script_artifacts=script_artifacts,
+        ),
+    )
+
+
+def _run_store(tmp_path: Path, *, authority_backed: bool) -> Any:
+    if not authority_backed:
+        return LocalRunStore(tmp_path / "runs")
+    return create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=SQLitePerRunAuthorityStore(),
+        authority_config=AuthorityConfig(
+            backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+            endpoint="http://authority.test",
+            workspace_id="workspace-a",
+            reference_id="slurm-live-test",
         ),
     )
 

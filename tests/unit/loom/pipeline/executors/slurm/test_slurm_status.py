@@ -14,11 +14,26 @@ from loom.pipeline.executors.slurm import (
     SlurmSchedulerStatusSnapshot,
     read_slurm_live_manifest,
 )
-from loom.pipeline.executors.slurm.status import inspect_slurm_job_status
+from loom.pipeline.executors.slurm.status import (
+    SlurmStatusInspectionError,
+    inspect_slurm_job_status,
+)
+from loom.pipeline.stores import LocalRunStore
 from loom.serialization import PlainData
 from tests.support.slurm_status_fixtures import write_submitted_slurm_fixture
 
 pytestmark = pytest.mark.unit
+
+
+def test_slurm_status_requires_authority_backed_store(tmp_path: Path) -> None:
+    with pytest.raises(SlurmStatusInspectionError) as exc_info:
+        inspect_slurm_job_status(
+            "file:///tmp/run",
+            run_store=LocalRunStore(tmp_path / "runs"),
+            command_runner=FakeSlurmCommandRunner(),
+        )
+
+    assert exc_info.value.code == "executor.slurm.status.missing_authority"
 
 
 def test_slurm_status_prefers_sacct_final_and_persists_snapshots(
@@ -69,7 +84,10 @@ def test_slurm_status_prefers_sacct_final_and_persists_snapshots(
     slurm_status = cast(
         dict[str, PlainData], registry.backend_metadata["slurm_status"]
     )
+    authority = cast(dict[str, PlainData], registry.backend_metadata["authority"])
     jobs = cast(list[dict[str, PlainData]], slurm_status["jobs"])
+    assert authority["mutation_source"] == "authority_service"
+    assert slurm_status["mutation_source"] == "authority_service"
     assert jobs[0]["status"] == "SUCCEEDED"
 
 

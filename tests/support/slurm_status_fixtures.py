@@ -33,7 +33,12 @@ from loom.pipeline.status import (
     StageStatus,
     StageStatusRecord,
 )
-from loom.pipeline.stores import AuthorityConfig, path_to_run_uri
+from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityConfig,
+    AuthorityDeploymentProfile,
+    path_to_run_uri,
+)
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
@@ -50,9 +55,11 @@ def write_submitted_slurm_fixture(
     """Persist a submitted afterok manifest and registry for status tests."""
 
     if authority_config is None:
+        authority_config = _slurm_live_authority_config()
         store = create_authority_backed_serial_run_store(
             tmp_path / "runs",
             authority_store=SQLitePerRunAuthorityStore(),
+            authority_config=authority_config,
         )
     else:
         store = create_authority_backed_serial_run_store(
@@ -143,6 +150,16 @@ def write_submitted_slurm_fixture(
             ),
         )
     return store, run_uri, manifest_path
+
+
+def _slurm_live_authority_config() -> AuthorityConfig:
+    return AuthorityConfig(
+        backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+        deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+        endpoint="http://authority.test",
+        workspace_id="workspace-a",
+        reference_id="slurm-live-test",
+    )
 
 
 def _execution_plan(
