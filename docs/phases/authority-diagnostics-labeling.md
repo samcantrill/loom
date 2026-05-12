@@ -163,7 +163,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used by managing-agent bounded validation fix after `make validate-pr` exposed one stale catalog-model serialization assertion
-- PR review: unused
+- PR review: used by managing-agent automated review; initial import-boundary finding was fixed and no blocking findings remain
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
