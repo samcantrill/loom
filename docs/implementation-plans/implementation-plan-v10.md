@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 17 merged; Phase 18 pr_open
+- Phase work status: Phase 17 merged; Phase 18 merged
 
 Related artifacts and references:
 
@@ -2317,7 +2317,7 @@ Phase 17 merged on 2026-05-12:
 
 ### Phase 18: Offline Import Transaction
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-offline-import`
 - PR: https://github.com/samcantrill/loom/pull/136
 
@@ -2417,7 +2417,46 @@ provenance visibility, and evidence/schema compatibility.
 
 **Completion Summary**
 
-TBD.
+Phase 18 merged on 2026-05-12:
+
+- Branch: `codex/authority-offline-import`
+- Phase execution plan: `docs/phases/authority-offline-import.md`
+- PR body: `docs/phases/authority-offline-import-pr-body.md`
+- PR: https://github.com/samcantrill/loom/pull/136
+- Stack target: root phase PR targeting `develop`
+- Implementation summary: added the strict `loom.authority.offline_import`
+  validator/result surface with manifest/schema/source/terminal-state/output/
+  event checks and structured rejection diagnostics; added a repository-owned
+  atomic import transaction that rejects collisions, writes authoritative
+  run/stage/attempt/output/artifact facts, stores `authority_import`
+  provenance metadata, and records replay-scoped audit events; wired the
+  mutation service, FastAPI routes, authority client, and
+  `loom authority import-offline` CLI command; and surfaced imported
+  provenance through authoritative snapshots, diagnostics inspection, and
+  status text formatting.
+- Validation before PR: focused Ruff, Pyright, and import/package/
+  contract/integration/e2e pytest coverage passed. `make validate-pr` passed
+  with Ruff, Pyright, default harness `1348 passed, 19 skipped, 14 deselected`,
+  config-extra harness `424 passed, 1378 deselected`, and build success.
+  `make test-summary` passed with package `70 passed, 1 skipped`, unit
+  `978 passed, 1 skipped`, contract `157 passed, 2 skipped`, integration
+  `130 passed, 8 skipped, 10 deselected`, e2e `40 passed, 2 deselected`, and
+  config-extra `424 passed, 1378 deselected`.
+- PR verification: `gh pr view 136 --json baseRefName,headRefName,state,url`
+  confirmed base `develop`, head `codex/authority-offline-import`, and state
+  `OPEN` after PR creation.
+- Automated review: manager review found no atomicity, collision-policy,
+  provenance-labeling, protocol-boundary, validation-evidence, or PR-body
+  blockers.
+- GitHub CI: `checks` succeeded on PR #136.
+- Merge verification: final pre-merge `gh pr view` confirmed base `develop`,
+  head `codex/authority-offline-import`, state `OPEN`, merge state `CLEAN`,
+  and CI `SUCCESS`.
+- Merge: PR #136 squash-merged into `develop` on 2026-05-12 at merge commit
+  `d3770050a0e1df722909f89be1d6b7e3924bfb2e`.
+- Stack maintenance: root PR merged into `develop`; no predecessor or
+  successor branch depended on `codex/authority-offline-import` at merge time.
+- Remaining blockers: none.
 
 ## Cross-Phase Review Notes
 

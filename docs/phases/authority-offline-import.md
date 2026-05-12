@@ -219,7 +219,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used locally during validation
-- PR review: unused
+- PR review: used by manager review on 2026-05-12
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -229,7 +229,8 @@ make test-summary
 - Implementation summary: added the strict `loom.authority.offline_import` validator/result surface, including manifest/schema/source/terminal-state/output/event checks and structured rejection diagnostics; added a repository-owned atomic import transaction that rejects collisions, writes imported run/stage/attempt/output/artifact facts, stores `authority_import` provenance metadata, and records replay-scoped audit events; wired the mutation service, FastAPI mutation routes, authority client, and `loom authority import-offline` CLI command; and surfaced imported provenance through authoritative snapshots, diagnostics inspection, and status text formatting.
 - Implementation validation: focused Ruff/Pyright/pytest coverage passed for the import module, repository, client/route/CLI wiring, contract shapes, integration API flow, package boundaries, and import-specific e2e smoke; `make validate-pr` passed with Ruff, Pyright, default harness `1348 passed, 19 skipped, 14 deselected`, config-extra harness `424 passed, 1378 deselected`, and package build; `make test-summary` passed with package `70 passed, 1 skipped`, unit `978 passed, 1 skipped`, contract `157 passed, 2 skipped`, integration `130 passed, 8 skipped, 10 deselected`, e2e `40 passed, 2 deselected`, and config-extra `424 passed, 1378 deselected`.
 - Refinement summary: one bounded local refinement pass tightened offline event validation to parse full `PipelineEventRecord` payloads, preserved original replay scope in imported audit events, threaded explicit `imported_by` through the client/CLI path, and repaired exact public-export test snapshots after the new route constant expanded `loom.pipeline.stores.__all__`.
+- PR review: used by manager review on 2026-05-12; no scope, atomicity, provenance-labeling, protocol-boundary, validation-evidence, or PR-body blockers were found.
 - Blocker-resolution summary: not needed; 0/3 blocker-resolution passes used.
-- PR preparation: PR body prepared at `docs/phases/authority-offline-import-pr-body.md`; PR #136 opened at https://github.com/samcantrill/loom/pull/136 against `develop` from `codex/authority-offline-import`, and target/head were verified with `gh pr view 136 --json baseRefName,headRefName,state,url`.
-- Stack maintenance: root phase targets `develop`; no successor branch depends on `codex/authority-offline-import`.
+- PR preparation: PR body prepared at `docs/phases/authority-offline-import-pr-body.md`; PR #136 opened at https://github.com/samcantrill/loom/pull/136 against `develop` from `codex/authority-offline-import`, target/head were verified with `gh pr view 136 --json baseRefName,headRefName,state,url`, and GitHub `checks` completed successfully before merge.
+- Stack maintenance: root phase merged into `develop` at `d3770050a0e1df722909f89be1d6b7e3924bfb2e`; no successor branch depended on `codex/authority-offline-import`.
 - Remaining blockers: none.
