@@ -11,7 +11,7 @@
 - Full plan: `docs/implementation-plans/implementation-plan-v10.md`
 - Source phase: Phase 16 - Resource Leases And Scheduler-Ready Admission
 - Stack predecessor: none; Phase 15 merged in PR #133 and is recorded in the plan
-- Base branch: `develop` at `870f4f9`
+- Base branch: `develop` at `60583e8` after rebasing onto current `origin/develop`
 - Target branch: `develop`
 - Merge eligibility: root phase, merge-eligible after PR targets `develop` and automated gates pass
 - Workflow path: expanded path
@@ -175,5 +175,5 @@ make test-summary
 - Draft plan: completed by managing agent on 2026-05-12.
 - Refine plan: completed by managing agent on 2026-05-12; scoped Phase 16 to service-backed named integer resources and runner admission, with scheduler queues/fairness deferred.
 - Implementation summary: service-backed resource limit and resource lease operations now return typed protocol results; resource recovery scans include resource leases; runner admission converts positive integer runtime resource requests into authority leases, supports fail-fast and bounded-wait decisions, records resource-admission failures, and releases acquired leases on terminal stage paths. The authority-backed run-store factory now auto-attaches a service coordination adapter only for resolved HTTP authority paths, preserving explicit non-HTTP authority-store tests.
-- Validation: targeted Ruff, Pyright, and pytest passed for authority, stores, execution, package, contract, and integration coverage; first full `make validate-pr` exposed the explicit authority-store factory regression, which was fixed in commit `0272e2f`; final `make validate-pr` passed with Ruff, Pyright, default harness `1329 passed, 19 skipped, 14 deselected`, config-extra `423 passed, 1358 deselected`, and build success. `make test-summary` passed with package `70 passed, 1 skipped`, unit `967 passed, 1 skipped`, contract `151 passed, 2 skipped`, integration `128 passed, 8 skipped, 10 deselected`, e2e `39 passed, 2 deselected`, and config-extra `423 passed, 1358 deselected`.
-- Stack maintenance: none yet; this is a root phase branch targeting `develop`.
+- Validation: targeted Ruff, Pyright, and pytest passed for authority, stores, execution, package, contract, and integration coverage; first full `make validate-pr` exposed the explicit authority-store factory regression, which was fixed in rebased commit `9491a95`; final post-rebase `make validate-pr` passed with Ruff, Pyright, default harness `1329 passed, 19 skipped, 14 deselected`, config-extra `423 passed, 1358 deselected`, and build success. Post-rebase `make test-summary` passed with package `70 passed, 1 skipped`, unit `967 passed, 1 skipped`, contract `151 passed, 2 skipped`, integration `128 passed, 8 skipped, 10 deselected`, e2e `39 passed, 2 deselected`, and config-extra `423 passed, 1358 deselected`.
+- Stack maintenance: branch rebased onto `origin/develop` at `60583e8` after Phase 16 `pr_open` metadata was pushed; this remains a root phase branch targeting `develop`.
