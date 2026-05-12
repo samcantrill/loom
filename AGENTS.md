@@ -50,6 +50,10 @@ Project-scoped custom agents live in `.codex/agents/`:
   phase PR review.
 - `loom_plan_reviewer`: uses `gpt-5.5` with `high` reasoning for read-only
   implementation plan review before phase work begins.
+- `loom_design_safety_reviewer`: uses `gpt-5.5` with `high` reasoning for a
+  docs-only roadmap planning review that pressure-tests proposed design shape,
+  decision traceability, extension points, public contracts, domain neutrality,
+  and future refactor risk before implementation-plan drafting.
 - `loom_architecture_explorer`: uses `gpt-5.4-mini` with `medium` reasoning for
   read-only architecture and boundary exploration.
 
@@ -93,13 +97,19 @@ reviewable.
 
 For roadmap-version work that needs human discussion, facilitate and complete
 roadmap-version planning notes before drafting or changing downstream artifacts.
-When the planning discussion is complete and the user explicitly confirms they
-are happy with the notes, the roadmap-version planning workflow may continue
-directly into `implementation-plan-draft.md` using the confirmed notes as the
-primary source. Draft and refine the implementation plan, including its plan
-quality gate, before creating phase execution plans. For phase execution and PR
-preparation, prefer the fast path unless the phase has broad design or
-long-term compatibility risk.
+The planning notes must record functionality traceability, proposed
+implementation shape, design decisions, design-safety review evidence,
+examples, validation strategy, phase shaping, and implementation readiness.
+Use `loom_design_safety_reviewer` before implementation-plan drafting for
+roadmap-version work, and do not draft phases while unresolved design-safety
+blockers or unresolved `needs discussion` decisions remain. When the planning
+discussion is complete and the user explicitly confirms they are happy with the
+notes, the roadmap-version planning workflow may continue directly into
+`implementation-plan-draft.md` using the confirmed notes as the primary source.
+Draft and refine the implementation plan, including its plan quality gate,
+before creating phase execution plans. For phase execution and PR preparation,
+prefer the fast path unless the phase has broad design or long-term
+compatibility risk.
 
 ### Branches And Worktrees
 
@@ -336,8 +346,8 @@ pass is unused, used, or explicitly not needed.
 Model policy:
 
 - Use `gpt-5.5` with `high` reasoning for whole-phase ownership, ambiguous
-  design translation, artifact refinement, review, PR preparation, and
-  correctness decisions.
+  design translation, roadmap design-safety review, artifact refinement,
+  review, PR preparation, and correctness decisions.
 - Use `gpt-5.3-codex-spark` with `high` reasoning for fast implementation from
   a scope-complete phase execution plan. Spark agents must stop and report
   blockers instead of making public API or phase-scope decisions.
@@ -433,9 +443,14 @@ findings.
 The selected implementation plan must be reviewed for
 maintainability, extensibility, future compatibility, conflicting design
 choices, technical debt, test strategy, and reviewability.
+When the plan cites roadmap-version planning notes, the gate must also verify
+planning readiness: functionality-to-design traceability, completed
+design-safety review or recorded accepted risks, validation strategy, phase
+shaping, and no unresolved `blocked` or `needs discussion` planning decisions.
 
 The implementation plan should include, where relevant:
 
+- Planning readiness.
 - Design principles.
 - Key design choices.
 - Conflicts and tradeoffs.

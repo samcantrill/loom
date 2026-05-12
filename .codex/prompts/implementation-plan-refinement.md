@@ -21,6 +21,7 @@ Task:
 2. Preserve existing project-specific guidance and plan intent.
 3. Keep the plan Markdown-based and lightweight.
 4. Add or update these plan-level sections when relevant:
+   - Planning readiness
    - Design principles
    - Key design choices
    - Conflicts and tradeoffs
@@ -52,6 +53,11 @@ Rules:
 - Do not add a new testing agent stage unless the user explicitly asks; keep
   test creation inside planning, execution, refinement, and PR preparation.
 - Do not invent requirements unsupported by the design docs or current plan.
+- Do not bypass unresolved roadmap-planning blockers. If completed planning
+  notes still have unresolved design-safety blockers, missing validation,
+  missing phase shaping, or unresolved `blocked` or `needs discussion`
+  decisions, record the blocker and leave the implementation plan not ready
+  instead of inventing phase content.
 - Prefer precise, reviewable text over generic assurances.
 - If a finding cannot be fully resolved, document the remaining risk and the
   trigger for revisiting it.

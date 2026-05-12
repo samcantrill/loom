@@ -24,6 +24,7 @@ Task:
 4. Add or align these plan-level sections when relevant:
    - Goal
    - Context
+   - Planning readiness
    - Desired outcome
    - Non-goals
    - Constraints
@@ -34,10 +35,27 @@ Task:
    - Extensibility assessment
    - Technical debt ledger
    - Plan quality gate
-5. Add or align a `## Phased implementation` section.
-6. Break the plan into small phases, each suitable for one PR.
-7. Assign each phase a branch using `codex/<summary-of-feature>`.
-8. For each phase, include:
+5. When completed roadmap-version planning notes are present, treat them as the
+   primary source and carry forward:
+   - approved functionality and behavior baseline
+   - functional requirements
+   - proposed implementation shape
+   - design decisions and rejected alternatives
+   - design-safety review result
+   - examples and validation strategy
+   - phase shaping
+   - implementation readiness blockers, accepted risks, and revisit triggers
+6. Before drafting phases from planning notes, check that implementation
+   readiness is not blocked, the design-safety review has passed or recorded
+   accepted risks, there are no unresolved `blocked` or `needs discussion`
+   design decisions, and validation and phase shaping are specific enough for
+   implementation agents.
+7. If readiness fails, update only the planning-readiness or blocker sections
+   of the implementation plan and do not invent phases to fill the gap.
+8. Add or align a `## Phased implementation` section when readiness is clear.
+9. Break the plan into small phases, each suitable for one PR.
+10. Assign each phase a branch using `codex/<summary-of-feature>`.
+11. For each phase, include:
    - Status
    - Branch
    - PR
@@ -53,15 +71,17 @@ Task:
    - Reviewability
    - Notes
    - Completion summary
-9. Keep phases ordered so implementation can proceed from top to bottom.
-10. Separate refactors, behavior changes, migrations, and cleanup into distinct phases where practical.
-11. Mark the plan quality gate as requiring review by `loom_plan_reviewer` before the first implementation phase begins.
+12. Keep phases ordered so implementation can proceed from top to bottom.
+13. Separate refactors, behavior changes, migrations, and cleanup into distinct phases where practical.
+14. Mark the plan quality gate as requiring review by `loom_plan_reviewer` before the first implementation phase begins.
 
 Rules:
 
 - Do not ask the user for feedback.
 - If the plan is ambiguous, make the smallest reasonable assumption and document it.
 - Do not invent requirements not supported by the plan or existing repo.
+- Do not use an implementation plan to resolve roadmap-planning blockers that
+  belong in the planning notes; record the blocker and stop phase drafting.
 - Align with existing repository patterns.
 - Surface conflicting design choices instead of silently choosing around them.
 - Record accepted technical debt with a concrete revisit trigger.

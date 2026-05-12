@@ -10,15 +10,33 @@
 - Stage gates:
   - Roadmap framing:
   - Intent discovery:
-  - Feature brainstorming:
+  - Capability triage and functional requirements:
   - Functionality and behavior confirmation:
   - Context compaction/reset checkpoint:
   - Design decision review:
+  - Design safety review:
+  - Examples and validation strategy:
   - Phase shaping:
+  - Implementation readiness:
   - Handoff:
 - Related implementation plans:
 - Related feature docs:
 - Blockers:
+
+## Source Evidence
+
+| Source | Relevant content | Used for | Notes |
+| --- | --- | --- | --- |
+| `docs/implementation-plans/implementation-roadmap.md` |  | roadmap scope |  |
+
+## Exploration Coverage
+
+| Area | Files or patterns checked | Findings | Gaps |
+| --- | --- | --- | --- |
+| Roadmap and architecture docs |  |  |  |
+| Feature docs |  |  |  |
+| Source and tests |  |  |  |
+| Prior or adjacent plans |  |  |  |
 
 ## Roadmap Extraction
 
@@ -100,20 +118,29 @@ Constraints:
 | --- | --- | --- | --- | --- |
 | Roadmap framing |  |  |  |  |
 | Intent discovery |  |  |  |  |
-| Feature brainstorming |  |  |  |  |
+| Capability triage and functional requirements |  |  |  |  |
 | Functionality and behavior confirmation |  |  |  |  |
 | Context compaction/reset checkpoint |  |  |  |  |
 | Design decision review |  |  |  |  |
+| Design safety review |  |  |  |  |
+| Examples and validation strategy |  |  |  |  |
 | Phase shaping |  |  |  |  |
+| Implementation readiness |  |  |  |  |
 | Handoff |  |  |  |  |
 
-## Brainstormed Capabilities
+## Capability Triage
 
 | Capability | Decision | Rationale | Notes |
 | --- | --- | --- | --- |
 |  | include / maybe / defer / out of scope |  |  |
 
-## Confirmed Functionality And Behavior
+## Functional Requirements
+
+| ID | Requirement | What | Why | Scope | User-visible behavior | System behavior | Capability enabled | Validation idea | Decision/status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FR-1 |  |  |  |  |  |  |  |  | recommended default / needs discussion / blocked / confirmed |
+
+## Behavior Baseline
 
 Included functionality:
 
@@ -146,17 +173,68 @@ Context compaction/reset checkpoint:
 - Resume instruction:
 - Functionality and behavior reopened after checkpoint:
 
+## Proposed Implementation Shape
+
+Likely modules or packages:
+
+- TBD
+
+Likely public classes, functions, or protocols:
+
+- TBD
+
+Likely internal helpers:
+
+- TBD
+
+Data flow:
+
+- TBD
+
+Dependency direction:
+
+- TBD
+
+Extension points and flexibility boundaries:
+
+- TBD
+
+Compatibility constraints:
+
+- TBD
+
 ## Design Decision Review Queue
 
-| Decision | Why it matters | User feedback needed | Status |
-| --- | --- | --- | --- |
-|  |  |  | draft / reviewing / confirmed / deferred |
+| ID | Decision | Classification | Why it matters | User feedback needed | Status |
+| --- | --- | --- | --- | --- | --- |
+| DD-1 |  | auto-approved candidate / recorded recommendation / needs discussion / blocked |  |  | draft / reviewing / confirmed / deferred / blocked |
 
 ## Design Decisions
 
-| Decision | Selected approach | User feedback | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Debt and revisit trigger |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |  |  |
+| ID | Decision | Selected approach | User feedback | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Validation/documentation obligation | Debt and revisit trigger | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DD-1 |  |  |  |  |  |  |  |  |  | pending |
+
+## Design Decision Triage
+
+| Decision ID | Final classification | Reviewer challenge considered | Traceability | Manager action | Status |
+| --- | --- | --- | --- | --- | --- |
+| DD-1 | auto-approved / recorded recommendation / needs discussion / blocked |  | FR- | summarize / discuss / block | pending |
+
+## Design Safety Review
+
+| Finding | Affected decision or requirement | Refactor or compatibility risk | Recommended action | Status |
+| --- | --- | --- | --- | --- |
+|  |  |  |  | pending |
+
+Gate result:
+
+- Status: pending
+- Reviewer:
+- Blockers:
+- Recorded recommendations:
+- Accepted risks:
+- Revisit triggers:
 
 ## Practical Design Notes
 
@@ -205,6 +283,18 @@ Accepted debt:
 | Debt | Reason accepted | Revisit trigger |
 | --- | --- | --- |
 |  |  |  |
+
+## Examples And Demonstrations
+
+| Example | Behavior demonstrated | Loom context | Required docs/tests | Status |
+| --- | --- | --- | --- | --- |
+|  |  |  |  | pending |
+
+## Validation Strategy
+
+| Area | Behavior validated | Required coverage | Test/check type | Command or location | Status |
+| --- | --- | --- | --- | --- | --- |
+|  |  |  |  |  | pending |
 
 ## Phase Sketch
 
@@ -255,6 +345,24 @@ Reviewability:
 
 - TBD
 
+## Implementation Readiness
+
+| Check | Evidence | Result | Required action |
+| --- | --- | --- | --- |
+| Roadmap-to-requirement traceability |  | pass / block |  |
+| Requirement-to-design traceability |  | pass / block |  |
+| Design-safety review completed |  | pass / block |  |
+| Example-to-validation traceability |  | pass / block |  |
+| Phase-shaping readiness |  | pass / block |  |
+| Unresolved blocked or needs-discussion decisions |  | pass / block |  |
+
+Readiness result:
+
+- Status: pending
+- Implementation-plan drafting blockers:
+- Accepted risks:
+- Assumptions to carry forward:
+
 ## Open Questions
 
 | Question | Affects | Current default | Status |
@@ -264,6 +372,14 @@ Reviewability:
 ## Handoff Notes
 
 Implementation-plan draft inputs:
+
+- TBD
+
+Design-safety review result:
+
+- TBD
+
+Validation and phase-shaping inputs:
 
 - TBD
 

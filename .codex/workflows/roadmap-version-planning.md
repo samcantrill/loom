@@ -9,6 +9,8 @@ confirmed notes.
 Canonical prompts:
 
 - `.codex/prompts/roadmap-version-planning-notes-facilitate.md`
+- `.codex/prompts/roadmap-version-design-safety-review.md`, before
+  implementation-plan drafting
 - `.codex/prompts/implementation-plan-draft.md`, after final planning
   confirmation
 
@@ -35,13 +37,15 @@ Expected flow:
 1. Roadmap framing, starting with a comprehensive version briefing and user
    clarification window.
 2. Intent discovery.
-3. Feature brainstorming.
-4. Functionality and behavior confirmation.
+3. Capability triage and functional requirements.
+4. Functionality and behavior baseline confirmation.
 5. Context compaction/reset checkpoint.
-6. Maintainability/extensibility design decision review.
-7. Phase shaping.
-8. Final planning confirmation.
-9. Implementation-plan draft from the confirmed planning notes.
+6. Proposed implementation shape and design decision review.
+7. Design-safety review with `loom_design_safety_reviewer`.
+8. Examples and validation strategy.
+9. Phase shaping.
+10. Implementation readiness and final planning confirmation.
+11. Implementation-plan draft from the confirmed planning notes.
 
 At workflow startup, read the roadmap, linked feature docs, adjacent plans, and
 current architecture notes before asking the user to confirm functionality or
@@ -60,13 +64,17 @@ relevant considerations or tradeoffs, and a recommended default when the repo
 evidence supports one. After functionality and behavior are confirmed, record a
 complete checkpoint in the planning notes and compact or reset context before
 starting the design decision review. The resumed design pass should reload the
-planning notes, identify the necessary design decisions, and classify them
-before asking the user anything. Do not ask the user whether more design
-decisions should be reviewed. The facilitator owns that triage and should not
-turn every behavior or implementation detail into a user question.
+planning notes, draft the proposed implementation shape, identify the necessary
+design decisions, and classify them before asking the user anything. Do not ask
+the user whether more design decisions should be reviewed. The facilitator owns
+that triage and should not turn every behavior or implementation detail into a
+user question.
 
 Classify each candidate design decision before discussing it:
 
+- If the decision is local, traceable, straightforward to validate, and low
+  risk, record it as an `auto-approved candidate` for the design-safety
+  reviewer to challenge.
 - If the decision is low impact for maintainability and extensibility, omit it
   from the review queue or record it as an implementation detail in the notes.
 - If the decision affects maintainability or extensibility and repo evidence
@@ -75,13 +83,19 @@ Classify each candidate design decision before discussing it:
 - If the decision has high maintainability or extensibility impact and there is
   no strong recommendation, discuss it with the user before marking it
   confirmed.
+- If implementation-plan drafting would require inventing product behavior,
+  public contracts, architecture boundaries, failure semantics, validation
+  obligations, or phase boundaries, mark the decision blocked.
 
 Each user-facing decision discussion should be presented independently with
 concrete options, maintainability impact, extensibility and expansion impact,
 accepted debt, rejected alternatives, and the specific user feedback needed.
 Do not expose clear-recommendation decisions as confirmation questions. Do not
 start phase implementation from this entrypoint; the drafted implementation plan
-still needs the normal plan quality gate before phase work begins.
+still needs the normal plan quality gate before phase work begins. Do not draft
+the implementation plan until design-safety review, examples, validation
+strategy, phase shaping, and implementation readiness are recorded with no
+unresolved blockers or unresolved `needs discussion` decisions.
 
 When the user gives feedback about the workflow itself, treat that as a
 first-class workflow refinement signal. Decide whether the feedback should

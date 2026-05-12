@@ -228,9 +228,15 @@ For roadmap-version work before an implementation plan exists:
    `.codex/prompts/roadmap-version-planning-notes-facilitate.md` before
    drafting downstream artifacts. The planning notes must confirm
    functionality and behavior, checkpoint and compact context when available,
-   then complete design-decision triage before the implementation-plan draft.
+   then complete proposed implementation shape, design-decision triage,
+   design-safety review, examples, validation strategy, phase shaping, and
+   implementation readiness before the implementation-plan draft.
    Record clear repo-supported recommendations without user review, and review
    only high-impact decisions that lack a strong recommendation with the user.
+   Run or assign `loom_design_safety_reviewer` with
+   `.codex/prompts/roadmap-version-design-safety-review.md` before phase
+   shaping or implementation-plan drafting, and do not bypass unresolved
+   design-safety blockers with invented implementation-plan content.
    Use a reset or explicit resume handoff only when direct compaction is
    unavailable.
    If the user gives feedback about the roadmap-planning workflow itself,
@@ -251,6 +257,9 @@ agents, or modifying product code. Treat missing, incomplete, stale, or
 ambiguous gate evidence as not passed.
 
 1. Confirm the selected implementation plan has a Plan quality gate section.
+   If the plan cites roadmap-version planning notes, confirm the gate covers
+   planning readiness, including design-safety review, validation strategy,
+   phase shaping, and unresolved planning blockers.
 2. If that section records a current passed result for the selected plan, verify
    the evidence and continue.
 3. If the section is missing, incomplete, stale, ambiguous, or not passed, review

@@ -18,6 +18,11 @@ gate is automatic workflow behavior, not a separate user-facing entrypoint.
    continue.
 4. Stop before phase planning if blocking plan findings remain.
 
+When the implementation plan cites roadmap-version planning notes, the quality
+gate must also verify planning readiness: design-safety review completed or
+accepted risks recorded, validation strategy and phase shaping carried into the
+plan, and no unresolved `blocked` or `needs discussion` planning decisions.
+
 Canonical manager prompt:
 
 - `.codex/prompts/phase-loop-management.md`

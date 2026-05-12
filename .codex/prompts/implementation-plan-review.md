@@ -19,25 +19,33 @@ Read:
 
 Review the plan for:
 
-1. Maintainability:
+1. Planning readiness, when roadmap planning notes exist:
+   - functionality and behavior baseline carried into the plan
+   - functional requirements trace to design decisions and phases
+   - design-safety review completed or accepted risks recorded
+   - no unresolved `blocked` or `needs discussion` design decisions
+   - examples and validation strategy reflected in phase acceptance criteria
+   - phase shaping reflected in reviewable implementation phases
+   - implementation readiness blockers not bypassed by invented plan content
+2. Maintainability:
    - unnecessary abstractions
    - broad or tangled phases
    - unclear ownership boundaries
    - hidden coupling
    - public API churn
-2. Extensibility:
+3. Extensibility:
    - future phases the plan should preserve
    - extension points that are too narrow or too speculative
    - decisions that could block documented future work
-3. Conflicting design choices:
+4. Conflicting design choices:
    - contradictions with `AGENTS.md`
    - contradictions with `docs/structure.md` or other design docs
    - unresolved tradeoffs
-4. Technical debt:
+5. Technical debt:
    - debt accepted without a revisit trigger
    - shortcuts that are likely to become permanent
    - missing migration or cleanup steps
-5. Reviewability:
+6. Reviewability:
    - phases too large for one PR
    - phases mixing refactor and behavior change
    - acceptance criteria that cannot be objectively reviewed
@@ -45,6 +53,11 @@ Review the plan for:
    - unclear validation or PR test-summary evidence
    - phase plans that demand exhaustive code recipes instead of clear scope,
      acceptance criteria, risks, and suite obligations
+
+Block the plan when planning notes contain unresolved design-safety blockers,
+unresolved `needs discussion` decisions, missing validation strategy, missing
+phase shaping, or missing traceability that would force a phase planner or
+executor to invent product behavior or structural code decisions.
 
 Output using `.codex/templates/plan-review-report.md`:
 

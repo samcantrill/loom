@@ -18,6 +18,16 @@ State the implementation goal.
 
 Summarize relevant repository state and source documents.
 
+## Planning Readiness
+
+- Source planning notes:
+- Functionality and behavior baseline:
+- Design-safety review:
+- Examples and validation strategy:
+- Phase shaping:
+- Implementation readiness blockers:
+- Accepted risks and revisit triggers:
+
 ## Desired Outcome
 
 Describe what should be true when all phases are complete.
@@ -47,6 +57,15 @@ Describe what should be true when all phases are complete.
 | Debt | Reason accepted | Revisit trigger |
 | --- | --- | --- |
 |  |  |  |
+
+## Plan Quality Gate
+
+- Status: pending
+- Review pass:
+- Refinement pass:
+- Confirmation review:
+- Planning-readiness dependencies:
+- Blockers:
 
 ## Phased Implementation
 
