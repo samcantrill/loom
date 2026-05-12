@@ -164,13 +164,19 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded-path phase may use one bounded pass if validation or coverage exposes a concrete gap
+- Phase implementation refinement: used by managing agent on 2026-05-12 for the targeted audit-event payload normalization exposed by the HTTP-backed runner test
 - PR review: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
-- Implementation summary: pending.
-- Validation: pending.
+- Implementation summary: added HTTP authority lease/submitted-operation client methods, captured HTTP readiness facts during authority resolution, added an `AuthorityClientBackedPerRunAuthorityStore`, wired HTTP authority references into `create_authority_backed_serial_run_store()`, kept HTTP-backed audit events local-only pending a service route, and aligned the supervisor CLI smoke with the existing optional-config test policy.
+- Validation:
+  - Targeted Ruff and Pyright passed for changed source and tests.
+  - Targeted pytest passed: `tests/unit/loom/pipeline/stores/test_authority_client.py`, `tests/unit/loom/pipeline/execution/test_authority_adapter.py`, `tests/integration/authority/test_mutation_api.py`, `tests/integration/pipeline/test_local_execution.py`, and `tests/e2e/test_authority_supervisor_cli.py` reported 26 passed and 2 skipped in the no-extra environment.
+  - `tests/package/test_pipeline_store_api.py` passed with 11 tests.
+  - `make validate-pr` passed outside the restricted sandbox: Ruff, Pyright, default harness with 1297 passed / 19 skipped / 14 deselected, config-extra harness with 422 passed / 1326 deselected, and `uv build`.
+  - `make test-summary` passed outside the restricted sandbox and wrote `build/test-summary.md`: package 69 passed / 1 skipped; unit 942 passed / 1 skipped; contract 146 passed / 2 skipped; integration 127 passed / 8 skipped / 10 deselected; e2e 39 passed / 2 deselected; config-extra 422 passed / 1326 deselected.
+  - Restricted sandbox note: FastAPI `TestClient` paths hang under the sandbox thread/network isolation, so suite gates that exercise those paths were run with approved escalation.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
