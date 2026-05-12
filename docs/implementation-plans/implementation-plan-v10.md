@@ -1715,9 +1715,9 @@ coverage around failed continuations.
 
 ### Phase 13: SLURM Live Operation Paths
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-slurm-live-paths`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/131
 
 **Goal**
 
@@ -1811,7 +1811,21 @@ and avoiding environment-dependent default tests.
 
 **Completion Summary**
 
-TBD.
+Phase 13 opened PR #131 against `develop` from
+`codex/authority-slurm-live-paths`. The phase added a shared SLURM live
+authority guard, requires service-profile authority-backed stores before live
+submission/status/cancellation mutation, records authority mutation-source
+metadata for live SLURM snapshots, rejects `direct_database` for live-worker
+admission, and updates deterministic SLURM tests and fixtures for fail-closed
+local-store behavior plus authority argument handoffs.
+
+Validation evidence: focused Ruff passed; focused Pyright passed; focused
+SLURM unit/integration tests passed with 100 tests; focused optional-config
+SLURM e2e tests passed outside the restricted sandbox with 14 tests;
+`make validate-pr` passed; `make test-summary` passed with package 69
+passed/1 skipped, unit 954 passed/1 skipped, contract 146 passed/2 skipped,
+integration 127 passed/8 skipped/10 deselected, e2e 39 passed/2 deselected,
+and config-extra 422 passed/1338 deselected.
 
 ### Phase 14: Diagnostics, Preflight, And Read-Only Source Labeling
 
