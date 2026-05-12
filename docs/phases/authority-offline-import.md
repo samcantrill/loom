@@ -230,6 +230,6 @@ make test-summary
 - Implementation validation: focused Ruff/Pyright/pytest coverage passed for the import module, repository, client/route/CLI wiring, contract shapes, integration API flow, package boundaries, and import-specific e2e smoke; `make validate-pr` passed with Ruff, Pyright, default harness `1348 passed, 19 skipped, 14 deselected`, config-extra harness `424 passed, 1378 deselected`, and package build; `make test-summary` passed with package `70 passed, 1 skipped`, unit `978 passed, 1 skipped`, contract `157 passed, 2 skipped`, integration `130 passed, 8 skipped, 10 deselected`, e2e `40 passed, 2 deselected`, and config-extra `424 passed, 1378 deselected`.
 - Refinement summary: one bounded local refinement pass tightened offline event validation to parse full `PipelineEventRecord` payloads, preserved original replay scope in imported audit events, threaded explicit `imported_by` through the client/CLI path, and repaired exact public-export test snapshots after the new route constant expanded `loom.pipeline.stores.__all__`.
 - Blocker-resolution summary: not needed; 0/3 blocker-resolution passes used.
-- PR preparation: PR body prepared at `docs/phases/authority-offline-import-pr-body.md`; PR not yet opened.
-- Stack maintenance:
-- Remaining blockers:
+- PR preparation: PR body prepared at `docs/phases/authority-offline-import-pr-body.md`; PR #136 opened at https://github.com/samcantrill/loom/pull/136 against `develop` from `codex/authority-offline-import`, and target/head were verified with `gh pr view 136 --json baseRefName,headRefName,state,url`.
+- Stack maintenance: root phase targets `develop`; no successor branch depends on `codex/authority-offline-import`.
+- Remaining blockers: none.
