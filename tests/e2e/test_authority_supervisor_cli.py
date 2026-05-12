@@ -131,6 +131,53 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
         assert run_payload["result"]["status"] == "SUCCEEDED"
         assert (run_uri_to_path(run_uri) / "status.json").is_file()
 
+        offline_run_uri = path_to_run_uri(tmp_path / "runs" / "offline-import")
+        offline_stdout = io.StringIO()
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    offline_run_uri,
+                    "--offline-first",
+                    "--format",
+                    "json",
+                ],
+                stdout=offline_stdout,
+            )
+            == 0
+        )
+        offline_payload = json.loads(offline_stdout.getvalue())
+        manifest_path = offline_payload["result"]["offline_evidence"]["manifest_path"]
+        import_stdout = io.StringIO()
+        assert (
+            main(
+                [
+                    "authority",
+                    "import-offline",
+                    manifest_path,
+                    "--authority-backend",
+                    "managed_service",
+                    "--authority-profile",
+                    "managed_service",
+                    "--authority-endpoint",
+                    start_payload["result"]["endpoint"],
+                    "--authority-workspace",
+                    "workspace-a",
+                    "--format",
+                    "json",
+                ],
+                stdout=import_stdout,
+            )
+            == 0
+        )
+        import_payload = json.loads(import_stdout.getvalue())
+        assert import_payload["ok"] is True
+        assert import_payload["result"]["run_uri"] == offline_run_uri
+        assert import_payload["result"]["status"] == "SUCCEEDED"
+        assert import_payload["result"]["imported_stage_count"] == 1
+
         subprocess_run_uri = path_to_run_uri(
             tmp_path / "runs" / "online-authority-subprocess"
         )
