@@ -99,6 +99,26 @@ def test_co_located_profile_downgrades_live_worker_authority() -> None:
     } <= {diagnostic.code for diagnostic in result.diagnostics}
 
 
+def test_direct_database_profile_downgrades_live_worker_authority() -> None:
+    result = preflight_authority_deployment(
+        config=AuthorityConfig(
+            backend_kind=AuthorityBackendKind.DIRECT_DATABASE,
+            deployment_profile=AuthorityDeploymentProfile.DIRECT_DATABASE,
+            state_path="/tmp/authority.sqlite3",
+        ),
+        capabilities=_live_worker_capabilities(),
+        require_live_worker=True,
+        compute_to_authority_reachable=True,
+        service_healthy=True,
+    )
+
+    assert not result.supported
+    assert result.summary.live_worker_authority is False
+    assert "authority.unsupported_profile" in {
+        diagnostic.code for diagnostic in result.diagnostics
+    }
+
+
 def test_deferred_profile_separates_envelope_handoff_from_live_fencing() -> None:
     config = AuthorityConfig(
         backend_kind=AuthorityBackendKind.DEFERRED_FINALIZATION,

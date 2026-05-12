@@ -9,7 +9,6 @@ from typing import cast
 
 from loom.pipeline.execution.lifecycle import write_run_submitted, write_stage_submitted
 from loom.pipeline.stores.run_store import LegacyRunStore as RunStore, LocalRunStorePaths
-from loom.pipeline.stores import AuthorityConfig
 from loom.pipeline.submitted import (
     SubmittedOperationRecord,
     SubmittedOperationState,
@@ -19,6 +18,7 @@ from loom.serialization import PlainData
 from loom.timestamps import utc_timestamp
 
 from .artifacts import SlurmDryRunPlanningResult
+from .authority import SlurmLiveAuthorityFacts, slurm_live_authority_facts
 from .commands import (
     SlurmCommandResult,
     SlurmCommandRunner,
@@ -114,6 +114,7 @@ def submit_single_job_slurm(
     submission = planning_result.submission
     if submission.mode != SlurmMode.SINGLE_JOB:
         raise SlurmPlanningError("submit_single_job_slurm requires slurm-single-job")
+    _require_slurm_live_authority(run_store, operation="single-job submission")
 
     _raise_if_active_submission(run_store=run_store, run_uri=run_uri)
     runner = command_runner or default_slurm_command_runner()
@@ -347,6 +348,7 @@ def submit_afterok_slurm(
     submission = planning_result.submission
     if submission.mode != SlurmMode.AFTEROK:
         raise SlurmPlanningError("submit_afterok_slurm requires slurm-afterok")
+    _require_slurm_live_authority(run_store, operation="afterok submission")
 
     _raise_if_active_submission(run_store=run_store, run_uri=run_uri)
     runner = command_runner or default_slurm_command_runner()
@@ -618,6 +620,21 @@ def _raise_if_active_submission(*, run_store: RunStore, run_uri: str) -> None:
     raise SlurmActiveSubmissionError(
         "run already has active submitted scheduler work; cancel it before resubmitting"
     )
+
+
+def _require_slurm_live_authority(
+    run_store: RunStore,
+    *,
+    operation: str,
+) -> SlurmLiveAuthorityFacts:
+    facts = slurm_live_authority_facts(run_store)
+    if facts is None:
+        raise SlurmSubmissionError(
+            "live SLURM submission requires a service-profile authority-backed run store",
+            code="executor.slurm.live_submission.missing_authority",
+            context={"operation": operation},
+        )
+    return facts
 
 
 def _write_manifest_and_registry(
@@ -932,17 +949,11 @@ def _stage_name_from_logical_key(logical_key: str) -> str:
 
 
 def _authority_backend_metadata(run_store: RunStore) -> dict[str, PlainData]:
-    raw_config = getattr(run_store, "authority_config", None)
-    config = raw_config() if callable(raw_config) else None
-    if not isinstance(config, AuthorityConfig):
+    facts = slurm_live_authority_facts(run_store)
+    if facts is None:
         return {}
-    reference = config.to_reference()
     return {
-        "authority": {
-            "backend_kind": config.backend_kind.value,
-            "deployment_profile": config.deployment_profile.value,
-            "reference": reference.redacted_dict(config.redaction_keys),
-        }
+        "authority": facts.to_metadata(),
     }
 
 

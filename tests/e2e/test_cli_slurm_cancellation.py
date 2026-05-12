@@ -14,7 +14,11 @@ import pytest
 from loom.cli.main import main
 from loom.pipeline.executors.slurm import FakeSlurmCommandRunner, SlurmCommandResult
 from loom.pipeline.status import StageStatus, StageStatusRecord
-from loom.pipeline.stores import authority_config_to_cli_args
+from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityDeploymentProfile,
+    authority_config_to_cli_args,
+)
 from loom.pipeline.stores.service_authority import LocalAuthorityService
 from tests.support.slurm_status_fixtures import write_submitted_slurm_fixture
 
@@ -29,7 +33,10 @@ def _service_submitted_slurm_fixture(
     starting_job_id: int,
 ) -> Iterator[tuple[Any, str, tuple[str, ...], Path]]:
     with LocalAuthorityService.start() as service:
-        authority_config = service.config()
+        authority_config = service.config(
+            backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+        )
         store, run_uri, manifest_path = write_submitted_slurm_fixture(
             tmp_path,
             stage_upstreams,

@@ -15,6 +15,7 @@ from loom.serialization import PlainData, ensure_plain_data, json_loads
 from loom.serialization.errors import PlainDataError
 from loom.timestamps import parse_timestamp, utc_timestamp
 
+from .authority import SlurmLiveAuthorityFacts, slurm_live_authority_facts
 from .commands import (
     SlurmCommandResult,
     SlurmCommandRunner,
@@ -242,6 +243,7 @@ def inspect_slurm_job_status(
             "scheduler status requires local run-store path helpers",
             code="executor.slurm.status.missing_local_paths",
         )
+    authority_facts = _require_slurm_live_authority(store)
 
     now = captured_at or utc_timestamp()
     state = store.inspect_run_state(run_uri)
@@ -302,6 +304,7 @@ def inspect_slurm_job_status(
         jobs=jobs,
         warnings=warnings,
         captured_at=now,
+        authority_facts=authority_facts,
     )
 
     return SlurmJobsStatusReport(
@@ -757,6 +760,7 @@ def _persist_status_snapshot(
     jobs: Sequence[SlurmJobStatusSummary],
     warnings: Sequence[SlurmStatusWarning],
     captured_at: str,
+    authority_facts: SlurmLiveAuthorityFacts,
 ) -> None:
     updated_manifest = replace(
         manifest,
@@ -765,9 +769,11 @@ def _persist_status_snapshot(
     )
     write_slurm_live_manifest(manifest_path, updated_manifest)
     backend_metadata = dict(record.backend_metadata)
+    backend_metadata["authority"] = authority_facts.to_metadata()
     backend_metadata["slurm_status"] = _plain_mapping(
         {
             "captured_at": captured_at,
+            "mutation_source": "authority_service",
             "job_count": len(jobs),
             "jobs": [
                 {
@@ -788,6 +794,16 @@ def _persist_status_snapshot(
         run_uri,
         replace(record, updated_at=captured_at, backend_metadata=backend_metadata),
     )
+
+
+def _require_slurm_live_authority(store: RunStore) -> SlurmLiveAuthorityFacts:
+    facts = slurm_live_authority_facts(store)
+    if facts is None:
+        raise SlurmStatusInspectionError(
+            "SLURM scheduler status persistence requires a service-profile authority-backed run store",
+            code="executor.slurm.status.missing_authority",
+        )
+    return facts
 
 
 def _command_details(result: SlurmCommandResult) -> dict[str, PlainData]:

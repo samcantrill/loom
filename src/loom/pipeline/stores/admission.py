@@ -250,7 +250,6 @@ def _profile_errors(
         not in {
             AuthorityDeploymentProfile.MANAGED_SERVICE,
             AuthorityDeploymentProfile.ALLOCATION_SCOPED,
-            AuthorityDeploymentProfile.DIRECT_DATABASE,
         }
     ):
         return (
@@ -262,7 +261,7 @@ def _profile_errors(
                 deployment_profile=config.deployment_profile.value,
                 message=(
                     "live submitted workers require managed-service, "
-                    "allocation-scoped, or direct-database authority"
+                    "or allocation-scoped service authority"
                 ),
                 detail={"requested_feature": required.value},
             ),

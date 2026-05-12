@@ -163,13 +163,17 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded-path phase may use one bounded pass if validation or coverage exposes a concrete gap
+- Phase implementation refinement: not needed; targeted validation passed after local fixes in the managing pass
 - PR review: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed by managing agent on 2026-05-12.
-- Implementation summary: pending.
-- Validation: pending.
+- Implementation summary: added a shared SLURM live authority fact helper, required service-profile authority-backed stores before live submission/status/cancellation mutation, recorded authority mutation-source metadata for status and cancellation snapshots, rejected `direct_database` for live-worker admission, and updated SLURM unit/integration/e2e fixtures to prove fail-closed local-store behavior plus authority argument propagation.
+- Validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/executors/slurm src/loom/pipeline/stores/admission.py tests/unit/loom/pipeline/stores/test_authority_config_admission.py tests/unit/loom/pipeline/stores/test_authority_deployment.py tests/unit/loom/pipeline/executors/slurm tests/integration/pipeline/test_slurm_dry_run_planning.py tests/integration/pipeline/test_slurm_live_single_job.py tests/integration/pipeline/test_slurm_live_afterok.py tests/integration/pipeline/test_slurm_scheduler_status.py tests/integration/pipeline/test_slurm_cancellation_integration.py tests/e2e/test_cli_slurm_live_operations_flow.py tests/e2e/test_cli_slurm_dry_run.py tests/e2e/test_cli_slurm_scheduler_status.py tests/e2e/test_cli_slurm_cancellation.py` - passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/executors/slurm src/loom/pipeline/stores/admission.py tests/unit/loom/pipeline/stores/test_authority_config_admission.py tests/unit/loom/pipeline/stores/test_authority_deployment.py tests/unit/loom/pipeline/executors/slurm tests/integration/pipeline/test_slurm_live_single_job.py tests/integration/pipeline/test_slurm_live_afterok.py tests/integration/pipeline/test_slurm_scheduler_status.py tests/integration/pipeline/test_slurm_cancellation_integration.py tests/e2e/test_cli_slurm_live_operations_flow.py tests/e2e/test_cli_slurm_dry_run.py` - passed after replacing a direct capability attribute access with a typed `getattr`.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_authority_config_admission.py tests/unit/loom/pipeline/stores/test_authority_deployment.py tests/unit/loom/pipeline/executors/slurm tests/integration/pipeline/test_slurm_live_single_job.py tests/integration/pipeline/test_slurm_live_afterok.py tests/integration/pipeline/test_slurm_scheduler_status.py tests/integration/pipeline/test_slurm_cancellation_integration.py tests/integration/pipeline/test_slurm_dry_run_planning.py` - 100 passed.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pytest tests/e2e/test_cli_slurm_live_operations_flow.py tests/e2e/test_cli_slurm_dry_run.py tests/e2e/test_cli_slurm_scheduler_status.py tests/e2e/test_cli_slurm_cancellation.py` - passed outside the restricted sandbox, 14 passed. The in-sandbox run failed because `LocalAuthorityService` could not open multiprocessing sockets.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.

@@ -20,7 +20,7 @@ from tests.integration.pipeline.test_slurm_dry_run_planning import _prepared_sto
 def test_live_single_job_submission_updates_manifest_registry_and_run_status(
     tmp_path: Path,
 ) -> None:
-    store, run_uri = _prepared_store(tmp_path, {"build": ()})
+    store, run_uri = _prepared_store(tmp_path, {"build": ()}, authority_backed=True)
     planning = plan_single_job_slurm_dry_run(
         run_store=store,
         run_uri=run_uri,
