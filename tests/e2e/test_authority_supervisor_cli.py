@@ -14,7 +14,7 @@ pytest.importorskip("omegaconf")
 pytest.importorskip("yaml")
 
 from loom.cli.main import main
-from loom.pipeline.stores import path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
 
 
 pytestmark = [pytest.mark.e2e, pytest.mark.optional_dependency]
@@ -130,6 +130,45 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
         run_payload = json.loads(run_stdout.getvalue())
         assert run_payload["result"]["status"] == "SUCCEEDED"
         assert (run_uri_to_path(run_uri) / "status.json").is_file()
+
+        subprocess_run_uri = path_to_run_uri(
+            tmp_path / "runs" / "online-authority-subprocess"
+        )
+        subprocess_stdout = io.StringIO()
+        assert (
+            main(
+                [
+                    "run",
+                    str(config_path),
+                    "--run-uri",
+                    subprocess_run_uri,
+                    "--executor",
+                    "subprocess",
+                    "--authority-backend",
+                    "managed_service",
+                    "--authority-profile",
+                    "managed_service",
+                    "--authority-endpoint",
+                    start_payload["result"]["endpoint"],
+                    "--authority-workspace",
+                    "workspace-a",
+                    "--format",
+                    "json",
+                ],
+                stdout=subprocess_stdout,
+            )
+            == 0
+        )
+        subprocess_payload = json.loads(subprocess_stdout.getvalue())
+        assert subprocess_payload["result"]["status"] == "SUCCEEDED"
+        assert (
+            LocalRunStore().read_stage_worker_result(
+                subprocess_run_uri,
+                "build",
+                attempt=1,
+            )
+            is not None
+        )
     finally:
         stop_stdout = io.StringIO()
         main(

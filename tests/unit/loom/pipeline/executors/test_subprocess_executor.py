@@ -186,16 +186,19 @@ def test_build_stage_worker_command_propagates_authority_config() -> None:
         stage_name="build",
         attempt=3,
         authority_config=AuthorityConfig(
-            backend_kind=AuthorityBackendKind.CO_LOCATED_SERVICE,
-            deployment_profile=AuthorityDeploymentProfile.CO_LOCATED,
-            endpoint="tcp://127.0.0.1:12345",
-            metadata={"authkey": "secret"},
+            backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
+            deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,
+            endpoint="http://authority.test",
+            workspace_id="workspace-a",
+            reference_id="worker-authority",
         ),
     )
 
-    assert "--authority-backend" in command
-    assert "--authority-endpoint" in command
-    assert "--authority-metadata-json" in command
+    assert command[command.index("--authority-backend") + 1] == "managed_service"
+    assert command[command.index("--authority-profile") + 1] == "managed_service"
+    assert command[command.index("--authority-endpoint") + 1] == "http://authority.test"
+    assert command[command.index("--authority-workspace") + 1] == "workspace-a"
+    assert command[command.index("--authority-reference") + 1] == "worker-authority"
     assert command[-2:] == ("--format", "json")
 
 
