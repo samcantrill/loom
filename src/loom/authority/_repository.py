@@ -21,6 +21,14 @@ from loom.pipeline.stores.authority import (
     OutputCommit,
     StatusTransition,
 )
+from loom.pipeline.stores.coordination import (
+    ConcurrencyCounter,
+    CoordinationRecoveryRecord,
+    SweepIdentity,
+    TrialLeaseRecord,
+    TrialReference,
+    WorkspaceIdentity,
+)
 from loom.pipeline.stores.read_models import (
     ArtifactFactRecord,
     AuthoritativeRunSnapshot,
@@ -37,6 +45,7 @@ from loom.pipeline.stores.read_models import (
     StageAttempt,
     StageLifecycleSnapshot,
 )
+from loom.pipeline.stores.sqlite_coordination import SQLiteWorkspaceCoordinationStore
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
@@ -45,6 +54,7 @@ from loom.timestamps import parse_timestamp, utc_now, utc_timestamp
 
 AUTHORITY_REPOSITORY_SCHEMA_VERSION = 3
 AUTHORITY_REPOSITORY_DB_NAME = "authority.sqlite3"
+AUTHORITY_REPOSITORY_COORDINATION_DB_NAME = "coordination.sqlite3"
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _METADATA_TABLE = "repository_metadata"
 _REQUIRED_SCHEMA_COLUMNS = {
@@ -1370,6 +1380,148 @@ class AuthorityRepository:
             _require_run_row(conn, run_uri)
             return _recovery_records(conn, run_uri)
 
+    def create_workspace(self, identity: WorkspaceIdentity) -> BackendRevision:
+        """Persist a workspace identity in service-owned coordination state."""
+
+        return self._coordination_store().create_workspace(identity)
+
+    def create_sweep(self, identity: SweepIdentity) -> BackendRevision:
+        """Persist a sweep identity in service-owned coordination state."""
+
+        return self._coordination_store().create_sweep(identity)
+
+    def record_trial(self, trial: TrialReference) -> BackendRevision:
+        """Persist a trial reference in service-owned coordination state."""
+
+        return self._coordination_store().record_trial(trial)
+
+    def list_trials(self, sweep_id: str) -> tuple[TrialReference, ...]:
+        """List trial references for one sweep."""
+
+        return self._coordination_store().list_trials(sweep_id)
+
+    def acquire_trial_lease(
+        self,
+        sweep_id: str,
+        trial_id: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int,
+    ) -> TrialLeaseRecord:
+        """Acquire a trial coordination lease."""
+
+        return self._coordination_store().acquire_trial_lease(
+            sweep_id,
+            trial_id,
+            owner_id=owner_id,
+            lease_ttl_seconds=lease_ttl_seconds,
+        )
+
+    def renew_coordination_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        lease_ttl_seconds: int,
+    ) -> LeaseRecord:
+        """Renew a service-owned workspace coordination lease."""
+
+        return self._coordination_store().renew_lease(
+            lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            lease_ttl_seconds=lease_ttl_seconds,
+        )
+
+    def release_coordination_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason | None = None,
+    ) -> LeaseRecord:
+        """Release a service-owned workspace coordination lease."""
+
+        return self._coordination_store().release_lease(
+            lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            reason=reason,
+        )
+
+    def fail_coordination_lease(
+        self,
+        lease_id: str,
+        *,
+        owner_id: str,
+        fencing_token: str,
+        reason: LifecycleReason,
+    ) -> LeaseRecord:
+        """Fail a service-owned workspace coordination lease."""
+
+        return self._coordination_store().fail_lease(
+            lease_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            reason=reason,
+        )
+
+    def set_counter_limit(
+        self, workspace_id: str, counter_name: str, *, limit: int | None
+    ) -> ConcurrencyCounter:
+        """Set a service-owned non-resource counter limit."""
+
+        return self._coordination_store().set_counter_limit(
+            workspace_id,
+            counter_name,
+            limit=limit,
+        )
+
+    def increment_counter(
+        self,
+        workspace_id: str,
+        counter_name: str,
+        *,
+        amount: int = 1,
+        limit: int | None = None,
+    ) -> ConcurrencyCounter:
+        """Increment a service-owned non-resource counter."""
+
+        return self._coordination_store().increment_counter(
+            workspace_id,
+            counter_name,
+            amount=amount,
+            limit=limit,
+        )
+
+    def decrement_counter(
+        self, workspace_id: str, counter_name: str, *, amount: int = 1
+    ) -> ConcurrencyCounter:
+        """Decrement a service-owned non-resource counter."""
+
+        return self._coordination_store().decrement_counter(
+            workspace_id,
+            counter_name,
+            amount=amount,
+        )
+
+    def read_counter(
+        self, workspace_id: str, counter_name: str
+    ) -> ConcurrencyCounter | None:
+        """Read a service-owned non-resource counter."""
+
+        return self._coordination_store().read_counter(workspace_id, counter_name)
+
+    def scan_coordination_recovery(
+        self, workspace_id: str
+    ) -> tuple[CoordinationRecoveryRecord, ...]:
+        """Scan service-owned non-resource coordination recovery facts."""
+
+        records = self._coordination_store().scan_recovery(workspace_id)
+        return tuple(record for record in records if record.resource_key is None)
+
     def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
         """Return persisted and currently detectable run-level recovery facts."""
 
@@ -1630,6 +1782,12 @@ class AuthorityRepository:
             parse_timestamp(value)
             return value
         return utc_timestamp(value)
+
+    def _coordination_store(self) -> SQLiteWorkspaceCoordinationStore:
+        return SQLiteWorkspaceCoordinationStore(
+            self.state_dir / AUTHORITY_REPOSITORY_COORDINATION_DB_NAME,
+            clock=self._clock,
+        )
 
     @contextmanager
     def _connection(self, *, create_parent: bool) -> Iterator[sqlite3.Connection]:
