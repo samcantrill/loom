@@ -170,7 +170,7 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; expanded-path phase may use one bounded pass after implementation if validation or coverage exposes a concrete gap
+- Phase implementation refinement: used by managing agent on 2026-05-12 for the bounded contract-expectation fixes surfaced by the first `make validate-pr` run
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -178,6 +178,14 @@ UV_CACHE_DIR=/tmp/uv-cache make test-summary
 
 - Draft plan: completed by managing agent on 2026-05-12.
 - Refine plan: completed by managing agent on 2026-05-12; clarified service-backed resource methods as unsupported until Phase 16.
-- Implementation summary: pending.
-- Validation: pending.
+- Implementation summary: added typed workspace-coordination protocol result fields, authority client route constants/methods, FastAPI mutation routes, mutation-service dispatch handlers, private repository coordination methods backed by service-owned coordination state, and a service-backed `WorkspaceCoordinationStore` adapter. Resource lease and resource limit service methods are present but return structured unsupported-capability responses until Phase 16.
+- Tests added or updated: protocol/client unit tests, authority repository and mutation-service unit tests, service-backed coordination contract coverage, FastAPI mutation integration coverage, public store export tests, and protocol contract shape tests.
+- Validation:
+  - `uv run ruff check src/loom/authority/routes/mutations.py src/loom/authority/mutation_service.py src/loom/authority/_repository.py src/loom/pipeline/stores/authority_client.py src/loom/pipeline/stores/authority_protocol.py src/loom/pipeline/stores/service_coordination.py src/loom/pipeline/stores/__init__.py tests/contracts/test_workspace_coordination_contract.py tests/unit/loom/pipeline/stores/test_authority_client.py tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/unit/loom/authority/test_repository.py tests/unit/loom/authority/test_mutation_service.py tests/integration/authority/test_mutation_api.py tests/package/test_pipeline_store_api.py` passed.
+  - `uv run pytest tests/unit/loom/pipeline/stores/test_authority_protocol.py tests/unit/loom/pipeline/stores/test_authority_client.py tests/unit/loom/authority/test_repository.py tests/unit/loom/authority/test_mutation_service.py tests/contracts/test_workspace_coordination_contract.py tests/integration/authority/test_mutation_api.py tests/package/test_pipeline_store_api.py` passed: 55 passed.
+  - `uv run pytest tests/package/test_import_boundaries.py` passed: 35 passed.
+  - `uv run pyright src/loom/authority src/loom/pipeline/stores tests/unit/loom/authority tests/unit/loom/pipeline/stores tests/contracts/test_workspace_coordination_contract.py tests/integration/authority tests/package/test_pipeline_store_api.py` passed: 0 errors.
+  - First `make validate-pr` run failed after tests on stable contract/export expectations for the new protocol and store vocabulary; fixed in commit `bed3ecf`.
+  - Final `make validate-pr` passed: Ruff passed, Pyright passed, default harness passed 1321 tests with 19 skipped and 14 deselected, config-extra passed 422 tests with 1350 deselected, and `uv build` produced sdist and wheel.
+  - `make test-summary` passed and wrote `build/test-summary.md`: package 70 passed / 1 skipped; unit 959 passed / 1 skipped; contract 151 passed / 2 skipped; integration 128 passed / 8 skipped / 10 deselected; e2e 39 passed / 2 deselected; config-extra 422 passed / 1350 deselected.
 - Stack maintenance: none yet; this is a root phase branch targeting `develop`.
