@@ -1715,7 +1715,7 @@ coverage around failed continuations.
 
 ### Phase 13: SLURM Live Operation Paths
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-slurm-live-paths`
 - PR: https://github.com/samcantrill/loom/pull/131
 
@@ -1811,7 +1811,8 @@ and avoiding environment-dependent default tests.
 
 **Completion Summary**
 
-Phase 13 opened PR #131 against `develop` from
+Phase 13 merged PR #131 into `develop` with squash commit
+`9ab7bd1098728ddb6af26a7fe5ce8c0c1102f35e` from
 `codex/authority-slurm-live-paths`. The phase added a shared SLURM live
 authority guard, requires service-profile authority-backed stores before live
 submission/status/cancellation mutation, records authority mutation-source
@@ -1826,6 +1827,13 @@ SLURM e2e tests passed outside the restricted sandbox with 14 tests;
 passed/1 skipped, unit 954 passed/1 skipped, contract 146 passed/2 skipped,
 integration 127 passed/8 skipped/10 deselected, e2e 39 passed/2 deselected,
 and config-extra 422 passed/1338 deselected.
+
+Automated review and merge notes: manager review found no blocking scope or
+correctness issues; `gh pr view 131 --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup,mergeStateStatus`
+verified target `develop`, head `codex/authority-slurm-live-paths`, clean merge
+state, and successful CI before merge. The GitHub squash merge succeeded; local
+branch deletion was deferred until the phase worktree cleanup because the
+branch was checked out there.
 
 ### Phase 14: Diagnostics, Preflight, And Read-Only Source Labeling
 
