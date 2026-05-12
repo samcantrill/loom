@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 13 merged; Phase 14 pending
+- Phase work status: Phase 14 PR open
 
 Related artifacts and references:
 
@@ -1837,9 +1837,9 @@ branch was checked out there.
 
 ### Phase 14: Diagnostics, Preflight, And Read-Only Source Labeling
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-diagnostics-labeling`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/132
 
 **Goal**
 
@@ -1924,7 +1924,18 @@ whether read-only paths stay mutation-free.
 
 **Completion Summary**
 
-TBD.
+PR opened on 2026-05-12:
+
+- Branch: `codex/authority-diagnostics-labeling`
+- PR: https://github.com/samcantrill/loom/pull/132
+- Target branch: `develop`
+- Implementation summary: added shared source-label helpers and additive labels
+  across backend diagnostics, status/stage/submitted-operation summaries,
+  artifact/log summaries, preflight details, run catalog summaries, catalog
+  warnings, and CLI text output.
+- Validation before PR: `make validate-pr` passed; `make test-summary` passed
+  with overall 1757 passed, 12 skipped, and 1350 deselected.
+- Follow-up notes: automated review and GitHub CI are pending before merge.
 
 ### Phase 15: Workspace Coordination Service API
 
