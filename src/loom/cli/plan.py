@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.stores.artifact_store import ArtifactStore
     from loom.pipeline.stores import AuthorityConfig
-    from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
+    from loom.pipeline.stores.run_store import LegacyRunStore
     from loom.pipeline.validation import PipelineValidationResult
 
 
@@ -326,16 +326,16 @@ def _stores_for_plan(
     run_uri: str | None,
     *,
     resume_enabled: bool,
-) -> tuple["RunStore", "ArtifactStore", str]:
+) -> tuple["LegacyRunStore", "ArtifactStore", str]:
     if run_uri is None:
         return (
-            cast("RunStore", _UnavailableRunStore()),
+            cast("LegacyRunStore", _UnavailableRunStore()),
             cast("ArtifactStore", _UnavailableArtifactStore()),
             _HYPOTHETICAL_PLAN_RUN_URI,
         )
     if not resume_enabled:
         return (
-            cast("RunStore", _UnavailableRunStore()),
+            cast("LegacyRunStore", _UnavailableRunStore()),
             cast("ArtifactStore", _UnavailableArtifactStore()),
             run_uri,
         )
@@ -345,7 +345,7 @@ def _stores_for_plan(
     if store is None:
         raise AssertionError("resolved plan run URI requires a run store")
     return (
-        cast("RunStore", store),
+        cast("LegacyRunStore", store),
         LocalArtifactStore(store.local_artifact_root(run_uri)),
         run_uri,
     )
@@ -355,7 +355,7 @@ def _plan_pipeline(
     spec: "PipelineSpec",
     *,
     run_uri: str,
-    run_store: "RunStore",
+    run_store: "LegacyRunStore",
     artifact_store: "ArtifactStore",
     selectors: "PlanSelectors",
     resume_enabled: bool,

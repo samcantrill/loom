@@ -47,7 +47,7 @@ from loom.pipeline.stores import (
     LocalArtifactStore,
     LocalRunStore,
     LocalRunStorePaths,
-    LegacyRunStore as RunStore,
+    LegacyRunStore,
     RequiredAuthorityCapability,
     StoreDiagnostic,
     admit_authority_capabilities,
@@ -103,7 +103,7 @@ from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_attempts import prepare_stage_attempt
 
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
-RunnerRunStore = RunStore | OfflineEvidenceRunStore
+RunnerRunStore = LegacyRunStore | OfflineEvidenceRunStore
 _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS = 60.0
 _REQUIRED_PARALLEL_CAPABILITIES = (
     BackendCapability.ATOMIC_TRANSITIONS,
@@ -173,8 +173,10 @@ class PipelineRunner:
         clock: Callable[[], str] = utc_timestamp,
     ) -> None:
         offline_evidence_store = is_offline_evidence_run_store(run_store)
-        if not offline_evidence_store and not isinstance(run_store, RunStore):
-            raise PipelineExecutionError("run_store must satisfy RunStore")
+        if not offline_evidence_store and not isinstance(
+            run_store, LegacyRunStore
+        ):
+            raise PipelineExecutionError("run_store must satisfy LegacyRunStore")
         if isinstance(run_store, LocalRunStore):
             raise PipelineExecutionError(
                 "PipelineRunner requires an authority-backed runtime store; "
@@ -188,7 +190,7 @@ class PipelineRunner:
             executor = LocalExecutor()
         if not isinstance(executor, Executor):
             raise PipelineExecutionError("executor must satisfy Executor")
-        self.run_store = cast(RunStore, run_store)
+        self.run_store = cast(LegacyRunStore, run_store)
         self.executor = executor
         self.artifact_store_factory = artifact_store_factory or (
             lambda root: LocalArtifactStore(root)

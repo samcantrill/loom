@@ -12,7 +12,7 @@ from loom.pipeline.errors import PipelineValidationError
 from loom.pipeline.specs import OutputSpec
 from loom.pipeline.stores._paths import validate_output_name
 from loom.pipeline.stores.artifact_store import ArtifactStore
-from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore
 from loom.serialization import PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 
@@ -26,13 +26,13 @@ class StageContext:
     inputs: Mapping[str, ArtifactRef] = field(default_factory=dict)
     provenance: Mapping[str, PlainData] = field(default_factory=dict)
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
-    run_store: InitVar[RunStore | None] = None
+    run_store: InitVar[LegacyRunStore | None] = None
     artifact_store: InitVar[ArtifactStore | None] = None
     output_specs: InitVar[Mapping[str, OutputSpec] | None] = None
     local_output_dir: InitVar[str | Path | None] = None
     local_workspace_dir: InitVar[str | Path | None] = None
 
-    _run_store: RunStore | None = field(default=None, init=False, repr=False)
+    _run_store: LegacyRunStore | None = field(default=None, init=False, repr=False)
     _artifact_store: ArtifactStore | None = field(default=None, init=False, repr=False)
     _output_specs: dict[str, OutputSpec] = field(
         default_factory=dict,
@@ -44,7 +44,7 @@ class StageContext:
 
     def __post_init__(
         self,
-        run_store: RunStore | None,
+        run_store: LegacyRunStore | None,
         artifact_store: ArtifactStore | None,
         output_specs: Mapping[str, OutputSpec] | None,
         local_output_dir: str | Path | None,
@@ -90,9 +90,9 @@ class StageContext:
             normalized_inputs[name] = ref
         object.__setattr__(self, "inputs", normalized_inputs)
 
-        if run_store is not None and not isinstance(run_store, RunStore):
+        if run_store is not None and not isinstance(run_store, LegacyRunStore):
             raise PipelineValidationError(
-                "run_store must satisfy RunStore when supplied"
+                "run_store must satisfy LegacyRunStore when supplied"
             )
         if artifact_store is not None and not isinstance(artifact_store, ArtifactStore):
             raise PipelineValidationError(

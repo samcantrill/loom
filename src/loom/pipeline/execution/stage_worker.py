@@ -24,7 +24,7 @@ from loom.pipeline.stage_factory import construct_stage
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import (
     AuthorityStoreError,
-    LegacyRunStore as RunStore,
+    LegacyRunStore,
     LocalArtifactStore,
     LocalRunStorePaths,
 )
@@ -78,7 +78,7 @@ class StageWorkerRunRequest:
 
 def run_stage_worker(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     request: StageWorkerRunRequest,
     executor: Executor | None = None,
     artifact_store_factory: ArtifactStoreFactory | None = None,
@@ -86,8 +86,8 @@ def run_stage_worker(
 ) -> StageWorkerResult:
     """Run one prepared stage attempt and persist its worker result handoff."""
 
-    if not isinstance(run_store, RunStore):
-        raise StageWorkerStateError("run_stage_worker requires RunStore")
+    if not isinstance(run_store, LegacyRunStore):
+        raise StageWorkerStateError("run_stage_worker requires LegacyRunStore")
     if not isinstance(run_store, LocalRunStorePaths):
         raise StageWorkerStateError(
             "run_stage_worker requires local run-store path helpers"
@@ -172,7 +172,7 @@ def run_stage_worker(
 
 def infer_stage_worker_attempt(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     run_uri: str,
     stage_name: str,
 ) -> int:
@@ -212,7 +212,7 @@ def infer_stage_worker_attempt(
 
 def reconstruct_stage_execution_request(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     worker_request: StageWorkerRequest,
     stage_plan: StagePlan,
     stage_index: int,
@@ -289,7 +289,7 @@ def reconstruct_stage_execution_request(
 
 def _read_prepared_request(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     run_uri: str,
     stage_name: str,
     attempt: int,
@@ -313,7 +313,7 @@ def _read_prepared_request(
 
 def _validate_current_attempt_state(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     run_uri: str,
     stage_name: str,
     attempt: int,
@@ -344,7 +344,7 @@ def _validate_current_attempt_state(
 
 def _validate_worker_authority_if_supported(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     run_uri: str,
     stage_name: str,
     attempt: int,
@@ -386,7 +386,7 @@ def _authority_attempt_metadata(metadata: Mapping[str, PlainData]) -> dict[str, 
 
 def _read_stage_plan(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     run_uri: str,
     stage_name: str,
 ) -> StagePlan:
@@ -401,7 +401,7 @@ def _read_stage_plan(
 
 def _stage_index(
     *,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     run_uri: str,
     stage_name: str,
 ) -> int:
@@ -414,7 +414,9 @@ def _stage_index(
         ) from exc
 
 
-def _read_execution_plan(*, run_store: RunStore, run_uri: str) -> ExecutionPlan:
+def _read_execution_plan(
+    *, run_store: LegacyRunStore, run_uri: str
+) -> ExecutionPlan:
     raw_plan = run_store.read_plan(run_uri)
     if raw_plan is None:
         raise StageWorkerStateError(
@@ -458,7 +460,7 @@ def _stage_spec_from_request(request: StageWorkerRequest) -> StageSpec:
 
 
 def _resolved_config_context(
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     request: StageWorkerRequest,
     stage: StageSpec,
     *,

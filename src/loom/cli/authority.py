@@ -208,11 +208,30 @@ def handle_import_offline(namespace: argparse.Namespace) -> int:
 
     from pathlib import Path
 
+    from loom.pipeline.offline_evidence import OfflineEvidenceError
     from loom.pipeline.offline_evidence import read_offline_evidence_manifest
     from loom.pipeline.stores import create_authority_client
 
     authority_config = authority_config_from_namespace(namespace)
-    manifest = read_offline_evidence_manifest(Path(namespace.manifest))
+    try:
+        manifest = read_offline_evidence_manifest(Path(namespace.manifest))
+    except OfflineEvidenceError as exc:
+        cause = exc.__cause__
+        raise CliError(
+            "offline evidence manifest is invalid"
+            if not isinstance(cause, OSError)
+            else "offline evidence manifest is unreadable",
+            code=(
+                "cli.authority.offline_import_manifest_unreadable"
+                if isinstance(cause, OSError)
+                else "cli.authority.offline_import_manifest_invalid"
+            ),
+            context={
+                "manifest": str(namespace.manifest),
+                "error": str(exc),
+            },
+            exit_code=ExitCode.CONFIG,
+        ) from exc
     client = create_authority_client(authority_config)
     response = client.import_offline_evidence(
         manifest.to_dict(),

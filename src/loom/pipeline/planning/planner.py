@@ -10,7 +10,7 @@ from loom.pipeline.graph.bindings import ResolvedInputBinding, resolve_input_bin
 from loom.pipeline.specs import OutputSpec, PipelineSpec, StageSpec
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.errors import StoreError
-from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore
 from loom.serialization import PlainData
 
 from .actions import decide_stage_action
@@ -42,7 +42,7 @@ def plan_pipeline(
     spec: PipelineSpec,
     *,
     run_uri: str,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     artifact_store: ArtifactStore,
     selectors: PlanSelectors | None = None,
     resume: ResumeOptions | None = None,
@@ -102,7 +102,7 @@ def _plan_stage(
     spec: PipelineSpec,
     stage: StageSpec,
     run_uri: str,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     artifact_store: ArtifactStore,
     selection: Selection,
     resume: ResumeOptions,
@@ -270,7 +270,9 @@ def _output_spec_to_dict(output: OutputSpec) -> dict[str, PlainData]:
     }
 
 
-def _persist_plan(run_store: RunStore, run_uri: str, plan: ExecutionPlan) -> None:
+def _persist_plan(
+    run_store: LegacyRunStore, run_uri: str, plan: ExecutionPlan
+) -> None:
     try:
         run_store.write_plan(run_uri, plan.to_dict())
         persisted = run_store.read_plan(run_uri)

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from loom.pipeline.executors.slurm.cancellation import SlurmCancellationResult
     from loom.pipeline.executors.slurm.commands import SlurmCommandRunner
     from loom.pipeline.stores import AuthorityConfig
-    from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
+    from loom.pipeline.stores.run_store import LegacyRunStore
 
 
 CANCEL_JOBS_RESULT_SCHEMA_VERSION = "loom.cli.cancel.jobs.v1"
@@ -124,7 +124,7 @@ def _build_slurm_cancel_command_runner() -> "SlurmCommandRunner":
 def _create_cancel_run_store(
     *,
     authority_config: "AuthorityConfig | None",
-) -> "RunStore":
+) -> "LegacyRunStore":
     from loom.pipeline.execution import create_authority_backed_serial_run_store
 
     return create_authority_backed_serial_run_store(

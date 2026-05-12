@@ -19,7 +19,7 @@ from loom.pipeline.stores.errors import (
     StoreError,
 )
 from loom.pipeline.stores.indexes import format_artifact_key
-from loom.pipeline.stores.run_store import LegacyRunStore as RunStore
+from loom.pipeline.stores.run_store import LegacyRunStore
 from loom.serialization import PlainData
 
 from .errors import ResumeStateError
@@ -46,7 +46,7 @@ def check_stage_resume(
     stage: StageSpec,
     *,
     run_uri: str,
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     artifact_store: ArtifactStore,
     current_fingerprint: StageFingerprintRecord | None,
     resume: ResumeOptions,
@@ -416,7 +416,7 @@ def _output_spec_reason(
 
 
 def _validate_artifact_index(
-    run_store: RunStore,
+    run_store: LegacyRunStore,
     run_uri: str,
     stage_name: str,
     outputs: dict[str, ArtifactRef],
