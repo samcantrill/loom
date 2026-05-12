@@ -10,10 +10,11 @@
 - Stage gates:
   - Roadmap framing:
   - Intent discovery:
-  - Capability triage and functional requirements:
+  - Capability triage and candidate functional requirements:
+  - Functionality agreement review:
   - Functionality and behavior confirmation:
   - Context compaction/reset checkpoint:
-  - Design decision review:
+  - Design agreement review:
   - Design safety review:
   - Examples and validation strategy:
   - Phase shaping:
@@ -125,7 +126,11 @@ Intent discovery locked decisions:
 
 - TBD
 
-Capability triage and functional-requirement readback:
+Capability triage and candidate-functional-requirement readback:
+
+- TBD
+
+Functionality-agreement readback:
 
 - TBD
 
@@ -133,7 +138,7 @@ Functionality and behavior confirmation readback:
 
 - TBD
 
-Design refinement follow-up:
+Design-agreement follow-up:
 
 - TBD
 
@@ -143,10 +148,11 @@ Design refinement follow-up:
 | --- | --- | --- | --- | --- |
 | Roadmap framing |  |  |  |  |
 | Intent discovery |  |  |  |  |
-| Capability triage and functional requirements |  |  |  |  |
+| Capability triage and candidate functional requirements |  |  |  |  |
+| Functionality agreement review |  |  |  |  |
 | Functionality and behavior confirmation |  |  |  |  |
 | Context compaction/reset checkpoint |  |  |  |  |
-| Design decision review |  |  |  |  |
+| Design agreement review |  |  |  |  |
 | Design safety review |  |  |  |  |
 | Examples and validation strategy |  |  |  |  |
 | Phase shaping |  |  |  |  |
@@ -159,11 +165,17 @@ Design refinement follow-up:
 | --- | --- | --- | --- |
 |  | include / maybe / defer / out of scope |  |  |
 
+## Functionality Agreement Queue
+
+| ID | Requirement or decision | Depends on | Resolution order | Recommended answer | Why it matters | Why user input is needed | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FRQ-1 |  | none / FRQ- | 1 |  |  |  | draft / reviewing / confirmed / deferred / blocked |
+
 ## Functional Requirements
 
-| ID | Requirement | What | Why | Scope | User-visible behavior | System behavior | Capability enabled | Validation idea | Decision/status |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| FR-1 |  |  |  |  |  |  |  |  | recommended default / needs discussion / blocked / confirmed |
+| ID | Requirement | Depends on | What | Why | Scope | User-visible behavior | System behavior | Capability enabled | Validation idea | Decision/status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FR-1 |  | none / FR- |  |  |  |  |  |  |  | recommended default / needs discussion / blocked / confirmed |
 
 ## Behavior Baseline
 
@@ -228,23 +240,23 @@ Compatibility constraints:
 
 - TBD
 
-## Design Decision Review Queue
+## Design Agreement Queue
 
-| ID | Decision | Classification | Why it matters | User feedback needed | Status |
-| --- | --- | --- | --- | --- | --- |
-| DD-1 |  | auto-approved candidate / recorded recommendation / needs discussion / blocked |  |  | draft / reviewing / confirmed / deferred / blocked |
+| ID | Decision | Depends on | Resolution order | Classification | Recommended answer | Why it matters | Why user input is needed | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DAQ-1 |  | none / FR- / DAQ- | 1 | auto-approved candidate / recorded recommendation / needs discussion / blocked |  |  |  | draft / reviewing / confirmed / deferred / blocked |
 
 ## Design Decisions
 
 | ID | Decision | Selected approach | User feedback | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Validation/documentation obligation | Debt and revisit trigger | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| DD-1 |  |  |  |  |  |  |  |  |  | pending |
+| DAQ-1 |  |  |  |  |  |  |  |  |  | pending |
 
-## Design Decision Triage
+## Design Agreement Triage
 
 | Decision ID | Final classification | Reviewer challenge considered | Traceability | Manager action | Status |
 | --- | --- | --- | --- | --- | --- |
-| DD-1 | auto-approved / recorded recommendation / needs discussion / blocked |  | FR- | summarize / discuss / block | pending |
+| DAQ-1 | auto-approved / recorded recommendation / needs discussion / blocked |  | FR- | summarize / discuss / block | pending |
 
 ## Design Safety Review
 
@@ -379,7 +391,7 @@ Reviewability:
 | Design-safety review completed |  | pass / block |  |
 | Example-to-validation traceability |  | pass / block |  |
 | Phase-shaping readiness |  | pass / block |  |
-| Unresolved blocked or needs-discussion decisions |  | pass / block |  |
+| Unresolved blocked or needs-discussion functionality or design decisions |  | pass / block |  |
 
 Readiness result:
 

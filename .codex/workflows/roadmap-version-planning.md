@@ -9,6 +9,10 @@ confirmed notes.
 Canonical prompts:
 
 - `.codex/prompts/roadmap-version-planning-notes-facilitate.md`
+- `.codex/prompts/roadmap-version-planning-notes-functionality-agreement.md`,
+  after capability triage and before behavior confirmation
+- `.codex/prompts/roadmap-version-planning-notes-design-agreement.md`,
+  after the context checkpoint and before design-safety review
 - `.codex/prompts/roadmap-version-design-safety-review.md`, before
   implementation-plan drafting
 - `.codex/prompts/implementation-plan-draft.md`, after final planning
@@ -37,17 +41,18 @@ Expected flow:
 1. Roadmap framing, starting with a comprehensive version briefing and user
    clarification window.
 2. Intent discovery.
-3. Capability triage and functional requirements.
-4. Functionality and behavior baseline confirmation.
-5. Explicit workflow stage readback and context compaction/reset checkpoint.
-6. Proposed implementation shape and design decision review.
-7. Design-safety review with `loom_design_safety_reviewer`.
-8. Examples and validation strategy.
-9. Phase shaping.
-10. Implementation-readiness checklist, open-question closure, and handoff
+3. Capability triage and candidate functional requirements.
+4. Functionality-agreement review.
+5. Functionality and behavior baseline confirmation.
+6. Explicit workflow stage readback and context compaction/reset checkpoint.
+7. Design-agreement review.
+8. Design-safety review with `loom_design_safety_reviewer`.
+9. Examples and validation strategy.
+10. Phase shaping.
+11. Implementation-readiness checklist, open-question closure, and handoff
     preparation.
-11. Final planning confirmation.
-12. Implementation-plan draft from the confirmed planning notes.
+12. Final planning confirmation.
+13. Implementation-plan draft from the confirmed planning notes.
 
 At workflow startup, read the roadmap, linked feature docs, adjacent plans, and
 current architecture notes before asking the user to confirm functionality or
@@ -56,7 +61,8 @@ version is, why it exists, what current or future work it impacts or links to,
 which public surfaces or durable artifacts it is likely to affect, why the
 planning structure appears appropriate, and which assumptions or risks are
 already visible. Then explicitly invite the user to ask clarifying questions and
-answer them before moving on to functionality and behavior confirmation.
+answer them before moving on to capability triage, functionality agreement, and
+behavior confirmation.
 
 Ask small batches of high-impact questions and update the planning notes after
 each confirmed stage. When asking about functionality, behavior, design
@@ -65,12 +71,22 @@ real choice: what the question is deciding, why it matters, expected impact,
 relevant considerations or tradeoffs, and a recommended default when the repo
 evidence supports one. After functionality and behavior are confirmed, record a
 complete checkpoint in the planning notes and compact or reset context before
-starting the design decision review. The resumed design pass should reload the
+starting the design-agreement review. The resumed design pass should reload the
 planning notes, draft the proposed implementation shape, identify the necessary
 design decisions, and classify them before asking the user anything. Do not ask
 the user whether more design decisions should be reviewed. The facilitator owns
 that triage and should not turn every behavior or implementation detail into a
 user question.
+
+During the functionality-agreement and design-agreement substages, draft the
+relevant queue first, resolve repo-answerable branches directly, then walk the
+remaining unresolved branches in dependency order one question at a time. Each
+question should state what is being locked, why it matters, the recommended
+answer, the main tradeoffs, and the exact feedback needed from the user.
+Continue until the queue has no unresolved high-impact `needs discussion` or
+`blocked` items before advancing. These substages enrich the same planning
+notes artifact; they do not create a separate workflow boundary or a separate
+handoff document.
 
 Maintain the planning notes in four parallel structures as the discussion
 progresses:
@@ -85,13 +101,13 @@ progresses:
   remaining blockers and carry-forward assumptions explicit before
   implementation-plan drafting.
 
-Do not leave the notes in a state where the design is "mostly known" but the
-remaining blockers are only implied by draft prose. If a question still affects
-public contracts, architecture boundaries, failure semantics, validation
-obligations, or phase boundaries, record it explicitly in the readiness or open
-questions sections with the required action. If repo evidence supports a clear
-recommendation, record that recommendation directly instead of leaving a vague
-pending marker.
+Do not leave the notes in a state where the requirements or design are "mostly
+known" but the remaining blockers are only implied by draft prose. If a
+question still affects scope, defaults, public contracts, architecture
+boundaries, failure semantics, validation obligations, or phase boundaries,
+record it explicitly in the readiness or open questions sections with the
+required action. If repo evidence supports a clear recommendation, record that
+recommendation directly instead of leaving a vague pending marker.
 
 Classify each candidate design decision before discussing it:
 

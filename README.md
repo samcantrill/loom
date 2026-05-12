@@ -3,6 +3,9 @@
 `loom` is a lightweight, generic runtime for composing, configuring, running, and
 resuming small Python pipelines.
 
+For repository-local terminology and preferred naming, see
+[docs/GLOSSARY.md](docs/GLOSSARY.md).
+
 The current v2 implementation is deliberately local-only:
 
 - functional `loom validate`, `loom plan`, and `loom run` commands

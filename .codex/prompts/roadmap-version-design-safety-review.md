@@ -22,9 +22,10 @@ Task:
 
 1. Treat the approved functionality and behavior baseline as binding unless the
    notes explicitly mark it reopened.
-2. Review functional requirements, proposed implementation shape, design
-   decisions, examples, validation strategy, phase shaping, assumptions, and
-   deferrals as one coherent plan.
+2. Review the functionality-agreement queue, functional requirements, proposed
+   implementation shape, design-agreement queue, design decisions, examples,
+   validation strategy, phase shaping, assumptions, and deferrals as one
+   coherent plan.
 3. Pressure-test each material decision for:
    - domain neutrality and source-tree boundaries
    - public Python API, CLI, config, persisted record, or file-layout lock-in
@@ -44,8 +45,9 @@ Task:
    invent product behavior, public contracts, architecture boundaries, failure
    semantics, validation obligations, or phase boundaries.
 7. Record findings in the planning notes, especially design-safety review,
-   design-decision triage, implementation readiness blockers, validation, and
-   phase-shaping sections.
+   functionality-agreement or design-agreement queues when they need to be
+   reopened, design-agreement triage, implementation readiness blockers,
+   validation, and phase-shaping sections.
 8. Do not implement code, create branches, create phase execution plans, or
    draft the implementation plan.
 

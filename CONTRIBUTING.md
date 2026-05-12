@@ -2,6 +2,9 @@
 
 This project is in repository setup before v0 implementation.
 
+Use [docs/GLOSSARY.md](docs/GLOSSARY.md) for repository vocabulary and
+preferred term choices when updating code, docs, tests, or examples.
+
 ## Development Setup
 
 ```sh

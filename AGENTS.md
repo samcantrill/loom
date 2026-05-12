@@ -7,6 +7,8 @@ running, and tracing reproducible research pipelines.
 
 - Keep `loom` domain-neutral.
 - Prefer the source-tree layout and boundaries described in `docs/structure.md`.
+- Use `docs/GLOSSARY.md` for repository vocabulary and preferred term choices
+  across code, docs, tests, and contributor guidance.
 - Do not introduce heavyweight runtime dependencies without an explicit design reason.
 - Treat authored configs as trusted project code.
 

@@ -19,7 +19,7 @@ PR body, review report, and merge record rather than in a separate artifact.
 
 | Workflow stage or handoff | Template | Typical destination |
 | --- | --- | --- |
-| Interactive roadmap-version planning, including functionality traceability, design-safety review evidence, validation strategy, phase shaping, and implementation readiness | `roadmap-version-planning-notes.md` | `docs/implementation-plans/roadmap-v<N>-planning-notes.md` |
+| Interactive roadmap-version planning, including functionality-agreement evidence, behavior confirmation, design-agreement evidence, design-safety review evidence, validation strategy, phase shaping, and implementation readiness | `roadmap-version-planning-notes.md` | `docs/implementation-plans/roadmap-v<N>-planning-notes.md` |
 | Implementation plan draft/refine | `implementation-plan.md` | `docs/implementation-plans/implementation-plan-vN.md` |
 | Manager to planner | `phase-assignment.md` | manager message or `docs/phases/<summary>-assignment.md` |
 | Plan reviewer to manager/refiner | `plan-review-report.md` | manager thread or `docs/phases/<summary>-plan-review.md` |

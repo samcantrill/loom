@@ -227,10 +227,11 @@ For roadmap-version work before an implementation plan exists:
    discussion, facilitate roadmap-version planning notes with
    `.codex/prompts/roadmap-version-planning-notes-facilitate.md` before
    drafting downstream artifacts. The planning notes must confirm
-   functionality and behavior, checkpoint and compact context when available,
-   then complete proposed implementation shape, design-decision triage,
-   design-safety review, examples, validation strategy, phase shaping, and
-   implementation readiness before the implementation-plan draft.
+   functionality-agreement and behavior, checkpoint and compact context when
+   available, then complete proposed implementation shape,
+   design-agreement triage, design-safety review, examples, validation
+   strategy, phase shaping, and implementation readiness before the
+   implementation-plan draft.
    Record clear repo-supported recommendations without user review, and review
    only high-impact decisions that lack a strong recommendation with the user.
    Run or assign `loom_design_safety_reviewer` with

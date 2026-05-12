@@ -26,6 +26,8 @@ Read before presenting the startup briefing or asking design questions:
 - `docs/structure.md`
 - Existing source and tests only as needed to understand current boundaries
 - `.codex/templates/roadmap-version-planning-notes.md`
+- `.codex/prompts/roadmap-version-planning-notes-functionality-agreement.md`
+- `.codex/prompts/roadmap-version-planning-notes-design-agreement.md`
 - `.codex/prompts/roadmap-version-design-safety-review.md`
 
 Task:
@@ -51,43 +53,49 @@ Task:
    rejected alternatives, assumptions, risks, and open questions.
 8. Stop at each stage gate until the user has confirmed the stage or provided
    enough detail to resolve the open questions.
-9. After functionality and behavior are confirmed, update the planning notes
-   with a complete checkpoint, then compact context before starting the design
-   decision review. If the client cannot compact context directly, reset or
-   pause with a concise resume instruction that points to the planning notes
-   path and this prompt.
-10. After compaction or reset, reload the planning notes, this prompt, and the
-   relevant source files before asking design-decision questions. Treat the
-   confirmed functionality and behavior as the stable baseline for the design
-   pass unless the user explicitly reopens it.
-11. At the start of the design decision review, draft the proposed
-   implementation shape and the design-decision review queue implied by the
+9. After capability triage, run or follow
+   `.codex/prompts/roadmap-version-planning-notes-functionality-agreement.md`
+   on the same planning-notes artifact so the included capabilities and
+   candidate requirements are resolved into a dependency-aware agreement queue
+   before behavior confirmation continues.
+10. After functionality and behavior are confirmed, update the planning notes
+    with a complete checkpoint, then compact context before starting the design
+    agreement review. If the client cannot compact context directly, reset or
+    pause with a concise resume instruction that points to the planning notes
+    path and this prompt.
+11. After compaction or reset, reload the planning notes, this prompt,
+    `.codex/prompts/roadmap-version-planning-notes-design-agreement.md`, and
+    the relevant source files before asking design-agreement questions. Treat
+    the confirmed functionality and behavior as the stable baseline for the
+    design pass unless the user explicitly reopens it.
+12. At the start of the design-agreement review, draft the proposed
+   implementation shape and the design-agreement queue implied by the
    confirmed functionality and behavior. Limit the queue to decisions that
    could materially affect maintainability, extensibility, compatibility,
    domain neutrality, public contracts, import boundaries, file layout,
    persistence, failure behavior, or future refactor cost.
-12. Classify each material design decision as `auto-approved candidate`,
+13. Classify each material design decision as `auto-approved candidate`,
    `recorded recommendation`, `needs discussion`, or `blocked`. Record clear
    repo-supported recommendations without asking the user; get user feedback
    only for high-impact decisions that do not have a strong recommendation
    before marking them confirmed.
-13. Run or assign one design-safety review using
+14. Run or assign one design-safety review using
    `.codex/prompts/roadmap-version-design-safety-review.md` and
    `loom_design_safety_reviewer` after the proposed implementation shape and
-   design-decision triage are recorded, and before phase shaping or
+   design-agreement triage are recorded, and before phase shaping or
    implementation-plan drafting. Resolve or record all blockers and required
    return-to-planning actions in the planning notes.
-14. If the user gives feedback about the planning workflow itself, evaluate
+15. If the user gives feedback about the planning workflow itself, evaluate
    whether the feedback describes a generally useful workflow refinement. If it
    does, update the reusable workflow, prompt, or template artifacts directly
    and keep product planning notes focused on product decisions. If it is
    specific to the current roadmap discussion, record it as a planning-process
    note or facilitation preference for the current notes only.
-15. When all stages are confirmed, mark the planning notes ready for
+16. When all stages are confirmed, mark the planning notes ready for
    implementation-plan drafting only if design-safety review, validation
    strategy, phase shaping, and implementation readiness have no unresolved
    blockers or `needs discussion` decisions.
-16. Ask for explicit confirmation before drafting the implementation plan. If
+17. Ask for explicit confirmation before drafting the implementation plan. If
    the user confirms, create or update
    `docs/implementation-plans/implementation-plan-<VERSION>.md` by following
    `.codex/prompts/implementation-plan-draft.md` and using the completed
@@ -117,16 +125,37 @@ Discussion stages:
    - Discuss workflows, success criteria, non-goals, constraints, and known
      operational realities.
    - Gate: goals, non-goals, done criteria, and constraints are confirmed.
-3. Capability triage and functional requirements
+3. Capability triage and candidate functional requirements
    - Propose useful capabilities grounded in the roadmap and feature docs.
    - Help the user sort them into include, defer, maybe, and out of scope.
-   - Convert included capabilities into a small set of functional requirements.
-     For each requirement, record what, why, scope, user-visible behavior,
-     system behavior, capability enabled, validation idea, and whether it is a
-     recommended default, needs discussion, blocked, or confirmed.
-   - Gate: candidate functionality and functional requirements are ready for
-     behavior confirmation.
-4. Functionality and behavior confirmation
+   - Convert included capabilities into a small set of candidate functional
+     requirements. For each candidate requirement, record what, why, scope,
+     user-visible behavior, system behavior, capability enabled, validation
+     idea, dependencies, and whether it is a recommended default, needs
+     discussion, blocked, or confirmed.
+   - Gate: included capabilities and candidate functional requirements are
+     ready for functionality-agreement review.
+4. Functionality-agreement review
+   - Run or follow
+     `.codex/prompts/roadmap-version-planning-notes-functionality-agreement.md`
+     on the same planning-notes artifact.
+   - Before asking the user to settle individual requirement choices, draft the
+     functionality-agreement queue for this roadmap version from the confirmed
+     intent, included capabilities, and candidate requirements.
+   - Resolve repo-answerable queue items directly and record the rationale.
+   - Present only unresolved high-impact requirement questions that materially
+     affect what Loom is being built to do, why it is valuable, scope
+     boundaries, requirement-level defaults, failure expectations, validation
+     obligations, or explicit deferrals.
+   - Ask one unresolved requirement question at a time in dependency order.
+     State what is being locked, why it matters, the recommended answer, the
+     main tradeoffs, and the exact feedback needed from the user.
+   - Do not mark a queue item resolved until the planning notes show shared
+     agreement on the requirement's what, why, scope, defaults, and
+     deferrals.
+   - Gate: the functionality-agreement queue is resolved and the user and
+     facilitator are aligned on what is being built and why.
+5. Functionality and behavior confirmation
    - Convert the capability and requirement set into a concrete behavior
      baseline: included functionality, user-visible behavior, default behavior,
      failure behavior, unsupported behavior, and explicit deferrals.
@@ -140,24 +169,27 @@ Discussion stages:
      roadmap versions.
    - Gate: selected functionality, functional requirements, behavior, defaults,
      non-goals, and explicit deferrals are confirmed.
-5. Context compaction/reset checkpoint
+6. Context compaction/reset checkpoint
    - Record a complete checkpoint in the planning notes: stage readback,
      selected functionality, confirmed behavior, defaults, deferrals, open
      questions, and next-stage resume instructions.
-   - Compact context before starting design decision review. If direct
+   - Compact context before starting design-agreement review. If direct
      compaction is unavailable, reset or stop and ask the user to resume with
      the planning notes path and this prompt.
    - After resuming, reread the checkpoint and do not reopen functionality or
      behavior unless the user explicitly asks.
    - Gate: design review starts from a fresh or compacted context and the
      planning notes are the source of truth.
-6. Design decision review
+7. Design-agreement review
+   - Run or follow
+     `.codex/prompts/roadmap-version-planning-notes-design-agreement.md` on
+     the same planning-notes artifact.
    - Map confirmed functionality and behavior to the current Loom architecture
      and draft the proposed implementation shape: likely modules, public
      classes/functions/protocols, internal helpers, data flow, dependency
      direction, extension points, and compatibility constraints.
    - Before asking the user to settle individual choices, draft the
-     design-decision review queue for this roadmap version from the confirmed
+     design-agreement queue for this roadmap version from the confirmed
      functionality and behavior. Include only decisions that could materially
      affect maintainability, extensibility, domain neutrality, public contracts,
      ownership boundaries, import boundaries, extension points, durable schema
@@ -200,9 +232,9 @@ Discussion stages:
      expected impact, implementation-relevant options, why there is no strong default,
      the tradeoffs and considerations, and the specific feedback needed from
      the user.
-   - Discuss `needs discussion` decisions in small batches, usually one
-     decision at a time when the tradeoffs are subtle. Do not ask the user to
-     audit the hidden or recorded-recommendation portions of the queue.
+   - Ask one unresolved design question at a time in dependency order. Do not
+     ask the user to audit the hidden or recorded-recommendation portions of
+     the queue.
    - Do not mark a `needs discussion` decision confirmed until user feedback has
      accepted the selected approach or provided enough direction to choose one.
    - For each confirmed decision, record the selected approach, user feedback,
@@ -212,12 +244,12 @@ Discussion stages:
    - Use `docs/implementation-plans/implementation-plan-v2.md` as an example
      of the expected plan-level design-decision depth.
    - Gate: the facilitator has completed the proposed implementation shape and
-     design-decision triage, every surfaced decision is reviewed with user
+     design-agreement triage, every surfaced decision is reviewed with user
      feedback, clear recommendations are recorded without user review, and core
      design decisions, rejected alternatives, maintainability and extensibility
      assessment, flexibility and expansion assessment, and debt revisit
      triggers are confirmed or ready for design-safety review.
-7. Design safety review
+8. Design safety review
    - Run or assign `loom_design_safety_reviewer` with
      `.codex/prompts/roadmap-version-design-safety-review.md`.
    - Review the returned blockers, overturned auto-approved candidates,
@@ -228,7 +260,7 @@ Discussion stages:
    - Gate: design-safety review is passed or all blockers are resolved,
      deferred with explicit rationale, or returned to an earlier planning
      stage.
-8. Examples and validation strategy
+9. Examples and validation strategy
    - Define examples or demonstrations that show the approved behavior in Loom
      context.
    - Define required validation coverage for behavior, edge cases, failure
@@ -237,7 +269,7 @@ Discussion stages:
    - Raise individual validation choices only when coverage scope, cost, public
      contract, or acceptance criteria remain ambiguous.
    - Gate: example set and validation strategy are approved.
-9. Phase shaping
+10. Phase shaping
    - Convert the design into reviewable implementation phases.
    - Discuss phase order, granularity, dependencies, and review boundaries with
      the user, then refine the phase sketch until each phase is coherent.
@@ -245,12 +277,12 @@ Discussion stages:
      test expectations, design impact, future compatibility, rejected
      alternatives, debt introduced, and reviewability.
    - Gate: phase breakdown is confirmed for implementation-plan drafting.
-10. Handoff
+11. Handoff
    - Record the final source notes for the implementation-plan draft.
    - Complete implementation readiness checks for roadmap-to-requirement,
      requirement-to-design, design-safety review, example-to-validation,
      phase-shaping readiness, and unresolved blocked or needs-discussion
-     decisions.
+     functionality-agreement or design-agreement decisions.
    - Identify unresolved assumptions, blockers, accepted risks, and
      plan-quality-gate risks.
    - Gate: planning notes are ready for the implementation-plan draft prompt,
@@ -259,7 +291,9 @@ Discussion stages:
 Question rules:
 
 - Before asking a question, first answer discoverable facts from the repo.
-- Ask questions in small batches of one to three high-impact choices.
+- Ask questions in small batches of one to three high-impact choices during
+  roadmap framing, intent discovery, capability triage, and behavior
+  confirmation.
 - Prefer concrete alternatives with a recommended default.
 - For functionality, behavior, and design-principle questions, lead with a short
   decision brief: what is being decided, why it matters, expected impact,
@@ -268,7 +302,13 @@ Question rules:
   concise direct questions.
 - Do not ask questions whose answer is already clear from the roadmap, feature
   docs, implementation plans, source, or tests.
-- During design decision review, ask the user only about high-impact
+- During functionality-agreement review, ask the user only about high-impact
+  requirement, scope, default, or deferral choices that do not have a clear
+  repo- or roadmap-supported recommendation.
+- During functionality-agreement review and design-agreement review, ask only
+  one unresolved queue item at a time in dependency order until the queue has
+  no unresolved high-impact `needs discussion` or `blocked` items.
+- During design-agreement review, ask the user only about high-impact
   maintainability/extensibility decisions that do not have a clear
   repo-supported recommendation.
 - If a question is open-ended by nature, ask it directly and explain which
@@ -276,9 +316,10 @@ Question rules:
 - At the end of each user exchange, give a short readback of locked decisions,
   defaults, open questions, and the next stage focus, then record that readback
   in the planning notes.
-- During design decision review and design-safety review, keep the decision
-  queue visible in the notes and update each decision's status as `draft`,
-  `reviewing`, `confirmed`, `deferred`, or `blocked`.
+- During functionality-agreement review, design-agreement review, and
+  design-safety review, keep the relevant queue visible in the notes and update
+  each item's status as `draft`, `reviewing`, `confirmed`, `deferred`, or
+  `blocked`.
 
 Workflow feedback rules:
 
@@ -307,7 +348,11 @@ Rules:
   design-safety review has passed or recorded accepted risks, implementation
   readiness has no unresolved blockers, and the user explicitly confirms they
   are happy for this workflow to enter the implementation-plan drafting prompt.
-- Do not begin the design decision review until functionality and behavior are
+- Do not exit the functionality-agreement review or design-agreement review
+  while the queue still contains unresolved high-impact `needs discussion` or
+  `blocked` items unless the planning notes explicitly record the blocker and
+  why the workflow cannot resolve it in scope.
+- Do not begin the design-agreement review until functionality and behavior are
   confirmed, a checkpoint is written, and context has been compacted, or reset
   only when compaction is unavailable.
 - Do not enter phase shaping until maintainability/extensibility-impacting
