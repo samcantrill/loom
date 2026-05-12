@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 14 PR open
+- Phase work status: Phase 14 merged; Phase 15 pending
 
 Related artifacts and references:
 
@@ -1837,7 +1837,7 @@ branch was checked out there.
 
 ### Phase 14: Diagnostics, Preflight, And Read-Only Source Labeling
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-diagnostics-labeling`
 - PR: https://github.com/samcantrill/loom/pull/132
 
@@ -1924,18 +1924,28 @@ whether read-only paths stay mutation-free.
 
 **Completion Summary**
 
-PR opened on 2026-05-12:
+Phase 14 merged on 2026-05-12:
 
 - Branch: `codex/authority-diagnostics-labeling`
 - PR: https://github.com/samcantrill/loom/pull/132
 - Target branch: `develop`
+- Merge commit: `b19dc70d68381135ff70ab7acac0640866623716`
 - Implementation summary: added shared source-label helpers and additive labels
   across backend diagnostics, status/stage/submitted-operation summaries,
   artifact/log summaries, preflight details, run catalog summaries, catalog
-  warnings, and CLI text output.
-- Validation before PR: `make validate-pr` passed; `make test-summary` passed
-  with overall 1757 passed, 12 skipped, and 1350 deselected.
-- Follow-up notes: automated review and GitHub CI are pending before merge.
+  warnings, and CLI text output; moved shared source-label vocabulary to
+  `loom.state_sources` after automated review found that `loom.runs` must not
+  import `loom.diagnostics`.
+- Validation before merge: `make validate-pr` passed; `make test-summary`
+  passed with overall 1758 passed, 12 skipped, and 1351 deselected.
+- GitHub CI: `checks` succeeded before merge on 2026-05-12.
+- Automated review: manager review found one import-boundary blocker, fixed it
+  with a neutral shared module and package-boundary regression test, then found
+  no remaining blocking scope, correctness, or test-evidence issues.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-diagnostics-labeling` at merge time.
+- Follow-up notes: Phase 17/18 should reuse the shared source vocabulary when
+  attaching real offline evidence and import state.
 
 ### Phase 15: Workspace Coordination Service API
 
