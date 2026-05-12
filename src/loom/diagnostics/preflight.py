@@ -15,6 +15,7 @@ from loom.state_sources import (
     authoritative_service_source,
     deferred_finalization_source,
     local_materialization_source,
+    offline_evidence_source,
     redacted_authority_summary,
     unavailable_authority_source,
 )
@@ -54,6 +55,9 @@ class _Context:
 
     def authority_config(self) -> object | None:
         return self.request.authority_config
+
+    def authority_mode(self) -> object | None:
+        return self.request.authority_mode
 
     def config(self) -> object:
         if self._config is not None:
@@ -704,14 +708,23 @@ def _authority_policy_details(context: _Context) -> dict[str, PlainData]:
     authority = redacted_authority_summary(config)
     backend_kind = _enum_value(getattr(config, "backend_kind", None))
     deployment_profile = _enum_value(getattr(config, "deployment_profile", None))
+    authority_mode = _enum_value(context.authority_mode())
     policy: dict[str, PlainData] = {
         "backend_kind": backend_kind,
         "deployment_profile": deployment_profile,
     }
+    if authority_mode is not None:
+        policy["authority_mode"] = authority_mode
     details: dict[str, PlainData] = {"authority_policy": policy}
     if authority is not None:
         details["authority"] = authority
-    if (
+    if authority_mode == "offline_first":
+        policy["source"] = offline_evidence_source()
+        details["guidance"] = (
+            "offline-first mode records local evidence and does not create "
+            "authority truth until import"
+        )
+    elif (
         backend_kind == "deferred_finalization"
         or deployment_profile == "deferred_finalization"
     ):

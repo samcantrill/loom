@@ -43,6 +43,11 @@ if TYPE_CHECKING:
     )
     from loom.pipeline.execution.models import redact_executor_metadata
     from loom.pipeline.execution.outputs import validate_stage_outputs
+    from loom.pipeline.execution.offline_adapter import (
+        OfflineEvidenceRunStore,
+        create_offline_evidence_run_store,
+        is_offline_evidence_run_store,
+    )
     from loom.pipeline.execution.runner import PipelineRunner, run_pipeline
     from loom.pipeline.execution.resource_admission import (
         ResourceAdmissionDecision,
@@ -76,6 +81,7 @@ def __getattr__(name: str) -> object:
         "InsufficientPreparedStateError",
         "LifecycleError",
         "OutputValidationError",
+        "OfflineEvidenceRunStore",
         "ParallelExecutionUnsupportedError",
         "PipelineExecutionError",
         "PipelineRunner",
@@ -107,8 +113,10 @@ def __getattr__(name: str) -> object:
         "UnsupportedContinuationExecutorError",
         "continue_prepared_run",
         "create_authority_backed_serial_run_store",
+        "create_offline_evidence_run_store",
         "acquire_resource_admission",
         "infer_stage_worker_attempt",
+        "is_offline_evidence_run_store",
         "prepare_stage_attempt",
         "reconstruct_stage_execution_request",
         "redact_executor_metadata",
@@ -153,6 +161,11 @@ def __getattr__(name: str) -> object:
             redact_executor_metadata,
         )
         from loom.pipeline.execution.outputs import validate_stage_outputs
+        from loom.pipeline.execution.offline_adapter import (
+            OfflineEvidenceRunStore,
+            create_offline_evidence_run_store,
+            is_offline_evidence_run_store,
+        )
         from loom.pipeline.execution.prepared_run import (
             PREPARED_RUN_CONTINUATION_WHOLE_RUN,
             PREPARED_RUN_SCHEMA_VERSION,
@@ -190,6 +203,7 @@ def __getattr__(name: str) -> object:
             "InsufficientPreparedStateError": InsufficientPreparedStateError,
             "LifecycleError": LifecycleError,
             "OutputValidationError": OutputValidationError,
+            "OfflineEvidenceRunStore": OfflineEvidenceRunStore,
             "ParallelExecutionUnsupportedError": ParallelExecutionUnsupportedError,
             "PipelineExecutionError": PipelineExecutionError,
             "PipelineRunner": PipelineRunner,
@@ -223,8 +237,10 @@ def __getattr__(name: str) -> object:
             "create_authority_backed_serial_run_store": (
                 create_authority_backed_serial_run_store
             ),
+            "create_offline_evidence_run_store": create_offline_evidence_run_store,
             "acquire_resource_admission": acquire_resource_admission,
             "infer_stage_worker_attempt": infer_stage_worker_attempt,
+            "is_offline_evidence_run_store": is_offline_evidence_run_store,
             "prepare_stage_attempt": prepare_stage_attempt,
             "reconstruct_stage_execution_request": reconstruct_stage_execution_request,
             "redact_executor_metadata": redact_executor_metadata,
@@ -246,6 +262,7 @@ __all__ = [
     "InsufficientPreparedStateError",
     "LifecycleError",
     "OutputValidationError",
+    "OfflineEvidenceRunStore",
     "ParallelExecutionUnsupportedError",
     "PipelineExecutionError",
     "PipelineRunner",
@@ -278,7 +295,9 @@ __all__ = [
     "acquire_resource_admission",
     "continue_prepared_run",
     "create_authority_backed_serial_run_store",
+    "create_offline_evidence_run_store",
     "infer_stage_worker_attempt",
+    "is_offline_evidence_run_store",
     "prepare_stage_attempt",
     "reconstruct_stage_execution_request",
     "redact_executor_metadata",

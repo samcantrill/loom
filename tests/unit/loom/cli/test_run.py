@@ -27,18 +27,18 @@ from loom.diagnostics import (
 from loom.pipeline.planning import PlanAction, PlanReason, PlanReasonCode
 from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import (
+    AuthorityFactoryError,
+    AuthorityResolutionFailureKind,
+    AuthorityResolutionMode,
+    LocalRunStore,
+)
 
 
 pytestmark = pytest.mark.unit
 
 
 def test_run_default_store_is_authority_backed_serial_store() -> None:
-    from loom.pipeline.stores import (
-        AuthorityFactoryError,
-        AuthorityResolutionFailureKind,
-    )
-
     with pytest.raises(AuthorityFactoryError) as exc_info:
         run_command._create_default_run_store()
 
@@ -49,6 +49,15 @@ def test_run_default_store_is_authority_backed_serial_store() -> None:
         error.resolution.failure_kind
         is AuthorityResolutionFailureKind.MISSING_AUTHORITY
     )
+
+
+def test_run_default_store_can_be_explicit_offline_evidence_store() -> None:
+    store = run_command._create_default_run_store(
+        authority_mode=AuthorityResolutionMode.OFFLINE_FIRST
+    )
+
+    assert getattr(store, "offline_evidence_enabled") is True
+    assert store.state_source["authoritative"] is False
 
 
 @dataclass(frozen=True, slots=True)

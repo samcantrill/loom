@@ -166,6 +166,10 @@ def format_run_text(result: RunCliResult) -> str:
             value = result.failure_summary.get(key)
             if value is not None:
                 lines.append(f"  {label}: {value}")
+    if result.offline_evidence is not None:
+        manifest_path = result.offline_evidence.get("manifest_path")
+        manifest_status = result.offline_evidence.get("manifest_status")
+        lines.append(f"offline_evidence: {manifest_status} {manifest_path}")
     return "\n".join(lines)
 
 
