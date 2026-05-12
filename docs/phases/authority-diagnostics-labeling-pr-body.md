@@ -20,7 +20,7 @@ Suite evidence from `make test-summary`:
 | contract | 146 passed, 2 skipped |
 | integration | 127 passed, 8 skipped, 10 deselected |
 | e2e | 39 passed, 2 deselected |
-| config-extra | 422 passed, 1338 deselected |
+| config-extra | 422 passed, 1339 deselected |
 
 ## Assumptions And Risks
 
