@@ -227,8 +227,10 @@ def _patch_common(
         runtime_options: object,
         open_existing: bool,
         authority_config: object | None = None,
+        authority_mode: object | None = None,
     ) -> None:
         calls["preflight_authority_config"] = authority_config
+        calls["preflight_authority_mode"] = authority_mode
         calls["preflight_config_path"] = getattr(config_options, "config_path")
         calls["preflight_resume"] = open_existing
         calls["preflight_run_uri"] = getattr(runtime_options, "run_uri")
@@ -240,7 +242,7 @@ def _patch_common(
     monkeypatch.setattr(
         run_command,
         "_create_default_run_store",
-        lambda *, authority_config=None: fake_store,
+        lambda *, authority_config=None, authority_mode=None: fake_store,
     )
     monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
     monkeypatch.setattr(run_command, "_run_preflight_for_run", run_preflight)
