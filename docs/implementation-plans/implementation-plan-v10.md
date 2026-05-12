@@ -2458,6 +2458,34 @@ Phase 18 merged on 2026-05-12:
   successor branch depended on `codex/authority-offline-import` at merge time.
 - Remaining blockers: none.
 
+### v10 Coverage Audit: Resource Admission + Offline Import
+
+- Findings from implemented v10 features:
+  - Resource admission logic is validated for in-memory workspace coordination and
+    user-visible run failure details, but service-backed admission behavior was
+    only lightly covered by integration mutation paths.
+  - Offline import API coverage validated successful import and snapshot exposure
+    but did not check replay-level audit persistence in detail.
+  - HTTP-authority local execution coverage did not explicitly validate stage
+    execution failure details when admission is blocked.
+- Plan:
+  - Add direct `ServiceWorkspaceCoordinationStore` unit coverage for fail-fast
+    rejection, bounded waiting/blocking, and partial-lease rollback.
+  - Extend offline import API integration assertions with replay-event payload
+    equivalence checks against manifest events.
+  - Add HTTP-authority local execution integration coverage for blocked admission
+    that asserts `resource_admission` failure type/details and no `stage.started`
+    events.
+- Implementation status: completed.
+- Validation notes:
+  - Unit tests covering the new resource-admission and replay assertion changes
+    passed (`16 passed`).
+  - In this checkout, FastAPI/TestClient-backed integration tests in this path
+    hang before request dispatch, and this appears outside the assertion scope
+    because trivial FastAPI app smoke tests also hang.
+  - The gap is documented as an environment/runtime blocker; coverage assertions
+    are implemented and reviewed in code.
+
 ## Cross-Phase Review Notes
 
 - Phase plans must record branch, stack predecessor, base branch, PR target

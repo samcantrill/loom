@@ -6,36 +6,52 @@
 - Source roadmap: `docs/implementation-plans/implementation-roadmap.md`
 - Roadmap reframing note: `implementation-roadmap.md` now inserts queued run
   dispatch as v11 and pushes the previous v11+ entries back by one version.
-- Previous version status: v10 is in progress and remains the prerequisite
-  because it provides durable authority, service-backed coordination, and
-  generic resource leases.
-- Planning notes status: draft
-- Current discussion stage: roadmap framing, functionality baseline, core
-  design choices, and local design-safety review complete; implementation
-  readiness is now blocked only on the final v10 surface evidence pass
+- Previous version status: v10 is implemented with all phases merged. Main v11
+  queue work still depends on a `v10-post` prerequisite hardening tranche that
+  tightens the authority, supervisor, SLURM live-path, diagnostics, and offline
+  import contracts, but `v10-post` and main v11 should now progress as one
+  continuous stacked workflow rather than separate stop-and-wait efforts.
+- Planning notes status: ready for a combined `v10-post -> v11`
+  implementation workflow
+- Current discussion stage: queue scope and design are confirmed, and these
+  notes now record the required `v10-post` prerequisite tranche as the leading
+  dependency slice inside the same workflow that continues through the main v11
+  queue phases.
 - Stage gates:
   - Roadmap framing: confirmed in `implementation-roadmap.md`; queue is v11
     after current v10 and the previous v11+ entries move later.
-  - Intent discovery: whole-run queueing for many independent Loom jobs, with
-    restricted-HPC compatibility and no mandatory external orchestrator.
-  - Capability triage and functional requirements: locked include/defer
-    decisions captured below, with SSH deferred from the first version.
+  - Intent discovery: confirmed for whole-run queueing of many independent Loom
+    jobs, with restricted-HPC compatibility and no mandatory external
+    orchestrator.
+  - Capability triage and candidate functional requirements: locked include and
+    defer decisions captured below, with SSH deferred from the first version.
+  - Functionality agreement review: resolved; no high-impact requirement-level
+    `needs discussion` or `blocked` item remains.
   - Functionality and behavior confirmation: confirmed in discussion; baseline
     updated below.
-  - Context compaction/reset checkpoint: ready to record after this refinement
-    pass; resume should start from design-safety review and implementation
-    readiness.
-  - Design decision review: core queue/service/capacity/status/CLI decisions
-    locked; queue config loading is now narrowed to an explicit-path YAML
-    recommendation instead of a magic default-discovery requirement.
+  - Context compaction/reset checkpoint: recorded in `Behavior Baseline`;
+    resumed design and readiness passes should treat this file as the source of
+    truth unless the user explicitly reopens behavior.
+  - Design agreement review: core queue/service/capacity/status/CLI decisions
+    are locked, and queue config loading is narrowed to an explicit-path YAML
+    recommendation rather than magic default discovery.
   - Design safety review: completed locally on 2026-05-12; no remaining
     design-safety blocker is open inside the notes.
-  - Examples and validation strategy: draft ideas captured below.
-  - Phase shaping: draft updated around repository/service, Python API,
-    local-managed dispatch, delegated SLURM dispatch, and thin CLI/docs
-    hardening.
-  - Implementation readiness: pending.
-  - Handoff: pending.
+  - Pre-v11 prerequisite hardening: locked in discussion; the `v10-post`
+    contract baseline and prerequisite phase sketch below now define the
+    leading dependency slice in the combined `v10-post -> v11` workflow.
+  - Examples and validation strategy: captured below with example-to-test
+    traceability for implementation-plan drafting and the prerequisite
+    hardening tranche.
+  - Phase shaping: the combined workflow keeps the four-phase `v10-post`
+    dependency tranche ahead of the five-phase main queue MVP, but all nine
+    phases should progress as one stacked workflow.
+  - Implementation readiness: queue design is ready, and the `v10-post` phases
+    now serve as the ordered dependency prefix for the same workflow rather than
+    a separate merge gate.
+  - Handoff: queue handoff content is preserved below, and
+    implementation-plan drafting should cover the full `v10-post -> v11` stack
+    in one workflow.
 - Related implementation plans:
   - `docs/implementation-plans/implementation-plan-v10.md`
   - `docs/implementation-plans/implementation-roadmap.md`
@@ -50,18 +66,32 @@
   - `docs/features/preflight.md`
   - `docs/features/cli.md`
   - `docs/features/testing.md`
-- Blockers:
-  - Current v10 must complete or at least stabilize the authority/resource-lease
-    surfaces before queue implementation planning can be decision-complete.
+- Workflow constraints:
+  - The combined implementation workflow must preserve dependency order:
+    `v10-post Phase 1` through `v10-post Phase 4` lead the stack, followed by
+    `v11 Phase 1` through `v11 Phase 5`.
+  - Later dependent phases may progress under the normal stacked-phase rules
+    once their predecessors are validated and recorded as `pr_open` or merged;
+    they do not need to wait for the entire tranche to land before workflow
+    planning continues.
+  - No remaining queue product-scope or design-safety blocker is open inside
+    these notes after the 2026-05-12 v10 surface verification pass.
+  - If `v10-post` materially changes the public authority, coordination, or
+    runtime contracts while the stack is in flight, refresh these notes and any
+    downstream main-v11 phase artifacts against the new surfaces before
+    executing the affected dependent phase.
 
 ## Source Evidence
 
 | Source | Relevant content | Used for | Notes |
 | --- | --- | --- | --- |
 | `docs/implementation-plans/implementation-roadmap.md` | v10 defers a full `WorkflowScheduler`, distributed queue, worker daemon, adaptive sweep runner, and external orchestration system while reserving scheduler-ready resource/admission interfaces. | roadmap scope | Queueing belongs immediately after current v10, not inside v10 authority. |
-| `docs/implementation-plans/implementation-plan-v10.md` | v10 adds DB-backed authority, service-backed workspace coordination, and generic named integer resource leases with fail-fast/bounded-wait admission. | prerequisite | Queue dispatch should use these primitives instead of opening authority storage. |
+| `docs/implementation-plans/implementation-plan-v10.md` | v10 adds DB-backed authority, service-backed workspace coordination, generic named integer resource leases, offline evidence/import, and strict resolver adoption. | prerequisite | Queue dispatch should use these primitives after the `v10-post` tightening rather than freezing the pre-hardening behavior as-is. |
+| `docs/implementation-plans/roadmap-v10-planning-notes.md` | The v10 planning notes now capture the locked authority-truth, registry/live-check, strict SLURM live-path, offline import, and mutation-safety decisions agreed during the post-v10 review. | prerequisite contract baseline | These decisions are folded into the `v10-post` tranche below rather than becoming a separate roadmap artifact. |
+| `src/loom/pipeline/stores/authority_factory.py`, `src/loom/pipeline/stores/authority_client.py`, `src/loom/pipeline/stores/coordination.py`, `src/loom/pipeline/execution/resource_admission.py`, `src/loom/pipeline/execution/runner.py` | `create_authority_client(...)`, authority coordination HTTP routes, `WorkspaceCoordinationStore` resource lease/limit methods, `acquire_resource_admission(...)`, and current runner-side admission show the exact queue-facing v10 seams. | prerequisite boundary verification | Main v11 can target these public authority, coordination, and resource-admission contracts only after the `v10-post` tranche locks the stricter live-path behavior. |
+| `src/loom/authority/supervisor.py`, `src/loom/pipeline/stores/deferred_finalization.py`, `src/loom/authority/offline_import.py`, `src/loom/state_sources.py`, `src/loom/pipeline/execution/continuation.py`, `src/loom/pipeline/execution/stage_worker.py` | Current supervisor state-dir handling, deferred-finalization semantics, offline import behavior, state-source labels, and worker/continuation authority checks show the surfaces that need pre-v11 hardening. | `v10-post` phase design | The prerequisite tranche should tighten these surfaces before dependent queue phases execute against them. |
 | `docs/features/runtime-resources.md` | Runtime resources are generic and scheduler-neutral; built-in resource kinds include `cpu`, `memory`, and `gpu`, while queue/partition/account style fields belong in executor-specific profiles. | resource model | Queue pools should stay generic and domain-neutral. |
-| `docs/features/slurm.md` | SLURM already owns its native submitted-job queueing, dependencies, status, and cancellation behavior. | delegated scheduling | Queue should support pass-through/delegated capacity for SLURM rather than double-leasing Loom resources by default. |
+| `docs/features/slurm.md` | SLURM already owns its native submitted-job queueing, dependencies, status, and cancellation behavior. | delegated scheduling | Queue should support pass-through/delegated capacity for SLURM rather than double-leasing Loom resources by default, and should assume strict live-authority SLURM as the default runtime mode after `v10-post`. |
 | Prefect work pools and work queues: <https://docs.prefect.io/latest/concepts/work-pools/> | Work pools separate execution environment configuration from work queues; work queues add priority and concurrency controls. | reference pattern | Borrow pool/queue split, but avoid container/cloud dependencies. |
 | Airflow pools: <https://airflow.apache.org/docs/apache-airflow/2.11.0/administration-and-deployment/pools.html> | Pools limit task parallelism with named slots. | reference pattern | Borrow slot-limit concept, not task-level DAG scheduling. |
 | RQ workers: <https://python-rq.org/docs/workers/> | Workers process named queues, support burst mode, and can be managed by ordinary process managers. | reference pattern | Borrow foreground/burst operation for restricted HPC environments; do not depend on Redis. |
@@ -74,9 +104,11 @@
 
 | Area | Files or patterns checked | Findings | Gaps |
 | --- | --- | --- | --- |
-| Roadmap and v10 docs | `implementation-roadmap.md`, `implementation-plan-v10.md`, `roadmap-v10-planning-notes.md` | v10 intentionally stops before a global scheduler but creates authority and resource primitives a queue can use. The roadmap now names this queue work as v11 and moves bundles to v12. | V10 authority/resource surfaces still need to stabilize before implementation planning can close. |
+| Roadmap and v10 docs | `implementation-roadmap.md`, `implementation-plan-v10.md`, `roadmap-v10-planning-notes.md` | v10 intentionally stops before a global scheduler but creates authority and resource primitives a queue can use. The roadmap now names this queue work as v11 and moves bundles to v12, while the post-v10 authority review adds a `v10-post` hardening tranche that should lead the same stacked workflow before dependent queue phases rely on those contracts. | If the prerequisite tranche materially changes the queue-facing public contracts again, refresh these notes and the later main v11 implementation plan. |
 | Runtime/resource docs | `runtime-resources.md`, `execution.md`, `slurm.md` | Resource requests are generic; SLURM has its own downstream queue and cancellation semantics. | Queue-specific feature doc does not exist yet. |
-| Source and tests | `src/loom/pipeline/execution/resource_admission.py`, `src/loom/pipeline/execution/runner.py`, `src/loom/pipeline/stores/coordination.py` | Runner admission already acquires generic resource leases from workspace coordination before local work starts. | Queue service and dispatch adapter protocols do not exist. |
+| Authority/resource surfaces | `src/loom/pipeline/stores/authority_factory.py`, `src/loom/pipeline/stores/authority_client.py`, `src/loom/pipeline/stores/coordination.py`, `src/loom/pipeline/execution/resource_admission.py`, `src/loom/pipeline/execution/runner.py` | Current queue-facing seams are strict public authority client construction, explicit coordination resource limit/lease methods, and runner-side resource-admission integration. | The later main v11 implementation plan should cite these exact seams and refresh if the `v10-post` tranche changes them. |
+| Post-v10 hardening surfaces | `src/loom/authority/supervisor.py`, `src/loom/pipeline/stores/deferred_finalization.py`, `src/loom/authority/offline_import.py`, `src/loom/state_sources.py`, `src/loom/pipeline/execution/continuation.py`, `src/loom/pipeline/execution/stage_worker.py` | The reviewed v10 behavior still needs a prerequisite hardening tranche around supervisor defaults, live-readiness enforcement, strict SLURM live commits, diagnostics/source labeling, and offline import semantics before dependent queue phases execute against those contracts. | Refresh the prerequisite phase definitions if these surfaces change while `v10-post` is implemented. |
+| Source and tests | `src/loom/pipeline/execution/resource_admission.py`, `src/loom/pipeline/execution/runner.py`, `src/loom/pipeline/stores/coordination.py` | Runner admission already acquires generic resource leases from workspace coordination before local work starts, and the queue can reuse that lease vocabulary instead of inventing a second resource truth. | Queue service and dispatch adapter protocols do not exist yet; the combined workflow should implement the `v10-post` prefix first and then continue into the dependent queue phases on the same stack. |
 | External tooling | Prefect, Airflow, RQ, Celery, Ray Jobs, Kueue, Slurm docs | Existing systems support pool/queue separation, burst workers, routing, remote job submission, and delegated scheduler cancellation. | These systems carry dependencies or assumptions Loom should not make mandatory. |
 
 ## Roadmap Extraction
@@ -91,12 +123,15 @@ Prerequisites:
 
 - Current v10 durable authority supervisor, resource leases, service-backed
   workspace coordination, and strict authority resolution.
+- A `v10-post` prerequisite hardening tranche that locks the reviewed post-v10
+  authority/runtime contracts as the dependency prefix of the same combined
+  `v10-post -> v11` workflow.
 - Existing run, SLURM, status, cancellation, and resource request surfaces.
 
 Primary feature docs:
 
-- Add a new queue/workflow-scheduler feature doc or extend `execution.md` with a
-  queue section before implementation-plan drafting.
+- Add a dedicated queue/workflow-scheduler feature doc before
+  implementation-plan drafting.
 - Update `runtime-resources.md`, `slurm.md`, `preflight.md`, and `cli.md` where
   queue behavior touches those surfaces.
 
@@ -114,6 +149,10 @@ Compatibility obligations:
 - Queue dispatch must not let queue service code open authority private storage.
 - Queue launchers must mutate Loom run lifecycle only through the v10 authority
   client and store factories.
+- Main v11 queue work must target the tightened `v10-post` contracts: live
+  authority remains the only mutation truth, deferred finalization is
+  compatibility-only, and offline import remains a strict historical import
+  rather than continuation context.
 - Queue state is scheduler policy and should not become core `RunStatus` truth.
 
 ## Version Briefing
@@ -134,10 +173,16 @@ Why this version exists:
   long-running third-party orchestration services.
 - Current v10 deliberately avoids queueing while creating the authority and
   resource primitives that make queueing safe.
+- The reviewed v10 implementation still needs a small `v10-post` hardening
+  tranche so queueing can build on the stricter authority/runtime contracts
+  instead of inheriting transitional behavior.
 
 Impacted or linked work:
 
 - V10 authority and resource leases are direct prerequisites.
+- `v10-post` hardening of authority resolution, supervisor defaults, SLURM live
+  paths, diagnostics/source labeling, resource admission, and offline import is
+  a mandatory pre-v11 tranche recorded inside these notes.
 - Current run bundles/exporters should move later. Full bundle transport may
   eventually replace the initial pre-staged/shared-workspace remote launch
   assumption.
@@ -151,8 +196,9 @@ Likely public surfaces and durable artifacts:
 - Trusted project queue config file loading.
 - Queue service database with queue pool, queue, item, claim, dispatch handle,
   cancellation, and audit records.
-- A later thin operational wrapper for starting/stopping the queue service,
-  running foreground drain mode, inspecting status, and cancelling items.
+- A later thin operational wrapper for starting/stopping the queue daemon,
+  running foreground drain compatibility mode, inspecting status, and
+  cancelling items.
 
 Structure rationale:
 
@@ -177,6 +223,10 @@ Visible assumptions, risks, and constraints:
 User clarification questions and resolved answers:
 
 - Placement: insert after current v10 and push the previous v11+ back.
+- Pre-v11 hardening: record the reviewed post-v10 contract changes as
+  `v10-post` prerequisite phases inside these notes, and treat them as the
+  dependency prefix of the same stacked workflow that continues through the
+  main v11 queue phases.
 - First scheduled unit: whole runs; per-stage queueing is future work.
 - Built-in storage: SQLite service DB.
 - Service boundary: separate queue service, co-managed with supervisor commands.
@@ -201,8 +251,13 @@ User clarification questions and resolved answers:
   persisted queue-owned `run_uri` derived from that id before first launch
   handoff; retries and recovery reuse the same `run_uri`, while
   `dispatch_attempt` increments only on explicit requeue or resubmit.
-- Controller mode: long-running service plus foreground drain mode. Foreground
-  drain must not orphan locally managed active work.
+- Controller mode: daemon-first long-running service plus foreground drain
+  compatibility mode. The daemon is the primary guarantee path; foreground
+  drain exists for restricted environments, must not orphan locally managed
+  active work, and may exit after durable delegated handoff once submit has
+  succeeded, the external scheduler handle is durably recorded, and at least
+  one downstream status read has succeeded. Authority run visibility is not
+  required before exit.
 
 ## User Intent
 
@@ -257,19 +312,24 @@ Constraints:
 
 ## Workflow Stage Readback
 
-The planning discussion has moved past initial scope discovery. This refinement
-pass on 2026-05-12 tightened the remaining weak spots: explicit workflow
-readback, queue-config loading expectations, and the implementation-readiness
-handoff into implementation-plan drafting.
+The planning discussion has moved past initial scope discovery. The current
+readback now carries both the locked v11 queue behavior and the reviewed
+`v10-post` prerequisite tranche that should lead the same stacked
+implementation workflow before dependent main-queue phases rely on those
+contracts.
 
 Roadmap framing locked decisions:
 
 - V11 is queued whole-run dispatch and resource pools, inserted after current
   v10.
+- `v10-post` prerequisite hardening is recorded inside these notes as the
+  dependency prefix of the same workflow that continues into the main v11 queue
+  phases.
 - V10 authority durability, service-backed coordination, and generic resource
   leases remain direct prerequisites.
 - The queue stays outside authority so scheduling policy does not become
-  lifecycle truth.
+  lifecycle truth, and queue code may reach authority only through public
+  authority-service APIs rather than private authority storage.
 
 Intent discovery locked decisions:
 
@@ -277,72 +337,111 @@ Intent discovery locked decisions:
 - The first version must work in local, workstation, lab-server, and restricted
   HPC environments without requiring Kubernetes, Docker, Redis, RabbitMQ, or a
   hosted orchestrator.
-- Whole-run queueing is the target; per-stage global scheduling is deferred.
+- Whole-run queueing is the target; stage-level or per-stage global scheduling
+  may be considered later but is not actively planned in v11.
 
-Capability triage and functional-requirement readback:
+Capability triage and candidate functional-requirement readback:
 
 - Include a separate SQLite-backed queue service, pool-plus-queue routing, one
   FIFO queue per pool, explicit managed and delegated capacity modes, local and
   SLURM adapters, accurate cancellation reporting, Python APIs first, and a
   later thin operational CLI wrapper.
 - Defer generic SSH, SLURM-over-SSH, automatic retries, multi-queue policy,
-  fairness, run bundles, remote payload transport, and hosted queue operations.
+  fairness, run bundles, remote payload transport, and hosted queue operations,
+  while keeping adapter and public-API seams modular enough for future SSH and
+  SLURM-over-SSH roadmap work.
+
+Functionality-agreement readback:
+
+- High-impact requirement branches are resolved in favor of whole-run queue
+  items, enqueue-time intent snapshots, explicit managed and delegated capacity
+  modes, accurate cancellation reporting, and no automatic retries.
+- Queueing remains a separate service boundary and may use only public
+  authority-service APIs; it must not open or rely on private authority
+  storage.
+- Enqueue-time intent locking should be treated as a durable public contract.
+  If later roadmap items such as bundle or transport support need supporting
+  API or schema hooks, v11 should anticipate that design now without pulling
+  the later implementation into scope.
+- No unresolved high-impact `needs discussion` or `blocked` requirement item
+  remains.
 
 Functionality and behavior confirmation readback:
 
 - Queue items represent whole-run intents with enqueue-time snapshots.
+- The enqueue-time snapshot is part of the public queue contract, and v11
+  should preserve enough schema/API room for later bundle or transport work to
+  extend that contract without redefining what a queued item means.
 - Managed pools use authority-backed leases before dispatch; delegated pools
   hand work to downstream schedulers without holding Loom leases.
 - Queue state and authority lifecycle truth remain separate and are joined only
   in read models.
 - Foreground drain must preserve local cancellation and recovery semantics
   rather than orphaning managed active work.
+- Main v11 phases assume the stricter post-v10 contract baseline recorded in the
+  prerequisite tranche below rather than the looser pre-hardening runtime
+  behavior.
 
-Design refinement follow-up on 2026-05-12:
+Design-agreement follow-up on 2026-05-12:
 
 - Queue config loading no longer needs a magic default path for the first
   version. The working recommendation is an explicit `load_queue_config(path)`
   style loader for trusted YAML documents with a versioned plain-data schema.
-- Remaining blockers are now procedural and boundary-oriented: complete the
-  design-safety review and verify the v10 authority/resource surfaces that the
-  implementation plan should target.
+- The design queue is resolved as recorded recommendations rather than open
+  product-scope questions, including queue-owned run identity, validation-only
+  managed resource ownership, and a thin operational CLI surface.
 - No user-facing product-scope question remains open in the baseline notes.
+
+Implementation-readiness and handoff follow-up on 2026-05-12:
+
+- The final v10 evidence pass now anchors implementation-plan drafting to
+  `create_authority_client(...)`, authority coordination HTTP routes,
+  `WorkspaceCoordinationStore` resource-limit and resource-lease methods,
+  `acquire_resource_admission(...)`, and
+  `PipelineRunner._acquire_stage_resource_admission(...)`.
+- The combined `v10-post -> v11` implementation workflow should target those
+  seams with `v10-post` as the dependency prefix and refresh downstream queue
+  phases if that prefix changes the reviewed authority/runtime contracts.
+- Main v11 implementation-plan drafting should now cover the whole ordered
+  stack rather than waiting for a separate prerequisite workflow to finish.
 
 ## Stage Readbacks
 
 | Stage | Locked decisions | Defaults | Open questions | Next focus |
 | --- | --- | --- | --- | --- |
-| Roadmap framing | New queue version after current v10; previous v11+ shifts later. | Keep v10 authority as prerequisite. | None for roadmap placement. | Continue with implementation-plan drafting inputs. |
-| Intent discovery | Whole-run queueing, no mandatory orchestrator/broker/container dependencies. | Workspace-scoped, dependency-light queue. | No remaining product-behavior question. | Implementation-plan drafting inputs. |
-| Capability triage and functional requirements | Pool+queue model, SQLite state, local/SLURM adapters, explicit managed/delegated capacity, accurate cancellation reporting, and separate queue/authority truth. | One FIFO queue per pool, no retries, no dependencies, Python API first. | Queue config should use explicit-path, versioned YAML loading rather than magic discovery. | Design safety review. |
-| Functionality and behavior confirmation | Confirmed in discussion. | Queue status joins queue and authority state without merging ownership. | None for the baseline. | Context checkpoint and implementation-plan drafting. |
-| Context compaction/reset checkpoint | Ready after this refinement pass. | Record this file as resume source. | None. | Checkpoint before design-safety review if context needs reset. |
-| Design decision review | Core scope and behavior decisions locked. | Keep queue/authority truth separate and CLI thin. | Package placement and feature-doc home can be recommended during plan drafting without reopening product scope. | Design safety review and implementation-plan drafting. |
+| Roadmap framing | New queue version after current v10; previous v11+ shifts later; `v10-post` prerequisite hardening is folded into these notes. | Keep v10 authority as prerequisite and treat the `v10-post` tranche as the dependency prefix of the same workflow. | None for roadmap placement. | Draft and execute one ordered `v10-post -> v11` workflow. |
+| Intent discovery | Whole-run queueing, no mandatory orchestrator/broker/container dependencies. | Workspace-scoped, dependency-light queue. | Stage-level scheduling remains a later consideration, not an active v11 planning branch. | Implementation-plan drafting inputs. |
+| Capability triage and candidate functional requirements | Pool+queue model, SQLite state, local/SLURM adapters, explicit managed/delegated capacity, accurate cancellation reporting, and separate queue/authority truth. | One FIFO queue per pool, no retries, no dependencies, Python API first. | No remaining requirement-scope blocker. | Functionality-agreement queue confirmation. |
+| Functionality agreement review | High-impact requirement branches are resolved, including whole-run items, snapshot semantics, managed/delegated modes, accurate cancellation, and no automatic retries. | Queue config stays trusted project code and user-visible setup remains Python-first. | No high-impact `needs discussion` or `blocked` requirement item remains. | Keep the resolved queue as the baseline for behavior and design. |
+| Functionality and behavior confirmation | Confirmed in discussion. | Queue status joins queue and authority state without merging ownership, daemon-first controller behavior is the primary trust path, and foreground drain compatibility mode may exit only after successful delegated submit, durable handle persistence, and at least one downstream status read. | No queue behavior-scope blocker remains. | Keep the locked controller-mode split and the stricter `v10-post` contract baseline in downstream planning. |
+| Context compaction/reset checkpoint | Checkpoint recorded in `Behavior Baseline`. | Record this file as the resume source. | None. | Reuse the checkpoint if a later pass needs to resume from design or readiness. |
+| Design agreement review | Core scope and behavior decisions are locked as recorded recommendations. | Keep queue/authority truth separate, CLI thin, managed-pool ownership validation-only, queue config explicit-path, dedicated queue/workflow-scheduler docs, and top-level `loom.queue` package placement. | No remaining product-scope design question remains open. | Design safety review and implementation-plan drafting. |
 | Design safety review | Completed locally on 2026-05-12. | Preserve the recorded recommendations. | None. | Carry recommendations into implementation-plan drafting. |
-| Examples and validation strategy | Draft ideas below. | Local deterministic tests first; no real SLURM by default. | Exact acceptance examples. | Expand after design decisions. |
-| Phase shaping | Draft updated. | Split repository/service, Python API, managed local dispatch, delegated SLURM dispatch, and operational hardening. | Final phase count may still move slightly during implementation-plan drafting. | Implementation plan later. |
-| Implementation readiness | Pending. | Blocked only on final v10 authority/resource surface verification. | No user-facing blocker remains; docs-routing and package-placement choices can be carried as recommendations. | Final evidence pass, then implementation plan. |
-| Handoff | Pending. | Carry forward the locked MVP and explicit queue-config recommendation. | None. | Implementation-plan drafting after notes confirmation. |
+| Pre-v11 prerequisite hardening | Authority/live-path/SLURM/import/diagnostic tightening decisions are locked and grouped into `v10-post Phase 1` through `v10-post Phase 4`. | Treat the tranche as the dependency prefix of the same stacked workflow. | No remaining product-scope question remains inside the tranche. | Start the workflow from the prerequisite phases, then continue directly into the dependent queue phases. |
+| Examples and validation strategy | The example set and validation mapping are ready for implementation-plan drafting. | Local deterministic tests first; no real SLURM by default. | No blocking coverage-scope question remains. | Preserve the current example-to-test mapping in the implementation plan. |
+| Phase shaping | The notes now carry a four-phase `v10-post` dependency tranche plus a five-phase main v11 queue MVP. | Preserve the namespaced split between dependency hardening and queue implementation while treating them as one ordered workflow. | Reviewability-only refinements are allowed, but no scope reopening is needed. | Preserve the phase shape and stack the later queue phases after the dependency prefix unless a narrower breakdown improves reviewability. |
+| Implementation readiness | The exact v10 queue-facing seams are verified, and the `v10-post` tranche now defines the contract tightening main v11 depends on. | Carry forward the public authority, coordination, and resource-admission seams through one ordered workflow, refreshing downstream phase artifacts if the dependency prefix changes them materially. | No product-scope blocker remains; only dependency ordering and contract-refresh discipline remain. | Draft the combined implementation workflow and execute it in stack order. |
+| Handoff | Queue handoff content is preserved and ready to seed one continuous workflow. | Carry forward the locked MVP, explicit queue-config recommendation, verified v10 seams, and `v10-post` tranche. | None. | Draft the combined `v10-post -> v11` implementation workflow. |
 
 ## Capability Triage
 
 | Capability | Decision | Rationale | Notes |
 | --- | --- | --- | --- |
 | Whole-run queue item | include | Matches user goal and avoids redesigning DAG stage orchestration. | Stores run intent snapshot and idempotency key. |
-| Per-stage scheduler | defer | Powerful but much larger and would replace runner orchestration. | Document as future consideration. |
-| Queue pools plus queues | include | Separates resource/adaptor defaults from user-facing backlog routing. | First version has one FIFO queue per pool; multi-queue pool policy is deferred. |
+| Per-stage scheduler | defer | Powerful but much larger and would replace runner orchestration. | May be considered later, but it is not an active v11 planning branch. |
+| Queue pools plus queues | include | Separates resource/adaptor defaults from user-facing backlog routing. | First version has one FIFO queue per pool; multi-queue pool policy is deferred, but the public scheduler-policy interface should be shaped so richer arbitrary policies can layer in later. |
 | SQLite queue service DB | include | Dependency-light and acceptable in restricted HPC/workstation contexts. | External broker adapters can come later. |
 | Authority-backed resource pool mode | include | Lets Loom manage a "1 GPU X CPU" pool safely with v10 leases. | Queue stores desired config; authority owns managed limits and active leases. |
 | Delegated downstream mode | include | Avoids double scheduling for SLURM or another external scheduler. | Queue records submission handles instead of holding Loom leases. |
 | Local process launcher | include | Deterministic first adapter with PID/process-group cancellation. | Useful for tests and local workstations. |
 | SLURM launcher | include | Existing Loom SLURM surfaces and Slurm job IDs support dispatch/status/cancel. | Real cluster tests remain opt-in. |
-| Generic SSH launcher | defer | Avoids early remote-wrapper complexity before the core queue model is proven. | Revisit after local/SLURM queue semantics and bundle transport direction are stable. |
-| SLURM-over-SSH | defer | Submit-host SSH can come after core delegated SLURM support. | Revisit only if non-local submit hosts are an immediate requirement. |
+| Generic SSH launcher | defer | Avoids early remote-wrapper complexity before the core queue model is proven. | Revisit after local/SLURM queue semantics and bundle transport direction are stable; keep adapter/public-API seams modular enough that future SSH support does not require queue-core redesign. |
+| SLURM-over-SSH | defer | Submit-host SSH can come after core delegated SLURM support. | Revisit only if non-local submit hosts are an immediate requirement; future support should layer on the same modular adapter boundaries as generic SSH. |
 | Python enqueue API | include | User selected Python API first. | CLI bulk submit can be later or thin. |
 | Trusted queue config file loading | include | Repeatable queue/pool setup without service-only configuration. | Treat authored configs as trusted project code. |
 | Operational CLI | include | A thin operational wrapper is useful after the Python API exists. | Keep first-version CLI to service/drain/status/cancel surfaces; no bulk submit. |
-| Long-running controller | include | Normal queue service behavior. | Co-managed by supervisor. |
-| Foreground drain controller | include | Supports cron/batch/HPC environments that discourage daemons while preserving cancellation/recovery. | For local managed work, it remains alive until claimed work reaches terminal or unknown state; delegated adapters may exit after durable external handoff. |
+| Long-running controller | include | Primary queue service behavior and strongest guarantee path. | Daemon-first and co-managed by supervisor. |
+| Foreground drain controller | include | Compatibility mode for cron/batch/HPC environments that discourage daemons while preserving cancellation/recovery. | It must not be treated as the strongest-trust mode; delegated active work may exit only after successful submit, durable handle persistence, and at least one downstream status read. |
 | Accurate cancellation reporting | include | User selected stronger cancellation semantics. | Never claim cancellation success without proof; unknown remote outcomes are explicit. |
 | Automatic retries | defer | Belongs to later reliability policy. | Explicit requeue/resubmit may be allowed. |
 | Priority/fairness/borrowing | defer | First version stays FIFO plus simple limits. | Kueue-like fairness is a future expansion. |
@@ -351,25 +450,37 @@ Design refinement follow-up on 2026-05-12:
 | Kubernetes/Docker/cloud dependency | out of scope | User explicitly rejected mandatory dependencies. | Future adapters must remain optional. |
 | Full run bundle transport | defer | User notes it likely refactors initial remote launch later. | Current remote launch assumes pre-staged/shared workspace. |
 
+## Functionality Agreement Queue
+
+| ID | Requirement or decision | Depends on | Resolution order | Recommended answer | Why it matters | Why user input is needed | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FRQ-1 | First scheduled unit is whole runs rather than stages. | none | 1 | Keep v11 to whole-run queue items and defer per-stage scheduling. | This is the main scope boundary between a job queue and a global scheduler. | Needed to confirm that v11 should not redesign runner orchestration; later stage-level scheduling can be reconsidered, but it is not actively planned in v11. | confirmed |
+| FRQ-2 | Queue service boundary relative to authority. | FRQ-1 | 2 | Keep a separate SQLite-backed queue service that uses only public authority-service APIs and never opens private authority storage. | This decides whether queue policy can leak into authority truth. | Needed to lock the control-plane boundary before design work continued. | confirmed |
+| FRQ-3 | Capacity ownership for queue pools. | FRQ-2 | 3 | Ship both managed Loom-resource pools and delegated downstream pools. | This controls whether queued work acquires Loom leases or only external scheduler handles. | Needed to cover local managed capacity and avoid SLURM double scheduling. | confirmed |
+| FRQ-4 | First-version launch-adapter scope. | FRQ-3 | 4 | Include local and SLURM adapters; defer generic SSH and SLURM-over-SSH while keeping adapter and public-API seams modular enough for later roadmap expansion. | Adapter scope shapes lifecycle guarantees, cancellation semantics, test coverage, and how much remote-wrapper complexity v11 absorbs. | Needed to keep the first version aligned with existing execution surfaces without backing future SSH-style expansion into a corner. | confirmed |
+| FRQ-5 | Queue item snapshot and stable run identity semantics. | FRQ-1 | 5 | Freeze enqueue-time intent facts and give each queue item a stable queue-owned `run_uri`, while anticipating any later public API or schema hooks needed for bundle or transport support without implementing them in v11. | This defines drift handling, crash recovery, queue-to-authority status joins, and how future reproducibility features layer onto the same public contract. | Needed because idempotency and reproducibility are part of the public behavior contract. | confirmed |
+| FRQ-6 | Failure, cancellation, and status semantics. | FRQ-3, FRQ-4, FRQ-5 | 6 | Keep queue state separate from authority truth, require accurate cancellation reporting, and do not auto-retry failures. | This locks the operator-facing semantics for blocked, failed, cancelled, and unknown outcomes. | Needed to settle high-impact failure behavior and explicit deferrals. | confirmed |
+| FRQ-7 | Setup and configuration surface. | FRQ-2 | 7 | Keep Python APIs primary, require explicit-path trusted queue config loading, and leave the CLI operational/thin. | This defines how users create queue state and avoids hidden discovery rules in the first version. | Needed to lock first-version setup behavior before design shaping. | confirmed |
+
 ## Functional Requirements
 
-| ID | Requirement | What | Why | Scope | User-visible behavior | System behavior | Capability enabled | Validation idea | Decision/status |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| FR-1 | Durable queue service | Persist queues, pools, items, claims, dispatch handles, and audits in a SQLite-backed queue service. | Users can submit work and leave the controller to dispatch later. | Built-in service only. | Queue survives process restart. | Service recovers pending/claimed/active items according to adapter state. | Dependency-light queueing. | Restart service with pending and active fake items. | confirmed |
-| FR-2 | Separate queue and authority services | Keep queue service separate from authority and communicate through public clients. | Prevent scheduler policy from becoming authority truth. | Service boundaries. | Operators see queue and authority as related but distinct services. | Queue never opens authority private DB. | Maintainable control plane. | Import-boundary/package tests. | confirmed |
-| FR-3 | Co-managed service lifecycle | Queue service lifecycle may be exposed through a thin operational wrapper after the Python API is in place. | Avoid unnecessary operator burden without making the CLI the primary contract. | Local/workspace service topology. | Users can inspect and control queue service lifecycle without configuring a separate orchestration system. | Queue still has its own DB and process identity; authority and queue remain separate services. | Practical deployment. | Python lifecycle tests first; minimal operational wrapper tests later. | confirmed |
-| FR-4 | Whole-run items | Queue items represent independent `loom run` requests. | Satisfies bulk run submission without stage scheduler redesign. | First version. | Users enqueue many run intents. | Dispatch adapter launches a run entrypoint. | Many-job workflow. | Enqueue and foreground-drain multiple fake/local runs. | confirmed |
-| FR-5 | Run intent snapshot and launch contract | Freeze local config identity, options, queue metadata, hashes, idempotency facts, and required remote/bundle interface expectations at enqueue time. | Avoid surprising "latest at dispatch" behavior while admitting that full remote equivalence waits for bundles. | Queue item schema. | Local drift is reported before dispatch; remote/pre-staged launch reports which interface checks were proven. | Dispatcher validates local snapshot where possible and records remote verification as proven, unavailable, or delegated to later bundle transport. | Reproducible queueing with explicit remote limits. | Mutate local config after enqueue and assert drift diagnostic; fake remote adapter reports verification capability. | confirmed |
-| FR-6 | Pool and queue model | Pools own dispatch mode/resource/adaptor defaults and exactly one FIFO queue in the first version. | Avoid duplicating resource/adaptor settings while avoiding premature multi-queue scheduling policy. | Queue config/API. | Users select the pool queue; admins configure pools. | Scheduler resolves item queue to pool policy with no cross-queue arbitration. | Capacity/routing separation. | Config round-trip and single-queue-per-pool validation tests. | confirmed |
-| FR-7 | Managed resource mode | Queue pool desired config is reconciled or validated against authority-backed resource limits before acquiring leases for local/managed launch. | Supports Loom-managed "1 GPU X CPU" capacity without creating two resource truths. | Authority-integrated pools. | Work waits in queue until Loom capacity is available. | Queue dispatch uses authority as managed resource limit and lease truth; queue records only desired config and reconciliation diagnostics. | Resource-limited queueing. | Two items compete for one GPU limit; stale desired config fails reconciliation. | confirmed |
-| FR-8 | Delegated downstream mode | Queue pool can submit to downstream scheduler without acquiring Loom resource leases. | Avoid double scheduling with SLURM-native queues. | SLURM and external adapters. | Queue records submission and lets downstream scheduler hold pending work. | Queue tracks external handle and joins status later. | Pass-through scheduler submission. | Fake SLURM pending/running/completed status. | confirmed |
-| FR-9 | One FIFO queue per pool | Dispatch the oldest eligible item in the pool's single queue, subject to pause, active limits, resource mode, and adapter readiness. | Simple predictable first policy without cross-queue arbitration. | First version policy. | No priorities, fair sharing, or resource-dependent queue ordering. | Service selects eligible work deterministically from one queue per pool. | Minimal scheduler and future scheduler-policy interface. | Ordering, active-limit, and one-queue-per-pool validation tests. | confirmed |
-| FR-10 | Local launcher | Built-in adapter launches a local process or trusted local `loom run` entrypoint. | Deterministic default and test substrate. | Local/workstation execution. | Local queued runs start without external dependencies. | Adapter records PID/process group and exit state. | Local queue execution. | Process launch/cancel/status tests. | confirmed |
-| FR-11 | SLURM launcher | Built-in adapter submits through existing SLURM paths and records job IDs. | HPC users need scheduler submission. | Local submit host in the first version. | Queued run becomes a Slurm job. | Adapter records scheduler id, polls status, and cancels with `scancel`. | Delegated HPC dispatch. | Fake command runner tests; opt-in real cluster smoke. | confirmed |
-| FR-12 | No generic SSH launch in the first version | First implementation does not ship generic SSH launch or raw shell templates. | Avoid early remote-wrapper complexity and weak cancellation semantics before the core queue model is stable. | First-version scope guard. | Users target local or SLURM adapters only. | Queue adapter protocols reserve future SSH expansion without shaping first-version correctness around remote wrapper behavior. | Scope control. | Config and package tests reject unsupported SSH adapter selection. | confirmed |
-| FR-13 | Accurate cancellation reporting | Every included adapter exposes cancellation; unverifiable outcomes become explicit unknown states. | Avoid false success when delegated or active work may still be running. | Queue item lifecycle. | Cancelled active work is either confirmed or marked unknown. | Queue records cancel attempt and adapter evidence and never reports success without proof. | Operational safety. | Local and SLURM cancellation tests. | confirmed |
-| FR-14 | Queue plus authority status | Status joins queue state with linked authority run/submitted state where available while keeping each surface as the source of truth for its own concern. | Users need one place to inspect queued and dispatched work without merging scheduler policy into runtime lifecycle. | Status/read models. | `queued`, `active`, run status, submitted job status are visible together. | Queue stores dispatch handle and queue state; authority stores run truth; joined views do not collapse them into one lifecycle enum. | Reviewable operations. | Fake authority/status join tests. | confirmed |
-| FR-15 | No automatic retries | Failed dispatches/runs stay failed until explicit requeue/resubmit. | Retry policy belongs to later reliability work. | First version. | Users see failure and can choose action. | Queue does not loop on failed items automatically. | Predictability. | Failed item remains failed until explicit action. | confirmed |
+| ID | Requirement | Depends on | What | Why | Scope | User-visible behavior | System behavior | Capability enabled | Validation idea | Decision/status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FR-1 | Durable queue service | none | Persist queues, pools, items, claims, dispatch handles, and audits in a SQLite-backed queue service. | Users can submit work and leave the controller to dispatch later. | Built-in service only. | Queue survives process restart. | Service recovers pending/claimed/active items according to adapter state. | Dependency-light queueing. | Restart service with pending and active fake items. | confirmed |
+| FR-2 | Separate queue and authority services | FR-1 | Keep queue service separate from authority and communicate only through public authority-service APIs. | Prevent scheduler policy from becoming authority truth. | Service boundaries. | Operators see queue and authority as related but distinct services. | Queue never opens authority private DB or bypasses authority-service API boundaries. | Maintainable control plane. | Import-boundary/package tests. | confirmed |
+| FR-3 | Co-managed service lifecycle | FR-2 | Queue service lifecycle may be exposed through a thin operational wrapper after the Python API is in place. | Avoid unnecessary operator burden without making the CLI the primary contract. | Local/workspace service topology and daemon-first operating model. | Users can inspect and control queue service lifecycle without configuring a separate orchestration system. | Queue still has its own DB and process identity; authority and queue remain separate services, with the long-running daemon as the primary guarantee path and foreground drain as a compatibility mode. | Practical deployment. | Python lifecycle tests first; minimal operational wrapper tests later. | confirmed |
+| FR-4 | Whole-run items | none | Queue items represent independent `loom run` requests. | Satisfies bulk run submission without stage scheduler redesign. | First version. | Users enqueue many run intents. | Dispatch adapter launches a run entrypoint. | Many-job workflow. | Enqueue and foreground-drain multiple fake/local runs. | confirmed |
+| FR-5 | Run intent snapshot and launch contract | FR-4 | Persist a normalized enqueue-time launch contract that freezes local config identity, resolved options, queue metadata, hashes, idempotency facts, and required remote/bundle interface expectations, while treating source references as evidence rather than the full meaning of the queued run. | Avoid surprising "latest at dispatch" behavior while admitting that full remote equivalence waits for bundles. | Queue item schema and forward-compatible public contract. | Local drift is reported before dispatch; remote/pre-staged launch reports which interface checks were proven. | Dispatcher validates the persisted launch contract where possible, records remote verification as proven, unavailable, or delegated to later bundle transport, and preserves a public schema/API shape that later roadmap items can extend without changing the enqueue-time contract. | Reproducible queueing with explicit remote limits. | Mutate local config after enqueue and assert drift diagnostic; fake remote adapter reports verification capability. | confirmed |
+| FR-6 | Pool and queue model | FR-4 | Pools own dispatch mode/resource/adaptor defaults and exactly one FIFO queue in the first version. | Avoid duplicating resource/adaptor settings while avoiding premature multi-queue scheduling policy. | Queue config/API and future scheduler-policy seam. | Users select the pool queue; admins configure pools. | Scheduler resolves item queue to pool policy with no cross-queue arbitration in v11, while running through a policy interface that can later host richer arbitrary policies or adapters. | Capacity/routing separation. | Config round-trip and single-queue-per-pool validation tests. | confirmed |
+| FR-7 | Managed resource mode | FR-2, FR-6 | Queue pool desired config is reconciled or validated against authority-backed resource limits before acquiring leases for local/managed launch. | Supports Loom-managed "1 GPU X CPU" capacity without creating two resource truths. | Authority-integrated pools. | Work waits in queue until Loom capacity is available. | Queue dispatch uses authority as managed resource limit and lease truth; queue records only desired config and reconciliation diagnostics. | Resource-limited queueing. | Two items compete for one GPU limit; stale desired config fails reconciliation. | confirmed |
+| FR-8 | Delegated downstream mode | FR-2, FR-6 | Queue pool can submit to downstream scheduler without acquiring Loom resource leases. | Avoid double scheduling with SLURM-native queues. | SLURM and external adapters. | Queue records submission and lets downstream scheduler hold pending work. | Queue tracks external handle and joins status later. | Pass-through scheduler submission. | Fake SLURM pending/running/completed status. | confirmed |
+| FR-9 | One FIFO queue per pool | FR-6, FR-7, FR-8 | Dispatch the oldest eligible item in the pool's single queue, subject to pause, active limits, resource mode, and adapter readiness. | Simple predictable first policy without cross-queue arbitration. | First version policy wrapped in a future-extensible scheduler-policy seam. | No priorities, fair sharing, or resource-dependent queue ordering in v11. | Service selects eligible work deterministically from one queue per pool, but does so through a minimal scheduler-policy interface that later roadmap items can replace or extend. | Minimal scheduler and future scheduler-policy interface. | Ordering, active-limit, and one-queue-per-pool validation tests. | confirmed |
+| FR-10 | Local launcher | FR-4, FR-7 | Built-in adapter launches a local process or trusted local `loom run` entrypoint. | Deterministic default and test substrate. | Local/workstation execution. | Local queued runs start without external dependencies. | Adapter records PID/process group and exit state. | Local queue execution. | Process launch/cancel/status tests. | confirmed |
+| FR-11 | SLURM launcher | FR-4, FR-8 | Built-in adapter submits through existing SLURM paths and records job IDs. | HPC users need scheduler submission. | Local submit host in the first version. | Queued run becomes a Slurm job. | Adapter records scheduler id, polls status, and cancels with `scancel`, while preserving modular seams for future non-local submit-host variants. | Delegated HPC dispatch. | Fake command runner tests; opt-in real cluster smoke. | confirmed |
+| FR-12 | No generic SSH launch in the first version | FR-11 | First implementation does not ship generic SSH launch or raw shell templates. | Avoid early remote-wrapper complexity and weak cancellation semantics before the core queue model is stable. | First-version scope guard. | Users target local or SLURM adapters only. | Queue adapter protocols and public queue APIs reserve future SSH expansion without shaping first-version correctness around remote wrapper behavior. | Scope control. | Config and package tests reject unsupported SSH adapter selection. | confirmed |
+| FR-13 | Accurate cancellation reporting | FR-10, FR-11 | Every included adapter exposes cancellation; unverifiable outcomes become explicit unknown states. | Avoid false success when delegated or active work may still be running. | Queue item lifecycle. | Cancelled active work is either confirmed or marked unknown. | Queue records cancel attempt and adapter evidence and never reports success without proof. | Operational safety. | Local and SLURM cancellation tests. | confirmed |
+| FR-14 | Queue plus authority status | FR-2, FR-5, FR-13 | Status joins queue state with linked authority run/submitted state where available while keeping each surface as the source of truth for its own concern. | Users need one place to inspect queued and dispatched work without merging scheduler policy into runtime lifecycle. | Status/read models. | `queued`, `active`, run status, submitted job status are visible together. | Queue stores dispatch handle and queue state; authority stores run truth; joined views do not collapse them into one lifecycle enum. | Reviewable operations. | Fake authority/status join tests. | confirmed |
+| FR-15 | No automatic retries | FR-4, FR-13 | Failed dispatches/runs stay failed until explicit requeue/resubmit. | Retry policy belongs to later reliability work. | First version. | Users see failure and can choose action. | Queue does not loop on failed items automatically. | Predictability. | Failed item remains failed until explicit action. | confirmed |
 
 ## Behavior Baseline
 
@@ -379,7 +490,10 @@ Included functionality:
 - Queue pools and queues.
 - Python enqueue API and trusted queue config loading.
 - Whole-run queue items with run intent snapshots.
-- Long-running controller and foreground drain controller modes.
+- The snapshot contract preserves room for later bundle or transport extensions
+  without redefining the meaning of an already-enqueued item.
+- Daemon-first long-running controller mode plus foreground drain
+  compatibility mode.
 - One FIFO queue per pool plus simple active/resource limits.
 - Managed Loom resource pools and delegated downstream scheduler pools.
 - Local and SLURM launch adapters.
@@ -394,9 +508,10 @@ User-visible behavior:
 - A user can configure a delegated SLURM queue and enqueue many runs that are
   submitted to SLURM without Loom holding a resource lease while Slurm keeps the
   job pending.
-- A user can run the controller as a service or run a foreground drain command
-  for environments that prefer periodic batch dispatch without orphaning locally
-  managed active work.
+- A user can run the controller as a long-running service/daemon for the
+  strongest guarantees, or use a foreground drain command as a compatibility
+  mode for environments that prefer periodic batch dispatch without orphaning
+  locally managed active work.
 
 Default behavior:
 
@@ -450,8 +565,9 @@ Context compaction/reset checkpoint:
 - Notes path: `docs/implementation-plans/roadmap-v11-planning-notes.md`
 - Resume instruction: reload this file, v10 implementation plan, roadmap v10
   resource/authority sections, `runtime-resources.md`, `slurm.md`, and current
-  source surfaces. Do not reopen locked choices unless the user asks. Continue
-  with design safety review and implementation-plan drafting.
+  source surfaces. Do not reopen locked choices unless the user asks. Complete
+  the `v10-post` prerequisite tranche before resuming main v11
+  implementation-plan drafting.
 - Functionality and behavior reopened after checkpoint: none yet.
 
 Confirmed queue item status vocabulary:
@@ -466,10 +582,8 @@ Confirmed queue item status vocabulary:
 
 Likely modules or packages:
 
-- `loom.queue` or `loom.pipeline.queue` for public queue records, config, and
-  service/client protocols.
-- `loom.queue.adapters` or `loom.pipeline.queue.adapters` for local and SLURM
-  launcher adapters.
+- `loom.queue` for public queue records, config, and service/client protocols.
+- `loom.queue.adapters` for local and SLURM launcher adapters.
 - `loom.authority` only gains supervisor co-management hooks, not queue policy.
 - `loom.cli.queue` for operational commands if included in the first
   implementation plan.
@@ -527,6 +641,9 @@ Extension points and flexibility boundaries:
 
 - Adapter protocol supports future SSH, broker, Prefect, Ray, cloud, or
   site-specific schedulers without making them default dependencies.
+- Public queue APIs should avoid local-only or SLURM-only assumptions in type
+  names and dispatch-handle contracts so future SSH and submit-host variants
+  can layer in without queue-core API breakage.
 - Pool dispatch mode keeps managed Loom resource leasing distinct from delegated
   downstream capacity.
 - Run intent snapshot records required launch interfaces and leaves room for
@@ -536,6 +653,9 @@ Extension points and flexibility boundaries:
   FIFO ordering, and explicit active/resource limits. Resource-dependent
   management, multiple queues per pool, priorities, and fair sharing belong to a
   later generic scheduler roadmap pass.
+- The FIFO policy should be wrapped in a public or semi-public scheduler-policy
+  seam so future arbitrary policy adapters can plug in without redefining queue
+  item storage or pool contracts.
 
 Compatibility constraints:
 
@@ -544,45 +664,45 @@ Compatibility constraints:
 - Queue config must not store secret values in durable records.
 - Queue cancellation must not delete authoritative run evidence.
 
-## Design Decision Review Queue
+## Design Agreement Queue
 
-| ID | Decision | Classification | Why it matters | User feedback needed | Status |
-| --- | --- | --- | --- | --- | --- |
-| DD-1 | Queue service remains separate from authority but supervisor-co-managed. | confirmed recommendation | Preserves authority truth while keeping operations manageable. | Already selected. | confirmed |
-| DD-2 | Built-in queue state uses SQLite, not an external broker. | confirmed recommendation | Satisfies restricted-HPC and no-dependency constraints. | Already selected. | confirmed |
-| DD-3 | Whole-run queue items only. | confirmed recommendation | Avoids redesigning DAG/stage orchestration. | Already selected; stage scheduling deferred. | confirmed |
-| DD-4 | Pool plus one FIFO queue model. | confirmed recommendation | Separates resource/adaptor policy from backlog ordering without adding multi-queue scheduling. | Already selected; multi-queue pool policy deferred. | confirmed |
-| DD-5 | Managed and delegated dispatch modes. | confirmed recommendation | Prevents double scheduling while supporting Loom-managed capacity. | Already selected. | confirmed |
-| DD-6 | Accurate cancellation reporting semantics. | confirmed recommendation | Prevents false operational success for active remote work. | Already selected. | confirmed |
-| DD-7 | Generic SSH launch deferred from the first version. | confirmed recommendation | Keeps the first version focused on local and SLURM adapters with proven lifecycle surfaces. | Already selected. | confirmed |
-| DD-8 | Python API first, with trusted config file loading. | confirmed recommendation | Matches user preference and project config rules. | Already selected. | confirmed |
-| DD-9 | Minimal operational CLI wrapper after Python API. | confirmed recommendation | Keeps the first version operational without making CLI the primary contract. | Already selected. | confirmed |
-| DD-10 | Queue item status vocabulary and terminal-state rules. | confirmed recommendation | Status names affect schema, status UX, and cancellation truth. | Baseline selected; implementation plan may normalize enum names without changing semantics. | confirmed |
-| DD-11 | Queue state remains separate from authority lifecycle truth. | confirmed recommendation | Prevents scheduler policy from leaking into authority state and keeps one source of truth per concern. | Already selected. | confirmed |
-| DD-12 | Queue config file format and location. | recorded recommendation | Affects UX, reproducibility, and preflight. | No further user input needed unless the user wants magic discovery later. | confirmed |
-| DD-13 | Queue-owned run identity and dispatch idempotency. | confirmed recommendation | Affects crash recovery, cancellation targeting, and queue-to-authority status joins. | Already selected. | confirmed |
-| DD-14 | Managed-pool authority-limit ownership. | confirmed recommendation | Affects whether queue remains policy-only or becomes a writer of authority resource truth. | Already selected: first-version managed pools validate against pre-provisioned authority limits rather than silently mutating them. | confirmed |
+| ID | Decision | Depends on | Resolution order | Classification | Recommended answer | Why it matters | Why user input is needed | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DD-1 | Queue service remains separate from authority but supervisor-co-managed. | FR-2, FR-3 | 1 | recorded recommendation | Keep a separate queue service with minimal supervisor co-management hooks, and require all queue-to-authority access to flow through public authority-service APIs. | This preserves authority truth while keeping operations manageable. | No further input needed; repo boundaries and prior discussion already support this. | confirmed |
+| DD-2 | Built-in queue state uses SQLite, not an external broker. | FR-1 | 2 | recorded recommendation | Use SQLite for the built-in queue repository. | This fixes the durability and dependency baseline for restricted HPC and local work. | No further input needed; the dependency-light requirement already resolves it. | confirmed |
+| DD-3 | Whole-run queue items only. | FR-4 | 3 | recorded recommendation | Keep the queue scheduling unit at whole runs only. | This avoids redesigning DAG or stage orchestration in v11. | No further input needed; the requirement queue already locked the scope boundary. | confirmed |
+| DD-4 | Pool plus one FIFO queue model. | FR-6, FR-9 | 4 | recorded recommendation | Keep one FIFO queue per pool and reserve richer scheduler policy for later, but route v11 behavior through an explicit scheduler-policy interface so later arbitrary policies can plug in without queue-core redesign. | This shapes config, status, and future scheduler-extension seams. | No further input needed; the user already accepted the simpler first-version policy and explicitly asked for a future-extensible policy seam. | confirmed |
+| DD-5 | Managed and delegated dispatch modes. | FR-7, FR-8 | 5 | recorded recommendation | Ship both managed Loom-resource pools and delegated downstream pools. | This prevents double scheduling while preserving Loom-managed local capacity. | No further input needed; the core operational tradeoff is already settled. | confirmed |
+| DD-6 | Accurate cancellation reporting semantics. | FR-13 | 6 | recorded recommendation | Require adapter-backed cancellation evidence and report unknown outcomes explicitly. | This protects operator trust in cancel/status surfaces. | No further input needed; false success was already rejected as the baseline. | confirmed |
+| DD-7 | Generic SSH launch deferred from the first version. | FR-11, FR-12 | 7 | recorded recommendation | Limit first-version adapters to local and SLURM and defer SSH, but keep adapter boundaries and public APIs modular enough that future SSH and SLURM-over-SSH do not require queue-core redesign. | This keeps lifecycle and remote-workspace complexity out of the first release while preserving future expansion room. | No further input needed; the deferred adapter scope is already accepted, but the modularity requirement should carry into implementation planning. | confirmed |
+| DD-8 | Python API first, with trusted config file loading. | FR-3, FRQ-7 | 8 | recorded recommendation | Keep Python APIs primary and support trusted queue config loading. | This fixes the first-version setup contract and public control surface. | No further input needed; the user already selected Python-first setup. | confirmed |
+| DD-9 | Minimal operational CLI wrapper after Python API. | DD-8 | 9 | recorded recommendation | Add a thin operational CLI over the Python service/client/controller APIs. | This bounds operational surface creep while keeping queue usage practical. | No further input needed; this follows directly from the Python-first decision. | confirmed |
+| DD-10 | Queue item status vocabulary and terminal-state rules. | FR-13, FR-14, FR-15 | 10 | recorded recommendation | Keep queue/dispatch status separate from authority truth with explicit terminal unknowns. | Status names affect schema, UX, and cancellation semantics. | No further input needed; the behavior baseline already locks these semantics. | confirmed |
+| DD-11 | Queue state remains separate from authority lifecycle truth. | DD-1, DD-10 | 11 | recorded recommendation | Preserve separate queue and authority truths and join them only in read models. | This avoids forcing scheduler policy into run-lifecycle ownership. | No further input needed; it is required by the service-boundary decision. | confirmed |
+| DD-12 | Queue config file format and location. | DD-8 | 12 | recorded recommendation | Require explicit-path, versioned YAML loading with optional `loom[config]` composition for complex authored configs. | This affects reproducibility, preflight behavior, and dependency boundaries. | No further input needed unless the user wants magic discovery later. | confirmed |
+| DD-13 | Queue-owned run identity and dispatch idempotency. | FR-5, FR-14 | 13 | recorded recommendation | Give each queue item an immutable id, persist a queue-owned `run_uri`, and increment `dispatch_attempt` only on explicit requeue/resubmit. | This affects crash recovery, cancellation targeting, and queue-to-authority status joins. | No further input needed; the stable-identity model is already accepted. | confirmed |
+| DD-14 | Managed-pool authority-limit ownership. | FR-7 | 14 | recorded recommendation | First-version managed pools validate against pre-provisioned authority limits and do not mutate authority truth. | This prevents queue policy from becoming a second resource-limit owner. | No further input needed; the validation-only resource-ownership rule is already settled. | confirmed |
 
 ## Design Decisions
 
 | ID | Decision | Selected approach | User feedback | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Validation/documentation obligation | Debt and revisit trigger | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| DD-1 | Service boundary | Separate queue service, co-managed by supervisor commands. | User accepted separate service and co-management. | Embed queue inside authority; fully independent daemon only. | Keeps scheduler policy out of authority truth while avoiding extra operator burden. | Clearer module ownership. | Future hosted/broker queue can replace queue service without changing authority. | Import-boundary tests and supervisor docs. | Co-management may grow supervisor complexity; revisit if queue operations need independent deployment. | confirmed |
+| DD-1 | Service boundary | Separate queue service, co-managed by supervisor commands, with queue-to-authority interaction limited to public authority-service APIs. | User accepted separate service and co-management, and explicitly rejected any direct access to private authority storage. | Embed queue inside authority; fully independent daemon only; direct private-authority storage access. | Keeps scheduler policy out of authority truth while avoiding extra operator burden and preserving a hard service boundary. | Clearer module ownership. | Future hosted/broker queue can replace queue service without changing authority. | Import-boundary tests and supervisor docs. | Co-management may grow supervisor complexity; revisit if queue operations need independent deployment. | confirmed |
 | DD-2 | Built-in queue storage | SQLite queue service DB. | User selected SQLite. | Authority DB tables; external broker only. | Dependency-free and HPC-friendly. | Keeps persistence simple and inspectable. | Broker-backed adapters can be added later. | Repository schema tests and restart tests. | SQLite concurrency limits may matter at high scale; revisit when many controllers need high write throughput. | confirmed |
 | DD-3 | Scheduling unit | Whole runs only. | User selected whole runs and future stage consideration. | Per-stage scheduler; sweep-only queue. | Satisfies immediate job queue goal without replacing runner DAG logic. | Smaller version with fewer lifecycle changes. | Stage scheduling can build later from the same queue/resource ideas. | Tests enqueue independent runs. | No fine-grained DAG-level global optimization; revisit when per-stage cluster utilization becomes important. | confirmed |
-| DD-4 | Queue structure | Queue pools plus one FIFO queue per pool. | User selected pool+queues and later clarified one FIFO queue per pool for now. | Queues only; pools only; multiple queues per pool in this version. | Avoids duplicating pool/resource/adaptor settings while preserving a simple backlog model. | Cleaner config and status model without cross-queue arbitration. | Leaves a scheduler-policy interface for future priorities, resource-dependent dispatch, and fair sharing. | Config validation and single-queue-per-pool tests. | First version omits multi-queue policy; revisit with resource-dependent scheduling or multi-team usage. | confirmed |
+| DD-4 | Queue structure | Queue pools plus one FIFO queue per pool in v11, with the concrete FIFO behavior wrapped in an explicit scheduler-policy interface or adapter seam for future arbitrary policy replacement. | User selected pool+queues, clarified one FIFO queue per pool for now, and asked that the planned behavior be wrapped in a future-extensible policy interface. | Queues only; pools only; multiple queues per pool in this version; hard-coded FIFO selection logic with no later policy seam. | Avoids duplicating pool/resource/adaptor settings while preserving a simple backlog model and keeping future policy evolution reviewable. | Cleaner config and status model without cross-queue arbitration. | Leaves a scheduler-policy interface for future priorities, resource-dependent dispatch, fair sharing, multi-queue routing, or site-specific policies. | Config validation, single-queue-per-pool tests, and interface documentation should make the v11 FIFO policy explicit while preserving the extension seam. | First version omits multi-queue policy; revisit with resource-dependent scheduling, multi-team usage, or site-specific policy requirements. | confirmed |
 | DD-5 | Capacity model | Managed resource mode plus delegated downstream mode. | User selected both. | Managed-only; delegated-only. | Prevents double scheduling with SLURM while supporting Loom-managed local capacity. | Makes capacity ownership explicit. | Works for future adapters with either resource ownership style. | Managed lease tests and delegated fake scheduler tests. | Users must understand mode choice; revisit after docs/examples feedback. | confirmed |
 | DD-6 | Cancellation | Required cancel API for included adapters; queue never claims cancellation success without proof. | User clarified that accurate reporting is the first guarantee. | Guaranteed stop only; best-effort success. | Keeps operational truth accurate without excluding all remote systems. | Avoids lying about remote state. | Adapters can report richer evidence later. | Cancellation outcome tests and diagnostics docs. | Unknown states require manual follow-up; revisit with reconciliation features. | confirmed |
-| DD-7 | Generic SSH launch | Defer from the first version. | User agreed to defer SSH. | Shipping SSH now; raw command templates. | Avoids early remote-wrapper complexity before local and SLURM queue semantics are proven. | Keeps adapter scope aligned with existing execution surfaces. | Leaves room for a future SSH adapter once bundle transport or remote-install strategy is clearer. | Config and documentation must make first-version adapter support explicit. | Revisit when users need non-SLURM remote dispatch or bundle transport clarifies remote contracts. | confirmed |
+| DD-7 | Generic SSH launch | Defer from the first version, but preserve modular adapter boundaries and a public queue API shape that can later admit generic SSH and SLURM-over-SSH without queue-core redesign. | User agreed to defer SSH, while explicitly asking that the first implementation stay modular enough to support later SSH-style roadmap items. | Shipping SSH now; raw command templates; hard-coding local/SLURM assumptions into queue-core APIs. | Avoids early remote-wrapper complexity before local and SLURM queue semantics are proven, while making future transport expansion a deliberate extension rather than a refactor. | Keeps adapter scope aligned with existing execution surfaces. | Leaves room for a future SSH adapter once bundle transport or remote-install strategy is clearer, and for submit-host variants such as SLURM-over-SSH. | Config, package-boundary, and public-API documentation must make first-version adapter support explicit while preserving extension seams. | Revisit when users need non-SLURM remote dispatch or bundle transport clarifies remote contracts. | confirmed |
 | DD-8 | Setup surface | Python API plus trusted queue config file loading. | User selected this. | Python API only; service API only. | Programmatic first while still enabling repeatable project queue setup. | Keeps CLI bulk submit optional. | Config schema can become CLI/API input later. | Public API and config-loader tests. | CLI UX may lag; revisit before examples phase. | confirmed |
 | DD-9 | Operational CLI | Add a thin wrapper after the Python API is stable. | User selected Python API first and a minimal CLI later. | Rich CLI-first workflow; no CLI at all. | Gives operators a small practical surface without moving the primary contract away from Python. | Limits operational surface growth early. | CLI can stay a thin adapter over Python service/client/controller APIs. | Lifecycle/status/cancel/drain wrapper tests and concise docs. | Revisit if operators need richer CLI bulk submission or scripting workflows. | confirmed |
 | DD-10 | Status model | Keep queue status and authority lifecycle separate and join them in read models. | User agreed to keep queue and authority state separate. | Extending `RunStatus` with queue states; making queue DB authoritative for run lifecycle. | Preserves one source of truth per concern while still allowing one user-facing job view. | Reduces lifecycle coupling and authority churn. | Joined read models can evolve without forcing authority enum changes. | Status-join tests and documentation that distinguishes queue state from run truth. | Revisit only if implementation evidence shows joined views are insufficient. | confirmed |
 | DD-11 | Supervisor co-management | Keep it minimal and operational, with clean Python APIs first. | User agreed to focus on Python API and add a minimal CLI wrapper later. | Shared process/database; generalized orchestration manager. | Preserves clear ownership boundaries while keeping local operations practical. | Avoids turning supervisor code into a second control-plane framework. | Later hosted or richer queue service management can extend thin hooks rather than unwind a broad early design. | Package-boundary tests and concise operator docs. | Revisit if queue operations need independent deployment or richer fleet management. | confirmed |
 | DD-12 | Queue config loading | Use explicit config paths with a versioned trusted YAML schema, with a small direct loader for plain queue specs and an optional `loom[config]` composition path when authored config needs includes/overlays/interpolation/recipe features. | User accepted explicit-path loading and a layered loader story. | Implicit current-directory discovery; environment-driven discovery; CLI-only configuration; unversioned ad hoc config records; forcing all queue config through `loom[config]`. | Matches the repo's explicit-config bias, keeps Python APIs primary, and avoids hiding queue behavior behind path-search rules before the queue contract is stable. | Removes ambiguous discovery rules from the first implementation while keeping queue-core imports decoupled from config extras. | Future CLI or project conventions can add optional discovery wrappers later without changing the underlying config schema. | Loader tests, schema-version tests, config-extra boundary tests, and concise docs that explain explicit-path loading plus when `loom[config]` composition is required. | First version lacks a workspace-wide default location; revisit only if repeated operator workflows show a clear need for a standard discovery convention. | confirmed |
-| DD-13 | Queue-owned run identity and dispatch idempotency | Each queued item gets an immutable `queue_item_id`; before first launch handoff the queue persists a queue-owned `run_uri` derived deterministically from that id and the configured run root, and all ordinary recovery or retry paths reuse that same `run_uri`. A separate `dispatch_attempt` counter increments only on explicit requeue or resubmit, not on controller restart or status polling recovery. | User accepted the stable identity model. | Fresh `allocate_run_uri()` on each launch attempt; adapter-owned run identity; queue item id without a persisted `run_uri`; incrementing attempt identity on ordinary controller recovery. | Current run paths already expect an explicit `run_uri`, while the existing allocator does not reserve identity durably before writes. Persisting the `run_uri` on the queue item before first handoff prevents duplicate runs and preserves a stable queue-to-authority join key. | Keeps recovery and cancellation targeting straightforward because queue state, authority state, and submitted-job state can all refer to the same persisted run identity. | Future adapters can add richer dispatch handles without changing the queue-owned run identity contract. A later roadmap can redesign path layout without changing the invariant that one queue item owns one persistent `run_uri`. | Tests must cover controller crash/restart before and after first dispatch handoff, duplicate-dispatch prevention, status joins keyed by persisted `run_uri`, and explicit requeue behavior with incremented `dispatch_attempt`. | The exact path convention, for example a `runs/queue/<queue_item_id>` subtree, can be refined in the implementation plan as long as the persisted queue-owned `run_uri` invariant stays fixed. | confirmed |
+| DD-13 | Queue-owned run identity and dispatch idempotency | Each queued item gets an immutable `queue_item_id`; before first launch handoff the queue persists a queue-owned `run_uri` derived deterministically from that id and the configured run root, and all ordinary recovery or retry paths reuse that same `run_uri`. A separate `dispatch_attempt` counter increments only on explicit requeue or resubmit, not on controller restart or status polling recovery. | User accepted the stable identity model and asked that enqueue-time snapshot semantics anticipate later public API needs without pulling future implementation into v11. | Fresh `allocate_run_uri()` on each launch attempt; adapter-owned run identity; queue item id without a persisted `run_uri`; incrementing attempt identity on ordinary controller recovery. | Current run paths already expect an explicit `run_uri`, while the existing allocator does not reserve identity durably before writes. Persisting the `run_uri` on the queue item before first handoff prevents duplicate runs and preserves a stable queue-to-authority join key. | Keeps recovery and cancellation targeting straightforward because queue state, authority state, and submitted-job state can all refer to the same persisted run identity. | Future adapters and later bundle/transport work can extend dispatch contracts without changing the queue-owned run identity contract or redefining the enqueue-time snapshot. | Tests must cover controller crash/restart before and after first dispatch handoff, duplicate-dispatch prevention, status joins keyed by persisted `run_uri`, and explicit requeue behavior with incremented `dispatch_attempt`. | The exact path convention, for example a `runs/queue/<queue_item_id>` subtree, can be refined in the implementation plan as long as the persisted queue-owned `run_uri` invariant stays fixed. | confirmed |
 | DD-14 | Managed-pool authority-limit ownership | First-version managed pools validate against pre-provisioned authority limits and never silently mutate authority resource truth during enqueue or dispatch. | User agreed with validate-only first-version behavior. | Silent queue-side mutation during enqueue/dispatch; queue-owned resource-limit truth. | Keeps queue policy separate from authority-managed coordination truth and matches the existing `WorkspaceCoordinationStore` ownership boundary. | Prevents a second source of truth for resource limits. | A later roadmap can add explicit provisioning APIs through authority if operators need them, without changing queue item semantics. | Validation tests for limit mismatch diagnostics and docs that explain pre-provisioned authority limits for managed pools. | Revisit only if operators need queue-driven resource provisioning through a designed authority contract. | confirmed |
 
-## Design Decision Triage
+## Design Agreement Triage
 
 | Decision ID | Final classification | Reviewer challenge considered | Traceability | Manager action | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -630,8 +750,9 @@ Gate result:
   - Use explicit-path, versioned YAML queue-config loading in the first version.
   - Permit optional `loom[config]` composition for complex queue configs without
     making queue-core imports depend on config extras.
-  - Keep queue-core imports independent from config-extra loading paths.
-  - Keep queue-owned run identity separate from adapter dispatch handles.
+- Keep queue-core imports independent from config-extra loading paths.
+- Keep queue-owned run identity separate from adapter dispatch handles.
+- Keep queue-to-authority integration limited to public authority-service APIs.
 - Accepted risks:
   - Delegated execution such as SLURM may rely on pre-staged/shared workspace
     assumptions where applicable.
@@ -653,9 +774,10 @@ Public Python API surface:
 - Load trusted queue configuration from project files.
 - Enqueue one or many `QueuedRunIntent` values.
 - Query status and cancellation results.
-- Run a controller in long-lived or foreground-drain mode.
+- Run a controller in daemon/service or foreground-drain compatibility mode.
 - Optionally run a foreground drain controller from Python for tests and
-  restricted environments.
+  restricted environments while keeping the daemon/service path as the primary
+  guarantee surface.
 
 Queue config loading shape:
 
@@ -672,6 +794,8 @@ Queue config loading shape:
 CLI surface:
 
 - Python API is the primary setup/enqueue/control surface.
+- Daemon/service lifecycle is the primary operational path; foreground drain is
+  a compatibility wrapper for restricted environments.
 - CLI is a thin operational wrapper for:
   - `loom queue service start|stop|status`
   - `loom queue drain --foreground`
@@ -702,6 +826,8 @@ Import boundaries and dependencies:
 - Optional adapter packages must remain isolated behind launch adapter protocols.
 - Queue modules may import public authority clients; authority modules must not
   import queue scheduler policy.
+- Queue modules must not open private authority storage even when local or
+  co-managed service deployment makes it technically reachable.
 
 Failure modes and diagnostics:
 
@@ -720,6 +846,8 @@ Extension points and flexibility boundaries:
 
 - Launch adapter protocol should support local, SLURM, future SSH, broker, Ray,
   Prefect, and future site-specific adapters.
+- First-version public queue APIs should be reviewed for transport neutrality
+  so later SSH and SLURM-over-SSH additions can fit the same queue-core model.
 - Pool dispatch modes should remain explicit so adapters do not silently choose
   resource ownership.
 - First-version scheduler policy should be a replaceable minimal interface:
@@ -777,29 +905,204 @@ Accepted debt:
 
 | Example | Behavior demonstrated | Loom context | Required docs/tests | Status |
 | --- | --- | --- | --- | --- |
-| Local GPU pool | Queue has `gpu=1`, `cpu=X`; two local runs requiring one GPU dispatch one at a time. | Managed resource mode through authority leases. | Unit/integration tests with fake/local adapters and service-backed resource leases. | draft |
-| Delegated SLURM queue | Multiple queued runs submit to SLURM and remain pending/running according to Slurm status without holding Loom leases. | Delegated capacity mode. | Fake SLURM command runner tests and docs explaining double-scheduling avoidance. | draft |
-| Foreground drain | Controller runs in foreground; local managed work is monitored to terminal/unknown state, while delegated work can exit after durable external handoff. | Restricted HPC/cron-friendly operation with recovery/cancellation preserved. | Integration test using temporary SQLite queue DB. | draft |
-| Accurate cancellation reporting | Cancel pending item immediately; cancel active local/SLURM item through adapter; unknown delegated outcome is explicit and never reported as success. | Adapter cancellation contract. | Unit tests per adapter and status rendering tests. | draft |
-| Snapshot and delegated launch checks | Config changes after enqueue are detected locally; delegated adapters record which launch assumptions and checks were proven. | Run intent snapshot plus deferred remote-equivalence proof. | Config-hash test and delegated-launch diagnostics. | draft |
+| Local GPU pool | Queue has `gpu=1`, `cpu=X`; two local runs requiring one GPU dispatch one at a time. | Managed resource mode through authority leases. | Unit/integration tests with fake/local adapters and service-backed resource leases. | ready |
+| Delegated SLURM queue | Multiple queued runs submit to SLURM and remain pending/running according to Slurm status without holding Loom leases. | Delegated capacity mode. | Fake SLURM command runner tests and docs explaining double-scheduling avoidance. | ready |
+| Foreground drain | Controller runs in foreground compatibility mode; local managed work is monitored to terminal/unknown state, and delegated active work may exit only after successful submit, durable handle persistence, and at least one downstream status read. Authority run visibility is not required before exit. | Restricted HPC/cron-friendly operation with recovery/cancellation preserved. | Integration test using temporary SQLite queue DB plus delegated-handoff assertions. | ready |
+| Accurate cancellation reporting | Cancel pending item immediately; cancel active local/SLURM item through adapter; unknown delegated outcome is explicit and never reported as success. | Adapter cancellation contract. | Unit tests per adapter and status rendering tests. | ready |
+| Snapshot and delegated launch checks | Config changes after enqueue are detected locally; delegated adapters record which launch assumptions and checks were proven. | Run intent snapshot plus deferred remote-equivalence proof. | Config-hash test and delegated-launch diagnostics. | ready |
 
 ## Validation Strategy
 
 | Area | Behavior validated | Required coverage | Test/check type | Command or location | Status |
 | --- | --- | --- | --- | --- | --- |
-| Queue models | Schema validation, serialization, unknown-field rejection, status transitions. | Unit tests. | `pytest` | New queue model tests. | draft |
-| SQLite repository | Durable enqueue, claim, dispatch, cancel, recovery across restart. | Unit/integration tests. | `pytest` | New queue repository tests. | draft |
-| Authority boundary | Queue uses public authority clients and never imports private authority repository. | Package/import tests. | `pytest` | Package boundary tests. | draft |
-| Managed resource mode | Resource leases gate dispatch and release on terminal outcomes. | Integration tests with service-backed coordination. | `pytest` | Queue-controller resource tests. | draft |
-| Delegated mode | Dispatch does not acquire Loom leases and records external handles/status. | Unit/integration tests with fake adapter. | `pytest` | Adapter/controller tests. | draft |
-| Local adapter | Launch, status, cancellation, exit-code handling. | Unit/integration tests. | `pytest` | Local adapter tests. | draft |
-| SLURM adapter | Submit/status/cancel with fake `sbatch`, `squeue`/`sacct`, and `scancel`. | Unit/integration tests. | `pytest` | SLURM adapter tests. | draft |
-| Service operations | Start/stop/status, schema version, stale process, foreground drain. | Integration/e2e tests. | `pytest` and targeted CLI tests if CLI included. | Queue service tests. | draft |
-| Opt-in real systems | Real SLURM smoke. | Opt-in only. | environment-gated tests | Real environment markers. | draft |
+| `v10-post` authority resolution and supervisor hardening | Live readiness gates mutation, registry remains hint-only, restart invalidates stale generations, and the explicit workspace-default state-dir surface behaves consistently. | Unit and integration CLI/authority tests. | `pytest` | Existing and new authority supervisor/resolver tests. | required prerequisite |
+| `v10-post` strict runtime, worker, and SLURM live paths | Continuations and workers fail before user code on stale or missing authority facts, controller-driven recovery remains the only normal path, strict live SLURM requires direct authority reachability, and deferred finalization stays explicit compatibility only. | Unit and integration runtime/worker/SLURM tests. | `pytest` | Runner, continuation, stage-worker, and SLURM path tests. | required prerequisite |
+| `v10-post` diagnostics, coordination, and admission tightening | Read-only fallback labeling remains explicit, deferred/offline states stay distinct, authority owns coordination mutation, and resource admission preserves fail-fast plus bounded-wait behavior. | Unit and integration diagnostics/coordination/resource tests. | `pytest` | Source-label, coordination, and resource-admission tests. | required prerequisite |
+| `v10-post` offline import and mutation safety | Import stays complete-manifest-only with strict collision rejects, imported provenance persists, and successful completion remains atomic and fence-guarded. | Unit and integration authority import/lifecycle tests. | `pytest` | Offline evidence/import and lifecycle repository tests. | required prerequisite |
+| Queue models | Schema validation, serialization, unknown-field rejection, status transitions. | Unit tests. | `pytest` | New queue model tests. | ready |
+| SQLite repository | Durable enqueue, claim, dispatch, cancel, recovery across restart. | Unit/integration tests. | `pytest` | New queue repository tests. | ready |
+| Authority boundary | Queue uses public authority clients and never imports private authority repository. | Package/import tests. | `pytest` | Package boundary tests. | ready |
+| Managed resource mode | Resource leases gate dispatch and release on terminal outcomes. | Integration tests with service-backed coordination. | `pytest` | Queue-controller resource tests. | ready |
+| Delegated mode | Dispatch does not acquire Loom leases and records external handles/status. | Unit/integration tests with fake adapter. | `pytest` | Adapter/controller tests. | ready |
+| Local adapter | Launch, status, cancellation, exit-code handling. | Unit/integration tests. | `pytest` | Local adapter tests. | ready |
+| SLURM adapter | Submit/status/cancel with fake `sbatch`, `squeue`/`sacct`, and `scancel`. | Unit/integration tests. | `pytest` | SLURM adapter tests. | ready |
+| Service operations | Daemon start/stop/status, schema version, stale process handling, and foreground drain compatibility behavior. | Integration/e2e tests. | `pytest` and targeted CLI tests if CLI included. | Queue service tests. | ready |
+| Opt-in real systems | Real SLURM smoke. | Opt-in only. | environment-gated tests | Real environment markers. | ready |
 
-## Phase Sketch
+## Pre-v11 `v10-post` Hardening
 
-### Phase 1 - Queue Records And SQLite Repository
+This tranche leads the combined `v10-post -> v11` workflow. It does not change
+the queue scope; it tightens the authority/runtime contracts the dependent
+queue phases will rely on.
+
+Locked behavioral contract:
+
+- Authority is the only runtime truth for scheduling, lifecycle mutation, and
+  coordination.
+- Local materialization remains useful for diagnostics and read models but never
+  substitutes for live authority mutation.
+- All online mutation paths fail closed when live authority checks fail.
+- `direct_database` remains closed for runtime mutation.
+- Strict live SLURM requires direct authority reachability; deferred
+  finalization is explicit compatibility only.
+- Offline import produces authoritative historical truth, not resumable live
+  continuation context.
+- Future repair, inspection-based resume, and partial-attempt resume remain
+  deferred explicit work rather than normal continuation behavior.
+
+### `v10-post` Phase 1 - Authority Resolution And Supervisor Hardening
+
+Goal:
+
+- Finalize strict authority resolution, registry semantics, and explicit
+  workspace-default supervisor state-dir behavior before queue work depends on
+  those surfaces.
+
+Scope:
+
+- Mandatory live readiness checks before mutation.
+- Registry remains a bootstrap hint, never authority truth.
+- `loom authority stop` keeps the registry record and marks it unavailable.
+- One authority per workspace for the current contract.
+- Explicit `--use-workspace-default` support resolving to
+  `<workspace-root>/.loom/authority/service`.
+
+Out of scope:
+
+- Queue service work.
+- Multi-authority workspace support.
+- Hidden implicit supervisor defaults for `start`.
+
+Acceptance criteria:
+
+- Mutating authority paths reject stale registry data or missing live readiness.
+- Supervisor commands expose a consistent explicit workspace-default state-dir
+  surface without reintroducing hidden `start` defaults.
+- Restart generation changes invalidate stale clients immediately.
+
+Test expectations:
+
+- Unit and integration coverage for authority resolution, registry validation,
+  supervisor lifecycle commands, and the explicit workspace-default path.
+
+### `v10-post` Phase 2 - Strict Runtime, Worker, And SLURM Live Paths
+
+Goal:
+
+- Tighten runtime mutation paths so local runners, workers, continuations, and
+  live SLURM jobs all preserve the same fail-closed authority contract.
+
+Scope:
+
+- No best-effort local resume by inspection in normal paths.
+- Worker and continuation validation fails before user code when authority facts
+  are stale or missing.
+- Recovery remains controller-driven.
+- Strict live SLURM requires direct authority commits and reachability.
+- Deferred finalization remains behind explicit acknowledgement only.
+- Authority loss stops further stage launches immediately.
+
+Out of scope:
+
+- Inspection-based repair workflows.
+- Partial-attempt resume.
+- Queue dispatch behavior.
+
+Acceptance criteria:
+
+- No user stage code starts with stale or missing authority lease/fencing data.
+- Live SLURM fails closed if authority is unreachable at worker start or commit
+  time.
+- No runtime path silently falls back to deferred finalization.
+
+Test expectations:
+
+- Runner, continuation, stage-worker, and SLURM lifecycle coverage proving the
+  strict live-path behavior and explicit compatibility downgrade surface.
+
+### `v10-post` Phase 3 - Diagnostics, Coordination, And Resource Admission Tightening
+
+Goal:
+
+- Freeze the read-path and coordination semantics that main v11 status, queue,
+  and resource-pool logic will assume.
+
+Scope:
+
+- Live-first read-only diagnostics with explicit stale/local fallback labeling.
+- Distinct deferred-finalization, offline-evidence, and authoritative state
+  labels.
+- Authority-owned coordination mutation and controller-owned resource leases
+  only.
+- Fail-fast admission by default with explicit bounded-wait support and reasoned
+  outcomes.
+
+Out of scope:
+
+- Queue status/read models.
+- Worker self-acquisition of coordination or resource leases.
+- New scheduler policy.
+
+Acceptance criteria:
+
+- Read-only surfaces clearly distinguish authoritative, local, deferred, and
+  offline sources.
+- Resource admission keeps `admitted`, `rejected`, and `blocked` while exposing
+  machine-readable reasons.
+- Authority restart or lease loss fails and requires controller reacquisition.
+
+Test expectations:
+
+- Diagnostics/source-label, coordination, and resource-admission coverage for
+  fail-fast, bounded-wait, and source-label correctness.
+
+### `v10-post` Phase 4 - Offline Import, Mutation Safety, And Deferred Repair Contracts
+
+Goal:
+
+- Lock offline import and terminal mutation semantics so later queue and
+  recovery features build on strict historical truth instead of soft repair
+  behavior.
+
+Scope:
+
+- Offline-first remains explicit.
+- Import requires a complete manifest and terminal run state.
+- Collision handling stays strict reject-by-default.
+- Imported provenance remains permanently preserved when safe.
+- Successful stage completion remains atomic and fence-guarded.
+- Imported offline attempts remain historical records, not resumable live
+  attempts.
+
+Out of scope:
+
+- Merge, overwrite, or fork-style import policies.
+- Normal-path repair or inspection-based resume.
+- Partial-attempt resume.
+
+Acceptance criteria:
+
+- Incomplete, non-terminal, or colliding offline imports fail explicitly.
+- Imported runs preserve offline provenance while becoming authoritative truth.
+- Terminal success cannot be recorded without the same-attempt fenced output
+  commit.
+
+Test expectations:
+
+- Offline evidence/import, repository lifecycle, and mutation-safety coverage
+  proving strict import and atomic success behavior.
+
+## Main v11 Phase Sketch
+
+The queue phase numbering stays stable after the `v10-post` dependency tranche.
+In the combined workflow, `v10-post Phase 1` through `v10-post Phase 4` remain
+the required stack prefix for `v11 Phase 1` through `v11 Phase 5`, but the full
+sequence should progress as one stacked workflow. Dependent v11 phases may move
+forward once their predecessors are validated and recorded as `pr_open` or
+merged, with downstream artifacts refreshed if the dependency prefix changes the
+queue-facing contracts materially.
+
+### v11 Phase 1 - Queue Records And SQLite Repository
 
 Goal:
 
@@ -831,7 +1134,7 @@ Test expectations:
   enqueue/claim/complete/cancel/unknown state transitions, one-queue-per-pool
   validation, and restart recovery.
 
-### Phase 2 - Queue Service, Client, And Python Control Surface
+### v11 Phase 2 - Queue Service, Client, And Python Control Surface
 
 Goal:
 
@@ -842,7 +1145,8 @@ Scope:
 
 - Queue service process boundary.
 - Queue client methods.
-- Python controller entrypoints for long-lived and foreground-drain operation.
+- Python controller entrypoints for daemon/service and foreground-drain
+  compatibility operation.
 
 Out of scope:
 
@@ -851,20 +1155,22 @@ Out of scope:
 
 Acceptance criteria:
 
-- Queue can be configured, started, and foreground-drained from Python against
-  fake work without orphaning local managed work.
+- Queue can be configured, started, and controlled from Python against fake
+  work, including foreground-drain compatibility mode without orphaning local
+  managed work.
 - Authority private storage remains untouched by queue code.
 
 Test expectations:
 
 - Package boundary, service lifecycle, Python API, and fake-controller tests.
 
-### Phase 3 - Managed Resource Pools And Local Launcher
+### v11 Phase 3 - Managed Resource Pools And Local Launcher
 
 Goal:
 
-- Connect queue dispatch to v10 authority-backed resource limits/leases and add
-  a local launch adapter with accurate status/cancel behavior.
+- Connect queue dispatch to the post-`v10-post` authority-backed resource
+  limit/lease contracts and add a local launch adapter with accurate
+  status/cancel behavior.
 
 Scope:
 
@@ -882,15 +1188,15 @@ Acceptance criteria:
 
 - Local queued runs respect configured resource limits and active limits.
 - Cancellation works for pending and active local work.
-- Foreground drain does not exit while local managed work remains active unless
-  it has recorded an explicit unknown/recovery state.
+- Foreground drain compatibility mode does not exit while local managed work
+  remains active unless it has recorded an explicit unknown/recovery state.
 
 Test expectations:
 
 - Service-backed resource integration, local process adapter tests, and queue
   status tests.
 
-### Phase 4 - Delegated SLURM Dispatch
+### v11 Phase 4 - Delegated SLURM Dispatch
 
 Goal:
 
@@ -918,17 +1224,17 @@ Test expectations:
 
 - Fake command runner unit/integration tests and opt-in real SLURM smoke.
 
-### Phase 5 - Operational UX, Minimal CLI Wrapper, Docs, And Hardening
+### v11 Phase 5 - Operational UX, Minimal CLI Wrapper, Docs, And Hardening
 
 Goal:
 
-- Finalize queue status/cancel/foreground-drain operations, examples, preflight
-  checks, and documentation.
+- Finalize queue status/cancel/daemon-service/foreground-drain operations,
+  examples, preflight checks, and documentation.
 
 Scope:
 
-- Minimal operational CLI wrapper for service lifecycle, foreground drain,
-  status, and cancel.
+- Minimal operational CLI wrapper for daemon/service lifecycle, foreground
+  drain compatibility mode, status, and cancel.
 - Preflight diagnostics for queue service, authority connection, resource pool
   configuration, SLURM command availability, and delegated-launch workspace
   assumptions.
@@ -952,21 +1258,30 @@ Test expectations:
 
 | Check | Evidence | Result | Required action |
 | --- | --- | --- | --- |
+| Pre-v11 `v10-post` prerequisite tranche | `Pre-v11 v10-post Hardening` now captures the locked authority/runtime contract changes main v11 depends on. | pass | Treat `v10-post Phase 1` through `v10-post Phase 4` as the dependency prefix of the same stacked workflow and refresh downstream queue phases if those contracts change materially. |
 | Roadmap-to-requirement traceability | `Roadmap Extraction`, `Capability Triage`, and `FR-1` through `FR-15` map the inserted v11 roadmap entry into concrete queue requirements. | pass | None. |
-| Requirement-to-design traceability | Functional requirements map to `DD-1` through `DD-14`, practical design notes, and the phase sketch. | pass | Keep the same traceability in the implementation plan. |
+| Requirement-to-design traceability | Functional requirements map to the resolved `Design Agreement Queue`, `DD-1` through `DD-14`, practical design notes, and the phase sketch. | pass | Keep the same traceability in the implementation plan. |
 | Design-safety review completed | `Design Safety Review` now records a completed local review on 2026-05-12 with the run-identity, managed-resource-ownership, and config-loading seams all frozen into explicit recommendations. | pass | Carry the frozen recommendations into the implementation plan. |
-| Example-to-validation traceability | The examples cover managed local dispatch, delegated SLURM dispatch, foreground drain, cancellation, and snapshot-drift behavior; the validation table maps each to concrete suite expectations. | pass | Preserve the example-to-test mapping during plan drafting. |
-| Phase-shaping readiness | The notes now carry a five-phase MVP aligned to the locked scope and test obligations. | pass | Refine phase boundaries only if reviewability improves and deferred scope stays deferred. |
-| Unresolved blocked or needs-discussion decisions | No remaining user-facing product-scope question is open. The remaining carry-forward items are recommended docs-routing and package-placement choices plus prerequisite v10 surface verification. | pass | Verify the exact v10 authority/resource surfaces to target. |
-| Prerequisite v10 surface verification | The notes now name the queue design contracts clearly, but the implementation plan still needs one final evidence pass against current v10 authority/resource-lease docs and source entry points. | block | Verify the exact current v10 authority/resource-lease surfaces before freezing the implementation plan. |
+| Example-to-validation traceability | The examples cover managed local dispatch, delegated SLURM dispatch, foreground drain, cancellation, and snapshot-drift behavior; the validation table maps each to concrete suite expectations. | pass | Preserve the mapping during implementation-plan drafting. |
+| Phase-shaping readiness | The notes now carry a four-phase `v10-post` prerequisite tranche plus a five-phase main v11 MVP aligned to the locked scope and test obligations. | pass | Refine phase boundaries only if reviewability improves and deferred scope stays deferred. |
+| Unresolved blocked or needs-discussion decisions | The queue functionality-agreement and design-agreement queues are resolved. Docs routing and package placement are now settled implementation-plan inputs rather than open product-scope questions. | pass | Carry the settled inputs forward without reopening queue product scope. |
+| Prerequisite v10 surface verification | Current v10 queue-facing seams are now verified against docs and source: `docs/implementation-plans/implementation-plan-v10.md` fixes the prerequisite boundary; `create_authority_client(...)` in `src/loom/pipeline/stores/authority_factory.py`, the coordination routes in `src/loom/pipeline/stores/authority_client.py`, `WorkspaceCoordinationStore.acquire_resource_lease(...)` and `set_resource_limit(...)` in `src/loom/pipeline/stores/coordination.py`, `acquire_resource_admission(...)` in `src/loom/pipeline/execution/resource_admission.py`, and `PipelineRunner._acquire_stage_resource_admission(...)` in `src/loom/pipeline/execution/runner.py` show the exact public contracts main v11 should target after `v10-post` lands. | pass | Name these exact seams in the later main v11 implementation plan and refresh only if the prerequisite tranche changes them materially. |
 
 Readiness result:
 
-- Status: blocked
-- Implementation-plan drafting blockers:
-  - The exact v10 authority/resource-lease surfaces to target still need a
-    final evidence pass against current docs/source before freezing the
-    implementation plan.
+- Status: pass
+- Implementation-plan drafting notes:
+  - Draft one combined `v10-post -> v11` implementation workflow rather than
+    separate prerequisite and queue workflows.
+  - Keep `v10-post Phase 1` through `v10-post Phase 4` as the dependency prefix
+    for `v11 Phase 1` through `v11 Phase 5`, and refresh downstream phase
+    artifacts if those prerequisite phases materially change queue-facing
+    contracts.
+  - Workflow process note: implementation-plan drafting still requires explicit
+    user confirmation before entering the drafting prompt.
+- Execution sequencing notes:
+  - Later dependent phases may progress under the standard stacked-phase rules
+    once predecessors are validated and recorded as `pr_open` or merged.
 - Accepted risks:
   - Delegated SLURM execution still relies on pre-staged/shared-workspace
     assumptions until run-bundle transport exists.
@@ -975,6 +1290,8 @@ Readiness result:
   - No automatic retries, fairness, or multi-queue policy exist in the first
     version.
 - Assumptions to carry forward:
+  - `v10-post` remains a namespaced prerequisite tranche inside these notes
+    rather than a separate roadmap artifact.
   - Queue service and authority remain separate services and separate sources of
     truth.
   - Managed and delegated capacity modes both ship in the first version.
@@ -985,20 +1302,38 @@ Readiness result:
 ## Open Questions
 
 No user-facing product-scope question remains open. The remaining items are
-implementation-plan boundary recommendations rather than unresolved behavior.
+implementation-plan boundary inputs rather than unresolved behavior.
 
 | Question | Affects | Current default | Status |
 | --- | --- | --- | --- |
 | How is stable run identity allocated and reused across queue recovery? | Dispatch idempotency, status joins, recovery, and cancellation targeting. | Each queue item owns an immutable `queue_item_id`, a persisted queue-owned `run_uri` created before first handoff, and a `dispatch_attempt` counter that changes only on explicit requeue or resubmit. | answered |
 | Can managed queue pools mutate authority resource limits? | Resource ownership, correctness, and operational diagnostics. | No silent mutation during enqueue/dispatch; validate against pre-provisioned authority limits unless an explicit provisioning contract is designed. | answered |
-| Which feature doc should own the public queue contract? | Docs routing for queue behavior, examples, preflight, and status semantics. | Add a dedicated queue/workflow-scheduler feature doc and cross-link `execution.md`, `runtime-resources.md`, `slurm.md`, `preflight.md`, and `cli.md` rather than overloading `execution.md`. | recommended |
-| Should queue code start under `loom.queue` or `loom.pipeline.queue`? | Source-tree ownership and import boundaries. | Start under `loom.pipeline.queue` unless the implementation plan demonstrates that the public queue vocabulary needs a top-level package immediately. | recommended |
+| Which feature doc should own the public queue contract? | Docs routing for queue behavior, examples, preflight, and status semantics. | Use a dedicated queue/workflow-scheduler feature doc and cross-link `execution.md`, `runtime-resources.md`, `slurm.md`, `preflight.md`, and `cli.md`. | answered |
+| Should queue code start under `loom.queue` or `loom.pipeline.queue`? | Source-tree ownership and import boundaries. | Start under top-level `loom.queue` so the public package can expand cleanly in future, with the queue docs owned alongside that surface. | answered |
 
 ## Handoff Notes
 
-Implementation-plan draft inputs:
+Implementation-plan draft inputs for the combined `v10-post -> v11` workflow:
 
-- Locked MVP scope:
+- Workflow shape:
+  - Draft and execute one stacked workflow that starts with `v10-post Phase 1`
+    through `v10-post Phase 4` and then continues into `v11 Phase 1` through
+    `v11 Phase 5`.
+  - Use the latest validated `v10-post` stack tip as the base for the first
+    dependent v11 phase rather than waiting for a separate prerequisite
+    workflow to finish end-to-end.
+  - If a `v10-post` phase materially changes queue-facing contracts, refresh
+    these notes and any downstream dependent phase artifacts before continuing.
+- Locked `v10-post` prerequisite contract:
+  - authority is the only mutation truth;
+  - local materialization is read-only fallback/diagnostic state only;
+  - live SLURM is strict by default and deferred finalization is explicit
+    compatibility only;
+  - offline import remains strict historical import rather than live
+    continuation context;
+  - future repair, inspection-based resume, and partial-attempt resume stay out
+    of normal runtime behavior.
+- Locked main v11 MVP scope:
   - separate SQLite-backed queue service;
   - whole-run queue items only;
   - one FIFO queue per pool;
@@ -1014,10 +1349,24 @@ Implementation-plan draft inputs:
     configs, while keeping a small direct loader for plain queue specs.
 - Critical invariants:
   - queue code never opens authority private storage;
+  - queue-to-authority integration goes through public authority-service APIs
+    only;
   - managed resource limits and active leases remain authority truth;
   - delegated schedulers do not hold Loom leases by default;
   - queue status never replaces authority lifecycle truth;
   - cancellation success is never claimed without adapter proof.
+- Verified current v10 seams to target after `v10-post` lands:
+  - `create_authority_client(...)` in
+    `src/loom/pipeline/stores/authority_factory.py`;
+  - authority coordination routes in
+    `src/loom/pipeline/stores/authority_client.py`;
+  - `WorkspaceCoordinationStore.acquire_resource_lease(...)`,
+    `set_resource_limit(...)`, and `scan_recovery(...)` in
+    `src/loom/pipeline/stores/coordination.py`;
+  - `acquire_resource_admission(...)` and `ResourceAdmissionRequest` in
+    `src/loom/pipeline/execution/resource_admission.py`;
+  - `PipelineRunner._acquire_stage_resource_admission(...)` in
+    `src/loom/pipeline/execution/runner.py`.
 
 Design-safety review result:
 
@@ -1041,19 +1390,30 @@ Validation and phase-shaping inputs:
   - foreground drain behavior;
   - accurate cancellation reporting;
   - snapshot drift and delegated-launch verification reporting.
-- Current five-phase shape:
-  1. Queue records and SQLite repository.
-  2. Queue service, client, and Python control surface.
-  3. Managed resource pools and local launcher.
-  4. Delegated SLURM dispatch.
-  5. Operational UX, minimal CLI wrapper, docs, and hardening.
+- Namespaced phase shape to preserve:
+  1. `v10-post` Phase 1: authority resolution and supervisor hardening.
+  2. `v10-post` Phase 2: strict runtime, worker, and SLURM live paths.
+  3. `v10-post` Phase 3: diagnostics, coordination, and resource admission tightening.
+  4. `v10-post` Phase 4: offline import, mutation safety, and deferred repair contracts.
+  5. `v11` Phase 1: queue records and SQLite repository.
+  6. `v11` Phase 2: queue service, client, and Python control surface.
+  7. `v11` Phase 3: managed resource pools and local launcher.
+  8. `v11` Phase 4: delegated SLURM dispatch.
+  9. `v11` Phase 5: operational UX, minimal CLI wrapper, docs, and hardening.
 
 Plan-quality-gate risks:
 
-- The implementation plan must name exact v10 authority/resource-lease entry
-  points rather than hand-wave over unstable boundaries.
+- The implementation plan must keep the verified v10 authority/resource-lease
+  entry points explicit rather than collapsing them into vague "authority"
+  references, and it must reflect any contract tightening delivered by
+  `v10-post`.
 - The implementation plan must keep queue policy separate from authority truth
   in both public API design and package layout.
+- The implementation plan must assume the explicit supervisor
+  `--use-workspace-default` surface rather than relying on hidden state-dir
+  defaults.
+- The implementation plan must assume strict live-authority SLURM by default and
+  must not treat deferred finalization as the normal queue submission path.
 - The implementation plan must not silently reintroduce implicit config
   discovery, SSH, retries, fairness, or multi-queue policy through phase scope
   creep.
@@ -1064,4 +1424,5 @@ Assumptions to carry forward:
   broker or hosted orchestrator.
 - Queue config is trusted project code and can rely on existing Loom config
   conventions for YAML/plain-data validation.
-- Foreground drain is a first-class operational mode, not just a test helper.
+- Foreground drain remains a supported compatibility mode, not just a test
+  helper.

@@ -258,7 +258,7 @@ post-v0.
 Phase 6 defines the minimal context shape:
 
 ```text
-run_id
+run_uri
 stage_name
 resolved_config
 stage_config

@@ -322,7 +322,7 @@ Example:
 {
   "format": "loom.run_bundle.v1",
   "created_at": "2026-05-03T02:14:09Z",
-  "run_id": "20260503T021409Z-a13f7c",
+  "run_uri": "file:///abs/runs/20260503T021409Z-a13f7c",
   "entries": [
     {
       "path": "state/run.json",
@@ -398,7 +398,7 @@ Import should:
 ```text
 validate the bundle manifest
 reject unsafe paths
-create a new run directory or preserve the original run ID when safe
+create a new run directory or preserve the original run URI when safe
 write imported metadata
 verify checksums when requested
 update or mark the catalog index stale

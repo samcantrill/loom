@@ -147,7 +147,7 @@ no required database
 ```
 
 Databases, remote stores, and richer indexes can be added later only if the local
-file layout remains an understandable source of truth.
+file layout remains an understandable inspection surface.
 
 ---
 
@@ -433,11 +433,13 @@ One attempted or completed execution of a resolved pipeline configuration.
 
 A run may contain succeeded, failed, skipped, stale, or pending stages.
 
-### 5.2 Run ID
+### 5.2 Run URI
 
-A stable identifier for a run.
+The public identifier for a run.
 
-The run ID should be safe as a path component and stable across resume attempts.
+The `run_uri` should remain stable across resume attempts. Local
+implementations may derive safe directory names from a resolved local
+`run_uri`, but the public and persisted run identity is the `run_uri`.
 
 ### 5.3 Run Directory
 
@@ -465,7 +467,7 @@ The directory containing persisted state for one stage invocation within a run.
 Example:
 
 ```text
-runs/RUN_ID/stages/train/
+runs/LOCAL_RUN_DIR/stages/train/
 ```
 
 ### 5.5 Run Status
@@ -621,7 +623,8 @@ as long as practical.
 
 ### 6.6 Path Safety
 
-Run IDs and stage names must not allow path traversal.
+Local run-directory names derived from a `run_uri` and stage names must not
+allow path traversal.
 
 Reject:
 
