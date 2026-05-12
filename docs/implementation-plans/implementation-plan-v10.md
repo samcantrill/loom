@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 17 merged; Phase 18 pending
+- Phase work status: Phase 17 merged; Phase 18 pr_open
 
 Related artifacts and references:
 
@@ -2317,9 +2317,9 @@ Phase 17 merged on 2026-05-12:
 
 ### Phase 18: Offline Import Transaction
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/authority-offline-import`
-- PR: TBD
+- PR: https://github.com/samcantrill/loom/pull/136
 
 **Goal**
 
