@@ -6,6 +6,7 @@ level: introductory
 introduced_in: v0
 status: runnable
 validation: smoke
+surface: python_api
 entrypoints:
   - path: run_pipeline.py
     kind: python

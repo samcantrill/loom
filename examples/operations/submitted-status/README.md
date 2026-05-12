@@ -1,8 +1,13 @@
 # Submitted Status
 
-This example creates a synthetic submitted run and inspects it with ordinary
-`loom status`. It demonstrates the v7 submitted lifecycle without querying a
-scheduler.
+This internal demo is kept for regression coverage of synthetic submitted
+status records. It is not part of the primary user-facing catalog because it
+seeds submitted-operation state directly instead of showing a real scheduler or
+full live-submission workflow.
+
+It creates a synthetic submitted run under an explicit authority supervisor and
+inspects it with ordinary `loom status`. It demonstrates the v7 submitted
+lifecycle without querying a scheduler.
 
 Run from the repository root:
 

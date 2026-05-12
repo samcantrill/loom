@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v5
 status: runnable
 validation: smoke
+surface: cli
 entrypoints:
   - path: run_subprocess_pipeline.py
     kind: python

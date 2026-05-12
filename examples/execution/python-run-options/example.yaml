@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v4
 status: runnable
 validation: smoke
+surface: python_api
 entrypoints:
   - path: run_options_api.py
     kind: python

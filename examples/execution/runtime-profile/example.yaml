@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v4
 status: runnable
 validation: smoke
+surface: cli
 entrypoints:
   - path: run_runtime_profile.py
     kind: python

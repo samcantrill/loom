@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import io
+# ruff: noqa: E402
+
 import json
 import os
 import sys
@@ -12,9 +13,17 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from loom.cli.main import main as loom_main
-from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
-from loom.pipeline.stores.service_authority import LocalAuthorityService
+REPO_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "examples" / "support.py").is_file()
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from examples.support import run_cli_json
+from examples.support import started_authority_session
+from loom.pipeline.stores import path_to_run_uri
 
 
 HERE = Path(__file__).resolve().parent
@@ -27,12 +36,21 @@ def main() -> None:
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     config_path = HERE / "pipeline.yaml"
 
-    with LocalAuthorityService.start() as service:
-        authority_args = authority_config_to_cli_args(service.config())
+    with started_authority_session(output_root) as authority:
         with scheduler_commands_unavailable():
             summaries = [
-                run_dry_run(config_path, run_root, "slurm-single-job", authority_args),
-                run_dry_run(config_path, run_root, "slurm-afterok", authority_args),
+                run_dry_run(
+                    config_path,
+                    run_root,
+                    "slurm-single-job",
+                    authority.authority_args,
+                ),
+                run_dry_run(
+                    config_path,
+                    run_root,
+                    "slurm-afterok",
+                    authority.authority_args,
+                ),
             ]
 
     print("slurm_dry_run_basics:")
@@ -107,24 +125,6 @@ def run_dry_run(
         "warning_codes": warning_codes,
         "scheduler_ids_absent": scheduler_ids_absent,
     }
-
-
-def run_cli_json(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    code = loom_main(argv, stdout=stdout, stderr=stderr)
-    if code != expected:
-        raise RuntimeError(
-            f"loom {' '.join(argv)} exited {code}; stdout={stdout.getvalue()!r}; "
-            f"stderr={stderr.getvalue()!r}"
-        )
-    if stderr.getvalue():
-        raise RuntimeError(f"unexpected stderr from loom {' '.join(argv)}")
-    payload = json.loads(stdout.getvalue())
-    if not isinstance(payload, dict):
-        raise RuntimeError("CLI JSON output was not a mapping")
-    return payload
-
 
 def require_mappings(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):

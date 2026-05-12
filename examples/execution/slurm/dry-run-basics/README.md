@@ -3,6 +3,44 @@
 This example generates SLURM dry-run artifacts for a small two-stage pipeline.
 It does not call `sbatch` or execute the generated scripts.
 
+## Workflow
+
+This workflow uses:
+
+- `loom run CONFIG --executor slurm-single-job --dry-run`
+- `loom run CONFIG --executor slurm-afterok --dry-run`
+
+## Variants
+
+Canonical single-job dry-run:
+
+```sh
+uv run loom run examples/execution/slurm/dry-run-basics/pipeline.yaml \
+  --run-uri file:///tmp/loom-examples/slurm-single-job \
+  --executor slurm-single-job \
+  --dry-run
+```
+
+Afterok dry-run variant:
+
+```sh
+uv run loom run examples/execution/slurm/dry-run-basics/pipeline.yaml \
+  --run-uri file:///tmp/loom-examples/slurm-afterok \
+  --executor slurm-afterok \
+  --dry-run
+```
+
+Explicit co-located authority selection:
+
+```sh
+uv run loom run examples/execution/slurm/dry-run-basics/pipeline.yaml \
+  --run-uri file:///tmp/loom-examples/slurm-afterok \
+  --executor slurm-afterok \
+  --dry-run \
+  --authority-backend co_located_service \
+  --authority-profile co_located
+```
+
 Run from the repository root:
 
 ```sh

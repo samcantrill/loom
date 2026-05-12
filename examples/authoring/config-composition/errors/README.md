@@ -8,6 +8,11 @@ This example demonstrates structured config errors from the public
 - unsupported resolver expression
 - unsupported `_copy_` directive
 
+## Public Python Surface
+
+This example teaches `loom.config.compose_config` and the structured config
+errors it raises.
+
 The entrypoint catches each exception and prints selected context fields rather
 than relying on full error message text.
 

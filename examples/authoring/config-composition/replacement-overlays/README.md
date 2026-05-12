@@ -10,6 +10,10 @@ It demonstrates:
 - replacement marker consumption in the resolved config;
 - source order in composition provenance.
 
+## Public Python Surface
+
+This example teaches `loom.config.compose_config`.
+
 Run from the repository root:
 
 ```sh

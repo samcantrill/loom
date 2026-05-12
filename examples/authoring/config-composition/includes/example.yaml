@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v1
 status: runnable
 validation: smoke
+surface: python_api
 entrypoints:
   - path: compose_includes.py
     kind: python

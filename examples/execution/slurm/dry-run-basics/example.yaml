@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v6
 status: runnable
 validation: smoke
+surface: cli
 entrypoints:
   - path: run_dry_run_basics.py
     kind: python

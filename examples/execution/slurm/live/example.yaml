@@ -6,6 +6,7 @@ level: advanced
 introduced_in: v7
 status: illustrative
 validation: manual
+surface: cli
 reason: Requires a real SLURM cluster and a shared filesystem visible to submit and compute nodes.
 entrypoints: []
 tags:

@@ -13,6 +13,11 @@ It demonstrates:
 - default metadata-only raw source snapshot references;
 - explicit opt-in raw source snapshot payloads, summarized without content.
 
+## Public Python Surface
+
+This example teaches `loom.config.compose_config` and
+`compare_config_artifact_fingerprints`.
+
 Run from the repository root:
 
 ```sh

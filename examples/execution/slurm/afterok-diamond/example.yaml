@@ -6,6 +6,7 @@ level: advanced
 introduced_in: v6
 status: runnable
 validation: smoke
+surface: cli
 entrypoints:
   - path: run_afterok_diamond.py
     kind: python

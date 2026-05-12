@@ -3,10 +3,16 @@
 This example demonstrates the main v0 runtime loop:
 
 1. Compose `pipeline.yaml` with `compose_config`.
-2. Run a two-stage in-process pipeline with `PipelineRunner`.
+2. Run a two-stage in-process pipeline with `PipelineRunner` against an explicit
+   local authority supervisor.
 3. Save and load artifacts through `StageContext` and the local artifact store.
 4. Reopen the same run directory with `open_existing=True` so unchanged stages
    are reused.
+
+## Public Python Surface
+
+This example teaches `loom.pipeline.PipelineRunner`, `loom.pipeline.RunRequest`,
+and `loom.config.compose_config`.
 
 Run from the repository root:
 

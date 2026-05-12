@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v4
 status: runnable
 validation: full
+surface: cli
 entrypoints:
   - path: run_resource_preflight.py
     kind: python

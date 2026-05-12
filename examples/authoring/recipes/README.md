@@ -8,6 +8,11 @@ This example demonstrates v0 config composition without running a pipeline:
 - explicit trusted recipe registration
 - recipe manifest and secret redaction output
 
+## Public Python Surface
+
+This example teaches `loom.config.compose_config` with trusted recipe
+registration.
+
 Run from the repository root:
 
 ```sh

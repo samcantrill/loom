@@ -9,6 +9,10 @@ This example demonstrates local YAML includes through the public
   customizations;
 - user addition of a brand-new include site with an explicit relative target.
 
+## Public Python Surface
+
+This example teaches `loom.config.compose_config`.
+
 Run from the repository root:
 
 ```sh

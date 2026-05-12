@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import os
 from pathlib import Path
+import sys
 
+REPO_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "examples" / "support.py").is_file()
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from examples.support import started_authority_session
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.stores import path_to_run_uri
-from loom.pipeline.stores.service_authority import LocalAuthorityService
 from loom.timestamps import safe_timestamp_for_path
 
 
@@ -24,11 +35,11 @@ def main() -> None:
     )
 
     composed = compose_config(HERE / "pipeline.yaml")
-    with LocalAuthorityService.start() as service:
+    with started_authority_session(output_root) as authority:
         runner = PipelineRunner(
             run_store=create_authority_backed_serial_run_store(
                 run_root,
-                authority_config=service.config(),
+                authority_config=authority.authority_config,
             )
         )
 

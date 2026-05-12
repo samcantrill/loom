@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
-import io
-import json
+# ruff: noqa: E402
+
 import os
 import sys
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from loom.cli.main import main as loom_main
+REPO_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "examples" / "support.py").is_file()
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from examples.support import run_cli_json
+from examples.support import started_authority_session
 from loom.config import compose_config
 from loom.pipeline import PipelineRunner, RunRequest
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.executors import LocalExecutor
 from loom.pipeline.stores import path_to_run_uri
-from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 HERE = Path(__file__).resolve().parent
@@ -28,11 +36,11 @@ def main() -> None:
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_uri = path_to_run_uri(run_root / f"captured-logs-{uuid4().hex[:8]}")
 
-    with LocalAuthorityService.start() as service:
+    with started_authority_session(output_root) as authority:
         runner = PipelineRunner(
             run_store=create_authority_backed_serial_run_store(
                 run_root,
-                authority_config=service.config(),
+                authority_config=authority.authority_config,
             ),
             executor=LocalExecutor(capture_stdout_stderr=True),
         )
@@ -64,15 +72,7 @@ def main() -> None:
 
 
 def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    code = loom_main(argv, stdout=stdout, stderr=stderr)
-    if code != expected:
-        raise RuntimeError(
-            f"loom {' '.join(argv)} exited {code}; stdout={stdout.getvalue()!r}; "
-            f"stderr={stderr.getvalue()!r}"
-        )
-    return json.loads(stdout.getvalue())
+    return run_cli_json(argv, expected=expected)
 
 
 if __name__ == "__main__":

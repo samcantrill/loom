@@ -8,6 +8,44 @@ extract -> features -> report
         -> train    ->
 ```
 
+## Workflow
+
+This workflow uses:
+
+- `loom run CONFIG --executor slurm-afterok --dry-run`
+
+## Variants
+
+Canonical afterok dry-run:
+
+```sh
+uv run loom run examples/execution/slurm/afterok-diamond/pipeline.yaml \
+  --run-uri file:///tmp/loom-examples/slurm-afterok-diamond \
+  --executor slurm-afterok \
+  --dry-run
+```
+
+Explicit co-located authority selection:
+
+```sh
+uv run loom run examples/execution/slurm/afterok-diamond/pipeline.yaml \
+  --run-uri file:///tmp/loom-examples/slurm-afterok-diamond \
+  --executor slurm-afterok \
+  --dry-run \
+  --authority-backend co_located_service \
+  --authority-profile co_located
+```
+
+JSON dry-run output for manifest inspection:
+
+```sh
+uv run loom run examples/execution/slurm/afterok-diamond/pipeline.yaml \
+  --run-uri file:///tmp/loom-examples/slurm-afterok-diamond \
+  --executor slurm-afterok \
+  --dry-run \
+  --format json
+```
+
 Run from the repository root:
 
 ```sh

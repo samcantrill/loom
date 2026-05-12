@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v3
 status: runnable
 validation: full
+surface: cli
 entrypoints:
   - path: run_failure_diagnostics.py
     kind: python

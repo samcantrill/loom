@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
-import io
-import json
+# ruff: noqa: E402
+
 import os
 import sys
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from loom.cli.main import main as loom_main
+REPO_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "examples" / "support.py").is_file()
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from examples.support import run_cli_json
+from examples.support import started_authority_session
 from loom.config import compose_config
 from loom.pipeline import validate_pipeline_config
 from loom.pipeline.execution import (
@@ -21,10 +30,8 @@ from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.stores import (
     LocalArtifactStore,
-    authority_config_to_cli_args,
     path_to_run_uri,
 )
-from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 HERE = Path(__file__).resolve().parent
@@ -36,12 +43,10 @@ def main() -> None:
     run_root = Path(os.environ.get("LOOM_EXAMPLE_RUN_ROOT", output_root / "runs"))
     run_uri = path_to_run_uri(run_root / f"direct-worker-{uuid4().hex[:8]}")
     config_path = HERE / "pipeline.yaml"
-    with LocalAuthorityService.start() as service:
-        authority_config = service.config()
-        authority_args = authority_config_to_cli_args(authority_config)
+    with started_authority_session(output_root) as authority:
         store = create_authority_backed_serial_run_store(
             run_root,
-            authority_config=authority_config,
+            authority_config=authority.authority_config,
         )
         store.create_run(run_uri)
         validation = validate_pipeline_config(compose_config(config_path).resolved)
@@ -73,7 +78,7 @@ def main() -> None:
                 run_uri,
                 "--stage",
                 "seed",
-                *authority_args,
+                *authority.authority_args,
                 "--format",
                 "json",
             ]
@@ -94,15 +99,7 @@ def _configure_import_path() -> None:
 
 
 def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    code = loom_main(argv, stdout=stdout, stderr=stderr)
-    if code != expected:
-        raise RuntimeError(
-            f"loom {' '.join(argv)} exited {code}; stdout={stdout.getvalue()!r}; "
-            f"stderr={stderr.getvalue()!r}"
-        )
-    return json.loads(stdout.getvalue())
+    return run_cli_json(argv, expected=expected)
 
 
 if __name__ == "__main__":

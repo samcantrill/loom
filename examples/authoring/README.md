@@ -4,7 +4,7 @@ Authoring examples cover how users describe work before it runs: trusted YAML
 composition, recipe expansion, interpolation, artifact-safe source records,
 structured errors, and recursive `_target_` construction.
 
-## Catalog
+## Public Python API Workflows
 
 | Example | Demonstrates |
 | --- | --- |

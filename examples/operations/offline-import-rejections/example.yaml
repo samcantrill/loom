@@ -1,0 +1,18 @@
+id: operations.offline-import-rejections
+title: Offline Import Rejections
+summary: Show stable rejection behavior for incomplete and conflicting offline evidence imports.
+capability: operations
+level: advanced
+introduced_in: v10
+status: runnable
+validation: full
+surface: cli
+entrypoints:
+  - path: run_offline_import_rejections.py
+    kind: python
+    description: Generate offline evidence, trigger import rejections, and print machine-readable error codes.
+tags:
+  - authority
+  - offline-import
+  - rejection
+  - diagnostics

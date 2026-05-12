@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
-import io
-import json
+# ruff: noqa: E402
+
 import os
 import sys
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-from loom.cli.main import main as loom_main
+REPO_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "examples" / "support.py").is_file()
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from examples.support import run_cli_json
+from examples.support import started_authority_session
 from loom.pipeline.stores import (
     LocalRunArtifactStore,
-    authority_config_to_cli_args,
+    WorkspaceIdentity,
+    create_authority_client,
     path_to_run_uri,
 )
-from loom.pipeline.stores.service_authority import LocalAuthorityService
 
 
 HERE = Path(__file__).resolve().parent
@@ -41,7 +50,19 @@ def main() -> None:
             "json",
         ]
     )
-    with LocalAuthorityService.start() as service:
+    with started_authority_session(output_root) as authority:
+        client = create_authority_client(authority.authority_config)
+        workspace = client.create_workspace(
+            WorkspaceIdentity(
+                workspace_id=authority.workspace_id,
+                root_uri=authority.workspace_root.resolve().as_uri(),
+                metadata={"example": "execution.runtime-profile"},
+            ),
+            request_id="runtime-profile-workspace-create",
+            service_generation=authority.generation,
+        )
+        if workspace.result is None or workspace.result.workspace is None:
+            raise RuntimeError("expected authority workspace creation to succeed")
         run = _run_cli(
             [
                 "run",
@@ -52,7 +73,7 @@ def main() -> None:
                 "invocation=cli",
                 "--note",
                 "runtime example executed",
-                *authority_config_to_cli_args(service.config()),
+                *authority.authority_args,
                 "--format",
                 "json",
             ]
@@ -71,15 +92,7 @@ def main() -> None:
 
 
 def _run_cli(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    code = loom_main(argv, stdout=stdout, stderr=stderr)
-    if code != expected:
-        raise RuntimeError(
-            f"loom {' '.join(argv)} exited {code}; stdout={stdout.getvalue()!r}; "
-            f"stderr={stderr.getvalue()!r}"
-        )
-    return json.loads(stdout.getvalue())
+    return run_cli_json(argv, expected=expected)
 
 
 if __name__ == "__main__":

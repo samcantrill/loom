@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v3
 status: runnable
 validation: full
+surface: python_api
 entrypoints:
   - path: run_captured_logs.py
     kind: python

@@ -6,6 +6,34 @@ that was submitted with `slurm-single-job` or `slurm-afterok`.
 It requires a real SLURM cluster and a run directory on a shared filesystem
 visible to both the submit host and compute nodes.
 
+## Workflow
+
+This workflow uses:
+
+- `loom status RUN_URI`
+- `loom status RUN_URI --jobs`
+- `loom cancel RUN_URI --jobs`
+
+## Variants
+
+Canonical scheduler-aware status:
+
+```sh
+uv run loom status file:///shared/loom-runs/slurm-live-example --jobs
+```
+
+Persisted-only status view:
+
+```sh
+uv run loom status file:///shared/loom-runs/slurm-live-example
+```
+
+Cancel active jobs:
+
+```sh
+uv run loom cancel file:///shared/loom-runs/slurm-live-example --jobs
+```
+
 ## Inspect Persisted State
 
 Ordinary status reads persisted Loom state and does not query SLURM:

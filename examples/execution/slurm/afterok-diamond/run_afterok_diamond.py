@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import io
+# ruff: noqa: E402
+
 import json
 import os
 import sys
@@ -12,13 +13,17 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from loom.cli.main import main as loom_main
-from loom.pipeline.stores import (
-    authority_config_to_cli_args,
-    path_to_run_uri,
-    run_uri_to_path,
+REPO_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "examples" / "support.py").is_file()
 )
-from loom.pipeline.stores.service_authority import LocalAuthorityService
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from examples.support import run_cli_json
+from examples.support import started_authority_session
+from loom.pipeline.stores import path_to_run_uri, run_uri_to_path
 
 
 HERE = Path(__file__).resolve().parent
@@ -33,8 +38,7 @@ def main() -> None:
     run_uri = path_to_run_uri(run_root / f"afterok-diamond-{uuid4().hex[:8]}")
     config_path = HERE / "pipeline.yaml"
 
-    with LocalAuthorityService.start() as service:
-        authority_args = authority_config_to_cli_args(service.config())
+    with started_authority_session(output_root) as authority:
         with controlled_environment():
             payload = run_cli_json(
                 [
@@ -45,7 +49,7 @@ def main() -> None:
                     "--dry-run",
                     "--run-uri",
                     run_uri,
-                    *authority_args,
+                    *authority.authority_args,
                     "--format",
                     "json",
                 ]
@@ -120,22 +124,6 @@ def contains_text(root: Path, needle: str) -> bool:
         if needle in content:
             return True
     return False
-
-
-def run_cli_json(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    code = loom_main(argv, stdout=stdout, stderr=stderr)
-    if code != expected:
-        raise RuntimeError(
-            f"loom {' '.join(argv)} exited {code}; stdout={stdout.getvalue()!r}; "
-            f"stderr={stderr.getvalue()!r}"
-        )
-    if stderr.getvalue():
-        raise RuntimeError(f"unexpected stderr from loom {' '.join(argv)}")
-    payload = json.loads(stdout.getvalue())
-    return require_mapping(payload)
-
 
 def require_mapping(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):

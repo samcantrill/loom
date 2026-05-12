@@ -1,0 +1,18 @@
+id: execution.offline-first-import
+title: Offline-First Import Workflow
+summary: Run a pipeline in explicit offline-first mode, import its evidence through authority, and inspect the imported authoritative state.
+capability: execution
+level: advanced
+introduced_in: v10
+status: runnable
+validation: smoke
+surface: cli
+entrypoints:
+  - path: run_offline_first_import.py
+    kind: python
+    description: Run offline-first, import the manifest through authority, and print source-label summaries.
+tags:
+  - authority
+  - offline-first
+  - import
+  - backend

@@ -7,6 +7,10 @@ includes, target instantiation, or pipeline execution:
 - ordinary update and add overrides
 - `resolved`, `unresolved`, and `redacted` views
 
+## Public Python Surface
+
+This example teaches `loom.config.compose_config`.
+
 Run from the repository root:
 
 ```sh

@@ -6,6 +6,7 @@ level: intermediate
 introduced_in: v7
 status: runnable
 validation: smoke
+surface: internal_demo
 entrypoints:
   - path: run_submitted_status.py
     kind: python

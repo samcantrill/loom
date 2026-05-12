@@ -8,6 +8,10 @@ blocks after config composition:
 - deferred construction with `_partial_`
 - runtime object injection with `_inject_`
 
+## Public Python Surface
+
+This example teaches `loom.config.instantiate`.
+
 Run from the repository root:
 
 ```sh

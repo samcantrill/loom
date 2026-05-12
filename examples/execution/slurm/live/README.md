@@ -7,6 +7,39 @@ nodes.
 Run commands from this directory so the `stages.py` module is importable by the
 submitted jobs.
 
+## Workflow
+
+This workflow uses:
+
+- `loom preflight CONFIG --executor slurm-afterok`
+- `loom run CONFIG --run-uri RUN_URI --executor slurm-afterok`
+- `loom status RUN_URI --jobs`
+- `loom cancel RUN_URI --jobs`
+
+## Variants
+
+Canonical live submit:
+
+```sh
+uv run loom run pipeline.yaml \
+  --run-uri file:///shared/loom-runs/slurm-live-example \
+  --executor slurm-afterok
+```
+
+Whole-pipeline single-job variant:
+
+```sh
+uv run loom run pipeline.yaml \
+  --run-uri file:///shared/loom-runs/slurm-live-single \
+  --executor slurm-single-job
+```
+
+Persisted-only status view:
+
+```sh
+uv run loom status file:///shared/loom-runs/slurm-live-example
+```
+
 ## Preflight
 
 Check the configuration and SLURM command availability from the submit host:

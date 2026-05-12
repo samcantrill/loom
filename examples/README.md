@@ -13,13 +13,24 @@ inspect, debug, and manage runs. Later roadmap items can add `experiments/`,
 `storage/`, and `extensions/` groups without making individual backends top
 level concepts.
 
-## Example Groups
+## CLI Workflows
 
-| Group | Demonstrates |
+| Group | Primary user-facing workflows |
 | --- | --- |
-| [Authoring](authoring/README.md) | Trusted YAML composition, includes, recipes, artifact-safe records, structured errors, and explicit `_target_` instantiation. |
-| [Execution](execution/README.md) | Local execution, subprocess execution, runtime profiles, Python run options, artifact storage, provenance snapshots, same-run resume behavior, and SLURM dry-run/live templates. |
-| [Operations](operations/README.md) | Preflight, run status, submitted-operation status, bounded logs, metadata-only artifact inspection, failure diagnostics, resource warnings, and SLURM job operations. |
+| [Execution](execution/README.md) | Runtime-profile runs, subprocess execution, offline-first import, and SLURM dry-run/live command flows. |
+| [Operations](operations/README.md) | Authority lifecycle, local diagnostics, failure inspection, resource preflight, offline import rejection, and live SLURM job commands. |
+
+## Public Python API Workflows
+
+| Group | Primary public Python surfaces |
+| --- | --- |
+| [Authoring](authoring/README.md) | `compose_config`, artifact-safe config inspection, recipe expansion, and trusted target instantiation. |
+| [Execution](execution/README.md) | `PipelineRunner` run/resume flows and `RunOptions` construction and validation. |
+| [Operations](operations/README.md) | Captured-log execution setup and authority-backed resource coordination APIs. |
+
+Internal demos stay in-repo for regression coverage, but the primary catalog
+excludes support-only workflows that rely on service fixtures or synthetic
+state seeding.
 
 Run smoke examples from the repository root with the commands listed in each
 group README.
@@ -38,6 +49,8 @@ example outputs. Execution and operations examples also accept
 
 V6/v7 SLURM and submitted-operation example coverage is tracked in
 [`docs/features/slurm-example-coverage.md`](../docs/features/slurm-example-coverage.md).
+V10 user-facing authority workflow coverage is tracked in
+[`docs/features/authority-example-coverage.md`](../docs/features/authority-example-coverage.md).
 
 Runnable examples stay local and synthetic. Manual SLURM examples document the
 real-cluster commands and shared-filesystem assumptions but are not executed by

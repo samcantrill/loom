@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
-import io
+# ruff: noqa: E402
+
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Any
 from uuid import uuid4
 
-from loom.cli.main import main as loom_main
+REPO_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "examples" / "support.py").is_file()
+)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from examples.support import run_cli_json
+from examples.support import started_authority_session
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
-from loom.pipeline.stores import authority_config_to_cli_args, path_to_run_uri
-from loom.pipeline.stores.service_authority import LocalAuthorityService
+from loom.pipeline.stores import path_to_run_uri
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 
@@ -29,12 +39,10 @@ def main() -> None:
     submission_id = "example-submitted"
     manifest_relative_path = f"slurm/submissions/{submission_id}/manifest.json"
 
-    with LocalAuthorityService.start() as service:
-        authority_config = service.config()
-        authority_args = authority_config_to_cli_args(authority_config)
+    with started_authority_session(output_root) as authority:
         store = create_authority_backed_serial_run_store(
             run_root,
-            authority_config=authority_config,
+            authority_config=authority.authority_config,
         )
         store.create_run(run_uri, metadata={"example": "operations.submitted-status"})
         store.write_run_status(
@@ -92,7 +100,9 @@ def main() -> None:
             ),
         )
 
-        payload = run_cli_json(["status", run_uri, *authority_args, "--format", "json"])
+        payload = run_cli_json(
+            ["status", run_uri, *authority.authority_args, "--format", "json"]
+        )
     result = require_mapping(payload["result"])
     operation = require_mapping(result["submitted_operations"][0])
     stages = require_mappings(result["stages"])
@@ -107,21 +117,6 @@ def main() -> None:
     print(f"  active: {operation['active']}")
     print(f"  manifest: {operation['manifest_relative_path']}")
     print(f"  summary_counts: {format_counts(operation['summary_counts'])}")
-
-
-def run_cli_json(argv: list[str], *, expected: int = 0) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    code = loom_main(argv, stdout=stdout, stderr=stderr)
-    if code != expected:
-        raise RuntimeError(
-            f"loom {' '.join(argv)} exited {code}; stdout={stdout.getvalue()!r}; "
-            f"stderr={stderr.getvalue()!r}"
-        )
-    if stderr.getvalue():
-        raise RuntimeError(f"unexpected stderr from loom {' '.join(argv)}")
-    return require_mapping(json.loads(stdout.getvalue()))
-
 
 def format_counts(value: object) -> str:
     counts = require_mapping(value)
