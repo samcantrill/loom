@@ -1303,6 +1303,7 @@ def create_authority_backed_serial_run_store(
     """Create the default authority-backed local serial run store."""
 
     readiness: AuthorityProtocolReadiness | None = None
+    should_create_coordination_store = authority_store is None
     if authority_store is None:
         input_config = _resolve_authority_config(authority_config, authority_store)
         if input_config.backend_kind is AuthorityBackendKind.TRANSITIONAL_SQLITE:
@@ -1334,7 +1335,7 @@ def create_authority_backed_serial_run_store(
         resolved_config = _resolve_authority_config(authority_config, authority_store)
 
     coordination_store = workspace_coordination_store
-    if coordination_store is None:
+    if coordination_store is None and should_create_coordination_store:
         coordination_store = _coordination_store_from_config(
             resolved_config,
             readiness=readiness,
