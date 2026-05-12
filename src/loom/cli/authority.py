@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from loom.authority.supervisor import AuthoritySupervisorCommandResult
     from loom.pipeline.stores import AuthorityConfig
     from loom.pipeline.stores import AuthorityResolutionMode
@@ -36,6 +35,7 @@ _AUTHORITY_PROFILE_CHOICES = (
 )
 _AUTHORITY_MODE_CHOICES = ("online_mutation", "offline_first")
 AUTHORITY_LIFECYCLE_SCHEMA_VERSION = "loom.cli.authority.lifecycle.v1"
+AUTHORITY_OFFLINE_IMPORT_SCHEMA_VERSION = "loom.cli.authority.offline_import.v1"
 
 
 def register_subparser(
@@ -99,6 +99,15 @@ def register_subparser(
     _add_process_options(restart)
     _add_output_options(restart)
     restart.set_defaults(handler=handle_restart)
+
+    import_offline = authority_subparsers.add_parser(
+        "import-offline",
+        help="import a v10 offline evidence manifest",
+    )
+    import_offline.add_argument("manifest", metavar="MANIFEST", help="manifest path")
+    add_authority_options(import_offline)
+    _add_output_options(import_offline)
+    import_offline.set_defaults(handler=handle_import_offline)
 
 
 def handle_start(namespace: argparse.Namespace) -> int:
@@ -192,6 +201,45 @@ def handle_restart(namespace: argparse.Namespace) -> int:
     except AuthoritySupervisorError as exc:
         raise _supervisor_cli_error(exc) from exc
     return _emit_result(result, namespace)
+
+
+def handle_import_offline(namespace: argparse.Namespace) -> int:
+    """Handle ``loom authority import-offline``."""
+
+    from pathlib import Path
+
+    from loom.pipeline.offline_evidence import read_offline_evidence_manifest
+    from loom.pipeline.stores import create_authority_client
+
+    authority_config = authority_config_from_namespace(namespace)
+    manifest = read_offline_evidence_manifest(Path(namespace.manifest))
+    client = create_authority_client(authority_config)
+    response = client.import_offline_evidence(
+        manifest.to_dict(),
+        workspace_id=authority_config.workspace_id,
+        imported_by="loom-authority-cli",
+    )
+    if not response.accepted or response.result is None:
+        rejection = response.rejection
+        raise CliError(
+            "offline evidence import was rejected"
+            if rejection is None
+            else rejection.message,
+            code="cli.authority.offline_import_rejected"
+            if rejection is None
+            else rejection.code,
+            context={}
+            if rejection is None
+            else {
+                "category": rejection.category.value,
+                "detail": rejection.detail,
+            },
+            exit_code=ExitCode.RUN_STATE,
+        )
+    result = response.result.body.get("offline_import", {})
+    if not isinstance(result, Mapping):
+        result = {}
+    return _emit_offline_import_result(result, namespace)
 
 
 def add_authority_options(
@@ -368,6 +416,38 @@ def _emit_result(
     return int(ExitCode.SUCCESS)
 
 
+def _emit_offline_import_result(
+    result: "Mapping[str, PlainData]",
+    namespace: argparse.Namespace,
+) -> int:
+    output_format = output_format_from_namespace(namespace)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=AUTHORITY_OFFLINE_IMPORT_SCHEMA_VERSION,
+                ok=True,
+                warnings=(),
+                payload_name="result",
+                payload=result,
+            )
+        )
+    else:
+        sys.stdout.write(_format_offline_import_text(result) + "\n")
+    return int(ExitCode.SUCCESS)
+
+
+def _format_offline_import_text(result: "Mapping[str, PlainData]") -> str:
+    run_uri = result.get("run_uri", "<unknown>")
+    status = result.get("status", "<unknown>")
+    revision = result.get("revision_sequence", "<unknown>")
+    stages = result.get("imported_stage_count", 0)
+    artifacts = result.get("imported_artifact_count", 0)
+    return (
+        f"OK authority import-offline {run_uri}: {status} "
+        f"revision={revision} stages={stages} artifacts={artifacts}"
+    )
+
+
 def _format_supervisor_text(result: "AuthoritySupervisorCommandResult") -> str:
     status = "OK" if result.ok else "WARN"
     lines = [f"{status} authority {result.command}: {result.readiness.value}"]
@@ -404,6 +484,7 @@ def _supervisor_cli_error(error: Exception) -> CliError:
 
 __all__ = [
     "AUTHORITY_LIFECYCLE_SCHEMA_VERSION",
+    "AUTHORITY_OFFLINE_IMPORT_SCHEMA_VERSION",
     "add_authority_options",
     "authority_config_from_namespace",
     "authority_config_to_worker_args",
@@ -411,6 +492,7 @@ __all__ = [
     "authority_resolution_mode_from_namespace",
     "handle_doctor",
     "handle_restart",
+    "handle_import_offline",
     "handle_start",
     "handle_status",
     "handle_stop",

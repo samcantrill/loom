@@ -43,6 +43,7 @@ class BackendCapability(StrEnum):
     SERVICE_ENDPOINT = "service_endpoint"
     SHARED_FILESYSTEM_SAFE = "shared_filesystem_safe"
     DEFERRED_FINALIZATION = "deferred_finalization"
+    OFFLINE_IMPORT = "offline_import"
 
 
 class CapabilityScope(StrEnum):

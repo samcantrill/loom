@@ -136,6 +136,7 @@ def repository_authority_capabilities() -> BackendCapabilitySet:
         BackendCapability.AUDIT_EVENTS,
         BackendCapability.SINGLE_HOST_AUTHORITY,
         BackendCapability.SERVICE_ENDPOINT,
+        BackendCapability.OFFLINE_IMPORT,
     )
     unsupported = {
         BackendCapability.CROSS_RUN_COORDINATION:

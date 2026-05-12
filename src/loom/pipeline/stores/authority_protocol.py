@@ -64,6 +64,7 @@ class AuthorityProtocolOperationKind(StrEnum):
     WORKSPACE_COORDINATION = "workspace_coordination"
     RECOVERY_SCAN = "recovery_scan"
     CLEANUP_CANDIDATES = "cleanup_candidates"
+    OFFLINE_IMPORT = "offline_import"
 
 
 class AuthorityProtocolErrorCategory(StrEnum):

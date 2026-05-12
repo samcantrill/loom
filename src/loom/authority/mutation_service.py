@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.offline_evidence import OfflineEvidenceManifest
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AuthorityProtocolErrorCategory,
@@ -43,6 +44,11 @@ from ._repository import (
     AuthorityRepositoryCompatibilityKind,
     AuthorityRepositoryError,
 )
+from .offline_import import (
+    OfflineImportError,
+    OfflineImportRejectionKind,
+    import_offline_evidence_manifest,
+)
 
 
 class AuthorityMutationOperation(StrEnum):
@@ -68,6 +74,7 @@ class AuthorityMutationOperation(StrEnum):
     CREATE_WORKSPACE = "create_workspace"
     CREATE_SWEEP = "create_sweep"
     RECORD_TRIAL = "record_trial"
+    IMPORT_OFFLINE_EVIDENCE = "import_offline_evidence"
     LIST_TRIALS = "list_trials"
     ACQUIRE_TRIAL_LEASE = "acquire_trial_lease"
     RENEW_COORDINATION_LEASE = "renew_coordination_lease"
@@ -139,6 +146,9 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
     ),
     AuthorityMutationOperation.RECORD_TRIAL: (
         AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.IMPORT_OFFLINE_EVIDENCE: (
+        AuthorityProtocolOperationKind.OFFLINE_IMPORT
     ),
     AuthorityMutationOperation.LIST_TRIALS: (
         AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
@@ -248,6 +258,11 @@ class AuthorityMutationService:
                 metadata,
                 _repository_rejection(exc, request_detail=_request_detail(payload)),
             )
+        except OfflineImportError as exc:
+            return rejected_authority_response(
+                metadata,
+                _offline_import_rejection(exc, request_detail=_request_detail(payload)),
+            )
         except (AuthorityMutationValidationError, TypeError) as exc:
             return rejected_authority_response(
                 metadata,
@@ -320,6 +335,8 @@ class AuthorityMutationService:
                 return self._create_sweep(request)
             case AuthorityMutationOperation.RECORD_TRIAL:
                 return self._record_trial(request)
+            case AuthorityMutationOperation.IMPORT_OFFLINE_EVIDENCE:
+                return self._import_offline_evidence(request)
             case AuthorityMutationOperation.LIST_TRIALS:
                 return self._list_trials(request)
             case AuthorityMutationOperation.ACQUIRE_TRIAL_LEASE:
@@ -638,6 +655,23 @@ class AuthorityMutationService:
             trial=trial,
         )
 
+    def _import_offline_evidence(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        manifest_data = _required_body_value(request, "manifest")
+        manifest = OfflineEvidenceManifest.from_dict(manifest_data)
+        result = import_offline_evidence_manifest(
+            self._repository,
+            manifest,
+            imported_by=_body_string(request, "imported_by", "authority-service"),
+            workspace_id=self._workspace_id,
+        )
+        return _result(
+            revision=self._repository.open_run(result.run_uri).revision,
+            service_generation=self._service_generation,
+            body={"offline_import": result.to_dict()},
+        )
+
     def _list_trials(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
         trials = self._repository.list_trials(_required_body_string(request, "sweep_id"))
         return _result(service_generation=self._service_generation, trials=trials)
@@ -934,6 +968,15 @@ def _required_body_string(request: AuthorityProtocolRequest, field: str) -> str:
     return value
 
 
+def _body_string(
+    request: AuthorityProtocolRequest, field: str, default: str
+) -> str:
+    value = request.body.get(field, default)
+    if not isinstance(value, str) or not value:
+        raise AuthorityMutationValidationError(f"{field} must be a non-empty string")
+    return value
+
+
 def _optional_body_mapping(
     request: AuthorityProtocolRequest,
     field: str,
@@ -1064,6 +1107,31 @@ def _repository_rejection(
         code=_repository_code(category, message),
         message=message,
         detail=request_detail,
+    )
+
+
+def _offline_import_rejection(
+    exc: OfflineImportError,
+    *,
+    request_detail: Mapping[str, PlainData],
+) -> AuthorityProtocolRejection:
+    category = (
+        AuthorityProtocolErrorCategory.CONFLICT
+        if exc.kind is OfflineImportRejectionKind.CONFLICT
+        else AuthorityProtocolErrorCategory.INTERNAL_ERROR
+        if exc.kind is OfflineImportRejectionKind.TRANSACTION
+        else AuthorityProtocolErrorCategory.VALIDATION
+    )
+    return AuthorityProtocolRejection(
+        category=category,
+        code=f"authority_offline_import_{exc.kind.value}",
+        message=str(exc),
+        detail={
+            **dict(request_detail),
+            "diagnostics": [
+                diagnostic.to_dict() for diagnostic in exc.diagnostics
+            ],
+        },
     )
 
 

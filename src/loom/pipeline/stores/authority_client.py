@@ -75,6 +75,9 @@ AUTHORITY_MUTATION_SUBMITTED_READ_PATH = (
 AUTHORITY_MUTATION_SUBMITTED_LIST_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/runs/submitted/list"
 )
+AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/import/offline-evidence"
+)
 AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/workspaces/create"
 )
@@ -246,6 +249,40 @@ class AuthorityClient:
                     workspace_id=workspace_id,
                 ),
                 run_uri=run_uri,
+            ),
+        )
+
+    def import_offline_evidence(
+        self,
+        manifest: Mapping[str, PlainData],
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+        workspace_id: str | None = None,
+        imported_by: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Import a complete v10 offline evidence manifest."""
+
+        manifest_body = dict(_plain_mapping(manifest, "manifest"))
+        body: dict[str, PlainData] = {"manifest": manifest_body}
+        if imported_by is not None:
+            if not isinstance(imported_by, str) or not imported_by:
+                raise AuthorityClientError("imported_by must be a non-empty string")
+            body["imported_by"] = imported_by
+        run_uri = manifest_body.get("run_uri")
+        if not isinstance(run_uri, str) or not run_uri:
+            raise AuthorityClientError("manifest.run_uri must be a non-empty string")
+        return self.send(
+            AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH,
+            AuthorityProtocolRequest(
+                metadata=_metadata(
+                    AuthorityProtocolOperationKind.OFFLINE_IMPORT,
+                    request_id=request_id,
+                    service_generation=service_generation,
+                    workspace_id=workspace_id,
+                ),
+                run_uri=run_uri,
+                body=body,
             ),
         )
 
@@ -1148,6 +1185,7 @@ __all__ = [
     "AUTHORITY_MUTATION_SUBMITTED_WRITE_PATH",
     "AUTHORITY_MUTATION_SUBMITTED_READ_PATH",
     "AUTHORITY_MUTATION_SUBMITTED_LIST_PATH",
+    "AUTHORITY_MUTATION_OFFLINE_IMPORT_PATH",
     "AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH",
     "AUTHORITY_COORDINATION_SWEEP_CREATE_PATH",
     "AUTHORITY_COORDINATION_TRIAL_RECORD_PATH",
