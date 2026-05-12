@@ -112,6 +112,31 @@ Constraints:
 
 - TBD
 
+## Workflow Stage Readback
+
+Record an explicit narrative readback before or after any context checkpoint so
+later passes can resume without rediscovering what was already confirmed.
+
+Roadmap framing locked decisions:
+
+- TBD
+
+Intent discovery locked decisions:
+
+- TBD
+
+Capability triage and functional-requirement readback:
+
+- TBD
+
+Functionality and behavior confirmation readback:
+
+- TBD
+
+Design refinement follow-up:
+
+- TBD
+
 ## Stage Readbacks
 
 | Stage | Locked decisions | Defaults | Open questions | Next focus |

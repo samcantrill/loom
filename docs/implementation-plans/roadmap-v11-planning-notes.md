@@ -10,9 +10,9 @@
   because it provides durable authority, service-backed coordination, and
   generic resource leases.
 - Planning notes status: draft
-- Current discussion stage: roadmap framing, functionality baseline, and core
-  design choices confirmed from user discussion; phase shaping updated around a
-  Python-first MVP
+- Current discussion stage: roadmap framing, functionality baseline, core
+  design choices, and local design-safety review complete; implementation
+  readiness is now blocked only on the final v10 surface evidence pass
 - Stage gates:
   - Roadmap framing: confirmed in `implementation-roadmap.md`; queue is v11
     after current v10 and the previous v11+ entries move later.
@@ -22,10 +22,14 @@
     decisions captured below, with SSH deferred from the first version.
   - Functionality and behavior confirmation: confirmed in discussion; baseline
     updated below.
-  - Context compaction/reset checkpoint: pending.
+  - Context compaction/reset checkpoint: ready to record after this refinement
+    pass; resume should start from design-safety review and implementation
+    readiness.
   - Design decision review: core queue/service/capacity/status/CLI decisions
-    locked; queue config path/schema remains open for plan drafting.
-  - Design safety review: pending.
+    locked; queue config loading is now narrowed to an explicit-path YAML
+    recommendation instead of a magic default-discovery requirement.
+  - Design safety review: completed locally on 2026-05-12; no remaining
+    design-safety blocker is open inside the notes.
   - Examples and validation strategy: draft ideas captured below.
   - Phase shaping: draft updated around repository/service, Python API,
     local-managed dispatch, delegated SLURM dispatch, and thin CLI/docs
@@ -193,6 +197,10 @@ User clarification questions and resolved answers:
   joined read models for user-facing status.
 - Public setup surface: Python API plus trusted queue config file loading first,
   followed by a thin operational CLI wrapper.
+- Queue identity: each queued item gets an immutable queue item id plus a
+  persisted queue-owned `run_uri` derived from that id before first launch
+  handoff; retries and recovery reuse the same `run_uri`, while
+  `dispatch_attempt` increments only on explicit requeue or resubmit.
 - Controller mode: long-running service plus foreground drain mode. Foreground
   drain must not orphan locally managed active work.
 
@@ -247,21 +255,74 @@ Constraints:
   discouraged by also providing foreground drain mode that preserves local
   cancellation and recovery semantics.
 
+## Workflow Stage Readback
+
+The planning discussion has moved past initial scope discovery. This refinement
+pass on 2026-05-12 tightened the remaining weak spots: explicit workflow
+readback, queue-config loading expectations, and the implementation-readiness
+handoff into implementation-plan drafting.
+
+Roadmap framing locked decisions:
+
+- V11 is queued whole-run dispatch and resource pools, inserted after current
+  v10.
+- V10 authority durability, service-backed coordination, and generic resource
+  leases remain direct prerequisites.
+- The queue stays outside authority so scheduling policy does not become
+  lifecycle truth.
+
+Intent discovery locked decisions:
+
+- The primary user outcome is durable queuing of many independent Loom runs.
+- The first version must work in local, workstation, lab-server, and restricted
+  HPC environments without requiring Kubernetes, Docker, Redis, RabbitMQ, or a
+  hosted orchestrator.
+- Whole-run queueing is the target; per-stage global scheduling is deferred.
+
+Capability triage and functional-requirement readback:
+
+- Include a separate SQLite-backed queue service, pool-plus-queue routing, one
+  FIFO queue per pool, explicit managed and delegated capacity modes, local and
+  SLURM adapters, accurate cancellation reporting, Python APIs first, and a
+  later thin operational CLI wrapper.
+- Defer generic SSH, SLURM-over-SSH, automatic retries, multi-queue policy,
+  fairness, run bundles, remote payload transport, and hosted queue operations.
+
+Functionality and behavior confirmation readback:
+
+- Queue items represent whole-run intents with enqueue-time snapshots.
+- Managed pools use authority-backed leases before dispatch; delegated pools
+  hand work to downstream schedulers without holding Loom leases.
+- Queue state and authority lifecycle truth remain separate and are joined only
+  in read models.
+- Foreground drain must preserve local cancellation and recovery semantics
+  rather than orphaning managed active work.
+
+Design refinement follow-up on 2026-05-12:
+
+- Queue config loading no longer needs a magic default path for the first
+  version. The working recommendation is an explicit `load_queue_config(path)`
+  style loader for trusted YAML documents with a versioned plain-data schema.
+- Remaining blockers are now procedural and boundary-oriented: complete the
+  design-safety review and verify the v10 authority/resource surfaces that the
+  implementation plan should target.
+- No user-facing product-scope question remains open in the baseline notes.
+
 ## Stage Readbacks
 
 | Stage | Locked decisions | Defaults | Open questions | Next focus |
 | --- | --- | --- | --- | --- |
 | Roadmap framing | New queue version after current v10; previous v11+ shifts later. | Keep v10 authority as prerequisite. | None for roadmap placement. | Continue with implementation-plan drafting inputs. |
-| Intent discovery | Whole-run queueing, no mandatory orchestrator/broker/container dependencies. | Workspace-scoped, dependency-light queue. | Queue config default path/schema. | Implementation-plan drafting inputs. |
-| Capability triage and functional requirements | Pool+queue model, SQLite state, local/SLURM adapters, explicit managed/delegated capacity, accurate cancellation reporting, and separate queue/authority truth. | One FIFO queue per pool, no retries, no dependencies, Python API first. | Queue config default path/schema. | Design safety review. |
+| Intent discovery | Whole-run queueing, no mandatory orchestrator/broker/container dependencies. | Workspace-scoped, dependency-light queue. | No remaining product-behavior question. | Implementation-plan drafting inputs. |
+| Capability triage and functional requirements | Pool+queue model, SQLite state, local/SLURM adapters, explicit managed/delegated capacity, accurate cancellation reporting, and separate queue/authority truth. | One FIFO queue per pool, no retries, no dependencies, Python API first. | Queue config should use explicit-path, versioned YAML loading rather than magic discovery. | Design safety review. |
 | Functionality and behavior confirmation | Confirmed in discussion. | Queue status joins queue and authority state without merging ownership. | None for the baseline. | Context checkpoint and implementation-plan drafting. |
-| Context compaction/reset checkpoint | Pending. | Record this file as resume source. | None. | Checkpoint after behavior confirmation. |
-| Design decision review | Core scope and behavior decisions locked. | Keep queue/authority truth separate and CLI thin. | Queue config default path/schema. | Design safety review and implementation-plan drafting. |
-| Design safety review | Pending. | Use reviewer before implementation-plan drafting. | None. | Review after design decisions. |
+| Context compaction/reset checkpoint | Ready after this refinement pass. | Record this file as resume source. | None. | Checkpoint before design-safety review if context needs reset. |
+| Design decision review | Core scope and behavior decisions locked. | Keep queue/authority truth separate and CLI thin. | Package placement and feature-doc home can be recommended during plan drafting without reopening product scope. | Design safety review and implementation-plan drafting. |
+| Design safety review | Completed locally on 2026-05-12. | Preserve the recorded recommendations. | None. | Carry recommendations into implementation-plan drafting. |
 | Examples and validation strategy | Draft ideas below. | Local deterministic tests first; no real SLURM by default. | Exact acceptance examples. | Expand after design decisions. |
 | Phase shaping | Draft updated. | Split repository/service, Python API, managed local dispatch, delegated SLURM dispatch, and operational hardening. | Final phase count may still move slightly during implementation-plan drafting. | Implementation plan later. |
-| Implementation readiness | Pending. | Blocked until roadmap updated and v10 surfaces stabilize. | None. | Plan quality gate later. |
-| Handoff | Pending. | None. | None. | Implementation-plan drafting after notes confirmation. |
+| Implementation readiness | Pending. | Blocked only on final v10 authority/resource surface verification. | No user-facing blocker remains; docs-routing and package-placement choices can be carried as recommendations. | Final evidence pass, then implementation plan. |
+| Handoff | Pending. | Carry forward the locked MVP and explicit queue-config recommendation. | None. | Implementation-plan drafting after notes confirmation. |
 
 ## Capability Triage
 
@@ -498,7 +559,9 @@ Compatibility constraints:
 | DD-9 | Minimal operational CLI wrapper after Python API. | confirmed recommendation | Keeps the first version operational without making CLI the primary contract. | Already selected. | confirmed |
 | DD-10 | Queue item status vocabulary and terminal-state rules. | confirmed recommendation | Status names affect schema, status UX, and cancellation truth. | Baseline selected; implementation plan may normalize enum names without changing semantics. | confirmed |
 | DD-11 | Queue state remains separate from authority lifecycle truth. | confirmed recommendation | Prevents scheduler policy from leaking into authority state and keeps one source of truth per concern. | Already selected. | confirmed |
-| DD-12 | Queue config file format and location. | needs discussion | Affects UX, reproducibility, and preflight. | Decide default path and schema during plan drafting. | draft |
+| DD-12 | Queue config file format and location. | recorded recommendation | Affects UX, reproducibility, and preflight. | No further user input needed unless the user wants magic discovery later. | confirmed |
+| DD-13 | Queue-owned run identity and dispatch idempotency. | confirmed recommendation | Affects crash recovery, cancellation targeting, and queue-to-authority status joins. | Already selected. | confirmed |
+| DD-14 | Managed-pool authority-limit ownership. | confirmed recommendation | Affects whether queue remains policy-only or becomes a writer of authority resource truth. | Already selected: first-version managed pools validate against pre-provisioned authority limits rather than silently mutating them. | confirmed |
 
 ## Design Decisions
 
@@ -515,6 +578,9 @@ Compatibility constraints:
 | DD-9 | Operational CLI | Add a thin wrapper after the Python API is stable. | User selected Python API first and a minimal CLI later. | Rich CLI-first workflow; no CLI at all. | Gives operators a small practical surface without moving the primary contract away from Python. | Limits operational surface growth early. | CLI can stay a thin adapter over Python service/client/controller APIs. | Lifecycle/status/cancel/drain wrapper tests and concise docs. | Revisit if operators need richer CLI bulk submission or scripting workflows. | confirmed |
 | DD-10 | Status model | Keep queue status and authority lifecycle separate and join them in read models. | User agreed to keep queue and authority state separate. | Extending `RunStatus` with queue states; making queue DB authoritative for run lifecycle. | Preserves one source of truth per concern while still allowing one user-facing job view. | Reduces lifecycle coupling and authority churn. | Joined read models can evolve without forcing authority enum changes. | Status-join tests and documentation that distinguishes queue state from run truth. | Revisit only if implementation evidence shows joined views are insufficient. | confirmed |
 | DD-11 | Supervisor co-management | Keep it minimal and operational, with clean Python APIs first. | User agreed to focus on Python API and add a minimal CLI wrapper later. | Shared process/database; generalized orchestration manager. | Preserves clear ownership boundaries while keeping local operations practical. | Avoids turning supervisor code into a second control-plane framework. | Later hosted or richer queue service management can extend thin hooks rather than unwind a broad early design. | Package-boundary tests and concise operator docs. | Revisit if queue operations need independent deployment or richer fleet management. | confirmed |
+| DD-12 | Queue config loading | Use explicit config paths with a versioned trusted YAML schema, with a small direct loader for plain queue specs and an optional `loom[config]` composition path when authored config needs includes/overlays/interpolation/recipe features. | User accepted explicit-path loading and a layered loader story. | Implicit current-directory discovery; environment-driven discovery; CLI-only configuration; unversioned ad hoc config records; forcing all queue config through `loom[config]`. | Matches the repo's explicit-config bias, keeps Python APIs primary, and avoids hiding queue behavior behind path-search rules before the queue contract is stable. | Removes ambiguous discovery rules from the first implementation while keeping queue-core imports decoupled from config extras. | Future CLI or project conventions can add optional discovery wrappers later without changing the underlying config schema. | Loader tests, schema-version tests, config-extra boundary tests, and concise docs that explain explicit-path loading plus when `loom[config]` composition is required. | First version lacks a workspace-wide default location; revisit only if repeated operator workflows show a clear need for a standard discovery convention. | confirmed |
+| DD-13 | Queue-owned run identity and dispatch idempotency | Each queued item gets an immutable `queue_item_id`; before first launch handoff the queue persists a queue-owned `run_uri` derived deterministically from that id and the configured run root, and all ordinary recovery or retry paths reuse that same `run_uri`. A separate `dispatch_attempt` counter increments only on explicit requeue or resubmit, not on controller restart or status polling recovery. | User accepted the stable identity model. | Fresh `allocate_run_uri()` on each launch attempt; adapter-owned run identity; queue item id without a persisted `run_uri`; incrementing attempt identity on ordinary controller recovery. | Current run paths already expect an explicit `run_uri`, while the existing allocator does not reserve identity durably before writes. Persisting the `run_uri` on the queue item before first handoff prevents duplicate runs and preserves a stable queue-to-authority join key. | Keeps recovery and cancellation targeting straightforward because queue state, authority state, and submitted-job state can all refer to the same persisted run identity. | Future adapters can add richer dispatch handles without changing the queue-owned run identity contract. A later roadmap can redesign path layout without changing the invariant that one queue item owns one persistent `run_uri`. | Tests must cover controller crash/restart before and after first dispatch handoff, duplicate-dispatch prevention, status joins keyed by persisted `run_uri`, and explicit requeue behavior with incremented `dispatch_attempt`. | The exact path convention, for example a `runs/queue/<queue_item_id>` subtree, can be refined in the implementation plan as long as the persisted queue-owned `run_uri` invariant stays fixed. | confirmed |
+| DD-14 | Managed-pool authority-limit ownership | First-version managed pools validate against pre-provisioned authority limits and never silently mutate authority resource truth during enqueue or dispatch. | User agreed with validate-only first-version behavior. | Silent queue-side mutation during enqueue/dispatch; queue-owned resource-limit truth. | Keeps queue policy separate from authority-managed coordination truth and matches the existing `WorkspaceCoordinationStore` ownership boundary. | Prevents a second source of truth for resource limits. | A later roadmap can add explicit provisioning APIs through authority if operators need them, without changing queue item semantics. | Validation tests for limit mismatch diagnostics and docs that explain pre-provisioned authority limits for managed pools. | Revisit only if operators need queue-driven resource provisioning through a designed authority contract. | confirmed |
 
 ## Design Decision Triage
 
@@ -528,25 +594,30 @@ Compatibility constraints:
 | DD-6 | recorded recommendation | Unknown cancellation states add complexity. | FR-13 | Keep because false success is worse than explicit uncertainty. | confirmed |
 | DD-7 | recorded recommendation | Deferring SSH may leave some remote use cases unsupported initially. | FR-12 | Keep first-version adapter scope to local and SLURM. | confirmed |
 | DD-8 | recorded recommendation | CLI may be expected by operators. | FR-3, FR-4 | Keep the wrapper thin and Python APIs primary. | confirmed |
+| DD-12 | recorded recommendation | Implicit config discovery would add hidden behavior and preflight ambiguity early. | DD-8 | Keep explicit-path loading with a versioned schema; allow optional `loom[config]` composition only behind the same normalized queue schema. | confirmed |
 | DD-10 | recorded recommendation | Separate queue and authority truth can confuse users if status surfaces are sloppy. | FR-14 | Keep joined read models explicit about ownership. | confirmed |
+| DD-13 | recorded recommendation | Queue recovery must not allocate a fresh run identity after a partial handoff. | FR-4, FR-5, FR-14 | Keep immutable queue item id, persisted queue-owned `run_uri`, and explicit `dispatch_attempt` semantics. | confirmed |
+| DD-14 | recorded recommendation | Queue-side mutation would conflict with authority-owned coordination truth. | FR-7 | Freeze first-version managed pools to validation against pre-provisioned authority limits. | confirmed |
 
 ## Design Safety Review
 
 | Finding | Affected decision or requirement | Refactor or compatibility risk | Recommended action | Status |
 | --- | --- | --- | --- | --- |
-| Queue policy could leak into authority service. | DD-1, FR-2 | High maintainability risk if authority becomes scheduler. | Keep queue service separate and add import-boundary checks. | draft |
-| Queue desired resource config could drift from authority limits. | DD-5, FR-7 | High correctness risk if queue DB becomes a second resource-limit truth. | Queue stores desired config only and reconciles or validates it against authority before dispatch. | draft |
-| Loom-managed leases can be wasted by delegated schedulers. | DD-5, FR-8 | High operational risk if SLURM-pending work holds Loom GPU leases. | Use delegated mode for SLURM by default unless explicitly configured otherwise. | draft |
-| Deferred remote equivalence proof can be overstated in delegated execution docs. | FR-5, FR-11 | Medium reproducibility risk until run bundles exist. | Keep delegated-launch docs explicit that shared/pre-staged workspace assumptions are weaker than bundle transport guarantees. | draft |
-| Queue item state could duplicate run lifecycle truth. | FR-14 | Medium compatibility risk for status/read models. | Queue stores queue/dispatch state only; authority remains run truth. | draft |
-| Supervisor and CLI hooks could grow into a second orchestration framework. | DD-11, FR-3 | Medium maintainability risk if operational convenience broadens into shared runtime ownership. | Keep Python service/client/controller APIs primary and the CLI wrapper thin. | draft |
+| Queue policy could leak into authority service. | DD-1, FR-2 | High maintainability risk if authority becomes scheduler. | Keep queue service separate and add import-boundary checks. | confirmed |
+| Managed-pool resource ownership must stay validation-only in the first version. | DD-5, DD-14, FR-7 | High correctness risk if queue config silently rewrites authority resource truth. | Freeze first-version behavior as validation against pre-provisioned authority limits; any future provisioning path must be explicit and authority-owned. | confirmed |
+| Loom-managed leases can be wasted by delegated schedulers. | DD-5, FR-8 | High operational risk if SLURM-pending work holds Loom GPU leases. | Use delegated mode for SLURM by default unless explicitly configured otherwise. | confirmed |
+| Dispatch idempotency and run identity must be queue-owned and persistent. | DD-13, FR-4, FR-5, FR-14 | High recovery and compatibility risk if a claimed item can create duplicate runs or lose the join key between queue state and authority state after controller failure. | Keep immutable `queue_item_id`, persist queue-owned `run_uri` before first handoff, and reuse that `run_uri` across ordinary recovery while reserving `dispatch_attempt` changes for explicit requeue/resubmit. | confirmed |
+| Deferred remote equivalence proof can be overstated in delegated execution docs. | FR-5, FR-11 | Medium reproducibility risk until run bundles exist. | Keep delegated-launch docs explicit that shared/pre-staged workspace assumptions are weaker than bundle transport guarantees. | confirmed |
+| Queue item state could duplicate run lifecycle truth. | FR-14 | Medium compatibility risk for status/read models. | Queue stores queue/dispatch state only; authority remains run truth. | confirmed |
+| Queue-config loading dependency policy is not yet explicit enough. | DD-8, DD-12 | Medium maintainability risk if queue config either duplicates `loom.config` behavior or accidentally makes config dependencies mandatory for queue-core imports. | The implementation plan should state whether explicit-path queue YAML loading reuses the existing `loom[config]` dependency boundary or a smaller dedicated loader, while keeping queue-core imports independent from config extras. | confirmed |
+| Supervisor and CLI hooks could grow into a second orchestration framework. | DD-11, FR-3 | Medium maintainability risk if operational convenience broadens into shared runtime ownership. | Keep Python service/client/controller APIs primary and the CLI wrapper thin. | confirmed |
 
 Gate result:
 
-- Status: pending
-- Reviewer: pending
+- Status: pass
+- Reviewer: local design-safety review recorded on 2026-05-12
 - Blockers:
-  - Queue config default path/schema remains undecided.
+  - No remaining design-safety blocker inside the v11 notes.
 - Recorded recommendations:
   - Separate queue service from authority.
   - Use SQLite built-in queue storage.
@@ -556,6 +627,11 @@ Gate result:
   - Ship local and SLURM adapters first; defer generic SSH.
   - Keep Python APIs primary and the CLI operational/thin.
   - Require accurate adapter cancellation reporting.
+  - Use explicit-path, versioned YAML queue-config loading in the first version.
+  - Permit optional `loom[config]` composition for complex queue configs without
+    making queue-core imports depend on config extras.
+  - Keep queue-core imports independent from config-extra loading paths.
+  - Keep queue-owned run identity separate from adapter dispatch handles.
 - Accepted risks:
   - Delegated execution such as SLURM may rely on pre-staged/shared workspace
     assumptions where applicable.
@@ -581,6 +657,18 @@ Public Python API surface:
 - Optionally run a foreground drain controller from Python for tests and
   restricted environments.
 
+Queue config loading shape:
+
+- First-version queue config loading should require an explicit path rather than
+  implicit current-directory or environment discovery.
+- The file should be a trusted YAML document with a top-level
+  `schema_version` and plain-data queue/pool definitions.
+- Python APIs and any later CLI wrapper should call the same normalized loader
+  surface rather than inventing separate config-discovery behavior.
+- Plain queue specs should load through a small direct loader.
+- Complex authored queue configs may opt into `loom[config]` composition, but
+  queue-core imports must remain independent from config extras.
+
 CLI surface:
 
 - Python API is the primary setup/enqueue/control surface.
@@ -600,7 +688,8 @@ Persisted records and file layout:
     generation;
   - one queue definition per pool, with pause/limit state;
   - run intent snapshot records;
-  - queue item state records;
+  - queue item state records, including immutable `queue_item_id`, persisted
+    queue-owned `run_uri`, and `dispatch_attempt`;
   - claim/dispatch/cancel audit records;
   - adapter dispatch handles;
   - links to authority run URI and submitted operation identifiers where present.
@@ -859,12 +948,120 @@ Test expectations:
 - CLI/e2e coverage for status/cancel/foreground-drain, plus docs and preflight
   tests.
 
-## Final Planning Confirmation
+## Implementation Readiness
 
-Status:
+| Check | Evidence | Result | Required action |
+| --- | --- | --- | --- |
+| Roadmap-to-requirement traceability | `Roadmap Extraction`, `Capability Triage`, and `FR-1` through `FR-15` map the inserted v11 roadmap entry into concrete queue requirements. | pass | None. |
+| Requirement-to-design traceability | Functional requirements map to `DD-1` through `DD-14`, practical design notes, and the phase sketch. | pass | Keep the same traceability in the implementation plan. |
+| Design-safety review completed | `Design Safety Review` now records a completed local review on 2026-05-12 with the run-identity, managed-resource-ownership, and config-loading seams all frozen into explicit recommendations. | pass | Carry the frozen recommendations into the implementation plan. |
+| Example-to-validation traceability | The examples cover managed local dispatch, delegated SLURM dispatch, foreground drain, cancellation, and snapshot-drift behavior; the validation table maps each to concrete suite expectations. | pass | Preserve the example-to-test mapping during plan drafting. |
+| Phase-shaping readiness | The notes now carry a five-phase MVP aligned to the locked scope and test obligations. | pass | Refine phase boundaries only if reviewability improves and deferred scope stays deferred. |
+| Unresolved blocked or needs-discussion decisions | No remaining user-facing product-scope question is open. The remaining carry-forward items are recommended docs-routing and package-placement choices plus prerequisite v10 surface verification. | pass | Verify the exact v10 authority/resource surfaces to target. |
+| Prerequisite v10 surface verification | The notes now name the queue design contracts clearly, but the implementation plan still needs one final evidence pass against current v10 authority/resource-lease docs and source entry points. | block | Verify the exact current v10 authority/resource-lease surfaces before freezing the implementation plan. |
 
-- Pending.
+Readiness result:
 
-Open items before implementation-plan drafting:
+- Status: blocked
+- Implementation-plan drafting blockers:
+  - The exact v10 authority/resource-lease surfaces to target still need a
+    final evidence pass against current docs/source before freezing the
+    implementation plan.
+- Accepted risks:
+  - Delegated SLURM execution still relies on pre-staged/shared-workspace
+    assumptions until run-bundle transport exists.
+  - SQLite remains the first workspace-scoped durability default and may need a
+    later broker-backed expansion path.
+  - No automatic retries, fairness, or multi-queue policy exist in the first
+    version.
+- Assumptions to carry forward:
+  - Queue service and authority remain separate services and separate sources of
+    truth.
+  - Managed and delegated capacity modes both ship in the first version.
+  - Local and SLURM are the only first-version launch adapters.
+  - Queue config loading uses an explicit path and a versioned trusted YAML
+    schema in the first version.
 
-- Decide queue config default path and schema.
+## Open Questions
+
+No user-facing product-scope question remains open. The remaining items are
+implementation-plan boundary recommendations rather than unresolved behavior.
+
+| Question | Affects | Current default | Status |
+| --- | --- | --- | --- |
+| How is stable run identity allocated and reused across queue recovery? | Dispatch idempotency, status joins, recovery, and cancellation targeting. | Each queue item owns an immutable `queue_item_id`, a persisted queue-owned `run_uri` created before first handoff, and a `dispatch_attempt` counter that changes only on explicit requeue or resubmit. | answered |
+| Can managed queue pools mutate authority resource limits? | Resource ownership, correctness, and operational diagnostics. | No silent mutation during enqueue/dispatch; validate against pre-provisioned authority limits unless an explicit provisioning contract is designed. | answered |
+| Which feature doc should own the public queue contract? | Docs routing for queue behavior, examples, preflight, and status semantics. | Add a dedicated queue/workflow-scheduler feature doc and cross-link `execution.md`, `runtime-resources.md`, `slurm.md`, `preflight.md`, and `cli.md` rather than overloading `execution.md`. | recommended |
+| Should queue code start under `loom.queue` or `loom.pipeline.queue`? | Source-tree ownership and import boundaries. | Start under `loom.pipeline.queue` unless the implementation plan demonstrates that the public queue vocabulary needs a top-level package immediately. | recommended |
+
+## Handoff Notes
+
+Implementation-plan draft inputs:
+
+- Locked MVP scope:
+  - separate SQLite-backed queue service;
+  - whole-run queue items only;
+  - one FIFO queue per pool;
+  - managed and delegated capacity modes;
+  - local and SLURM launch adapters only;
+  - queue and authority truth kept separate, joined only in read models;
+  - Python API first, with a thin operational CLI wrapper later.
+- Queue-config recommendation:
+  - use explicit-path loading for trusted YAML with `schema_version` and
+    plain-data pool/queue definitions;
+  - do not introduce implicit discovery in the first version;
+  - allow an optional `loom[config]` composition path for complex authored
+    configs, while keeping a small direct loader for plain queue specs.
+- Critical invariants:
+  - queue code never opens authority private storage;
+  - managed resource limits and active leases remain authority truth;
+  - delegated schedulers do not hold Loom leases by default;
+  - queue status never replaces authority lifecycle truth;
+  - cancellation success is never claimed without adapter proof.
+
+Design-safety review result:
+
+- Completed locally on 2026-05-12. No remaining design-safety blocker is open
+  inside the v11 notes.
+- Confirmed recommendations to preserve:
+  - queue/authority import and ownership boundaries;
+  - delegated-capacity semantics for SLURM;
+  - status-join clarity;
+  - operational-surface creep limits for supervisor/CLI hooks;
+  - validation-only managed-pool ownership in the first version;
+  - immutable `queue_item_id`, persisted queue-owned `run_uri`, and explicit
+    `dispatch_attempt` semantics for recovery-safe dispatch identity;
+  - explicit dependency policy for queue-config loading.
+
+Validation and phase-shaping inputs:
+
+- Core examples to preserve in the implementation plan:
+  - managed local GPU pool;
+  - delegated SLURM queue;
+  - foreground drain behavior;
+  - accurate cancellation reporting;
+  - snapshot drift and delegated-launch verification reporting.
+- Current five-phase shape:
+  1. Queue records and SQLite repository.
+  2. Queue service, client, and Python control surface.
+  3. Managed resource pools and local launcher.
+  4. Delegated SLURM dispatch.
+  5. Operational UX, minimal CLI wrapper, docs, and hardening.
+
+Plan-quality-gate risks:
+
+- The implementation plan must name exact v10 authority/resource-lease entry
+  points rather than hand-wave over unstable boundaries.
+- The implementation plan must keep queue policy separate from authority truth
+  in both public API design and package layout.
+- The implementation plan must not silently reintroduce implicit config
+  discovery, SSH, retries, fairness, or multi-queue policy through phase scope
+  creep.
+
+Assumptions to carry forward:
+
+- The first implementation can stay dependency-light and deterministic without a
+  broker or hosted orchestrator.
+- Queue config is trusted project code and can rely on existing Loom config
+  conventions for YAML/plain-data validation.
+- Foreground drain is a first-class operational mode, not just a test helper.

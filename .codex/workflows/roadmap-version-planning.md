@@ -39,13 +39,15 @@ Expected flow:
 2. Intent discovery.
 3. Capability triage and functional requirements.
 4. Functionality and behavior baseline confirmation.
-5. Context compaction/reset checkpoint.
+5. Explicit workflow stage readback and context compaction/reset checkpoint.
 6. Proposed implementation shape and design decision review.
 7. Design-safety review with `loom_design_safety_reviewer`.
 8. Examples and validation strategy.
 9. Phase shaping.
-10. Implementation readiness and final planning confirmation.
-11. Implementation-plan draft from the confirmed planning notes.
+10. Implementation-readiness checklist, open-question closure, and handoff
+    preparation.
+11. Final planning confirmation.
+12. Implementation-plan draft from the confirmed planning notes.
 
 At workflow startup, read the roadmap, linked feature docs, adjacent plans, and
 current architecture notes before asking the user to confirm functionality or
@@ -69,6 +71,27 @@ design decisions, and classify them before asking the user anything. Do not ask
 the user whether more design decisions should be reviewed. The facilitator owns
 that triage and should not turn every behavior or implementation detail into a
 user question.
+
+Maintain the planning notes in four parallel structures as the discussion
+progresses:
+
+- metadata stage gates that show where the workflow currently stands;
+- the stage-readback table that records locked decisions, defaults, open
+  questions, and next focus for each stage;
+- an explicit workflow-stage readback narrative before or after any context
+  checkpoint so later passes can resume without rediscovering what was already
+  confirmed;
+- implementation-readiness, open-questions, and handoff sections that make the
+  remaining blockers and carry-forward assumptions explicit before
+  implementation-plan drafting.
+
+Do not leave the notes in a state where the design is "mostly known" but the
+remaining blockers are only implied by draft prose. If a question still affects
+public contracts, architecture boundaries, failure semantics, validation
+obligations, or phase boundaries, record it explicitly in the readiness or open
+questions sections with the required action. If repo evidence supports a clear
+recommendation, record that recommendation directly instead of leaving a vague
+pending marker.
 
 Classify each candidate design decision before discussing it:
 
