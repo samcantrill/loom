@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 10 merged; Phase 11 pr_open
+- Phase work status: Phase 11 merged; Phase 12 pending
 
 Related artifacts and references:
 
@@ -1478,7 +1478,7 @@ clarity of user-facing failure messages.
 
 ### Phase 11: Python Runner And `loom run` Online Path
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/authority-run-online-path`
 - PR: <https://github.com/samcantrill/loom/pull/129>
 
@@ -1584,8 +1584,14 @@ error UX, and ensuring only Phase 11 paths changed.
   contract 146 passed / 2 skipped, integration 127 passed / 8 skipped / 10
   deselected, e2e 39 passed / 2 deselected, and config-extra 422 passed / 1326
   deselected.
-- PR metadata: PR #129 opened from `codex/authority-run-online-path` to
-  `develop` and verified with `gh pr view`.
+- Review and CI: managing-agent automated review completed with no blocking
+  findings; GitHub CI `checks` passed on
+  <https://github.com/samcantrill/loom/actions/runs/25706042258/job/75476254033>.
+- Merge metadata: PR #129 was squash-merged into `develop` as `d93e19f` after
+  confirming the PR target was exactly `develop`, the PR was open, and CI had
+  passed.
+- Stack maintenance: root phase merged directly to `develop`; no successor
+  branch depended on `codex/authority-run-online-path` at merge time.
 - Follow-up notes: audit events remain local-only for HTTP-backed runner stores
   until a service audit route exists. Phase 12 still owns continuation and
   local/subprocess worker migration.
