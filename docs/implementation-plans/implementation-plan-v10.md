@@ -11,7 +11,7 @@
   import, strict import collision rejection, and hybrid resource admission
 - Plan quality gate: passed on 2026-05-11 after one refinement pass and
   confirmation review
-- Phase work status: Phase 12 merged; Phase 13 pending
+- Phase work status: Phase 13 merged; Phase 14 pending
 
 Related artifacts and references:
 
