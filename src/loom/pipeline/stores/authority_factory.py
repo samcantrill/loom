@@ -78,6 +78,7 @@ class AuthorityFactoryResolution:
     config: AuthorityConfig
     result: AuthorityResolutionResult
     registry: AuthorityRegistryValidationResult | None = None
+    readiness: AuthorityProtocolReadiness | None = None
 
     @property
     def reference(self) -> AuthorityReference | None:
@@ -118,11 +119,35 @@ def resolve_authority_for_factory(
     if endpoint is None and registry is not None and registry.record is not None:
         endpoint = registry.record.reference.endpoint
 
+    readiness: AuthorityProtocolReadiness | None = None
     if probe_http_readiness and endpoint is not None and _is_http_endpoint(endpoint):
-        service_health = probe_http_authority_readiness(
-            endpoint,
-            timeout_seconds=readiness_timeout_seconds,
-        )
+        try:
+            readiness = read_http_authority_readiness(
+                endpoint,
+                timeout_seconds=readiness_timeout_seconds,
+            )
+        except (
+            TimeoutError,
+            socket.timeout,
+            error.URLError,
+            OSError,
+        ) as exc:
+            service_health = AuthorityServiceHealth(
+                state=AuthorityServiceHealthState.UNAVAILABLE,
+                message=str(exc),
+            )
+        except (
+            AuthorityProtocolError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as exc:
+            service_health = AuthorityServiceHealth(
+                state=AuthorityServiceHealthState.UNHEALTHY,
+                protocol_compatible=False,
+                message=str(exc),
+            )
+        else:
+            service_health = _health_from_readiness(readiness)
 
     result = resolve_authority(
         AuthorityResolverInput(
@@ -137,6 +162,7 @@ def resolve_authority_for_factory(
         config=resolved_config,
         result=result,
         registry=registry,
+        readiness=readiness,
     )
 
 
@@ -233,12 +259,10 @@ def probe_http_authority_readiness(
     if not _is_http_endpoint(endpoint):
         return AuthorityServiceHealth()
     try:
-        with request.urlopen(
-            request.Request(_join_url(endpoint, "/ready")),
-            timeout=timeout_seconds,
-        ) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        readiness = AuthorityProtocolReadiness.from_dict(payload)
+        readiness = read_http_authority_readiness(
+            endpoint,
+            timeout_seconds=timeout_seconds,
+        )
     except (TimeoutError, socket.timeout, error.URLError, OSError) as exc:
         return AuthorityServiceHealth(
             state=AuthorityServiceHealthState.UNAVAILABLE,
@@ -251,6 +275,31 @@ def probe_http_authority_readiness(
             message=str(exc),
         )
 
+    return _health_from_readiness(readiness)
+
+
+def read_http_authority_readiness(
+    endpoint: str,
+    *,
+    timeout_seconds: float | None = DEFAULT_AUTHORITY_READINESS_TIMEOUT_SECONDS,
+) -> AuthorityProtocolReadiness:
+    """Fetch and parse `/ready` from an HTTP authority endpoint."""
+
+    if not _is_http_endpoint(endpoint):
+        raise AuthorityFactoryError(
+            "authority readiness requires an http or https endpoint",
+            code="authority_factory.unsupported_endpoint",
+            context={"endpoint": endpoint},
+        )
+    with request.urlopen(
+        request.Request(_join_url(endpoint, "/ready")),
+        timeout=timeout_seconds,
+    ) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return AuthorityProtocolReadiness.from_dict(payload)
+
+
+def _health_from_readiness(readiness: AuthorityProtocolReadiness) -> AuthorityServiceHealth:
     state = (
         AuthorityServiceHealthState.READY
         if readiness.ready
@@ -306,6 +355,7 @@ __all__ = [
     "config_from_authority_reference",
     "create_authority_client",
     "probe_http_authority_readiness",
+    "read_http_authority_readiness",
     "require_online_authority",
     "resolve_authority_for_factory",
 ]

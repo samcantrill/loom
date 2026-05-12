@@ -18,6 +18,10 @@ from loom.pipeline.stores import (
     AuthorityProtocolErrorCategory,
     AuthorityProtocolResponse,
 )
+from loom.pipeline.submitted import (
+    SubmittedOperationRecord,
+    SubmittedOperationState,
+)
 from loom.serialization import PlainData
 
 
@@ -229,6 +233,77 @@ def test_mutation_api_maps_conflict_and_stale_fencing_rejections(tmp_path) -> No
     assert rejected.accepted is False
     assert rejected.rejection is not None
     assert rejected.rejection.category is AuthorityProtocolErrorCategory.STALE_FENCING
+
+
+def test_mutation_api_handles_leases_and_submitted_operations(tmp_path) -> None:
+    client = _client(tmp_path)
+    admitted = client.admit_run(
+        RUN_URI,
+        request_id="admit-1",
+        service_generation="generation-1",
+    )
+    assert admitted.result is not None
+
+    lease = client.acquire_controller_lease(
+        RUN_URI,
+        owner_id="runner",
+        lease_ttl_seconds=60,
+        expected_revision=admitted.result.revision,
+        request_id="lease-1",
+        service_generation="generation-1",
+    )
+    assert lease.accepted is True
+    assert lease.result is not None
+    assert lease.result.lease is not None
+
+    renewed = client.renew_controller_lease(
+        RUN_URI,
+        lease_id=lease.result.lease.lease_id,
+        owner_id="runner",
+        fencing_token=lease.result.lease.fencing_token,
+        lease_ttl_seconds=60,
+        expected_revision=lease.result.lease.revision,
+        request_id="lease-renew-1",
+        service_generation="generation-1",
+    )
+    assert renewed.accepted is True
+
+    record = SubmittedOperationRecord(
+        run_uri=RUN_URI,
+        submission_id="sub-1",
+        backend="local",
+        mode="batch",
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:00Z",
+        state=SubmittedOperationState.SUBMITTED,
+        manifest_relative_path="submitted/sub-1/manifest.json",
+    )
+    written = client.write_submitted_operation(
+        RUN_URI,
+        record,
+        request_id="submitted-write-1",
+        service_generation="generation-1",
+    )
+    assert written.accepted is True
+
+    read = client.read_submitted_operation(
+        RUN_URI,
+        "sub-1",
+        request_id="submitted-read-1",
+        service_generation="generation-1",
+    )
+    assert read.accepted is True
+    assert read.result is not None
+    assert read.result.submitted_operation == record
+
+    listed = client.list_submitted_operations(
+        RUN_URI,
+        request_id="submitted-list-1",
+        service_generation="generation-1",
+    )
+    assert listed.accepted is True
+    assert listed.result is not None
+    assert listed.result.submitted_operations == (record,)
 
 
 def test_route_level_invalid_request_returns_protocol_rejection(tmp_path) -> None:
