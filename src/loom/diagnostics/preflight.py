@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from loom.diagnostics.source_labels import (
+from loom.state_sources import (
     authoritative_service_source,
     deferred_finalization_source,
     local_materialization_source,

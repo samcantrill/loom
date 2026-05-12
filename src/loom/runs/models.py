@@ -8,7 +8,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
-from loom.diagnostics.source_labels import unknown_source
+from loom.state_sources import unknown_source
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
 from .errors import CatalogValidationError

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from loom.artifacts import ArtifactRef
-from loom.diagnostics.source_labels import local_materialization_source
+from loom.state_sources import local_materialization_source
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores import (

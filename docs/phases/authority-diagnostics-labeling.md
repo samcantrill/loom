@@ -92,7 +92,7 @@ The label vocabulary should be reusable by Phase 17 offline evidence and Phase 1
 
 ## Reviewability
 
-- Files to inspect: `src/loom/diagnostics/source_labels.py`, `src/loom/diagnostics/inspection.py`, `src/loom/diagnostics/backend.py`, `src/loom/diagnostics/preflight.py`, `src/loom/runs/models.py`, `src/loom/runs/_scan.py`, `src/loom/cli/formatting.py`, and focused tests.
+- Files to inspect: `src/loom/state_sources.py`, `src/loom/diagnostics/inspection.py`, `src/loom/diagnostics/backend.py`, `src/loom/diagnostics/preflight.py`, `src/loom/runs/models.py`, `src/loom/runs/_scan.py`, `src/loom/cli/formatting.py`, and focused tests.
 - Scope-control checks: no mutation calls added to diagnostics, no private authority repository imports in read-only CLI clients, and no offline import/evidence writer implementation.
 
 ## Implementation Steps

@@ -442,6 +442,26 @@ def test_lower_layers_do_not_import_diagnostics() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_runs_does_not_import_diagnostics() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.runs
+
+        if "loom.diagnostics" in sys.modules:
+            raise SystemExit("loom.runs imported loom.diagnostics")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_execution_does_not_import_config_stores_cli() -> None:
     script = dedent(
         """

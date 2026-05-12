@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from loom.diagnostics.source_labels import (
+from loom.state_sources import (
     authoritative_service_source,
     redacted_authority_summary,
     unavailable_authority_source,

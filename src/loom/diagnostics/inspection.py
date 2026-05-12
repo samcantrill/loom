@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from loom.artifacts import ArtifactRef
-from loom.diagnostics.source_labels import (
+from loom.state_sources import (
     authoritative_service_source,
     local_materialization_source,
     redacted_authority_summary,
