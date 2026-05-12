@@ -8,8 +8,12 @@ from typing import Any, cast
 import pytest
 
 from loom.pipeline import PipelineRunner, RunRequest
-from loom.pipeline.execution import create_authority_backed_serial_run_store
+from loom.pipeline.execution import (
+    create_authority_backed_serial_run_store,
+    create_offline_evidence_run_store,
+)
 from loom.pipeline.execution.authority_adapter import AuthorityBackedSerialRunStore
+from loom.pipeline.offline_evidence import read_offline_evidence_manifest
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.planning import PlanAction
 from loom.pipeline.status import RunStatus, StageStatus
@@ -192,6 +196,23 @@ def test_local_pipeline_run_and_resume_from_config(tmp_path: Path) -> None:
         "stages/report/provenance.json",
     ]:
         assert (run_dir / relative).is_file(), relative
+
+
+def test_offline_first_pipeline_run_writes_evidence_manifest(tmp_path: Path) -> None:
+    run_store = create_offline_evidence_run_store(tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(config=local_execution_config(), run_uri=run_uri)
+    )
+
+    manifest_path = run_store.offline_evidence_manifest_path(run_uri)
+    manifest = read_offline_evidence_manifest(manifest_path)
+    assert result.status == RunStatus.SUCCEEDED
+    assert manifest.complete
+    assert manifest.state_source["label"] == "offline_evidence"
+    assert manifest.state_source["authoritative"] is False
+    assert [stage.stage_name for stage in manifest.stages] == ["build", "report"]
 
 
 def test_local_pipeline_run_with_composed_config_persists_manifest_not_resolved_snapshots(

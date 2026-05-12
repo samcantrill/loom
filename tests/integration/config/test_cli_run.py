@@ -103,6 +103,51 @@ def test_run_default_uri_executes_under_store_default_root(
     assert stderr.getvalue() == ""
 
 
+def test_run_offline_first_writes_non_authoritative_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "pipeline.yaml"
+    run_uri = path_to_run_uri(tmp_path / "runs" / "offline")
+    _write_pipeline_config(config_path)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "run",
+                str(config_path),
+                "--run-uri",
+                run_uri,
+                "--offline-first",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    evidence = payload["result"]["offline_evidence"]
+    manifest_path = Path(evidence["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["result"]["status"] == "SUCCEEDED"
+    assert evidence["state_source"]["authoritative"] is False
+    assert evidence["state_source"]["label"] == "offline_evidence"
+    assert evidence["manifest_status"] == "complete"
+    assert manifest["kind"] == "loom.offline_evidence_manifest"
+    assert manifest["state_source"]["authoritative"] is False
+    assert [stage["stage_name"] for stage in manifest["stages"]] == [
+        "build",
+        "report",
+    ]
+    assert manifest["events"][-1]["event_type"] == "run.completed"
+    assert stderr.getvalue() == ""
+
+
 def test_run_explicit_uri_uses_exact_target_directory(tmp_path: Path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     run_path = tmp_path / "runs" / "explicit"

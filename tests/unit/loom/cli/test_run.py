@@ -27,18 +27,18 @@ from loom.diagnostics import (
 from loom.pipeline.planning import PlanAction, PlanReason, PlanReasonCode
 from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import (
+    AuthorityFactoryError,
+    AuthorityResolutionFailureKind,
+    AuthorityResolutionMode,
+    LocalRunStore,
+)
 
 
 pytestmark = pytest.mark.unit
 
 
 def test_run_default_store_is_authority_backed_serial_store() -> None:
-    from loom.pipeline.stores import (
-        AuthorityFactoryError,
-        AuthorityResolutionFailureKind,
-    )
-
     with pytest.raises(AuthorityFactoryError) as exc_info:
         run_command._create_default_run_store()
 
@@ -49,6 +49,15 @@ def test_run_default_store_is_authority_backed_serial_store() -> None:
         error.resolution.failure_kind
         is AuthorityResolutionFailureKind.MISSING_AUTHORITY
     )
+
+
+def test_run_default_store_can_be_explicit_offline_evidence_store() -> None:
+    store = run_command._create_default_run_store(
+        authority_mode=AuthorityResolutionMode.OFFLINE_FIRST
+    )
+
+    assert getattr(store, "offline_evidence_enabled") is True
+    assert store.state_source["authoritative"] is False
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,8 +227,10 @@ def _patch_common(
         runtime_options: object,
         open_existing: bool,
         authority_config: object | None = None,
+        authority_mode: object | None = None,
     ) -> None:
         calls["preflight_authority_config"] = authority_config
+        calls["preflight_authority_mode"] = authority_mode
         calls["preflight_config_path"] = getattr(config_options, "config_path")
         calls["preflight_resume"] = open_existing
         calls["preflight_run_uri"] = getattr(runtime_options, "run_uri")
@@ -231,7 +242,7 @@ def _patch_common(
     monkeypatch.setattr(
         run_command,
         "_create_default_run_store",
-        lambda *, authority_config=None: fake_store,
+        lambda *, authority_config=None, authority_mode=None: fake_store,
     )
     monkeypatch.setattr(run_command, "_build_run_request", build_run_request)
     monkeypatch.setattr(run_command, "_run_preflight_for_run", run_preflight)

@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from loom.cli.errors import CliError, ExitCode
-from loom.cli.authority import add_authority_options, authority_config_from_namespace
+from loom.cli.authority import (
+    add_authority_options,
+    authority_config_from_namespace,
+    authority_resolution_mode_from_namespace,
+)
 from loom.cli.formatting import (
     format_json_envelope,
     format_run_text,
@@ -47,7 +51,7 @@ if TYPE_CHECKING:
     from loom.pipeline.specs import PipelineSpec
     from loom.pipeline.validation import PipelineValidationResult
     from loom.serialization import PlainData
-    from loom.pipeline.stores import AuthorityConfig
+    from loom.pipeline.stores import AuthorityConfig, AuthorityResolutionMode
 
 
 RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v2"
@@ -168,7 +172,7 @@ def register_subparser(
         default=OutputFormat.TEXT.value,
         help="output format",
     )
-    add_authority_options(parser)
+    add_authority_options(parser, include_resolution_mode=True)
     parser.add_argument(
         "--traceback",
         action="store_true",
@@ -186,6 +190,7 @@ def handle(namespace: argparse.Namespace) -> int:
     selector_options = SelectorCliOptions.from_namespace(namespace)
     output_format = output_format_from_namespace(namespace)
     authority_config = authority_config_from_namespace(namespace)
+    authority_mode = authority_resolution_mode_from_namespace(namespace)
 
     if run_options.dry_run:
         return _handle_dry_run(
@@ -194,6 +199,7 @@ def handle(namespace: argparse.Namespace) -> int:
             selector_options=selector_options,
             output_format=output_format,
             authority_config=authority_config,
+            authority_mode=authority_mode,
         )
 
     if _run_selects_slurm_executor(
@@ -227,6 +233,7 @@ def handle(namespace: argparse.Namespace) -> int:
         run_options=run_options,
         selector_options=selector_options,
         authority_config=authority_config,
+        authority_mode=authority_mode,
     )
     ok = result.status == "SUCCEEDED"
     if output_format is OutputFormat.JSON:
@@ -250,6 +257,7 @@ def build_run_result(
     run_options: RunCliOptions,
     selector_options: SelectorCliOptions,
     authority_config: "AuthorityConfig | None" = None,
+    authority_mode: "AuthorityResolutionMode | None" = None,
 ) -> RunCliResult:
     """Execute a pipeline and build the CLI-specific run result."""
 
@@ -258,7 +266,10 @@ def build_run_result(
         "subprocess",
     }:
         raise UnsupportedExecutorError(cast(str, run_options.executor))
-    store = _create_default_run_store(authority_config=authority_config)
+    store = _create_default_run_store(
+        authority_config=authority_config,
+        authority_mode=authority_mode,
+    )
     composed = _compose_config(
         config_options.config_path,
         overlays=config_options.overlays,
@@ -285,6 +296,7 @@ def build_run_result(
         runtime_options=runtime_options,
         open_existing=run_options.resume,
         authority_config=authority_config,
+        authority_mode=authority_mode,
     )
     request = _build_run_request(
         composed,
@@ -292,7 +304,10 @@ def build_run_result(
         options=runtime_options,
     )
     result = _run_pipeline(request, store, executor=executor)
-    return _run_result_from_execution_result(result)
+    return _run_result_from_execution_result(
+        result,
+        offline_evidence=_offline_evidence_summary(store, result.run_uri),
+    )
 
 
 def _handle_dry_run(
@@ -302,6 +317,7 @@ def _handle_dry_run(
     selector_options: SelectorCliOptions,
     output_format: OutputFormat,
     authority_config: "AuthorityConfig | None" = None,
+    authority_mode: "AuthorityResolutionMode | None" = None,
 ) -> int:
     if _dry_run_selects_slurm_executor(
         config_options=config_options,
@@ -568,8 +584,22 @@ def _with_resolved_run_uri(options: "RunOptions", run_uri: str | None) -> "RunOp
 def _create_default_run_store(
     *,
     authority_config: "AuthorityConfig | None" = None,
+    authority_mode: "AuthorityResolutionMode | None" = None,
     owner_id: str = "cli-run",
 ) -> Any:
+    from loom.pipeline.stores import AuthorityResolutionMode
+
+    if authority_mode is AuthorityResolutionMode.OFFLINE_FIRST:
+        from loom.pipeline.execution import create_offline_evidence_run_store
+
+        workspace_id = None
+        if authority_config is not None:
+            workspace_id = authority_config.workspace_id
+        return create_offline_evidence_run_store(
+            "runs",
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+        )
     from loom.pipeline.execution.authority_adapter import (
         create_authority_backed_serial_run_store,
     )
@@ -615,6 +645,7 @@ def _run_preflight_for_run(
     runtime_options: "RunOptions",
     open_existing: bool,
     authority_config: "AuthorityConfig | None" = None,
+    authority_mode: "AuthorityResolutionMode | None" = None,
 ) -> None:
     from loom.diagnostics import PreflightError, PreflightRequest
 
@@ -641,6 +672,7 @@ def _run_preflight_for_run(
                 overrides=config_options.overrides,
                 runtime_options=runtime_options,
                 authority_config=authority_config,
+                authority_mode=authority_mode,
             )
         )
     except PreflightError as exc:
@@ -1353,7 +1385,11 @@ def _require_slurm_live_authority(store: Any, *, executor: str) -> None:
         )
 
 
-def _run_result_from_execution_result(result: "RunResult") -> RunCliResult:
+def _run_result_from_execution_result(
+    result: "RunResult",
+    *,
+    offline_evidence: Mapping[str, object] | None = None,
+) -> RunCliResult:
     return RunCliResult(
         run_uri=result.run_uri,
         status=result.status.value,
@@ -1364,7 +1400,20 @@ def _run_result_from_execution_result(result: "RunResult") -> RunCliResult:
         failure_summary=_failure_summary(result.failure),
         plan_summary=dict(result.plan.summary),
         artifact_count=len(result.artifact_index),
+        offline_evidence=offline_evidence,
     )
+
+
+def _offline_evidence_summary(
+    store: object, run_uri: str
+) -> Mapping[str, object] | None:
+    summary = getattr(store, "offline_evidence_summary", None)
+    if not callable(summary):
+        return None
+    value = summary(run_uri)
+    if not isinstance(value, Mapping):
+        return None
+    return value
 
 
 def _stage_summary(stage_name: str, stage_result: object) -> dict[str, object]:

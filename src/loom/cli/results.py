@@ -116,6 +116,7 @@ class RunCliResult:
     failure_summary: Mapping[str, object] | None = None
     plan_summary: Mapping[str, object] = field(default_factory=dict)
     artifact_count: int | None = None
+    offline_evidence: Mapping[str, object] | None = None
 
     def to_dict(self) -> dict[str, PlainCliData]:
         """Return the result as plain data."""
@@ -127,6 +128,7 @@ class RunCliResult:
             "failure_summary": to_plain_cli_data(self.failure_summary),
             "plan_summary": to_plain_cli_data(dict(self.plan_summary)),
             "artifact_count": self.artifact_count,
+            "offline_evidence": to_plain_cli_data(self.offline_evidence),
         }
 
 

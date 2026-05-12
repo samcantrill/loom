@@ -23,6 +23,7 @@ from loom.pipeline.planning import (
     plan_pipeline,
 )
 from loom.pipeline.resources import ResourceRequest
+from loom.pipeline.offline_evidence import write_offline_evidence_manifest
 from loom.pipeline.runtime import (
     ExecutionOptions,
     ParallelExecutionOptions,
@@ -87,6 +88,7 @@ from .models import (
     StageExecutionResult,
     StageRunResult,
 )
+from .offline_adapter import OfflineEvidenceRunStore, is_offline_evidence_run_store
 from .resource_admission import (
     DEFAULT_RESOURCE_LEASE_TTL_SECONDS,
     ResourceAdmissionDecision,
@@ -101,6 +103,7 @@ from .run_locks import acquire_run_lock, build_lock_owner, release_run_lock
 from .stage_attempts import prepare_stage_attempt
 
 ArtifactStoreFactory = Callable[[Path], ArtifactStore]
+RunnerRunStore = RunStore | OfflineEvidenceRunStore
 _STAGE_LEASE_RENEWAL_INTERVAL_SECONDS = 60.0
 _REQUIRED_PARALLEL_CAPABILITIES = (
     BackendCapability.ATOMIC_TRANSITIONS,
@@ -164,12 +167,13 @@ class PipelineRunner:
     def __init__(
         self,
         *,
-        run_store: RunStore,
+        run_store: RunnerRunStore,
         executor: Executor | None = None,
         artifact_store_factory: ArtifactStoreFactory | None = None,
         clock: Callable[[], str] = utc_timestamp,
     ) -> None:
-        if not isinstance(run_store, RunStore):
+        offline_evidence_store = is_offline_evidence_run_store(run_store)
+        if not offline_evidence_store and not isinstance(run_store, RunStore):
             raise PipelineExecutionError("run_store must satisfy RunStore")
         if isinstance(run_store, LocalRunStore):
             raise PipelineExecutionError(
@@ -184,7 +188,7 @@ class PipelineRunner:
             executor = LocalExecutor()
         if not isinstance(executor, Executor):
             raise PipelineExecutionError("executor must satisfy Executor")
-        self.run_store = run_store
+        self.run_store = cast(RunStore, run_store)
         self.executor = executor
         self.artifact_store_factory = artifact_store_factory or (
             lambda root: LocalArtifactStore(root)
@@ -239,6 +243,21 @@ class PipelineRunner:
     def _preflight_authority_admission(
         self, policy: ParallelExecutionOptions
     ) -> None:
+        if is_offline_evidence_run_store(self.run_store):
+            if policy.enabled:
+                raise ParallelExecutionUnsupportedError(
+                    "offline-first evidence runs do not support bounded parallel execution",
+                    code="pipeline.offline_evidence.parallel_unsupported",
+                    context={"max_parallel_stages": policy.max_parallel_stages},
+                )
+            executor_name = str(getattr(self.executor, "name", "unknown"))
+            if executor_name != "local":
+                raise ParallelExecutionUnsupportedError(
+                    "offline-first evidence runs support only the local executor",
+                    code="pipeline.offline_evidence.executor_unsupported",
+                    context={"executor": executor_name},
+                )
+            return
         self._admit_authority_capabilities(
             (RequiredAuthorityCapability.SERIAL_RUN,),
             feature="serial pipeline execution",
@@ -526,7 +545,7 @@ class PipelineRunner:
             stage_plan.stage_name: outcome.stage_results[stage_plan.stage_name]
             for stage_plan in plan.ordered_stage_plans
         }
-        return RunResult(
+        result = RunResult(
             run_uri=run_uri,
             status=run_status,
             started_at=started_at,
@@ -538,6 +557,8 @@ class PipelineRunner:
             artifact_index=artifact_index,
             metadata=request.metadata,
         )
+        self._write_offline_evidence_manifest_if_needed(run_uri)
+        return result
 
     def _run_serial_plan(
         self,
@@ -1424,11 +1445,27 @@ class PipelineRunner:
             return
 
     def _require_local_run_store(self) -> LocalRunStorePaths:
+        if isinstance(self.run_store, OfflineEvidenceRunStore):
+            return self.run_store.local_store
         if not isinstance(self.run_store, LocalRunStorePaths):
             raise PipelineExecutionError(
                 "PipelineRunner requires a run_store that exposes local_* path helpers"
             )
         return self.run_store
+
+    def _write_offline_evidence_manifest_if_needed(self, run_uri: str) -> None:
+        if not is_offline_evidence_run_store(self.run_store):
+            return
+        local_store = self._require_local_run_store()
+        if not isinstance(local_store, LocalRunStore):
+            raise PipelineExecutionError(
+                "offline evidence writing requires a LocalRunStore-backed adapter"
+            )
+        write_offline_evidence_manifest(
+            local_store,
+            run_uri,
+            generated_at=self.clock(),
+        )
 
     def _resolve_request_run_uri(
         self, request: RunRequest, local_run_store: LocalRunStorePaths
@@ -2057,7 +2094,7 @@ def _parallel_policy_from_request(
 def run_pipeline(
     request: RunRequest,
     *,
-    run_store: RunStore,
+    run_store: RunnerRunStore,
     executor: Executor | None = None,
     artifact_store_factory: ArtifactStoreFactory | None = None,
 ) -> RunResult:
