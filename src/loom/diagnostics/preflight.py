@@ -11,6 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from loom.diagnostics.source_labels import (
+    authoritative_service_source,
+    deferred_finalization_source,
+    local_materialization_source,
+    redacted_authority_summary,
+    unavailable_authority_source,
+)
 from loom.serialization import PlainData
 
 from .models import (
@@ -426,7 +433,11 @@ def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...
                     PreflightCheckStatus.FAIL,
                     PreflightSeverity.ERROR,
                     "run URI resolves to a non-directory path",
-                    {"run_uri": resolved.uri, "path": str(path)},
+                    {
+                        "run_uri": resolved.uri,
+                        "path": str(path),
+                        "state_source": local_materialization_source(path=str(path)),
+                    },
                 ),
             )
         if _request_resume_enabled(context):
@@ -442,6 +453,8 @@ def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...
                         "path": str(path),
                         "exists": True,
                         "resume": True,
+                        "state_source": local_materialization_source(path=str(path)),
+                        **_authority_policy_details(context),
                     },
                 ),
             )
@@ -452,7 +465,16 @@ def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...
                 PreflightCheckStatus.FAIL,
                 PreflightSeverity.ERROR,
                 "run URI directory already exists",
-                {"run_uri": resolved.uri, "path": str(path)},
+                {
+                    "run_uri": resolved.uri,
+                    "path": str(path),
+                    "state_source": local_materialization_source(path=str(path)),
+                    "guidance": (
+                        "resume the run with the selected authority or choose "
+                        "a new run URI"
+                    ),
+                    **_authority_policy_details(context),
+                },
             ),
         )
 
@@ -463,7 +485,13 @@ def _check_run_uri_resolve(context: _Context) -> tuple[PreflightCheckResult, ...
             PreflightCheckStatus.PASS,
             PreflightSeverity.INFO,
             "run URI resolves to an available local path",
-            {"run_uri": resolved.uri, "path": str(path), "exists": False},
+            {
+                "run_uri": resolved.uri,
+                "path": str(path),
+                "exists": False,
+                "state_source": local_materialization_source(path=str(path)),
+                **_authority_policy_details(context),
+            },
         ),
     )
 
@@ -502,7 +530,14 @@ def _check_slurm_active_submission(
                     PreflightCheckStatus.PASS,
                     PreflightSeverity.INFO,
                     "no existing run directory has active submitted SLURM work",
-                    {"run_uri": resolved.uri, "run_exists": False},
+                    {
+                        "run_uri": resolved.uri,
+                        "run_exists": False,
+                        "state_source": local_materialization_source(
+                            path=str(resolved.path)
+                        ),
+                        **_authority_policy_details(context),
+                    },
                 ),
             )
         store = create_authority_backed_serial_run_store(
@@ -529,7 +564,12 @@ def _check_slurm_active_submission(
                 PreflightCheckStatus.PASS,
                 PreflightSeverity.INFO,
                 "existing run has no active submitted SLURM work",
-                {"run_uri": resolved.uri, "active": False},
+                {
+                    "run_uri": resolved.uri,
+                    "active": False,
+                    "state_source": _active_submission_source(context),
+                    **_authority_policy_details(context),
+                },
             ),
         )
     return (
@@ -546,6 +586,9 @@ def _check_slurm_active_submission(
                 "backend": active.backend,
                 "mode": active.mode,
                 "state": active.state.value,
+                "state_source": _active_submission_source(context),
+                "guidance": "cancel or inspect active scheduler work before resubmitting",
+                **_authority_policy_details(context),
             },
         ),
     )
@@ -585,7 +628,11 @@ def _check_slurm_run_uri_local(context: _Context) -> tuple[PreflightCheckResult,
             PreflightCheckStatus.PASS,
             PreflightSeverity.INFO,
             "SLURM dry-run run URI resolves locally",
-            {"run_uri": resolved.uri, "path": str(resolved.path)},
+            {
+                "run_uri": resolved.uri,
+                "path": str(resolved.path),
+                "state_source": local_materialization_source(path=str(resolved.path)),
+            },
         ),
     )
 
@@ -629,7 +676,10 @@ def _check_artifact_store(context: _Context) -> tuple[PreflightCheckResult, ...]
                 PreflightCheckStatus.FAIL,
                 PreflightSeverity.ERROR,
                 "artifact root exists but is not a directory",
-                {"path": str(root)},
+                {
+                    "path": str(root),
+                    "state_source": local_materialization_source(path=str(root)),
+                },
             ),
         )
 
@@ -640,9 +690,61 @@ def _check_artifact_store(context: _Context) -> tuple[PreflightCheckResult, ...]
             PreflightCheckStatus.PASS,
             PreflightSeverity.INFO,
             "local artifact store can be constructed",
-            {"path": str(store.root), "exists": root.exists()},
+            {
+                "path": str(store.root),
+                "exists": root.exists(),
+                "state_source": local_materialization_source(path=str(root)),
+            },
         ),
     )
+
+
+def _authority_policy_details(context: _Context) -> dict[str, PlainData]:
+    config = context.authority_config()
+    authority = redacted_authority_summary(config)
+    backend_kind = _enum_value(getattr(config, "backend_kind", None))
+    deployment_profile = _enum_value(getattr(config, "deployment_profile", None))
+    policy: dict[str, PlainData] = {
+        "backend_kind": backend_kind,
+        "deployment_profile": deployment_profile,
+    }
+    details: dict[str, PlainData] = {"authority_policy": policy}
+    if authority is not None:
+        details["authority"] = authority
+    if (
+        backend_kind == "deferred_finalization"
+        or deployment_profile == "deferred_finalization"
+    ):
+        policy["source"] = deferred_finalization_source()
+        details["guidance"] = (
+            "deferred finalization is non-authoritative until a service imports it"
+        )
+    elif backend_kind in {"direct_database", "transitional_sqlite"}:
+        policy["source"] = unavailable_authority_source(
+            reason=f"unsupported_{backend_kind}",
+            authority=authority,
+        )
+        details["guidance"] = (
+            "select a service authority endpoint or explicit offline mode"
+        )
+    else:
+        policy["source"] = authoritative_service_source(
+            authority=authority,
+        )
+    return details
+
+
+def _active_submission_source(context: _Context) -> dict[str, PlainData]:
+    return authoritative_service_source(
+        authority=redacted_authority_summary(context.authority_config())
+    )
+
+
+def _enum_value(value: object) -> str | None:
+    raw = getattr(value, "value", value)
+    if raw is None:
+        return None
+    return str(raw)
 
 
 def _check_codecs(_context: _Context) -> tuple[PreflightCheckResult, ...]:

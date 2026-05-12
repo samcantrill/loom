@@ -31,5 +31,7 @@ def test_backend_diagnostics_accept_per_run_authority_contract(tmp_path: Path) -
     assert result.run_uri == run_uri
     assert result.status == "RUNNING"
     assert result.backend_name == "in-memory-authority-test-store"
+    assert result.state_source["label"] == "authoritative_service_truth"
     assert capabilities.backend_name == result.backend_name
+    assert capabilities.state_source["label"] == "authoritative_service_truth"
     assert capabilities.capabilities

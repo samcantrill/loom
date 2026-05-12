@@ -5,6 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from loom.diagnostics.source_labels import (
+    authoritative_service_source,
+    redacted_authority_summary,
+    unavailable_authority_source,
+    unknown_source,
+)
 from loom.pipeline.stores import (
     AuthoritativeReadOptions,
     AuthorityBackendKind,
@@ -75,6 +81,7 @@ class BackendInspectionResult:
     recovery_records: tuple[Mapping[str, PlainData], ...] = ()
     materialized_refs: tuple[Mapping[str, PlainData], ...] = ()
     warnings: tuple[Mapping[str, PlainData], ...] = ()
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
 
     def to_dict(self) -> dict[str, PlainData]:
         return {
@@ -96,6 +103,7 @@ class BackendInspectionResult:
             ],
             "materialized_refs": [dict(ref) for ref in self.materialized_refs],
             "warnings": [dict(warning) for warning in self.warnings],
+            "state_source": dict(self.state_source),
         }
 
 
@@ -109,6 +117,7 @@ class BackendCapabilitiesResult:
     capabilities: tuple[Mapping[str, PlainData], ...]
     diagnostics: tuple[Mapping[str, PlainData], ...] = ()
     requirements: Mapping[str, bool] = field(default_factory=dict)
+    state_source: Mapping[str, PlainData] = field(default_factory=unknown_source)
 
     @property
     def has_error_diagnostics(self) -> bool:
@@ -129,6 +138,7 @@ class BackendCapabilitiesResult:
                 dict(diagnostic) for diagnostic in self.diagnostics
             ],
             "requirements": dict(self.requirements),
+            "state_source": dict(self.state_source),
         }
 
 
@@ -147,6 +157,10 @@ def inspect_backend(
     store = authority_store or _default_authority_store(authority_config)
     schema = _require_supported_schema(store, resolved_run_uri)
     capability_set = store.capabilities()
+    source = _authority_state_source(
+        authority_store=store,
+        authority_config=authority_config,
+    )
     try:
         snapshot = read_authoritative_run(
             store,
@@ -164,7 +178,13 @@ def inspect_backend(
         raise BackendDiagnosticsError(
             f"authoritative backend is unavailable for run {resolved_run_uri}: {exc}",
             code="backend_diagnostics.authority_unavailable",
-            context={"run_uri": resolved_run_uri},
+            context={
+                "run_uri": resolved_run_uri,
+                "state_source": unavailable_authority_source(
+                    reason=str(exc),
+                    authority=redacted_authority_summary(authority_config),
+                ),
+            },
         ) from exc
     stages = tuple(
         stage for stage in snapshot.stages
@@ -216,6 +236,7 @@ def inspect_backend(
         recovery_records=tuple(record.to_dict() for record in recovery_records),
         materialized_refs=tuple(ref.to_dict() for ref in snapshot.materialized_refs),
         warnings=tuple(warning.to_dict() for warning in snapshot.warnings),
+        state_source=source,
     )
 
 
@@ -233,6 +254,10 @@ def inspect_backend_capabilities(
     store = authority_store or _default_authority_store(authority_config)
     schema = _require_supported_schema(store, resolved_run_uri)
     capability_set = store.capabilities()
+    source = _authority_state_source(
+        authority_store=store,
+        authority_config=authority_config,
+    )
     diagnostics = _requirement_diagnostics(
         capability_set,
         require_shared_filesystem=require_shared_filesystem,
@@ -248,6 +273,7 @@ def inspect_backend_capabilities(
             "shared_filesystem": require_shared_filesystem,
             "remote": require_remote,
         },
+        state_source=source,
     )
 
 
@@ -291,7 +317,17 @@ def _default_authority_store(
                 "authoritative backend is missing; start or select an authority "
                 "service before running backend diagnostics",
                 code="backend_diagnostics.authority_missing",
-                context={"backend_kind": config.backend_kind.value},
+                context={
+                    "backend_kind": config.backend_kind.value,
+                    "state_source": unavailable_authority_source(
+                        reason="missing_endpoint",
+                        authority=redacted_authority_summary(config),
+                    ),
+                    "guidance": (
+                        "start an authority with `loom authority start` or pass "
+                        "an explicit service endpoint"
+                    ),
+                },
             )
         try:
             return create_service_authority_store(config)
@@ -302,6 +338,15 @@ def _default_authority_store(
                 context={
                     "backend_kind": config.backend_kind.value,
                     "endpoint": config.endpoint,
+                    "state_source": unavailable_authority_source(
+                        reason=str(exc),
+                        authority=redacted_authority_summary(config),
+                    ),
+                    "guidance": (
+                        "check `loom authority status`, restart the authority, "
+                        "or choose explicit offline mode where authority truth "
+                        "is not required"
+                    ),
                 },
             ) from exc
     raise BackendDiagnosticsError(
@@ -345,7 +390,32 @@ def _require_supported_schema(
         message,
         code=f"backend_diagnostics.schema_{check.failure.kind.value}",
         diagnostics=(diagnostic,),
-        context={"run_uri": run_uri, "authority_marker_exists": marker_exists},
+        context={
+            "run_uri": run_uri,
+            "authority_marker_exists": marker_exists,
+            "state_source": unavailable_authority_source(
+                reason=check.failure.kind.value,
+            ),
+            "guidance": (
+                "start/status/restart the selected authority service; use "
+                "offline mode only for explicit non-authoritative evidence"
+            ),
+        },
+    )
+
+
+def _authority_state_source(
+    *,
+    authority_store: PerRunAuthorityStore,
+    authority_config: AuthorityConfig | None,
+) -> Mapping[str, PlainData]:
+    try:
+        backend_name = authority_store.capabilities().backend_name
+    except Exception:
+        backend_name = None
+    return authoritative_service_source(
+        backend_name=backend_name,
+        authority=redacted_authority_summary(authority_config),
     )
 
 

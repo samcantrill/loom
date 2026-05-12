@@ -65,6 +65,13 @@ def test_run_uri_group_uses_explicit_runtime_run_uri_without_config(
     assert result.status is PreflightStatus.PASS
     assert result.checks[0].check_id == "run_uri.resolve"
     assert result.checks[0].details["run_uri"] == run_uri
+    source = cast(dict[str, Any], result.checks[0].details["state_source"])
+    authority_policy = cast(
+        dict[str, Any], result.checks[0].details["authority_policy"]
+    )
+    policy_source = cast(dict[str, Any], authority_policy["source"])
+    assert source["label"] == "materialized_local_state"
+    assert policy_source["label"] == "authoritative_service_truth"
 
 
 def test_run_uri_group_does_not_compose_config_for_non_uri_runtime_flags() -> None:
@@ -474,6 +481,11 @@ def test_slurm_run_preflight_fails_existing_active_submission(
         by_id["run_uri.slurm.active_submission"].status
         is PreflightCheckStatus.FAIL
     )
+    source = cast(
+        dict[str, Any],
+        by_id["run_uri.slurm.active_submission"].details["state_source"],
+    )
+    assert source["label"] == "authoritative_service_truth"
     assert by_id["run_uri.slurm.active_submission"].details["submission_id"] == (
         "planning-1"
     )

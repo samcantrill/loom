@@ -128,6 +128,14 @@ def format_preflight_text(result: object, *, config_path: object) -> str:
         check_id = str(getattr(check, "check_id"))
         message = str(getattr(check, "message"))
         lines.append(f"{check_status} {check_id}: {message}")
+        details = getattr(check, "details", {})
+        if isinstance(details, Mapping):
+            source = details.get("state_source")
+            if isinstance(source, Mapping):
+                lines.append(f"  source: {source.get('label', 'unknown')}")
+            guidance = details.get("guidance")
+            if isinstance(guidance, str) and guidance:
+                lines.append(f"  guidance: {guidance}")
     return "\n".join(lines)
 
 
@@ -290,6 +298,9 @@ def format_status_text(result: object) -> str:
     status = getattr(result, "status")
     status_text = "<unknown>" if status is None else str(status)
     lines = [f"status {run_uri}: {status_text}"]
+    source = getattr(result, "state_source", {})
+    if isinstance(source, Mapping):
+        lines.append(f"source: {source.get('label', 'unknown')}")
     submitted_operations = cast(
         Sequence[object], getattr(result, "submitted_operations", ())
     )
@@ -313,6 +324,9 @@ def format_status_text(result: object) -> str:
             f"{output_count} output" if output_count == 1 else f"{output_count} outputs"
         )
         lines.append(f"{stage_name}: {stage_status_text} ({suffix})")
+        stage_source = getattr(stage, "state_source", {})
+        if isinstance(stage_source, Mapping):
+            lines.append(f"  source: {stage_source.get('label', 'unknown')}")
         failure = getattr(stage, "failure")
         if isinstance(failure, Mapping):
             message = failure.get("message")
@@ -521,6 +535,9 @@ def format_runs_list_text(
             parts.append(f"commit={commit}")
         parts.append(f"stages={len(getattr(summary, 'stages'))}")
         parts.append(f"artifacts={len(getattr(summary, 'artifacts'))}")
+        source = getattr(summary, "state_source", {})
+        if isinstance(source, Mapping):
+            parts.append(f"source={source.get('label', 'unknown')}")
         lines.append(" ".join(parts))
     _extend_warning_lines(lines, warnings)
     return "\n".join(lines)

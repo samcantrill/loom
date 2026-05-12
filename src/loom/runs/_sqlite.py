@@ -657,6 +657,7 @@ def _run_summary_from_data(data: Mapping[str, PlainData]) -> RunSummary:
             git_commit=_optional_str(data.get("git_commit"), "git_commit"),
             executor=_optional_str(data.get("executor"), "executor"),
             backend=_optional_str(data.get("backend"), "backend"),
+            state_source=_plain_mapping(data.get("state_source"), "state_source"),
             stages=tuple(_stage_from_data(stage) for stage in stages),
             artifacts=tuple(_artifact_from_data(artifact) for artifact in artifacts),
             submitted_operations=tuple(
@@ -677,6 +678,7 @@ def _stage_from_data(data: Mapping[str, PlainData]) -> StageSummary:
         started_at=_optional_str(data.get("started_at"), "started_at"),
         finished_at=_optional_str(data.get("finished_at"), "finished_at"),
         metadata=_plain_mapping(data.get("metadata"), "metadata"),
+        state_source=_plain_mapping(data.get("state_source"), "state_source"),
     )
 
 
@@ -691,6 +693,7 @@ def _artifact_from_data(data: Mapping[str, PlainData]) -> ArtifactSummary:
         fingerprint=_optional_str(data.get("fingerprint"), "fingerprint"),
         producer_stage=_optional_str(data.get("producer_stage"), "producer_stage"),
         metadata=_plain_mapping(data.get("metadata"), "metadata"),
+        state_source=_plain_mapping(data.get("state_source"), "state_source"),
     )
 
 
@@ -706,6 +709,7 @@ def _submitted_operation_from_data(
         updated_at=_require_str(data, "updated_at"),
         active=_require_bool(data.get("active"), "active"),
         summary_counts=_int_mapping(data.get("summary_counts"), "summary_counts"),
+        state_source=_plain_mapping(data.get("state_source"), "state_source"),
     )
 
 

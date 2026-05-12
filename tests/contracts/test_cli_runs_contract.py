@@ -80,6 +80,10 @@ def test_runs_list_json_contract(tmp_path: Path) -> None:
     assert [summary["status"] for summary in payload["result"]["summaries"]] == [
         "SUCCEEDED"
     ]
+    assert (
+        payload["result"]["summaries"][0]["state_source"]["label"]
+        == "materialized_local_state"
+    )
     assert payload["result"]["filters"] == [
         {"kind": "run_status", "key": None, "value": "SUCCEEDED"}
     ]

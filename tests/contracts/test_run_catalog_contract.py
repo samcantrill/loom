@@ -40,5 +40,7 @@ def test_run_catalog_list_returns_public_result_envelope(tmp_path: Path) -> None
     data = result.to_dict()
     summaries = cast(list[dict[str, object]], data["summaries"])
     assert summaries[0]["run_uri"] == run_uri
+    source = cast(dict[str, object], summaries[0]["state_source"])
+    assert source["label"] == "materialized_local_state"
     assert data["filters"] == [run_filter.to_dict()]
     assert data["checked_at"] is not None
