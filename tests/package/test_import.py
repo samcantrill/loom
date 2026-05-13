@@ -57,6 +57,14 @@ def test_import_loom_diagnostics_public_api() -> None:
     ]
 
 
+def test_import_loom_queue_public_api() -> None:
+    import loom.queue
+
+    assert "QueueItem" in loom.queue.__all__
+    assert "SQLiteQueueRepository" in loom.queue.__all__
+    assert "validate_one_queue_per_pool" in loom.queue.__all__
+
+
 def test_package_includes_typing_marker() -> None:
     assert files("loom").joinpath("py.typed").is_file()
 
