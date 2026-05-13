@@ -199,7 +199,8 @@ make test-summary
 
 - Phase implementation refinement: used locally for the pytest module-name
   collision found by the first full validation run
-- PR review: unused
+- PR review: used locally on 2026-05-13; completion-before-dispatch guard was
+  added and no blocking findings remain
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -213,16 +214,19 @@ make test-summary
   canonical item JSON, indexed FIFO columns, audit events, enqueue/idempotency,
   claim, dispatch, completion, cancellation, recovery scan, and restart
   recovery behavior.
-- Implementation validation: targeted Phase 5 pytest command passed with 61
+- Implementation validation: targeted Phase 5 pytest command passed with 62
   tests; targeted Ruff and Pyright on the new queue package/tests passed;
   `make validate-pr` passed after Ruff, Pyright, default harness,
   config-extra harness, and build; `make test-summary` passed with 1852
-  passed, 12 skipped, and 1433 deselected.
+  passed, 12 skipped, and 1433 deselected before local review, then 1853
+  passed, 12 skipped, and 1434 deselected after the completion-guard fix.
 - Refinement summary: the first full validation run exposed a pytest
   module-name collision for `tests/unit/loom/queue/test_models.py`; renamed it
   to `test_queue_models.py`, updated this phase plan's validation command, and
   reran targeted tests plus the full validation gate successfully.
 - Blocker-resolution summary: none.
-- PR preparation: pending.
+- PR preparation: PR #141 opened against `develop` and verified with
+  `baseRefName=develop`, `headRefName=codex/queue-records-sqlite-repository`,
+  and `state=OPEN`.
 - Stack maintenance: none yet.
 - Remaining blockers: none.

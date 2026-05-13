@@ -30,10 +30,10 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Focused Phase 5 pytest | Passed | 61 passed across package, queue unit, queue contract, and SQLite repository integration tests. |
+| Focused Phase 5 pytest | Passed | 62 passed across package, queue unit, queue contract, and SQLite repository integration tests. |
 | Targeted Ruff/Pyright | Passed | New queue package and targeted tests passed. |
-| `make validate-pr` | Passed | Ruff passed; Pyright passed; default harness passed with 1391 passed, 19 skipped, 14 deselected; config-extra passed with 434 passed, 1421 deselected; build passed. |
-| `make test-summary` | Passed | Overall 1852 passed, 12 skipped, 1433 deselected. |
+| `make validate-pr` | Passed | Ruff passed; Pyright passed; default harness passed with 1392 passed, 19 skipped, 14 deselected; config-extra passed with 434 passed, 1422 deselected; build passed. |
+| `make test-summary` | Passed | Overall 1853 passed, 12 skipped, 1434 deselected. |
 | GitHub checks | Pending | To be recorded after PR creation. |
 
 ### Test Suite Summary
@@ -43,9 +43,9 @@ New tests implemented:
 | package | passed | 72 | 0 | 0 | 1 | 0 |
 | unit | passed | 1004 | 0 | 0 | 1 | 0 |
 | contract | passed | 162 | 0 | 0 | 2 | 0 |
-| integration | passed | 140 | 0 | 0 | 8 | 10 |
+| integration | passed | 141 | 0 | 0 | 8 | 10 |
 | e2e | passed | 40 | 0 | 0 | 0 | 2 |
-| config-extra | passed | 434 | 0 | 0 | 0 | 1421 |
+| config-extra | passed | 434 | 0 | 0 | 0 | 1422 |
 
 ## Risks / Follow-Ups
 
