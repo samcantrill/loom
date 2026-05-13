@@ -594,9 +594,9 @@ path still silently mutates lifecycle truth.
 
 ### Phase 3: `v10-post` Diagnostics, Coordination, And Resource Admission Tightening
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/diagnostics-admission-tightening`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/139
 
 **Goal**
 
@@ -667,7 +667,14 @@ outcome completeness.
 
 **Completion Summary**
 
-- Pending.
+- PR opened on 2026-05-13 at
+  https://github.com/samcantrill/loom/pull/139 targeting `develop`.
+- Branch: `codex/diagnostics-admission-tightening`
+- Worktree:
+  `/home/samcantrill/work/loom-worktrees/diagnostics-admission-tightening`
+- Validation before PR: focused Phase 3 pytest command passed with 75 tests;
+  `make validate-pr` passed; `make test-summary` passed with 1830 passed, 12
+  skipped, and 1411 deselected.
 
 ### Phase 4: `v10-post` Offline Import, Mutation Safety, And Deferred Repair Contracts
 
