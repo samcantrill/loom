@@ -231,6 +231,41 @@ def test_import_queue_root_is_lightweight() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_queue_control_modules_do_not_import_authority_or_config() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.queue.client
+        import loom.queue.config
+        import loom.queue.controller
+        import loom.queue.service
+
+        for forbidden in (
+            "loom.config",
+            "loom.authority",
+            "loom.authority._repository",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+            "fastapi",
+            "starlette",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through queue control modules")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> None:
     script = dedent(
         """
