@@ -501,9 +501,9 @@ explicitness of supervisor surfaces.
 
 ### Phase 2: `v10-post` Strict Runtime, Worker, And SLURM Live Paths
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/strict-runtime-live-paths`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/138
 
 **Goal**
 
