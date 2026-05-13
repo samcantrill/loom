@@ -11,6 +11,18 @@ class QueueValidationError(ValueError, QueueError):
     """Raised when a queue record is invalid."""
 
 
+class QueueConfigError(QueueValidationError):
+    """Raised when queue configuration cannot be loaded or normalized."""
+
+
+class QueueServiceError(RuntimeError, QueueError):
+    """Raised when queue service operations are unavailable or invalid."""
+
+
+class QueueServiceStateError(QueueServiceError):
+    """Raised when an operation is invalid for the current service state."""
+
+
 class QueueStorageError(RuntimeError, QueueError):
     """Raised when queue repository storage fails."""
 
@@ -24,9 +36,12 @@ class QueueSchemaError(QueueStorageError):
 
 
 __all__ = [
+    "QueueConfigError",
     "QueueConflictError",
     "QueueError",
     "QueueSchemaError",
+    "QueueServiceError",
+    "QueueServiceStateError",
     "QueueStorageError",
     "QueueValidationError",
 ]

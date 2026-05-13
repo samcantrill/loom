@@ -3,10 +3,31 @@
 from __future__ import annotations
 
 from ._sqlite import QUEUE_DB_SCHEMA_VERSION, SQLiteQueueRepository
+from .client import QueueClient
+from .config import (
+    QUEUE_CONFIG_SCHEMA_VERSION,
+    QueueControllerSpec,
+    QueueServiceSpec,
+    compose_queue_spec,
+    load_queue_spec,
+    normalize_queue_spec,
+    queue_spec_from_composed_config,
+)
+from .controller import (
+    FakeQueueDispatchAdapter,
+    QueueController,
+    QueueControllerStep,
+    QueueDispatchAdapter,
+    QueueDispatchResult,
+    QueueDrainResult,
+)
 from .errors import (
+    QueueConfigError,
     QueueConflictError,
     QueueError,
     QueueSchemaError,
+    QueueServiceError,
+    QueueServiceStateError,
     QueueStorageError,
     QueueValidationError,
 )
@@ -27,19 +48,38 @@ from .models import (
     validate_one_queue_per_pool,
 )
 from .repository import QueueClaimResult, QueueRepository
+from .service import (
+    QueueEnqueueRequest,
+    QueueItemInspection,
+    QueueService,
+    QueueServiceState,
+    QueueServiceStatus,
+)
 
 __all__ = [
+    "QUEUE_CONFIG_SCHEMA_VERSION",
     "QUEUE_DB_SCHEMA_VERSION",
     "QUEUE_RECORD_SCHEMA_VERSION",
     "CancellationRecord",
     "DispatchHandle",
+    "FakeQueueDispatchAdapter",
     "LaunchContract",
     "QueueAuditEvent",
     "QueueClaim",
     "QueueClaimResult",
+    "QueueClient",
+    "QueueConfigError",
+    "QueueController",
+    "QueueControllerSpec",
+    "QueueControllerStep",
+    "QueueDispatchAdapter",
     "QueueConflictError",
     "QueueDefinition",
+    "QueueDispatchResult",
+    "QueueDrainResult",
+    "QueueEnqueueRequest",
     "QueueError",
+    "QueueItemInspection",
     "QueueItem",
     "QueueItemStatus",
     "QueuePool",
@@ -47,9 +87,19 @@ __all__ = [
     "QueueRecoveryRecord",
     "QueueRepository",
     "QueueSchemaError",
+    "QueueService",
+    "QueueServiceError",
+    "QueueServiceSpec",
+    "QueueServiceState",
+    "QueueServiceStateError",
+    "QueueServiceStatus",
     "QueueStorageError",
     "QueueValidationError",
     "RunIntent",
     "SQLiteQueueRepository",
+    "compose_queue_spec",
+    "load_queue_spec",
+    "normalize_queue_spec",
+    "queue_spec_from_composed_config",
     "validate_one_queue_per_pool",
 ]
