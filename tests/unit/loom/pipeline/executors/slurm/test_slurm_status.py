@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+import loom.pipeline.executors.slurm.authority as slurm_authority
 from loom.pipeline.executors.slurm import (
     FakeSlurmCommandRunner,
     SlurmCommandResult,
@@ -19,10 +20,16 @@ from loom.pipeline.executors.slurm.status import (
     inspect_slurm_job_status,
 )
 from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import AuthorityServiceHealth, AuthorityServiceHealthState
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.serialization import PlainData
 from tests.support.slurm_status_fixtures import write_submitted_slurm_fixture
 
 pytestmark = pytest.mark.unit
+
+
+class _ProbeRequiredAuthority(SQLitePerRunAuthorityStore):
+    requires_live_endpoint_readiness = True
 
 
 def test_slurm_status_requires_authority_backed_store(tmp_path: Path) -> None:
@@ -30,6 +37,35 @@ def test_slurm_status_requires_authority_backed_store(tmp_path: Path) -> None:
         inspect_slurm_job_status(
             "file:///tmp/run",
             run_store=LocalRunStore(tmp_path / "runs"),
+            command_runner=FakeSlurmCommandRunner(),
+        )
+
+    assert exc_info.value.code == "executor.slurm.status.missing_authority"
+
+
+def test_slurm_status_rejects_unreachable_http_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, run_uri, _ = write_submitted_slurm_fixture(
+        tmp_path,
+        {"extract": ()},
+        authority_store=_ProbeRequiredAuthority(),
+    )
+
+    monkeypatch.setattr(
+        slurm_authority,
+        "probe_http_authority_readiness",
+        lambda endpoint: AuthorityServiceHealth(
+            state=AuthorityServiceHealthState.UNAVAILABLE,
+            message=f"{endpoint} unreachable",
+        ),
+    )
+
+    with pytest.raises(SlurmStatusInspectionError) as exc_info:
+        inspect_slurm_job_status(
+            run_uri,
+            run_store=store,
             command_runner=FakeSlurmCommandRunner(),
         )
 

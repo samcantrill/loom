@@ -8,6 +8,8 @@ from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityConfig,
     AuthorityDeploymentProfile,
+    AuthorityServiceHealthState,
+    probe_http_authority_readiness,
 )
 from loom.serialization import PlainData
 
@@ -42,6 +44,10 @@ def slurm_live_authority_facts(run_store: object) -> SlurmLiveAuthorityFacts | N
         return None
     if not _service_profile(config):
         return None
+    if _requires_live_endpoint_readiness(authority_store) and not _endpoint_ready(
+        config
+    ):
+        return None
     backend_name = None
     capabilities = getattr(authority_store, "capabilities", None)
     if callable(capabilities):
@@ -49,6 +55,18 @@ def slurm_live_authority_facts(run_store: object) -> SlurmLiveAuthorityFacts | N
         if isinstance(raw_backend_name, str):
             backend_name = raw_backend_name
     return SlurmLiveAuthorityFacts(config=config, backend_name=backend_name)
+
+
+def _requires_live_endpoint_readiness(authority_store: object) -> bool:
+    return bool(getattr(authority_store, "requires_live_endpoint_readiness", False))
+
+
+def _endpoint_ready(config: AuthorityConfig) -> bool:
+    endpoint = config.endpoint
+    if endpoint is None:
+        return False
+    health = probe_http_authority_readiness(endpoint)
+    return health.state is AuthorityServiceHealthState.READY
 
 
 def _service_profile(config: AuthorityConfig) -> bool:

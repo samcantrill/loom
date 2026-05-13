@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 
+import loom.pipeline.executors.slurm.authority as slurm_authority
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.executors.slurm import (
     FakeSlurmCommandRunner,
@@ -43,6 +44,8 @@ from loom.pipeline.stores import (
     AuthorityBackendKind,
     AuthorityConfig,
     AuthorityDeploymentProfile,
+    AuthorityServiceHealth,
+    AuthorityServiceHealthState,
     LocalRunStore,
     path_to_run_uri,
 )
@@ -50,6 +53,10 @@ from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 
 pytestmark = pytest.mark.unit
+
+
+class _ProbeRequiredAuthority(SQLitePerRunAuthorityStore):
+    requires_live_endpoint_readiness = True
 
 
 def test_submit_single_job_slurm_persists_scheduler_identity(
@@ -129,6 +136,38 @@ def test_submit_single_job_slurm_requires_authority_backed_store(
             planning_result=planning,
             command_runner=FakeSlurmCommandRunner(),
         )
+
+
+def test_submit_single_job_slurm_rejects_unreachable_http_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, run_uri, planning = _planning_result(
+        tmp_path,
+        authority_store=_ProbeRequiredAuthority(),
+    )
+    runner = FakeSlurmCommandRunner()
+
+    monkeypatch.setattr(
+        slurm_authority,
+        "probe_http_authority_readiness",
+        lambda endpoint: AuthorityServiceHealth(
+            state=AuthorityServiceHealthState.UNAVAILABLE,
+            message=f"{endpoint} unreachable",
+        ),
+    )
+
+    with pytest.raises(SlurmSubmissionError) as exc_info:
+        submit_single_job_slurm(
+            run_store=store,
+            run_uri=run_uri,
+            planning_result=planning,
+            command_runner=runner,
+        )
+
+    assert exc_info.value.code == "executor.slurm.live_submission.missing_authority"
+    assert runner.calls == []
+    assert store.latest_submitted_operation(run_uri) is None
 
 
 def test_submit_single_job_slurm_rejects_existing_active_submission(
@@ -368,8 +407,13 @@ def _planning_result(
     tmp_path: Path,
     *,
     authority_backed: bool = True,
+    authority_store: SQLitePerRunAuthorityStore | None = None,
 ) -> tuple[Any, str, SlurmDryRunPlanningResult]:
-    store = _run_store(tmp_path, authority_backed=authority_backed)
+    store = _run_store(
+        tmp_path,
+        authority_backed=authority_backed,
+        authority_store=authority_store,
+    )
     run_uri = path_to_run_uri(tmp_path / "runs" / "demo")
     store.create_run(run_uri)
     submission = build_single_job_planned_submission(
@@ -477,12 +521,17 @@ def _afterok_planning_result(
     )
 
 
-def _run_store(tmp_path: Path, *, authority_backed: bool) -> Any:
+def _run_store(
+    tmp_path: Path,
+    *,
+    authority_backed: bool,
+    authority_store: SQLitePerRunAuthorityStore | None = None,
+) -> Any:
     if not authority_backed:
         return LocalRunStore(tmp_path / "runs")
     return create_authority_backed_serial_run_store(
         tmp_path / "runs",
-        authority_store=SQLitePerRunAuthorityStore(),
+        authority_store=authority_store or SQLitePerRunAuthorityStore(),
         authority_config=AuthorityConfig(
             backend_kind=AuthorityBackendKind.MANAGED_SERVICE,
             deployment_profile=AuthorityDeploymentProfile.MANAGED_SERVICE,

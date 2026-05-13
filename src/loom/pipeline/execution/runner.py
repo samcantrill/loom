@@ -648,7 +648,10 @@ class PipelineRunner:
                     )
                     if failure is None:
                         failed_stage, failure = _first_stage_failure(stage_results)
-                        if failure is not None and not context.policy.continue_independent:
+                        if failure is not None and (
+                            not context.policy.continue_independent
+                            or _failure_requires_global_stop(failure)
+                        ):
                             stopped = True
                 if len(stage_results) >= len(stage_order):
                     break
@@ -679,9 +682,16 @@ class PipelineRunner:
                     if result.failure is not None and failure is None:
                         failed_stage = task.stage_name
                         failure = result.failure
-                        if not context.policy.continue_independent:
+                        if (
+                            not context.policy.continue_independent
+                            or _failure_requires_global_stop(failure)
+                        ):
                             stopped = True
-                if failure is not None and context.policy.continue_independent:
+                if (
+                    failure is not None
+                    and context.policy.continue_independent
+                    and not stopped
+                ):
                     self._block_failed_downstream_ready_stages(
                         context,
                         plan_by_stage=plan_by_stage,
@@ -851,7 +861,10 @@ class PipelineRunner:
                 if result.status == StageStatus.SUCCEEDED:
                     outputs_by_stage[stage_name] = dict(result.outputs)
                 progressed = True
-                if result.failure is not None and not context.policy.continue_independent:
+                if result.failure is not None and (
+                    not context.policy.continue_independent
+                    or _failure_requires_global_stop(result.failure)
+                ):
                     return progressed
                 continue
             upstream_blocker = _first_non_successful_upstream(ready, stage_results)
@@ -2185,6 +2198,13 @@ def _failure_type_for_exception(exc: BaseException) -> str:
     if isinstance(exc, (StoreError, ArtifactStoreError, AuthorityStoreError)):
         return "store_commit"
     return "executor_infrastructure"
+
+
+def _failure_requires_global_stop(failure: ExecutionFailure) -> bool:
+    if failure.failure_type != "store_commit":
+        return False
+    exception_type = failure.exception_type or ""
+    return exception_type.rsplit(".", 1)[-1].startswith("Authority")
 
 
 def _is_composed_config(value: object) -> bool:

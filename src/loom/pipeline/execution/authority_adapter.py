@@ -81,6 +81,8 @@ class _ControllerLease:
 class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
     """Per-run authority adapter backed by the repository-free HTTP client."""
 
+    requires_live_endpoint_readiness = True
+
     def __init__(
         self,
         *,

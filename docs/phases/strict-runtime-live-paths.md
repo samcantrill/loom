@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implemented
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 2: Strict Runtime, Worker, And SLURM Live Paths`
 - Branch: `codex/strict-runtime-live-paths`
@@ -19,7 +19,7 @@
 - Plan quality gate: implementation-plan v11 gate passed on 2026-05-13 and Phase 1 merge metadata is recorded
 - Plan quality gate loop budget: already satisfied in the implementation plan
 - Draft pass: completed locally on 2026-05-13
-- Refine pass: not needed unless validation exposes a broader live-path contract gap
+- Refine pass: not needed; validation did not expose broader live-path contract gaps
 - Setup limitations: GitHub operations require approved network access; `uv` validation requires approved cache access outside the filesystem sandbox
 - Blockers: none
 
@@ -191,11 +191,20 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed locally before implementation.
-- Final phase execution plan: pending.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
-- Blocker-resolution summary: pending.
-- PR preparation: pending.
+- Final phase execution plan: this file.
+- Implementation summary: marked HTTP client-backed authority stores for fresh
+  live endpoint readiness checks, made live SLURM submit/status/cancel reject
+  unreachable service-backed authority facts before scheduler mutation, and
+  made bounded parallel execution stop launching new stages after authority
+  store failures even under `continue_independent`.
+- Implementation validation: focused Phase 2 pytest command passed with 59
+  tests; `uv run ruff check` on touched files passed; `make validate-pr`
+  passed, including Ruff, Pyright, default test harness, config-extra harness,
+  and package build; `make test-summary` passed with 1825 passed, 12 skipped,
+  and 1406 deselected.
+- Refinement summary: not needed.
+- Blocker-resolution summary: 0/3 used.
+- PR preparation: PR body drafted in
+  `docs/phases/strict-runtime-live-paths-pr-body.md`; PR opening pending.
 - Stack maintenance: none yet.
 - Remaining blockers: none.

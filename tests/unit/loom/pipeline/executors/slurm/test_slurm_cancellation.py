@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+import loom.pipeline.executors.slurm.authority as slurm_authority
 from loom.pipeline.executors.slurm import (
     FakeSlurmCommandRunner,
     SlurmCancellationAttempt,
@@ -19,11 +20,20 @@ from loom.pipeline.executors.slurm.cancellation import (
     cancel_slurm_jobs,
 )
 from loom.pipeline.status import StageStatus, StageStatusRecord
-from loom.pipeline.stores import LocalRunStore
+from loom.pipeline.stores import (
+    AuthorityServiceHealth,
+    AuthorityServiceHealthState,
+    LocalRunStore,
+)
+from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.pipeline.submitted import SubmittedOperationState
 from tests.support.slurm_status_fixtures import write_submitted_slurm_fixture
 
 pytestmark = pytest.mark.unit
+
+
+class _ProbeRequiredAuthority(SQLitePerRunAuthorityStore):
+    requires_live_endpoint_readiness = True
 
 
 def test_cancel_slurm_jobs_requires_authority_backed_store(tmp_path: Path) -> None:
@@ -35,6 +45,37 @@ def test_cancel_slurm_jobs_requires_authority_backed_store(tmp_path: Path) -> No
         )
 
     assert exc_info.value.code == "executor.slurm.cancel.missing_authority"
+
+
+def test_cancel_slurm_jobs_rejects_unreachable_http_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, run_uri, _ = write_submitted_slurm_fixture(
+        tmp_path,
+        {"extract": ()},
+        authority_store=_ProbeRequiredAuthority(),
+    )
+    runner = FakeSlurmCommandRunner()
+
+    monkeypatch.setattr(
+        slurm_authority,
+        "probe_http_authority_readiness",
+        lambda endpoint: AuthorityServiceHealth(
+            state=AuthorityServiceHealthState.UNAVAILABLE,
+            message=f"{endpoint} unreachable",
+        ),
+    )
+
+    with pytest.raises(SlurmCancellationError) as exc_info:
+        cancel_slurm_jobs(
+            run_uri,
+            run_store=store,
+            command_runner=runner,
+        )
+
+    assert exc_info.value.code == "executor.slurm.cancel.missing_authority"
+    assert runner.calls == []
 
 
 def test_cancel_slurm_jobs_marks_run_and_submitted_stages_cancelled(
