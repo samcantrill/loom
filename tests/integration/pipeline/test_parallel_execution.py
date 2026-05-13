@@ -14,7 +14,7 @@ from loom.pipeline.execution.authority_adapter import (
 from loom.pipeline.planning import PlanSelectors
 from loom.pipeline.runtime import RunOptions
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LeaseRecord, path_to_run_uri
+from loom.pipeline.stores import AttemptAllocation, AuthorityStoreError, LeaseRecord, path_to_run_uri
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 
 
@@ -39,6 +39,25 @@ class _CountingRenewalAuthority(SQLitePerRunAuthorityStore):
             lease_id,
             owner_id=owner_id,
             fencing_token=fencing_token,
+            lease_ttl_seconds=lease_ttl_seconds,
+        )
+
+
+class _FailingAllocationAuthority(SQLitePerRunAuthorityStore):
+    def allocate_stage_attempt(
+        self,
+        run_uri: str,
+        stage_name: str,
+        *,
+        owner_id: str,
+        lease_ttl_seconds: int | None = None,
+    ) -> AttemptAllocation:
+        if stage_name == "fail":
+            raise AuthorityStoreError("authority service is unavailable")
+        return super().allocate_stage_attempt(
+            run_uri,
+            stage_name,
+            owner_id=owner_id,
             lease_ttl_seconds=lease_ttl_seconds,
         )
 
@@ -326,6 +345,43 @@ def test_continue_independent_failure_policy_runs_unrelated_branch(
     assert result.stage_results["fail"].status is StageStatus.FAILED
     assert result.stage_results["ok"].status is StageStatus.SUCCEEDED
     assert result.stage_results["after_ok"].status is StageStatus.SUCCEEDED
+
+
+def test_continue_independent_stops_new_work_after_authority_loss(
+    tmp_path: Path,
+) -> None:
+    authority = _FailingAllocationAuthority(clock=lambda: "2020-01-01T00:00:00Z")
+    run_store = create_authority_backed_serial_run_store(
+        tmp_path / "runs",
+        authority_store=authority,
+    )
+    run_uri = path_to_run_uri(tmp_path / "runs" / "continue-authority-loss")
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            pipeline=_failure_policy_pipeline(tmp_path),
+            run_uri=run_uri,
+            options=RunOptions(
+                execution={
+                    "settings": {
+                        "max_parallel_stages": 2,
+                        "failure_policy": "continue_independent",
+                    }
+                },
+            ),
+        )
+    )
+
+    fail = result.stage_results["fail"]
+    assert result.status is RunStatus.FAILED
+    assert result.stage_results["ok"].status is StageStatus.SUCCEEDED
+    assert fail.status is StageStatus.FAILED
+    assert fail.failure is not None
+    assert fail.failure.failure_type == "store_commit"
+    assert fail.failure.exception_type is not None
+    assert fail.failure.exception_type.endswith("AuthorityStoreError")
+    assert result.stage_results["after_ok"].status is StageStatus.BLOCKED
+    assert "after_ok.text" not in run_store.read_artifact_index(run_uri)
 
 
 def test_run_request_failure_policy_can_continue_independent_branch(

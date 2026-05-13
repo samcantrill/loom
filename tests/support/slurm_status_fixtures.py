@@ -51,6 +51,7 @@ def write_submitted_slurm_fixture(
     run_status: RunStatus = RunStatus.SUBMITTED,
     stage_status: StageStatus = StageStatus.SUBMITTED,
     authority_config: AuthorityConfig | None = None,
+    authority_store: SQLitePerRunAuthorityStore | None = None,
 ) -> tuple[Any, str, Path]:
     """Persist a submitted afterok manifest and registry for status tests."""
 
@@ -58,7 +59,7 @@ def write_submitted_slurm_fixture(
         authority_config = _slurm_live_authority_config()
         store = create_authority_backed_serial_run_store(
             tmp_path / "runs",
-            authority_store=SQLitePerRunAuthorityStore(),
+            authority_store=authority_store or SQLitePerRunAuthorityStore(),
             authority_config=authority_config,
         )
     else:
