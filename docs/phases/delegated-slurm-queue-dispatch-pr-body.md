@@ -12,13 +12,15 @@
 | Targeted Phase 8 pytest | `55 passed` |
 | Targeted Ruff | passed |
 | Targeted Pyright | `0 errors` |
-| `make validate-pr` | passed: Ruff, Pyright, default harness, config-extra harness, build |
-| `make test-summary` package | `75 passed, 1 skipped` |
-| `make test-summary` unit | `1030 passed, 1 skipped, 1 deselected` |
-| `make test-summary` contract | `167 passed, 2 skipped` |
-| `make test-summary` integration | `145 passed, 8 skipped, 11 deselected` |
-| `make test-summary` e2e | `40 passed, 2 deselected` |
-| `make test-summary` config-extra | `436 passed, 1460 deselected` |
+| Post-fix `make validate-pr` | passed: Ruff, Pyright, default harness `1431 passed, 19 skipped, 16 deselected`, config-extra harness `436 passed, 1461 deselected`, build |
+| `make test-summary` package | `75 passed, 1 skipped` before final review fix |
+| `make test-summary` unit | `1030 passed, 1 skipped, 1 deselected` before final review fix |
+| `make test-summary` contract | `167 passed, 2 skipped` before final review fix |
+| `make test-summary` integration | `145 passed, 8 skipped, 11 deselected` before final review fix |
+| `make test-summary` e2e | `40 passed, 2 deselected` before final review fix |
+| `make test-summary` config-extra | `436 passed, 1460 deselected` before final review fix |
+
+Post-fix `make test-summary` was not rerun because the sandbox approval reviewer rejected the command before execution; post-fix `make validate-pr` and targeted Phase 8 checks passed on the current branch.
 
 ## Assumptions And Risks
 
