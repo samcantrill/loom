@@ -192,3 +192,33 @@ def test_finish_stage_attempt_records_terminal_state(tmp_path) -> None:
     assert attempt.status is StageStatus.FAILED
     assert snapshot.stages[0].status is StageStatus.FAILED
     assert snapshot.stages[0].attempts[0].reason == reason
+
+
+def test_finish_stage_attempt_rejects_success_without_output_commit(tmp_path) -> None:
+    repository = _repository(tmp_path)
+    allocation = repository.allocate_stage_attempt(
+        RUN_URI,
+        "test",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
+
+    with pytest.raises(
+        AuthorityRepositoryError,
+        match="terminal success requires record_output_commit",
+    ):
+        repository.finish_stage_attempt(
+            RUN_URI,
+            "test",
+            attempt_id=allocation.attempt.attempt_id,
+            owner_id="worker-1",
+            fencing_token=allocation.lease.fencing_token,
+            to_status=StageStatus.SUCCEEDED,
+            service_generation="generation-1",
+        )
+
+    snapshot = repository.open_run(RUN_URI)
+    assert snapshot.stages[0].status is StageStatus.RUNNING
+    assert snapshot.stages[0].attempts[0].status is StageStatus.RUNNING
+    assert snapshot.stages[0].active_lease == allocation.lease

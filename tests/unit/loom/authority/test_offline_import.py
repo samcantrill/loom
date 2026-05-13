@@ -72,7 +72,12 @@ def test_offline_import_accepts_complete_manifest_and_writes_authority_facts(
     import_provenance = snapshot.metadata["authority_import"]
     assert isinstance(import_provenance, Mapping)
     assert import_provenance["source"] == "offline_evidence"
+    assert import_provenance["historical_only"] is True
+    assert import_provenance["resumable_live"] is False
+    assert import_provenance["import_policy"] == "strict_reject_collisions"
     assert import_provenance["workspace_id"] == "workspace-a"
+    assert [stage.active_lease for stage in snapshot.stages] == [None, None]
+    assert {stage.attempts[0].owner for stage in snapshot.stages} == {"offline-import"}
     assert event_types[0] == "offline_import.accepted"
     assert len(replay_events) == len(manifest.events)
     assert replay_events[0].event_type == "offline_import.replay.run.created"
