@@ -313,6 +313,7 @@ __all__ = [
     "infer_stage_worker_attempt",
     "is_offline_evidence_run_store",
     "prepare_stage_attempt",
+    "reconcile_resource_limits",
     "reconstruct_stage_execution_request",
     "redact_executor_metadata",
     "release_resource_admission",
@@ -320,6 +321,5 @@ __all__ = [
     "run_stage_worker",
     "run_stage_job",
     "run_pipeline",
-    "reconcile_resource_limits",
     "validate_stage_outputs",
 ]
