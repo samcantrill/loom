@@ -907,7 +907,7 @@ versioning, and repository recovery behavior.
 
 ### Phase 6: `v11` Queue Service, Client, And Python Control Surface
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/queue-service-python-surface`
 - PR: https://github.com/samcantrill/loom/pull/142
 
@@ -993,7 +993,10 @@ authority import hygiene.
 - Validation: targeted Phase 6 pytest passed with 56 passed and 2 skipped;
   targeted config-extra queue loader pytest passed with 5 passed;
   `make validate-pr` passed; `make test-summary` passed with 1868 passed, 12
-  skipped, and 1449 deselected. GitHub CI is pending.
+  skipped, and 1449 deselected. GitHub CI `checks` passed before merge.
+- Merge: PR #142 squash-merged into `develop` at
+  `6012e71fe511c7c23863a5b441afffeeb4cd1e24`.
+- Follow-up: continue with Phase 7 from updated `develop`.
 
 ### Phase 7: `v11` Managed Resource Pools And Local Launcher
 
