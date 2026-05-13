@@ -907,9 +907,9 @@ versioning, and repository recovery behavior.
 
 ### Phase 6: `v11` Queue Service, Client, And Python Control Surface
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/queue-service-python-surface`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/142
 
 **Goal**
 
@@ -981,7 +981,19 @@ authority import hygiene.
 
 **Completion Summary**
 
-- Pending.
+- Phase execution plan: `docs/phases/queue-service-python-surface.md`.
+- PR body: `docs/phases/queue-service-python-surface-pr-body.md`.
+- Implemented normalized queue service config records and explicit queue YAML
+  loading, lazy config-extra composition normalization, an in-process queue
+  service boundary, a transport-neutral client facade, and Python controller
+  entrypoints for fake daemon-style dispatch and foreground drain.
+- Added package/import-boundary tests, unit tests for config/service/client and
+  controller behavior, contract tests for queue config and Python API shapes,
+  and integration tests for service restart recovery and fake foreground drain.
+- Validation: targeted Phase 6 pytest passed with 56 passed and 2 skipped;
+  targeted config-extra queue loader pytest passed with 5 passed;
+  `make validate-pr` passed; `make test-summary` passed with 1866 passed, 14
+  skipped, and 1449 deselected. GitHub CI is pending.
 
 ### Phase 7: `v11` Managed Resource Pools And Local Launcher
 
