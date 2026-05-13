@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implemented
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 3: Diagnostics, Coordination, And Resource Admission Tightening`
 - Branch: `codex/diagnostics-admission-tightening`
@@ -189,17 +189,29 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used locally for the package API contract export fix after the first full validation run
 - PR review: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed locally before implementation.
-- Final phase execution plan: pending implementation.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Final phase execution plan: this file.
+- Implementation summary: added non-mutating `read_resource_limit(...)`
+  coordination support across the protocol, SQLite store, service adapter,
+  authority repository, mutation service, route, and HTTP client; added
+  read-only resource-limit reconciliation results for `success`, `mismatch`,
+  `missing_limit`, and `unavailable_authority`; added structured
+  `reason_code` and `reason_context` admission decision fields while
+  preserving `admitted`, `rejected`, and `blocked`; locked deferred and offline
+  diagnostics policy source labels with regression tests.
+- Implementation validation: focused Phase 3 pytest command passed with 75
+  tests; targeted Ruff on touched files passed; `make validate-pr` passed
+  after Ruff, Pyright, default harness, config-extra harness, and build;
+  `make test-summary` passed with 1830 passed, 12 skipped, and 1411 deselected.
+- Refinement summary: after the first full validation run found missing package
+  export expectations, updated the pipeline execution and store package API
+  contract tests and reran targeted package tests before the full gate.
 - Blocker-resolution summary: pending.
 - PR preparation: pending.
 - Stack maintenance: none yet.
