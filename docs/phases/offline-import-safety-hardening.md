@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: implemented
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 4: Offline Import, Mutation Safety, And Deferred Repair Contracts`
 - Branch: `codex/offline-import-safety-hardening`
@@ -188,7 +188,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted and full validation passed
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -196,10 +196,19 @@ make test-summary
 
 - Draft plan: completed locally before implementation.
 - Final phase execution plan: this file.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
-- Blocker-resolution summary: pending.
+- Implementation summary: added explicit historical-only/non-resumable import
+  provenance for offline evidence imports; kept imported attempts as
+  `offline-import` historical records without active leases; rejected
+  `finish_stage_attempt(..., SUCCEEDED)` so live success remains tied to
+  same-attempt fenced `record_output_commit(...)`; added unit and integration
+  regression coverage for import provenance and terminal mutation safety.
+- Implementation validation: focused Phase 4 pytest command passed with 28
+  tests; targeted Ruff on touched files passed; `make validate-pr` passed after
+  Ruff, Pyright, default harness, config-extra harness, and build; `make
+  test-summary` passed with 1832 passed, 12 skipped, and 1413 deselected.
+- Refinement summary: no implementation refinement pass was needed after
+  validation.
+- Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
