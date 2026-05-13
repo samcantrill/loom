@@ -55,23 +55,23 @@ New tests cover:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Targeted Phase 7 suite | Passed | 54 passed |
+| Targeted Phase 7 suite | Passed | 54 passed before review fix; focused post-fix queue suite 51 passed |
 | `uv run ruff check ...` | Passed | Queue/source/test targets clean |
 | `uv run pyright ...` | Passed | 0 errors, 0 warnings |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
-| `make test-summary` | Passed | Overall 1882 passed, 12 skipped, 1463 deselected |
+| `make test-summary` | Passed | Overall 1883 passed, 12 skipped, 1464 deselected |
 | GitHub checks | Pending | Will be verified after PR creation |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 74 | 0 | 0 | 1 | 0 | 12.07s |
-| unit | passed | 1023 | 0 | 0 | 1 | 1 | 50.86s |
-| contract | passed | 165 | 0 | 0 | 2 | 0 | 10.95s |
-| integration | passed | 144 | 0 | 0 | 8 | 11 | 51.38s |
-| e2e | passed | 40 | 0 | 0 | 0 | 2 | 36.24s |
-| config-extra | passed | 436 | 0 | 0 | 0 | 1449 | 77.89s |
+| package | passed | 74 | 0 | 0 | 1 | 0 | 11.42s |
+| unit | passed | 1024 | 0 | 0 | 1 | 1 | 48.75s |
+| contract | passed | 165 | 0 | 0 | 2 | 0 | 10.54s |
+| integration | passed | 144 | 0 | 0 | 8 | 11 | 49.71s |
+| e2e | passed | 40 | 0 | 0 | 0 | 2 | 35.23s |
+| config-extra | passed | 436 | 0 | 0 | 0 | 1450 | 75.18s |
 
 ## Risks / Follow-Ups
 

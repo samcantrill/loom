@@ -203,7 +203,7 @@ make test-summary
 - Draft plan: completed locally before implementation.
 - Final phase execution plan: this file.
 - Implementation summary: added managed-pool authority reconciliation helpers, non-terminal queue dispatch/status/cancel controller seams, active recovery item reads, local process-group dispatch with authority resource admission and lease release, launch-contract drift detection, and queue/adapter/authority status read models.
-- Implementation validation: targeted Phase 7 suite passed with 54 passed; `uv run ruff check ...` passed; `uv run pyright ...` passed; `make validate-pr` passed with Ruff, Pyright, default harness, config-extra harness, and build; `make test-summary` passed with 1882 passed, 12 skipped, and 1463 deselected overall.
+- Implementation validation: targeted Phase 7 suite passed with 54 passed before the review fix, and the focused post-fix queue suite passed with 51 passed; `uv run ruff check ...` passed; `uv run pyright ...` passed; `make validate-pr` passed with Ruff, Pyright, default harness, config-extra harness, and build; `make test-summary` passed with 1883 passed, 12 skipped, and 1464 deselected overall.
 - Refinement summary: not needed; no validation failures remained after local implementation cleanup.
 - Blocker-resolution summary: none.
 - PR preparation: PR body prepared in `docs/phases/managed-pools-local-launcher-pr-body.md`.
