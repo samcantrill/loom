@@ -99,6 +99,20 @@ def test_sqlite_repository_records_dispatch_and_completion(tmp_path: Path) -> No
     ]
 
 
+def test_sqlite_repository_rejects_completion_before_claim_or_dispatch(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteQueueRepository(tmp_path / "queue.sqlite")
+    repository.enqueue(_item("item-1", "gpu-pool", "2020-01-01T00:00:00Z"))
+
+    with pytest.raises(QueueConflictError, match="not been dispatched"):
+        repository.complete_item(
+            "item-1",
+            status=QueueItemStatus.SUCCEEDED,
+            reason="no-dispatch",
+        )
+
+
 def test_sqlite_repository_records_cancellation_and_excludes_recovery(
     tmp_path: Path,
 ) -> None:

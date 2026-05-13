@@ -195,6 +195,11 @@ class SQLiteQueueRepository:
             current = _require_item(conn, queue_item_id)
             if current.terminal:
                 raise QueueConflictError("queue item is already terminal")
+            if QueueItemStatus(current.status) not in {
+                QueueItemStatus.CLAIMED,
+                QueueItemStatus.DISPATCHED,
+            }:
+                raise QueueConflictError("queue item has not been dispatched")
             now = self._clock()
             updated = replace(current, status=status, updated_at=now)
             _update_item(conn, updated)
