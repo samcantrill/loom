@@ -594,7 +594,7 @@ path still silently mutates lifecycle truth.
 
 ### Phase 3: `v10-post` Diagnostics, Coordination, And Resource Admission Tightening
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/diagnostics-admission-tightening`
 - PR: https://github.com/samcantrill/loom/pull/139
 
@@ -667,14 +667,23 @@ outcome completeness.
 
 **Completion Summary**
 
-- PR opened on 2026-05-13 at
-  https://github.com/samcantrill/loom/pull/139 targeting `develop`.
-- Branch: `codex/diagnostics-admission-tightening`
-- Worktree:
-  `/home/samcantrill/work/loom-worktrees/diagnostics-admission-tightening`
-- Validation before PR: focused Phase 3 pytest command passed with 75 tests;
+- Merged on 2026-05-13 via squash merge commit
+  `1816d75b3b3853ce3686bab1bc879bd1ff5659f6`.
+- Added non-mutating `read_resource_limit(...)` support across workspace
+  coordination stores, service adapters, authority repository, mutation routes,
+  and HTTP client paths.
+- Added read-only resource-limit reconciliation outcomes for `success`,
+  `mismatch`, `missing_limit`, and `unavailable_authority` so managed-pool
+  validation can compare desired limits without mutating authority truth.
+- Added structured `reason_code` and `reason_context` fields to resource
+  admission decisions while preserving `admitted`, `rejected`, and `blocked`
+  statuses.
+- Locked distinct offline-evidence and deferred-finalization diagnostics source
+  labels with regression coverage.
+- Validation: focused Phase 3 pytest command passed with 75 tests;
   `make validate-pr` passed; `make test-summary` passed with 1830 passed, 12
-  skipped, and 1411 deselected.
+  skipped, and 1411 deselected. GitHub CI `checks` passed before merge.
+- Follow-up: continue with Phase 4 from updated `develop`.
 
 ### Phase 4: `v10-post` Offline Import, Mutation Safety, And Deferred Repair Contracts
 
