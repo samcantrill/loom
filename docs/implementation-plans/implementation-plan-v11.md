@@ -1000,9 +1000,9 @@ authority import hygiene.
 
 ### Phase 7: `v11` Managed Resource Pools And Local Launcher
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/managed-pools-local-launcher`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/143
 
 **Goal**
 
@@ -1082,7 +1082,24 @@ cancel/status truth.
 
 **Completion Summary**
 
-- Pending.
+- Phase execution plan:
+  `docs/phases/managed-pools-local-launcher.md`.
+- PR body: `docs/phases/managed-pools-local-launcher-pr-body.md`.
+- Opened Phase 7 PR #143 against `develop` from
+  `codex/managed-pools-local-launcher`.
+- Implemented managed-pool authority reconciliation, non-terminal queue
+  dispatch/status/cancel seams, active recovery reads, local process-group
+  dispatch with authority resource admission and lease release, launch-contract
+  drift detection, and queue/adapter/authority status read models.
+- Validation before PR:
+  - Targeted Phase 7 suite: 54 passed.
+  - `make validate-pr`: passed Ruff, Pyright, default harness, config-extra
+    harness, and build.
+  - `make test-summary`: package 74 passed/1 skipped; unit 1023 passed/1
+    skipped/1 deselected; contract 165 passed/2 skipped; integration 144
+    passed/8 skipped/11 deselected; e2e 40 passed/2 deselected; config-extra
+    436 passed/1449 deselected.
+- Follow-up: automated review and GitHub checks pending before merge.
 
 ### Phase 8: `v11` Delegated SLURM Dispatch
 
