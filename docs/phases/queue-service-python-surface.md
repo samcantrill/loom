@@ -195,7 +195,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: not needed; targeted and full validation passed
-- PR review: unused
+- PR review: used locally on 2026-05-13; optional-dependency marker coverage
+  was corrected and no blocking findings remain
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -219,7 +220,9 @@ make test-summary
   reporting 436 passed and 1435 deselected, and `uv build` passing;
   `make test-summary` passed overall with 1868 passed, 12 skipped, and 1449
   deselected.
-- Refinement summary: no separate refinement pass was needed after validation.
+- Refinement summary: no separate implementation refinement pass was needed
+  after validation; local review corrected test harness classification for the
+  queue YAML loader coverage.
 - Blocker-resolution summary: none.
 - PR preparation: PR #142 opened against `develop` and verified with
   `baseRefName=develop`, `headRefName=codex/queue-service-python-surface`,
