@@ -49,19 +49,19 @@ New tests implemented:
 | `uv run pytest ... Phase 6 targets` | Passed | 56 passed, 2 skipped |
 | `uv run --extra config pytest ... queue loader targets` | Passed | 5 passed |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
-| `make test-summary` | Passed | Overall 1866 passed, 14 skipped, 1449 deselected |
+| `make test-summary` | Passed | Overall 1868 passed, 12 skipped, 1449 deselected |
 | GitHub checks | Pending | Will be verified after PR creation |
 
 ### Test Suite Summary
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 73 | 0 | 0 | 1 | 0 | 11.71s |
-| unit | passed | 1013 | 0 | 0 | 2 | 0 | 50.54s |
-| contract | passed | 164 | 0 | 0 | 2 | 0 | 10.89s |
-| integration | passed | 142 | 0 | 0 | 9 | 10 | 55.78s |
-| e2e | passed | 40 | 0 | 0 | 0 | 2 | 40.17s |
-| config-extra | passed | 434 | 0 | 0 | 0 | 1437 | 85.58s |
+| package | passed | 73 | 0 | 0 | 1 | 0 | 12.00s |
+| unit | passed | 1013 | 0 | 0 | 1 | 1 | 50.31s |
+| contract | passed | 164 | 0 | 0 | 2 | 0 | 11.06s |
+| integration | passed | 142 | 0 | 0 | 8 | 11 | 52.15s |
+| e2e | passed | 40 | 0 | 0 | 0 | 2 | 36.92s |
+| config-extra | passed | 436 | 0 | 0 | 0 | 1435 | 79.13s |
 
 ## Risks / Follow-Ups
 

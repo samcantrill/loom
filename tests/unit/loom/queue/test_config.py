@@ -78,6 +78,7 @@ def test_queue_spec_from_composed_config_uses_resolved_queue_section() -> None:
     assert spec.queue_names == ("cpu",)
 
 
+@pytest.mark.optional_dependency
 def test_load_queue_spec_uses_explicit_yaml_path(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     config_path = tmp_path / "queue.yaml"

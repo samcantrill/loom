@@ -15,6 +15,9 @@ from loom.queue import (
 )
 
 
+pytestmark = pytest.mark.optional_dependency
+
+
 def test_fake_controller_drains_loaded_queue_config(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     db_path = tmp_path / "queue.sqlite"

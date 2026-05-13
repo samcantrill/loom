@@ -213,10 +213,11 @@ make test-summary
 - Implementation validation: targeted Phase 6 pytest passed with 56 passed and
   2 skipped in the no-extra environment; targeted config-extra queue loader
   pytest passed with 5 passed; targeted Ruff and Pyright on queue code/tests
-  passed; `make validate-pr` passed with Ruff, Pyright, the default harness
-  reporting 1405 passed, 21 skipped, and 14 deselected, the config-extra
-  harness reporting 434 passed and 1437 deselected, and `uv build` passing;
-  `make test-summary` passed overall with 1866 passed, 14 skipped, and 1449
+  passed; after marking queue YAML tests as optional-dependency coverage,
+  `make validate-pr` passed with Ruff, Pyright, the default harness reporting
+  1405 passed, 19 skipped, and 16 deselected, the config-extra harness
+  reporting 436 passed and 1435 deselected, and `uv build` passing;
+  `make test-summary` passed overall with 1868 passed, 12 skipped, and 1449
   deselected.
 - Refinement summary: no separate refinement pass was needed after validation.
 - Blocker-resolution summary: none.
