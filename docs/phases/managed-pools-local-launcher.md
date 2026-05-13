@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implemented; PR preparation in progress
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 7: Managed Resource Pools And Local Launcher`
 - Branch: `codex/managed-pools-local-launcher`
@@ -194,7 +194,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted, full PR, and summary gates passed without requiring a separate refinement pass
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -202,10 +202,10 @@ make test-summary
 
 - Draft plan: completed locally before implementation.
 - Final phase execution plan: this file.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary: added managed-pool authority reconciliation helpers, non-terminal queue dispatch/status/cancel controller seams, active recovery item reads, local process-group dispatch with authority resource admission and lease release, launch-contract drift detection, and queue/adapter/authority status read models.
+- Implementation validation: targeted Phase 7 suite passed with 54 passed; `uv run ruff check ...` passed; `uv run pyright ...` passed; `make validate-pr` passed with Ruff, Pyright, default harness, config-extra harness, and build; `make test-summary` passed with 1882 passed, 12 skipped, and 1463 deselected overall.
+- Refinement summary: not needed; no validation failures remained after local implementation cleanup.
 - Blocker-resolution summary: none.
-- PR preparation: pending.
+- PR preparation: PR body prepared in `docs/phases/managed-pools-local-launcher-pr-body.md`.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
