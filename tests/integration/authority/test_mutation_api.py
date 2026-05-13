@@ -16,6 +16,9 @@ from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AuthorityClient,
     AuthorityProtocolErrorCategory,
+    AuthorityProtocolMetadata,
+    AuthorityProtocolOperationKind,
+    AuthorityProtocolRequest,
     AuthorityProtocolResponse,
     BackendRevision,
     LeaseKind,
@@ -38,6 +41,11 @@ RUN_URI = "file:///runs/mutation-api-r1"
 
 
 def _client(tmp_path) -> AuthorityClient:
+    client, _app_client = _client_with_app(tmp_path)
+    return client
+
+
+def _client_with_app(tmp_path) -> tuple[AuthorityClient, TestClient]:
     repository = initialize_authority_repository(
         tmp_path,
         service_generation="generation-1",
@@ -63,7 +71,7 @@ def _client(tmp_path) -> AuthorityClient:
         assert isinstance(parsed, Mapping)
         return parsed
 
-    return AuthorityClient("http://authority.test", transport=transport)
+    return AuthorityClient("http://authority.test", transport=transport), app_client
 
 
 def test_authority_client_mutates_repository_through_fastapi_routes(tmp_path) -> None:
@@ -141,6 +149,60 @@ def test_authority_client_mutates_repository_through_fastapi_routes(tmp_path) ->
     assert snapshot.result.snapshot is not None
     assert snapshot.result.snapshot.status is RunStatus.RUNNING
     assert snapshot.result.snapshot.stages[0].status is StageStatus.SUCCEEDED
+
+
+def test_mutation_api_rejects_terminal_success_without_output_commit(tmp_path) -> None:
+    client, app_client = _client_with_app(tmp_path)
+    admitted = client.admit_run(
+        RUN_URI,
+        request_id="admit-1",
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert admitted.result is not None
+    allocation = client.allocate_stage_attempt(
+        RUN_URI,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+        expected_revision=admitted.result.revision,
+        request_id="attempt-1",
+        service_generation="generation-1",
+        workspace_id="workspace-a",
+    )
+    assert allocation.result is not None
+    assert allocation.result.stage_attempt is not None
+    assert allocation.result.lease is not None
+
+    finish_request = AuthorityProtocolRequest(
+        metadata=AuthorityProtocolMetadata(
+            request_id="finish-1",
+            operation_kind=AuthorityProtocolOperationKind.STAGE_ATTEMPT,
+            service_generation="generation-1",
+            workspace_id="workspace-a",
+        ),
+        run_uri=RUN_URI,
+        stage_name="build",
+        owner_id="worker-1",
+        fencing_token=allocation.result.lease.fencing_token,
+        body={
+            "attempt_id": allocation.result.stage_attempt.attempt_id,
+            "to_status": StageStatus.SUCCEEDED.value,
+        },
+    )
+
+    response = app_client.post(
+        "/v1/authority/stages/attempts/finish",
+        json=finish_request.to_dict(),
+    )
+    assert response.status_code == 200
+    parsed = AuthorityProtocolResponse.from_dict(response.json())
+
+    assert parsed.accepted is False
+    assert parsed.rejection is not None
+    assert parsed.rejection.category is AuthorityProtocolErrorCategory.CONFLICT
+    assert parsed.rejection.code == "authority_repository_conflict"
+    assert parsed.rejection.message == "terminal success requires record_output_commit"
 
 
 def test_mutation_api_rejects_stale_generation_with_protocol_response(

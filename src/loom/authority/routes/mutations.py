@@ -283,7 +283,7 @@ def finish_stage_attempt(
     payload: dict[str, object],
     services: AuthorityAppServices = Depends(get_authority_services),
 ) -> dict[str, PlainData]:
-    """Record a terminal stage attempt state."""
+    """Record a terminal non-success stage attempt state."""
 
     return _handle(
         AuthorityMutationOperation.FINISH_STAGE_ATTEMPT,

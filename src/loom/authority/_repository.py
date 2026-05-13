@@ -738,6 +738,10 @@ class AuthorityRepository:
         to_status = StageStatus(to_status)
         if to_status not in _ATTEMPT_TERMINAL_STATUSES:
             raise AuthorityRepositoryError("attempt terminal status is required")
+        if to_status is StageStatus.SUCCEEDED:
+            raise AuthorityRepositoryError(
+                "terminal success requires record_output_commit"
+            )
         if reason is not None and not isinstance(reason, LifecycleReason):
             raise AuthorityRepositoryError("reason must be a LifecycleReason or None")
         with self.transaction() as conn:
@@ -2495,6 +2499,9 @@ def _offline_import_provenance(
 ) -> dict[str, PlainData]:
     provenance: dict[str, PlainData] = {
         "source": "offline_evidence",
+        "historical_only": True,
+        "resumable_live": False,
+        "import_policy": "strict_reject_collisions",
         "manifest_kind": manifest.kind,
         "manifest_schema_version": manifest.schema_version,
         "manifest_generated_at": manifest.generated_at,

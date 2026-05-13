@@ -77,6 +77,11 @@ def test_offline_import_api_imports_manifest_and_exposes_snapshot(
     import_provenance = snapshot.metadata["authority_import"]
     assert isinstance(import_provenance, Mapping)
     assert import_provenance["source"] == "offline_evidence"
+    assert import_provenance["historical_only"] is True
+    assert import_provenance["resumable_live"] is False
+    assert import_provenance["import_policy"] == "strict_reject_collisions"
+    assert [stage.active_lease for stage in snapshot.stages] == [None, None]
+    assert {stage.attempts[0].owner for stage in snapshot.stages} == {"offline-import"}
     events = repository.list_audit_events(manifest.run_uri)
     _assert_replay_events_match_manifest(manifest, events)
 
