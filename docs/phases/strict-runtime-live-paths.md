@@ -205,6 +205,7 @@ make test-summary
 - Refinement summary: not needed.
 - Blocker-resolution summary: 0/3 used.
 - PR preparation: PR body drafted in
-  `docs/phases/strict-runtime-live-paths-pr-body.md`; PR opening pending.
+  `docs/phases/strict-runtime-live-paths-pr-body.md`; PR opened at
+  https://github.com/samcantrill/loom/pull/138 targeting `develop`.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
