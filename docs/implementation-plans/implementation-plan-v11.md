@@ -1000,7 +1000,7 @@ authority import hygiene.
 
 ### Phase 7: `v11` Managed Resource Pools And Local Launcher
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/managed-pools-local-launcher`
 - PR: https://github.com/samcantrill/loom/pull/143
 
@@ -1087,6 +1087,8 @@ cancel/status truth.
 - PR body: `docs/phases/managed-pools-local-launcher-pr-body.md`.
 - Opened Phase 7 PR #143 against `develop` from
   `codex/managed-pools-local-launcher`.
+- Merged Phase 7 PR #143 into `develop` on 2026-05-13 with squash merge
+  commit `06d1347b73b3da4afed2b1ea033d9cf7e92035f2`.
 - Implemented managed-pool authority reconciliation, non-terminal queue
   dispatch/status/cancel seams, active recovery reads, local process-group
   dispatch with authority resource admission and lease release, launch-contract
@@ -1100,7 +1102,11 @@ cancel/status truth.
     skipped/1 deselected; contract 165 passed/2 skipped; integration 144
     passed/8 skipped/11 deselected; e2e 40 passed/2 deselected; config-extra
     436 passed/1450 deselected.
-- Follow-up: automated review and GitHub checks pending before merge.
+- Automated review found one pool-scoping issue in active queue
+  reconciliation; fixed in `fix: scope active queue reconciliation by pool`
+  before merge.
+- GitHub CI `checks` passed before merge.
+- Follow-up: continue with Phase 8 from updated `develop`.
 
 ### Phase 8: `v11` Delegated SLURM Dispatch
 
