@@ -2,14 +2,14 @@
 
 - Added `SlurmQueueDispatchAdapter` for delegated queue dispatch through existing fakeable SLURM command runners.
 - Persisted external SLURM job handles, first downstream status-read evidence, delegated handoff facts, and conservative launch-verification reports.
-- Extended active queue inspection with a handoff-complete signal so foreground drain can stop after durable delegated handoff while leaving the item recoverable.
+- Extended active queue inspection with a handoff-complete signal so foreground drain can stop after durable delegated handoff while daemon-style dispatch can continue to later queued delegated work.
 - Added delegated SLURM cancellation evidence, missing-authority diagnostics, status read-model output, and docs clarifying that SLURM-pending delegated work does not hold Loom leases by default.
 
 ## Tests
 
 | Suite | Evidence |
 | --- | --- |
-| Targeted Phase 8 pytest | `54 passed` |
+| Targeted Phase 8 pytest | `55 passed` |
 | Targeted Ruff | passed |
 | Targeted Pyright | `0 errors` |
 | `make validate-pr` | passed: Ruff, Pyright, default harness, config-extra harness, build |

@@ -205,10 +205,19 @@ class QueueController:
         self._clock = clock
         self._claim_counter = 0
 
-    def run_once(self, *, pool_name: str | None = None) -> QueueControllerStep:
+    def run_once(
+        self,
+        *,
+        pool_name: str | None = None,
+        stop_on_handoff: bool = False,
+    ) -> QueueControllerStep:
         active = self.reconcile_active(pool_name=pool_name)
         if active.outcome != "idle":
-            return active
+            if active.outcome != "handoff" or stop_on_handoff:
+                return active
+            handoff = active
+        else:
+            handoff = None
         for candidate_pool in self._candidate_pools(pool_name):
             claim = self._service.claim_next(
                 candidate_pool,
@@ -256,7 +265,7 @@ class QueueController:
                 item=completed,
                 dispatch_handle=handle,
             )
-        return QueueControllerStep(outcome="idle")
+        return QueueControllerStep(outcome="idle") if handoff is None else handoff
 
     def reconcile_active(self, *, pool_name: str | None = None) -> QueueControllerStep:
         for item in self._service.recovery_items():
@@ -346,7 +355,7 @@ class QueueController:
             raise QueueServiceError("poll_interval_seconds must be non-negative")
         steps: list[QueueControllerStep] = []
         while max_items is None or len(steps) < max_items:
-            step = self.run_once(pool_name=pool_name)
+            step = self.run_once(pool_name=pool_name, stop_on_handoff=True)
             if step.outcome == "idle":
                 break
             steps.append(step)

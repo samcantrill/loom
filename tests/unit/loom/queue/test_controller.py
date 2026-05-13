@@ -251,6 +251,56 @@ def test_foreground_drain_stops_after_delegated_handoff(tmp_path: Path) -> None:
     assert len(result.recovery_records) == 1
 
 
+def test_daemon_run_once_continues_after_delegated_handoff_when_more_work_is_queued(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-01T00:00:02Z",
+        "2020-01-01T00:00:03Z",
+        "2020-01-01T00:00:04Z",
+        "2020-01-01T00:00:05Z",
+        "2020-01-01T00:00:06Z",
+    )
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            adapter="delegated",
+        )
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-2",
+            queue_name="gpu",
+            run_uri="file:///runs/item-2",
+        )
+    )
+    controller = QueueController(
+        service,
+        adapters={
+            "delegated": _DelegatedHandoffAdapter(),
+            "fake": FakeQueueDispatchAdapter(),
+        },
+        clock=clock,
+    )
+
+    first = controller.run_once(pool_name="gpu-pool")
+    second = controller.run_once(pool_name="gpu-pool")
+    handoff = controller.run_once(pool_name="gpu-pool")
+
+    assert first.item is not None
+    assert first.item.queue_item_id == "item-1"
+    assert first.item.status is QueueItemStatus.DISPATCHED
+    assert second.item is not None
+    assert second.item.queue_item_id == "item-2"
+    assert second.item.status is QueueItemStatus.SUCCEEDED
+    assert handoff.outcome == "handoff"
+
+
 class _AsyncAdapter:
     adapter_name = "async"
 
