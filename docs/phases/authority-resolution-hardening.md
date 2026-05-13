@@ -206,6 +206,7 @@ make test-summary
 - Implementation validation: focused supervisor/resolver pytest command passed with 36 tests; validation-blocker pytest command passed with 25 tests; `make validate-pr` passed; `make test-summary` passed with 1821 passed, 12 skipped, 1402 deselected.
 - Refinement summary: not needed.
 - Blocker-resolution summary: 1/3 used for full-gate validation blockers in CLI/offline-evidence tests.
-- PR preparation: validation evidence is ready; PR body and PR creation pending.
+- PR preparation: PR body prepared and PR opened at
+  https://github.com/samcantrill/loom/pull/137 targeting `develop`.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
