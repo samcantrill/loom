@@ -992,7 +992,7 @@ authority import hygiene.
   and integration tests for service restart recovery and fake foreground drain.
 - Validation: targeted Phase 6 pytest passed with 56 passed and 2 skipped;
   targeted config-extra queue loader pytest passed with 5 passed;
-  `make validate-pr` passed; `make test-summary` passed with 1866 passed, 14
+  `make validate-pr` passed; `make test-summary` passed with 1868 passed, 12
   skipped, and 1449 deselected. GitHub CI is pending.
 
 ### Phase 7: `v11` Managed Resource Pools And Local Launcher
