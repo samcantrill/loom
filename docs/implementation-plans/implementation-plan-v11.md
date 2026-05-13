@@ -408,9 +408,9 @@ dependent phase.
 
 ### Phase 1: `v10-post` Authority Resolution And Supervisor Hardening
 
-- Status: pending
+- Status: merged
 - Branch: `codex/authority-resolution-hardening`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/137
 
 **Goal**
 
@@ -482,7 +482,22 @@ explicitness of supervisor surfaces.
 
 **Completion Summary**
 
-- Pending.
+- Merged on 2026-05-13 via squash merge commit
+  `ffa980cdcb064d7c2481f199da5e42e4169029ce`.
+- Implemented explicit workspace-default supervisor state-directory handling via
+  `--use-workspace-default`, resolving to
+  `<workspace-root>/.loom/authority/service`, while keeping normal startup
+  explicit.
+- Added a live duplicate-authority guard that treats registry records as
+  bootstrap hints and confirms supervisor state, process liveness, and readiness
+  before rejecting a second authority for the same workspace.
+- Preserved restart generation observability and strict resolver coverage.
+- Resolved full-gate validation blockers for invalid offline-manifest CLI
+  classification and offline-import replay-event assertions.
+- Validation: `make validate-pr` passed; `make test-summary` passed with 1821
+  passed, 12 skipped, and 1402 deselected. GitHub CI `checks` passed before
+  merge.
+- Follow-up: continue with Phase 2 from updated `develop`.
 
 ### Phase 2: `v10-post` Strict Runtime, Worker, And SLURM Live Paths
 
