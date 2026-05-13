@@ -501,7 +501,7 @@ explicitness of supervisor surfaces.
 
 ### Phase 2: `v10-post` Strict Runtime, Worker, And SLURM Live Paths
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/strict-runtime-live-paths`
 - PR: https://github.com/samcantrill/loom/pull/138
 
@@ -576,7 +576,21 @@ path still silently mutates lifecycle truth.
 
 **Completion Summary**
 
-- Pending.
+- Merged on 2026-05-13 via squash merge commit
+  `a9f3ccf1339436e53a2165a3012b05c38a3dc4d6`.
+- Marked HTTP client-backed authority stores for fresh endpoint readiness
+  checks and made live SLURM submit, status persistence, and cancellation reject
+  unreachable service-backed authority facts before scheduler mutation.
+- Made bounded parallel execution stop launching new stages after authority
+  store failures even under `continue_independent`, while preserving ordinary
+  continue-independent behavior for user-code and plan failures.
+- Preserved existing worker and stage-job authority-fence validation before
+  user code and kept deferred finalization outside normal live controller,
+  worker, and SLURM paths.
+- Validation: focused Phase 2 pytest command passed with 59 tests;
+  `make validate-pr` passed; `make test-summary` passed with 1825 passed, 12
+  skipped, and 1406 deselected. GitHub CI `checks` passed before merge.
+- Follow-up: continue with Phase 3 from updated `develop`.
 
 ### Phase 3: `v10-post` Diagnostics, Coordination, And Resource Admission Tightening
 
