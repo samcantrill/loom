@@ -121,6 +121,7 @@ def handle_start(namespace: argparse.Namespace) -> int:
     try:
         result = start_authority_supervisor(
             state_dir=namespace.state_dir,
+            use_workspace_default=namespace.use_workspace_default,
             workspace_root=namespace.workspace_root,
             workspace_id=namespace.workspace_id,
             host=namespace.host,
@@ -139,6 +140,7 @@ def handle_status(namespace: argparse.Namespace) -> int:
 
     result = inspect_authority_supervisor(
         state_dir=namespace.state_dir,
+        use_workspace_default=namespace.use_workspace_default,
         workspace_root=namespace.workspace_root,
         workspace_id=namespace.workspace_id,
         command="status",
@@ -153,6 +155,7 @@ def handle_doctor(namespace: argparse.Namespace) -> int:
 
     result = inspect_authority_supervisor(
         state_dir=namespace.state_dir,
+        use_workspace_default=namespace.use_workspace_default,
         workspace_root=namespace.workspace_root,
         workspace_id=namespace.workspace_id,
         command="doctor",
@@ -174,6 +177,7 @@ def handle_stop(namespace: argparse.Namespace) -> int:
 
     result = stop_authority_supervisor(
         state_dir=namespace.state_dir,
+        use_workspace_default=namespace.use_workspace_default,
         workspace_root=namespace.workspace_root,
         workspace_id=namespace.workspace_id,
         timeout_seconds=namespace.timeout,
@@ -192,6 +196,7 @@ def handle_restart(namespace: argparse.Namespace) -> int:
     try:
         result = restart_authority_supervisor(
             state_dir=namespace.state_dir,
+            use_workspace_default=namespace.use_workspace_default,
             workspace_root=namespace.workspace_root,
             workspace_id=namespace.workspace_id,
             host=namespace.host,
@@ -374,8 +379,16 @@ def _add_supervisor_location_options(
 ) -> None:
     parser.add_argument(
         "--state-dir",
-        required=state_required,
+        required=False,
         help="explicit authority supervisor state directory",
+    )
+    parser.add_argument(
+        "--use-workspace-default",
+        action="store_true",
+        help=(
+            "use <workspace-root>/.loom/authority/service as the explicit "
+            "supervisor state directory"
+        ),
     )
     parser.add_argument(
         "--workspace-root",
@@ -493,11 +506,20 @@ def _supervisor_cli_error(error: Exception) -> CliError:
     context = getattr(error, "context", {})
     if not isinstance(context, dict):
         context = {}
+    exit_code = (
+        ExitCode.USAGE
+        if code
+        in {
+            "authority_supervisor.state_dir_required",
+            "authority_supervisor.state_dir_conflict",
+        }
+        else ExitCode.RUN_STATE
+    )
     return CliError(
         str(error),
         code=str(code).replace("authority_supervisor.", "cli.authority."),
         context=context,
-        exit_code=ExitCode.RUN_STATE,
+        exit_code=exit_code,
     )
 
 

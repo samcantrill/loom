@@ -145,7 +145,7 @@ def _assert_replay_events_match_manifest(
         PipelineEventRecord.from_dict(event) for event in manifest.events
     )
     assert len(replay_events) == len(manifest_events)
-    for manifest_event, replay_event in zip(replay_events, manifest_events):
+    for replay_event, manifest_event in zip(replay_events, manifest_events):
         assert replay_event.event_type == f"offline_import.replay.{manifest_event.event_type}"
         payload = cast(Mapping[str, object], replay_event.payload)
         offline_event = cast(Mapping[str, object], payload["offline_event"])

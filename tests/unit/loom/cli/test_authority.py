@@ -177,10 +177,6 @@ def test_doctor_reports_unavailable_for_stale_supervisor_process(
             return None
 
     monkeypatch.setattr(
-        "loom.cli.authority.subprocess.Popen",
-        lambda *args, **kwargs: _FakeProcess(),
-    )
-    monkeypatch.setattr(
         "loom.authority.supervisor.subprocess.Popen",
         lambda *args, **kwargs: _FakeProcess(),
     )

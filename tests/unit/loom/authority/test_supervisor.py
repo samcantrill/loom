@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from loom.authority._repository import initialize_authority_repository
 from loom.authority.supervisor import (
+    AUTHORITY_SUPERVISOR_WORKSPACE_DEFAULT_DIR,
     AuthoritySupervisorError,
     AuthoritySupervisorProcessState,
     AuthoritySupervisorReadiness,
@@ -20,6 +21,7 @@ from loom.authority.supervisor import (
     start_authority_supervisor,
     stop_authority_supervisor,
     supervisor_state_path,
+    workspace_default_supervisor_state_dir,
 )
 from loom.pipeline.stores import (
     AuthorityProtocolReadiness,
@@ -70,7 +72,24 @@ def test_supervisor_state_round_trips(tmp_path: Path) -> None:
 
 def test_start_requires_explicit_state_dir() -> None:
     with pytest.raises(AuthoritySupervisorError, match="state-dir"):
-        start_authority_supervisor(state_dir=None)  # type: ignore[arg-type]
+        start_authority_supervisor(state_dir=None)
+
+
+def test_workspace_default_state_dir_is_explicit_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+
+    assert workspace_default_supervisor_state_dir(workspace) == (
+        workspace.resolve() / AUTHORITY_SUPERVISOR_WORKSPACE_DEFAULT_DIR
+    )
+
+
+def test_state_dir_conflicts_with_workspace_default(tmp_path: Path) -> None:
+    with pytest.raises(AuthoritySupervisorError, match="mutually exclusive"):
+        start_authority_supervisor(
+            state_dir=tmp_path / "state",
+            use_workspace_default=True,
+            workspace_root=tmp_path / "workspace",
+        )
 
 
 def test_start_writes_supervisor_state_and_registry(tmp_path: Path, monkeypatch) -> None:
@@ -99,6 +118,44 @@ def test_start_writes_supervisor_state_and_registry(tmp_path: Path, monkeypatch)
     assert record.reference.endpoint == "http://127.0.0.1:8766"
     assert record.service_health_state is AuthorityServiceHealthState.READY
     assert supervisor_state_path(tmp_path / "state").exists()
+
+
+def test_start_rejects_second_live_authority_for_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "loom.authority.supervisor.subprocess.Popen",
+        lambda *args, **kwargs: _FakeProcess(),
+    )
+    monkeypatch.setattr(
+        "loom.authority.supervisor._wait_until_ready",
+        lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
+    )
+    monkeypatch.setattr("loom.authority.supervisor._process_running", lambda pid: True)
+    monkeypatch.setattr(
+        "loom.authority.supervisor._readiness_for_state",
+        lambda state, *, process_state: AuthoritySupervisorReadiness.READY,
+    )
+
+    start_authority_supervisor(
+        state_dir=tmp_path / "state-a",
+        workspace_root=tmp_path / "workspace",
+        workspace_id="workspace-a",
+        port=8770,
+        service_generation="generation-1",
+    )
+
+    with pytest.raises(AuthoritySupervisorError) as exc_info:
+        start_authority_supervisor(
+            state_dir=tmp_path / "state-b",
+            workspace_root=tmp_path / "workspace",
+            workspace_id="workspace-a",
+            port=8771,
+            service_generation="generation-2",
+        )
+
+    assert exc_info.value.code == "authority_supervisor.workspace_authority_exists"
 
 
 def test_start_fails_if_process_exits_during_startup(tmp_path: Path, monkeypatch) -> None:
@@ -161,7 +218,10 @@ def test_restart_rotates_service_generation_and_restarts_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with patch("loom.authority.supervisor.subprocess.Popen", _FakeProcess):
+    with patch(
+        "loom.authority.supervisor.subprocess.Popen",
+        lambda *args, **kwargs: _FakeProcess(),
+    ):
         monkeypatch.setattr(
             "loom.authority.supervisor._wait_until_ready",
             lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
@@ -195,7 +255,10 @@ def test_stale_state_reports_unavailable_and_unready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with patch("loom.authority.supervisor.subprocess.Popen", _FakeProcess):
+    with patch(
+        "loom.authority.supervisor.subprocess.Popen",
+        lambda *args, **kwargs: _FakeProcess(),
+    ):
         monkeypatch.setattr(
             "loom.authority.supervisor._wait_until_ready",
             lambda endpoint, *, timeout_seconds, process=None: AuthorityProtocolReadiness(),
