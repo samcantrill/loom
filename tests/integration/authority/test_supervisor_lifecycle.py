@@ -14,6 +14,7 @@ from loom.authority.supervisor import (
     restart_authority_supervisor,
     start_authority_supervisor,
     stop_authority_supervisor,
+    workspace_default_supervisor_state_dir,
 )
 from loom.pipeline.stores import (
     AuthorityRegistryValidationStatus,
@@ -74,6 +75,35 @@ def test_supervisor_lifecycle_starts_writes_registry_and_stops(tmp_path: Path) -
 
     assert stopped.process_state is AuthoritySupervisorProcessState.STOPPED
     assert stopped.registry_status is AuthorityRegistryValidationStatus.UNAVAILABLE_SERVICE
+
+
+def test_supervisor_lifecycle_supports_explicit_workspace_default(
+    tmp_path: Path,
+) -> None:
+    port = _free_port()
+    workspace = tmp_path / "workspace"
+    state_dir = workspace_default_supervisor_state_dir(workspace)
+
+    try:
+        started = start_authority_supervisor(
+            use_workspace_default=True,
+            workspace_root=workspace,
+            workspace_id="workspace-default",
+            port=port,
+        )
+
+        assert started.ok is True
+        assert started.state_dir == state_dir
+        assert (state_dir / "supervisor.json").is_file()
+        record = read_authority_registry_record(workspace)
+        assert record.state_dir == str(state_dir)
+    finally:
+        stopped = stop_authority_supervisor(
+            use_workspace_default=True,
+            workspace_root=workspace,
+        )
+
+    assert stopped.process_state is AuthoritySupervisorProcessState.STOPPED
 
 
 def _free_port() -> int:

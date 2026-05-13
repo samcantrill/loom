@@ -17,7 +17,7 @@ from loom.pipeline.planning import ExecutionPlan
 from loom.pipeline.status import StageStatusRecord
 from loom.pipeline.stores.atomic import atomic_write_json
 from loom.pipeline.stores.local_runs import LocalRunStore
-from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization import DeserializationError, PlainData, ensure_plain_data
 from loom.serialization.errors import PlainDataError
 from loom.state_sources import offline_evidence_source
 from loom.timestamps import utc_timestamp
@@ -581,7 +581,16 @@ def read_offline_evidence_manifest(path: str | Path) -> OfflineEvidenceManifest:
         data = json_loads(path_obj.read_text(encoding="utf-8"), path=str(path_obj))
     except OSError as exc:
         raise OfflineEvidenceError(f"failed to read offline evidence manifest: {path_obj}") from exc
-    return OfflineEvidenceManifest.from_dict(data)
+    except DeserializationError as exc:
+        raise OfflineEvidenceError(
+            f"failed to parse offline evidence manifest: {path_obj}"
+        ) from exc
+    try:
+        return OfflineEvidenceManifest.from_dict(data)
+    except (OfflineEvidenceError, PlainDataError) as exc:
+        raise OfflineEvidenceError(
+            f"offline evidence manifest is invalid: {path_obj}"
+        ) from exc
 
 
 def _read_run_status(

@@ -45,6 +45,7 @@ from ._repository import (
 
 AUTHORITY_SUPERVISOR_STATE_FILE = "supervisor.json"
 AUTHORITY_SUPERVISOR_LOG_FILE = "supervisor.log"
+AUTHORITY_SUPERVISOR_WORKSPACE_DEFAULT_DIR = ".loom/authority/service"
 DEFAULT_AUTHORITY_SUPERVISOR_HOST = "127.0.0.1"
 DEFAULT_AUTHORITY_SUPERVISOR_PORT = 8765
 DEFAULT_AUTHORITY_SUPERVISOR_TIMEOUT_SECONDS = 10.0
@@ -233,7 +234,8 @@ class AuthoritySupervisorCommandResult:
 
 def start_authority_supervisor(
     *,
-    state_dir: str | Path,
+    state_dir: str | Path | None = None,
+    use_workspace_default: bool = False,
     workspace_root: str | Path = ".",
     workspace_id: str | None = None,
     host: str = DEFAULT_AUTHORITY_SUPERVISOR_HOST,
@@ -243,9 +245,14 @@ def start_authority_supervisor(
 ) -> AuthoritySupervisorCommandResult:
     """Start the local repository-backed FastAPI authority service."""
 
-    resolved_state_dir = _explicit_state_dir(state_dir)
     resolved_workspace_root = Path(workspace_root).resolve()
     resolved_workspace_id = _workspace_id(workspace_id, resolved_workspace_root)
+    resolved_state_dir = _resolve_state_dir_option(
+        state_dir=state_dir,
+        workspace_root=resolved_workspace_root,
+        use_workspace_default=use_workspace_default,
+        command="start",
+    )
     resolved_port = _port(port)
     existing = _read_state_if_present(resolved_state_dir)
     if existing is not None and _process_running(existing.pid):
@@ -254,6 +261,11 @@ def start_authority_supervisor(
             code="authority_supervisor.already_running",
             context=existing.to_dict(),
         )
+    _reject_second_workspace_authority(
+        workspace_root=resolved_workspace_root,
+        workspace_id=resolved_workspace_id,
+        state_dir=resolved_state_dir,
+    )
 
     repository = AuthorityRepository(resolved_state_dir)
     identity = repository.initialize(service_generation=service_generation)
@@ -365,6 +377,7 @@ def start_authority_supervisor(
 def inspect_authority_supervisor(
     *,
     state_dir: str | Path | None = None,
+    use_workspace_default: bool = False,
     workspace_root: str | Path = ".",
     workspace_id: str | None = None,
     command: str = "status",
@@ -373,7 +386,11 @@ def inspect_authority_supervisor(
 
     resolved_workspace_root = Path(workspace_root).resolve()
     resolved_workspace_id = _workspace_id(workspace_id, resolved_workspace_root)
-    state = _resolve_state(state_dir=state_dir, workspace_root=resolved_workspace_root)
+    state = _resolve_state(
+        state_dir=state_dir,
+        use_workspace_default=use_workspace_default,
+        workspace_root=resolved_workspace_root,
+    )
     if state is None:
         registry = validate_authority_registry(
             resolved_workspace_root,
@@ -436,6 +453,7 @@ def inspect_authority_supervisor(
 def stop_authority_supervisor(
     *,
     state_dir: str | Path | None = None,
+    use_workspace_default: bool = False,
     workspace_root: str | Path = ".",
     workspace_id: str | None = None,
     timeout_seconds: float = 5.0,
@@ -444,7 +462,11 @@ def stop_authority_supervisor(
 
     resolved_workspace_root = Path(workspace_root).resolve()
     resolved_workspace_id = _workspace_id(workspace_id, resolved_workspace_root)
-    state = _resolve_state(state_dir=state_dir, workspace_root=resolved_workspace_root)
+    state = _resolve_state(
+        state_dir=state_dir,
+        use_workspace_default=use_workspace_default,
+        workspace_root=resolved_workspace_root,
+    )
     if state is None:
         return AuthoritySupervisorCommandResult(
             command="stop",
@@ -512,7 +534,8 @@ def stop_authority_supervisor(
 
 def restart_authority_supervisor(
     *,
-    state_dir: str | Path,
+    state_dir: str | Path | None = None,
+    use_workspace_default: bool = False,
     workspace_root: str | Path = ".",
     workspace_id: str | None = None,
     host: str = DEFAULT_AUTHORITY_SUPERVISOR_HOST,
@@ -521,17 +544,23 @@ def restart_authority_supervisor(
 ) -> AuthoritySupervisorCommandResult:
     """Restart the local supervisor with a new service generation."""
 
-    resolved_state_dir = _explicit_state_dir(state_dir)
+    resolved_workspace_root = Path(workspace_root).resolve()
+    resolved_state_dir = _resolve_state_dir_option(
+        state_dir=state_dir,
+        workspace_root=resolved_workspace_root,
+        use_workspace_default=use_workspace_default,
+        command="restart",
+    )
     stop_authority_supervisor(
         state_dir=resolved_state_dir,
-        workspace_root=workspace_root,
+        workspace_root=resolved_workspace_root,
         workspace_id=workspace_id,
         timeout_seconds=5.0,
     )
     generation = rotate_authority_repository_generation(resolved_state_dir).service_generation
     result = start_authority_supervisor(
         state_dir=resolved_state_dir,
-        workspace_root=workspace_root,
+        workspace_root=resolved_workspace_root,
         workspace_id=workspace_id,
         host=host,
         port=port,
@@ -598,6 +627,12 @@ def supervisor_state_path(state_dir: str | Path) -> Path:
     """Return the local supervisor state-file path for a service state dir."""
 
     return Path(state_dir) / AUTHORITY_SUPERVISOR_STATE_FILE
+
+
+def workspace_default_supervisor_state_dir(workspace_root: str | Path) -> Path:
+    """Return the explicit workspace-default supervisor state directory."""
+
+    return Path(workspace_root).resolve() / AUTHORITY_SUPERVISOR_WORKSPACE_DEFAULT_DIR
 
 
 def _result_from_observations(
@@ -754,10 +789,16 @@ def _read_state_if_present(state_dir: Path) -> AuthoritySupervisorState | None:
 def _resolve_state(
     *,
     state_dir: str | Path | None,
+    use_workspace_default: bool,
     workspace_root: Path,
 ) -> AuthoritySupervisorState | None:
-    if state_dir is not None:
-        return _read_state_if_present(Path(state_dir).resolve())
+    resolved_state_dir = _optional_state_dir(
+        state_dir=state_dir,
+        workspace_root=workspace_root,
+        use_workspace_default=use_workspace_default,
+    )
+    if resolved_state_dir is not None:
+        return _read_state_if_present(resolved_state_dir)
     try:
         record = read_authority_registry_record(workspace_root)
     except AuthorityRegistryError:
@@ -879,7 +920,7 @@ def _endpoint(host: str, port: int) -> str:
 def _explicit_state_dir(value: str | Path | None) -> Path:
     if value is None:
         raise AuthoritySupervisorError(
-            "authority supervisor start requires --state-dir",
+            "authority supervisor command requires --state-dir or --use-workspace-default",
             code="authority_supervisor.state_dir_required",
         )
     path = Path(value).expanduser().resolve()
@@ -889,6 +930,87 @@ def _explicit_state_dir(value: str | Path | None) -> Path:
             code="authority_supervisor.invalid_state_dir",
         )
     return path
+
+
+def _resolve_state_dir_option(
+    *,
+    state_dir: str | Path | None,
+    workspace_root: Path,
+    use_workspace_default: bool,
+    command: str,
+) -> Path:
+    resolved = _optional_state_dir(
+        state_dir=state_dir,
+        workspace_root=workspace_root,
+        use_workspace_default=use_workspace_default,
+    )
+    if resolved is None:
+        raise AuthoritySupervisorError(
+            f"authority supervisor {command} requires --state-dir or "
+            "--use-workspace-default",
+            code="authority_supervisor.state_dir_required",
+        )
+    return resolved
+
+
+def _optional_state_dir(
+    *,
+    state_dir: str | Path | None,
+    workspace_root: Path,
+    use_workspace_default: bool,
+) -> Path | None:
+    if state_dir is not None and use_workspace_default:
+        raise AuthoritySupervisorError(
+            "--state-dir and --use-workspace-default are mutually exclusive",
+            code="authority_supervisor.state_dir_conflict",
+            context={"state_dir": str(state_dir)},
+        )
+    if use_workspace_default:
+        return workspace_default_supervisor_state_dir(workspace_root)
+    if state_dir is None:
+        return None
+    return _explicit_state_dir(state_dir)
+
+
+def _reject_second_workspace_authority(
+    *,
+    workspace_root: Path,
+    workspace_id: str,
+    state_dir: Path,
+) -> None:
+    registry = validate_authority_registry(
+        workspace_root,
+        expected_workspace_id=workspace_id,
+    )
+    if registry.status is not AuthorityRegistryValidationStatus.VALID:
+        return
+    if registry.record is None:
+        return
+    if Path(registry.record.state_dir).resolve() == state_dir.resolve():
+        return
+    existing_state = _read_state_if_present(Path(registry.record.state_dir).resolve())
+    if existing_state is None:
+        return
+    if not _process_running(existing_state.pid):
+        return
+    if (
+        _readiness_for_state(
+            existing_state,
+            process_state=AuthoritySupervisorProcessState.RUNNING,
+        )
+        is not AuthoritySupervisorReadiness.READY
+    ):
+        return
+    raise AuthoritySupervisorError(
+        "workspace already has a live authority supervisor",
+        code="authority_supervisor.workspace_authority_exists",
+        context={
+            "workspace_root": str(workspace_root),
+            "workspace_id": workspace_id,
+            "existing_state_dir": registry.record.state_dir,
+            "requested_state_dir": str(state_dir),
+        },
+    )
 
 
 def _workspace_id(value: str | None, workspace_root: Path) -> str:
@@ -957,6 +1079,7 @@ def _port(value: object) -> int:
 __all__ = [
     "AUTHORITY_SUPERVISOR_LOG_FILE",
     "AUTHORITY_SUPERVISOR_STATE_FILE",
+    "AUTHORITY_SUPERVISOR_WORKSPACE_DEFAULT_DIR",
     "DEFAULT_AUTHORITY_SUPERVISOR_HOST",
     "DEFAULT_AUTHORITY_SUPERVISOR_PORT",
     "AuthoritySupervisorCommandResult",
@@ -971,4 +1094,5 @@ __all__ = [
     "start_authority_supervisor",
     "stop_authority_supervisor",
     "supervisor_state_path",
+    "workspace_default_supervisor_state_dir",
 ]

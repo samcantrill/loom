@@ -29,7 +29,6 @@ pytestmark = [pytest.mark.e2e, pytest.mark.optional_dependency]
 def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
     port = _free_port()
     restart_port = _free_port()
-    state_dir = tmp_path / "state"
     workspace = tmp_path / "workspace"
 
     try:
@@ -39,8 +38,7 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
                 [
                     "authority",
                     "start",
-                    "--state-dir",
-                    str(state_dir),
+                    "--use-workspace-default",
                     "--workspace-root",
                     str(workspace),
                     "--workspace-id",
@@ -83,8 +81,7 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
                 [
                     "authority",
                     "restart",
-                    "--state-dir",
-                    str(state_dir),
+                    "--use-workspace-default",
                     "--workspace-root",
                     str(workspace),
                     "--workspace-id",
@@ -279,8 +276,7 @@ def test_authority_supervisor_cli_lifecycle_smoke(tmp_path: Path) -> None:
             [
                 "authority",
                 "stop",
-                "--state-dir",
-                str(state_dir),
+                "--use-workspace-default",
                 "--workspace-root",
                 str(workspace),
                 "--format",
