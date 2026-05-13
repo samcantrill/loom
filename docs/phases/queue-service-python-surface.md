@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented
+- Status: pr_open
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 6: Queue Service, Client, And Python Control Surface`
 - Branch: `codex/queue-service-python-surface`
@@ -220,6 +220,8 @@ make test-summary
   deselected.
 - Refinement summary: no separate refinement pass was needed after validation.
 - Blocker-resolution summary: none.
-- PR preparation: pending.
+- PR preparation: PR #142 opened against `develop` and verified with
+  `baseRefName=develop`, `headRefName=codex/queue-service-python-surface`,
+  and `state=OPEN`.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
