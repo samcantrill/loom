@@ -200,6 +200,37 @@ def test_authority_root_does_not_export_private_repository() -> None:
     assert not hasattr(authority, "initialize_authority_repository")
 
 
+def test_import_queue_root_is_lightweight() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.queue
+
+        for forbidden in (
+            "sqlite3",
+            "loom.config",
+            "loom.cli",
+            "loom.authority",
+            "loom.authority._repository",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "fastapi",
+            "starlette",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.queue")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> None:
     script = dedent(
         """
