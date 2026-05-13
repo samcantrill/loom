@@ -15,11 +15,15 @@ from .config import (
 )
 from .controller import (
     FakeQueueDispatchAdapter,
+    QueueCancellableDispatchAdapter,
     QueueController,
     QueueControllerStep,
     QueueDispatchAdapter,
+    QueueDispatchCancellation,
+    QueueDispatchInspection,
     QueueDispatchResult,
     QueueDrainResult,
+    QueueInspectableDispatchAdapter,
 )
 from .errors import (
     QueueConfigError,
@@ -65,6 +69,7 @@ __all__ = [
     "FakeQueueDispatchAdapter",
     "LaunchContract",
     "QueueAuditEvent",
+    "QueueCancellableDispatchAdapter",
     "QueueClaim",
     "QueueClaimResult",
     "QueueClient",
@@ -75,6 +80,8 @@ __all__ = [
     "QueueDispatchAdapter",
     "QueueConflictError",
     "QueueDefinition",
+    "QueueDispatchCancellation",
+    "QueueDispatchInspection",
     "QueueDispatchResult",
     "QueueDrainResult",
     "QueueEnqueueRequest",
@@ -86,6 +93,7 @@ __all__ = [
     "QueuePoolMode",
     "QueueRecoveryRecord",
     "QueueRepository",
+    "QueueInspectableDispatchAdapter",
     "QueueSchemaError",
     "QueueService",
     "QueueServiceError",
