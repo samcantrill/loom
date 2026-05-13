@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented; PR preparation in progress
+- Status: pr_open
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 8: Delegated SLURM Dispatch`
 - Branch: `codex/delegated-slurm-queue-dispatch`
@@ -10,6 +10,7 @@
 - Phase execution plan path: `docs/phases/delegated-slurm-queue-dispatch.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v11.md`
 - Source phase: Phase 8, `v11` Delegated SLURM Dispatch
+- PR: https://github.com/samcantrill/loom/pull/144
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
@@ -203,6 +204,6 @@ make test-summary
 - Implementation validation: targeted Phase 8 pytest passed with 54 passed; targeted Ruff passed; targeted Pyright passed with 0 errors; `make validate-pr` passed with Ruff, Pyright, default harness, config-extra harness, and build; `make test-summary` passed with package 75 passed/1 skipped, unit 1030 passed/1 skipped/1 deselected, contract 167 passed/2 skipped, integration 145 passed/8 skipped/11 deselected, e2e 40 passed/2 deselected, and config-extra 436 passed/1460 deselected.
 - Refinement summary: not needed; no validation or coverage blockers remained after local implementation cleanup.
 - Blocker-resolution summary: none.
-- PR preparation: pending.
+- PR preparation: PR body prepared in `docs/phases/delegated-slurm-queue-dispatch-pr-body.md` and PR #144 opened against `develop`.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
