@@ -687,9 +687,9 @@ outcome completeness.
 
 ### Phase 4: `v10-post` Offline Import, Mutation Safety, And Deferred Repair Contracts
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/offline-import-safety-hardening`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/140
 
 **Goal**
 
@@ -755,6 +755,9 @@ Review should focus on historical-vs-live truth separation and terminal safety.
 
 **Notes**
 
+- PR opened on 2026-05-13 against `develop` after focused Phase 4 pytest
+  passed with 28 tests, `make validate-pr` passed, and `make test-summary`
+  passed with 1832 passed, 12 skipped, and 1413 deselected.
 - Completion of this phase triggers the explicit transition checkpoint before
   any main queue phase begins.
 
