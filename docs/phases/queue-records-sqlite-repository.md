@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: planned
+- Status: implemented
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 5: Queue Records And SQLite Repository`
 - Branch: `codex/queue-records-sqlite-repository`
@@ -197,7 +197,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used locally for the pytest module-name
+  collision found by the first full validation run
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -205,10 +206,23 @@ make test-summary
 
 - Draft plan: completed locally before implementation.
 - Final phase execution plan: this file.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
-- Blocker-resolution summary: pending.
+- Implementation summary: added the top-level `loom.queue` package with
+  versioned queue pool, queue, run intent, launch contract, queue item, claim,
+  dispatch handle, cancellation, audit, and recovery records; added a private
+  FIFO selector; added a SQLite queue repository with schema metadata,
+  canonical item JSON, indexed FIFO columns, audit events, enqueue/idempotency,
+  claim, dispatch, completion, cancellation, recovery scan, and restart
+  recovery behavior.
+- Implementation validation: targeted Phase 5 pytest command passed with 61
+  tests; targeted Ruff and Pyright on the new queue package/tests passed;
+  `make validate-pr` passed after Ruff, Pyright, default harness,
+  config-extra harness, and build; `make test-summary` passed with 1852
+  passed, 12 skipped, and 1433 deselected.
+- Refinement summary: the first full validation run exposed a pytest
+  module-name collision for `tests/unit/loom/queue/test_models.py`; renamed it
+  to `test_queue_models.py`, updated this phase plan's validation command, and
+  reran targeted tests plus the full validation gate successfully.
+- Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: none yet.
 - Remaining blockers: none.
