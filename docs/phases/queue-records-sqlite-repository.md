@@ -139,7 +139,7 @@ The private FIFO selector should be replaceable by richer scheduler policy witho
 ### Unit Suite
 
 - Status: required
-- Expected paths: `tests/unit/loom/queue/test_models.py`, `tests/unit/loom/queue/test_scheduler.py`
+- Expected paths: `tests/unit/loom/queue/test_queue_models.py`, `tests/unit/loom/queue/test_scheduler.py`
 - Required assertions or deferral reason: versioned model serialization, unknown-field rejection, state validation, one-queue-per-pool validation, launch-contract drift/verification fields, and FIFO selection order.
 
 ### Contract Suite
@@ -178,7 +178,7 @@ The private FIFO selector should be replaceable by richer scheduler policy witho
 Targeted development commands:
 
 ```sh
-uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py tests/unit/loom/queue/test_models.py tests/unit/loom/queue/test_scheduler.py tests/contracts/test_queue_records_contract.py tests/contracts/test_queue_repository_contract.py tests/integration/queue/test_sqlite_repository.py
+uv run pytest tests/package/test_import.py tests/package/test_import_boundaries.py tests/unit/loom/queue/test_queue_models.py tests/unit/loom/queue/test_scheduler.py tests/contracts/test_queue_records_contract.py tests/contracts/test_queue_repository_contract.py tests/integration/queue/test_sqlite_repository.py
 ```
 
 Final PR-preparation commands:
