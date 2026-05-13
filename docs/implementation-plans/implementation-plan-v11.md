@@ -805,7 +805,7 @@ Checkpoint recorded on 2026-05-13 after Phase 4 merge:
 
 ### Phase 5: `v11` Queue Records And SQLite Repository
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/queue-records-sqlite-repository`
 - PR: https://github.com/samcantrill/loom/pull/141
 
@@ -885,10 +885,25 @@ versioning, and repository recovery behavior.
 - PR opened on 2026-05-13 against `develop` after focused Phase 5 pytest
   passed with 62 tests, `make validate-pr` passed, and `make test-summary`
   passed with 1853 passed, 12 skipped, and 1434 deselected.
+- Merged on 2026-05-13 via squash merge commit
+  `ef775b6ea66c4534430131ef2c5be674f725f619` after local automated review
+  added the completion-before-dispatch guard and GitHub CI `checks` passed.
 
 **Completion Summary**
 
-- Pending.
+- Added top-level `loom.queue` public records and errors, a private FIFO
+  selector, repository contracts, and `SQLiteQueueRepository` with schema
+  metadata, indexed FIFO item columns, canonical queue item JSON, audit events,
+  enqueue/idempotency, claim, dispatch, terminal completion, cancellation,
+  recovery scans, and restart recovery behavior.
+- Added package import-boundary coverage, unit queue model/selector coverage,
+  queue record/repository contract tests, and SQLite repository integration
+  tests.
+- Validation: focused Phase 5 pytest command passed with 62 tests; targeted
+  Ruff/Pyright passed; `make validate-pr` passed; `make test-summary` passed
+  with 1853 passed, 12 skipped, and 1434 deselected. GitHub CI `checks` passed
+  before merge.
+- Follow-up: continue with Phase 6 from updated `develop`.
 
 ### Phase 6: `v11` Queue Service, Client, And Python Control Surface
 
