@@ -687,7 +687,7 @@ outcome completeness.
 
 ### Phase 4: `v10-post` Offline Import, Mutation Safety, And Deferred Repair Contracts
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/offline-import-safety-hardening`
 - PR: https://github.com/samcantrill/loom/pull/140
 
@@ -758,12 +758,24 @@ Review should focus on historical-vs-live truth separation and terminal safety.
 - PR opened on 2026-05-13 against `develop` after focused Phase 4 pytest
   passed with 28 tests, `make validate-pr` passed, and `make test-summary`
   passed with 1832 passed, 12 skipped, and 1413 deselected.
+- Merged on 2026-05-13 via squash merge commit
+  `2af37fa3cd4be75e2d1804fef3470f5b2b177e81` after local automated review
+  found no blockers and GitHub CI `checks` passed.
 - Completion of this phase triggers the explicit transition checkpoint before
   any main queue phase begins.
 
 **Completion Summary**
 
-- Pending.
+- Added explicit historical-only/non-resumable offline import provenance,
+  preserved imported attempts as historical `offline-import` records without
+  active leases, and rejected `finish_stage_attempt(..., SUCCEEDED)` so live
+  success remains tied to same-attempt fenced `record_output_commit(...)`.
+- Validation: focused Phase 4 pytest command passed with 28 tests; targeted
+  Ruff on touched files passed; `make validate-pr` passed; `make test-summary`
+  passed with 1832 passed, 12 skipped, and 1413 deselected. GitHub CI `checks`
+  passed before merge.
+- Follow-up: proceed to the transition checkpoint and then Phase 5 from updated
+  `develop`.
 
 ### Transition Checkpoint After Phase 4
 
@@ -775,6 +787,21 @@ Before `v11` queue implementation begins:
 - refresh this plan and any dependent phase artifacts if the prefix changed any
   queue-facing contract materially;
 - record the exact changed seams before Phase 5 starts.
+
+Checkpoint recorded on 2026-05-13 after Phase 4 merge:
+
+- Authority readiness and online mutation entrypoints remain strict from Phase
+  1; registry state remains a hint and supervisor workspace defaults stay
+  explicit.
+- Runtime, worker, continuation, and live SLURM paths remain fail-closed from
+  Phase 2; deferred finalization remains explicit compatibility behavior.
+- Diagnostics source labels, authority-owned coordination mutation, and
+  structured resource-admission outcomes remain stable from Phase 3.
+- Offline import is now historical-only by provenance, strict on collisions and
+  non-terminal/incomplete evidence, and does not create resumable live attempts;
+  live success remains fenced through `record_output_commit(...)`.
+- No queue-facing contract drift requires a Phase 5 plan refresh. Phase 5 may
+  branch from updated `develop` after this metadata commit.
 
 ### Phase 5: `v11` Queue Records And SQLite Repository
 
