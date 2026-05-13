@@ -231,6 +231,19 @@ class QueueService:
             recovery_records=recovery,
         )
 
+    def read_item(self, queue_item_id: str) -> QueueItem | None:
+        self._ensure_running()
+        return self.repository.read_item(queue_item_id)
+
+    def recovery_items(self) -> tuple[QueueItem, ...]:
+        self._ensure_running()
+        items: list[QueueItem] = []
+        for record in self.repository.scan_recovery():
+            item = self.repository.read_item(record.queue_item_id)
+            if item is not None:
+                items.append(item)
+        return tuple(items)
+
     def cancel_item(
         self,
         queue_item_id: str,

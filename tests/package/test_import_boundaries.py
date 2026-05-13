@@ -266,6 +266,36 @@ def test_import_queue_control_modules_do_not_import_authority_or_config() -> Non
     assert result.stdout.strip() == "ok"
 
 
+def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modules() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.queue.local
+        import loom.queue.resources
+
+        for forbidden in (
+            "loom.authority",
+            "loom.authority._repository",
+            "loom.pipeline.executors",
+            "loom.pipeline.executors.slurm",
+            "loom.cli",
+            "fastapi",
+            "starlette",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through queue local modules")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> None:
     script = dedent(
         """
