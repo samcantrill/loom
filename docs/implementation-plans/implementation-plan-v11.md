@@ -805,9 +805,9 @@ Checkpoint recorded on 2026-05-13 after Phase 4 merge:
 
 ### Phase 5: `v11` Queue Records And SQLite Repository
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/queue-records-sqlite-repository`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/141
 
 **Goal**
 
@@ -882,6 +882,9 @@ versioning, and repository recovery behavior.
 
 - This phase should keep queue docs and queue package ownership aligned from the
   start.
+- PR opened on 2026-05-13 against `develop` after focused Phase 5 pytest
+  passed with 61 tests, `make validate-pr` passed, and `make test-summary`
+  passed with 1852 passed, 12 skipped, and 1433 deselected.
 
 **Completion Summary**
 
