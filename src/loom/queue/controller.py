@@ -199,7 +199,7 @@ class QueueController:
         self._claim_counter = 0
 
     def run_once(self, *, pool_name: str | None = None) -> QueueControllerStep:
-        active = self.reconcile_active()
+        active = self.reconcile_active(pool_name=pool_name)
         if active.outcome != "idle":
             return active
         for candidate_pool in self._candidate_pools(pool_name):
@@ -251,8 +251,10 @@ class QueueController:
             )
         return QueueControllerStep(outcome="idle")
 
-    def reconcile_active(self) -> QueueControllerStep:
+    def reconcile_active(self, *, pool_name: str | None = None) -> QueueControllerStep:
         for item in self._service.recovery_items():
+            if pool_name is not None and item.pool_name != pool_name:
+                continue
             if QueueItemStatus(item.status) is QueueItemStatus.CLAIMED:
                 return self._complete_unknown(
                     item,

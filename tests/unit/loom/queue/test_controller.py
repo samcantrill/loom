@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from loom.queue import (
+    FakeQueueDispatchAdapter,
     QueueController,
     QueueDispatchCancellation,
     QueueDispatchInspection,
@@ -178,6 +179,51 @@ def test_controller_cancels_active_dispatch_through_adapter(tmp_path: Path) -> N
     assert service.scan_recovery() == ()
 
 
+def test_controller_pool_scoped_run_once_ignores_other_pool_active_work(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-01T00:00:02Z",
+        "2020-01-01T00:00:03Z",
+        "2020-01-01T00:00:04Z",
+        "2020-01-01T00:00:05Z",
+        "2020-01-01T00:00:06Z",
+    )
+    service = _two_pool_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="gpu-item",
+            queue_name="gpu",
+            run_uri="file:///runs/gpu-item",
+            adapter="async",
+        )
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="cpu-item",
+            queue_name="cpu",
+            run_uri="file:///runs/cpu-item",
+        )
+    )
+    adapter = _AsyncAdapter()
+    controller = QueueController(
+        service,
+        adapters={"async": adapter, "fake": FakeQueueDispatchAdapter()},
+        clock=clock,
+    )
+
+    gpu = controller.run_once(pool_name="gpu-pool")
+    cpu = controller.run_once(pool_name="cpu-pool")
+
+    assert gpu.item is not None
+    assert gpu.item.status is QueueItemStatus.DISPATCHED
+    assert cpu.item is not None
+    assert cpu.item.queue_item_id == "cpu-item"
+    assert cpu.item.status is QueueItemStatus.SUCCEEDED
+
+
 class _AsyncAdapter:
     adapter_name = "async"
 
@@ -222,6 +268,26 @@ class _AsyncAdapter:
 
 def _started_service(tmp_path: Path, *, clock) -> QueueService:
     spec = _spec(tmp_path)
+    repository = SQLiteQueueRepository(tmp_path / "queue.sqlite", clock=clock)
+    service = QueueService(spec, repository, clock=clock)
+    service.start()
+    return service
+
+
+def _two_pool_service(tmp_path: Path, *, clock) -> QueueService:
+    spec = normalize_queue_spec(
+        {
+            "db_path": str(tmp_path / "queue.sqlite"),
+            "pools": [
+                {"pool_name": "gpu-pool", "mode": "managed"},
+                {"pool_name": "cpu-pool", "mode": "managed"},
+            ],
+            "queues": [
+                {"queue_name": "gpu", "pool_name": "gpu-pool"},
+                {"queue_name": "cpu", "pool_name": "cpu-pool"},
+            ],
+        }
+    )
     repository = SQLiteQueueRepository(tmp_path / "queue.sqlite", clock=clock)
     service = QueueService(spec, repository, clock=clock)
     service.start()
