@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: implemented; PR preparation in progress
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 8: Delegated SLURM Dispatch`
 - Branch: `codex/delegated-slurm-queue-dispatch`
@@ -191,7 +191,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted, type, full PR, and summary gates passed
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -199,9 +199,9 @@ make test-summary
 
 - Draft plan: completed locally before implementation.
 - Final phase execution plan: this file.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Implementation summary: added a delegated SLURM queue adapter over the existing fakeable command-runner boundary; persisted external scheduler handles, first status-read evidence, and delegated verification reports; extended active queue inspection with a handoff-complete signal for foreground drain; exposed handoff-complete status read-model data; documented delegated SLURM queue semantics; and added unit, contract, integration, and package-boundary coverage.
+- Implementation validation: targeted Phase 8 pytest passed with 54 passed; targeted Ruff passed; targeted Pyright passed with 0 errors; `make validate-pr` passed with Ruff, Pyright, default harness, config-extra harness, and build; `make test-summary` passed with package 75 passed/1 skipped, unit 1030 passed/1 skipped/1 deselected, contract 167 passed/2 skipped, integration 145 passed/8 skipped/11 deselected, e2e 40 passed/2 deselected, and config-extra 436 passed/1460 deselected.
+- Refinement summary: not needed; no validation or coverage blockers remained after local implementation cleanup.
 - Blocker-resolution summary: none.
 - PR preparation: pending.
 - Stack maintenance: none yet.
