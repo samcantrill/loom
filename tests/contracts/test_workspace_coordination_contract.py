@@ -24,6 +24,7 @@ from loom.pipeline.stores import (
     AUTHORITY_COORDINATION_LEASE_RENEW_PATH,
     AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
     AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
@@ -111,6 +112,9 @@ _COORDINATION_OPERATIONS = {
     ),
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH: (
         AuthorityMutationOperation.SET_RESOURCE_LIMIT
+    ),
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH: (
+        AuthorityMutationOperation.READ_RESOURCE_LIMIT
     ),
 }
 
@@ -334,6 +338,7 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
     if coordination_case.supports_resources:
         resource_limit = store.set_resource_limit("workspace-1", "gpu", limit=2)
         assert resource_limit.counter_name == "resource:gpu"
+        assert store.read_resource_limit("workspace-1", "gpu") == resource_limit
         first_resource = store.acquire_resource_lease(
             "workspace-1",
             "gpu",
@@ -341,6 +346,10 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
             amount=2,
             lease_ttl_seconds=1,
         )
+        active_limit = store.read_resource_limit("workspace-1", "gpu")
+        assert active_limit is not None
+        assert active_limit.value == 2
+        assert active_limit.limit == 2
         with pytest.raises(ValueError, match="resource limit"):
             store.acquire_resource_lease(
                 "workspace-1",
@@ -358,6 +367,11 @@ def test_workspace_coordination_contract_fences_leases_and_counters(
             lease_ttl_seconds=10,
         )
         assert recovered_resource.lease.lease_id != first_resource.lease.lease_id
+        recovered_limit = store.read_resource_limit("workspace-1", "gpu")
+        assert recovered_limit is not None
+        assert recovered_limit.value == 1
+        assert recovered_limit.limit == 2
+        assert store.read_resource_limit("workspace-1", "missing-gpu") is None
     else:
         with pytest.raises(CoordinationStoreError, match="unsupported_resource"):
             store.acquire_resource_lease(

@@ -576,6 +576,7 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         self._lease_expiry_ticks: dict[str, int] = {}
         self._counters: dict[tuple[str, str], ConcurrencyCounter] = {}
         self._resource_limits: dict[tuple[str, str], int] = {}
+        self._resource_limit_revisions: dict[tuple[str, str], BackendRevision] = {}
 
     def capabilities(self) -> BackendCapabilitySet:
         return BackendCapabilitySet(
@@ -765,19 +766,40 @@ class InMemoryWorkspaceCoordinationStore(WorkspaceCoordinationStore):
         if workspace_id not in self._workspaces:
             raise ValueError("unknown workspace")
         active_amount = self._active_resource_amount(workspace_id, resource_key)
+        revision = self._next_revision()
+        key = (workspace_id, resource_key)
         if limit is None:
-            self._resource_limits.pop((workspace_id, resource_key), None)
+            self._resource_limits.pop(key, None)
+            self._resource_limit_revisions.pop(key, None)
         else:
             if limit <= 0:
                 raise ValueError("limit must be positive")
             if active_amount > limit:
                 raise ValueError("resource limit is below active lease usage")
-            self._resource_limits[(workspace_id, resource_key)] = limit
+            self._resource_limits[key] = limit
+            self._resource_limit_revisions[key] = revision
         return ConcurrencyCounter(
             counter_name=f"resource:{resource_key}",
             value=active_amount,
             limit=limit,
-            revision=self._next_revision(),
+            revision=revision,
+        )
+
+    def read_resource_limit(
+        self, workspace_id: str, resource_key: str
+    ) -> ConcurrencyCounter | None:
+        if workspace_id not in self._workspaces:
+            raise ValueError("unknown workspace")
+        key = (workspace_id, resource_key)
+        limit = self._resource_limits.get(key)
+        if limit is None:
+            return None
+        revision = self._resource_limit_revisions[key]
+        return ConcurrencyCounter(
+            counter_name=f"resource:{resource_key}",
+            value=self._active_resource_amount(workspace_id, resource_key),
+            limit=limit,
+            revision=revision,
         )
 
     def set_counter_limit(

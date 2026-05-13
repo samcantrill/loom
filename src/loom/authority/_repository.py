@@ -1694,6 +1694,16 @@ class AuthorityRepository:
             limit=limit,
         )
 
+    def read_resource_limit(
+        self, workspace_id: str, resource_key: str
+    ) -> ConcurrencyCounter | None:
+        """Read a service-owned generic resource limit without mutating state."""
+
+        return self._coordination_store().read_resource_limit(
+            workspace_id,
+            resource_key,
+        )
+
     def increment_counter(
         self,
         workspace_id: str,

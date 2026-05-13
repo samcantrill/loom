@@ -224,6 +224,18 @@ class ServiceWorkspaceCoordinationStore:
         )
         return _required(result.counter, "counter")
 
+    def read_resource_limit(
+        self, workspace_id: str, resource_key: str
+    ) -> ConcurrencyCounter | None:
+        result = _accepted(
+            self._client.read_resource_limit(
+                workspace_id,
+                resource_key,
+                service_generation=self._service_generation,
+            )
+        )
+        return result.counter
+
     def set_counter_limit(
         self, workspace_id: str, counter_name: str, *, limit: int | None
     ) -> ConcurrencyCounter:
