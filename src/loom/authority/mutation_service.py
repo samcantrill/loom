@@ -87,6 +87,7 @@ class AuthorityMutationOperation(StrEnum):
     SCAN_COORDINATION_RECOVERY = "scan_coordination_recovery"
     ACQUIRE_RESOURCE_LEASE = "acquire_resource_lease"
     SET_RESOURCE_LIMIT = "set_resource_limit"
+    READ_RESOURCE_LIMIT = "read_resource_limit"
 
 
 class AuthorityMutationValidationError(ValueError):
@@ -184,6 +185,9 @@ _OPERATION_KIND_BY_MUTATION: Mapping[
         AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
     ),
     AuthorityMutationOperation.SET_RESOURCE_LIMIT: (
+        AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
+    ),
+    AuthorityMutationOperation.READ_RESOURCE_LIMIT: (
         AuthorityProtocolOperationKind.WORKSPACE_COORDINATION
     ),
 }
@@ -361,6 +365,8 @@ class AuthorityMutationService:
                 return self._acquire_resource_lease(request)
             case AuthorityMutationOperation.SET_RESOURCE_LIMIT:
                 return self._set_resource_limit(request)
+            case AuthorityMutationOperation.READ_RESOURCE_LIMIT:
+                return self._read_resource_limit(request)
 
     def _admit_run(self, request: AuthorityProtocolRequest) -> AuthorityProtocolResult:
         revision = self._repository.admit_run(
@@ -781,6 +787,15 @@ class AuthorityMutationService:
             service_generation=self._service_generation,
             counter=counter,
         )
+
+    def _read_resource_limit(
+        self, request: AuthorityProtocolRequest
+    ) -> AuthorityProtocolResult:
+        counter = self._repository.read_resource_limit(
+            _required_body_string(request, "workspace_id"),
+            _required_body_string(request, "resource_key"),
+        )
+        return _result(service_generation=self._service_generation, counter=counter)
 
     def _increment_counter(
         self, request: AuthorityProtocolRequest

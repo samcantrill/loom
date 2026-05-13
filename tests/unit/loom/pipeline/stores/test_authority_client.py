@@ -22,8 +22,9 @@ from loom.pipeline.stores import (
     accepted_authority_response,
 )
 from loom.pipeline.stores.authority_client import (
-    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
     AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
     AUTHORITY_COORDINATION_WORKSPACE_CREATE_PATH,
     AUTHORITY_MUTATION_CONTROLLER_LEASE_ACQUIRE_PATH,
@@ -241,6 +242,7 @@ def test_authority_client_sends_workspace_coordination_payloads() -> None:
         workspace_id="workspace-1",
     )
     client.set_resource_limit("workspace-1", "gpu", limit=2)
+    client.read_resource_limit("workspace-1", "gpu")
     client.acquire_resource_lease(
         "workspace-1",
         "gpu",
@@ -275,9 +277,15 @@ def test_authority_client_sends_workspace_coordination_payloads() -> None:
         "resource_key": "gpu",
         "limit": 2,
     }
-    assert captured[4][0].endswith(AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH)
-    assert captured[4][1]["owner_id"] == "worker-2"
-    resource_lease_body = cast(Mapping[str, PlainData], captured[4][1]["body"])
+    assert captured[4][0].endswith(AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH)
+    read_body = cast(Mapping[str, PlainData], captured[4][1]["body"])
+    assert read_body == {
+        "workspace_id": "workspace-1",
+        "resource_key": "gpu",
+    }
+    assert captured[5][0].endswith(AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH)
+    assert captured[5][1]["owner_id"] == "worker-2"
+    resource_lease_body = cast(Mapping[str, PlainData], captured[5][1]["body"])
     assert resource_lease_body == {
         "workspace_id": "workspace-1",
         "resource_key": "gpu",

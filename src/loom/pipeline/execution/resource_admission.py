@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import cast
 
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.stores import (
+    ConcurrencyCounter,
     LifecycleReason,
     ResourceLeaseRecord,
     WorkspaceCoordinationStore,
 )
-from loom.serialization import PlainData
+from loom.serialization import PlainData, ensure_plain_data
+from loom.serialization.errors import PlainDataError
 
 from .errors import PipelineExecutionError
 
@@ -28,6 +31,15 @@ class ResourceAdmissionStatus(StrEnum):
     ADMITTED = "admitted"
     REJECTED = "rejected"
     BLOCKED = "blocked"
+
+
+class ResourceLimitReconciliationStatus(StrEnum):
+    """Machine-readable resource-limit reconciliation outcomes."""
+
+    SUCCESS = "success"
+    MISMATCH = "mismatch"
+    MISSING_LIMIT = "missing_limit"
+    UNAVAILABLE_AUTHORITY = "unavailable_authority"
 
 
 class ResourceAdmissionError(PipelineExecutionError):
@@ -94,7 +106,7 @@ class ResourceAdmissionRequest:
     poll_interval_seconds: float = DEFAULT_RESOURCE_ADMISSION_POLL_SECONDS
 
     def __post_init__(self) -> None:
-        for field, value in {
+        for field_name, value in {
             "run_uri": self.run_uri,
             "stage_name": self.stage_name,
             "workspace_id": self.workspace_id,
@@ -102,7 +114,7 @@ class ResourceAdmissionRequest:
         }.items():
             if not isinstance(value, str) or not value:
                 raise ResourceAdmissionError(
-                    f"{field} must be a non-empty string",
+                    f"{field_name} must be a non-empty string",
                     code="resource_admission.invalid_request",
                 )
         if (
@@ -159,6 +171,24 @@ class ResourceAdmissionDecision:
     request: ResourceAdmissionRequest
     leases: tuple[ResourceLeaseRecord, ...] = ()
     message: str | None = None
+    reason_code: str | None = None
+    reason_context: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", ResourceAdmissionStatus(self.status))
+        object.__setattr__(self, "leases", tuple(self.leases))
+        if self.reason_code is not None and (
+            not isinstance(self.reason_code, str) or not self.reason_code
+        ):
+            raise ResourceAdmissionError(
+                "reason_code must be a non-empty string",
+                code="resource_admission.invalid_decision",
+            )
+        object.__setattr__(
+            self,
+            "reason_context",
+            _plain_mapping(self.reason_context, "reason_context"),
+        )
 
     @property
     def admitted(self) -> bool:
@@ -170,6 +200,77 @@ class ResourceAdmissionDecision:
             "request": self.request.to_dict(),
             "leases": [lease.to_dict() for lease in self.leases],
             "message": self.message,
+            "reason_code": self.reason_code,
+            "reason_context": dict(self.reason_context),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceLimitReconciliationResult:
+    """Read-only comparison of one desired resource limit against authority."""
+
+    status: ResourceLimitReconciliationStatus
+    workspace_id: str
+    resource_key: str
+    desired_limit: int
+    actual_limit: int | None = None
+    active: int | None = None
+    reason_code: str | None = None
+    message: str | None = None
+    reason_context: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "status",
+            ResourceLimitReconciliationStatus(self.status),
+        )
+        for field_name, value in {
+            "workspace_id": self.workspace_id,
+            "resource_key": self.resource_key,
+        }.items():
+            if not isinstance(value, str) or not value:
+                raise ResourceAdmissionError(
+                    f"{field_name} must be a non-empty string",
+                    code="resource_limit_reconciliation.invalid_request",
+                )
+        object.__setattr__(
+            self, "desired_limit", _positive_int(self.desired_limit, "desired_limit")
+        )
+        if self.actual_limit is not None:
+            object.__setattr__(
+                self, "actual_limit", _positive_int(self.actual_limit, "actual_limit")
+            )
+        if self.active is not None:
+            object.__setattr__(self, "active", _non_negative_int(self.active, "active"))
+        if self.reason_code is not None and (
+            not isinstance(self.reason_code, str) or not self.reason_code
+        ):
+            raise ResourceAdmissionError(
+                "reason_code must be a non-empty string",
+                code="resource_limit_reconciliation.invalid_result",
+            )
+        object.__setattr__(
+            self,
+            "reason_context",
+            _plain_mapping(self.reason_context, "reason_context"),
+        )
+
+    @property
+    def ok(self) -> bool:
+        return self.status is ResourceLimitReconciliationStatus.SUCCESS
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "status": self.status.value,
+            "workspace_id": self.workspace_id,
+            "resource_key": self.resource_key,
+            "desired_limit": self.desired_limit,
+            "actual_limit": self.actual_limit,
+            "active": self.active,
+            "reason_code": self.reason_code,
+            "message": self.message,
+            "reason_context": dict(self.reason_context),
         }
 
 
@@ -190,6 +291,58 @@ def resource_requests_from_runtime(
             )
         requests.append(ResourceLeaseRequest(resource_key=key, amount=entry.amount))
     return tuple(requests)
+
+
+def reconcile_resource_limits(
+    store: WorkspaceCoordinationStore,
+    workspace_id: str,
+    desired_limits: Mapping[str, int],
+) -> tuple[ResourceLimitReconciliationResult, ...]:
+    """Compare desired finite resource limits against authority without mutation."""
+
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise ResourceAdmissionError(
+            "workspace_id must be a non-empty string",
+            code="resource_limit_reconciliation.invalid_request",
+        )
+    if not isinstance(desired_limits, Mapping):
+        raise ResourceAdmissionError(
+            "desired_limits must be a mapping",
+            code="resource_limit_reconciliation.invalid_request",
+        )
+    normalized = tuple(
+        (
+            _non_empty_string(resource_key, "resource_key"),
+            _positive_int(limit, "desired_limit"),
+        )
+        for resource_key, limit in desired_limits.items()
+    )
+    results: list[ResourceLimitReconciliationResult] = []
+    for resource_key, desired_limit in normalized:
+        try:
+            counter = store.read_resource_limit(workspace_id, resource_key)
+        except Exception as exc:
+            results.append(
+                ResourceLimitReconciliationResult(
+                    status=ResourceLimitReconciliationStatus.UNAVAILABLE_AUTHORITY,
+                    workspace_id=workspace_id,
+                    resource_key=resource_key,
+                    desired_limit=desired_limit,
+                    reason_code="resource_limit_reconciliation.unavailable_authority",
+                    message=str(exc),
+                    reason_context={"exception_type": type(exc).__name__},
+                )
+            )
+            continue
+        results.append(
+            _resource_limit_reconciliation_result(
+                workspace_id=workspace_id,
+                resource_key=resource_key,
+                desired_limit=desired_limit,
+                counter=counter,
+            )
+        )
+    return tuple(results)
 
 
 def acquire_resource_admission(
@@ -236,6 +389,12 @@ def acquire_resource_admission(
                     else ResourceAdmissionStatus.REJECTED,
                     request=request,
                     message=str(last_error),
+                    reason_code=_admission_reason_code(last_error),
+                    reason_context=_admission_reason_context(
+                        request,
+                        last_error,
+                        waited=request.waits,
+                    ),
                 )
             sleep(min(request.poll_interval_seconds, max(0.0, deadline - monotonic())))
 
@@ -281,6 +440,115 @@ def _release_partial(
             continue
 
 
+def _resource_limit_reconciliation_result(
+    *,
+    workspace_id: str,
+    resource_key: str,
+    desired_limit: int,
+    counter: ConcurrencyCounter | None,
+) -> ResourceLimitReconciliationResult:
+    if counter is None or counter.limit is None:
+        return ResourceLimitReconciliationResult(
+            status=ResourceLimitReconciliationStatus.MISSING_LIMIT,
+            workspace_id=workspace_id,
+            resource_key=resource_key,
+            desired_limit=desired_limit,
+            active=None if counter is None else counter.value,
+            reason_code="resource_limit_reconciliation.missing_limit",
+            message="authority resource limit is not configured",
+        )
+    if counter.limit != desired_limit:
+        return ResourceLimitReconciliationResult(
+            status=ResourceLimitReconciliationStatus.MISMATCH,
+            workspace_id=workspace_id,
+            resource_key=resource_key,
+            desired_limit=desired_limit,
+            actual_limit=counter.limit,
+            active=counter.value,
+            reason_code="resource_limit_reconciliation.mismatch",
+            message="authority resource limit does not match desired limit",
+        )
+    return ResourceLimitReconciliationResult(
+        status=ResourceLimitReconciliationStatus.SUCCESS,
+        workspace_id=workspace_id,
+        resource_key=resource_key,
+        desired_limit=desired_limit,
+        actual_limit=counter.limit,
+        active=counter.value,
+        reason_code="resource_limit_reconciliation.success",
+    )
+
+
+def _admission_reason_code(exc: Exception) -> str:
+    if isinstance(exc, ResourceAdmissionError):
+        return exc.code
+    message = str(exc).lower()
+    if "resource limit" in message or "capacity" in message:
+        return "resource_admission.capacity_unavailable"
+    if "unsupported_resource" in message or "unsupported resource" in message:
+        return "resource_admission.unsupported_resource"
+    if "unavailable" in message or "stale_generation" in message:
+        return "resource_admission.unavailable_authority"
+    return "resource_admission.acquisition_failed"
+
+
+def _admission_reason_context(
+    request: ResourceAdmissionRequest,
+    exc: Exception,
+    *,
+    waited: bool,
+) -> dict[str, PlainData]:
+    return {
+        "exception_type": type(exc).__name__,
+        "waited": waited,
+        "wait_timeout_seconds": request.wait_timeout_seconds,
+        "resources": [resource.to_dict() for resource in request.resources],
+    }
+
+
+def _non_empty_string(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ResourceAdmissionError(
+            f"{field} must be a non-empty string",
+            code="resource_limit_reconciliation.invalid_request",
+        )
+    return value
+
+
+def _positive_int(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ResourceAdmissionError(
+            f"{field} must be a positive integer",
+            code="resource_limit_reconciliation.invalid_request",
+        )
+    return value
+
+
+def _non_negative_int(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ResourceAdmissionError(
+            f"{field} must be a non-negative integer",
+            code="resource_limit_reconciliation.invalid_result",
+        )
+    return value
+
+
+def _plain_mapping(value: Mapping[str, PlainData], field: str) -> Mapping[str, PlainData]:
+    try:
+        normalized = ensure_plain_data(dict(value), path=field)
+    except (PlainDataError, ValueError) as exc:
+        raise ResourceAdmissionError(
+            f"{field} must be plain-data-compatible: {exc}",
+            code="resource_admission.invalid_decision",
+        ) from exc
+    if not isinstance(normalized, Mapping):
+        raise ResourceAdmissionError(
+            f"{field} must be a mapping",
+            code="resource_admission.invalid_decision",
+        )
+    return cast(Mapping[str, PlainData], normalized)
+
+
 __all__ = [
     "DEFAULT_RESOURCE_ADMISSION_POLL_SECONDS",
     "DEFAULT_RESOURCE_LEASE_TTL_SECONDS",
@@ -288,8 +556,11 @@ __all__ = [
     "ResourceAdmissionError",
     "ResourceAdmissionRequest",
     "ResourceAdmissionStatus",
+    "ResourceLimitReconciliationResult",
+    "ResourceLimitReconciliationStatus",
     "ResourceLeaseRequest",
     "acquire_resource_admission",
+    "reconcile_resource_limits",
     "release_resource_admission",
     "resource_requests_from_runtime",
 ]

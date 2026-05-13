@@ -476,6 +476,10 @@ class WorkspaceCoordinationStore(Protocol):
         self, workspace_id: str, resource_key: str, *, limit: int | None
     ) -> ConcurrencyCounter: ...
 
+    def read_resource_limit(
+        self, workspace_id: str, resource_key: str
+    ) -> ConcurrencyCounter | None: ...
+
     def set_counter_limit(
         self, workspace_id: str, counter_name: str, *, limit: int | None
     ) -> ConcurrencyCounter: ...

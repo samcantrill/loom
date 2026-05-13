@@ -16,6 +16,12 @@ from loom.diagnostics import (
     run_preflight,
 )
 from loom.diagnostics.models import PreflightError
+from loom.pipeline.stores import (
+    AuthorityBackendKind,
+    AuthorityConfig,
+    AuthorityDeploymentProfile,
+    path_to_run_uri,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -50,8 +56,6 @@ def test_missing_run_uri_skips_run_path_dependent_groups() -> None:
 def test_run_uri_group_uses_explicit_runtime_run_uri_without_config(
     tmp_path,
 ) -> None:
-    from loom.pipeline.stores import path_to_run_uri
-
     run_uri = path_to_run_uri(tmp_path / "runs" / "demo")
 
     result = run_preflight(
@@ -72,6 +76,51 @@ def test_run_uri_group_uses_explicit_runtime_run_uri_without_config(
     policy_source = cast(dict[str, Any], authority_policy["source"])
     assert source["label"] == "materialized_local_state"
     assert policy_source["label"] == "authoritative_service_truth"
+
+
+def test_run_uri_group_labels_offline_first_authority_policy_source(tmp_path) -> None:
+    result = run_preflight(
+        PreflightRequest(
+            config_path="missing.yaml",
+            groups=("run",),
+            runtime_options={
+                "run_uri": path_to_run_uri(tmp_path / "runs" / "offline-demo")
+            },
+            authority_mode="offline_first",
+        )
+    )
+
+    authority_policy = cast(
+        dict[str, Any], result.checks[0].details["authority_policy"]
+    )
+    policy_source = cast(dict[str, Any], authority_policy["source"])
+    assert policy_source["label"] == "offline_evidence"
+    assert policy_source["policy"] == "offline_first"
+    assert policy_source["authoritative"] is False
+
+
+def test_run_uri_group_labels_deferred_finalization_policy_source(tmp_path) -> None:
+    result = run_preflight(
+        PreflightRequest(
+            config_path="missing.yaml",
+            groups=("run",),
+            runtime_options={
+                "run_uri": path_to_run_uri(tmp_path / "runs" / "deferred-demo")
+            },
+            authority_config=AuthorityConfig(
+                backend_kind=AuthorityBackendKind.DEFERRED_FINALIZATION,
+                deployment_profile=AuthorityDeploymentProfile.DEFERRED_FINALIZATION,
+            ),
+        )
+    )
+
+    authority_policy = cast(
+        dict[str, Any], result.checks[0].details["authority_policy"]
+    )
+    policy_source = cast(dict[str, Any], authority_policy["source"])
+    assert policy_source["label"] == "deferred_finalization_state"
+    assert policy_source["policy"] == "deferred_finalization"
+    assert policy_source["authoritative"] is False
 
 
 def test_run_uri_group_does_not_compose_config_for_non_uri_runtime_flags() -> None:

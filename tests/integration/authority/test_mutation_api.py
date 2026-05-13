@@ -424,6 +424,18 @@ def test_mutation_api_serves_workspace_coordination_routes(tmp_path) -> None:
     assert limit.result.counter is not None
     assert limit.result.counter.counter_name == "resource:gpu"
 
+    read_limit = client.read_resource_limit(
+        "workspace-a",
+        "gpu",
+        request_id="resource-limit-read-1",
+        service_generation="generation-1",
+    )
+    assert read_limit.accepted is True
+    assert read_limit.result is not None
+    assert read_limit.result.counter is not None
+    assert read_limit.result.counter.counter_name == "resource:gpu"
+    assert read_limit.result.counter.limit == 1
+
     resource = client.acquire_resource_lease(
         "workspace-a",
         "gpu",

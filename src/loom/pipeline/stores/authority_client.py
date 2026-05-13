@@ -123,6 +123,9 @@ AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH = (
 AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH = (
     f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/resources/limit"
 )
+AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH = (
+    f"{AUTHORITY_MUTATION_ROUTE_PREFIX}/coordination/resources/limit/read"
+)
 
 AuthorityHttpTransport = Callable[
     [str, Mapping[str, PlainData], float | None],
@@ -1031,6 +1034,27 @@ class AuthorityClient:
             workspace_id=workspace_id,
         )
 
+    def read_resource_limit(
+        self,
+        workspace_id: str,
+        resource_key: str,
+        *,
+        request_id: str | None = None,
+        service_generation: str | None = None,
+    ) -> AuthorityProtocolResponse:
+        """Read a resource limit from authority-backed coordination."""
+
+        return self._coordination_request(
+            AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH,
+            body={
+                "workspace_id": workspace_id,
+                "resource_key": resource_key,
+            },
+            request_id=request_id,
+            service_generation=service_generation,
+            workspace_id=workspace_id,
+        )
+
     def _lease_request(
         self,
         path: str,
@@ -1200,6 +1224,7 @@ __all__ = [
     "AUTHORITY_COORDINATION_COUNTER_READ_PATH",
     "AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH",
     "AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH",
+    "AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH",
     "AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH",
     "AuthorityClient",
     "AuthorityClientError",

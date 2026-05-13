@@ -497,6 +497,24 @@ class SQLiteWorkspaceCoordinationStore:
                 revision=revision,
             )
 
+    def read_resource_limit(
+        self, workspace_id: str, resource_key: str
+    ) -> ConcurrencyCounter | None:
+        resource_key = _non_empty_string(resource_key, "resource_key")
+        with self._connection(initialize=False) as conn:
+            _raise_for_schema(conn)
+            _require_workspace(conn, workspace_id)
+            row = _resource_limit_row(conn, workspace_id, resource_key)
+            if row is None:
+                return None
+            now = self._now()
+            return ConcurrencyCounter(
+                counter_name=_resource_counter_name(resource_key),
+                value=_active_resource_amount(conn, workspace_id, resource_key, now),
+                limit=cast(int | None, row["limit_value"]),
+                revision=_revision_for(conn, cast(int, row["revision_sequence"])),
+            )
+
     def set_counter_limit(
         self, workspace_id: str, counter_name: str, *, limit: int | None
     ) -> ConcurrencyCounter:
@@ -1243,17 +1261,26 @@ def _active_resource_amount(
 def _resource_limit(
     conn: sqlite3.Connection, workspace_id: str, resource_key: str
 ) -> int | None:
-    row = conn.execute(
-        """
-        SELECT limit_value
-        FROM resource_limits
-        WHERE workspace_id = ? AND resource_key = ?
-        """,
-        (workspace_id, resource_key),
-    ).fetchone()
+    row = _resource_limit_row(conn, workspace_id, resource_key)
     if row is None:
         return None
     return cast(int | None, row["limit_value"])
+
+
+def _resource_limit_row(
+    conn: sqlite3.Connection, workspace_id: str, resource_key: str
+) -> sqlite3.Row | None:
+    return cast(
+        sqlite3.Row | None,
+        conn.execute(
+            """
+            SELECT limit_value, revision_sequence
+            FROM resource_limits
+            WHERE workspace_id = ? AND resource_key = ?
+            """,
+            (workspace_id, resource_key),
+        ).fetchone(),
+    )
 
 
 def _counter_row(

@@ -61,6 +61,11 @@ def test_sqlite_resource_limits_recover_expired_capacity(tmp_path: Path) -> None
     store = SQLiteWorkspaceCoordinationStore(database_path, clock=clock)
     _seed_trial(store, "trial-1")
     store.set_resource_limit("workspace-1", "gpu", limit=2)
+    initial_limit = store.read_resource_limit("workspace-1", "gpu")
+    assert initial_limit is not None
+    assert initial_limit.counter_name == "resource:gpu"
+    assert initial_limit.value == 0
+    assert initial_limit.limit == 2
 
     first = store.acquire_resource_lease(
         "workspace-1",
@@ -93,6 +98,10 @@ def test_sqlite_resource_limits_recover_expired_capacity(tmp_path: Path) -> None
         lease_ttl_seconds=30,
     )
     assert second.lease.lease_id != first.lease.lease_id
+    recovered_limit = store.read_resource_limit("workspace-1", "gpu")
+    assert recovered_limit is not None
+    assert recovered_limit.value == 1
+    assert recovered_limit.limit == 2
 
 
 def test_sqlite_counters_are_transactional_and_guarded(tmp_path: Path) -> None:

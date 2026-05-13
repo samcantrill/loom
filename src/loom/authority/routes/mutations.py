@@ -14,6 +14,7 @@ from loom.pipeline.stores import (
     AUTHORITY_COORDINATION_LEASE_RENEW_PATH,
     AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH,
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH,
     AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH,
     AUTHORITY_COORDINATION_SWEEP_CREATE_PATH,
     AUTHORITY_COORDINATION_TRIAL_LEASE_ACQUIRE_PATH,
@@ -523,7 +524,7 @@ def acquire_resource_lease(
     payload: dict[str, object],
     services: AuthorityAppServices = Depends(get_authority_services),
 ) -> dict[str, PlainData]:
-    """Report resource leases as unsupported until the resource phase."""
+    """Acquire a resource lease through authority-owned coordination."""
 
     return _handle(
         AuthorityMutationOperation.ACQUIRE_RESOURCE_LEASE,
@@ -542,9 +543,24 @@ def set_resource_limit(
     payload: dict[str, object],
     services: AuthorityAppServices = Depends(get_authority_services),
 ) -> dict[str, PlainData]:
-    """Report resource limits as unsupported until the resource phase."""
+    """Set a resource limit through authority-owned coordination."""
 
     return _handle(AuthorityMutationOperation.SET_RESOURCE_LIMIT, payload, services)
+
+
+@router.post(
+    AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH.removeprefix(
+        MUTATION_ROUTE_PREFIX
+    ),
+    response_model=None,
+)
+def read_resource_limit(
+    payload: dict[str, object],
+    services: AuthorityAppServices = Depends(get_authority_services),
+) -> dict[str, PlainData]:
+    """Read a resource limit through authority-owned coordination."""
+
+    return _handle(AuthorityMutationOperation.READ_RESOURCE_LIMIT, payload, services)
 
 
 def _handle(

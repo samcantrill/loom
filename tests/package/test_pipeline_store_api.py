@@ -50,6 +50,7 @@ def test_pipeline_store_public_exports() -> None:
         "AUTHORITY_COORDINATION_COUNTER_READ_PATH",
         "AUTHORITY_COORDINATION_RECOVERY_SCAN_PATH",
         "AUTHORITY_COORDINATION_RESOURCE_LEASE_ACQUIRE_PATH",
+        "AUTHORITY_COORDINATION_RESOURCE_LIMIT_READ_PATH",
         "AUTHORITY_COORDINATION_RESOURCE_LIMIT_SET_PATH",
         "AuthorityClient",
         "AuthorityClientError",
@@ -271,6 +272,7 @@ def test_pipeline_store_public_exports() -> None:
     assert "record_output_commit" in stores.StageStore.__dict__
     assert "acquire_trial_lease" in stores.WorkspaceCoordinationStore.__dict__
     assert "acquire_resource_lease" in stores.WorkspaceCoordinationStore.__dict__
+    assert "read_resource_limit" in stores.WorkspaceCoordinationStore.__dict__
     assert "renew_lease" in stores.WorkspaceCoordinationStore.__dict__
     assert "fail_lease" in stores.WorkspaceCoordinationStore.__dict__
     assert "set_counter_limit" in stores.WorkspaceCoordinationStore.__dict__

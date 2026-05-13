@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -10,8 +10,10 @@ from loom.pipeline.execution import (
     ResourceAdmissionError,
     ResourceAdmissionRequest,
     ResourceAdmissionStatus,
+    ResourceLimitReconciliationStatus,
     ResourceLeaseRequest,
     acquire_resource_admission,
+    reconcile_resource_limits,
     release_resource_admission,
     resource_requests_from_runtime,
 )
@@ -58,6 +60,12 @@ class _FakeServiceWorkspaceClient:
                 counter=counter,
             )
         )
+
+    def read_resource_limit(
+        self, workspace_id: str, resource_key: str, **_kwargs
+    ) -> object:
+        counter = self._store.read_resource_limit(workspace_id, resource_key)
+        return self._response(AuthorityProtocolResult(counter=counter))
 
     def acquire_resource_lease(
         self,
@@ -181,6 +189,9 @@ def test_resource_admission_fail_fast_rejects_when_capacity_is_unavailable() -> 
     assert decision.status is ResourceAdmissionStatus.REJECTED
     assert decision.leases == ()
     assert "resource limit" in str(decision.message)
+    assert decision.reason_code == "resource_admission.capacity_unavailable"
+    assert decision.reason_context["waited"] is False
+    assert decision.to_dict()["reason_code"] == decision.reason_code
 
 
 def test_resource_admission_bounded_wait_returns_blocked_after_timeout() -> None:
@@ -217,6 +228,8 @@ def test_resource_admission_bounded_wait_returns_blocked_after_timeout() -> None
 
     assert decision.status is ResourceAdmissionStatus.BLOCKED
     assert sleeps == [1.0, 1.0]
+    assert decision.reason_code == "resource_admission.capacity_unavailable"
+    assert decision.reason_context["waited"] is True
 
 
 def test_resource_admission_releases_partial_leases_after_later_failure() -> None:
@@ -265,6 +278,7 @@ def test_service_workspace_coordination_store_fails_fast_when_capacity_is_exhaus
     assert decision.status is ResourceAdmissionStatus.REJECTED
     assert decision.leases == ()
     assert "resource limit exceeded" in str(decision.message)
+    assert decision.reason_code == "resource_admission.capacity_unavailable"
 
 
 def test_service_workspace_coordination_store_bounded_wait_returns_blocked_after_timeout() -> None:
@@ -301,6 +315,7 @@ def test_service_workspace_coordination_store_bounded_wait_returns_blocked_after
 
     assert decision.status is ResourceAdmissionStatus.BLOCKED
     assert sleeps == [1.0, 1.0]
+    assert decision.reason_context["waited"] is True
 
 
 def test_service_workspace_coordination_store_releases_partial_leases_after_later_failure() -> None:
@@ -328,6 +343,66 @@ def test_service_workspace_coordination_store_releases_partial_leases_after_late
         store,
         _admission_request(ResourceLeaseRequest("cpu", 1)),
     ).status is ResourceAdmissionStatus.ADMITTED
+
+
+def test_reconcile_resource_limits_returns_machine_readable_outcomes() -> None:
+    store = _store_with_workspace()
+    store.set_resource_limit("workspace-1", "cpu", limit=2)
+    store.set_resource_limit("workspace-1", "gpu", limit=1)
+    store.acquire_resource_lease(
+        "workspace-1",
+        "gpu",
+        owner_id="existing-worker",
+        amount=1,
+        lease_ttl_seconds=30,
+    )
+
+    results = reconcile_resource_limits(
+        store,
+        "workspace-1",
+        {"cpu": 2, "gpu": 2, "missing": 1},
+    )
+
+    by_key = {result.resource_key: result for result in results}
+    assert by_key["cpu"].status is ResourceLimitReconciliationStatus.SUCCESS
+    assert by_key["cpu"].actual_limit == 2
+    assert by_key["cpu"].active == 0
+    assert by_key["cpu"].ok is True
+    assert by_key["gpu"].status is ResourceLimitReconciliationStatus.MISMATCH
+    assert by_key["gpu"].actual_limit == 1
+    assert by_key["gpu"].active == 1
+    assert by_key["gpu"].reason_code == "resource_limit_reconciliation.mismatch"
+    assert by_key["missing"].status is ResourceLimitReconciliationStatus.MISSING_LIMIT
+    assert by_key["missing"].actual_limit is None
+    assert by_key["missing"].reason_code == "resource_limit_reconciliation.missing_limit"
+    assert by_key["missing"].to_dict()["status"] == "missing_limit"
+
+
+def test_reconcile_resource_limits_reports_unavailable_authority() -> None:
+    class UnavailableStore:
+        def read_resource_limit(self, _workspace_id: str, _resource_key: str) -> object:
+            raise RuntimeError("authority unavailable")
+
+    (result,) = reconcile_resource_limits(
+        cast(Any, UnavailableStore()),
+        "workspace-1",
+        {"gpu": 1},
+    )
+
+    assert result.status is ResourceLimitReconciliationStatus.UNAVAILABLE_AUTHORITY
+    assert result.reason_code == "resource_limit_reconciliation.unavailable_authority"
+    assert result.reason_context == {"exception_type": "RuntimeError"}
+    assert result.message == "authority unavailable"
+
+
+def test_service_resource_limit_reconciliation_uses_read_only_limit_route() -> None:
+    store = _service_store_with_workspace()
+    store.set_resource_limit("workspace-1", "cpu", limit=1)
+
+    (result,) = reconcile_resource_limits(store, "workspace-1", {"cpu": 1})
+
+    assert result.status is ResourceLimitReconciliationStatus.SUCCESS
+    assert result.actual_limit == 1
 
 
 def _store_with_workspace() -> InMemoryWorkspaceCoordinationStore:
