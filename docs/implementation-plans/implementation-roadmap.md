@@ -128,7 +128,7 @@ written.
 | v9 | Persistence and concurrency foundation | Authoritative run/sweep store contracts, backend capabilities, stage attempts, leases, and commit semantics for future concurrent execution. |
 | v9-post | Authority-backed runtime unification | Deprecate local-only runtime mutation, route every run/stage entrypoint through authority-backed stores, and plan the service/database authority backend for multi-host operation. |
 | v10 | DB-backed service supervisor | Durable authority service lifecycle, strict online/offline policy, true offline import, and service-backed workspace coordination. |
-| v11 | Queued run dispatch and resource pools | Durable whole-run queueing, one FIFO queue per pool, foreground drain mode, and local/SLURM/managed-SSH launch adapters without mandatory external orchestration dependencies. |
+| v11 | Queued run dispatch and resource pools | Durable whole-run queueing, one FIFO queue per pool, daemon-first control with foreground-drain compatibility, and local/SLURM launch adapters without mandatory external orchestration dependencies. |
 | v12 | Run bundles, transfer, and exporters | Safe run export, transfer-interface verification, inspect, import, and compatibility exporter contracts with portable manifests. |
 | v13 | Deterministic sweeps | Grid/manual sweep expansion, manifests, sequential execution, status, and collection. |
 | v14 | Plugin discovery | Explicit entry point loading for recipes, codecs, sources, executors, artifact stores, run exporters, event sinks, and provenance. |
@@ -1007,14 +1007,15 @@ Implement:
   only; authority-backed resource limits and active leases remain the source of
   truth before managed dispatch starts work.
 - Managed resource mode that acquires authority-backed generic resource leases
-  before local or managed-remote launches.
+  before local managed launches.
 - Delegated scheduler mode for adapters such as SLURM where downstream
   scheduler acceptance, status, and cancellation facts are recorded without
   double-leasing Loom resources by default.
-- Built-in launch adapters for local process execution, SLURM submission, and a
-  Loom-managed SSH wrapper, all fakeable in default tests.
-- A long-running controller mode plus a foreground drain mode for restricted
-  environments. Foreground drain must not orphan locally managed active work.
+- Built-in launch adapters for local process execution and SLURM submission,
+  both fakeable in default tests.
+- A daemon-first long-running controller mode plus a foreground drain
+  compatibility mode for restricted environments. Foreground drain must not
+  orphan locally managed active work.
 - Queue status vocabulary that distinguishes `queued`, `blocked`, `claimed`,
   `dispatching`, `active`, `completed`, `failed`, `cancelled`, and
   `cancel_unknown`, while linking to authoritative run or submitted-operation
@@ -1025,9 +1026,9 @@ Implement:
 - A minimal scheduler-policy interface whose first implementation selects the
   oldest eligible item in the pool's single FIFO queue. Priorities, fair
   sharing, and resource-dependent ordering remain future scheduler policy.
-- CLI and supervisor surfaces for queue configuration inspection, enqueue,
-  status, foreground drain, service start/stop where applicable, and
-  cancellation.
+- Minimal CLI and supervisor surfaces for queue status, foreground drain,
+  service start/stop where applicable, and cancellation, with Python APIs
+  remaining primary for queue definition and enqueueing.
 - Unit, contract, fake-adapter, and e2e-style tests that do not require real
   clusters, containers, brokers, or network services by default.
 
@@ -1041,8 +1042,8 @@ Exit criteria:
   leases.
 - Queue state remains scheduling policy and operational audit data, not core
   `RunStatus` truth.
-- Local, SLURM, and managed-SSH fake adapters prove launch, status, and
-  cancellation behavior, including `cancel_unknown` reporting.
+- Local and SLURM fake adapters prove launch, status, and cancellation
+  behavior, including `cancel_unknown` reporting.
 - Remote or pre-staged launches record which launch-interface checks were
   proven, unavailable, or delegated to later bundle/transfer support. V11 does
   not claim full remote workspace equivalence without v12 evidence.
