@@ -1092,13 +1092,14 @@ cancel/status truth.
   dispatch with authority resource admission and lease release, launch-contract
   drift detection, and queue/adapter/authority status read models.
 - Validation before PR:
-  - Targeted Phase 7 suite: 54 passed.
+  - Targeted Phase 7 suite: 54 passed before the review fix; focused
+    post-fix queue suite: 51 passed.
   - `make validate-pr`: passed Ruff, Pyright, default harness, config-extra
     harness, and build.
-  - `make test-summary`: package 74 passed/1 skipped; unit 1023 passed/1
+  - `make test-summary`: package 74 passed/1 skipped; unit 1024 passed/1
     skipped/1 deselected; contract 165 passed/2 skipped; integration 144
     passed/8 skipped/11 deselected; e2e 40 passed/2 deselected; config-extra
-    436 passed/1449 deselected.
+    436 passed/1450 deselected.
 - Follow-up: automated review and GitHub checks pending before merge.
 
 ### Phase 8: `v11` Delegated SLURM Dispatch
