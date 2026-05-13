@@ -69,9 +69,12 @@ class QueueDispatchInspection:
     reason: str
     evidence: Mapping[str, PlainData] = field(default_factory=dict)
     terminal: bool = False
+    handoff_complete: bool = False
 
     def __post_init__(self) -> None:
         status = QueueItemStatus(self.status)
+        if not isinstance(self.handoff_complete, bool):
+            raise QueueServiceError("handoff_complete must be a boolean")
         if self.terminal:
             if status not in {
                 QueueItemStatus.SUCCEEDED,
@@ -81,6 +84,10 @@ class QueueDispatchInspection:
             }:
                 raise QueueServiceError(
                     "terminal dispatch inspection must use a terminal status"
+                )
+            if self.handoff_complete:
+                raise QueueServiceError(
+                    "terminal dispatch inspection cannot be handoff-complete"
                 )
         elif status is not QueueItemStatus.DISPATCHED:
             raise QueueServiceError("active dispatch inspection must use DISPATCHED")
@@ -275,6 +282,8 @@ class QueueController:
                 )
             inspection = adapter.inspect(item)
             if not inspection.terminal:
+                if inspection.handoff_complete:
+                    return QueueControllerStep(outcome="handoff", item=item)
                 return QueueControllerStep(outcome="active", item=item)
             if inspection.status is QueueItemStatus.CANCELLED:
                 cancelled = self._service.cancel_item(
@@ -341,6 +350,8 @@ class QueueController:
             if step.outcome == "idle":
                 break
             steps.append(step)
+            if step.outcome == "handoff":
+                break
             if step.outcome == "active" and poll_interval_seconds > 0:
                 sleep(poll_interval_seconds)
         return QueueDrainResult(

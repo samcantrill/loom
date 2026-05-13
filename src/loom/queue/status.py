@@ -42,6 +42,7 @@ class QueueManagedItemStatus:
                 "status": self.adapter_inspection.status.value,
                 "reason": self.adapter_inspection.reason,
                 "terminal": self.adapter_inspection.terminal,
+                "handoff_complete": self.adapter_inspection.handoff_complete,
                 "evidence": thaw_plain_data(
                     self.adapter_inspection.evidence,
                     path="adapter_inspection.evidence",

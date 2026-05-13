@@ -296,6 +296,35 @@ def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modul
     assert result.stdout.strip() == "ok"
 
 
+def test_import_queue_slurm_adapter_uses_public_scheduler_boundary_only() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.queue.slurm
+
+        if "loom.pipeline.executors.slurm.commands" not in sys.modules:
+            raise SystemExit("SLURM command boundary was not imported")
+        for forbidden in (
+            "loom.authority",
+            "loom.authority._repository",
+            "loom.cli",
+            "fastapi",
+            "starlette",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through queue SLURM adapter")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> None:
     script = dedent(
         """
