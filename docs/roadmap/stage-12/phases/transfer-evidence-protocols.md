@@ -263,10 +263,11 @@ make test-summary
   preservation for `unsupported` statuses, and fake/unsupported
   importer/exporter contract coverage.
 - Implementation validation: targeted Ruff passed; targeted Pyright passed;
-  targeted pytest passed with 61 tests; `make validate-pr` passed with Ruff,
-  Pyright, default pytest, config-extra pytest, and build success; `make
-  test-summary` passed with package 77 passed, unit 1051 passed, contract 179
-  passed, integration 148 passed, e2e 41 passed, and config-extra 438 passed.
+  targeted pytest passed for the transfer-evidence regression set; `make
+  validate-pr` passed with Ruff, Pyright, default pytest, config-extra pytest,
+  and build success; `make test-summary` passed with package 77 passed, unit
+  1052 passed, contract 179 passed, integration 148 passed, e2e 41 passed, and
+  config-extra 438 passed.
 - Refinement summary: no separate implementation refinement pass used; targeted
   fixes were completed during the implementation pass before full validation.
 - Blocker-resolution summary: 0/3 blocker-resolution passes used.

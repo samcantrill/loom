@@ -15,11 +15,11 @@
 | --- | --- |
 | `make validate-pr` | Passed: Ruff, Pyright, default pytest, config-extra pytest, and build |
 | `make test-summary` package | Passed: 77 passed, 1 skipped |
-| `make test-summary` unit | Passed: 1051 passed, 7 skipped, 1 deselected |
+| `make test-summary` unit | Passed: 1052 passed, 7 skipped, 1 deselected |
 | `make test-summary` contract | Passed: 179 passed, 2 skipped |
 | `make test-summary` integration | Passed: 148 passed, 8 skipped, 13 deselected |
 | `make test-summary` e2e | Passed: 41 passed, 2 deselected |
-| `make test-summary` config-extra | Passed: 438 passed, 1505 deselected |
+| `make test-summary` config-extra | Passed: 438 passed, 1506 deselected |
 
 ## Assumptions And Risks
 

@@ -906,9 +906,9 @@ conformance, and package boundaries.
   transfer diagnostics/records, queue delegated-verification preservation for
   `unsupported` statuses, and fake/unsupported importer/exporter contract
   coverage.
-- Tests and validation: targeted Phase 4 pytest set passed with 61 tests;
+- Tests and validation: targeted Phase 4 transfer-evidence checks passed;
   `make validate-pr` passed; `make test-summary` passed with package 77,
-  unit 1051, contract 179, integration 148, e2e 41, and config-extra 438
+  unit 1052, contract 179, integration 148, e2e 41, and config-extra 438
   passing.
 - PR opened as https://github.com/samcantrill/loom/pull/149 targeting
   `develop` from `codex/transfer-evidence-protocols`.
