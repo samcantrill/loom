@@ -90,10 +90,13 @@ and project-scoped Codex workflow metadata.
     structure.md
     briefs/
       <feature-brief>.md
-    implementation-plans/
-      implementation-plan-v0.md
-    phases/
-      <phase-execution-plan>.md
+    roadmap.md
+    roadmap/
+      stage-<id>/
+        planning.md
+        implementation-plan.md
+        phases/
+          <phase-execution-plan>.md
     features/
       core-model.md
       timestamps.md
@@ -152,7 +155,7 @@ typed, and cheap to import.
 Design and implementation specifications. These documents are not only prose;
 they define module boundaries, contracts, test expectations, and deferred work.
 Feature briefs capture approved intent before specification work. Phase
-execution plans under `docs/phases/` capture the decision-complete how for one
+execution plans under `docs/roadmap/stage-<id>/phases/` capture the decision-complete how for one
 implementation phase.
 
 ### 2.3 `tests`
@@ -999,14 +1002,19 @@ briefs/
 briefs/v0_public_api_migration_notes.md
   Migration notes from early v0 patterns to the hardened public API shapes.
 
-implementation-plans/implementation-plan-v0.md
+roadmap/stage-0/implementation-plan.md
   Review-gated v0 phase plan, phase status, accepted tradeoffs, and deferred
   v0 scope boundaries.
 
-phases/
-  Phase execution plans and phase-scoped PR bodies. A phase execution plan is
-  drafted at the what level, refined at the how level, and then used as the
-  implementation contract for one phase.
+roadmap/stage-<id>/planning.md
+  Roadmap-stage planning artifact with source evidence, functionality and
+  design agreement, validation strategy, phase shaping, and readiness notes.
+
+roadmap/stage-<id>/phases/
+  Phase execution plans, phase-scoped PR bodies, blocker-resolution sidecars,
+  and merge records for one roadmap stage. A phase execution plan is drafted at
+  the what level, refined at the how level, and then used as the implementation
+  contract for one phase.
 ```
 
 ---
@@ -1128,7 +1136,7 @@ When adding modules:
    doc or phase execution plan.
 
 The repository phase workflow in `AGENTS.md` and
-`docs/implementation-plans/implementation-plan-v0.md` controls large
+`docs/roadmap/stage-0/implementation-plan.md` controls large
 implementation work. This structure document should guide those phases but
 should not be treated as permission to implement future phases early.
 

@@ -29,8 +29,8 @@ users can also use it as a quick map to stable repository terms.
 | Term | Preferred meaning in this repository | Distinguish from / avoid |
 | --- | --- | --- |
 | feature spec | A contract-focused design document under `docs/features/` that defines subsystem behavior and long-lived vocabulary. | Do not treat feature specs as disposable notes when they define public terms. |
-| implementation plan | A roadmap-level plan under `docs/implementation-plans/` that sequences and scopes phases. | Not the same as a phase execution plan. |
-| phase execution plan | A scoped implementation artifact under `docs/phases/` for one phase of work. | Not a product spec or public API reference. |
+| implementation plan | A roadmap-level plan under `docs/roadmap/stage-<id>/` that sequences and scopes phases. | Not the same as a phase execution plan. |
+| phase execution plan | A scoped implementation artifact under `docs/roadmap/stage-<id>/phases/` for one phase of work. | Not a product spec or public API reference. |
 | contract test | A test under `tests/contracts/` that locks public or cross-subsystem behavior. | Distinguish from unit tests and package-surface import tests. |
 
 ## Core model and identity terms
