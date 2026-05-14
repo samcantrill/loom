@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation pending
+- Status: pr_open
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 2: Grid And Manual Planning`
 - Branch: `codex/grid-manual-planning`
@@ -15,6 +15,7 @@
 - Base branch:
   `origin/develop` at `376fdec35d45be3016933b775c3e76e4b3266e67`
 - Target branch: `develop`
+- PR: [#152](https://github.com/samcantrill/loom/pull/152)
 - Merge eligibility: root phase PR targets `develop`; merge-eligible only
   after implementation, phase validation, automated review, CI or justified
   unavailable checks, and target-branch verification pass.
@@ -539,6 +540,10 @@ make test-summary
   Pyright findings from the first full validation run; no scope expansion was
   introduced.
 - Blocker-resolution summary: none; 0/3 blocker-resolution passes used.
-- PR preparation: pending.
+- PR preparation: complete; opened
+  [#152](https://github.com/samcantrill/loom/pull/152) against `develop`
+  from `codex/grid-manual-planning` and verified
+  `baseRefName=develop`, `headRefName=codex/grid-manual-planning`,
+  `state=OPEN`.
 - Stack maintenance: root phase; no predecessor because Phase 1 is merged.
 - Remaining blockers: none.
