@@ -6,6 +6,11 @@ import pytest
 
 from loom.pipeline.sweep import (
     FiniteSweepProposalProvider,
+    GridSweepProposalProvider,
+    GridSweepSpec,
+    ManualSweepProposalProvider,
+    ManualSweepSpec,
+    ManualTrialSpec,
     SweepProposalProvider,
     SweepProviderContext,
     SweepProviderIdentity,
@@ -105,3 +110,44 @@ def test_sweep_provider_identity_round_trip_contract_shape() -> None:
 
     assert restored == _PROVIDER_IDENTITY
     assert restored.to_dict() == payload
+
+
+def test_first_party_grid_and_manual_providers_satisfy_provider_contracts() -> None:
+    grid = GridSweepProposalProvider(
+        GridSweepSpec(
+            sweep_id="grid",
+            grid={"pipeline.lr": [0.1, 0.01], "pipeline.seed": [1, 2]},
+        )
+    )
+    manual = ManualSweepProposalProvider(
+        ManualSweepSpec(
+            sweep_id="manual",
+            trials=(
+                ManualTrialSpec(
+                    name="baseline",
+                    provider_trial_id="external-1",
+                    overrides={"pipeline.variant": "baseline"},
+                ),
+            ),
+        )
+    )
+    context = SweepProviderContext(sweep_id="grid")
+
+    assert isinstance(grid, SweepProposalProvider)
+    assert isinstance(grid, FiniteSweepProposalProvider)
+    assert provider_trial_count(grid) == 4
+    assert [
+        proposal.overrides for proposal in grid.proposals(context)
+    ] == [
+        {"pipeline.lr": 0.1, "pipeline.seed": 1},
+        {"pipeline.lr": 0.1, "pipeline.seed": 2},
+        {"pipeline.lr": 0.01, "pipeline.seed": 1},
+        {"pipeline.lr": 0.01, "pipeline.seed": 2},
+    ]
+
+    assert isinstance(manual, SweepProposalProvider)
+    assert isinstance(manual, FiniteSweepProposalProvider)
+    assert provider_trial_count(manual) == 1
+    proposal = manual.proposals(SweepProviderContext(sweep_id="manual"))[0]
+    assert proposal.provider_trial_id == "external-1"
+    assert proposal.metadata["trial_name"] == "baseline"

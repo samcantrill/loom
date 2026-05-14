@@ -34,7 +34,7 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
-- Current phase: none
+- Current phase: Phase 2 - `grid-manual-planning`
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains; Phase 1 execution planning may begin.
@@ -405,7 +405,7 @@ Required suite categories:
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `sweep-contracts-manifests` | merged | `codex/sweep-contracts-manifests` | [#151](https://github.com/samcantrill/loom/pull/151) | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
-| 2 | `grid-manual-planning` | pending | `codex/grid-manual-planning` | pending | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
+| 2 | `grid-manual-planning` | pr_open | `codex/grid-manual-planning` | [#152](https://github.com/samcantrill/loom/pull/152) | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
 | 3 | `early-stop-direct-dispatch` | pending | `codex/early-stop-direct-dispatch` | pending | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
 | 4 | `coordination-queue-status` | pending | `codex/coordination-queue-status` | pending | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
 | 5 | `sweep-collection-cli-hardening` | pending | `codex/sweep-collection-cli-hardening` | pending | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
@@ -605,11 +605,11 @@ ordinary-run compatibility guardrail.
 
 ### Phase 2: Grid And Manual Planning
 
-- Status: pending
+- Status: pr_open
 - Slug: `grid-manual-planning`
 - Branch: `codex/grid-manual-planning`
 - Worktree: `/home/samcantrill/work/loom-worktrees/grid-manual-planning`
-- PR: pending
+- PR: [#152](https://github.com/samcantrill/loom/pull/152)
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -685,12 +685,14 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
+- Phase execution plan: complete
+- Planning/refinement budget: used for expanded-path draft/refine in
+  `docs/roadmap/stage-13/phases/grid-manual-planning.md`
+- Implementation/refinement budget: used locally to address Pyright typing
+  findings after the first full validation run
 - PR review budget: unused
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
+- Pre-submit blocker gate: passed
 - Merge record: pending
 
 #### Risks And Stop Conditions
@@ -708,9 +710,14 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
+- Implementation: Added trusted grid/manual sweep spec records, first-party
+  finite providers, deterministic proposal-to-trial materialization, default
+  generated-trial guard, run URI mapping, plan-only manifest/spec writes, and
+  compatible readback diagnostics.
+- Validation: Targeted Phase 2 tests passed (`71 passed`); `make validate-pr`
+  passed after local Pyright fixes; `make test-summary` passed.
+- PR: [#152](https://github.com/samcantrill/loom/pull/152), targeting
+  `develop` from `codex/grid-manual-planning`.
 - Merge:
 - Follow-up:
 
