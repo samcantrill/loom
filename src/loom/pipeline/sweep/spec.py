@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import cast
 
 from loom.config.errors import OverrideParseError
 from loom.config.overrides import parse_overrides
@@ -263,7 +262,7 @@ class ManualSweepSpec:
     """Trusted first-party manual sweep spec."""
 
     sweep_id: str
-    trials: Sequence[ManualTrialSpec | Mapping[str, object]]
+    trials: Sequence[ManualTrialSpec]
     schema_version: int = SWEEP_SPEC_SCHEMA_VERSION
     sweep_name: str | None = None
     run_uri_root: str | None = None
@@ -327,7 +326,7 @@ class ManualSweepSpec:
                 data.get("max_generated_trials", DEFAULT_MAX_GENERATED_TRIALS),
                 "max_generated_trials",
             ),
-            trials=cast(Sequence[Mapping[str, object]], _required(data, "trials")),
+            trials=_manual_trials(_required(data, "trials")),
             metadata=_plain_mapping(data.get("metadata", {}), "metadata"),
         )
 

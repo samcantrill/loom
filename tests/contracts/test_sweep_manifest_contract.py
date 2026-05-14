@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from loom.pipeline.sweep import (
@@ -140,11 +142,11 @@ def test_planned_grid_manifests_preserve_phase_one_schema_shape() -> None:
 
     sweep_payload = plan.sweep_manifest.to_dict()
     trials_payload = plan.trials_manifest.to_dict()
+    provider_payload = cast(dict[str, object], sweep_payload["provider"])
+    trial_payloads = cast(list[dict[str, object]], trials_payload["trials"])
 
     assert sweep_payload["schema_version"] == SWEEP_MANIFEST_SCHEMA_VERSION
     assert trials_payload["schema_version"] == TRIALS_MANIFEST_SCHEMA_VERSION
-    assert sweep_payload["provider"]["provider_type"] == "loom.grid"
-    assert trials_payload["trials"][0]["trial_id"] == "trial-0001"
-    assert trials_payload["trials"][0]["run_uri"] == (
-        "file:///tmp/contract-grid/trial-0001"
-    )
+    assert provider_payload["provider_type"] == "loom.grid"
+    assert trial_payloads[0]["trial_id"] == "trial-0001"
+    assert trial_payloads[0]["run_uri"] == "file:///tmp/contract-grid/trial-0001"
