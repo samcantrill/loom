@@ -133,7 +133,7 @@ The command group should leave room for a later hosted daemon transport by descr
 ### Unit Suite
 
 - Status: required
-- Expected paths: `tests/unit/loom/queue/test_preflight.py`, `tests/unit/loom/queue/test_status.py`, `tests/unit/loom/cli/test_queue.py`, `tests/unit/loom/cli/test_main.py`
+- Expected paths: `tests/unit/loom/queue/test_queue_preflight.py`, `tests/unit/loom/queue/test_queue_status.py`, `tests/unit/loom/cli/test_queue.py`, `tests/unit/loom/cli/test_main.py`
 - Required assertions or deferral reason: queue preflight diagnostics, status rendering, cancel/status JSON payloads, and parser registration.
 
 ### Contract Suite
@@ -172,7 +172,7 @@ The command group should leave room for a later hosted daemon transport by descr
 Targeted development commands:
 
 ```sh
-uv run pytest tests/unit/loom/queue/test_preflight.py tests/unit/loom/queue/test_status.py tests/unit/loom/cli/test_queue.py tests/integration/queue/test_cli_operations.py tests/e2e/test_queue_cli.py tests/package/test_import_boundaries.py
+uv run pytest tests/unit/loom/queue/test_queue_preflight.py tests/unit/loom/queue/test_queue_status.py tests/unit/loom/cli/test_queue.py tests/integration/queue/test_cli_operations.py tests/e2e/test_queue_cli.py tests/package/test_import_boundaries.py
 ```
 
 Final PR-preparation commands:
