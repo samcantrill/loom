@@ -220,7 +220,9 @@ make test-summary
 - Refinement summary: no separate implementation refinement pass used; targeted
   fixes were completed during the implementation pass before full validation.
 - Blocker-resolution summary: 0/3 blocker-resolution passes used.
-- PR preparation: pending.
+- PR preparation: PR opened as https://github.com/samcantrill/loom/pull/148
+  targeting `develop` from `codex/run-bundle-import-offline-readiness`; verified
+  with `gh pr view 148 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: none required; Phase 3 is a root phase targeting
   `develop`.
 - Remaining blockers: none.

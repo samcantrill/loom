@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 3 in progress
+- Status: Phase 3 PR open
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -679,10 +679,10 @@ inspect-without-extraction proof.
 
 ### Phase 3: Import, Offline Alignment, And Resume Readiness
 
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/run-bundle-import-offline-readiness`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-import-offline-readiness`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/148
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -795,6 +795,8 @@ readiness-blocker behavior separately from export archive code.
   targeted Ruff and Pyright passed; `make validate-pr` passed; `make
   test-summary` passed with package 77 passed, unit 1048 passed, contract 176
   passed, integration 148 passed, e2e 41 passed, and config-extra 438 passed.
+- PR status: opened as https://github.com/samcantrill/loom/pull/148 targeting
+  `develop`; base/head verified after creation.
 
 ### Phase 4: Transfer Evidence And Importer/Exporter Protocols
 
