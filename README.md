@@ -185,8 +185,9 @@ requirements.
 - [docs/features/cli.md](docs/features/cli.md)
 - [docs/features/config.md](docs/features/config.md)
 - [docs/structure.md](docs/structure.md)
-- [implementation-plan-v2.md](docs/implementation-plans/implementation-plan-v2.md)
-- [implementation-plan-v0.md](docs/implementation-plans/implementation-plan-v0.md)
+- [docs/roadmap.md](docs/roadmap.md)
+- [docs/roadmap/stage-2/implementation-plan.md](docs/roadmap/stage-2/implementation-plan.md)
+- [docs/roadmap/stage-0/implementation-plan.md](docs/roadmap/stage-0/implementation-plan.md)
 - [v0 public API migration notes](docs/briefs/v0_public_api_migration_notes.md)
 
 ## Development

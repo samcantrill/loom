@@ -27,8 +27,8 @@ suite-level evidence.
 
 This repository uses a phase-based Codex workflow for larger implementation
 plans. The canonical v0 implementation plan lives in
-`docs/implementation-plans/implementation-plan-v0.md`.
-Individual phase execution plans live in `docs/phases/`.
+`docs/roadmap/stage-0/implementation-plan.md`.
+Individual phase execution plans live in `docs/roadmap/stage-<id>/phases/`.
 Reusable project-scoped Codex plans live in `.codex/plans/`.
 
 When assigned a phase, implement only that phase.
@@ -84,12 +84,13 @@ enough unless the expanded-path triggers below apply.
 
 First-class artifacts:
 
-- Roadmap-version planning notes, usually in
-  `docs/implementation-plans/roadmap-v<N>-planning-notes.md`, when a roadmap
-  version needs interactive human discussion before implementation planning.
-- Implementation plan, in `docs/implementation-plans/`.
-- Phase execution plan, in `docs/phases/`.
-- PR body, usually in `docs/phases/<summary>-pr-body.md`.
+- Roadmap-stage planning, in `docs/roadmap/stage-<id>/planning.md`, when a
+  roadmap stage needs interactive human discussion before implementation
+  planning.
+- Implementation plan, in
+  `docs/roadmap/stage-<id>/implementation-plan.md`.
+- Phase execution plan, in `docs/roadmap/stage-<id>/phases/`.
+- PR body, usually in `docs/roadmap/stage-<id>/phases/<summary>-pr-body.md`.
 - Merge notes, recorded in implementation-plan completion metadata.
 
 Testing plans are embedded by default in implementation plans, phase execution
@@ -97,17 +98,18 @@ plans, and PR evidence. Create a standalone testing plan only when the assigned
 work is too large or cross-cutting for embedded suite obligations to remain
 reviewable.
 
-For roadmap-version work that needs human discussion, facilitate and complete
-roadmap-version planning notes before drafting or changing downstream artifacts.
-The planning notes must record functionality traceability, proposed
+For roadmap-stage work that needs human discussion, facilitate and complete
+`docs/roadmap/stage-<id>/planning.md` before drafting or changing downstream
+artifacts. The planning artifact must record functionality traceability, proposed
 implementation shape, design decisions, design-safety review evidence,
 examples, validation strategy, phase shaping, and implementation readiness.
 Use `loom_design_safety_reviewer` before implementation-plan drafting for
-roadmap-version work, and do not draft phases while unresolved design-safety
+roadmap-stage work, and do not draft phases while unresolved design-safety
 blockers or unresolved `needs discussion` decisions remain. When the planning
 discussion is complete and the user explicitly confirms they are happy with the
-notes, the roadmap-version planning workflow may continue directly into
-`implementation-plan-draft.md` using the confirmed notes as the primary source.
+planning artifact, the roadmap-stage planning workflow may continue directly
+into implementation-plan drafting using the confirmed planning artifact as the
+primary source.
 Draft and refine the implementation plan, including its plan quality gate,
 before creating phase execution plans. For phase execution and PR preparation,
 prefer the fast path unless the phase has broad design or long-term
@@ -445,7 +447,7 @@ findings.
 The selected implementation plan must be reviewed for
 maintainability, extensibility, future compatibility, conflicting design
 choices, technical debt, test strategy, and reviewability.
-When the plan cites roadmap-version planning notes, the gate must also verify
+When the plan cites roadmap-stage planning, the gate must also verify
 planning readiness: functionality-to-design traceability, completed
 design-safety review or recorded accepted risks, validation strategy, phase
 shaping, and no unresolved `blocked` or `needs discussion` planning decisions.
