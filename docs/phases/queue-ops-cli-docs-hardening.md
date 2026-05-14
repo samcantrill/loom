@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: implementation complete; PR preparation pending
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 9: Operational UX, CLI, Docs, And Hardening`
 - Branch: `codex/queue-ops-cli-docs-hardening`
@@ -19,7 +19,7 @@
 - Plan quality gate: implementation-plan v11 gate passed on 2026-05-13 and Phase 8 merge metadata is recorded
 - Plan quality gate loop budget: already satisfied in the implementation plan
 - Draft pass: completed locally on 2026-05-14
-- Refine pass: not needed unless validation or review finds a blocking gap
+- Refine pass: not needed; validation passed after a targeted pytest module-name fix
 - Setup limitations: GitHub operations require approved network access; `uv` validation requires approved cache access outside the filesystem sandbox
 - Blockers: none
 
@@ -191,18 +191,18 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted and full PR gates passed after the local test module rename fix
 - PR review: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed locally before implementation.
-- Final phase execution plan: pending implementation.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending.
+- Final phase execution plan: this file.
+- Implementation summary: added queue-owned preflight diagnostics, operator-facing queue status/cancellation read models, `loom queue` subcommands for preflight/start/status/cancel/drain-foreground, queue status/cancel/drain/preflight text and JSON formatting, deterministic CLI/integration/e2e coverage, import-boundary coverage, and dedicated queue docs with cross-links from CLI, execution, runtime resources, SLURM, and preflight docs.
+- Implementation validation: focused Phase 9 pytest passed with 58 passed after renaming queue unit test modules to unique basenames; targeted Ruff passed; targeted Pyright passed with 0 errors; config-extra targeted queue tests passed with 8 passed; `make validate-pr` passed with Ruff, Pyright, default harness 1434 passed/25 skipped/18 deselected, config-extra harness 438 passed/1470 deselected, and build; `make test-summary` passed with package 77 passed/1 skipped, unit 1032 passed/6 skipped/1 deselected, contract 167 passed/2 skipped, integration 145 passed/8 skipped/13 deselected, e2e 41 passed/2 deselected, and config-extra 438 passed/1470 deselected.
+- Refinement summary: no implementation refinement pass was needed. A validation blocker caused by duplicate pytest module basenames was fixed with a scoped test-file rename and phase-plan command update.
 - Blocker-resolution summary: none.
-- PR preparation: pending.
+- PR preparation: PR body prepared in `docs/phases/queue-ops-cli-docs-hardening-pr-body.md`; PR opening pending.
 - Stack maintenance: none.
 - Remaining blockers: none.
