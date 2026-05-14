@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 3: Early Stop And Direct Dispatch`
 - Branch: `codex/early-stop-direct-dispatch`
@@ -16,10 +16,11 @@
 - Base branch:
   `origin/develop` at `058de1d4d6ec0c9c87dceaa46d3847b577d86364`
 - Target branch: `develop`
-- PR: [#153](https://github.com/samcantrill/loom/pull/153)
-- Merge eligibility: root phase PR targets `develop`; merge-eligible only
-  after implementation, validation, automated review, CI or justified
-  unavailable checks, and target-branch verification pass.
+- PR: [#153](https://github.com/samcantrill/loom/pull/153), merged at
+  `a047ed27f1108367aeb6911ea5c622147394b6a1`
+- Merge eligibility: complete; root phase PR targeted `develop`, validation
+  passed, automated manager review passed after one local blocker fix, GitHub
+  CI passed, and the PR was squash-merged.
 - Workflow path: expanded path
 - Successor dependency notes: Phase 4 should branch from
   `codex/early-stop-direct-dispatch` if Phase 3 is `pr_open` or `approved`
@@ -428,5 +429,14 @@ make test-summary
   [#153](https://github.com/samcantrill/loom/pull/153) opened against
   `develop` and verified with `baseRefName=develop`,
   `headRefName=codex/early-stop-direct-dispatch`, `state=OPEN`.
-- Stack maintenance:
+- Merge verification: Before merge, PR
+  [#153](https://github.com/samcantrill/loom/pull/153) was verified with
+  `baseRefName=develop`, `headRefName=codex/early-stop-direct-dispatch`,
+  `state=OPEN`, clean merge state, and GitHub CI `checks` success on
+  `c2068e0131682740fca616b2946efc724419d32d`.
+- Merge result: Squash-merged into `develop` at
+  `a047ed27f1108367aeb6911ea5c622147394b6a1`.
+- Stack maintenance: No successor depended on
+  `codex/early-stop-direct-dispatch`; the remote branch was deleted after
+  merge. Phase 4 should branch from updated `develop`.
 - Remaining blockers: none.

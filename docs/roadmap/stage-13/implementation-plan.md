@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: plan quality gate passed; ready for Phase 1 execution planning
+- Status: Phases 1-3 merged; ready for Phase 4 execution planning
 - Roadmap stage: `v13`
 - Source planning notes:
   `docs/roadmap/stage-13/planning.md`
@@ -34,10 +34,10 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
-- Current phase: Phase 3, `early-stop-direct-dispatch`
+- Current phase: Phase 4, `coordination-queue-status`
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 1 execution planning may begin.
+  - No plan-quality blocker remains; Phase 4 execution planning may begin.
 
 ## Summary
 
@@ -732,7 +732,7 @@ ordinary-run compatibility guardrail.
 
 ### Phase 3: Early Stop And Direct Dispatch
 
-- Status: pr_open
+- Status: merged
 - Slug: `early-stop-direct-dispatch`
 - Branch: `codex/early-stop-direct-dispatch`
 - Worktree: `/home/samcantrill/work/loom-worktrees/early-stop-direct-dispatch`
@@ -832,7 +832,13 @@ ordinary-run compatibility guardrail.
 - Blocker-resolution budget: 1/3 used for subprocess worker CLI cancellation
   exit-code handling
 - Pre-submit blocker gate: passed
-- Merge record: pending
+- Merge record: complete; squash merged to `develop` as
+  `a047ed27f1108367aeb6911ea5c622147394b6a1` via PR
+  [#153](https://github.com/samcantrill/loom/pull/153). Pre-merge target
+  verification checked `baseRefName=develop`,
+  `headRefName=codex/early-stop-direct-dispatch`, `state=OPEN`, clean merge
+  state, and GitHub CI `checks` success on
+  `c2068e0131682740fca616b2946efc724419d32d`.
 
 #### Risks And Stop Conditions
 
@@ -863,8 +869,13 @@ ordinary-run compatibility guardrail.
   integration `153 passed`, e2e `42 passed`, and config-extra `438 passed`.
 - PR: [#153](https://github.com/samcantrill/loom/pull/153), targeting
   `develop` from `codex/early-stop-direct-dispatch`.
-- Merge:
-- Follow-up:
+- Merge: Squash merged [#153](https://github.com/samcantrill/loom/pull/153)
+  into `develop` at `a047ed27f1108367aeb6911ea5c622147394b6a1` after final
+  local `make validate-pr`, `make test-summary`, automated manager review, and
+  GitHub CI success. The remote branch
+  `codex/early-stop-direct-dispatch` was deleted after merge because no
+  successor depended on it.
+- Follow-up: Phase 4 should branch from updated `develop`.
 
 ### Phase 4: Coordination, Queue Dispatch, And Status
 
