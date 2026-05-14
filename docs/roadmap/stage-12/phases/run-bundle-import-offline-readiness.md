@@ -207,10 +207,20 @@ make test-summary
 
 - Draft plan: completed in the Phase 3 worktree.
 - Final phase execution plan: completed; no separate refinement pass used.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added `loom.runs` local bundle import helpers,
+  `LocalRunBundleImporter`, offline-evidence import adapter/result wrapping,
+  target-local collision rejection, strict checksum validation, historical-only
+  readiness blockers, source provenance, copied payload rebasing, and catalog
+  admission for historical portable imports.
+- Implementation validation: targeted Ruff passed; targeted Pyright passed;
+  targeted pytest passed with 53 tests; `make validate-pr` passed with Ruff,
+  Pyright, default pytest, config-extra pytest, and build success; `make
+  test-summary` passed with package 77 passed, unit 1048 passed, contract 176
+  passed, integration 148 passed, e2e 41 passed, and config-extra 438 passed.
+- Refinement summary: no separate implementation refinement pass used; targeted
+  fixes were completed during the implementation pass before full validation.
+- Blocker-resolution summary: 0/3 blocker-resolution passes used.
+- PR preparation: pending.
+- Stack maintenance: none required; Phase 3 is a root phase targeting
+  `develop`.
+- Remaining blockers: none.

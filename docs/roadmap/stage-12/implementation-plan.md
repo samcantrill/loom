@@ -786,6 +786,15 @@ readiness-blocker behavior separately from export archive code.
 - Phase execution plan:
   `docs/roadmap/stage-12/phases/run-bundle-import-offline-readiness.md`.
 - Implementation started from updated `origin/develop` after Phase 2 merge.
+- Implementation summary: added safe local bundle import and offline-evidence
+  adapter alignment through shared portable-run import results, with
+  target-local identity, strict collision rejection, historical-only readiness,
+  source provenance, copied payload rebasing, and catalog visibility for
+  imported historical runs.
+- Tests and validation: targeted Phase 3 pytest set passed with 53 tests;
+  targeted Ruff and Pyright passed; `make validate-pr` passed; `make
+  test-summary` passed with package 77 passed, unit 1048 passed, contract 176
+  passed, integration 148 passed, e2e 41 passed, and config-extra 438 passed.
 
 ### Phase 4: Transfer Evidence And Importer/Exporter Protocols
 
