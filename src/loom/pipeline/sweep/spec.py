@@ -335,7 +335,10 @@ SweepSpec = GridSweepSpec | ManualSweepSpec
 
 
 def _validate_mode(value: object, expected: SweepMode) -> None:
-    mode = SweepMode(value) if value is not None else expected
+    try:
+        mode = SweepMode(value) if value is not None else expected
+    except ValueError as exc:
+        raise SweepProtocolError(f"unsupported sweep mode {value!r}") from exc
     if mode is not expected:
         raise SweepProtocolError(
             f"mode must be {expected.value!r} for {expected.value} sweep specs"

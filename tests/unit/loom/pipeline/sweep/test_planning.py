@@ -151,6 +151,18 @@ def test_parse_sweep_spec_normalizes_grid_and_manual_payloads() -> None:
     assert isinstance(manual, ManualSweepSpec)
 
 
+def test_spec_from_dict_wraps_unsupported_modes() -> None:
+    with pytest.raises(SweepProtocolError, match="unsupported sweep mode"):
+        GridSweepSpec.from_dict(
+            {
+                "schema_version": 1,
+                "mode": "adaptive",
+                "sweep_id": "bad-mode",
+                "grid": {"pipeline.x": [1]},
+            }
+        )
+
+
 def test_override_paths_use_existing_override_parser() -> None:
     with pytest.raises(SweepProtocolError, match="invalid override path"):
         GridSweepSpec(sweep_id="bad", grid={"pipeline..value": [1]})
