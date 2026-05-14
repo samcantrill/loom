@@ -15,7 +15,7 @@ from .extraction import (
     SweepExtractionResult,
     unsupported_extraction,
 )
-from .status import SweepTrialStatus, build_sweep_status
+from .status import SweepTrialOutcome, SweepTrialStatus, build_sweep_status
 
 if TYPE_CHECKING:
     from .runner import SweepPlan
@@ -337,7 +337,9 @@ class SweepCollectedTrial:
                 trial_index=_non_negative_int(
                     _required(status_data, "trial_index"), "status.trial_index"
                 ),
-                outcome=_text(_required(status_data, "outcome"), "status.outcome"),
+                outcome=SweepTrialOutcome(
+                    _text(_required(status_data, "outcome"), "status.outcome")
+                ),
                 run_uri=_optional_text(status_data.get("run_uri"), "status.run_uri"),
                 run_status=_optional_text(
                     status_data.get("run_status"), "status.run_status"

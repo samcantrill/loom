@@ -28,6 +28,7 @@ def test_build_parser_includes_v2_commands() -> None:
     assert "artifacts" in help_text
     assert "runs" in help_text
     assert "queue" in help_text
+    assert "sweep" in help_text
 
 
 def test_help_and_version_return_zero() -> None:

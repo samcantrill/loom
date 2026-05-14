@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -55,13 +56,17 @@ def test_sweep_collection_contract_preserves_metadata_only_shape() -> None:
     assert payload["schema_version"] == SWEEP_COLLECTION_SCHEMA_VERSION
     assert payload["trial_count"] == 1
     assert payload["artifact_count"] == 1
-    trial = payload["trials"][0]
+    trials = cast(list[dict[str, object]], payload["trials"])
+    trial = trials[0]
+    status = cast(dict[str, object], trial["status"])
+    artifacts = cast(list[dict[str, object]], trial["artifacts"])
+    extraction_result = cast(dict[str, object], trial["extraction_result"])
     assert trial["proposal_overrides"] == {"pipeline.seed": 1}
-    assert trial["status"]["outcome"] == "succeeded"
-    assert trial["artifacts"][0]["artifact_id"] == "build/out"
-    assert "payload" not in trial["artifacts"][0]
+    assert status["outcome"] == "succeeded"
+    assert artifacts[0]["artifact_id"] == "build/out"
+    assert "payload" not in artifacts[0]
     assert "metric" not in trial
-    assert trial["extraction_result"]["status"] == "unsupported"
+    assert extraction_result["status"] == "unsupported"
     assert SweepCollectionResult.from_dict(payload) == result
 
 

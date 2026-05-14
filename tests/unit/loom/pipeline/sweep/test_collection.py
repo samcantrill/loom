@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import SimpleNamespace
 
 from loom.artifacts import ArtifactRef
@@ -55,7 +56,7 @@ def test_collect_sweep_results_reports_status_artifact_refs_and_extraction() -> 
 def test_collect_sweep_results_turns_artifact_reader_failures_into_diagnostics() -> None:
     plan = _plan()
 
-    def fail(_run_uri: str) -> object:
+    def fail(_run_uri: str) -> Mapping[str, object] | None:
         raise RuntimeError("missing artifact index")
 
     result = collect_sweep_results(
