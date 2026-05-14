@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 2: Grid And Manual Planning`
 - Branch: `codex/grid-manual-planning`
@@ -511,7 +511,8 @@ make test-summary
 - Phase implementation refinement: used locally after the first full
   validation run reported Pyright findings in manual-trial typing and
   plain-data payload indexing
-- PR review: unused
+- PR review: used by manager pre-merge review; one error-handling finding was
+  fixed before merge
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -546,5 +547,14 @@ make test-summary
   from `codex/grid-manual-planning` and verified
   `baseRefName=develop`, `headRefName=codex/grid-manual-planning`,
   `state=OPEN`.
+- PR review: complete; manager review found one bounded error-handling issue
+  in direct spec `from_dict()` mode validation, fixed it before merge, and
+  found no remaining blocking issues. Pre-merge verification confirmed
+  `baseRefName=develop`, `headRefName=codex/grid-manual-planning`,
+  `mergeStateStatus=CLEAN`, and GitHub CI `checks` completed successfully.
 - Stack maintenance: root phase; no predecessor because Phase 1 is merged.
+  PR #152 was squash merged to `develop` as
+  `98b2fc25e72be426f951c90da1cef9f9722c42ef` on 2026-05-14, and remote
+  branch `codex/grid-manual-planning` was deleted after merge because no
+  successor branch depended on it.
 - Remaining blockers: none.
