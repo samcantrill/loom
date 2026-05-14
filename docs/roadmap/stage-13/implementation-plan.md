@@ -34,7 +34,7 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
-- Current phase: Phase 1 `pr_open`
+- Current phase: none
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains; Phase 1 execution planning may begin.
@@ -404,7 +404,7 @@ Required suite categories:
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `sweep-contracts-manifests` | pr_open | `codex/sweep-contracts-manifests` | [#151](https://github.com/samcantrill/loom/pull/151) | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
+| 1 | `sweep-contracts-manifests` | merged | `codex/sweep-contracts-manifests` | [#151](https://github.com/samcantrill/loom/pull/151) | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
 | 2 | `grid-manual-planning` | pending | `codex/grid-manual-planning` | pending | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
 | 3 | `early-stop-direct-dispatch` | pending | `codex/early-stop-direct-dispatch` | pending | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
 | 4 | `coordination-queue-status` | pending | `codex/coordination-queue-status` | pending | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
@@ -465,7 +465,7 @@ ordinary-run compatibility guardrail.
 
 ### Phase 1: Sweep Contracts And Manifests
 
-- Status: pr_open
+- Status: merged
 - Slug: `sweep-contracts-manifests`
 - Branch: `codex/sweep-contracts-manifests`
 - Worktree: `/home/samcantrill/work/loom-worktrees/sweep-contracts-manifests`
@@ -569,7 +569,8 @@ ordinary-run compatibility guardrail.
 - PR review budget: used by manager pre-submit review
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed
-- Merge record: pending
+- Merge record: complete; squash merged to `develop` as
+  `6facf9d6e5d94d56e3073f787fde6b6ea44a091d` on 2026-05-14 after CI passed.
 
 #### Risks And Stop Conditions
 
@@ -593,7 +594,13 @@ ordinary-run compatibility guardrail.
   validate-pr` passed, and `make test-summary` passed.
 - PR: [#151](https://github.com/samcantrill/loom/pull/151), targeting
   `develop` from `codex/sweep-contracts-manifests`.
-- Merge:
+- Merge: Squash merged [#151](https://github.com/samcantrill/loom/pull/151)
+  into `develop` as `6facf9d6e5d94d56e3073f787fde6b6ea44a091d` on
+  2026-05-14. Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/sweep-contracts-manifests`, `mergeStateStatus=CLEAN`,
+  and GitHub CI `checks` completed successfully. Remote branch
+  `codex/sweep-contracts-manifests` was deleted after merge because no
+  successor branch depended on it.
 - Follow-up: Phase 2 owns grid/manual planning behavior over these contracts.
 
 ### Phase 2: Grid And Manual Planning

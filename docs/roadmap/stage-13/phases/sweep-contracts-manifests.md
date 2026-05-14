@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 1: Sweep Contracts And Manifests`
 - Branch: `codex/sweep-contracts-manifests`
@@ -460,5 +460,7 @@ make test-summary
   [#151](https://github.com/samcantrill/loom/pull/151) against `develop` and
   verified `baseRefName=develop`, `headRefName=codex/sweep-contracts-manifests`,
   `state=OPEN`.
-- Stack maintenance: root phase; no predecessor.
+- Stack maintenance: root phase; no predecessor. Squash merged into `develop`
+  as `6facf9d6e5d94d56e3073f787fde6b6ea44a091d`; remote phase branch deleted
+  after merge because no successor branch depended on it.
 - Remaining blockers: none.
