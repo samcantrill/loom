@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 5 pending after Phase 4 merge
+- Status: Phase 5 in progress
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -921,7 +921,7 @@ conformance, and package boundaries.
 
 ### Phase 5: CLI, Docs, Hardening, And Final Validation
 
-- Status: pending
+- Status: in_progress
 - Branch: `codex/run-bundle-cli-docs-hardening`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-cli-docs-hardening`
 - PR: pending
@@ -1010,7 +1010,9 @@ final validation evidence.
 
 **Completion Summary**
 
-- Pending.
+- Phase execution plan:
+  `docs/roadmap/stage-12/phases/run-bundle-cli-docs-hardening.md`.
+- Implementation started from updated `origin/develop` after Phase 4 merge.
 
 ## Cross-Phase Review Notes
 
