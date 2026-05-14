@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; ready for implementation
+- Status: implementation complete; PR ready to open
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 3: Early Stop And Direct Dispatch`
 - Branch: `codex/early-stop-direct-dispatch`
@@ -392,7 +392,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted and final validation
+  passed after the implementation slice.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -400,10 +401,21 @@ make test-summary
 
 - Draft plan: completed locally on 2026-05-14.
 - Final phase execution plan: completed locally on 2026-05-14.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
+- Implementation summary: Added a typed early-stop signal and context helper,
+  persisted early stop as `CANCELLED` plus `LifecycleReason(code="early_stop")`,
+  widened execution result handling for controlled cancellation, preserved
+  local/subprocess worker propagation, and added direct sequential sweep
+  dispatch over Phase 1 dispatch records and Phase 2 plans.
+- Implementation validation: Targeted Phase 3 suite passed (`52 passed`);
+  adjacent execution/executor suites passed (`71 passed`); package/import
+  boundary suite passed (`45 passed`); `make validate-pr` passed; `make
+  test-summary` passed and wrote `build/test-summary.md`.
+- Refinement summary: Not needed; targeted Ruff, targeted Pyright, targeted
+  pytest, full PR validation, and suite summary all passed after the
+  implementation commit.
 - Blocker-resolution summary:
-- PR preparation:
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-13/phases/early-stop-direct-dispatch-pr-body.md`; PR
+  opening pending.
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none.
