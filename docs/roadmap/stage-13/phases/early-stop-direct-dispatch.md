@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR ready to open
+- Status: pr_open
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 3: Early Stop And Direct Dispatch`
 - Branch: `codex/early-stop-direct-dispatch`
@@ -16,7 +16,7 @@
 - Base branch:
   `origin/develop` at `058de1d4d6ec0c9c87dceaa46d3847b577d86364`
 - Target branch: `develop`
-- PR: pending
+- PR: [#153](https://github.com/samcantrill/loom/pull/153)
 - Merge eligibility: root phase PR targets `develop`; merge-eligible only
   after implementation, validation, automated review, CI or justified
   unavailable checks, and target-branch verification pass.
@@ -416,6 +416,8 @@ make test-summary
 - Blocker-resolution summary:
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-13/phases/early-stop-direct-dispatch-pr-body.md`; PR
-  opening pending.
+  [#153](https://github.com/samcantrill/loom/pull/153) opened against
+  `develop` and verified with `baseRefName=develop`,
+  `headRefName=codex/early-stop-direct-dispatch`, `state=OPEN`.
 - Stack maintenance:
 - Remaining blockers: none.

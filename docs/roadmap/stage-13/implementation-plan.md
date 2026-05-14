@@ -34,7 +34,7 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
-- Current phase: none
+- Current phase: Phase 3, `early-stop-direct-dispatch`
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains; Phase 1 execution planning may begin.
@@ -406,7 +406,7 @@ Required suite categories:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `sweep-contracts-manifests` | merged | `codex/sweep-contracts-manifests` | [#151](https://github.com/samcantrill/loom/pull/151) | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
 | 2 | `grid-manual-planning` | merged | `codex/grid-manual-planning` | [#152](https://github.com/samcantrill/loom/pull/152) | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
-| 3 | `early-stop-direct-dispatch` | pending | `codex/early-stop-direct-dispatch` | pending | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
+| 3 | `early-stop-direct-dispatch` | pr_open | `codex/early-stop-direct-dispatch` | [#153](https://github.com/samcantrill/loom/pull/153) | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
 | 4 | `coordination-queue-status` | pending | `codex/coordination-queue-status` | pending | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
 | 5 | `sweep-collection-cli-hardening` | pending | `codex/sweep-collection-cli-hardening` | pending | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
 
@@ -732,11 +732,11 @@ ordinary-run compatibility guardrail.
 
 ### Phase 3: Early Stop And Direct Dispatch
 
-- Status: pending
+- Status: pr_open
 - Slug: `early-stop-direct-dispatch`
 - Branch: `codex/early-stop-direct-dispatch`
 - Worktree: `/home/samcantrill/work/loom-worktrees/early-stop-direct-dispatch`
-- PR: pending
+- PR: [#153](https://github.com/samcantrill/loom/pull/153)
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -823,12 +823,14 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
+- Phase execution plan: complete
+- Planning/refinement budget: used for expanded-path draft/refine in
+  `docs/roadmap/stage-13/phases/early-stop-direct-dispatch.md`
+- Implementation/refinement budget: not needed; targeted and final validation
+  passed after the implementation slice
 - PR review budget: unused
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
+- Pre-submit blocker gate: passed
 - Merge record: pending
 
 #### Risks And Stop Conditions
@@ -848,9 +850,16 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
+- Implementation: Added typed cooperative early-stop support, context helper,
+  cancellation lifecycle persistence, local/subprocess execution propagation,
+  direct sequential sweep dispatch, per-trial run request construction,
+  failure continuation, compatible manifest checks, and direct dispatch
+  aggregate result records.
+- Validation: Targeted Phase 3 tests passed (`52 passed`); adjacent
+  execution/executor tests passed (`71 passed`); package/import-boundary tests
+  passed (`45 passed`); `make validate-pr` passed; `make test-summary` passed.
+- PR: [#153](https://github.com/samcantrill/loom/pull/153), targeting
+  `develop` from `codex/early-stop-direct-dispatch`.
 - Merge:
 - Follow-up:
 
