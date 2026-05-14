@@ -531,14 +531,15 @@ make test-summary
   tests/contracts/test_sweep_manifest_contract.py
   tests/contracts/test_sweep_planning_contract.py
   tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py
-  tests/integration/pipeline/sweep`: 70 passed). Targeted Ruff passed.
-  `make validate-pr` passed after the local type-check fix. `make
+  tests/integration/pipeline/sweep`: 71 passed). Targeted Ruff passed.
+  `make validate-pr` passed after local type-check and review fixes. `make
   test-summary` passed and wrote `build/test-summary.md`: package 79 passed,
-  unit 1068 passed, contract 194 passed, integration 151 passed, e2e 42
+  unit 1069 passed, contract 194 passed, integration 151 passed, e2e 42
   passed, config-extra 438 passed.
-- Refinement summary: one local implementation refinement was used to address
-  Pyright findings from the first full validation run; no scope expansion was
-  introduced.
+- Refinement summary: one local implementation refinement addressed Pyright
+  findings from the first full validation run; manager review then added a
+  bounded error-handling fix so direct spec `from_dict()` calls wrap
+  unsupported modes in `SweepProtocolError`. No scope expansion was introduced.
 - Blocker-resolution summary: none; 0/3 blocker-resolution passes used.
 - PR preparation: complete; opened
   [#152](https://github.com/samcantrill/loom/pull/152) against `develop`

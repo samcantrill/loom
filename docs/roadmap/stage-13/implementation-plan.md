@@ -714,7 +714,7 @@ ordinary-run compatibility guardrail.
   finite providers, deterministic proposal-to-trial materialization, default
   generated-trial guard, run URI mapping, plan-only manifest/spec writes, and
   compatible readback diagnostics.
-- Validation: Targeted Phase 2 tests passed (`70 passed`); `make validate-pr`
+- Validation: Targeted Phase 2 tests passed (`71 passed`); `make validate-pr`
   passed after local Pyright fixes; `make test-summary` passed.
 - PR: [#152](https://github.com/samcantrill/loom/pull/152), targeting
   `develop` from `codex/grid-manual-planning`.

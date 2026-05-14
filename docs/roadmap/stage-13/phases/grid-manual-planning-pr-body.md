@@ -36,7 +36,7 @@ package exports/import boundaries, and narrow plan-file integration.
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Targeted Phase 2 tests | Passed | 70 passed across sweep unit, provider/manifest/planning contracts, package boundaries, and plan-file integration |
+| Targeted Phase 2 tests | Passed | 71 passed across sweep unit, provider/manifest/planning contracts, package boundaries, and plan-file integration |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
 | `make test-summary` | Passed | Wrote `build/test-summary.md` |
 | GitHub checks | Pending | Available after PR creation |
@@ -46,7 +46,7 @@ package exports/import boundaries, and narrow plan-file integration.
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | package | passed | 79 | 0 | 0 | 1 | 0 |
-| unit | passed | 1068 | 0 | 0 | 7 | 1 |
+| unit | passed | 1069 | 0 | 0 | 7 | 1 |
 | contract | passed | 194 | 0 | 0 | 2 | 0 |
 | integration | passed | 151 | 0 | 0 | 8 | 13 |
 | e2e | passed | 42 | 0 | 0 | 0 | 2 |
