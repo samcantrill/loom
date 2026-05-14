@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 2 merged; ready for Phase 3 execution planning
+- Status: Phase 3 PR open
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -26,7 +26,7 @@
 - Refine pass: complete on 2026-05-14 after local plan-quality review
 - Plan quality gate: passed on 2026-05-14 after local
   review/refinement/confirmation
-- Current phase: none
+- Current phase: Phase 3, Import, Offline Alignment, And Resume Readiness
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains; Phase 2 execution planning may begin.
@@ -377,7 +377,7 @@ Required suite categories:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `portable-run-exchange-contracts` | merged | `codex/portable-run-exchange-contracts` | [#146](https://github.com/samcantrill/loom/pull/146) | `loom.runs` models plus import-light neutral records and minimal protocols | Establish portable-run exchange, manifest, result, evidence, readiness, and importer/exporter protocol contracts | Package, unit, contract | Manifest models, fake/unsupported adapter records |
 | 2 | `run-bundle-export-inspect` | merged | `codex/run-bundle-export-inspect` | [#147](https://github.com/samcantrill/loom/pull/147) | `loom.runs` export and archive helpers | Implement export, archive safety, and inspect without extraction | Unit, contract, integration | Metadata-only export, inspect safety |
-| 3 | `run-bundle-import-offline-readiness` | pending | `codex/run-bundle-import-offline-readiness` | pending | `loom.runs` import plus `loom.authority.offline_import` adapter alignment | Implement safe import, offline-evidence alignment, provenance, and readiness blockers | Package, unit, contract, integration | Safe import, offline evidence, resume readiness |
+| 3 | `run-bundle-import-offline-readiness` | in_progress | `codex/run-bundle-import-offline-readiness` | pending | `loom.runs` import plus `loom.authority.offline_import` adapter alignment | Implement safe import, offline-evidence alignment, provenance, and readiness blockers | Package, unit, contract, integration | Safe import, offline evidence, resume readiness |
 | 4 | `transfer-evidence-protocols` | pending | `codex/transfer-evidence-protocols` | pending | Transfer evidence mappings, importer/exporter conformance, queue mapping tests | Publish queue-consumable transfer verification and explicit fake/unsupported protocol behavior | Package, unit, contract, narrow integration | Queue evidence, fake/unsupported adapters |
 | 5 | `run-bundle-cli-docs-hardening` | pending | `codex/run-bundle-cli-docs-hardening` | pending | CLI, docs, final hardening | Expose `loom runs export/inspect/import`, document behavior, and run final validation | Package, unit, contract, integration, e2e where practical | CLI workflow, docs, final gate |
 
@@ -679,10 +679,10 @@ inspect-without-extraction proof.
 
 ### Phase 3: Import, Offline Alignment, And Resume Readiness
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/run-bundle-import-offline-readiness`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-import-offline-readiness`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/148
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -783,7 +783,20 @@ readiness-blocker behavior separately from export archive code.
 
 **Completion Summary**
 
-- Pending.
+- Phase execution plan:
+  `docs/roadmap/stage-12/phases/run-bundle-import-offline-readiness.md`.
+- Implementation started from updated `origin/develop` after Phase 2 merge.
+- Implementation summary: added safe local bundle import and offline-evidence
+  adapter alignment through shared portable-run import results, with
+  target-local identity, strict collision rejection, historical-only readiness,
+  source provenance, copied payload rebasing, and catalog visibility for
+  imported historical runs.
+- Tests and validation: targeted Phase 3 pytest set passed with 53 tests;
+  targeted Ruff and Pyright passed; `make validate-pr` passed; `make
+  test-summary` passed with package 77 passed, unit 1048 passed, contract 176
+  passed, integration 148 passed, e2e 41 passed, and config-extra 438 passed.
+- PR status: opened as https://github.com/samcantrill/loom/pull/148 targeting
+  `develop`; base/head verified after creation.
 
 ### Phase 4: Transfer Evidence And Importer/Exporter Protocols
 
