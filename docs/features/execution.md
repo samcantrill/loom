@@ -25,6 +25,11 @@ generic continuation surfaces; live cluster and container execution details in
 this document remain future scaffolding unless an implementation plan adds a
 phase for them.
 
+V11 queueing is owned by top-level `loom.queue`, not by the execution runner.
+The queue dispatches whole runs through configured adapters and records
+queue-local scheduling evidence, while authority remains lifecycle truth for
+executed runs. See [queue.md](queue.md) for the queue service contract.
+
 ### 1.1 Alignment With `loom.md`
 
 This document refines stage execution goals from [loom.md](../loom.md). It keeps

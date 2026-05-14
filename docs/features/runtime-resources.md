@@ -12,6 +12,10 @@ particular invocation should run.
 Resource requests describe what a stage says it needs. Executors decide how
 much of that request they can enforce.
 
+V11 queue managed pools use authority-owned resource limits and leases at
+dispatch time, but they do not provision or mutate those limits. Queue config
+reconciliation is read-only and is described in [queue.md](queue.md).
+
 ## Scope
 
 Current alignment:

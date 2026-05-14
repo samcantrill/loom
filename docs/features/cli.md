@@ -15,6 +15,12 @@ V7 adds optional live SLURM operations through the same general command surface:
 `loom run CONFIG --executor slurm-afterok`, `loom status RUN_URI --jobs`, and
 `loom cancel RUN_URI --jobs`.
 
+V11 adds a narrow queue operations group: `loom queue preflight`,
+`loom queue start`, `loom queue status`, `loom queue cancel`, and
+`loom queue drain-foreground`. These commands are operational wrappers over the
+Python queue service and configured repository; enqueue remains Python-first.
+See [queue.md](queue.md) for the queue service ownership model and examples.
+
 Roadmap commands for run status, logs, artifacts, sweeps, catalogs, bundles,
 plugins, remote stores, containers, cleanup, and scheduler/container executors are
 intentionally deferred. The later-command sections in this document describe

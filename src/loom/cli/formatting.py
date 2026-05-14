@@ -139,6 +139,35 @@ def format_preflight_text(result: object, *, config_path: object) -> str:
     return "\n".join(lines)
 
 
+def format_queue_preflight_text(result: object) -> str:
+    """Format queue preflight output."""
+
+    status = _enum_value(getattr(result, "status"))
+    prefix = {
+        "PASS": "OK",
+        "WARN": "WARN",
+        "FAIL": "FAILED",
+        "SKIP": "SKIP",
+    }.get(status, status)
+    lines = [
+        f"{prefix} queue preflight {getattr(result, 'config_path')}: {status}"
+    ]
+    for check in getattr(result, "checks", ()):
+        check_status = _enum_value(getattr(check, "status"))
+        check_id = str(getattr(check, "check_id"))
+        message = str(getattr(check, "message"))
+        lines.append(f"{check_status} {check_id}: {message}")
+        details = getattr(check, "details", {})
+        if isinstance(details, Mapping):
+            missing = details.get("missing")
+            if isinstance(missing, Sequence) and not isinstance(missing, str) and missing:
+                lines.append("  missing: " + ", ".join(str(item) for item in missing))
+            reason = details.get("reason")
+            if isinstance(reason, str) and reason:
+                lines.append(f"  reason: {reason}")
+    return "\n".join(lines)
+
+
 def format_run_text(result: RunCliResult) -> str:
     """Format a concise run result."""
 
@@ -404,6 +433,78 @@ def format_status_jobs_text(result: object) -> str:
     return "\n".join(lines)
 
 
+def format_queue_status_text(result: object) -> str:
+    """Format queue service and item status output."""
+
+    service = getattr(result, "service_status")
+    state = _enum_value(getattr(service, "state"))
+    pools = ", ".join(str(name) for name in getattr(service, "pool_names"))
+    queues = ", ".join(str(name) for name in getattr(service, "queue_names"))
+    recovery = tuple(getattr(service, "recovery_records", ()))
+    lines = [
+        f"queue service: {state}",
+        f"scope: {getattr(result, 'service_scope', 'in_process_command')}",
+        f"pools: {pools or '<none>'}",
+        f"queues: {queues or '<none>'}",
+        f"recovery: {len(recovery)} active item(s)",
+    ]
+    inspection = getattr(result, "item_inspection", None)
+    if inspection is not None:
+        item = getattr(inspection, "item")
+        if item is None:
+            lines.append("item: <missing>")
+        else:
+            lines.extend(_queue_item_lines(item))
+            audit_events = tuple(getattr(inspection, "audit_events", ()))
+            lines.append(f"audit_events: {len(audit_events)}")
+    active_items = cast(Sequence[object], getattr(result, "active_items", ()))
+    if active_items:
+        lines.append("active inspections:")
+        for active in active_items:
+            item = getattr(active, "item")
+            lines.append(
+                f"  {getattr(item, 'queue_item_id')}: {_enum_value(getattr(active, 'status'))}"
+            )
+            adapter_inspection = getattr(active, "adapter_inspection")
+            if adapter_inspection is not None:
+                lines.append(f"    adapter: {getattr(adapter_inspection, 'reason')}")
+    lines.extend(_queue_ownership_lines(getattr(result, "to_dict")()))
+    return "\n".join(lines)
+
+
+def format_queue_cancel_text(result: object) -> str:
+    """Format queue cancellation output."""
+
+    item = getattr(result, "item")
+    status = _enum_value(getattr(item, "status"))
+    lines = [f"queue cancel {getattr(item, 'queue_item_id')}: {status}"]
+    cancellation = getattr(item, "cancellation")
+    if cancellation is not None:
+        lines.append(f"reason: {getattr(cancellation, 'reason')}")
+        evidence = getattr(cancellation, "evidence", {})
+        if isinstance(evidence, Mapping) and evidence:
+            outcome = evidence.get("cancellation_outcome")
+            if outcome is not None:
+                lines.append(f"adapter_outcome: {outcome}")
+    lines.extend(_queue_ownership_lines(getattr(result, "to_dict")()))
+    return "\n".join(lines)
+
+
+def format_queue_drain_text(result: object) -> str:
+    """Format foreground queue drain output."""
+
+    steps = tuple(getattr(result, "steps", ()))
+    recovery_records = tuple(getattr(result, "recovery_records", ()))
+    lines = [f"queue drain foreground: {len(steps)} step(s)"]
+    for step in steps:
+        item = getattr(step, "item")
+        item_id = "<none>" if item is None else str(getattr(item, "queue_item_id"))
+        status = "" if item is None else f" {_enum_value(getattr(item, 'status'))}"
+        lines.append(f"{getattr(step, 'outcome')}: {item_id}{status}")
+    lines.append(f"recovery: {len(recovery_records)} active item(s)")
+    return "\n".join(lines)
+
+
 def format_cancel_jobs_text(result: object) -> str:
     """Format submitted-job cancellation output."""
 
@@ -634,6 +735,55 @@ def _enum_value(value: object) -> str:
     return str(enum_value)
 
 
+def _queue_item_lines(item: object) -> list[str]:
+    lines = [
+        f"item {getattr(item, 'queue_item_id')}: {_enum_value(getattr(item, 'status'))}",
+        f"run_uri: {getattr(item, 'run_uri')}",
+        f"queue: {getattr(item, 'queue_name')} pool={getattr(item, 'pool_name')}",
+        f"adapter: {getattr(getattr(item, 'launch_contract'), 'adapter')}",
+        f"dispatch_attempt: {getattr(item, 'dispatch_attempt')}",
+    ]
+    handle = getattr(item, "dispatch_handle")
+    if handle is not None:
+        lines.append(f"handle: {getattr(handle, 'adapter')} {getattr(handle, 'handle_id')}")
+        evidence = getattr(handle, "evidence", {})
+        if isinstance(evidence, Mapping):
+            handoff = evidence.get("delegated_handoff")
+            if isinstance(handoff, Mapping):
+                lines.append(
+                    "delegated_handoff: "
+                    f"durable={handoff.get('durable')} "
+                    f"status_read={handoff.get('downstream_status_read_succeeded')}"
+                )
+            verification = evidence.get("delegated_launch_verification")
+            if isinstance(verification, Mapping):
+                summary = verification.get("summary")
+                if isinstance(summary, Mapping):
+                    lines.append(
+                        "delegated_verification: "
+                        f"proven={summary.get('proven_count')} "
+                        f"unproven={summary.get('unproven_count')}"
+                    )
+    cancellation = getattr(item, "cancellation")
+    if cancellation is not None:
+        lines.append(f"cancellation: {getattr(cancellation, 'reason')}")
+    return lines
+
+
+def _queue_ownership_lines(payload: object) -> list[str]:
+    if not isinstance(payload, Mapping):
+        return []
+    ownership = payload.get("ownership")
+    if not isinstance(ownership, Mapping):
+        return []
+    return [
+        "ownership:",
+        f"  queue: {ownership.get('queue_state')}",
+        f"  authority: {ownership.get('authority_state')}",
+        f"  delegated: {ownership.get('delegated_scheduler_state')}",
+    ]
+
+
 __all__ = [
     "CLI_ERROR_SCHEMA_VERSION",
     "CLI_RESULT_SCHEMA_VERSION",
@@ -643,6 +793,10 @@ __all__ = [
     "format_json_envelope",
     "format_plan_text",
     "format_preflight_text",
+    "format_queue_cancel_text",
+    "format_queue_drain_text",
+    "format_queue_preflight_text",
+    "format_queue_status_text",
     "format_runs_diff_text",
     "format_runs_index_text",
     "format_runs_list_text",

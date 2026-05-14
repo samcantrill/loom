@@ -12,6 +12,13 @@ clear about checks it could not perform.
 Preflight is best-effort validation. It is not a substitute for normal runtime
 checks.
 
+Queue service preflight is documented in [queue.md](queue.md). The command
+`loom queue preflight CONFIG` checks queue config loading, SQLite repository
+reachability, authority configuration evidence, managed-pool reconciliation
+readiness, SLURM command availability for delegated pools, and the delegated
+shared-workspace assumptions without submitting work or mutating authority
+resource limits.
+
 ## Scope
 
 Preflight owns:

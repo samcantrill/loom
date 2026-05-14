@@ -10,8 +10,8 @@ from loom.serialization.errors import PlainDataError
 
 from .controller import QueueDispatchInspection, QueueInspectableDispatchAdapter
 from .errors import QueueServiceError
-from .models import QueueItem, QueueItemStatus, QueueRecoveryRecord
-from .service import QueueService
+from .models import QueueAuditEvent, QueueItem, QueueItemStatus, QueueRecoveryRecord
+from .service import QueueItemInspection, QueueService, QueueServiceStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +53,76 @@ class QueueManagedItemStatus:
                 path="authority_evidence",
             ),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class QueueOperationalStatus:
+    """Operator-facing queue status read model."""
+
+    service_status: QueueServiceStatus
+    item_inspection: QueueItemInspection | None = None
+    active_items: tuple[QueueManagedItemStatus, ...] = ()
+    service_scope: str = "in_process_command"
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "service_scope": self.service_scope,
+            "service": self.service_status.to_dict(),
+            "item": None
+            if self.item_inspection is None
+            else _item_inspection_dict(self.item_inspection),
+            "active_items": [status.to_dict() for status in self.active_items],
+            "ownership": queue_ownership_summary(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class QueueCancellationStatus:
+    """Operator-facing cancellation result."""
+
+    item: QueueItem
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "item": self.item.to_dict(),
+            "ownership": queue_ownership_summary(),
+        }
+
+
+def build_queue_operational_status(
+    service: QueueService,
+    *,
+    queue_item_id: str | None = None,
+    adapters: Mapping[str, QueueInspectableDispatchAdapter] | None = None,
+) -> QueueOperationalStatus:
+    """Build a queue status report without changing queue state."""
+
+    item_inspection = (
+        None if queue_item_id is None else service.inspect_item(queue_item_id)
+    )
+    active_items = (
+        ()
+        if adapters is None
+        else inspect_managed_queue_status(service, adapters=adapters)
+    )
+    return QueueOperationalStatus(
+        service_status=service.status(),
+        item_inspection=item_inspection,
+        active_items=active_items,
+    )
+
+
+def queue_ownership_summary() -> dict[str, PlainData]:
+    """Return stable operator wording for queue/status ownership."""
+
+    return {
+        "queue_state": "queue service owns scheduling intent, dispatch handles, and queue-local item status",
+        "authority_state": "authority remains the source of run lifecycle and coordination truth",
+        "delegated_scheduler_state": (
+            "delegated adapters report external scheduler evidence; SLURM-pending "
+            "work does not hold Loom resource leases by default"
+        ),
+    }
 
 
 def inspect_managed_queue_status(
@@ -102,4 +172,27 @@ def _authority_evidence(item: QueueItem) -> Mapping[str, PlainData]:
     return frozen
 
 
-__all__ = ["QueueManagedItemStatus", "inspect_managed_queue_status"]
+def _item_inspection_dict(inspection: QueueItemInspection) -> dict[str, PlainData]:
+    return {
+        "item": None if inspection.item is None else inspection.item.to_dict(),
+        "audit_events": [
+            _audit_event_dict(event) for event in inspection.audit_events
+        ],
+        "recovery_records": [
+            record.to_dict() for record in inspection.recovery_records
+        ],
+    }
+
+
+def _audit_event_dict(event: QueueAuditEvent) -> dict[str, PlainData]:
+    return event.to_dict()
+
+
+__all__ = [
+    "QueueCancellationStatus",
+    "QueueManagedItemStatus",
+    "QueueOperationalStatus",
+    "build_queue_operational_status",
+    "inspect_managed_queue_status",
+    "queue_ownership_summary",
+]

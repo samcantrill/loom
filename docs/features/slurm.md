@@ -44,6 +44,8 @@ default; downstream SLURM capacity owns pending/running admission until richer
 bundle or submit-host transport exists. If the external handle is active but no
 authority run is visible yet, queue status reports that as diagnostic evidence
 and continues to reuse the same handle instead of resubmitting.
+See [queue.md](queue.md) for the queue config, CLI, and preflight surfaces for
+delegated SLURM pools.
 
 Generated single-job scripts call the generic whole-run continuation command:
 
