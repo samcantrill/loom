@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation pending
+- Status: pr_open
 - Feature focus: Queue Service, Resource Pools, And Delegated Dispatch
 - PR title: `Queue Service, Resource Pools, And Delegated Dispatch - Phase 9: Operational UX, CLI, Docs, And Hardening`
 - Branch: `codex/queue-ops-cli-docs-hardening`
@@ -10,6 +10,7 @@
 - Phase execution plan path: `docs/phases/queue-ops-cli-docs-hardening.md`
 - Full plan: `docs/implementation-plans/implementation-plan-v11.md`
 - Source phase: Phase 9, `v11` Operational UX, Minimal CLI Wrapper, Docs, And Hardening
+- PR: https://github.com/samcantrill/loom/pull/145
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
@@ -203,6 +204,6 @@ make test-summary
 - Implementation validation: focused Phase 9 pytest passed with 58 passed after renaming queue unit test modules to unique basenames; targeted Ruff passed; targeted Pyright passed with 0 errors; config-extra targeted queue tests passed with 8 passed; `make validate-pr` passed with Ruff, Pyright, default harness 1434 passed/25 skipped/18 deselected, config-extra harness 438 passed/1470 deselected, and build; `make test-summary` passed with package 77 passed/1 skipped, unit 1032 passed/6 skipped/1 deselected, contract 167 passed/2 skipped, integration 145 passed/8 skipped/13 deselected, e2e 41 passed/2 deselected, and config-extra 438 passed/1470 deselected.
 - Refinement summary: no implementation refinement pass was needed. A validation blocker caused by duplicate pytest module basenames was fixed with a scoped test-file rename and phase-plan command update.
 - Blocker-resolution summary: none.
-- PR preparation: PR body prepared in `docs/phases/queue-ops-cli-docs-hardening-pr-body.md`; PR opening pending.
+- PR preparation: PR body prepared in `docs/phases/queue-ops-cli-docs-hardening-pr-body.md`; PR #145 opened against `develop`.
 - Stack maintenance: none.
 - Remaining blockers: none.

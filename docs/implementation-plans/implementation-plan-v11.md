@@ -1218,9 +1218,9 @@ and truthful cancellation/status behavior.
 
 ### Phase 9: `v11` Operational UX, Minimal CLI Wrapper, Docs, And Hardening
 
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/queue-ops-cli-docs-hardening`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/145
 
 **Goal**
 
