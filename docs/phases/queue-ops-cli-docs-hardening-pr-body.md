@@ -39,7 +39,7 @@ smoke, and import-boundary constraints.
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Focused Phase 9 pytest | Passed | 58 passed |
+| Focused Phase 9 pytest | Passed | 58 passed before review fix; 7 passed for review-fix focused subset |
 | Config-extra focused queue tests | Passed | 8 passed |
 | Targeted Ruff | Passed | Phase 9 touched Python files |
 | Targeted Pyright | Passed | 0 errors |
@@ -52,15 +52,18 @@ smoke, and import-boundary constraints.
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | package | passed | 77 | 0 | 0 | 1 | 0 |
-| unit | passed | 1032 | 0 | 0 | 6 | 1 |
+| unit | passed | 1032 | 0 | 0 | 7 | 1 |
 | contract | passed | 167 | 0 | 0 | 2 | 0 |
 | integration | passed | 145 | 0 | 0 | 8 | 13 |
 | e2e | passed | 41 | 0 | 0 | 0 | 2 |
-| config-extra | passed | 438 | 0 | 0 | 0 | 1470 |
+| config-extra | passed | 438 | 0 | 0 | 0 | 1471 |
 
 ## Risks / Follow-Ups
 
 - `loom queue start` is an in-process service/config check in v11, not a
   persistent background supervisor.
+- `loom queue preflight` treats authority checks as skipped unless authority
+  flags are supplied, so default local queue checks do not imply an authority
+  workspace has been selected.
 - CLI enqueue, retries, fairness, SSH, bundles, daemon transport, and richer
   scheduler policy remain later roadmap work.
