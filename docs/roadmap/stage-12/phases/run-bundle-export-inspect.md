@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan
+- Status: pr_open
 - Feature focus: Portable Run Exchange
 - PR title: `Portable Run Exchange - Phase 2: Export And Inspect Bundles`
 - Branch: `codex/run-bundle-export-inspect`
@@ -21,6 +21,7 @@
 - Draft pass: completed by managing Codex
 - Refine pass: included in this scope-complete expanded-path plan; no separate refinement pass needed unless implementation discovers an archive-safety contract blocker
 - Setup limitations: none; branch/worktree created from updated `origin/develop`
+- PR: [#147](https://github.com/samcantrill/loom/pull/147)
 - Blockers: none
 
 ## Objective
@@ -217,8 +218,9 @@ make test-summary
 - Blocker-resolution summary: 0/3 blocker-resolution passes used; no blockers
   remain.
 - PR preparation: PR body drafted at
-  `docs/roadmap/stage-12/phases/run-bundle-export-inspect-pr-body.md`; PR not
-  opened yet at this checkpoint.
+  `docs/roadmap/stage-12/phases/run-bundle-export-inspect-pr-body.md`; PR #147
+  opened against `develop` and verified with base `develop`, head
+  `codex/run-bundle-export-inspect`, state `OPEN`.
 - Stack maintenance: root PR targets `develop`; no successor branch depends on
   this branch yet.
 - Remaining blockers: none.
