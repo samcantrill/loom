@@ -28,7 +28,8 @@
 - Plan quality gate loop budget: implementation-plan review, refinement, and
   confirmation were used before Phase 1; no blocking findings remain.
 - Draft pass: complete for this phase execution plan.
-- Refine pass: pending for this expanded-path phase.
+- Refine pass: complete for this expanded-path phase; the artifact is final for
+  implementation.
 - Setup limitations: the original control checkout has unrelated dirty and
   untracked files; phase work is isolated in the worktree above.
 - Blockers: none.
@@ -135,6 +136,10 @@ scheduler-specific per-trial policy.
   `loom sweep collect` with text and JSON output. The CLI must delegate to
   public sweep APIs and avoid duplicating manifest parsing, dispatch, status,
   or collection business logic.
+- Use this initial CLI contract unless source constraints force a smaller
+  equivalent: `loom sweep plan SPEC --sweep-dir DIR`, `loom sweep run SPEC
+  --sweep-dir DIR [--queue-config CONFIG]`, `loom sweep status DIR`, and
+  `loom sweep collect DIR [--include-unsupported-extraction]`.
 - Add docs and examples for grid/manual specs, planning, direct run, queue
   submit, status outcomes, collection, early stop, unsupported extraction, and
   deferred roadmap behavior.
@@ -174,6 +179,9 @@ scheduler-specific per-trial policy.
   result payloads using existing CLI envelope conventions.
 - CLI error behavior must use existing `CliError`/`ExitCode` patterns for
   validation, run failures, unsupported extraction, and unavailable run state.
+- Queue CLI behavior must be submit-only: `--queue-config` may start the queue
+  service long enough to enqueue items through existing queue APIs, but it must
+  not drain, cancel, or poll workers.
 - Status and collection must treat run lifecycle/read-model state as truth and
   avoid mutating run stores, queue services, or coordination stores.
 
@@ -368,7 +376,8 @@ make test-summary
 ## Completion Notes
 
 - Draft plan: completed locally on 2026-05-14.
-- Final phase execution plan:
+- Final phase execution plan: completed locally on 2026-05-14 after refining
+  the CLI argument contract and queue submit-only scope.
 - Implementation summary:
 - Implementation validation:
 - Refinement summary:
