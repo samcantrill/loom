@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phases 1-4 merged; ready for Phase 5 execution planning
+- Status: Phases 1-4 merged; Phase 5 execution planning in progress
 - Roadmap stage: `v13`
 - Source planning notes:
   `docs/roadmap/stage-13/planning.md`
@@ -37,8 +37,8 @@
 - Current phase: Phase 5, `sweep-collection-cli-hardening`
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 5 execution planning may begin from
-    updated `develop`.
+  - No plan-quality blocker remains; Phase 5 execution planning is in progress
+    from updated `develop`.
 
 ## Summary
 
@@ -1022,7 +1022,7 @@ ordinary-run compatibility guardrail.
 
 ### Phase 5: Collection, CLI, Docs, And Hardening
 
-- Status: pending
+- Status: in_progress
 - Slug: `sweep-collection-cli-hardening`
 - Branch: `codex/sweep-collection-cli-hardening`
 - Worktree:
@@ -1114,8 +1114,9 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
+- Phase execution plan: draft complete in
+  `docs/roadmap/stage-13/phases/sweep-collection-cli-hardening.md`
+- Planning/refinement budget: draft used; refine pending for expanded path
 - Implementation/refinement budget: unused
 - PR review budget: unused
 - Blocker-resolution budget: unused
