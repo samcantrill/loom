@@ -141,7 +141,7 @@ def handle_preflight(namespace: argparse.Namespace) -> int:
 
     result = build_queue_preflight_result(
         namespace.config,
-        authority_config=authority_config_from_namespace(namespace),
+        authority_config=_explicit_authority_config_from_namespace(namespace),
     )
     output_format = output_format_from_namespace(namespace)
     if output_format is OutputFormat.JSON:
@@ -405,6 +405,23 @@ def _queue_cli_error(error: QueueError) -> CliError:
         context={"error_type": type(error).__name__},
         exit_code=exit_code,
     )
+
+
+def _explicit_authority_config_from_namespace(
+    namespace: argparse.Namespace,
+) -> "AuthorityConfig | None":
+    option_names = (
+        "authority_backend",
+        "authority_profile",
+        "authority_endpoint",
+        "authority_workspace",
+        "authority_state",
+        "authority_reference",
+        "authority_metadata_json",
+    )
+    if not any(getattr(namespace, name, None) is not None for name in option_names):
+        return None
+    return authority_config_from_namespace(namespace)
 
 
 def _enum_value(value: object) -> str:

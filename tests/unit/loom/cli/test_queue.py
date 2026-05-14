@@ -45,6 +45,25 @@ def test_queue_status_json_reports_item_and_ownership(tmp_path: Path) -> None:
     assert "authority remains" in payload["result"]["ownership"]["authority_state"]
 
 
+def test_queue_preflight_skips_authority_when_no_authority_flags_are_supplied(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("yaml")
+    config_path = _queue_config(tmp_path)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    exit_code = main(
+        ["queue", "preflight", str(config_path)],
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code == 0
+    assert stderr.getvalue() == ""
+    assert "SKIP queue.authority.connection" in stdout.getvalue()
+
+
 def test_queue_cancel_records_queue_local_cancellation(tmp_path: Path) -> None:
     pytest.importorskip("yaml")
     config_path = _queue_config(tmp_path)
