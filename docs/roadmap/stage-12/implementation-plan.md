@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 4 PR open
+- Status: Phase 5 pending after Phase 4 merge
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -26,10 +26,10 @@
 - Refine pass: complete on 2026-05-14 after local plan-quality review
 - Plan quality gate: passed on 2026-05-14 after local
   review/refinement/confirmation
-- Current phase: Phase 4, Transfer Evidence And Importer/Exporter Protocols
+- Current phase: Phase 5, CLI, Docs, Hardening, And Final Validation
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 4 execution planning may begin.
+  - No plan-quality blocker remains; Phase 5 execution planning may begin.
 
 ## Summary
 
@@ -809,7 +809,7 @@ readiness-blocker behavior separately from export archive code.
 
 ### Phase 4: Transfer Evidence And Importer/Exporter Protocols
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/transfer-evidence-protocols`
 - Worktree: `/home/samcantrill/work/loom-worktrees/transfer-evidence-protocols`
 - PR: https://github.com/samcantrill/loom/pull/149
@@ -912,6 +912,12 @@ conformance, and package boundaries.
   passing.
 - PR opened as https://github.com/samcantrill/loom/pull/149 targeting
   `develop` from `codex/transfer-evidence-protocols`.
+- Automated review and merge: manager review found one structured-detail
+  override issue in unsupported transfer diagnostics; fixed in the phase branch,
+  revalidated, and GitHub CI `checks` passed. PR #149 was squash-merged into
+  `develop` as merge commit `5b64dc68b5cda686c19076861f61d4bcff7c6050`.
+- Follow-up notes: no successor branch depended on the Phase 4 branch at merge
+  time; local cleanup may remove the Phase 4 worktree and stale branch refs.
 
 ### Phase 5: CLI, Docs, Hardening, And Final Validation
 
