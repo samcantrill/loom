@@ -18,12 +18,12 @@ It also carries the confirmed Stage 12 planning and implementation-plan artifact
 
 The new contracts live in `src/loom/runs/models.py` and are exported from `loom.runs`. They deliberately stay as plain dataclasses, enums, and protocols over `PlainData` mappings so authority/offline evidence and later adapters can depend on the result shapes without importing archive helpers or catalog scanning behavior.
 
-The manifest contract is strict at the top level and reserves future opaque data for explicit `extensions` fields. Export and payload-selection defaults are metadata-only; payload/log/workspace inclusion remains explicit for later phases.
+The manifest contract is strict at the top level and reserves future opaque data for explicit `extensions` fields. Export and payload-selection defaults are metadata-only; payload/log/workspace inclusion remains explicit for later phases. Deferred import behaviors such as preserve-source identity, overwrite/reuse collision handling, and non-strict checksum policy are not exposed as accepted public policy values.
 
 New tests implemented:
 
 - Contract tests for manifest round-trips, strict unknown-field rejection, result envelopes, and structural fake importer/exporter conformance.
-- Unit tests for manifest strictness, schema-version rejection, metadata-only defaults, and readiness record round-trips.
+- Unit tests for manifest strictness, schema-version rejection, metadata-only defaults, deferred-policy rejection, and readiness record round-trips.
 - Package tests updated for intentional `loom.runs` exports and existing import-boundary coverage.
 
 ## Tests And Validation
@@ -38,13 +38,13 @@ New tests implemented:
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 77 | 0 | 0 | 1 | 0 | 78 | 24.98s |
-| unit | passed | 1037 | 0 | 0 | 7 | 1 | 1044 | 78.47s |
-| contract | passed | 171 | 0 | 0 | 2 | 0 | 173 | 15.05s |
-| integration | passed | 145 | 0 | 0 | 8 | 13 | 153 | 69.00s |
-| e2e | passed | 41 | 0 | 0 | 0 | 2 | 41 | 43.38s |
-| config-extra | passed | 438 | 0 | 0 | 0 | 1480 | 438 | 89.24s |
-| Overall | passed | 1909 | 0 | 0 | 18 | 1496 | 1927 | 320.12s |
+| package | passed | 77 | 0 | 0 | 1 | 0 | 78 | 16.52s |
+| unit | passed | 1038 | 0 | 0 | 7 | 1 | 1045 | 59.28s |
+| contract | passed | 171 | 0 | 0 | 2 | 0 | 173 | 12.04s |
+| integration | passed | 145 | 0 | 0 | 8 | 13 | 153 | 54.28s |
+| e2e | passed | 41 | 0 | 0 | 0 | 2 | 41 | 38.56s |
+| config-extra | passed | 438 | 0 | 0 | 0 | 1481 | 438 | 84.68s |
+| Overall | passed | 1910 | 0 | 0 | 18 | 1497 | 1928 | 265.36s |
 
 ## Risks / Follow-Ups
 
