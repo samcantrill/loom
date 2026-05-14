@@ -745,7 +745,7 @@ def build_queue_enqueue_request(
             dispatch_request.to_dict(),
             "dispatch_request",
         ),
-        **dict(metadata or {}),
+        **_thawed_mapping(dict(metadata or {}), "metadata"),
     }
     run_metadata = {
         **_thawed_mapping(dict(run_request.metadata), "run_metadata"),
@@ -999,10 +999,7 @@ def _queue_run_request_snapshot(request: "RunRequest") -> dict[str, PlainData]:
         "has_pipeline": request.pipeline is not None,
     }
     if isinstance(request.config, Mapping):
-        config = ensure_plain_data(request.config, path="request.config")
-        if not isinstance(config, dict):
-            raise SweepProtocolError("request.config must be a mapping when queued")
-        snapshot["config"] = config
+        snapshot["config"] = _thawed_mapping(request.config, "request.config")
     return snapshot
 
 
