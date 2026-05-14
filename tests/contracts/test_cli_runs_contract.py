@@ -10,10 +10,14 @@ from loom.artifacts import ArtifactRef
 from loom.cli.main import main
 from loom.cli.runs import (
     RUNS_DIFF_SCHEMA_VERSION,
+    RUNS_EXPORT_SCHEMA_VERSION,
     RUNS_INDEX_SCHEMA_VERSION,
+    RUNS_IMPORT_SCHEMA_VERSION,
+    RUNS_INSPECT_SCHEMA_VERSION,
     RUNS_LIST_SCHEMA_VERSION,
 )
 from loom.fingerprints import format_digest
+from loom.io.uris import path_to_file_uri
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
@@ -130,6 +134,80 @@ def test_runs_diff_json_contract(tmp_path: Path) -> None:
     assert stderr.getvalue() == ""
 
 
+def test_runs_bundle_exchange_json_contract(tmp_path: Path) -> None:
+    run_uri = _create_completed_authority_run(tmp_path / "source-runs" / "run-1")
+    bundle_path = tmp_path / "bundle.tar"
+    target_collection = tmp_path / "target-runs"
+
+    export_stdout = io.StringIO()
+    export_stderr = io.StringIO()
+    assert (
+        main(
+            ["runs", "export", run_uri, str(bundle_path), "--format", "json"],
+            stdout=export_stdout,
+            stderr=export_stderr,
+        )
+        == 0
+    )
+    export_payload = json.loads(export_stdout.getvalue())
+    assert export_payload["schema_version"] == RUNS_EXPORT_SCHEMA_VERSION
+    assert export_payload["ok"] is True
+    assert export_payload["warnings"] == []
+    assert export_payload["result"]["status"] == "succeeded"
+    assert export_payload["result"]["exported_payload_count"] == 0
+    assert export_payload["result"]["manifest"]["payload_selection"] == {
+        "include_artifacts": False,
+        "include_logs": False,
+        "include_other": False,
+        "include_workspace": False,
+        "extensions": {},
+    }
+    assert export_stderr.getvalue() == ""
+
+    inspect_stdout = io.StringIO()
+    inspect_stderr = io.StringIO()
+    assert (
+        main(
+            ["runs", "inspect", str(bundle_path), "--format", "json"],
+            stdout=inspect_stdout,
+            stderr=inspect_stderr,
+        )
+        == 0
+    )
+    inspect_payload = json.loads(inspect_stdout.getvalue())
+    assert inspect_payload["schema_version"] == RUNS_INSPECT_SCHEMA_VERSION
+    assert inspect_payload["ok"] is True
+    assert inspect_payload["result"]["status"] == "succeeded"
+    assert inspect_payload["result"]["manifest"]["run_uri"] == run_uri
+    assert inspect_payload["result"]["included_payload_count"] == 0
+    assert inspect_stderr.getvalue() == ""
+
+    import_stdout = io.StringIO()
+    import_stderr = io.StringIO()
+    assert (
+        main(
+            [
+                "runs",
+                "import",
+                str(bundle_path),
+                str(target_collection),
+                "--format",
+                "json",
+            ],
+            stdout=import_stdout,
+            stderr=import_stderr,
+        )
+        == 0
+    )
+    import_payload = json.loads(import_stdout.getvalue())
+    assert import_payload["schema_version"] == RUNS_IMPORT_SCHEMA_VERSION
+    assert import_payload["ok"] is True
+    assert import_payload["result"]["status"] == "succeeded"
+    assert import_payload["result"]["target_run_uri"].endswith("/run-1")
+    assert import_payload["result"]["readiness"]["mode"] == "historical_only"
+    assert import_stderr.getvalue() == ""
+
+
 def _create_run(
     root: Path,
     run_path: Path,
@@ -178,5 +256,41 @@ def _create_run(
                 producer_stage="build",
             )
         },
+    )
+    return run_uri
+
+
+def _create_completed_authority_run(run_path: Path) -> str:
+    run_uri = path_to_run_uri(run_path)
+    payload = run_path / "artifacts" / "build" / "out.bin"
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_bytes(b"payload")
+    store = SQLitePerRunAuthorityStore(run_uri)
+    store.create_run(run_uri)
+    allocation = store.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
+    store.record_output_commit(
+        run_uri,
+        "build",
+        attempt_id=allocation.attempt.attempt_id,
+        fencing_token=allocation.lease.fencing_token,
+        outputs={
+            "out": ArtifactRef(
+                artifact_id="build/out",
+                uri=path_to_file_uri(payload),
+                artifact_type="bytes",
+                checksum=format_digest("sha256", "a" * 64),
+            )
+        },
+    )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.CREATED,
+        to_status=RunStatus.SUCCEEDED,
     )
     return run_uri

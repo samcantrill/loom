@@ -21,10 +21,16 @@ V11 adds a narrow queue operations group: `loom queue preflight`,
 Python queue service and configured repository; enqueue remains Python-first.
 See [queue.md](queue.md) for the queue service ownership model and examples.
 
-Roadmap commands for run status, logs, artifacts, sweeps, catalogs, bundles,
-plugins, remote stores, containers, cleanup, and scheduler/container executors are
-intentionally deferred. The later-command sections in this document describe
-future shape, not current support.
+V12 adds portable run exchange commands under the existing `loom runs` group:
+`loom runs export`, `loom runs inspect`, and `loom runs import`. These commands
+are thin wrappers over public `loom.runs` bundle APIs. They do not parse archive
+members in CLI code, load provider plugins, dispatch remote exporters, or claim
+live migrated resume support.
+
+Roadmap commands for sweeps, plugins, remote stores, containers, cleanup, and
+additional scheduler/container executors are intentionally deferred. The
+later-command sections in this document describe future shape, not current
+support.
 
 The v2 CLI should answer:
 
@@ -248,6 +254,12 @@ loom run CONFIG --executor slurm-afterok
 loom status RUN_URI
 loom status RUN_URI --jobs
 loom cancel RUN_URI --jobs
+loom runs index COLLECTION
+loom runs list COLLECTION
+loom runs diff COLLECTION RUN_A RUN_B
+loom runs export RUN_URI BUNDLE
+loom runs inspect BUNDLE
+loom runs import BUNDLE TARGET_COLLECTION
 loom stage run --run-uri RUN_URI --stage STAGE [--attempt N]
 loom prepared-run continue --run-uri RUN_URI --executor local
 loom stage-job run --run-uri RUN_URI --stage STAGE --executor local
@@ -257,11 +269,38 @@ config overlays and CLI overrides
 resume selector flags shared by plan and run
 local and serial subprocess executor execution
 machine-readable JSON output for validate, plan, run, stage run, prepared-run,
-stage-job, SLURM dry-run/live submission/status/cancel, and structured errors
+stage-job, SLURM dry-run/live submission/status/cancel, run catalog and bundle
+exchange commands, and structured errors
 loom plan CONFIG --resume --explain STAGE
 ```
 
-### 4.2 Must Not Support in v2
+### 4.2 Run Exchange Commands
+
+`loom runs export RUN_URI BUNDLE` exports a completed local run into a local
+bundle archive. Metadata-only export is the default. Users opt into copied refs
+with `--include-payloads`, `--include-logs`, and `--include-workspace`; checksum
+verification is explicit with `--verify-checksums`.
+
+`loom runs inspect BUNDLE` reads bundle metadata and diagnostics without
+extracting archive members. It can verify member checksums when requested.
+
+`loom runs import BUNDLE TARGET_COLLECTION` imports into a local target
+collection with target-local identity and historical-only readiness. Source run
+identity and bundle evidence are preserved as provenance. The CLI returns JSON
+result envelopes with the same public result records used by Python callers.
+
+The run exchange CLI does not:
+
+```text
+implement archive safety itself
+mutate target run stores directly
+load exporter plugins
+contact remote services
+perform provider-specific transfer
+enable live migrated resume
+```
+
+### 4.3 Must Not Support in v2
 
 ```text
 interactive TUI
@@ -275,13 +314,13 @@ rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
 Docker or Apptainer execution
 remote run URI schemes
-sweep, bundle, plugin, cleanup, or reliability commands
+sweep, plugin, cleanup, reliability, or provider-specific bundle commands
 --run-dir, --run-id, or --strict options
 ```
 
 Domain packages can expose their own CLIs that call `loom` Python APIs.
 
-### 4.3 Deferred Command Families
+### 4.4 Deferred Command Families
 
 ```text
 loom sweep plan ...
