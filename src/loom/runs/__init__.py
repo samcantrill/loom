@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 from .catalog import RunCatalog
+from .bundles import (
+    LOCAL_RUN_BUNDLE_ADAPTER,
+    RUN_BUNDLE_MANIFEST_MEMBER,
+    LocalRunBundleExporter,
+    build_portable_run_export_record,
+    export_completed_run_bundle,
+    export_run_bundle,
+    inspect_run_bundle,
+    normalize_bundle_member_path,
+    write_local_run_bundle,
+)
 from .errors import (
     CatalogError,
     CatalogFeatureUnavailableError,
@@ -67,6 +78,15 @@ from .models import (
 
 __all__ = [
     "RunCatalog",
+    "LOCAL_RUN_BUNDLE_ADAPTER",
+    "RUN_BUNDLE_MANIFEST_MEMBER",
+    "LocalRunBundleExporter",
+    "build_portable_run_export_record",
+    "export_completed_run_bundle",
+    "export_run_bundle",
+    "inspect_run_bundle",
+    "normalize_bundle_member_path",
+    "write_local_run_bundle",
     "CatalogError",
     "CatalogFeatureUnavailableError",
     "CatalogStorageError",
