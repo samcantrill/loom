@@ -34,7 +34,7 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
-- Current phase: none
+- Current phase: Phase 1 `pr_open`
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains; Phase 1 execution planning may begin.
@@ -404,7 +404,7 @@ Required suite categories:
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `sweep-contracts-manifests` | pending | `codex/sweep-contracts-manifests` | pending | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
+| 1 | `sweep-contracts-manifests` | pr_open | `codex/sweep-contracts-manifests` | [#151](https://github.com/samcantrill/loom/pull/151) | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
 | 2 | `grid-manual-planning` | pending | `codex/grid-manual-planning` | pending | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
 | 3 | `early-stop-direct-dispatch` | pending | `codex/early-stop-direct-dispatch` | pending | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
 | 4 | `coordination-queue-status` | pending | `codex/coordination-queue-status` | pending | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
@@ -465,11 +465,11 @@ ordinary-run compatibility guardrail.
 
 ### Phase 1: Sweep Contracts And Manifests
 
-- Status: pending
+- Status: pr_open
 - Slug: `sweep-contracts-manifests`
 - Branch: `codex/sweep-contracts-manifests`
 - Worktree: `/home/samcantrill/work/loom-worktrees/sweep-contracts-manifests`
-- PR: pending
+- PR: [#151](https://github.com/samcantrill/loom/pull/151)
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -562,12 +562,13 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
+- Phase execution plan: complete
+- Planning/refinement budget: used for expanded-path draft/refine
+- Implementation/refinement budget: used as manager-local completion and
+  pre-submit correction after executor checkpoint
+- PR review budget: used by manager pre-submit review
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
+- Pre-submit blocker gate: passed
 - Merge record: pending
 
 #### Risks And Stop Conditions
@@ -584,11 +585,16 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
+- Implementation: Added import-light sweep provider/proposal, dispatch,
+  feedback, extraction, trial, and versioned manifest contract records under
+  `loom.pipeline.sweep`.
+- Validation: Targeted package tests passed (`45 passed`), targeted sweep
+  unit/contract tests passed (`16 passed`), targeted Ruff passed, `make
+  validate-pr` passed, and `make test-summary` passed.
+- PR: [#151](https://github.com/samcantrill/loom/pull/151), targeting
+  `develop` from `codex/sweep-contracts-manifests`.
 - Merge:
-- Follow-up:
+- Follow-up: Phase 2 owns grid/manual planning behavior over these contracts.
 
 ### Phase 2: Grid And Manual Planning
 

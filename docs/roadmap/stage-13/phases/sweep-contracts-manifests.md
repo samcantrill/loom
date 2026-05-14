@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; ready for implementation
+- Status: pr_open
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 1: Sweep Contracts And Manifests`
 - Branch: `codex/sweep-contracts-manifests`
@@ -14,7 +14,8 @@
 - Stack predecessor: none
 - Base branch: `origin/develop` at `73fef42064ecfab4f898993816b6765954892dee`
 - Target branch: `develop`
-- Merge eligibility: root phase PR may target `develop`; merge-eligible only
+- PR: [#151](https://github.com/samcantrill/loom/pull/151)
+- Merge eligibility: root phase PR targets `develop`; merge-eligible only
   after implementation, phase validation, automated review, CI or justified
   unavailable checks, and target-branch verification pass.
 - Workflow path: expanded path
@@ -426,7 +427,7 @@ make test-summary
 - Phase implementation refinement: used as manager-local completion and
   pre-submit correction after executor checkpoint; no separate refiner subagent
   was run.
-- PR review: unused
+- PR review: used by manager pre-submit review
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -455,6 +456,9 @@ make test-summary
   and corrected trials-manifest malformed-record compatibility diagnostics to
   report `sweep_id` rather than `trial_id`.
 - Blocker-resolution summary: none; 0/3 blocker-resolution passes used.
-- PR preparation: pending.
+- PR preparation: complete; opened
+  [#151](https://github.com/samcantrill/loom/pull/151) against `develop` and
+  verified `baseRefName=develop`, `headRefName=codex/sweep-contracts-manifests`,
+  `state=OPEN`.
 - Stack maintenance: root phase; no predecessor.
 - Remaining blockers: none.
