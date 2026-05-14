@@ -423,7 +423,9 @@ make test-summary
 
 - Phase execution plan draft: complete
 - Phase execution plan refine: complete for expanded path
-- Phase implementation refinement: unused
+- Phase implementation refinement: used as manager-local completion and
+  pre-submit correction after executor checkpoint; no separate refiner subagent
+  was run.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -432,9 +434,26 @@ make test-summary
 - Draft plan: complete on 2026-05-14 in the phase worktree.
 - Final phase execution plan: complete on 2026-05-14; ready for
   `loom_phase_executor`.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending; implementation refinement budget unused.
+- Implementation summary: complete on 2026-05-14. Added the import-light
+  `loom.pipeline.sweep` contract package with provider/proposal protocols,
+  optional finite-provider capability, trial records, adapter-neutral dispatch
+  request/result records, feedback/observation records, unsupported extraction
+  request/result diagnostics, and versioned sweep/trials manifest models with
+  compatibility diagnostics and JSON read/write helpers. Added package, unit,
+  and contract coverage for exports, import boundaries, plain-data
+  round-trips, provider capabilities, dispatch records, manifest compatibility,
+  feedback, and unsupported extraction.
+- Implementation validation: targeted package tests passed
+  (`45 passed`); targeted sweep unit and contract tests passed
+  (`16 passed`); targeted Ruff passed; `make validate-pr` passed
+  (Ruff, Pyright, default harness, config-extra harness, build); `make
+  test-summary` passed and wrote `build/test-summary.md` with package
+  `79 passed`, unit `1061 passed`, contract `190 passed`, integration
+  `149 passed`, e2e `42 passed`, and config-extra `438 passed`.
+- Refinement summary: manager-local refinement tightened the finite-provider
+  runtime capability so plain sized objects do not count as finite providers,
+  and corrected trials-manifest malformed-record compatibility diagnostics to
+  report `sweep_id` rather than `trial_id`.
 - Blocker-resolution summary: none; 0/3 blocker-resolution passes used.
 - PR preparation: pending.
 - Stack maintenance: root phase; no predecessor.
