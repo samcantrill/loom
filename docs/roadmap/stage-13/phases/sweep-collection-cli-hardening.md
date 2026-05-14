@@ -136,10 +136,12 @@ scheduler-specific per-trial policy.
   `loom sweep collect` with text and JSON output. The CLI must delegate to
   public sweep APIs and avoid duplicating manifest parsing, dispatch, status,
   or collection business logic.
-- Use this initial CLI contract unless source constraints force a smaller
-  equivalent: `loom sweep plan SPEC --sweep-dir DIR`, `loom sweep run SPEC
-  --sweep-dir DIR [--queue-config CONFIG]`, `loom sweep status DIR`, and
-  `loom sweep collect DIR [--include-unsupported-extraction]`.
+- Use this initial CLI contract: `loom sweep plan SPEC --sweep-dir DIR`,
+  `loom sweep run SPEC --config CONFIG --sweep-dir DIR [--queue-config CONFIG]`,
+  `loom sweep status DIR [--queue-config CONFIG]`, and `loom sweep collect DIR
+  [--include-unsupported-extraction]`. The `--config` argument is required for
+  run/queue submission because sweep specs intentionally only describe trial
+  overrides and identities, not the base pipeline.
 - Add docs and examples for grid/manual specs, planning, direct run, queue
   submit, status outcomes, collection, early stop, unsupported extraction, and
   deferred roadmap behavior.
