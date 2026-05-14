@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Deterministic Sweeps
 - PR title:
   `Deterministic Sweeps - Phase 5: Collection, CLI, Docs, And Hardening`
@@ -17,7 +17,7 @@
 - Base branch: `origin/develop` at
   `959201973861353d016a6818b45f429d941483e4`
 - Target branch: `develop`
-- PR: pending
+- PR: [#155](https://github.com/samcantrill/loom/pull/155)
 - Merge eligibility: root phase PR targets `develop`; merge-eligible only after
   implementation, validation, automated review, CI or justified unavailable
   checks, and target-branch verification pass.
@@ -399,8 +399,11 @@ make test-summary
   local fixes before full validation were limited to type/import and
   dependency-light CLI behavior found during targeted validation.
 - Blocker-resolution summary: none used.
-- PR preparation: pending branch push and PR creation after validation evidence
-  update.
+- PR preparation: complete; PR
+  [#155](https://github.com/samcantrill/loom/pull/155) opened from
+  `codex/sweep-collection-cli-hardening` to `develop` after verification
+  confirmed `baseRefName=develop`, `headRefName=codex/sweep-collection-cli-hardening`,
+  and `state=OPEN`.
 - Stack maintenance: root phase from updated `develop`; no successor branch is
   expected for Stage 13.
 - Remaining blockers: none.
