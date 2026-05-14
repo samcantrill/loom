@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 5 PR open
+- Status: complete
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -26,10 +26,11 @@
 - Refine pass: complete on 2026-05-14 after local plan-quality review
 - Plan quality gate: passed on 2026-05-14 after local
   review/refinement/confirmation
-- Current phase: Phase 5, CLI, Docs, Hardening, And Final Validation
+- Current phase: all phases merged
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 5 execution planning may begin.
+  - No plan-quality blocker remains.
+  - No Stage 12 implementation blocker remains.
 
 ## Summary
 
@@ -921,7 +922,7 @@ conformance, and package boundaries.
 
 ### Phase 5: CLI, Docs, Hardening, And Final Validation
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/run-bundle-cli-docs-hardening`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-cli-docs-hardening`
 - PR: https://github.com/samcantrill/loom/pull/150
@@ -1022,6 +1023,13 @@ final validation evidence.
   contract 180, integration 149, e2e 42, and config-extra 438 passing.
 - PR opened as https://github.com/samcantrill/loom/pull/150 targeting
   `develop` from `codex/run-bundle-cli-docs-hardening`.
+- Automated review and merge: manager review found one documentation scope
+  inconsistency around deferred bundle commands; fixed in the phase branch,
+  revalidated, and GitHub CI `checks` passed. PR #150 was squash-merged into
+  `develop` as merge commit `0962575c8e2ce9b9196876a1a6a2f4926379c922`.
+- Follow-up notes: Phase 5 was the final Stage 12 phase; no successor branch
+  depended on the Phase 5 branch at merge time. Local cleanup may remove the
+  Phase 5 worktree and stale branch refs.
 
 ## Cross-Phase Review Notes
 
