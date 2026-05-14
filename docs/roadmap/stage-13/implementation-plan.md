@@ -972,10 +972,11 @@ ordinary-run compatibility guardrail.
   `docs/roadmap/stage-13/phases/coordination-queue-status.md`
 - Planning/refinement budget: used for expanded-path draft/refine in
   `docs/roadmap/stage-13/phases/coordination-queue-status.md`
-- Implementation/refinement budget: unused
+- Implementation/refinement budget: not needed; targeted and final validation
+  passed after the implementation slice
 - PR review budget: unused
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
+- Pre-submit blocker gate: passed
 - Merge record: pending
 
 #### Risks And Stop Conditions
@@ -993,8 +994,17 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
-- Implementation:
-- Validation:
+- Implementation: Added sweep coordination projection helpers, queue-backed
+  finite-trial submission records and enqueue helpers, optional coordination
+  updates for direct/queue dispatch, read-only sweep status aggregation, and
+  public sweep exports. Queue service enqueue now thaws nested structured
+  request fields before creating durable queue records so whole-run trial
+  intents can carry structured metadata.
+- Validation: Targeted Phase 4 tests passed (`42 passed`); broader queue and
+  coordination tests passed (`74 passed`); targeted Ruff passed; Pyright passed;
+  `make validate-pr` passed; `make test-summary` passed with package
+  `79 passed`, unit `1083 passed`, contract `197 passed`, integration
+  `154 passed`, e2e `42 passed`, and config-extra `438 passed`.
 - PR:
 - Merge:
 - Follow-up:
