@@ -179,6 +179,25 @@ class SubprocessExecutor:
                 metadata=metadata,
             )
 
+        if worker_result.status == StageStatus.CANCELLED:
+            return StageExecutionResult(
+                stage_name=request.stage.name,
+                status=StageStatus.CANCELLED,
+                outputs={},
+                failure=None,
+                started_at=worker_result.started_at,
+                finished_at=worker_result.finished_at,
+                executor_name=self.name,
+                attempt=request.attempt,
+                stdout_path=worker_result.stdout_path,
+                stderr_path=worker_result.stderr_path,
+                traceback_path=worker_result.traceback_path,
+                executor_metadata={
+                    **metadata,
+                    **dict(worker_result.executor_metadata),
+                },
+            )
+
         return StageExecutionResult(
             stage_name=request.stage.name,
             status=StageStatus.SUCCEEDED,
@@ -364,6 +383,16 @@ def _process_conflict_failure(
             message="subprocess worker reported failure but process exited successfully",
             exit_code=None,
             signal=None,
+            metadata=process_metadata,
+            details={"worker_status": worker_result.status.value},
+        )
+    if worker_result.status == StageStatus.CANCELLED and process_returncode != 0:
+        return _failure(
+            request=request,
+            failed_at=finished_at,
+            message="subprocess worker reported cancellation but process failed",
+            exit_code=process_exit_code,
+            signal=process_signal,
             metadata=process_metadata,
             details={"worker_status": worker_result.status.value},
         )

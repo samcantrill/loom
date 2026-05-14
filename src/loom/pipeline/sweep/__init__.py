@@ -2,9 +2,21 @@
 
 from .dispatch import (
     SWEEP_DISPATCH_SCHEMA_VERSION,
+    DirectSweepRunResult,
+    DirectSweepTrialResult,
     SweepDispatchRequest,
     SweepDispatchResult,
     SweepDispatchStatus,
+    SweepRunStatus,
+    build_dispatch_requests,
+    build_trial_run_request,
+    run_sweep_direct,
+)
+from .early_stopping import (
+    EARLY_STOP_REASON_CODE,
+    EarlyStopSignal,
+    lifecycle_reason_from_early_stop,
+    stop_early,
 )
 from .errors import (
     SweepError,
@@ -81,9 +93,19 @@ from .trials import SweepTrialRecord
 
 __all__ = [
     "SWEEP_DISPATCH_SCHEMA_VERSION",
+    "DirectSweepRunResult",
+    "DirectSweepTrialResult",
     "SweepDispatchRequest",
     "SweepDispatchResult",
     "SweepDispatchStatus",
+    "SweepRunStatus",
+    "build_dispatch_requests",
+    "build_trial_run_request",
+    "run_sweep_direct",
+    "EARLY_STOP_REASON_CODE",
+    "EarlyStopSignal",
+    "lifecycle_reason_from_early_stop",
+    "stop_early",
     "SWEEP_EXTRACTION_SCHEMA_VERSION",
     "SweepExtractionDiagnostic",
     "SweepExtractionRequest",

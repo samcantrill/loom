@@ -499,6 +499,46 @@ def test_runner_fails_fast_when_stage_resources_are_unavailable(
     assert executor.requests == []
 
 
+def test_runner_maps_context_stop_early_to_cancelled_lifecycle(
+    tmp_path: Path,
+) -> None:
+    run_store = _authority_run_store(tmp_path)
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.EarlyStopStage"
+                    ),
+                )
+            ),
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    stage_result = result.stage_results["build"]
+    run_status = run_store.read_run_status(result.run_uri)
+    stage_status = run_store.read_stage_status(result.run_uri, "build")
+
+    assert result.status == RunStatus.CANCELLED
+    assert result.failure is None
+    assert stage_result.status == StageStatus.CANCELLED
+    assert run_status is not None
+    assert run_status.status == RunStatus.CANCELLED
+    assert run_status.metadata["reason_code"] == "early_stop"
+    assert stage_status is not None
+    assert stage_status.status == StageStatus.CANCELLED
+    assert stage_status.metadata["reason_code"] == "early_stop"
+    reason = cast(Mapping[str, PlainData], stage_status.metadata["reason"])
+    assert reason["message"] == "stopped early"
+
+
 def test_runner_prepares_worker_attempt_for_subprocess_without_constructing_stage(
     tmp_path: Path,
 ) -> None:

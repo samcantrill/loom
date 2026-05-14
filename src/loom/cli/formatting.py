@@ -284,7 +284,13 @@ def format_stage_worker_text(result: object) -> str:
     """Format one direct worker result."""
 
     status = _enum_value(getattr(result, "status"))
-    prefix = "OK" if status == "SUCCEEDED" else "FAILED"
+    prefix = (
+        "OK"
+        if status == "SUCCEEDED"
+        else "CANCELLED"
+        if status == "CANCELLED"
+        else "FAILED"
+    )
     run_uri = str(getattr(result, "run_uri"))
     stage_name = str(getattr(result, "stage_name"))
     attempt = int(getattr(result, "attempt"))

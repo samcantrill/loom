@@ -50,7 +50,7 @@ def _worker_result(status: StageStatus = StageStatus.SUCCEEDED) -> StageWorkerRe
         executor_name="local",
         outputs=outputs,
         failure=failure,
-        exit_code=0 if status == StageStatus.SUCCEEDED else 1,
+        exit_code=0 if status != StageStatus.FAILED else 1,
     )
 
 
@@ -122,6 +122,31 @@ def test_stage_run_failure_returns_one(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert "FAILED stage run file:///tmp/run build attempt 1: FAILED" in stdout.getvalue()
     assert "failure stage_exception: boom" in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_stage_run_cancelled_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        stage_command,
+        "_run_stage_worker",
+        lambda **_kwargs: _worker_result(StageStatus.CANCELLED),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["stage", "run", "--run-uri", "file:///tmp/run", "--stage", "build"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    assert (
+        "CANCELLED stage run file:///tmp/run build attempt 1: CANCELLED"
+        in stdout.getvalue()
+    )
     assert stderr.getvalue() == ""
 
 

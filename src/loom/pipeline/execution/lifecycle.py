@@ -14,6 +14,7 @@ from loom.pipeline.status import (
     StageStatusRecord,
 )
 from loom.pipeline.stores import LegacyRunStore as RunStore
+from loom.pipeline.stores import LifecycleReason
 from loom.pipeline.stores.artifact_store import ArtifactStore
 from loom.pipeline.stores.indexes import format_artifact_key, merge_artifact_index
 from loom.serialization import PlainData, ensure_plain_data
@@ -152,6 +153,32 @@ def write_failed_run(
     )
 
 
+def write_cancelled_run(
+    run_store: RunStore,
+    *,
+    run_uri: str,
+    created_at: str,
+    started_at: str,
+    cancelled_at: str,
+    reason: LifecycleReason,
+    stage_name: str | None = None,
+) -> None:
+    metadata = _reason_metadata(reason)
+    if stage_name is not None:
+        metadata["cancelled_stage"] = stage_name
+    write_run_status(
+        run_store,
+        run_uri=run_uri,
+        status=RunStatus.CANCELLED,
+        created_at=created_at,
+        updated_at=cancelled_at,
+        started_at=started_at,
+        finished_at=cancelled_at,
+        message=reason.message,
+        metadata=metadata,
+    )
+
+
 def persist_stage_failure(
     run_store: RunStore,
     *,
@@ -182,6 +209,37 @@ def persist_stage_failure(
         event_type="stage.failed",
         timestamp=clock(),
         payload={"attempt": attempt, "failure_type": failure.failure_type},
+    )
+
+
+def persist_stage_cancellation(
+    run_store: RunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    started_at: str | None,
+    cancelled_at: str,
+    reason: LifecycleReason,
+    clock: Callable[[], str] = utc_timestamp,
+) -> None:
+    write_stage_cancelled(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        started_at=started_at,
+        cancelled_at=cancelled_at,
+        message=reason.message,
+        metadata=_reason_metadata(reason),
+    )
+    emit_stage_event(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        event_type="stage.cancelled",
+        timestamp=clock(),
+        payload={"attempt": attempt, "reason": reason.to_dict()},
     )
 
 
@@ -276,6 +334,31 @@ def commit_stage_execution_result(
             attempt=attempt,
             outputs={},
             failure=failure,
+            reasons=stage_plan.reasons,
+            started_at=execution_result.started_at,
+            finished_at=execution_result.finished_at,
+            executor_metadata=execution_result.executor_metadata,
+        )
+
+    if execution_result.status == StageStatus.CANCELLED:
+        reason = _execution_result_lifecycle_reason(execution_result)
+        persist_stage_cancellation(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            started_at=execution_result.started_at,
+            cancelled_at=execution_result.finished_at,
+            reason=reason,
+            clock=clock,
+        )
+        return StageRunResult(
+            stage_name=stage.name,
+            action=PlanAction.RUN,
+            status=StageStatus.CANCELLED,
+            attempt=attempt,
+            outputs={},
+            failure=None,
             reasons=stage_plan.reasons,
             started_at=execution_result.started_at,
             finished_at=execution_result.finished_at,
@@ -522,6 +605,40 @@ def write_stage_failed(
     return record
 
 
+def write_stage_cancelled(
+    run_store: RunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    started_at: str | None,
+    cancelled_at: str,
+    message: str | None = None,
+    owner: Mapping[str, PlainData] | None = None,
+    metadata: Mapping[str, PlainData] | None = None,
+) -> StageStatusRecord:
+    normalized_owner = ensure_plain_data(dict(owner or {}), path="owner")
+    normalized_metadata = ensure_plain_data(dict(metadata or {}), path="metadata")
+    if not isinstance(normalized_owner, dict) or not isinstance(
+        normalized_metadata, dict
+    ):
+        raise ValueError("owner and metadata must be mappings")
+    record = StageStatusRecord(
+        run_uri=run_uri,
+        stage_name=stage_name,
+        status=StageStatus.CANCELLED,
+        attempt=attempt,
+        updated_at=cancelled_at,
+        started_at=started_at,
+        finished_at=cancelled_at,
+        message=message,
+        owner=normalized_owner,
+        metadata=normalized_metadata,
+    )
+    run_store.write_stage_status(run_uri, stage_name, record)
+    return record
+
+
 def write_stage_skipped(
     run_store: RunStore,
     *,
@@ -594,13 +711,39 @@ def _plain(value: object, *, path: str) -> dict[str, PlainData]:
     return normalized
 
 
+def _reason_metadata(reason: LifecycleReason) -> dict[str, PlainData]:
+    if not isinstance(reason, LifecycleReason):
+        raise ValueError("reason must be LifecycleReason")
+    return {
+        "reason": reason.to_dict(),
+        "reason_code": reason.code,
+    }
+
+
+def _execution_result_lifecycle_reason(
+    execution_result: StageExecutionResult,
+) -> LifecycleReason:
+    raw = execution_result.executor_metadata.get("lifecycle_reason")
+    if isinstance(raw, Mapping):
+        try:
+            return LifecycleReason.from_dict(raw)
+        except Exception:
+            pass
+    return LifecycleReason(
+        code="early_stop",
+        message="stage requested early stop",
+    )
+
+
 __all__ = [
     "bind_stage_inputs",
     "commit_stage_execution_result",
     "next_stage_attempt",
+    "persist_stage_cancellation",
     "persist_stage_failure",
     "record_stage_failure_and_failed_run",
     "write_stage_artifact_index_refs",
+    "write_cancelled_run",
     "write_failed_run",
     "write_run_status",
     "write_run_submitted",
@@ -608,6 +751,7 @@ __all__ = [
     "write_stage_submitted",
     "write_stage_running",
     "write_stage_succeeded",
+    "write_stage_cancelled",
     "write_stage_failed",
     "write_stage_skipped",
     "write_stage_blocked",

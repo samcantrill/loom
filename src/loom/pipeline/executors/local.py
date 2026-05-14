@@ -9,6 +9,10 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.early_stopping import (
+    EarlyStopSignal,
+    lifecycle_reason_from_early_stop,
+)
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import StageStatus
 from loom.timestamps import utc_timestamp
@@ -60,6 +64,28 @@ class LocalExecutor:
                     )
             else:
                 raw_outputs = request.stage_object.run(request.context, request.inputs)
+        except EarlyStopSignal as exc:
+            finished_at = utc_timestamp()
+            if self.capture_stdout_stderr:
+                write_text_file(request.stdout_path, stdout_buffer.getvalue())
+                write_text_file(request.stderr_path, stderr_buffer.getvalue())
+            reason = lifecycle_reason_from_early_stop(exc)
+            return StageExecutionResult(
+                stage_name=request.stage.name,
+                status=StageStatus.CANCELLED,
+                outputs={},
+                failure=None,
+                started_at=started_at,
+                finished_at=finished_at,
+                executor_name=self.name,
+                attempt=request.attempt,
+                stdout_path=str(request.stdout_path),
+                stderr_path=str(request.stderr_path),
+                executor_metadata={
+                    "capture_stdout_stderr": self.capture_stdout_stderr,
+                    "lifecycle_reason": reason.to_dict(),
+                },
+            )
         except Exception as exc:  # noqa: BLE001 - trusted stage failures become structured results.
             finished_at = utc_timestamp()
             traceback_text = "".join(
