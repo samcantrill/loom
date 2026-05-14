@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 5 in progress
+- Status: Phase 5 PR open
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -921,10 +921,10 @@ conformance, and package boundaries.
 
 ### Phase 5: CLI, Docs, Hardening, And Final Validation
 
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/run-bundle-cli-docs-hardening`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-cli-docs-hardening`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/150
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -1013,6 +1013,15 @@ final validation evidence.
 - Phase execution plan:
   `docs/roadmap/stage-12/phases/run-bundle-cli-docs-hardening.md`.
 - Implementation started from updated `origin/develop` after Phase 4 merge.
+- Implementation summary: added `loom runs export`, `loom runs inspect`, and
+  `loom runs import` with text/JSON output, public API delegation, local
+  SQLite authority export wiring, strict historical import behavior, and docs
+  for v12 bundle behavior and deferrals.
+- Tests and validation: targeted Phase 5 checks passed with 65 tests; `make
+  validate-pr` passed; `make test-summary` passed with package 77, unit 1055,
+  contract 180, integration 149, e2e 42, and config-extra 438 passing.
+- PR opened as https://github.com/samcantrill/loom/pull/150 targeting
+  `develop` from `codex/run-bundle-cli-docs-hardening`.
 
 ## Cross-Phase Review Notes
 

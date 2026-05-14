@@ -286,9 +286,9 @@ make test-summary
 - Refinement summary: no separate implementation refinement pass used; targeted
   fixes were completed during the implementation pass before full validation.
 - Blocker-resolution summary: 0/3 blocker-resolution passes used.
-- PR preparation: PR body prepared in
-  `docs/roadmap/stage-12/phases/run-bundle-cli-docs-hardening-pr-body.md`;
-  PR open/verification pending.
+- PR preparation: PR opened as https://github.com/samcantrill/loom/pull/150
+  targeting `develop` from `codex/run-bundle-cli-docs-hardening`; verified
+  with `gh pr view 150 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: none required; Phase 5 is a root phase targeting
   `develop`.
 - Remaining blockers: none.
