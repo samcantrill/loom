@@ -23,6 +23,13 @@ from .imports import (
     import_offline_evidence,
     import_run_bundle,
 )
+from .transfer import (
+    TRANSFER_VERIFICATION_DELEGATED_KEY,
+    transfer_verification_to_delegated_verification,
+    unsupported_transfer_diagnostic,
+    unsupported_transfer_record,
+    unsupported_transfer_verification,
+)
 from .errors import (
     CatalogError,
     CatalogFeatureUnavailableError,
@@ -103,6 +110,11 @@ __all__ = [
     "build_portable_run_import_record",
     "import_offline_evidence",
     "import_run_bundle",
+    "TRANSFER_VERIFICATION_DELEGATED_KEY",
+    "transfer_verification_to_delegated_verification",
+    "unsupported_transfer_diagnostic",
+    "unsupported_transfer_record",
+    "unsupported_transfer_verification",
     "CatalogError",
     "CatalogFeatureUnavailableError",
     "CatalogStorageError",

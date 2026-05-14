@@ -701,15 +701,20 @@ def _delegated_launch_verification_report(
     unproven = [
         str(check["name"]) for check in checks if check["status"] == "unproven"
     ]
+    unsupported = [
+        str(check["name"]) for check in checks if check["status"] == "unsupported"
+    ]
     return _plain_mapping(
         {
             "schema_version": 1,
             "checks": list(checks),
             "proven": proven,
             "unproven": unproven,
+            "unsupported": unsupported,
             "summary": {
                 "proven_count": len(proven),
                 "unproven_count": len(unproven),
+                "unsupported_count": len(unsupported),
             },
         },
         path="delegated_launch_verification",
@@ -723,7 +728,11 @@ def _verification_check(
 ) -> Mapping[str, object]:
     if isinstance(value, Mapping):
         status_value = value.get("status")
-        if isinstance(status_value, str) and status_value in {"proven", "unproven"}:
+        if isinstance(status_value, str) and status_value in {
+            "proven",
+            "unproven",
+            "unsupported",
+        }:
             status = cast(str, status_value)
         else:
             status = "proven" if value.get("proven") is True else "unproven"
@@ -757,6 +766,8 @@ def _adapter_check(
 def _verification_reason(name: str, status: str) -> str:
     if status == "proven":
         return f"{name} is recorded as proven by the launch contract"
+    if status == "unsupported":
+        return f"{name} is recorded as unsupported by the launch contract"
     return f"{name} is not proven by the delegated SLURM adapter"
 
 
