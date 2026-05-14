@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Deterministic Sweeps
 - PR title:
   `Deterministic Sweeps - Phase 4: Coordination, Queue Dispatch, And Status`
@@ -17,7 +17,7 @@
 - Base branch:
   `origin/develop` at `8854cb7fd727de2ae9c0fe4fd9966fb27ad48514`
 - Target branch: `develop`
-- PR: pending
+- PR: [#154](https://github.com/samcantrill/loom/pull/154)
 - Merge eligibility: root phase PR targets `develop`; merge-eligible only after
   implementation, validation, automated review, CI or justified unavailable
   checks, and target-branch verification pass.
@@ -297,6 +297,8 @@ make test-summary
 - Blocker-resolution summary: 0/3 used.
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-13/phases/coordination-queue-status-pr-body.md`; PR is
-  pending.
+  [#154](https://github.com/samcantrill/loom/pull/154) opened against
+  `develop` and verified with `baseRefName=develop`,
+  `headRefName=codex/coordination-queue-status`, `state=OPEN`.
 - Stack maintenance:
 - Remaining blockers: none.

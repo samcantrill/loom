@@ -879,11 +879,11 @@ ordinary-run compatibility guardrail.
 
 ### Phase 4: Coordination, Queue Dispatch, And Status
 
-- Status: in_progress
+- Status: pr_open
 - Slug: `coordination-queue-status`
 - Branch: `codex/coordination-queue-status`
 - Worktree: `/home/samcantrill/work/loom-worktrees/coordination-queue-status`
-- PR: pending
+- PR: [#154](https://github.com/samcantrill/loom/pull/154)
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -1005,7 +1005,8 @@ ordinary-run compatibility guardrail.
   `make validate-pr` passed; `make test-summary` passed with package
   `79 passed`, unit `1083 passed`, contract `197 passed`, integration
   `154 passed`, e2e `42 passed`, and config-extra `438 passed`.
-- PR:
+- PR: [#154](https://github.com/samcantrill/loom/pull/154), targeting
+  `develop` from `codex/coordination-queue-status`.
 - Merge:
 - Follow-up:
 
