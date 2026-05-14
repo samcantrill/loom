@@ -828,8 +828,9 @@ ordinary-run compatibility guardrail.
   `docs/roadmap/stage-13/phases/early-stop-direct-dispatch.md`
 - Implementation/refinement budget: not needed; targeted and final validation
   passed after the implementation slice
-- PR review budget: unused
-- Blocker-resolution budget: unused
+- PR review budget: used by manager pre-merge review
+- Blocker-resolution budget: 1/3 used for subprocess worker CLI cancellation
+  exit-code handling
 - Pre-submit blocker gate: passed
 - Merge record: pending
 
@@ -857,7 +858,9 @@ ordinary-run compatibility guardrail.
   aggregate result records.
 - Validation: Targeted Phase 3 tests passed (`52 passed`); adjacent
   execution/executor tests passed (`71 passed`); package/import-boundary tests
-  passed (`45 passed`); `make validate-pr` passed; `make test-summary` passed.
+  passed (`45 passed`); `make validate-pr` passed; `make test-summary` passed
+  with package `79 passed`, unit `1077 passed`, contract `195 passed`,
+  integration `153 passed`, e2e `42 passed`, and config-extra `438 passed`.
 - PR: [#153](https://github.com/samcantrill/loom/pull/153), targeting
   `develop` from `codex/early-stop-direct-dispatch`.
 - Merge:

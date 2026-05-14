@@ -61,11 +61,11 @@ exports, and direct dispatch integration through `PipelineRunner`.
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | package | passed | 79 | 0 | 0 | 1 | 0 |
-| unit | passed | 1076 | 0 | 0 | 7 | 1 |
+| unit | passed | 1077 | 0 | 0 | 7 | 1 |
 | contract | passed | 195 | 0 | 0 | 2 | 0 |
 | integration | passed | 153 | 0 | 0 | 8 | 13 |
 | e2e | passed | 42 | 0 | 0 | 0 | 2 |
-| config-extra | passed | 438 | 0 | 0 | 0 | 1554 |
+| config-extra | passed | 438 | 0 | 0 | 0 | 1555 |
 
 ## Risks / Follow-Ups
 

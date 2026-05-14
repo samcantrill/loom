@@ -394,8 +394,10 @@ make test-summary
 
 - Phase implementation refinement: not needed; targeted and final validation
   passed after the implementation slice.
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used by manager before merge; one subprocess-worker CLI
+  cancellation handling blocker was found and fixed locally.
+- Blocker resolution: 1/3 used for the subprocess worker CLI cancellation
+  exit-code blocker.
 
 ## Completion Notes
 
@@ -413,7 +415,14 @@ make test-summary
 - Refinement summary: Not needed; targeted Ruff, targeted Pyright, targeted
   pytest, full PR validation, and suite summary all passed after the
   implementation commit.
-- Blocker-resolution summary:
+- Review summary: Manager review found that subprocess-worker early-stop
+  results were propagated as `CANCELLED` but the stage CLI still returned a
+  nonzero exit for worker `CANCELLED`. The fix updates the CLI to treat
+  `SUCCEEDED` and `CANCELLED` worker results as successful handoff outcomes and
+  adds unit coverage.
+- Blocker-resolution summary: 1/3 used for the subprocess worker CLI
+  cancellation exit-code blocker; final `make validate-pr` and `make
+  test-summary` passed after the fix.
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-13/phases/early-stop-direct-dispatch-pr-body.md`; PR
   [#153](https://github.com/samcantrill/loom/pull/153) opened against
