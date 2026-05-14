@@ -258,10 +258,21 @@ make test-summary
 
 - Draft plan: completed in the Phase 4 worktree.
 - Final phase execution plan: completed; fast path selected.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added public `loom.runs` transfer evidence helpers,
+  unsupported transfer diagnostics/records, queue delegated-verification
+  preservation for `unsupported` statuses, and fake/unsupported
+  importer/exporter contract coverage.
+- Implementation validation: targeted Ruff passed; targeted Pyright passed;
+  targeted pytest passed with 61 tests; `make validate-pr` passed with Ruff,
+  Pyright, default pytest, config-extra pytest, and build success; `make
+  test-summary` passed with package 77 passed, unit 1051 passed, contract 179
+  passed, integration 148 passed, e2e 41 passed, and config-extra 438 passed.
+- Refinement summary: no separate implementation refinement pass used; targeted
+  fixes were completed during the implementation pass before full validation.
+- Blocker-resolution summary: 0/3 blocker-resolution passes used.
+- PR preparation: PR body prepared in
+  `docs/roadmap/stage-12/phases/transfer-evidence-protocols-pr-body.md`;
+  PR open/verification pending.
+- Stack maintenance: none required; Phase 4 is a root phase targeting
+  `develop`.
+- Remaining blockers: none.
