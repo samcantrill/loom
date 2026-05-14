@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Portable Run Exchange
 - PR title: `Portable Run Exchange - Phase 2: Export And Inspect Bundles`
 - Branch: `codex/run-bundle-export-inspect`
@@ -13,7 +13,7 @@
 - Stack predecessor: none; Phase 1 merged to `develop`
 - Base branch: `develop` via `origin/develop` at `c1228f521e92f6f26aef4d90b70bd6498ed9f45c`
 - Target branch: `develop`
-- Merge eligibility: merge-eligible after PR validation, automated review, CI, and target-branch verification
+- Merge eligibility: merged into `develop` after local validation, automated review, CI, and target-branch verification
 - Workflow path: expanded path
 - Successor dependency notes: Phase 3 import must reuse Phase 2 archive safety and inspect helpers without adding export-side protocol changes.
 - Plan quality gate: passed on 2026-05-14 in the implementation plan
@@ -22,6 +22,7 @@
 - Refine pass: included in this scope-complete expanded-path plan; no separate refinement pass needed unless implementation discovers an archive-safety contract blocker
 - Setup limitations: none; branch/worktree created from updated `origin/develop`
 - PR: [#147](https://github.com/samcantrill/loom/pull/147)
+- Merge commit: `143297c149f12bbba7d4135f45a05e1a03f4867a`
 - Blockers: none
 
 ## Objective
@@ -195,8 +196,10 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: unused
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used by managing Codex local review; no blocking findings remain
+- Blocker resolution: 1/3 used for the regular-file payload member fix after
+  review identified symlink source payloads could otherwise become link
+  members
 
 ## Completion Notes
 
@@ -211,16 +214,21 @@ make test-summary
 - Implementation validation: targeted Phase 2 pytest set passed with 51 tests;
   targeted Ruff passed; targeted Pyright passed; `make validate-pr` passed
   outside the sandbox; `make test-summary` passed with overall 1918 passed, 0
-  failed, 0 errors, 18 skipped, and 1505 deselected.
+  failed, 0 errors, 18 skipped, and 1505 deselected; GitHub CI `checks`
+  passed before merge.
 - Refinement summary: no `loom_phase_refiner` pass used; local implementation
   fixes addressed duplicate diagnostics, computed checksum algorithms, and
   plain-data manifest extension thawing before full validation.
-- Blocker-resolution summary: 0/3 blocker-resolution passes used; no blockers
-  remain.
+- Blocker-resolution summary: 1/3 blocker-resolution passes used for the
+  regular-file payload member fix; no blockers remain.
 - PR preparation: PR body drafted at
   `docs/roadmap/stage-12/phases/run-bundle-export-inspect-pr-body.md`; PR #147
   opened against `develop` and verified with base `develop`, head
   `codex/run-bundle-export-inspect`, state `OPEN`.
-- Stack maintenance: root PR targets `develop`; no successor branch depends on
-  this branch yet.
+- PR merge: PR #147 merged into `develop` on 2026-05-14 with merge commit
+  `143297c149f12bbba7d4135f45a05e1a03f4867a`; final pre-merge check verified
+  base `develop`, head `codex/run-bundle-export-inspect`, state `OPEN`,
+  mergeable status, and successful GitHub CI `checks`.
+- Stack maintenance: root PR targeted `develop`; no successor branch depended
+  on this branch, and the remote branch was deleted after merge.
 - Remaining blockers: none.

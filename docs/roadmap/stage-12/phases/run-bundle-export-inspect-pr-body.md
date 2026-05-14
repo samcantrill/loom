@@ -39,7 +39,7 @@ New tests cover package exports/import boundaries, metadata-only defaults, expli
 | Targeted Pyright | Passed | `uv run --isolated --locked --group dev --extra config pyright ...` |
 | `make validate-pr` | Passed | Ruff, Pyright, default suite, config-extra suite, and build passed outside the sandbox. |
 | `make test-summary` | Passed | Wrote `build/test-summary.md`; all suites passed. |
-| GitHub checks | Pending | To be populated after PR creation. |
+| GitHub checks | Passed | CI `checks` succeeded before merge. |
 
 ### Test Suite Summary
 

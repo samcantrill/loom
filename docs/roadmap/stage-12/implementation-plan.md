@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 2 PR open; ready for automated review and merge gate
+- Status: Phase 2 merged; ready for Phase 3 execution planning
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -376,7 +376,7 @@ Required suite categories:
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `portable-run-exchange-contracts` | merged | `codex/portable-run-exchange-contracts` | [#146](https://github.com/samcantrill/loom/pull/146) | `loom.runs` models plus import-light neutral records and minimal protocols | Establish portable-run exchange, manifest, result, evidence, readiness, and importer/exporter protocol contracts | Package, unit, contract | Manifest models, fake/unsupported adapter records |
-| 2 | `run-bundle-export-inspect` | pr_open | `codex/run-bundle-export-inspect` | [#147](https://github.com/samcantrill/loom/pull/147) | `loom.runs` export and archive helpers | Implement export, archive safety, and inspect without extraction | Unit, contract, integration | Metadata-only export, inspect safety |
+| 2 | `run-bundle-export-inspect` | merged | `codex/run-bundle-export-inspect` | [#147](https://github.com/samcantrill/loom/pull/147) | `loom.runs` export and archive helpers | Implement export, archive safety, and inspect without extraction | Unit, contract, integration | Metadata-only export, inspect safety |
 | 3 | `run-bundle-import-offline-readiness` | pending | `codex/run-bundle-import-offline-readiness` | pending | `loom.runs` import plus `loom.authority.offline_import` adapter alignment | Implement safe import, offline-evidence alignment, provenance, and readiness blockers | Package, unit, contract, integration | Safe import, offline evidence, resume readiness |
 | 4 | `transfer-evidence-protocols` | pending | `codex/transfer-evidence-protocols` | pending | Transfer evidence mappings, importer/exporter conformance, queue mapping tests | Publish queue-consumable transfer verification and explicit fake/unsupported protocol behavior | Package, unit, contract, narrow integration | Queue evidence, fake/unsupported adapters |
 | 5 | `run-bundle-cli-docs-hardening` | pending | `codex/run-bundle-cli-docs-hardening` | pending | CLI, docs, final hardening | Expose `loom runs export/inspect/import`, document behavior, and run final validation | Package, unit, contract, integration, e2e where practical | CLI workflow, docs, final gate |
@@ -564,10 +564,10 @@ mutation changes beyond import-boundary-safe adapter records.
 
 ### Phase 2: Export, Archive Safety, And Inspect
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/run-bundle-export-inspect`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-export-inspect`
-- PR: [#147](https://github.com/samcantrill/loom/pull/147)
+- PR: [#147](https://github.com/samcantrill/loom/pull/147), merged
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -659,8 +659,9 @@ inspect-without-extraction proof.
 
 - Phase execution plan:
   `docs/roadmap/stage-12/phases/run-bundle-export-inspect.md`.
-- PR: [#147](https://github.com/samcantrill/loom/pull/147), opened against
-  `develop` from `codex/run-bundle-export-inspect`.
+- PR: [#147](https://github.com/samcantrill/loom/pull/147), merged into
+  `develop` on 2026-05-14 with merge commit
+  `143297c149f12bbba7d4135f45a05e1a03f4867a`.
 - Implementation summary: added metadata-backed export-record assembly,
   strict local bundle writing, `RunExporter`-conforming local exporter,
   traversal-safe archive member validation, metadata-only default export,
@@ -669,9 +670,12 @@ inspect-without-extraction proof.
 - Tests and validation: targeted Phase 2 pytest set passed with 51 tests;
   targeted Ruff and Pyright passed; `make validate-pr` passed outside the
   sandbox; `make test-summary` passed with overall 1918 passed, 0 failed, 0
-  errors, 18 skipped, and 1505 deselected.
+  errors, 18 skipped, and 1505 deselected; GitHub CI `checks` passed before
+  merge.
 - Follow-up notes: Phase 3 should reuse the archive path validation and
-  manifest reader rather than inventing a separate import safety path.
+  manifest reader rather than inventing a separate import safety path. No
+  successor branch depended on the Phase 2 branch at merge time; remote branch
+  cleanup was safe and completed.
 
 ### Phase 3: Import, Offline Alignment, And Resume Readiness
 
