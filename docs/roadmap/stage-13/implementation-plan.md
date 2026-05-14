@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phases 1-3 merged; Phase 4 PR open with final validation complete
+- Status: Phases 1-4 merged; ready for Phase 5 execution planning
 - Roadmap stage: `v13`
 - Source planning notes:
   `docs/roadmap/stage-13/planning.md`
@@ -34,11 +34,11 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
-- Current phase: Phase 4, `coordination-queue-status`
+- Current phase: Phase 5, `sweep-collection-cli-hardening`
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 4 is awaiting automated PR checks
-    and merge.
+  - No plan-quality blocker remains; Phase 5 execution planning may begin from
+    updated `develop`.
 
 ## Summary
 
@@ -880,7 +880,7 @@ ordinary-run compatibility guardrail.
 
 ### Phase 4: Coordination, Queue Dispatch, And Status
 
-- Status: pr_open
+- Status: merged
 - Slug: `coordination-queue-status`
 - Branch: `codex/coordination-queue-status`
 - Worktree: `/home/samcantrill/work/loom-worktrees/coordination-queue-status`
@@ -979,7 +979,8 @@ ordinary-run compatibility guardrail.
   nested frozen mappings could leak into queued trial config snapshots.
 - Blocker-resolution budget: 1/3 used for the scoped queue snapshot thawing fix.
 - Pre-submit blocker gate: passed
-- Merge record: pending
+- Merge record: complete; squash merged to `develop` as
+  `b00675dc319282973345a5915e99c2256f72e21e` on 2026-05-14.
 
 #### Risks And Stop Conditions
 
@@ -1010,8 +1011,14 @@ ordinary-run compatibility guardrail.
   `438 passed`.
 - PR: [#154](https://github.com/samcantrill/loom/pull/154), targeting
   `develop` from `codex/coordination-queue-status`.
-- Merge:
-- Follow-up:
+- Merge: Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/coordination-queue-status`, `state=OPEN`, head
+  `dab78594d6269a830be1de344559e48022071728`, clean merge state, and GitHub CI
+  `checks` success before squash merge through the GitHub API. The merged PR is
+  [#154](https://github.com/samcantrill/loom/pull/154), merge commit
+  `b00675dc319282973345a5915e99c2256f72e21e`.
+- Follow-up: Phase 5 should branch from updated `develop`; the merged Phase 4
+  remote branch was deleted because no successor branch depended on it.
 
 ### Phase 5: Collection, CLI, Docs, And Hardening
 

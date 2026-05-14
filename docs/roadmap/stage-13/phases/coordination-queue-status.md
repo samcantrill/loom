@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Deterministic Sweeps
 - PR title:
   `Deterministic Sweeps - Phase 4: Coordination, Queue Dispatch, And Status`
@@ -18,9 +18,8 @@
   `origin/develop` at `8854cb7fd727de2ae9c0fe4fd9966fb27ad48514`
 - Target branch: `develop`
 - PR: [#154](https://github.com/samcantrill/loom/pull/154)
-- Merge eligibility: root phase PR targets `develop`; merge-eligible only after
-  implementation, validation, automated review, CI or justified unavailable
-  checks, and target-branch verification pass.
+- Merge eligibility: complete; root phase PR targeted `develop`, validation,
+  automated review, CI, and target-branch verification passed before merge.
 - Workflow path: expanded path
 - Successor dependency notes: Phase 5 should branch from
   `codex/coordination-queue-status` if Phase 4 is `pr_open` or `approved` but
@@ -305,9 +304,15 @@ make test-summary
   queue records are built.
 - Blocker-resolution summary: 1/3 used for the queue snapshot thawing fix.
 - PR preparation: PR body drafted in
-  `docs/roadmap/stage-13/phases/coordination-queue-status-pr-body.md`; PR is
-  [#154](https://github.com/samcantrill/loom/pull/154) opened against
-  `develop` and verified with `baseRefName=develop`,
-  `headRefName=codex/coordination-queue-status`, `state=OPEN`.
-- Stack maintenance:
+  `docs/roadmap/stage-13/phases/coordination-queue-status-pr-body.md`;
+  [#154](https://github.com/samcantrill/loom/pull/154) merged into `develop`.
+  Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/coordination-queue-status`, `state=OPEN`, clean merge
+  state, head `dab78594d6269a830be1de344559e48022071728`, and GitHub CI
+  `checks` success.
+- Merge record: squash merged through the GitHub API on 2026-05-14 as
+  `b00675dc319282973345a5915e99c2256f72e21e`.
+- Stack maintenance: no successor branch depended on
+  `codex/coordination-queue-status`; the remote phase branch was deleted after
+  merge. Phase 5 should branch from updated `develop`.
 - Remaining blockers: none.
