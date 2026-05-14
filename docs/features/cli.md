@@ -314,13 +314,13 @@ rich progress UI requiring heavyweight dependencies
 shelling out to `loom` from inside Python APIs
 Docker or Apptainer execution
 remote run URI schemes
-sweep, bundle, plugin, cleanup, or reliability commands
+sweep, plugin, cleanup, reliability, or provider-specific bundle commands
 --run-dir, --run-id, or --strict options
 ```
 
 Domain packages can expose their own CLIs that call `loom` Python APIs.
 
-### 4.3 Deferred Command Families
+### 4.4 Deferred Command Families
 
 ```text
 loom sweep plan ...
