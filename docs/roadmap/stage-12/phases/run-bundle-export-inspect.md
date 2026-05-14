@@ -201,10 +201,24 @@ make test-summary
 
 - Draft plan: completed in the Phase 2 worktree.
 - Final phase execution plan: completed; no separate refinement pass used.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added local bundle export/inspect helpers under
+  `loom.runs`, metadata-backed portable export-record assembly, a
+  `LocalRunBundleExporter` conforming to the Phase 1 `RunExporter` protocol,
+  traversal-safe archive member validation, metadata-only default exports,
+  explicit selected-payload materialization, and inspect-without-extraction
+  checksum diagnostics.
+- Implementation validation: targeted Phase 2 pytest set passed with 50 tests;
+  targeted Ruff passed; targeted Pyright passed; `make validate-pr` passed
+  outside the sandbox; `make test-summary` passed with overall 1917 passed, 0
+  failed, 0 errors, 18 skipped, and 1504 deselected.
+- Refinement summary: no `loom_phase_refiner` pass used; local implementation
+  fixes addressed duplicate diagnostics, computed checksum algorithms, and
+  plain-data manifest extension thawing before full validation.
+- Blocker-resolution summary: 0/3 blocker-resolution passes used; no blockers
+  remain.
+- PR preparation: PR body drafted at
+  `docs/roadmap/stage-12/phases/run-bundle-export-inspect-pr-body.md`; PR not
+  opened yet at this checkpoint.
+- Stack maintenance: root PR targets `develop`; no successor branch depends on
+  this branch yet.
+- Remaining blockers: none.
