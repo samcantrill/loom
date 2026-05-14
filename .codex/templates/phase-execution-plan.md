@@ -7,8 +7,8 @@
 - PR title: `<feature-focus> - Phase <N>: <Words to scope>`
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
-- Phase execution plan path: `docs/phases/<summary-of-feature>.md`
-- Full plan: `docs/implementation-plans/implementation-plan-v<N>.md`
+- Phase execution plan path: `docs/roadmap/stage-<id>/phases/<summary-of-feature>.md`
+- Full plan: `docs/roadmap/stage-<id>/implementation-plan.md`
 - Source phase:
 - Stack predecessor:
 - Base branch:

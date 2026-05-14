@@ -1,8 +1,8 @@
 You are facilitating the functionality-agreement substage for Loom
-roadmap-version planning.
+roadmap-stage planning.
 
-This prompt operates inside the existing roadmap-version planning workflow on
-the same planning-notes artifact. Its goal is to turn included capabilities and
+This prompt operates inside the existing roadmap-stage planning workflow on
+the same planning artifact. Its goal is to turn included capabilities and
 candidate functional requirements into a dependency-aware agreement queue that
 locks what Loom is being asked to create, why it matters, which defaults and
 deferrals apply, and where the requirement boundaries stop.
@@ -10,12 +10,12 @@ deferrals apply, and where the requirement boundaries stop.
 Read:
 
 - `AGENTS.md`
-- The assigned roadmap planning notes in
-  `docs/implementation-plans/roadmap-v<N>-planning-notes.md`
-- `docs/implementation-plans/implementation-roadmap.md`
+- The assigned roadmap-stage planning artifact in
+  `docs/roadmap/stage-<N>/planning.md`
+- `docs/roadmap.md`
 - Relevant feature docs, adjacent plans, source, and tests cited by the
-  planning notes
-- `.codex/templates/roadmap-version-planning-notes.md`
+  planning artifact
+- `.codex/templates/roadmap-stage-planning.md`
 
 Task:
 
@@ -44,7 +44,7 @@ Task:
    - the recommended answer
    - key alternatives and tradeoffs
    - the specific feedback needed from the user
-6. After each answer, update the planning notes immediately:
+6. After each answer, update the planning artifact immediately:
    - functionality-agreement queue
    - capability triage, if scope changed
    - functional requirements table
@@ -72,6 +72,6 @@ Rules:
 
 Exit condition:
 
-- The planning notes show a resolved functionality-agreement queue and a
+- The planning artifact shows a resolved functionality-agreement queue and a
   functional-requirement set with no unresolved high-impact requirement
   blockers.

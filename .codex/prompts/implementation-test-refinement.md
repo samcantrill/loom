@@ -13,7 +13,7 @@ Record which budget the pass consumes.
 Read:
 
 - `AGENTS.md`
-- The phase execution plan in `docs/phases/`
+- The phase execution plan in `docs/roadmap/stage-<id>/phases/`
 - The current diff
 - Test and validation output
 - `.codex/templates/phase-refinement-report.md`
@@ -34,7 +34,7 @@ Task:
    implementation refinement as `used` for the implementation refinement pass,
    or blocker resolution as `<N>/3 used` for a blocker-resolution pass. If the
    manager asks for a separate artifact, write it to
-   `docs/phases/<summary-of-feature>-refinement.md`.
+   `docs/roadmap/stage-<id>/phases/<summary-of-feature>-refinement.md`.
 8. Commit refinements with `git commit -m "fix: refine after validation"`.
 
 Rules:

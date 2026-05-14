@@ -8,7 +8,7 @@ Read:
 
 - `AGENTS.md`
 - The source implementation plan recorded in the phase execution plan
-- The phase execution plan in `docs/phases/`
+- The phase execution plan in `docs/roadmap/stage-<id>/phases/`
 - `.codex/templates/phase-implementation-handoff.md`
 
 Task:
@@ -31,7 +31,7 @@ Task:
 9. Record results in the phase execution plan completion notes using the sections from
    `.codex/templates/phase-implementation-handoff.md`. If the manager asks for
    a separate artifact, write it to
-   `docs/phases/<summary-of-feature>-implementation-handoff.md`.
+   `docs/roadmap/stage-<id>/phases/<summary-of-feature>-implementation-handoff.md`.
 
 Commit guidance:
 

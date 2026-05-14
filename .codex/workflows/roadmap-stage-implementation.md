@@ -1,6 +1,6 @@
-# Roadmap-Version Implementation
+# Roadmap-Stage Implementation
 
-Use this entrypoint when a roadmap-version implementation plan exists and Codex
+Use this entrypoint when a roadmap-stage implementation plan exists and Codex
 should implement its phases through branch/worktree creation, validation, PRs,
 CI-gated merges, metadata updates, and cleanup.
 
@@ -18,7 +18,7 @@ gate is automatic workflow behavior, not a separate user-facing entrypoint.
    continue.
 4. Stop before phase planning if blocking plan findings remain.
 
-When the implementation plan cites roadmap-version planning notes, the quality
+When the implementation plan cites roadmap-stage planning, the quality
 gate must also verify planning readiness: design-safety review completed or
 accepted risks recorded, validation strategy and phase shaping carried into the
 plan, and no unresolved `blocked` or `needs discussion` planning decisions.
@@ -52,8 +52,8 @@ Primary templates:
 User request shape:
 
 ```text
-Use .codex/workflows/roadmap-version-implementation.md.
-Begin or continue implementation of docs/implementation-plans/<plan>.md.
+Use .codex/workflows/roadmap-stage-implementation.md.
+Begin or continue implementation of docs/roadmap/stage-<id>/implementation-plan.md.
 Use Codex-managed automatic merges. Do not gate implementation on human PR
 review.
 ```

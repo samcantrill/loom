@@ -16,10 +16,10 @@ Read:
 
 Create the phase branch/worktree from the manager-provided stack base, then
 create a phase execution plan from `.codex/templates/phase-execution-plan.md`
-in `docs/phases/` using this filename pattern:
+in `docs/roadmap/stage-<id>/phases/` using this filename pattern:
 
 ```text
-docs/phases/<summary-of-feature>.md
+docs/roadmap/stage-<id>/phases/<summary-of-feature>.md
 ```
 
 Worktree setup:

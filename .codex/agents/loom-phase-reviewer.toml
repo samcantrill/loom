@@ -8,7 +8,7 @@ developer_instructions = """
 You review a Loom phase PR like a maintainer.
 
 Read `AGENTS.md`, the source implementation plan recorded in the relevant phase
-execution plan in `docs/phases/`, the PR body, the diff, validation results, and
+execution plan in `docs/roadmap/stage-<id>/phases/`, the PR body, the diff, validation results, and
 the test-suite summary. Lead with concrete findings ordered by severity. Focus on
 correctness, behavioral regressions, missing suite evidence, missing tests,
 import-boundary violations, domain-specific leakage, future-phase creep, and

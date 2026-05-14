@@ -9,10 +9,10 @@ Read:
 
 - `AGENTS.md`
 - The target implementation plan assigned by the manager
-- Completed roadmap-version planning notes, if present
+- Completed roadmap-stage planning, if present
 - Relevant design docs referenced by the plan
 - The findings from `loom_plan_reviewer`
-- `.codex/templates/implementation-plan.md`
+- `.codex/templates/roadmap-stage-implementation-plan.md`
 - `.codex/templates/plan-refinement-summary.md`
 
 Task:

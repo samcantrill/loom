@@ -5,14 +5,14 @@
 - Phase:
 - Feature focus:
 - PR title: `<feature-focus> - Phase <N>: <Words to scope>`
-- Source plan: `docs/implementation-plans/implementation-plan-v<N>.md`
+- Source plan: `docs/roadmap/stage-<id>/implementation-plan.md`
 - Branch: `codex/<summary-of-feature>`
 - Worktree: `/home/samcantrill/work/loom-worktrees/<summary-of-feature>`
 - Stack predecessor:
 - Base branch:
 - Target branch:
 - Merge eligibility:
-- Phase execution plan path: `docs/phases/<summary-of-feature>.md`
+- Phase execution plan path: `docs/roadmap/stage-<id>/phases/<summary-of-feature>.md`
 - Assigned agent:
 - Assigned prompt:
 - Artifact draft/refine status:

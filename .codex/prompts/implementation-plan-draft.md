@@ -9,16 +9,16 @@ Read existing repository files before editing:
 - `AGENTS.md`, if present
 - The target implementation plan, if updating one
 - Adjacent or previous implementation plans, if relevant
-- Completed roadmap-version planning notes, if present
+- Completed roadmap-stage planning, if present
 - README or project documentation
 - Existing tests and package/build configuration
 - Any user-provided plan or design document
-- `.codex/templates/implementation-plan.md`
+- `.codex/templates/roadmap-stage-implementation-plan.md`
 
 Task:
 
 1. Preserve existing files and project guidance.
-2. Use `.codex/templates/implementation-plan.md` for new implementation plans.
+2. Use `.codex/templates/roadmap-stage-implementation-plan.md` for new implementation plans.
 3. Do not overwrite an existing implementation plan unless the manager assigns
    that target plan explicitly.
 4. Add or align these plan-level sections when relevant:
@@ -35,7 +35,7 @@ Task:
    - Extensibility assessment
    - Technical debt ledger
    - Plan quality gate
-5. When completed roadmap-version planning notes are present, treat them as the
+5. When completed roadmap-stage planning artifacts are present, treat them as the
    primary source and carry forward:
    - approved functionality and behavior baseline
    - functional requirements
@@ -45,7 +45,7 @@ Task:
    - examples and validation strategy
    - phase shaping
    - implementation readiness blockers, accepted risks, and revisit triggers
-6. Before drafting phases from planning notes, check that implementation
+6. Before drafting phases from the planning artifact, check that implementation
    readiness is not blocked, the design-safety review has passed or recorded
    accepted risks, there are no unresolved `blocked` or `needs discussion`
    design decisions, and validation and phase shaping are specific enough for
@@ -81,7 +81,7 @@ Rules:
 - If the plan is ambiguous, make the smallest reasonable assumption and document it.
 - Do not invent requirements not supported by the plan or existing repo.
 - Do not use an implementation plan to resolve roadmap-planning blockers that
-  belong in the planning notes; record the blocker and stop phase drafting.
+  belong in the planning artifact; record the blocker and stop phase drafting.
 - Align with existing repository patterns.
 - Surface conflicting design choices instead of silently choosing around them.
 - Record accepted technical debt with a concrete revisit trigger.

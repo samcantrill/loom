@@ -11,7 +11,7 @@ Read:
 
 - `AGENTS.md`
 - The source implementation plan recorded in the phase execution plan
-- The phase execution plan in `docs/phases/`
+- The phase execution plan in `docs/roadmap/stage-<id>/phases/`
 - The current diff
 - Validation results
 - `.github/PULL_REQUEST_TEMPLATE.md`
@@ -41,7 +41,7 @@ Task:
     its output as the suite-level evidence in the PR body. Do not paste
     box-drawing tables, output tails, or long command listings. If it cannot
     run, explain why and summarize available targeted suite results.
-11. Create a PR body at `docs/phases/<summary-of-feature>-pr-body.md` using
+11. Create a PR body at `docs/roadmap/stage-<id>/phases/<summary-of-feature>-pr-body.md` using
     `.codex/templates/phase-pr-body.md`, which mirrors the simplified public
     `.github/PULL_REQUEST_TEMPLATE.md`.
 12. Mark the PR body draft pass complete. Mark refine pass `not needed` on the

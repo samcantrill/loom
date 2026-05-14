@@ -12,7 +12,7 @@ Read:
 
 - `AGENTS.md`
 - The source implementation plan recorded in the phase execution plan
-- The relevant phase execution plan in `docs/phases/`
+- The relevant phase execution plan in `docs/roadmap/stage-<id>/phases/`
 - The PR body or prepared PR body
 - The current diff
 - Validation results, test-suite summary, or CI output

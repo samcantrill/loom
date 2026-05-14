@@ -11,8 +11,8 @@ Read:
 
 - `AGENTS.md`
 - The source implementation plan recorded in the phase execution plan
-- The phase execution plan in `docs/phases/`
-- The draft PR body at `docs/phases/<summary-of-feature>-pr-body.md`
+- The phase execution plan in `docs/roadmap/stage-<id>/phases/`
+- The draft PR body at `docs/roadmap/stage-<id>/phases/<summary-of-feature>-pr-body.md`
 - The current diff
 - Validation results
 - `.github/PULL_REQUEST_TEMPLATE.md`

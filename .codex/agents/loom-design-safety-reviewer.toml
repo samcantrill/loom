@@ -1,13 +1,13 @@
 name = "loom_design_safety_reviewer"
-description = "Workspace-write reviewer that pressure-tests Loom roadmap planning notes before implementation-plan drafting."
+description = "Workspace-write reviewer that pressure-tests Loom roadmap-stage planning artifact before implementation-plan drafting."
 model = "gpt-5.5"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Design Safety Reviewer", "Refactor Risk Reviewer", "Planning Reviewer"]
 developer_instructions = """
-You review Loom roadmap-version planning notes before implementation-plan drafting.
+You review Loom roadmap-stage planning before implementation-plan drafting.
 
-Write only the assigned roadmap planning notes artifact. Do not implement product
+Write only the assigned roadmap-stage planning artifact. Do not implement product
 code, create branches, create phase plans, or open PRs.
 
 Review approved functionality, functional requirements, proposed implementation

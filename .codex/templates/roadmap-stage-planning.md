@@ -1,11 +1,11 @@
-# Roadmap <VERSION> Planning Notes: <Title>
+# Roadmap Stage <ID> Planning: <Title>
 
 ## Metadata
 
-- Roadmap version:
+- Roadmap stage:
 - Source roadmap:
 - Previous version status:
-- Planning notes status: draft
+- Planning artifact status: draft
 - Current discussion stage:
 - Stage gates:
   - Roadmap framing:
@@ -20,7 +20,7 @@
   - Phase shaping:
   - Implementation readiness:
   - Handoff:
-- Related implementation plans:
+- Related implementation plan:
 - Related feature docs:
 - Blockers:
 
@@ -28,7 +28,7 @@
 
 | Source | Relevant content | Used for | Notes |
 | --- | --- | --- | --- |
-| `docs/implementation-plans/implementation-roadmap.md` |  | roadmap scope |  |
+| `docs/roadmap.md` |  | roadmap scope |  |
 
 ## Exploration Coverage
 
@@ -61,13 +61,13 @@ Compatibility obligations:
 
 - TBD
 
-## Version Briefing
+## Stage Briefing
 
-What this version is:
+What this stage is:
 
 - TBD
 
-Why this version exists:
+Why this stage exists:
 
 - TBD
 

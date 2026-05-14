@@ -4,8 +4,8 @@ Read:
 
 - `AGENTS.md`
 - The selected implementation plan
-- Completed roadmap-version planning notes, if present
-- Existing phase execution plans in `docs/phases/`
+- Completed roadmap-stage planning, if present
+- Existing phase execution plans in `docs/roadmap/stage-<id>/phases/`
 - `.codex/workflows/README.md`
 - `.codex/templates/README.md`
 - Open PRs and CI/test results if available
@@ -69,7 +69,7 @@ artifact shape to complete and pass to the next stage.
 
 Workflow stages are artifact-centered. Each first-class artifact has a
 high-level draft pass and a lower-level refine pass only when the artifact is a
-roadmap-version planning notes, implementation plan, or an expanded-path phase
+roadmap-stage planning, implementation plan, or an expanded-path phase
 artifact. Routine phase execution plans and PR bodies use a single concise
 fast-path pass by default. Multiple prompts or agents may work on the same
 artifact; do not create a separate durable artifact merely because a separate
@@ -221,12 +221,12 @@ No human merge gate:
   phase, stop after recording the current PR and validation state instead of
   converting the phase loop into a reusable human-gated workflow.
 
-For roadmap-version work before an implementation plan exists:
+For roadmap-stage work before an implementation plan exists:
 
-1. If the user assigns a roadmap version and wants interactive design
-   discussion, facilitate roadmap-version planning notes with
-   `.codex/prompts/roadmap-version-planning-notes-facilitate.md` before
-   drafting downstream artifacts. The planning notes must confirm
+1. If the user assigns a roadmap stage and wants interactive design
+   discussion, facilitate roadmap-stage planning with
+   `.codex/prompts/roadmap-stage-planning-facilitate.md` before
+   drafting downstream artifacts. The planning artifact must confirm
    functionality-agreement and behavior, checkpoint and compact context when
    available, then complete proposed implementation shape,
    design-agreement triage, design-safety review, examples, validation
@@ -235,7 +235,7 @@ For roadmap-version work before an implementation plan exists:
    Record clear repo-supported recommendations without user review, and review
    only high-impact decisions that lack a strong recommendation with the user.
    Run or assign `loom_design_safety_reviewer` with
-   `.codex/prompts/roadmap-version-design-safety-review.md` before phase
+   `.codex/prompts/roadmap-stage-design-safety-review.md` before phase
    shaping or implementation-plan drafting, and do not bypass unresolved
    design-safety blockers with invented implementation-plan content.
    Use a reset or explicit resume handoff only when direct compaction is
@@ -243,11 +243,11 @@ For roadmap-version work before an implementation plan exists:
    If the user gives feedback about the roadmap-planning workflow itself,
    evaluate whether the feedback should refine reusable workflow artifacts or
    only the current planning session; make generic workflow refinements in
-   `.codex/` artifacts and avoid encoding roadmap-version-specific examples.
+   `.codex/` artifacts and avoid encoding roadmap-stage-specific examples.
 2. Draft an implementation plan with `.codex/prompts/implementation-plan-draft.md`,
-   using completed roadmap-version planning notes as source input when present.
+   using completed roadmap-stage planning as source input when present.
 3. Review and refine the implementation plan using the plan quality gate below.
-4. Do not start phase execution planning until any planning notes and the
+4. Do not start phase execution planning until any planning artifact and the
    implementation plan have no unresolved blockers, unless the user explicitly
    assigns a smaller workflow stage.
 
@@ -258,7 +258,7 @@ agents, or modifying product code. Treat missing, incomplete, stale, or
 ambiguous gate evidence as not passed.
 
 1. Confirm the selected implementation plan has a Plan quality gate section.
-   If the plan cites roadmap-version planning notes, confirm the gate covers
+   If the plan cites roadmap-stage planning, confirm the gate covers
    planning readiness, including design-safety review, validation strategy,
    phase shaping, and unresolved planning blockers.
 2. If that section records a current passed result for the selected plan, verify

@@ -1,44 +1,43 @@
-# Roadmap-Version Planning
+# Roadmap-Stage Planning
 
 Use this entrypoint when the user wants an interactive design discussion for one
-roadmap version before drafting an implementation plan. When the planning
+roadmap stage before drafting an implementation plan. When the planning
 discussion is complete and the user explicitly confirms they are happy with the
-roadmap-version notes, continue into implementation-plan drafting from the
-confirmed notes.
+roadmap-stage planning artifact, continue into implementation-plan drafting from the confirmed planning artifact.
 
 Canonical prompts:
 
-- `.codex/prompts/roadmap-version-planning-notes-facilitate.md`
-- `.codex/prompts/roadmap-version-planning-notes-functionality-agreement.md`,
+- `.codex/prompts/roadmap-stage-planning-facilitate.md`
+- `.codex/prompts/roadmap-stage-functionality-agreement.md`,
   after capability triage and before behavior confirmation
-- `.codex/prompts/roadmap-version-planning-notes-design-agreement.md`,
+- `.codex/prompts/roadmap-stage-design-agreement.md`,
   after the context checkpoint and before design-safety review
-- `.codex/prompts/roadmap-version-design-safety-review.md`, before
+- `.codex/prompts/roadmap-stage-design-safety-review.md`, before
   implementation-plan drafting
 - `.codex/prompts/implementation-plan-draft.md`, after final planning
   confirmation
 
 Primary template:
 
-- `.codex/templates/roadmap-version-planning-notes.md`
-- `.codex/templates/implementation-plan.md`, after final planning confirmation
+- `.codex/templates/roadmap-stage-planning.md`
+- `.codex/templates/roadmap-stage-implementation-plan.md`, after final planning confirmation
 
 Typical artifacts:
 
-- `docs/implementation-plans/roadmap-v<N>-planning-notes.md`
-- `docs/implementation-plans/implementation-plan-v<N>.md`
+- `docs/roadmap/stage-<id>/planning.md`
+- `docs/roadmap/stage-<id>/implementation-plan.md`
 
 User request shape:
 
 ```text
-Use .codex/workflows/roadmap-version-planning.md for v<N>.
-Facilitate the discussion and update the roadmap planning notes as decisions
+Use .codex/workflows/roadmap-stage-planning.md for v<N>.
+Facilitate the discussion and update the roadmap-stage planning artifact as decisions
 are confirmed.
 ```
 
 Expected flow:
 
-1. Roadmap framing, starting with a comprehensive version briefing and user
+1. Roadmap framing, starting with a comprehensive stage briefing and user
    clarification window.
 2. Intent discovery.
 3. Capability triage and candidate functional requirements.
@@ -52,11 +51,11 @@ Expected flow:
 11. Implementation-readiness checklist, open-question closure, and handoff
     preparation.
 12. Final planning confirmation.
-13. Implementation-plan draft from the confirmed planning notes.
+13. Implementation-plan draft from the confirmed planning artifact.
 
 At workflow startup, read the roadmap, linked feature docs, adjacent plans, and
 current architecture notes before asking the user to confirm functionality or
-behavior. First provide a comprehensive version briefing that explains what the
+behavior. First provide a comprehensive stage briefing that explains what the
 version is, why it exists, what current or future work it impacts or links to,
 which public surfaces or durable artifacts it is likely to affect, why the
 planning structure appears appropriate, and which assumptions or risks are
@@ -64,15 +63,15 @@ already visible. Then explicitly invite the user to ask clarifying questions and
 answer them before moving on to capability triage, functionality agreement, and
 behavior confirmation.
 
-Ask small batches of high-impact questions and update the planning notes after
+Ask small batches of high-impact questions and update the planning artifact after
 each confirmed stage. When asking about functionality, behavior, design
 principles, or design decisions, include enough context for the user to make a
 real choice: what the question is deciding, why it matters, expected impact,
 relevant considerations or tradeoffs, and a recommended default when the repo
 evidence supports one. After functionality and behavior are confirmed, record a
-complete checkpoint in the planning notes and compact or reset context before
+complete checkpoint in the planning artifact and compact or reset context before
 starting the design-agreement review. The resumed design pass should reload the
-planning notes, draft the proposed implementation shape, identify the necessary
+planning artifact, draft the proposed implementation shape, identify the necessary
 design decisions, and classify them before asking the user anything. Do not ask
 the user whether more design decisions should be reviewed. The facilitator owns
 that triage and should not turn every behavior or implementation detail into a
@@ -88,7 +87,7 @@ Continue until the queue has no unresolved high-impact `needs discussion` or
 notes artifact; they do not create a separate workflow boundary or a separate
 handoff document.
 
-Maintain the planning notes in four parallel structures as the discussion
+Maintain the planning artifact in four parallel structures as the discussion
 progresses:
 
 - metadata stage gates that show where the workflow currently stands;
@@ -101,7 +100,7 @@ progresses:
   remaining blockers and carry-forward assumptions explicit before
   implementation-plan drafting.
 
-Do not leave the notes in a state where the requirements or design are "mostly
+Do not leave the planning artifact in a state where the requirements or design are "mostly
 known" but the remaining blockers are only implied by draft prose. If a
 question still affects scope, defaults, public contracts, architecture
 boundaries, failure semantics, validation obligations, or phase boundaries,
@@ -115,10 +114,10 @@ Classify each candidate design decision before discussing it:
   risk, record it as an `auto-approved candidate` for the design-safety
   reviewer to challenge.
 - If the decision is low impact for maintainability and extensibility, omit it
-  from the review queue or record it as an implementation detail in the notes.
+  from the review queue or record it as an implementation detail in the planning artifact.
 - If the decision affects maintainability or extensibility and repo evidence
   gives a clear recommendation, record the recommendation, rationale, rejected
-  alternatives, and revisit trigger in the notes without asking the user.
+  alternatives, and revisit trigger in the planning artifact without asking the user.
 - If the decision has high maintainability or extensibility impact and there is
   no strong recommendation, discuss it with the user before marking it
   confirmed.
@@ -141,6 +140,6 @@ first-class workflow refinement signal. Decide whether the feedback should
 change reusable workflow behavior or only the current planning session. For
 reusable feedback, update the relevant `.codex/workflows/`, `.codex/prompts/`,
 or `.codex/templates/` file generically, without encoding
-roadmap-version-specific or phase-specific examples. For current-session
-preferences, record a short planning-process note in the roadmap planning notes
+roadmap-stage-specific or phase-specific examples. For current-session
+preferences, record a short planning-process note in the roadmap-stage planning artifact
 and continue.

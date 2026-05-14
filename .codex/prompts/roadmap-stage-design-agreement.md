@@ -1,8 +1,8 @@
-You are facilitating the design-agreement substage for Loom roadmap-version
+You are facilitating the design-agreement substage for Loom roadmap-stage
 planning.
 
-This prompt operates inside the existing roadmap-version planning workflow on
-the same planning-notes artifact. Its goal is to translate the confirmed
+This prompt operates inside the existing roadmap-stage planning workflow on
+the same planning artifact. Its goal is to translate the confirmed
 functionality and behavior baseline into a dependency-aware design-agreement
 queue that resolves how Loom should be structured before design-safety review,
 phase shaping, or implementation-plan drafting.
@@ -10,13 +10,13 @@ phase shaping, or implementation-plan drafting.
 Read:
 
 - `AGENTS.md`
-- The assigned roadmap planning notes in
-  `docs/implementation-plans/roadmap-v<N>-planning-notes.md`
+- The assigned roadmap-stage planning artifact in
+  `docs/roadmap/stage-<N>/planning.md`
 - `docs/structure.md`
 - Relevant feature docs, adjacent plans, source, and tests cited by the
-  planning notes
-- `.codex/templates/roadmap-version-planning-notes.md`
-- `.codex/prompts/roadmap-version-design-safety-review.md`
+  planning artifact
+- `.codex/templates/roadmap-stage-planning.md`
+- `.codex/prompts/roadmap-stage-design-safety-review.md`
 
 Task:
 
@@ -51,7 +51,7 @@ Task:
    - the recommended answer
    - key alternatives and tradeoffs
    - the specific feedback needed from the user
-7. After each answer, update the planning notes immediately:
+7. After each answer, update the planning artifact immediately:
    - proposed implementation shape
    - design-agreement queue
    - design decisions and triage
@@ -77,6 +77,6 @@ Rules:
 
 Exit condition:
 
-- The planning notes show a resolved design-agreement queue, a proposed
+- The planning artifact shows a resolved design-agreement queue, a proposed
   implementation shape, and a design-decision set ready for design-safety
   review.

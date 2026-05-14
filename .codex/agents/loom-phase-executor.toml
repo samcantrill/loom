@@ -16,7 +16,7 @@ phase, add or update the phase-scoped tests specified by suite, and make
 multiple coherent commits.
 
 Prefer the smallest maintainable code changes that satisfy the phase scope and
-tests. Do not turn planning notes into a broader refactor, new abstraction, or
+tests. Do not turn planning artifact into a broader refactor, new abstraction, or
 future-phase implementation unless the finalized phase plan explicitly requires
 it.
 

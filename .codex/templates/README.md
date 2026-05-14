@@ -8,9 +8,9 @@ agents draft, refine, and pass to the next stage.
 
 Each major workflow stage leaves one durable artifact. Multiple agents or prompt
 passes may work on the same artifact, but the artifact is the stage boundary.
-Per-phase artifacts should usually be written under `docs/phases/` with the
-phase summary in the filename. Review reports may annotate the stage artifact,
-be pasted into the managing thread, PR discussion, or a phase-scoped file when
+Per-phase artifacts should usually be written under
+`docs/roadmap/stage-<id>/phases/` with the phase summary in the filename.
+Review reports may annotate the stage artifact, be pasted into the managing thread, PR discussion, or a phase-scoped file when
 the manager needs a tracked blocker.
 Stacked phase state is recorded in the phase assignment, phase execution plan,
 PR body, review report, and merge record rather than in a separate artifact.
@@ -19,15 +19,15 @@ PR body, review report, and merge record rather than in a separate artifact.
 
 | Workflow stage or handoff | Template | Typical destination |
 | --- | --- | --- |
-| Interactive roadmap-version planning, including functionality-agreement evidence, behavior confirmation, design-agreement evidence, design-safety review evidence, validation strategy, phase shaping, and implementation readiness | `roadmap-version-planning-notes.md` | `docs/implementation-plans/roadmap-v<N>-planning-notes.md` |
-| Implementation plan draft/refine | `implementation-plan.md` | `docs/implementation-plans/implementation-plan-vN.md` |
-| Manager to planner | `phase-assignment.md` | manager message or `docs/phases/<summary>-assignment.md` |
-| Plan reviewer to manager/refiner | `plan-review-report.md` | manager thread or `docs/phases/<summary>-plan-review.md` |
-| Plan refiner to confirmation reviewer | `plan-refinement-summary.md` | manager thread or implementation-plan notes |
-| Phase execution plan draft/refine | `phase-execution-plan.md` | `docs/phases/<summary>.md` |
-| Executor to refiner | `phase-implementation-handoff.md` | phase execution plan completion notes or `docs/phases/<summary>-implementation-handoff.md` |
-| Refiner to PR preparer | `phase-refinement-report.md` | phase execution plan completion notes or `docs/phases/<summary>-refinement.md` |
-| PR preparer to reviewer | `phase-pr-body.md` | `docs/phases/<summary>-pr-body.md` |
+| Roadmap-stage planning, including functionality-agreement evidence, behavior confirmation, design-agreement evidence, design-safety review evidence, validation strategy, phase shaping, and implementation readiness | `roadmap-stage-planning.md` | `docs/roadmap/stage-<id>/planning.md` |
+| Roadmap-stage implementation plan draft/refine | `roadmap-stage-implementation-plan.md` | `docs/roadmap/stage-<id>/implementation-plan.md` |
+| Manager to planner | `phase-assignment.md` | manager message or `docs/roadmap/stage-<id>/phases/<summary>-assignment.md` |
+| Plan reviewer to manager/refiner | `plan-review-report.md` | manager thread or `docs/roadmap/stage-<id>/phases/<summary>-plan-review.md` |
+| Plan refiner to confirmation reviewer | `plan-refinement-summary.md` | manager thread or implementation-plan metadata |
+| Phase execution plan draft/refine | `phase-execution-plan.md` | `docs/roadmap/stage-<id>/phases/<summary>.md` |
+| Executor to refiner | `phase-implementation-handoff.md` | phase execution plan completion notes or `docs/roadmap/stage-<id>/phases/<summary>-implementation-handoff.md` |
+| Refiner to PR preparer | `phase-refinement-report.md` | phase execution plan completion notes or `docs/roadmap/stage-<id>/phases/<summary>-refinement.md` |
+| PR preparer to reviewer | `phase-pr-body.md` | `docs/roadmap/stage-<id>/phases/<summary>-pr-body.md` |
 | PR reviewer to manager | `phase-pr-review-report.md` | PR review comment or manager thread |
 | Manager after merge | `phase-merge-record.md` | implementation-plan completion metadata |
 

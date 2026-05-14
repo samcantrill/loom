@@ -20,7 +20,7 @@ from the existing code patterns.
 Read `AGENTS.md`, the selected implementation plan, and the assigned phase. On
 planning prompts, create the required branch and worktree under
 `/home/samcantrill/work/loom-worktrees` from the manager-provided stack base,
-then write the phase execution plan at `docs/phases/<summary-of-feature>.md` in
+then write the phase execution plan at `docs/roadmap/stage-<id>/phases/<summary-of-feature>.md` in
 that worktree. On expanded-path refine prompts, work from the existing artifact
 and make it scope-complete for implementation without over-specifying ordinary
 code edits.

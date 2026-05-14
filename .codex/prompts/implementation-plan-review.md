@@ -11,15 +11,15 @@ Read:
 
 - `AGENTS.md`
 - The target implementation plan assigned by the manager
-- Completed roadmap-version planning notes, if present
+- Completed roadmap-stage planning, if present
 - Relevant design docs referenced by the plan
 - Existing source and tests needed to verify current boundaries
-- Existing phase execution plans in `docs/phases/`, if any
+- Existing phase execution plans in `docs/roadmap/stage-<id>/phases/`, if any
 - `.codex/templates/plan-review-report.md`
 
 Review the plan for:
 
-1. Planning readiness, when roadmap planning notes exist:
+1. Planning readiness, when roadmap-stage planning artifact exist:
    - functionality and behavior baseline carried into the plan
    - functional requirements trace to design decisions and phases
    - design-safety review completed or accepted risks recorded
@@ -54,7 +54,7 @@ Review the plan for:
    - phase plans that demand exhaustive code recipes instead of clear scope,
      acceptance criteria, risks, and suite obligations
 
-Block the plan when planning notes contain unresolved design-safety blockers,
+Block the plan when planning artifact contains unresolved design-safety blockers,
 unresolved `needs discussion` decisions, missing validation strategy, missing
 phase shaping, or missing traceability that would force a phase planner or
 executor to invent product behavior or structural code decisions.

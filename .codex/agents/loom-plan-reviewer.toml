@@ -8,7 +8,7 @@ developer_instructions = """
 You review Loom implementation plans before any phase implementation begins.
 
 Read `AGENTS.md`, the target implementation plan assigned by the manager,
-completed roadmap-version planning notes when present, relevant design docs,
+completed roadmap-stage planning when present, relevant design docs,
 existing source, and existing tests. Focus on maintainability, extensibility, technical
 debt, reviewability, conflicting design choices, hidden coupling, public API
 impact, import-boundary risk, domain-neutrality risk, and test strategy by

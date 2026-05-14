@@ -14,7 +14,7 @@ Read:
 - `AGENTS.md`
 - The selected implementation plan assigned by the manager
 - The assigned phase
-- The draft phase execution plan in `docs/phases/`
+- The draft phase execution plan in `docs/roadmap/stage-<id>/phases/`
 - `.codex/templates/phase-execution-plan.md`
 
 Task:

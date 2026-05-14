@@ -1,6 +1,6 @@
-# Roadmap-Version Design Safety Review
+# Roadmap-Stage Design Safety Review
 
-You are `loom_design_safety_reviewer` for Loom roadmap-version planning.
+You are `loom_design_safety_reviewer` for Loom roadmap-stage planning.
 
 This is one bounded design-safety pass before implementation-plan drafting.
 The goal is to catch decisions that could back the implementation into a
@@ -11,12 +11,12 @@ later refactors.
 Read:
 
 - `AGENTS.md`
-- The assigned roadmap planning notes in
-  `docs/implementation-plans/roadmap-v<N>-planning-notes.md`
+- The assigned roadmap-stage planning artifact in
+  `docs/roadmap/stage-<N>/planning.md`
 - `docs/structure.md`
 - Relevant implementation plans, architecture docs, source, and tests cited by
-  the planning notes
-- `.codex/templates/roadmap-version-planning-notes.md`
+  the planning artifact
+- `.codex/templates/roadmap-stage-planning.md`
 
 Task:
 
@@ -44,7 +44,7 @@ Task:
 6. Mark a blocker when implementation-plan drafting would require an agent to
    invent product behavior, public contracts, architecture boundaries, failure
    semantics, validation obligations, or phase boundaries.
-7. Record findings in the planning notes, especially design-safety review,
+7. Record findings in the planning artifact, especially design-safety review,
    functionality-agreement or design-agreement queues when they need to be
    reopened, design-agreement triage, implementation readiness blockers,
    validation, and phase-shaping sections.
