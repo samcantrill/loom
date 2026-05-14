@@ -273,8 +273,11 @@ make test-summary
 
 - Phase implementation refinement: not needed; targeted validation and final
   PR gates passed after the implementation slice.
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used by the managing agent before merge. The review found that
+  queued trial config snapshots could still carry nested frozen mappings when
+  assembled from structured run requests.
+- Blocker resolution: 1/3 used for the scoped queue snapshot thawing fix; final
+  PR gates passed after the fix.
 
 ## Completion Notes
 
@@ -288,13 +291,19 @@ make test-summary
   intents can carry structured metadata.
 - Implementation validation: Targeted sweep/queue/contract/integration/package
   tests passed (`42 passed`); broader queue and coordination suites passed
-  (`74 passed`); targeted Ruff passed; Pyright passed; `make validate-pr`
-  passed with default harness `1527 passed, 26 skipped, 18 deselected`,
-  config-extra `438 passed, 1564 deselected`, and build success; `make
-  test-summary` passed and wrote `build/test-summary.md`.
-- Refinement summary: Not needed; implementation, targeted validation, full PR
-  validation, and suite summary all passed.
-- Blocker-resolution summary: 0/3 used.
+  (`74 passed`); targeted Ruff passed; Pyright passed; after the scoped queue
+  snapshot thawing fix, `make validate-pr` passed with default harness `1527
+  passed, 26 skipped, 18 deselected`, config-extra `438 passed, 1564
+  deselected`, and build success; `make test-summary` passed and wrote
+  `build/test-summary.md`.
+- Refinement summary: Not needed; the post-review code change used the
+  blocker-resolution budget instead of the optional implementation refinement
+  pass.
+- PR review summary: Managing-agent review completed before merge; the only
+  blocking finding was nested frozen mapping leakage in queued config snapshots,
+  fixed by thawing queue dispatch config and metadata snapshots before durable
+  queue records are built.
+- Blocker-resolution summary: 1/3 used for the queue snapshot thawing fix.
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-13/phases/coordination-queue-status-pr-body.md`; PR is
   [#154](https://github.com/samcantrill/loom/pull/154) opened against

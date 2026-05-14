@@ -34,6 +34,9 @@ queue.
 - Extended direct dispatch with optional coordination updates.
 - Updated `QueueService.enqueue` to thaw nested structured request fields before
   durable queue records are built, allowing structured whole-run trial intents.
+- Hardened queue sweep dispatch so queued config and metadata snapshots are
+  thawed before enqueue, avoiding nested frozen mapping leakage in durable queue
+  records.
 
 ## Tests And Validation
 
@@ -44,7 +47,7 @@ queue.
 | `uv run --extra config pyright` | Passed | 0 errors |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
 | `make test-summary` | Passed | Wrote `build/test-summary.md` |
-| GitHub checks | Pending | Available after PR creation |
+| GitHub checks | Pending | Available after final PR head is pushed |
 
 ### Test Suite Summary
 

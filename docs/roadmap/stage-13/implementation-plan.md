@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phases 1-3 merged; ready for Phase 4 execution planning
+- Status: Phases 1-3 merged; Phase 4 PR open with final validation complete
 - Roadmap stage: `v13`
 - Source planning notes:
   `docs/roadmap/stage-13/planning.md`
@@ -37,7 +37,8 @@
 - Current phase: Phase 4, `coordination-queue-status`
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 4 execution planning may begin.
+  - No plan-quality blocker remains; Phase 4 is awaiting automated PR checks
+    and merge.
 
 ## Summary
 
@@ -974,8 +975,9 @@ ordinary-run compatibility guardrail.
   `docs/roadmap/stage-13/phases/coordination-queue-status.md`
 - Implementation/refinement budget: not needed; targeted and final validation
   passed after the implementation slice
-- PR review budget: unused
-- Blocker-resolution budget: unused
+- PR review budget: used by the managing agent before merge; the review found
+  nested frozen mappings could leak into queued trial config snapshots.
+- Blocker-resolution budget: 1/3 used for the scoped queue snapshot thawing fix.
 - Pre-submit blocker gate: passed
 - Merge record: pending
 
@@ -1002,9 +1004,10 @@ ordinary-run compatibility guardrail.
   intents can carry structured metadata.
 - Validation: Targeted Phase 4 tests passed (`42 passed`); broader queue and
   coordination tests passed (`74 passed`); targeted Ruff passed; Pyright passed;
-  `make validate-pr` passed; `make test-summary` passed with package
-  `79 passed`, unit `1083 passed`, contract `197 passed`, integration
-  `154 passed`, e2e `42 passed`, and config-extra `438 passed`.
+  after the scoped queue snapshot thawing fix, `make validate-pr` passed; `make
+  test-summary` passed with package `79 passed`, unit `1083 passed`, contract
+  `197 passed`, integration `154 passed`, e2e `42 passed`, and config-extra
+  `438 passed`.
 - PR: [#154](https://github.com/samcantrill/loom/pull/154), targeting
   `develop` from `codex/coordination-queue-status`.
 - Merge:
