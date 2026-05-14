@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; ready for implementation
+- Status: implementation complete; PR preparation pending
 - Feature focus: Deterministic Sweeps
 - PR title: `Deterministic Sweeps - Phase 2: Grid And Manual Planning`
 - Branch: `codex/grid-manual-planning`
@@ -507,7 +507,9 @@ make test-summary
 
 - Phase execution plan draft: complete
 - Phase execution plan refine: complete for expanded path
-- Phase implementation refinement: unused
+- Phase implementation refinement: used locally after the first full
+  validation run reported Pyright findings in manual-trial typing and
+  plain-data payload indexing
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -516,9 +518,26 @@ make test-summary
 - Draft plan: complete on 2026-05-14 in the phase worktree.
 - Final phase execution plan: complete on 2026-05-14; ready for
   `loom_phase_executor`.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending; implementation refinement budget unused.
+- Implementation summary: Added trusted grid/manual sweep spec records,
+  first-party finite grid/manual providers, deterministic proposal
+  materialization into `SweepTrialRecord` values, stable index-based
+  `trial_id` generation, deterministic run URI mapping, default
+  `100`-trial guard with explicit override, authored-spec/manifests plan-only
+  writes, compatible readback, and incompatible-plan diagnostics.
+- Implementation validation: Targeted Phase 2 validation passed
+  (`uv run pytest tests/unit/loom/pipeline/sweep
+  tests/contracts/test_sweep_provider_contract.py
+  tests/contracts/test_sweep_manifest_contract.py
+  tests/contracts/test_sweep_planning_contract.py
+  tests/package/test_pipeline_api.py tests/package/test_import_boundaries.py
+  tests/integration/pipeline/sweep`: 70 passed). Targeted Ruff passed.
+  `make validate-pr` passed after the local type-check fix. `make
+  test-summary` passed and wrote `build/test-summary.md`: package 79 passed,
+  unit 1068 passed, contract 194 passed, integration 151 passed, e2e 42
+  passed, config-extra 438 passed.
+- Refinement summary: one local implementation refinement was used to address
+  Pyright findings from the first full validation run; no scope expansion was
+  introduced.
 - Blocker-resolution summary: none; 0/3 blocker-resolution passes used.
 - PR preparation: pending.
 - Stack maintenance: root phase; no predecessor because Phase 1 is merged.
