@@ -373,8 +373,11 @@ make test-summary
 
 - Phase implementation refinement: unused; not needed after targeted and full
   validation passed without requiring a separate refiner pass.
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: used by manager-local automated review on 2026-05-14; the review
+  found one malformed artifact metadata diagnostic edge case, fixed before
+  merge.
+- Blocker resolution: 1/3 used for the malformed artifact metadata diagnostic
+  fix.
 
 ## Completion Notes
 
@@ -389,16 +392,20 @@ make test-summary
   supported v13 workflow and deferred extraction behavior.
 - Implementation validation: targeted Ruff and targeted pytest passed for the
   new sweep collection, CLI, integration/e2e, package, and import-boundary
-  coverage (`49 passed`). `make validate-pr` passed, including Ruff, Pyright,
-  default and config-extra harnesses, and package build. `make test-summary`
-  passed with package `80 passed, 1 skipped`; unit `1088 passed, 7 skipped, 1
-  deselected`; contract `199 passed, 2 skipped`; integration `155 passed, 8
-  skipped, 13 deselected`; e2e `43 passed, 2 deselected`; config-extra
-  `438 passed, 1574 deselected`.
+  coverage (`50 passed`). `make validate-pr` passed, including Ruff, Pyright,
+  default (`1538 passed, 26 skipped, 18 deselected`) and config-extra
+  (`438 passed, 1575 deselected`) harnesses, and package build. `make
+  test-summary` passed with package `80 passed, 1 skipped`; unit `1089 passed,
+  7 skipped, 1 deselected`; contract `199 passed, 2 skipped`; integration `155
+  passed, 8 skipped, 13 deselected`; e2e `43 passed, 2 deselected`;
+  config-extra `438 passed, 1575 deselected`.
 - Refinement summary: no separate implementation refinement pass was needed;
-  local fixes before full validation were limited to type/import and
-  dependency-light CLI behavior found during targeted validation.
-- Blocker-resolution summary: none used.
+  manager-local fixes before final validation included type/import and
+  dependency-light CLI behavior plus the automated-review malformed artifact
+  metadata diagnostic fix.
+- Blocker-resolution summary: used 1/3 passes for malformed artifact metadata
+  diagnostic handling; the fix converts non-plain artifact payload errors into
+  per-trial `artifact_collection_malformed` diagnostics and adds unit coverage.
 - PR preparation: complete; PR
   [#155](https://github.com/samcantrill/loom/pull/155) opened from
   `codex/sweep-collection-cli-hardening` to `develop` after verification

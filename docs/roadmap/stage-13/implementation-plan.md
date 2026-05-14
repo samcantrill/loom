@@ -1120,8 +1120,9 @@ ordinary-run compatibility guardrail.
 - Planning/refinement budget: draft/refine used for expanded path
 - Implementation/refinement budget: unused; not needed after targeted and full
   validation passed without a separate refiner pass
-- PR review budget: unused
-- Blocker-resolution budget: unused
+- PR review budget: used by manager-local automated review on 2026-05-14
+- Blocker-resolution budget: 1/3 used for malformed artifact metadata
+  diagnostic handling
 - Pre-submit blocker gate: passed
 - Merge record: pending
 
@@ -1147,10 +1148,11 @@ ordinary-run compatibility guardrail.
   added `loom sweep plan/run/status/collect` with text and JSON output over
   public sweep APIs; preserved queue submit-only behavior; documented the v13
   CLI workflow and final deferrals.
-- Validation: Targeted Phase 5 tests passed (`49 passed`); `make validate-pr`
-  passed, including Ruff, Pyright, default and config-extra harnesses, and
+- Validation: Targeted Phase 5 tests passed (`50 passed`); `make validate-pr`
+  passed, including Ruff, Pyright, default (`1538 passed, 26 skipped, 18
+  deselected`) and config-extra (`438 passed, 1575 deselected`) harnesses, and
   package build; `make test-summary` passed with package `80 passed`, unit
-  `1088 passed`, contract `199 passed`, integration `155 passed`, e2e `43
+  `1089 passed`, contract `199 passed`, integration `155 passed`, e2e `43
   passed`, and config-extra `438 passed`.
 - PR: [#155](https://github.com/samcantrill/loom/pull/155), targeting
   `develop` from `codex/sweep-collection-cli-hardening`; PR target
