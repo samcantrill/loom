@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phases 1-4 merged; Phase 5 PR open
+- Status: Phases 1-5 merged; Stage 13 complete
 - Roadmap stage: `v13`
 - Source planning notes:
   `docs/roadmap/stage-13/planning.md`
@@ -34,12 +34,12 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
-- Current phase: Phase 5, `sweep-collection-cli-hardening`
+- Current phase: complete; all five Stage 13 phases are merged
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 5 PR
-    [#155](https://github.com/samcantrill/loom/pull/155) is open from updated
-    `develop`.
+  - No plan-quality blocker remains.
+  - No implementation, validation, review, CI, or merge blocker remains for
+    Stage 13.
 
 ## Summary
 
@@ -410,7 +410,7 @@ Required suite categories:
 | 2 | `grid-manual-planning` | merged | `codex/grid-manual-planning` | [#152](https://github.com/samcantrill/loom/pull/152) | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
 | 3 | `early-stop-direct-dispatch` | merged | `codex/early-stop-direct-dispatch` | [#153](https://github.com/samcantrill/loom/pull/153) | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
 | 4 | `coordination-queue-status` | merged | `codex/coordination-queue-status` | [#154](https://github.com/samcantrill/loom/pull/154) | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
-| 5 | `sweep-collection-cli-hardening` | pr_open | `codex/sweep-collection-cli-hardening` | [#155](https://github.com/samcantrill/loom/pull/155) | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
+| 5 | `sweep-collection-cli-hardening` | merged | `codex/sweep-collection-cli-hardening` | [#155](https://github.com/samcantrill/loom/pull/155) | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
 
 ## Implementation Readiness Blockers
 
@@ -1023,7 +1023,7 @@ ordinary-run compatibility guardrail.
 
 ### Phase 5: Collection, CLI, Docs, And Hardening
 
-- Status: pr_open
+- Status: merged
 - Slug: `sweep-collection-cli-hardening`
 - Branch: `codex/sweep-collection-cli-hardening`
 - Worktree:
@@ -1115,7 +1115,7 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
-- Phase execution plan: draft complete in
+- Phase execution plan: complete in
   `docs/roadmap/stage-13/phases/sweep-collection-cli-hardening.md`
 - Planning/refinement budget: draft/refine used for expanded path
 - Implementation/refinement budget: unused; not needed after targeted and full
@@ -1124,7 +1124,9 @@ ordinary-run compatibility guardrail.
 - Blocker-resolution budget: 1/3 used for malformed artifact metadata
   diagnostic handling
 - Pre-submit blocker gate: passed
-- Merge record: pending
+- Merge record: complete; squash merged to `develop` as
+  `be7f8e79c8f8d21cb974a80896581cff52ca65ed` on 2026-05-14 after local
+  validation, manager review, and GitHub CI passed.
 
 #### Risks And Stop Conditions
 
@@ -1158,8 +1160,16 @@ ordinary-run compatibility guardrail.
   `develop` from `codex/sweep-collection-cli-hardening`; PR target
   verification confirmed `baseRefName=develop`, `headRefName=codex/sweep-collection-cli-hardening`,
   and `state=OPEN`.
-- Merge:
-- Follow-up:
+- Merge: Squash merged [#155](https://github.com/samcantrill/loom/pull/155)
+  into `develop` as `be7f8e79c8f8d21cb974a80896581cff52ca65ed` on
+  2026-05-14. Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/sweep-collection-cli-hardening`, `mergeStateStatus=CLEAN`,
+  and GitHub CI `checks` completed successfully. The remote branch
+  `codex/sweep-collection-cli-hardening` was deleted after merge because no
+  successor branch depended on it.
+- Follow-up: Stage 13 is complete; future stages own concrete extraction
+  adapters, optimizer providers, retry/rerun policy, distributed controllers,
+  and sweep-specific export behavior if needed.
 
 ## Cross-Phase Review Notes
 

@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Deterministic Sweeps
 - PR title:
   `Deterministic Sweeps - Phase 5: Collection, CLI, Docs, And Hardening`
@@ -17,10 +17,12 @@
 - Base branch: `origin/develop` at
   `959201973861353d016a6818b45f429d941483e4`
 - Target branch: `develop`
-- PR: [#155](https://github.com/samcantrill/loom/pull/155)
-- Merge eligibility: root phase PR targets `develop`; merge-eligible only after
-  implementation, validation, automated review, CI or justified unavailable
-  checks, and target-branch verification pass.
+- PR: [#155](https://github.com/samcantrill/loom/pull/155), merged into
+  `develop` as `be7f8e79c8f8d21cb974a80896581cff52ca65ed`
+- Merge eligibility: passed; root phase PR targeted `develop`, local
+  validation passed, manager-local automated review passed after one resolved
+  blocker, GitHub CI passed, and target-branch verification passed before
+  merge.
 - Workflow path: expanded path
 - Successor dependency notes: this is the final Stage 13 phase; no successor
   phase branch should depend on it.
@@ -411,6 +413,12 @@ make test-summary
   `codex/sweep-collection-cli-hardening` to `develop` after verification
   confirmed `baseRefName=develop`, `headRefName=codex/sweep-collection-cli-hardening`,
   and `state=OPEN`.
+- Merge record: squash merged [#155](https://github.com/samcantrill/loom/pull/155)
+  into `develop` as `be7f8e79c8f8d21cb974a80896581cff52ca65ed` on
+  2026-05-14. Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/sweep-collection-cli-hardening`, `mergeStateStatus=CLEAN`,
+  and GitHub CI `checks` completed successfully.
 - Stack maintenance: root phase from updated `develop`; no successor branch is
-  expected for Stage 13.
+  expected for Stage 13. The remote branch
+  `codex/sweep-collection-cli-hardening` was deleted after merge.
 - Remaining blockers: none.
