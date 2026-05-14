@@ -664,12 +664,12 @@ inspect-without-extraction proof.
 - Implementation summary: added metadata-backed export-record assembly,
   strict local bundle writing, `RunExporter`-conforming local exporter,
   traversal-safe archive member validation, metadata-only default export,
-  explicit selected-payload inclusion, and inspect-without-extraction checksum
-  diagnostics under `loom.runs`.
-- Tests and validation: targeted Phase 2 pytest set passed with 50 tests;
+  explicit selected-payload inclusion as regular archive members, and
+  inspect-without-extraction checksum diagnostics under `loom.runs`.
+- Tests and validation: targeted Phase 2 pytest set passed with 51 tests;
   targeted Ruff and Pyright passed; `make validate-pr` passed outside the
-  sandbox; `make test-summary` passed with overall 1917 passed, 0 failed, 0
-  errors, 18 skipped, and 1504 deselected.
+  sandbox; `make test-summary` passed with overall 1918 passed, 0 failed, 0
+  errors, 18 skipped, and 1505 deselected.
 - Follow-up notes: Phase 3 should reuse the archive path validation and
   manifest reader rather than inventing a separate import safety path.
 

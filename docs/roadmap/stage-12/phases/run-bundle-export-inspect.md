@@ -206,12 +206,12 @@ make test-summary
   `loom.runs`, metadata-backed portable export-record assembly, a
   `LocalRunBundleExporter` conforming to the Phase 1 `RunExporter` protocol,
   traversal-safe archive member validation, metadata-only default exports,
-  explicit selected-payload materialization, and inspect-without-extraction
-  checksum diagnostics.
-- Implementation validation: targeted Phase 2 pytest set passed with 50 tests;
+  explicit selected-payload materialization as regular archive members, and
+  inspect-without-extraction checksum diagnostics.
+- Implementation validation: targeted Phase 2 pytest set passed with 51 tests;
   targeted Ruff passed; targeted Pyright passed; `make validate-pr` passed
-  outside the sandbox; `make test-summary` passed with overall 1917 passed, 0
-  failed, 0 errors, 18 skipped, and 1504 deselected.
+  outside the sandbox; `make test-summary` passed with overall 1918 passed, 0
+  failed, 0 errors, 18 skipped, and 1505 deselected.
 - Refinement summary: no `loom_phase_refiner` pass used; local implementation
   fixes addressed duplicate diagnostics, computed checksum algorithms, and
   plain-data manifest extension thawing before full validation.

@@ -214,7 +214,7 @@ def write_local_run_bundle(
             source = payload_sources.get(entry.path)
             if source is None:
                 continue
-            archive.add(source, arcname=entry.path, recursive=False)
+            _add_file_member(archive, entry.path, source)
 
     return RunBundleExportResult(
         status=RunExchangeOperationStatus.SUCCEEDED,
@@ -377,11 +377,11 @@ def _payload_ref(
             uri=ref.uri,
             kind=_bundle_kind_for_ref(ref),
             selected=True,
-        checksum_algorithm="sha256" if checksum is not None else None,
-        checksum=checksum,
-        size_bytes=size,
-        extensions={"materialized_ref": thaw_plain_data(ref.to_dict())},
-    ),
+            checksum_algorithm="sha256" if checksum is not None else None,
+            checksum=checksum,
+            size_bytes=size,
+            extensions={"materialized_ref": thaw_plain_data(ref.to_dict())},
+        ),
         tuple(diagnostics),
     )
 
@@ -471,6 +471,13 @@ def _add_bytes_member(archive: tarfile.TarFile, name: str, data: bytes) -> None:
     info = tarfile.TarInfo(normalize_bundle_member_path(name))
     info.size = len(data)
     archive.addfile(info, io.BytesIO(data))
+
+
+def _add_file_member(archive: tarfile.TarFile, name: str, source: Path) -> None:
+    info = tarfile.TarInfo(normalize_bundle_member_path(name))
+    info.size = source.stat().st_size
+    with source.open("rb") as payload:
+        archive.addfile(info, payload)
 
 
 def _archive_member_diagnostics(

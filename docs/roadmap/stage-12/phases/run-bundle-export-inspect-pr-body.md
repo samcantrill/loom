@@ -10,7 +10,7 @@ The default export path remains metadata-only. Payload bytes are included only w
 
 - [x] Completed-run metadata can be converted into portable export records and local bundle manifests.
 - [x] Metadata-only export writes only the manifest by default.
-- [x] Explicit payload selection writes selected local file refs with size and checksum facts.
+- [x] Explicit payload selection writes selected local file refs as regular archive members with size and checksum facts.
 - [x] Inspection reads manifest and payload counts without extraction.
 - [x] Unsafe archive members, duplicate members, missing payloads, and checksum mismatches produce structured diagnostics.
 - [x] Import, offline evidence alignment, queue behavior, transfer handlers, and CLI commands remain out of scope.
@@ -26,6 +26,7 @@ Key behavior:
 - `export_run_bundle` lazily reads completed-run metadata from authority stores and writes local tar bundles.
 - `inspect_run_bundle` validates archive member names, duplicate/link members, manifest shape, and optional checksum evidence without extracting.
 - `normalize_bundle_member_path` centralizes traversal-safe POSIX archive paths for Phase 3 reuse.
+- Payload writes use explicit regular-file tar members so source symlinks do not become link members in exported bundles.
 
 New tests cover package exports/import boundaries, metadata-only defaults, explicit payload selection, missing payload diagnostics, exporter protocol conformance, unsafe archive fixtures, and SQLite-backed completed-run export/inspect.
 
@@ -33,7 +34,7 @@ New tests cover package exports/import boundaries, metadata-only defaults, expli
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Targeted pytest | Passed | 50 passed across package, import-boundary, unit, contract, and integration Phase 2 tests. |
+| Targeted pytest | Passed | 51 passed across package, import-boundary, unit, contract, and integration Phase 2 tests. |
 | Targeted Ruff | Passed | `uv run --isolated --locked --group dev ruff check ...` |
 | Targeted Pyright | Passed | `uv run --isolated --locked --group dev --extra config pyright ...` |
 | `make validate-pr` | Passed | Ruff, Pyright, default suite, config-extra suite, and build passed outside the sandbox. |
@@ -46,11 +47,11 @@ New tests cover package exports/import boundaries, metadata-only defaults, expli
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | package | passed | 77 | 0 | 0 | 1 | 0 | 78 | 12.63s |
 | unit | passed | 1041 | 0 | 0 | 7 | 1 | 1048 | 49.43s |
-| contract | passed | 173 | 0 | 0 | 2 | 0 | 175 | 10.92s |
-| integration | passed | 147 | 0 | 0 | 8 | 13 | 155 | 49.70s |
-| e2e | passed | 41 | 0 | 0 | 0 | 2 | 41 | 35.71s |
-| config-extra | passed | 438 | 0 | 0 | 0 | 1488 | 438 | 78.65s |
-| Overall | passed | 1917 | 0 | 0 | 18 | 1504 | 1935 | 237.04s |
+| contract | passed | 174 | 0 | 0 | 2 | 0 | 176 | 11.03s |
+| integration | passed | 147 | 0 | 0 | 8 | 13 | 155 | 52.23s |
+| e2e | passed | 41 | 0 | 0 | 0 | 2 | 41 | 36.67s |
+| config-extra | passed | 438 | 0 | 0 | 0 | 1489 | 438 | 81.25s |
+| Overall | passed | 1918 | 0 | 0 | 18 | 1505 | 1936 | 247.32s |
 
 ## Risks / Follow-Ups
 
