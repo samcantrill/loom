@@ -57,6 +57,10 @@ Deferred or out-of-scope roadmap work:
 
 - TBD
 
+Future-roadmap touchpoints:
+
+- TBD
+
 Compatibility obligations:
 
 - TBD
@@ -236,6 +240,14 @@ Extension points and flexibility boundaries:
 
 - TBD
 
+Generic interface, adapter, or protocol shape:
+
+- TBD
+
+Future-roadmap impact:
+
+- TBD
+
 Compatibility constraints:
 
 - TBD
@@ -248,9 +260,9 @@ Compatibility constraints:
 
 ## Design Decisions
 
-| ID | Decision | Selected approach | User feedback | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Validation/documentation obligation | Debt and revisit trigger | Status |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| DAQ-1 |  |  |  |  |  |  |  |  |  | pending |
+| ID | Decision | Selected approach | User feedback | Alternatives rejected | Rationale | Maintainability impact | Extensibility, flexibility, and expansion impact | Future-roadmap impact | Interface, adapter, or protocol impact | Validation/documentation obligation | Debt and revisit trigger | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DAQ-1 |  |  |  |  |  |  |  |  |  |  |  | pending |
 
 ## Design Agreement Triage
 
@@ -260,9 +272,9 @@ Compatibility constraints:
 
 ## Design Safety Review
 
-| Finding | Affected decision or requirement | Refactor or compatibility risk | Recommended action | Status |
-| --- | --- | --- | --- | --- |
-|  |  |  |  | pending |
+| Finding | Affected decision or requirement | Future-roadmap or compatibility risk | Interface, adapter, or protocol reuse risk | Recommended planning revision | Status |
+| --- | --- | --- | --- | --- | --- |
+|  |  |  |  |  | pending |
 
 Gate result:
 
@@ -270,6 +282,9 @@ Gate result:
 - Reviewer:
 - Blockers:
 - Recorded recommendations:
+- Future-roadmap impact summary:
+- Generic interface, adapter, and protocol assessment:
+- Planning revisions required:
 - Accepted risks:
 - Revisit triggers:
 
@@ -296,6 +311,14 @@ Failure modes and diagnostics:
 - TBD
 
 Extension points and flexibility boundaries:
+
+- TBD
+
+Generic interfaces, adapters, and protocols:
+
+- TBD
+
+Future-roadmap compatibility:
 
 - TBD
 
@@ -389,6 +412,8 @@ Reviewability:
 | Roadmap-to-requirement traceability |  | pass / block |  |
 | Requirement-to-design traceability |  | pass / block |  |
 | Design-safety review completed |  | pass / block |  |
+| Future-roadmap impact considered |  | pass / block |  |
+| Generic interface, adapter, and protocol flexibility considered |  | pass / block |  |
 | Example-to-validation traceability |  | pass / block |  |
 | Phase-shaping readiness |  | pass / block |  |
 | Unresolved blocked or needs-discussion functionality or design decisions |  | pass / block |  |

@@ -11,11 +11,13 @@ later refactors.
 Read:
 
 - `AGENTS.md`
+- `docs/roadmap.md`
 - The assigned roadmap-stage planning artifact in
   `docs/roadmap/stage-<N>/planning.md`
 - `docs/structure.md`
-- Relevant implementation plans, architecture docs, source, and tests cited by
-  the planning artifact
+- Relevant previous, adjacent, successor, and future roadmap-stage
+  implementation plans or planning artifacts, architecture docs, source, and
+  tests cited by the planning artifact
 - `.codex/templates/roadmap-stage-planning.md`
 
 Task:
@@ -32,23 +34,36 @@ Task:
    - import-boundary, dependency, serialization, provenance, and store coupling
    - ownership between config, planning, execution, stores, pipeline graph, and
      diagnostics behavior
+   - impact on documented successor roadmap stages, future roadmap candidates,
+     and future phases that are expected to consume this stage's contracts
+   - ways documented future roadmap work could invalidate, constrain, or force
+     revision of this stage's proposed design
+   - whether interfaces, adapters, and protocols are generic enough to be
+     reused, extended, or adapted without encoding one backend, executor,
+     store, scheduler, or integration shape too early
    - extension points that are too narrow, too broad, missing, or premature
    - failure modes, compatibility, and migration or cleanup obligations
    - future refactors that would become expensive because of this choice
 4. Try to overturn every `auto-approved candidate` or `auto-approved` design
    decision. Keep it auto-approved only when the notes show approved-behavior
-   traceability, repository evidence, low future-refactor risk, and
+   traceability, repository evidence, low future-roadmap and future-refactor
+   risk, a reusable-enough interface or extension shape when relevant, and
    straightforward validation.
 5. Reclassify material decisions as `auto-approved`, `recorded recommendation`,
    `needs discussion`, or `blocked`.
 6. Mark a blocker when implementation-plan drafting would require an agent to
    invent product behavior, public contracts, architecture boundaries, failure
-   semantics, validation obligations, or phase boundaries.
+   semantics, validation obligations, phase boundaries, future-roadmap
+   compatibility policy, or interface/adapter/protocol reuse boundaries.
 7. Record findings in the planning artifact, especially design-safety review,
    functionality-agreement or design-agreement queues when they need to be
    reopened, design-agreement triage, implementation readiness blockers,
-   validation, and phase-shaping sections.
-8. Do not implement code, create branches, create phase execution plans, or
+   validation, phase-shaping sections, future-roadmap impact notes, and
+   interface/adapter/protocol genericity notes.
+8. When a finding shows the planning artifact needs revision, record the
+   required return-to-planning action instead of treating the design as ready
+   for implementation-plan drafting.
+9. Do not implement code, create branches, create phase execution plans, or
    draft the implementation plan.
 
 Rules:
@@ -69,5 +84,7 @@ Return:
 - Gate result: passed / blocked.
 - Auto-approved decisions upheld or overturned.
 - Recorded recommendations and residual risks.
+- Future-roadmap impact assessment.
+- Interface, adapter, and protocol genericity assessment.
 - Decisions needing discussion.
 - Blockers and required return-to-planning actions.

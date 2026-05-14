@@ -55,7 +55,8 @@ Project-scoped custom agents live in `.codex/agents/`:
 - `loom_design_safety_reviewer`: uses `gpt-5.5` with `high` reasoning for a
   docs-only roadmap planning review that pressure-tests proposed design shape,
   decision traceability, extension points, public contracts, domain neutrality,
-  and future refactor risk before implementation-plan drafting.
+  future-roadmap impact, reusable interface/adapter/protocol shape, and future
+  refactor risk before implementation-plan drafting.
 - `loom_architecture_explorer`: uses `gpt-5.4-mini` with `medium` reasoning for
   read-only architecture and boundary exploration.
 
@@ -102,6 +103,7 @@ For roadmap-stage work that needs human discussion, facilitate and complete
 `docs/roadmap/stage-<id>/planning.md` before drafting or changing downstream
 artifacts. The planning artifact must record functionality traceability, proposed
 implementation shape, design decisions, design-safety review evidence,
+future-roadmap impact, reusable interface/adapter/protocol assumptions,
 examples, validation strategy, phase shaping, and implementation readiness.
 Use `loom_design_safety_reviewer` before implementation-plan drafting for
 roadmap-stage work, and do not draft phases while unresolved design-safety
@@ -449,8 +451,10 @@ maintainability, extensibility, future compatibility, conflicting design
 choices, technical debt, test strategy, and reviewability.
 When the plan cites roadmap-stage planning, the gate must also verify
 planning readiness: functionality-to-design traceability, completed
-design-safety review or recorded accepted risks, validation strategy, phase
-shaping, and no unresolved `blocked` or `needs discussion` planning decisions.
+design-safety review or recorded accepted risks, future-roadmap impact,
+reusable interface/adapter/protocol assumptions where relevant, validation
+strategy, phase shaping, and no unresolved `blocked` or `needs discussion`
+planning decisions.
 
 The implementation plan should include, where relevant:
 

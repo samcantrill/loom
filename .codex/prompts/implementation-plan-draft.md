@@ -42,14 +42,17 @@ Task:
    - proposed implementation shape
    - design decisions and rejected alternatives
    - design-safety review result
+   - future-roadmap impact and accepted future-compatibility risks
+   - reusable interface, adapter, and protocol assumptions
    - examples and validation strategy
    - phase shaping
    - implementation readiness blockers, accepted risks, and revisit triggers
 6. Before drafting phases from the planning artifact, check that implementation
    readiness is not blocked, the design-safety review has passed or recorded
    accepted risks, there are no unresolved `blocked` or `needs discussion`
-   design decisions, and validation and phase shaping are specific enough for
-   implementation agents.
+   design decisions, future-roadmap impact has been considered, reusable
+   interface/adapter/protocol assumptions are explicit where relevant, and
+   validation and phase shaping are specific enough for implementation agents.
 7. If readiness fails, update only the planning-readiness or blocker sections
    of the implementation plan and do not invent phases to fill the gap.
 8. Add or align a `## Phased implementation` section when readiness is clear.

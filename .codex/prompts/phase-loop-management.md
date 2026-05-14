@@ -232,12 +232,16 @@ For roadmap-stage work before an implementation plan exists:
    design-agreement triage, design-safety review, examples, validation
    strategy, phase shaping, and implementation readiness before the
    implementation-plan draft.
+   Proposed implementation shape and design-safety review must explicitly
+   consider documented future-roadmap impact and whether interfaces, adapters,
+   and protocols are generic enough for expected future consumers.
    Record clear repo-supported recommendations without user review, and review
    only high-impact decisions that lack a strong recommendation with the user.
    Run or assign `loom_design_safety_reviewer` with
    `.codex/prompts/roadmap-stage-design-safety-review.md` before phase
    shaping or implementation-plan drafting, and do not bypass unresolved
-   design-safety blockers with invented implementation-plan content.
+   design-safety blockers, future-roadmap blockers, or interface-reuse blockers
+   with invented implementation-plan content.
    Use a reset or explicit resume handoff only when direct compaction is
    unavailable.
    If the user gives feedback about the roadmap-planning workflow itself,

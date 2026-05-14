@@ -23,6 +23,10 @@ Review the plan for:
    - functionality and behavior baseline carried into the plan
    - functional requirements trace to design decisions and phases
    - design-safety review completed or accepted risks recorded
+   - future-roadmap impact from the planning artifact carried into design
+     choices, phase order, accepted risks, or explicit deferrals
+   - reusable interface, adapter, and protocol assumptions carried forward when
+     the plan creates or changes contracts
    - no unresolved `blocked` or `needs discussion` design decisions
    - examples and validation strategy reflected in phase acceptance criteria
    - phase shaping reflected in reviewable implementation phases

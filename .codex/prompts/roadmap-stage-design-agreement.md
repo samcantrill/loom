@@ -25,7 +25,9 @@ Task:
 2. Draft the proposed implementation shape before asking the user anything.
    Map the approved behavior onto likely modules, public surfaces, dependency
    direction, extension points, compatibility constraints, and accepted
-   boundary assumptions.
+   boundary assumptions. Include documented future-roadmap touchpoints and the
+   intended generic shape for interfaces, adapters, and protocols when the
+   stage creates or changes reusable contracts.
 3. Draft the design-agreement queue before asking the user anything. Turn the
    material design decisions into a dependency tree or queue that shows:
    - what design decision is being locked
@@ -43,7 +45,8 @@ Task:
    maintainability, extensibility, compatibility, domain neutrality, public
    contracts, import boundaries, file layout, failure semantics, persistence
    shape, optional dependencies, extension points, scalability, testing
-   strategy, or accepted debt.
+   strategy, documented future roadmap work, interface/adapter/protocol reuse,
+   or accepted debt.
 6. Ask only one unresolved design question at a time, in dependency order. For
    each question, include:
    - the exact design branch being locked
@@ -78,5 +81,5 @@ Rules:
 Exit condition:
 
 - The planning artifact shows a resolved design-agreement queue, a proposed
-  implementation shape, and a design-decision set ready for design-safety
-  review.
+  implementation shape, future-roadmap and generic-interface assumptions when
+  relevant, and a design-decision set ready for design-safety review.

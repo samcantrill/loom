@@ -77,6 +77,10 @@ the user whether more design decisions should be reviewed. The facilitator owns
 that triage and should not turn every behavior or implementation detail into a
 user question.
 
+The design pass should explicitly record documented future-roadmap touchpoints
+and, when the stage creates or changes reusable contracts, the intended generic
+shape for interfaces, adapters, and protocols.
+
 During the functionality-agreement and design-agreement substages, draft the
 relevant queue first, resolve repo-answerable branches directly, then walk the
 remaining unresolved branches in dependency order one question at a time. Each
@@ -86,6 +90,13 @@ Continue until the queue has no unresolved high-impact `needs discussion` or
 `blocked` items before advancing. These substages enrich the same planning
 notes artifact; they do not create a separate workflow boundary or a separate
 handoff document.
+
+During design-safety review, challenge whether current decisions block or are
+likely to be invalidated by future roadmap items, and whether interfaces,
+adapters, and protocols remain generic enough to be reused or adapted without
+locking Loom into one backend, executor, store, scheduler, or integration shape.
+If that challenge exposes a material issue, return to planning revisions or
+record an accepted risk with a concrete revisit trigger before phase shaping.
 
 Maintain the planning artifact in four parallel structures as the discussion
 progresses:
@@ -118,6 +129,9 @@ Classify each candidate design decision before discussing it:
 - If the decision affects maintainability or extensibility and repo evidence
   gives a clear recommendation, record the recommendation, rationale, rejected
   alternatives, and revisit trigger in the planning artifact without asking the user.
+- If the decision creates or changes an interface, adapter, or protocol, record
+  whether it is generic enough for the documented future roadmap consumers and
+  what deliberately remains outside the contract.
 - If the decision has high maintainability or extensibility impact and there is
   no strong recommendation, discuss it with the user before marking it
   confirmed.

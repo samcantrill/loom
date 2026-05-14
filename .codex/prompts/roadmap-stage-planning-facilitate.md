@@ -33,8 +33,8 @@ Read before presenting the startup briefing or asking design questions:
 Task:
 
 1. Extract the selected roadmap stage's baseline scope, prerequisites, primary
-   feature docs, likely public surfaces, deferred work, and compatibility
-   obligations.
+   feature docs, likely public surfaces, deferred work, successor and future
+   roadmap touchpoints, and compatibility obligations.
 2. Create or update
    `docs/roadmap/stage-<id>/planning.md` from
    `.codex/templates/roadmap-stage-planning.md`.
@@ -73,7 +73,8 @@ Task:
    confirmed functionality and behavior. Limit the queue to decisions that
    could materially affect maintainability, extensibility, compatibility,
    domain neutrality, public contracts, import boundaries, file layout,
-   persistence, failure behavior, or future refactor cost.
+   persistence, failure behavior, documented future roadmap work,
+   interface/adapter/protocol reuse, or future refactor cost.
 13. Classify each material design decision as `auto-approved candidate`,
    `recorded recommendation`, `needs discussion`, or `blocked`. Record clear
    repo-supported recommendations without asking the user; get user feedback
@@ -83,8 +84,9 @@ Task:
    `.codex/prompts/roadmap-stage-design-safety-review.md` and
    `loom_design_safety_reviewer` after the proposed implementation shape and
    design-agreement triage are recorded, and before phase shaping or
-   implementation-plan drafting. Resolve or record all blockers and required
-   return-to-planning actions in the planning artifact.
+   implementation-plan drafting. Resolve or record all blockers, future-roadmap
+   compatibility findings, interface/adapter/protocol reuse findings, and
+   required return-to-planning actions in the planning artifact.
 15. If the user gives feedback about the planning workflow itself, evaluate
    whether the feedback describes a generally useful workflow refinement. If it
    does, update the reusable workflow, prompt, or template artifacts directly
@@ -108,9 +110,10 @@ Discussion stages:
    - Present the startup stage briefing in plain language before asking
      planning questions. Cover what the stage is, why it exists, the current
      repository or roadmap gap it is meant to close, prerequisite and successor
-     links, primary feature-doc links, likely impacts on public APIs, CLI
-     surface, persisted records, file layout, ownership boundaries, tests, and
-     docs, and why the proposed discussion structure fits the stage's scope.
+     links, future roadmap items it may enable or constrain, primary
+     feature-doc links, likely impacts on public APIs, CLI surface, persisted
+     records, file layout, ownership boundaries, tests, and docs, and why the
+     proposed discussion structure fits the stage's scope.
    - State the visible assumptions, risks, constraints, and structure choices
      that should be validated with the user.
    - Ask whether the user has clarifying questions about the stage briefing.
@@ -187,14 +190,16 @@ Discussion stages:
    - Map confirmed functionality and behavior to the current Loom architecture
      and draft the proposed implementation shape: likely modules, public
      classes/functions/protocols, internal helpers, data flow, dependency
-     direction, extension points, and compatibility constraints.
+     direction, extension points, generic adapter or protocol boundaries,
+     future-roadmap touchpoints, and compatibility constraints.
    - Before asking the user to settle individual choices, draft the
      design-agreement queue for this roadmap stage from the confirmed
      functionality and behavior. Include only decisions that could materially
      affect maintainability, extensibility, domain neutrality, public contracts,
      ownership boundaries, import boundaries, extension points, durable schema
      or file-layout choices, optional dependencies, compatibility policy,
-     security or trust assumptions, future expansion paths, scalability,
+     security or trust assumptions, future roadmap work, reusable
+     interface/adapter/protocol shape, future expansion paths, scalability,
      testing strategy, failure semantics, or accepted debt.
    - Do not include low-impact implementation details, local naming choices, or
      straightforward applications of established repository patterns in the
@@ -239,8 +244,9 @@ Discussion stages:
      accepted the selected approach or provided enough direction to choose one.
    - For each confirmed decision, record the selected approach, user feedback,
      rejected alternatives, rationale, maintainability impact,
-     extensibility/flexibility impact, future expansion impact, debt
-     introduced, and revisit trigger.
+     extensibility/flexibility impact, future-roadmap impact, reusable
+     interface/adapter/protocol impact when relevant, debt introduced, and
+     revisit trigger.
    - Use `docs/roadmap/stage-2/implementation-plan.md` as an example
      of the expected plan-level design-decision depth.
    - Gate: the facilitator has completed the proposed implementation shape and
@@ -253,8 +259,13 @@ Discussion stages:
    - Run or assign `loom_design_safety_reviewer` with
      `.codex/prompts/roadmap-stage-design-safety-review.md`.
    - Review the returned blockers, overturned auto-approved candidates,
-     recorded recommendations, residual risks, and decisions needing
+     recorded recommendations, residual risks, future-roadmap impact findings,
+     interface/adapter/protocol genericity findings, and decisions needing
      discussion.
+   - If the review shows future roadmap items may be blocked, or if future
+     roadmap work would likely force avoidable redesign, revise the planning
+     artifact before phase shaping or record an accepted risk with a concrete
+     revisit trigger.
    - Raise only findings that remain ambiguous, blocked, or materially risky
      after manager reconciliation. Record each answer before moving on.
    - Gate: design-safety review is passed or all blockers are resolved,

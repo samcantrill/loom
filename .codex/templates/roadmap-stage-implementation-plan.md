@@ -16,6 +16,8 @@ Blockers:
 - Source behavior confirmation:
 - Key design constraints:
 - Source design-agreement gate:
+- Future-roadmap impact:
+- Reusable interface, adapter, or protocol assumptions:
 - Examples covered:
 - Source phase shaping:
 - Source plan quality gate:
@@ -78,6 +80,8 @@ Workflow path: fast path / expanded path
 
 - Behavior evidence:
 - Design-decision evidence:
+- Future-roadmap compatibility evidence:
+- Interface, adapter, or protocol reuse evidence:
 - Documentation evidence:
 - Domain-neutrality evidence:
 
