@@ -204,6 +204,76 @@ loom sweep collect
 
 The CLI should call sweep APIs and format results.
 
+### 3.7 Implemented v13 CLI Workflow
+
+The v13 CLI supports deterministic grid and manual sweeps through trusted JSON
+sweep specs. A sweep spec describes trial identity and override values; the base
+pipeline config remains an ordinary Loom config supplied when trials are run or
+queued.
+
+Manual sweep example:
+
+```json
+{
+  "schema_version": 1,
+  "mode": "manual",
+  "sweep_id": "demo-sweep",
+  "run_uri_root": "file:///tmp/demo-sweep/runs",
+  "trials": [
+    {"overrides": {"pipeline.name": "demo-a"}},
+    {"overrides": {"pipeline.name": "demo-b"}}
+  ]
+}
+```
+
+Plan and inspect exact trial IDs and run URIs:
+
+```sh
+loom sweep plan sweep.json --sweep-dir .loom/sweeps/demo --format json
+```
+
+Run trials directly as ordinary Loom runs:
+
+```sh
+loom sweep run sweep.json --config pipeline.json --sweep-dir .loom/sweeps/demo
+```
+
+Submit finite planned trials to an existing queue service without draining or
+controlling the queue:
+
+```sh
+loom sweep run sweep.json \
+  --config pipeline.json \
+  --sweep-dir .loom/sweeps/demo \
+  --queue-config queue.json \
+  --queue-name local
+```
+
+Read status from the sweep manifests plus available run and queue read models:
+
+```sh
+loom sweep status .loom/sweeps/demo --format json
+loom sweep status .loom/sweeps/demo --queue-config queue.json
+```
+
+Collect trial facts, override values, statuses, and artifact references without
+loading artifact payloads:
+
+```sh
+loom sweep collect .loom/sweeps/demo --include-unsupported-extraction --format json
+```
+
+Collection is metadata-first. The default extraction result is an explicit
+`unsupported_extraction` diagnostic until a later artifact/materialization stage
+adds concrete extraction adapters. Sweep collection does not parse project
+metrics, objective values, or artifact payloads.
+
+Cooperative early stopping is available to stage code through
+`context.stop_early(...)`. Loom records early stop as the existing `CANCELLED`
+run/stage lifecycle plus structured `early_stop` reason metadata, and sweep
+status presents it as `early_stopped` without adding a new core lifecycle
+status.
+
 ---
 
 ## 4. Initial Scope

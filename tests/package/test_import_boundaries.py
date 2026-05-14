@@ -1083,6 +1083,38 @@ def test_import_cli_run_remains_import_light() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_cli_sweep_remains_import_light() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.cli.sweep
+
+        for forbidden in (
+            "loom.config",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.pipeline.stores",
+            "loom.queue",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+            "optuna",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.cli.sweep")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_cli_diagnostics_commands_remain_import_light() -> None:
     script = dedent(
         """
