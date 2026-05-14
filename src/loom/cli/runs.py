@@ -10,20 +10,36 @@ from typing import TYPE_CHECKING, cast
 from loom.cli.errors import CliError, ExitCode
 from loom.cli.formatting import (
     format_json_envelope,
+    format_runs_export_text,
     format_runs_diff_text,
+    format_runs_import_text,
     format_runs_index_text,
+    format_runs_inspect_text,
     format_runs_list_text,
 )
 from loom.cli.options import OutputFormat, output_format_from_namespace
 from loom.cli.results import CliWarning
 
 if TYPE_CHECKING:
-    from loom.runs import CatalogIndexResult, ListRunsResult, RunComparison, RunFilter
+    from loom.runs import (
+        CatalogIndexResult,
+        ListRunsResult,
+        RunBundleExportOptions,
+        RunBundleExportResult,
+        RunBundleImportPolicy,
+        RunBundleImportResult,
+        RunBundleInspection,
+        RunComparison,
+        RunFilter,
+    )
 
 
 RUNS_INDEX_SCHEMA_VERSION = "loom.cli.runs.index.v1"
 RUNS_LIST_SCHEMA_VERSION = "loom.cli.runs.list.v1"
 RUNS_DIFF_SCHEMA_VERSION = "loom.cli.runs.diff.v1"
+RUNS_EXPORT_SCHEMA_VERSION = "loom.cli.runs.export.v1"
+RUNS_INSPECT_SCHEMA_VERSION = "loom.cli.runs.inspect.v1"
+RUNS_IMPORT_SCHEMA_VERSION = "loom.cli.runs.import.v1"
 
 
 def register_subparser(
@@ -96,6 +112,61 @@ def register_subparser(
     diff_parser.add_argument("right_run_uri", metavar="RIGHT_RUN_URI", help="right run URI")
     _add_output_options(diff_parser)
     diff_parser.set_defaults(handler=handle_diff)
+
+    export_parser = actions.add_parser("export", help="export a completed run bundle")
+    export_parser.add_argument("run_uri", metavar="RUN_URI", help="completed run URI")
+    export_parser.add_argument("destination", metavar="DESTINATION", help="bundle archive path")
+    export_parser.add_argument(
+        "--include-payloads",
+        action="store_true",
+        help="include artifact payloads in the bundle",
+    )
+    export_parser.add_argument(
+        "--include-logs",
+        action="store_true",
+        help="include stage log refs in the bundle",
+    )
+    export_parser.add_argument(
+        "--include-workspace",
+        action="store_true",
+        help="include config, provenance, and worker handoff refs",
+    )
+    export_parser.add_argument(
+        "--verify-checksums",
+        action="store_true",
+        help="verify materialized checksums while exporting",
+    )
+    export_parser.add_argument(
+        "--max-payload-count",
+        type=_positive_int,
+        metavar="N",
+        help="fail if payload selection exceeds this count",
+    )
+    _add_output_options(export_parser)
+    export_parser.set_defaults(handler=handle_export)
+
+    inspect_parser = actions.add_parser(
+        "inspect",
+        help="inspect a run bundle without extracting it",
+    )
+    inspect_parser.add_argument("bundle", metavar="BUNDLE", help="bundle archive path")
+    inspect_parser.add_argument(
+        "--verify-checksums",
+        action="store_true",
+        help="verify bundle member checksums during inspection",
+    )
+    _add_output_options(inspect_parser)
+    inspect_parser.set_defaults(handler=handle_inspect)
+
+    import_parser = actions.add_parser("import", help="import a run bundle")
+    import_parser.add_argument("bundle", metavar="BUNDLE", help="bundle archive path")
+    import_parser.add_argument(
+        "target_collection",
+        metavar="TARGET_COLLECTION",
+        help="target local run collection path",
+    )
+    _add_output_options(import_parser)
+    import_parser.set_defaults(handler=handle_import)
 
 
 def handle_index(namespace: argparse.Namespace) -> int:
@@ -183,6 +254,87 @@ def handle_diff(namespace: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def handle_export(namespace: argparse.Namespace) -> int:
+    """Handle ``loom runs export``."""
+
+    destination = Path(namespace.destination)
+    options = export_options_from_namespace(namespace)
+    result = build_runs_export_result(str(namespace.run_uri), destination, options)
+    output_format = output_format_from_namespace(namespace)
+    ok = _exchange_result_ok(result)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=RUNS_EXPORT_SCHEMA_VERSION,
+                ok=ok,
+                warnings=(),
+                payload_name="result",
+                payload=result.to_dict(),
+            )
+        )
+    else:
+        sys.stdout.write(
+            format_runs_export_text(result, destination_path=destination) + "\n"
+        )
+    return int(ExitCode.SUCCESS if ok else ExitCode.RUN_STATE)
+
+
+def handle_inspect(namespace: argparse.Namespace) -> int:
+    """Handle ``loom runs inspect``."""
+
+    bundle = Path(namespace.bundle)
+    result = build_runs_inspect_result(
+        bundle,
+        verify_checksums=bool(namespace.verify_checksums),
+    )
+    output_format = output_format_from_namespace(namespace)
+    ok = _exchange_result_ok(result)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=RUNS_INSPECT_SCHEMA_VERSION,
+                ok=ok,
+                warnings=(),
+                payload_name="result",
+                payload=result.to_dict(),
+            )
+        )
+    else:
+        sys.stdout.write(format_runs_inspect_text(result, bundle_path=bundle) + "\n")
+    return int(ExitCode.SUCCESS if ok else ExitCode.RUN_STATE)
+
+
+def handle_import(namespace: argparse.Namespace) -> int:
+    """Handle ``loom runs import``."""
+
+    bundle = Path(namespace.bundle)
+    target_collection = Path(namespace.target_collection)
+    policy = import_policy_from_namespace(namespace)
+    result = build_runs_import_result(bundle, target_collection, policy)
+    output_format = output_format_from_namespace(namespace)
+    ok = _exchange_result_ok(result)
+    if output_format is OutputFormat.JSON:
+        sys.stdout.write(
+            format_json_envelope(
+                schema_version=RUNS_IMPORT_SCHEMA_VERSION,
+                ok=ok,
+                warnings=(),
+                payload_name="result",
+                payload=result.to_dict(),
+            )
+        )
+    else:
+        sys.stdout.write(
+            format_runs_import_text(
+                result,
+                bundle_path=bundle,
+                target_collection=target_collection,
+            )
+            + "\n"
+        )
+    return int(ExitCode.SUCCESS if ok else ExitCode.RUN_STATE)
+
+
 def build_runs_index_result(collection: Path) -> "CatalogIndexResult":
     """Rebuild the catalog sidecar for a collection."""
 
@@ -221,6 +373,84 @@ def build_runs_diff_result(
         return RunCatalog.open(collection).compare(left_run_uri, right_run_uri)
     except CatalogError as exc:
         raise _catalog_cli_error(exc) from exc
+
+
+def build_runs_export_result(
+    run_uri: str,
+    destination: Path,
+    options: "RunBundleExportOptions",
+) -> "RunBundleExportResult":
+    """Export a local completed run bundle."""
+
+    from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
+    from loom.runs import export_run_bundle
+
+    try:
+        return export_run_bundle(
+            SQLitePerRunAuthorityStore(run_uri),
+            run_uri,
+            destination,
+            options=options,
+        )
+    except Exception as exc:
+        raise _exchange_cli_error("export", exc) from exc
+
+
+def build_runs_inspect_result(
+    bundle: Path,
+    *,
+    verify_checksums: bool = False,
+) -> "RunBundleInspection":
+    """Inspect a local completed run bundle without extraction."""
+
+    from loom.runs import inspect_run_bundle
+
+    try:
+        return inspect_run_bundle(bundle, verify_checksums=verify_checksums)
+    except Exception as exc:
+        raise _exchange_cli_error("inspect", exc) from exc
+
+
+def build_runs_import_result(
+    bundle: Path,
+    target_collection: Path,
+    policy: "RunBundleImportPolicy",
+) -> "RunBundleImportResult":
+    """Import a local completed run bundle into a target collection."""
+
+    from loom.runs import import_run_bundle
+
+    try:
+        return import_run_bundle(bundle, target_collection, policy=policy)
+    except Exception as exc:
+        raise _exchange_cli_error("import", exc) from exc
+
+
+def export_options_from_namespace(
+    namespace: argparse.Namespace,
+) -> "RunBundleExportOptions":
+    """Build bundle export options from parsed CLI flags."""
+
+    from loom.runs import RunBundleExportOptions
+
+    return RunBundleExportOptions(
+        include_payloads=bool(namespace.include_payloads),
+        include_logs=bool(namespace.include_logs),
+        include_workspace=bool(namespace.include_workspace),
+        verify_checksums=bool(namespace.verify_checksums),
+        max_payload_count=cast(int | None, namespace.max_payload_count),
+    )
+
+
+def import_policy_from_namespace(
+    namespace: argparse.Namespace,
+) -> "RunBundleImportPolicy":
+    """Build the strict v12 bundle import policy from parsed CLI flags."""
+
+    del namespace
+    from loom.runs import RunBundleImportPolicy
+
+    return RunBundleImportPolicy()
 
 
 def filters_from_namespace(namespace: argparse.Namespace) -> tuple["RunFilter", ...]:
@@ -334,6 +564,16 @@ def _split_key_value(value: str) -> tuple[str | None, str]:
     return key, item
 
 
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected a positive integer") from exc
+    if number <= 0:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return number
+
+
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
@@ -359,17 +599,47 @@ def _catalog_cli_error(error: BaseException) -> CliError:
     )
 
 
+def _exchange_cli_error(operation: str, error: BaseException) -> CliError:
+    return CliError(
+        str(error),
+        code=f"cli.runs.{operation}_error",
+        context={
+            "operation": operation,
+            "error_type": type(error).__name__,
+        },
+        exit_code=ExitCode.RUN_STATE,
+    )
+
+
+def _exchange_result_ok(result: object) -> bool:
+    status = getattr(getattr(result, "status", None), "value", None)
+    if status is None:
+        status = str(getattr(result, "status", ""))
+    return str(status) == "succeeded"
+
+
 __all__ = [
     "RUNS_DIFF_SCHEMA_VERSION",
+    "RUNS_EXPORT_SCHEMA_VERSION",
     "RUNS_INDEX_SCHEMA_VERSION",
+    "RUNS_IMPORT_SCHEMA_VERSION",
+    "RUNS_INSPECT_SCHEMA_VERSION",
     "RUNS_LIST_SCHEMA_VERSION",
     "build_runs_diff_result",
+    "build_runs_export_result",
     "build_runs_index_result",
+    "build_runs_import_result",
+    "build_runs_inspect_result",
     "build_runs_list_result",
     "catalog_warnings_for_cli",
+    "export_options_from_namespace",
     "filters_from_namespace",
+    "handle_export",
     "handle_diff",
     "handle_index",
+    "handle_import",
+    "handle_inspect",
     "handle_list",
+    "import_policy_from_namespace",
     "register_subparser",
 ]

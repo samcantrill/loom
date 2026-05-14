@@ -691,6 +691,81 @@ def format_runs_diff_text(
     return "\n".join(lines)
 
 
+def format_runs_export_text(result: object, *, destination_path: object) -> str:
+    """Format run bundle export output."""
+
+    status = _enum_value(getattr(result, "status"))
+    manifest = getattr(result, "manifest", None)
+    run_uri = "<unknown>" if manifest is None else str(getattr(manifest, "run_uri"))
+    lines = [
+        f"runs export {run_uri}: {status} destination={destination_path} "
+        f"payloads={getattr(result, 'exported_payload_count')}"
+    ]
+    if manifest is not None:
+        lines.append(
+            f"bundle: entries={len(getattr(manifest, 'entries'))} "
+            f"payload_refs={len(getattr(manifest, 'payload_refs'))}"
+        )
+        _extend_identity_lines(lines, manifest)
+    _extend_exchange_diagnostic_lines(lines, getattr(result, "diagnostics", ()))
+    return "\n".join(lines)
+
+
+def format_runs_inspect_text(result: object, *, bundle_path: object) -> str:
+    """Format run bundle inspection output."""
+
+    status = _enum_value(getattr(result, "status"))
+    manifest = getattr(result, "manifest")
+    lines = [
+        f"runs inspect {bundle_path}: {status} run_uri={getattr(manifest, 'run_uri')} "
+        f"payloads={getattr(result, 'included_payload_count')}"
+    ]
+    lines.append(
+        f"bundle: schema={getattr(manifest, 'schema_version')} "
+        f"format={getattr(manifest, 'format_version')} "
+        f"entries={len(getattr(manifest, 'entries'))} "
+        f"payload_refs={len(getattr(manifest, 'payload_refs'))}"
+    )
+    _extend_identity_lines(lines, manifest)
+    _extend_exchange_diagnostic_lines(lines, getattr(result, "diagnostics", ()))
+    return "\n".join(lines)
+
+
+def format_runs_import_text(
+    result: object,
+    *,
+    bundle_path: object,
+    target_collection: object,
+) -> str:
+    """Format run bundle import output."""
+
+    status = _enum_value(getattr(result, "status"))
+    target_run_uri = getattr(result, "target_run_uri")
+    lines = [
+        f"runs import {bundle_path}: {status} target={target_run_uri or '<none>'} "
+        f"entries={getattr(result, 'imported_entry_count')} "
+        f"payloads={getattr(result, 'imported_payload_count')}"
+    ]
+    lines.append(f"target_collection: {target_collection}")
+    source = getattr(result, "source_identity")
+    lines.append(
+        f"source: kind={_enum_value(getattr(source, 'source_kind'))} "
+        f"run_uri={getattr(source, 'run_uri')}"
+    )
+    readiness = getattr(result, "readiness")
+    blockers = tuple(getattr(readiness, "blockers"))
+    lines.append(
+        f"readiness: mode={_enum_value(getattr(readiness, 'mode'))} "
+        f"blockers={len(blockers)}"
+    )
+    for blocker in blockers:
+        lines.append(
+            f"  {_enum_value(getattr(blocker, 'code'))}: {getattr(blocker, 'message')}"
+        )
+    _extend_exchange_diagnostic_lines(lines, getattr(result, "diagnostics", ()))
+    return "\n".join(lines)
+
+
 def _comparison_status_summary(status_counts: Mapping[str, int]) -> str:
     ordered = [
         ("different", status_counts.get("different", 0)),
@@ -718,6 +793,33 @@ def _extend_warning_lines(
             code = str(warning.get("code", "warning"))
             message = str(warning.get("message", ""))
         lines.append(f"  {code}: {message}")
+
+
+def _extend_exchange_diagnostic_lines(lines: list[str], diagnostics: object) -> None:
+    if not isinstance(diagnostics, Sequence) or isinstance(diagnostics, str):
+        return
+    items = tuple(diagnostics)
+    if not items:
+        return
+    suffix = "1 diagnostic" if len(items) == 1 else f"{len(items)} diagnostics"
+    lines.append(f"diagnostics: {suffix}")
+    for diagnostic in items:
+        severity = _enum_value(getattr(diagnostic, "severity", "error"))
+        code = getattr(diagnostic, "code", "diagnostic")
+        message = getattr(diagnostic, "message", "")
+        lines.append(f"  {severity} {code}: {message}")
+
+
+def _extend_identity_lines(lines: list[str], manifest: object) -> None:
+    source = getattr(manifest, "source_identity")
+    lines.append(
+        f"source: kind={_enum_value(getattr(source, 'source_kind'))} "
+        f"run_uri={getattr(source, 'run_uri')}"
+    )
+    target = getattr(manifest, "target_identity")
+    lines.append(
+        f"target_identity: mode={_enum_value(getattr(target, 'mode'))}"
+    )
 
 
 def _text_value(value: object) -> str:
@@ -798,7 +900,10 @@ __all__ = [
     "format_queue_preflight_text",
     "format_queue_status_text",
     "format_runs_diff_text",
+    "format_runs_export_text",
+    "format_runs_import_text",
     "format_runs_index_text",
+    "format_runs_inspect_text",
     "format_runs_list_text",
     "format_slurm_live_submission_text",
     "format_slurm_dry_run_text",
