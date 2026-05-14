@@ -14,6 +14,15 @@ from .bundles import (
     normalize_bundle_member_path,
     write_local_run_bundle,
 )
+from .imports import (
+    OFFLINE_EVIDENCE_IMPORT_ADAPTER,
+    LocalRunBundleImporter,
+    OfflineEvidenceRunImporter,
+    build_offline_evidence_import_record,
+    build_portable_run_import_record,
+    import_offline_evidence,
+    import_run_bundle,
+)
 from .errors import (
     CatalogError,
     CatalogFeatureUnavailableError,
@@ -87,6 +96,13 @@ __all__ = [
     "inspect_run_bundle",
     "normalize_bundle_member_path",
     "write_local_run_bundle",
+    "OFFLINE_EVIDENCE_IMPORT_ADAPTER",
+    "LocalRunBundleImporter",
+    "OfflineEvidenceRunImporter",
+    "build_offline_evidence_import_record",
+    "build_portable_run_import_record",
+    "import_offline_evidence",
+    "import_run_bundle",
     "CatalogError",
     "CatalogFeatureUnavailableError",
     "CatalogStorageError",

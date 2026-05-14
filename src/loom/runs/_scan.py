@@ -189,6 +189,7 @@ def _scan_candidate(
         authority_store, authority_warning = _authority_store_for_candidate(
             run_uri,
             candidate,
+            store,
             authority_context,
         )
     except (CorruptStoreDocumentError, OSError) as exc:
@@ -399,9 +400,12 @@ def _warning_for_store_exception(
 def _authority_store_for_candidate(
     run_uri: str,
     candidate: Path,
+    store: LocalRunStore,
     authority_context: _AuthorityScanContext,
 ) -> tuple[PerRunAuthorityStore | None, CatalogWarning | None]:
     config = authority_context.config
+    if _is_historical_portable_import(store, run_uri):
+        return None, None
     if config.backend_kind in {
         AuthorityBackendKind.CO_LOCATED_SERVICE,
         AuthorityBackendKind.MANAGED_SERVICE,
@@ -508,6 +512,17 @@ def _authority_store_for_candidate(
                 "offline mode"
             ),
         },
+    )
+
+
+def _is_historical_portable_import(store: LocalRunStore, run_uri: str) -> bool:
+    try:
+        runtime = store.read_runtime_metadata(run_uri) or {}
+    except Exception:
+        return False
+    return (
+        runtime.get("historical_only") is True
+        and isinstance(runtime.get("portable_run_import"), dict)
     )
 
 
