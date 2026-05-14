@@ -224,6 +224,83 @@ def test_controller_pool_scoped_run_once_ignores_other_pool_active_work(
     assert cpu.item.status is QueueItemStatus.SUCCEEDED
 
 
+def test_foreground_drain_stops_after_delegated_handoff(tmp_path: Path) -> None:
+    clock = _clock(
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-01T00:00:02Z",
+        "2020-01-01T00:00:03Z",
+    )
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            adapter="delegated",
+        )
+    )
+    adapter = _DelegatedHandoffAdapter()
+    controller = QueueController(service, adapters={"delegated": adapter}, clock=clock)
+
+    result = controller.drain_foreground(poll_interval_seconds=0)
+
+    assert [step.outcome for step in result.steps] == ["dispatched", "handoff"]
+    assert result.steps[-1].item is not None
+    assert result.steps[-1].item.status is QueueItemStatus.DISPATCHED
+    assert len(result.recovery_records) == 1
+
+
+def test_daemon_run_once_continues_after_delegated_handoff_when_more_work_is_queued(
+    tmp_path: Path,
+) -> None:
+    clock = _clock(
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-01T00:00:02Z",
+        "2020-01-01T00:00:03Z",
+        "2020-01-01T00:00:04Z",
+        "2020-01-01T00:00:05Z",
+        "2020-01-01T00:00:06Z",
+    )
+    service = _started_service(tmp_path, clock=clock)
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-1",
+            queue_name="gpu",
+            run_uri="file:///runs/item-1",
+            adapter="delegated",
+        )
+    )
+    service.enqueue(
+        QueueEnqueueRequest(
+            queue_item_id="item-2",
+            queue_name="gpu",
+            run_uri="file:///runs/item-2",
+        )
+    )
+    controller = QueueController(
+        service,
+        adapters={
+            "delegated": _DelegatedHandoffAdapter(),
+            "fake": FakeQueueDispatchAdapter(),
+        },
+        clock=clock,
+    )
+
+    first = controller.run_once(pool_name="gpu-pool")
+    second = controller.run_once(pool_name="gpu-pool")
+    handoff = controller.run_once(pool_name="gpu-pool")
+
+    assert first.item is not None
+    assert first.item.queue_item_id == "item-1"
+    assert first.item.status is QueueItemStatus.DISPATCHED
+    assert second.item is not None
+    assert second.item.queue_item_id == "item-2"
+    assert second.item.status is QueueItemStatus.SUCCEEDED
+    assert handoff.outcome == "handoff"
+
+
 class _AsyncAdapter:
     adapter_name = "async"
 
@@ -263,6 +340,27 @@ class _AsyncAdapter:
         return QueueDispatchCancellation(
             reason=reason,
             evidence={"adapter_cancelled": True, "requested_by": requested_by},
+        )
+
+
+class _DelegatedHandoffAdapter:
+    adapter_name = "delegated"
+
+    def dispatch(self, item) -> QueueDispatchResult:  # noqa: ANN001
+        return QueueDispatchResult(
+            handle_id=f"delegated:{item.queue_item_id}",
+            status=QueueItemStatus.DISPATCHED,
+            reason="delegated-dispatched",
+            evidence={"queue_item_id": item.queue_item_id},
+            complete=False,
+        )
+
+    def inspect(self, item) -> QueueDispatchInspection:  # noqa: ANN001
+        return QueueDispatchInspection(
+            status=QueueItemStatus.DISPATCHED,
+            reason="delegated-handoff-complete",
+            terminal=False,
+            handoff_complete=True,
         )
 
 

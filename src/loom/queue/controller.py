@@ -69,9 +69,12 @@ class QueueDispatchInspection:
     reason: str
     evidence: Mapping[str, PlainData] = field(default_factory=dict)
     terminal: bool = False
+    handoff_complete: bool = False
 
     def __post_init__(self) -> None:
         status = QueueItemStatus(self.status)
+        if not isinstance(self.handoff_complete, bool):
+            raise QueueServiceError("handoff_complete must be a boolean")
         if self.terminal:
             if status not in {
                 QueueItemStatus.SUCCEEDED,
@@ -81,6 +84,10 @@ class QueueDispatchInspection:
             }:
                 raise QueueServiceError(
                     "terminal dispatch inspection must use a terminal status"
+                )
+            if self.handoff_complete:
+                raise QueueServiceError(
+                    "terminal dispatch inspection cannot be handoff-complete"
                 )
         elif status is not QueueItemStatus.DISPATCHED:
             raise QueueServiceError("active dispatch inspection must use DISPATCHED")
@@ -198,10 +205,19 @@ class QueueController:
         self._clock = clock
         self._claim_counter = 0
 
-    def run_once(self, *, pool_name: str | None = None) -> QueueControllerStep:
+    def run_once(
+        self,
+        *,
+        pool_name: str | None = None,
+        stop_on_handoff: bool = False,
+    ) -> QueueControllerStep:
         active = self.reconcile_active(pool_name=pool_name)
         if active.outcome != "idle":
-            return active
+            if active.outcome != "handoff" or stop_on_handoff:
+                return active
+            handoff = active
+        else:
+            handoff = None
         for candidate_pool in self._candidate_pools(pool_name):
             claim = self._service.claim_next(
                 candidate_pool,
@@ -249,7 +265,7 @@ class QueueController:
                 item=completed,
                 dispatch_handle=handle,
             )
-        return QueueControllerStep(outcome="idle")
+        return QueueControllerStep(outcome="idle") if handoff is None else handoff
 
     def reconcile_active(self, *, pool_name: str | None = None) -> QueueControllerStep:
         for item in self._service.recovery_items():
@@ -275,6 +291,8 @@ class QueueController:
                 )
             inspection = adapter.inspect(item)
             if not inspection.terminal:
+                if inspection.handoff_complete:
+                    return QueueControllerStep(outcome="handoff", item=item)
                 return QueueControllerStep(outcome="active", item=item)
             if inspection.status is QueueItemStatus.CANCELLED:
                 cancelled = self._service.cancel_item(
@@ -337,10 +355,12 @@ class QueueController:
             raise QueueServiceError("poll_interval_seconds must be non-negative")
         steps: list[QueueControllerStep] = []
         while max_items is None or len(steps) < max_items:
-            step = self.run_once(pool_name=pool_name)
+            step = self.run_once(pool_name=pool_name, stop_on_handoff=True)
             if step.outcome == "idle":
                 break
             steps.append(step)
+            if step.outcome == "handoff":
+                break
             if step.outcome == "active" and poll_interval_seconds > 0:
                 sleep(poll_interval_seconds)
         return QueueDrainResult(

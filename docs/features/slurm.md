@@ -33,6 +33,18 @@ attempts, partial submission facts, and safe scheduler metadata. Missing
 is a preflight warning, while the operation that needs the command fails clearly
 at use time.
 
+V11 queue delegated SLURM dispatch is a queue-service adapter path rather than a
+replacement for live submitted-operation manifests. A delegated queue item
+stores the queue-owned `run_uri`, the external SLURM job id returned by
+`sbatch --parsable`, the submit command record, and status-read evidence in its
+dispatch handle. Foreground queue draining may exit only after the external
+handle is persisted and at least one downstream `squeue` or `sacct` read has
+succeeded. Delegated SLURM-pending work does not hold Loom resource leases by
+default; downstream SLURM capacity owns pending/running admission until richer
+bundle or submit-host transport exists. If the external handle is active but no
+authority run is visible yet, queue status reports that as diagnostic evidence
+and continues to reuse the same handle instead of resubmitting.
+
 Generated single-job scripts call the generic whole-run continuation command:
 
 ```bash
