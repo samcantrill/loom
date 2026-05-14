@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 3 merged; ready for Phase 4 execution planning
+- Status: Phase 4 in progress
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -26,7 +26,7 @@
 - Refine pass: complete on 2026-05-14 after local plan-quality review
 - Plan quality gate: passed on 2026-05-14 after local
   review/refinement/confirmation
-- Current phase: none
+- Current phase: Phase 4, Transfer Evidence And Importer/Exporter Protocols
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains; Phase 4 execution planning may begin.
@@ -378,7 +378,7 @@ Required suite categories:
 | 1 | `portable-run-exchange-contracts` | merged | `codex/portable-run-exchange-contracts` | [#146](https://github.com/samcantrill/loom/pull/146) | `loom.runs` models plus import-light neutral records and minimal protocols | Establish portable-run exchange, manifest, result, evidence, readiness, and importer/exporter protocol contracts | Package, unit, contract | Manifest models, fake/unsupported adapter records |
 | 2 | `run-bundle-export-inspect` | merged | `codex/run-bundle-export-inspect` | [#147](https://github.com/samcantrill/loom/pull/147) | `loom.runs` export and archive helpers | Implement export, archive safety, and inspect without extraction | Unit, contract, integration | Metadata-only export, inspect safety |
 | 3 | `run-bundle-import-offline-readiness` | merged | `codex/run-bundle-import-offline-readiness` | [#148](https://github.com/samcantrill/loom/pull/148) | `loom.runs` import plus `loom.authority.offline_import` adapter alignment | Implement safe import, offline-evidence alignment, provenance, and readiness blockers | Package, unit, contract, integration | Safe import, offline evidence, resume readiness |
-| 4 | `transfer-evidence-protocols` | pending | `codex/transfer-evidence-protocols` | pending | Transfer evidence mappings, importer/exporter conformance, queue mapping tests | Publish queue-consumable transfer verification and explicit fake/unsupported protocol behavior | Package, unit, contract, narrow integration | Queue evidence, fake/unsupported adapters |
+| 4 | `transfer-evidence-protocols` | in_progress | `codex/transfer-evidence-protocols` | pending | Transfer evidence mappings, importer/exporter conformance, queue mapping tests | Publish queue-consumable transfer verification and explicit fake/unsupported protocol behavior | Package, unit, contract, narrow integration | Queue evidence, fake/unsupported adapters |
 | 5 | `run-bundle-cli-docs-hardening` | pending | `codex/run-bundle-cli-docs-hardening` | pending | CLI, docs, final hardening | Expose `loom runs export/inspect/import`, document behavior, and run final validation | Package, unit, contract, integration, e2e where practical | CLI workflow, docs, final gate |
 
 ## Implementation Readiness Blockers
@@ -809,7 +809,7 @@ readiness-blocker behavior separately from export archive code.
 
 ### Phase 4: Transfer Evidence And Importer/Exporter Protocols
 
-- Status: pending
+- Status: in_progress
 - Branch: `codex/transfer-evidence-protocols`
 - Worktree: `/home/samcantrill/work/loom-worktrees/transfer-evidence-protocols`
 - PR: pending
@@ -899,7 +899,9 @@ conformance, and package boundaries.
 
 **Completion Summary**
 
-- Pending.
+- Phase execution plan:
+  `docs/roadmap/stage-12/phases/transfer-evidence-protocols.md`.
+- Implementation started from updated `origin/develop` after Phase 3 merge.
 
 ### Phase 5: CLI, Docs, Hardening, And Final Validation
 
