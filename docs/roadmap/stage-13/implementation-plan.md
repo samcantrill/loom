@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phases 1-4 merged; ready for Phase 5 execution planning
+- Status: Phases 1-4 merged; Phase 5 PR open
 - Roadmap stage: `v13`
 - Source planning notes:
   `docs/roadmap/stage-13/planning.md`
@@ -37,8 +37,9 @@
 - Current phase: Phase 5, `sweep-collection-cli-hardening`
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 5 execution planning may begin from
-    updated `develop`.
+  - No plan-quality blocker remains; Phase 5 PR
+    [#155](https://github.com/samcantrill/loom/pull/155) is open from updated
+    `develop`.
 
 ## Summary
 
@@ -407,9 +408,9 @@ Required suite categories:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `sweep-contracts-manifests` | merged | `codex/sweep-contracts-manifests` | [#151](https://github.com/samcantrill/loom/pull/151) | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
 | 2 | `grid-manual-planning` | merged | `codex/grid-manual-planning` | [#152](https://github.com/samcantrill/loom/pull/152) | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
-| 3 | `early-stop-direct-dispatch` | pr_open | `codex/early-stop-direct-dispatch` | [#153](https://github.com/samcantrill/loom/pull/153) | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
-| 4 | `coordination-queue-status` | pending | `codex/coordination-queue-status` | pending | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
-| 5 | `sweep-collection-cli-hardening` | pending | `codex/sweep-collection-cli-hardening` | pending | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
+| 3 | `early-stop-direct-dispatch` | merged | `codex/early-stop-direct-dispatch` | [#153](https://github.com/samcantrill/loom/pull/153) | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
+| 4 | `coordination-queue-status` | merged | `codex/coordination-queue-status` | [#154](https://github.com/samcantrill/loom/pull/154) | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
+| 5 | `sweep-collection-cli-hardening` | pr_open | `codex/sweep-collection-cli-hardening` | [#155](https://github.com/samcantrill/loom/pull/155) | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
 
 ## Implementation Readiness Blockers
 
@@ -1022,12 +1023,12 @@ ordinary-run compatibility guardrail.
 
 ### Phase 5: Collection, CLI, Docs, And Hardening
 
-- Status: pending
+- Status: pr_open
 - Slug: `sweep-collection-cli-hardening`
 - Branch: `codex/sweep-collection-cli-hardening`
 - Worktree:
   `/home/samcantrill/work/loom-worktrees/sweep-collection-cli-hardening`
-- PR: pending
+- PR: [#155](https://github.com/samcantrill/loom/pull/155)
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -1114,12 +1115,15 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
-- Implementation/refinement budget: unused
-- PR review budget: unused
-- Blocker-resolution budget: unused
-- Pre-submit blocker gate: pending
+- Phase execution plan: draft complete in
+  `docs/roadmap/stage-13/phases/sweep-collection-cli-hardening.md`
+- Planning/refinement budget: draft/refine used for expanded path
+- Implementation/refinement budget: unused; not needed after targeted and full
+  validation passed without a separate refiner pass
+- PR review budget: used by manager-local automated review on 2026-05-14
+- Blocker-resolution budget: 1/3 used for malformed artifact metadata
+  diagnostic handling
+- Pre-submit blocker gate: passed
 - Merge record: pending
 
 #### Risks And Stop Conditions
@@ -1138,9 +1142,22 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
+- Implementation: Added versioned sweep collection records and injected-reader
+  collection helpers for trial facts, statuses, artifact refs, and unsupported
+  extraction diagnostics; exported collection APIs from `loom.pipeline.sweep`;
+  added `loom sweep plan/run/status/collect` with text and JSON output over
+  public sweep APIs; preserved queue submit-only behavior; documented the v13
+  CLI workflow and final deferrals.
+- Validation: Targeted Phase 5 tests passed (`50 passed`); `make validate-pr`
+  passed, including Ruff, Pyright, default (`1538 passed, 26 skipped, 18
+  deselected`) and config-extra (`438 passed, 1575 deselected`) harnesses, and
+  package build; `make test-summary` passed with package `80 passed`, unit
+  `1089 passed`, contract `199 passed`, integration `155 passed`, e2e `43
+  passed`, and config-extra `438 passed`.
+- PR: [#155](https://github.com/samcantrill/loom/pull/155), targeting
+  `develop` from `codex/sweep-collection-cli-hardening`; PR target
+  verification confirmed `baseRefName=develop`, `headRefName=codex/sweep-collection-cli-hardening`,
+  and `state=OPEN`.
 - Merge:
 - Follow-up:
 

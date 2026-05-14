@@ -109,6 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     from loom.cli import stage as stage_command
     from loom.cli import stage_job as stage_job_command
     from loom.cli import status as status_command
+    from loom.cli import sweep as sweep_command
     from loom.cli import validate as validate_command
 
     validate_command.register_subparser(subparsers)
@@ -126,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     backend_command.register_subparser(subparsers)
     runs_command.register_subparser(subparsers)
     queue_command.register_subparser(subparsers)
+    sweep_command.register_subparser(subparsers)
 
     return parser
 

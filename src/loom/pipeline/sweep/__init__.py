@@ -29,6 +29,14 @@ from .coordination import (
     trial_state_from_queue_status,
     trial_state_from_run_status,
 )
+from .collection import (
+    SWEEP_COLLECTION_SCHEMA_VERSION,
+    SweepCollectedArtifact,
+    SweepCollectedTrial,
+    SweepCollectionDiagnostic,
+    SweepCollectionResult,
+    collect_sweep_results,
+)
 from .early_stopping import (
     EARLY_STOP_REASON_CODE,
     EarlyStopSignal,
@@ -141,6 +149,12 @@ __all__ = [
     "record_sweep_trial_coordination",
     "trial_state_from_queue_status",
     "trial_state_from_run_status",
+    "SWEEP_COLLECTION_SCHEMA_VERSION",
+    "SweepCollectedArtifact",
+    "SweepCollectedTrial",
+    "SweepCollectionDiagnostic",
+    "SweepCollectionResult",
+    "collect_sweep_results",
     "EARLY_STOP_REASON_CODE",
     "EarlyStopSignal",
     "lifecycle_reason_from_early_stop",
