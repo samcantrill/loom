@@ -1110,7 +1110,7 @@ cancel/status truth.
 
 ### Phase 8: `v11` Delegated SLURM Dispatch
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/delegated-slurm-queue-dispatch`
 - PR: https://github.com/samcantrill/loom/pull/144
 
@@ -1195,20 +1195,26 @@ and truthful cancellation/status behavior.
 **Completion Summary**
 
 - PR opened: 2026-05-13, targeting `develop`.
+- PR merged: 2026-05-14, squash commit
+  `1d335f314443926da520a40fee8a5d811ae440c7`.
 - Implementation summary: added delegated SLURM queue dispatch through existing
   fakeable SLURM command runners, external job-id dispatch-handle persistence,
-  handoff-complete foreground drain behavior, missing-authority diagnostics,
+  handoff-complete foreground drain behavior that does not block daemon
+  dispatch of later queued delegated work, missing-authority diagnostics,
   conservative launch verification reporting, explicit cancellation outcome
   evidence, and read-model/docs updates for no Loom leases on SLURM-pending
   delegated work by default.
-- Validation evidence: targeted Phase 8 pytest passed with 54 passed; targeted
-  Ruff and Pyright passed; `make validate-pr` passed; `make test-summary`
-  passed with package 75 passed/1 skipped, unit 1030 passed/1 skipped/1
-  deselected, contract 167 passed/2 skipped, integration 145 passed/8
-  skipped/11 deselected, e2e 40 passed/2 deselected, and config-extra 436
-  passed/1460 deselected.
-
-- Pending.
+- Validation evidence: targeted Phase 8 pytest passed with 55 passed; targeted
+  Ruff and Pyright passed; post-fix `make validate-pr` passed with Ruff,
+  Pyright, default harness 1431 passed/19 skipped/16 deselected, config-extra
+  harness 436 passed/1461 deselected, and build; GitHub CI `checks` passed.
+  `make test-summary` passed before the final review fix with package 75
+  passed/1 skipped, unit 1030 passed/1 skipped/1 deselected, contract 167
+  passed/2 skipped, integration 145 passed/8 skipped/11 deselected, e2e 40
+  passed/2 deselected, and config-extra 436 passed/1460 deselected.
+- Review and follow-up notes: local automated review found and fixed one daemon
+  handoff blocker before merge. No successor branch depended on the phase
+  branch at merge time.
 
 ### Phase 9: `v11` Operational UX, Minimal CLI Wrapper, Docs, And Hardening
 
