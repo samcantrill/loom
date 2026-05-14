@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tarfile
+import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -606,8 +607,9 @@ def _bundle_validation_diagnostics(
 def _copy_bundle_payloads(
     bundle_path: Path | None,
     manifest: RunBundleManifest,
-    target_dir: Path,
     *,
+    destination_root: Path,
+    uri_root: Path,
     complete: bool,
 ) -> _CopiedPayloads:
     if not complete or not manifest.entries:
@@ -635,7 +637,7 @@ def _copy_bundle_payloads(
                 entry.checksum,
             ):
                 raise CatalogValidationError(f"bundle payload checksum mismatch: {entry.path}")
-            target_path = target_dir / _IMPORT_PAYLOAD_ROOT / entry.path
+            target_path = destination_root / entry.path
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_bytes(payload)
             payload_ref = _payload_ref_for_import(entry.path, manifest.payload_refs)
@@ -643,7 +645,7 @@ def _copy_bundle_payloads(
                 payload_refs.append(payload_ref)
                 artifact_id = _payload_artifact_id(payload_ref)
                 if artifact_id is not None:
-                    artifact_uris[artifact_id] = path_to_file_uri(target_path)
+                    artifact_uris[artifact_id] = path_to_file_uri(uri_root / entry.path)
     return _CopiedPayloads(payload_refs=tuple(payload_refs), artifact_uris=artifact_uris)
 
 
@@ -690,57 +692,81 @@ def _write_imported_run(
         "source_run_uri": metadata.run_uri,
         "historical_only": True,
     }
-    store.create_run(target_run_uri, metadata=run_metadata)
-    copied_payloads = _copy_bundle_payloads(
-        bundle_path,
-        manifest,
-        target_dir,
-        complete=complete,
-    )
-    store.write_run_status(
-        target_run_uri,
-        RunStatusRecord(
-            run_uri=target_run_uri,
-            status=metadata.status,
-            created_at=now,
-            updated_at=now,
-            finished_at=now,
-            metadata={"portable_run_import": dict(import_provenance)},
-        ),
-    )
-    store.write_runtime_metadata(
-        target_run_uri,
-        {
-            "executor": "portable-run-import",
-            "backend": "local-bundle",
-            "historical_only": True,
-            "source_run_uri": metadata.run_uri,
-            "portable_run_import": dict(import_provenance),
-        },
-    )
-    for stage in metadata.stages:
-        store.write_stage_status(
+    payload_root = target_dir / _IMPORT_PAYLOAD_ROOT
+    staging_dir: Path | None = None
+    try:
+        copied_payloads = _CopiedPayloads()
+        if complete and manifest.entries:
+            staging_dir = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{target_dir.name}.importing-",
+                    dir=target_collection,
+                )
+            )
+            copied_payloads = _copy_bundle_payloads(
+                bundle_path,
+                manifest,
+                destination_root=staging_dir,
+                uri_root=payload_root,
+                complete=complete,
+            )
+
+        store.create_run(target_run_uri, metadata=run_metadata)
+        if staging_dir is not None:
+            _promote_staged_payloads(staging_dir, payload_root)
+            staging_dir = None
+        store.write_run_status(
             target_run_uri,
-            stage.stage_name,
-            StageStatusRecord(
+            RunStatusRecord(
                 run_uri=target_run_uri,
-                stage_name=stage.stage_name,
-                status=stage.status,
-                attempt=_stage_attempt_number(stage),
+                status=metadata.status,
+                created_at=now,
                 updated_at=now,
                 finished_at=now,
-                metadata={
-                    "portable_run_import": {
-                        "source_run_uri": metadata.run_uri,
-                        "source_stage_name": stage.stage_name,
-                    }
-                },
+                metadata={"portable_run_import": dict(import_provenance)},
             ),
         )
-    artifacts = _artifact_index_for_import(metadata, copied_payloads.artifact_uris)
-    if artifacts:
-        store.write_artifact_index(target_run_uri, artifacts)
-    return copied_payloads
+        store.write_runtime_metadata(
+            target_run_uri,
+            {
+                "executor": "portable-run-import",
+                "backend": "local-bundle",
+                "historical_only": True,
+                "source_run_uri": metadata.run_uri,
+                "portable_run_import": dict(import_provenance),
+            },
+        )
+        for stage in metadata.stages:
+            store.write_stage_status(
+                target_run_uri,
+                stage.stage_name,
+                StageStatusRecord(
+                    run_uri=target_run_uri,
+                    stage_name=stage.stage_name,
+                    status=stage.status,
+                    attempt=_stage_attempt_number(stage),
+                    updated_at=now,
+                    finished_at=now,
+                    metadata={
+                        "portable_run_import": {
+                            "source_run_uri": metadata.run_uri,
+                            "source_stage_name": stage.stage_name,
+                        }
+                    },
+                ),
+            )
+        artifacts = _artifact_index_for_import(metadata, copied_payloads.artifact_uris)
+        if artifacts:
+            store.write_artifact_index(target_run_uri, artifacts)
+        return copied_payloads
+    finally:
+        if staging_dir is not None and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def _promote_staged_payloads(staging_dir: Path, payload_root: Path) -> None:
+    payload_root.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir.replace(payload_root)
 
 
 def _artifact_index_for_import(
