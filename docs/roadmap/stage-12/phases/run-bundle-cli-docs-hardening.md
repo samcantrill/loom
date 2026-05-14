@@ -273,10 +273,22 @@ make test-summary
 - Draft plan: completed in the Phase 5 worktree.
 - Final phase execution plan: completed; expanded path selected because this is
   a public CLI surface and final-stage documentation/hardening phase.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added `loom runs export`, `loom runs inspect`, and
+  `loom runs import` with text/JSON envelopes, public API delegation, local
+  SQLite authority export wiring, strict historical import behavior, CLI
+  diagnostics, contract/integration/e2e coverage, and docs for v12 bundle
+  behavior and deferrals.
+- Implementation validation: targeted Ruff passed; targeted Pyright passed;
+  targeted pytest passed with 65 tests; `make validate-pr` passed with Ruff,
+  Pyright, default pytest, config-extra pytest, and build success; `make
+  test-summary` passed with package 77 passed, unit 1055 passed, contract 180
+  passed, integration 149 passed, e2e 42 passed, and config-extra 438 passed.
+- Refinement summary: no separate implementation refinement pass used; targeted
+  fixes were completed during the implementation pass before full validation.
+- Blocker-resolution summary: 0/3 blocker-resolution passes used.
+- PR preparation: PR body prepared in
+  `docs/roadmap/stage-12/phases/run-bundle-cli-docs-hardening-pr-body.md`;
+  PR open/verification pending.
+- Stack maintenance: none required; Phase 5 is a root phase targeting
+  `develop`.
+- Remaining blockers: none.
