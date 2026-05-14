@@ -879,7 +879,7 @@ ordinary-run compatibility guardrail.
 
 ### Phase 4: Coordination, Queue Dispatch, And Status
 
-- Status: pending
+- Status: in_progress
 - Slug: `coordination-queue-status`
 - Branch: `codex/coordination-queue-status`
 - Worktree: `/home/samcantrill/work/loom-worktrees/coordination-queue-status`
@@ -968,8 +968,10 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: unused
+- Phase execution plan: complete in
+  `docs/roadmap/stage-13/phases/coordination-queue-status.md`
+- Planning/refinement budget: used for expanded-path draft/refine in
+  `docs/roadmap/stage-13/phases/coordination-queue-status.md`
 - Implementation/refinement budget: unused
 - PR review budget: unused
 - Blocker-resolution budget: unused
