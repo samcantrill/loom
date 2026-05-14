@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined draft
+- Status: completed; Phases 1-9 merged into `develop`
 - Source planning notes:
   `docs/implementation-plans/roadmap-v11-planning-notes.md`
 - Related implementation plans:
@@ -1218,7 +1218,7 @@ and truthful cancellation/status behavior.
 
 ### Phase 9: `v11` Operational UX, Minimal CLI Wrapper, Docs, And Hardening
 
-- Status: pr_open
+- Status: merged
 - Branch: `codex/queue-ops-cli-docs-hardening`
 - PR: https://github.com/samcantrill/loom/pull/145
 
@@ -1298,7 +1298,36 @@ stay thin rather than becoming a second orchestration layer.
 
 **Completion Summary**
 
-- Pending.
+- Phase execution plan:
+  `docs/phases/queue-ops-cli-docs-hardening.md`.
+- PR body: `docs/phases/queue-ops-cli-docs-hardening-pr-body.md`.
+- Opened Phase 9 PR #145 against `develop` from
+  `codex/queue-ops-cli-docs-hardening`.
+- Merged Phase 9 PR #145 into `develop` on 2026-05-14 with squash merge
+  commit `bf050f26ce4284c17a7374716ceab116eb6ede0d`.
+- Implemented the queue operational CLI for preflight, start, status, cancel,
+  and foreground drain; queue preflight diagnostics for service repository,
+  authority evidence, pool configuration, managed-pool reconciliation,
+  delegated SLURM command availability, and delegated workspace assumptions;
+  queue status/cancellation read models; status/preflight/drain text rendering;
+  queue feature docs and cross-links from CLI, execution, preflight,
+  runtime-resource, and SLURM docs.
+- Validation before merge:
+  - Focused Phase 9 pytest passed with 58 passed before final review fix.
+  - Review-fix focused queue pytest passed with 7 passed.
+  - Targeted Ruff and Pyright on changed files passed after review fix.
+  - Final `make validate-pr` passed with Ruff, Pyright, default harness 1434
+    passed/26 skipped/18 deselected, config-extra harness 438 passed/1471
+    deselected, and build.
+  - Final `make test-summary` passed with package 77 passed/1 skipped, unit
+    1032 passed/7 skipped/1 deselected, contract 167 passed/2 skipped,
+    integration 145 passed/8 skipped/13 deselected, e2e 41 passed/2
+    deselected, and config-extra 438 passed/1471 deselected.
+- Automated review found one implicit-authority preflight issue; fixed before
+  merge so `loom queue preflight` skips authority checks unless authority CLI
+  flags are explicitly supplied.
+- GitHub CI `checks` passed before merge. No successor branch depended on the
+  phase branch at merge time.
 
 ## Cross-Phase Review Notes
 
