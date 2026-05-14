@@ -13,6 +13,7 @@ from loom.runs import (
     RunBundleEntry,
     RunBundleEntryKind,
     RunBundleExportOptions,
+    RunBundleImportPolicy,
     RunBundleManifest,
     RunBundlePayloadReference,
     RunBundlePayloadSelection,
@@ -89,11 +90,21 @@ def test_payload_and_export_defaults_are_metadata_only() -> None:
         "include_payloads": False,
         "include_logs": False,
         "include_workspace": False,
-        "include_non_terminal_runs": False,
         "verify_checksums": False,
         "max_payload_count": None,
         "extensions": {},
     }
+
+
+def test_deferred_import_policies_are_not_public_contract_values() -> None:
+    with pytest.raises(CatalogValidationError, match="invalid target identity mode"):
+        PortableRunTargetIdentityPolicy(mode="preserve_source")
+
+    with pytest.raises(CatalogValidationError, match="invalid collision policy"):
+        RunBundleImportPolicy(collision_policy="overwrite")
+
+    with pytest.raises(CatalogValidationError, match="invalid checksum policy"):
+        RunBundleImportPolicy(checksum_policy="ignore")
 
 
 def test_run_bundle_manifest_rejects_unknown_field() -> None:

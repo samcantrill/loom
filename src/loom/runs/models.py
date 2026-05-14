@@ -641,16 +641,12 @@ class RunImportCollisionPolicy(StrEnum):
     """Target identity collision policy."""
 
     REJECT = "reject"
-    OVERWRITE = "overwrite"
-    REUSE = "reuse"
 
 
 class RunImportChecksumPolicy(StrEnum):
     """Checksum policy for imported payloads."""
 
     STRICT = "strict"
-    WARNING = "warning"
-    IGNORE = "ignore"
 
 
 class RunImportMaterializationPolicy(StrEnum):
@@ -664,7 +660,6 @@ class RunTargetIdentityPolicyMode(StrEnum):
     """Target identity policy for imported runs."""
 
     TARGET_LOCAL = "target_local"
-    PRESERVE_SOURCE = "preserve_source"
 
 
 class TransferVerificationStatus(StrEnum):
@@ -1507,7 +1502,6 @@ class RunBundleExportOptions:
     include_payloads: bool = False
     include_logs: bool = False
     include_workspace: bool = False
-    include_non_terminal_runs: bool = False
     verify_checksums: bool = False
     max_payload_count: int | None = None
     extensions: Mapping[str, PlainData] = field(default_factory=dict)
@@ -1516,7 +1510,6 @@ class RunBundleExportOptions:
         _coerce_bool(self.include_payloads, "include_payloads")
         _coerce_bool(self.include_logs, "include_logs")
         _coerce_bool(self.include_workspace, "include_workspace")
-        _coerce_bool(self.include_non_terminal_runs, "include_non_terminal_runs")
         _coerce_bool(self.verify_checksums, "verify_checksums")
         if self.max_payload_count is not None:
             object.__setattr__(
@@ -1535,7 +1528,6 @@ class RunBundleExportOptions:
             "include_payloads": self.include_payloads,
             "include_logs": self.include_logs,
             "include_workspace": self.include_workspace,
-            "include_non_terminal_runs": self.include_non_terminal_runs,
             "verify_checksums": self.verify_checksums,
             "max_payload_count": self.max_payload_count,
             "extensions": thaw_plain_data(self.extensions, path="extensions"),
@@ -1550,7 +1542,6 @@ class RunBundleExportOptions:
                 "include_payloads",
                 "include_logs",
                 "include_workspace",
-                "include_non_terminal_runs",
                 "verify_checksums",
                 "max_payload_count",
                 "extensions",
@@ -1560,10 +1551,6 @@ class RunBundleExportOptions:
             include_payloads=cast(bool, payload["include_payloads"]),
             include_logs=cast(bool, payload["include_logs"]),
             include_workspace=cast(bool, payload["include_workspace"]),
-            include_non_terminal_runs=cast(
-                bool,
-                payload["include_non_terminal_runs"],
-            ),
             verify_checksums=cast(bool, payload["verify_checksums"]),
             max_payload_count=cast(int | None, payload["max_payload_count"]),
             extensions=cast(Mapping[str, PlainData], payload["extensions"]),
