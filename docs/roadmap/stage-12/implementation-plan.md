@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: plan quality gate passed; ready for Phase 1 execution planning
+- Status: Phase 1 PR open; CI in progress
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -26,10 +26,10 @@
 - Refine pass: complete on 2026-05-14 after local plan-quality review
 - Plan quality gate: passed on 2026-05-14 after local
   review/refinement/confirmation
-- Current phase: none
+- Current phase: Phase 1 `pr_open`
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 1 execution planning may begin.
+  - No plan-quality blocker remains.
 
 ## Summary
 
@@ -375,7 +375,7 @@ Required suite categories:
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `portable-run-exchange-contracts` | pending | `codex/portable-run-exchange-contracts` | pending | `loom.runs` models plus import-light neutral records and minimal protocols | Establish portable-run exchange, manifest, result, evidence, readiness, and importer/exporter protocol contracts | Package, unit, contract | Manifest models, fake/unsupported adapter records |
+| 1 | `portable-run-exchange-contracts` | pr_open | `codex/portable-run-exchange-contracts` | [#146](https://github.com/samcantrill/loom/pull/146) | `loom.runs` models plus import-light neutral records and minimal protocols | Establish portable-run exchange, manifest, result, evidence, readiness, and importer/exporter protocol contracts | Package, unit, contract | Manifest models, fake/unsupported adapter records |
 | 2 | `run-bundle-export-inspect` | pending | `codex/run-bundle-export-inspect` | pending | `loom.runs` export and archive helpers | Implement export, archive safety, and inspect without extraction | Unit, contract, integration | Metadata-only export, inspect safety |
 | 3 | `run-bundle-import-offline-readiness` | pending | `codex/run-bundle-import-offline-readiness` | pending | `loom.runs` import plus `loom.authority.offline_import` adapter alignment | Implement safe import, offline-evidence alignment, provenance, and readiness blockers | Package, unit, contract, integration | Safe import, offline evidence, resume readiness |
 | 4 | `transfer-evidence-protocols` | pending | `codex/transfer-evidence-protocols` | pending | Transfer evidence mappings, importer/exporter conformance, queue mapping tests | Publish queue-consumable transfer verification and explicit fake/unsupported protocol behavior | Package, unit, contract, narrow integration | Queue evidence, fake/unsupported adapters |
@@ -434,10 +434,10 @@ DAQ-3, and fail-closed migration-resume behavior from DAQ-7.
 
 ### Phase 1: Portable Exchange And Bundle Manifest Contracts
 
-- Status: pending
+- Status: pr_open
 - Branch: `codex/portable-run-exchange-contracts`
 - Worktree: `/home/samcantrill/work/loom-worktrees/portable-run-exchange-contracts`
-- PR: pending
+- PR: [#146](https://github.com/samcantrill/loom/pull/146)
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -543,7 +543,21 @@ mutation changes beyond import-boundary-safe adapter records.
 
 **Completion Summary**
 
-- Pending.
+- Phase execution plan added at
+  `docs/roadmap/stage-12/phases/portable-run-exchange-contracts.md`.
+- PR opened: [#146](https://github.com/samcantrill/loom/pull/146), targeting
+  `develop` from `codex/portable-run-exchange-contracts`.
+- Implementation summary: added import-light portable-run exchange records,
+  strict local bundle manifest records, shared diagnostics/result/readiness
+  envelopes, transfer evidence placeholders, and minimal
+  `RunExporter`/`RunImporter` protocols under `loom.runs`.
+- Tests and validation: targeted Phase 1 pytest set passed with 53 tests;
+  targeted Ruff and Pyright passed; `make validate-pr` passed outside the
+  sandbox; `make test-summary` passed with overall 1910 passed, 0 failed, 0
+  errors, 18 skipped, and 1497 deselected.
+- Review status: managing Codex local pre-submit review completed with no
+  blocking findings. CI `checks` was in progress when this metadata was
+  recorded.
 
 ### Phase 2: Export, Archive Safety, And Inspect
 
