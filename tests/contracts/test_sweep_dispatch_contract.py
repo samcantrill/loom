@@ -5,11 +5,14 @@ from __future__ import annotations
 import pytest
 
 from loom.pipeline.sweep import (
+    DirectSweepRunResult,
+    DirectSweepTrialResult,
     SWEEP_DISPATCH_SCHEMA_VERSION,
     SweepDispatchRequest,
     SweepDispatchResult,
     SweepDispatchStatus,
     SweepProtocolError,
+    SweepRunStatus,
 )
 
 pytestmark = pytest.mark.contract
@@ -72,3 +75,25 @@ def test_dispatch_records_reject_unknown_status_values() -> None:
                 "status": "not-a-status",
             }
         )
+
+
+def test_direct_dispatch_result_contract_exposes_counts() -> None:
+    request = SweepDispatchRequest(**_TRIAL_COMMON, run_uri="file:///runs/trial-1")
+    dispatch_result = SweepDispatchResult(
+        request=request,
+        status=SweepDispatchStatus.DISPATCHED,
+        run_uri=request.run_uri,
+        result_metadata={"run_status": "SUCCEEDED"},
+    )
+    trial_result = DirectSweepTrialResult(dispatch_result=dispatch_result)
+    result = DirectSweepRunResult(
+        sweep_id="sweep-1",
+        status=SweepRunStatus.SUCCEEDED,
+        trial_results=(trial_result,),
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z",
+    )
+
+    assert result.trial_count == 1
+    assert result.failed_count == 0
+    assert result.to_dict()["trial_results"] == [trial_result.to_dict()]

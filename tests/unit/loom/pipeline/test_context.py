@@ -6,6 +6,7 @@ from typing import cast
 import pytest
 
 from loom.pipeline.context import StageContext
+from loom.pipeline.early_stopping import EarlyStopSignal
 from loom.pipeline.errors import PipelineValidationError
 from loom.pipeline.specs import OutputSpec
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
@@ -43,6 +44,38 @@ def test_context_requires_identity_strings() -> None:
             resolved_config={},
             stage_config={},
         )
+
+
+def test_context_stop_early_raises_typed_signal() -> None:
+    context = StageContext(
+        run_uri="run-1",
+        stage_name="build",
+        resolved_config={},
+        stage_config={},
+    )
+
+    with pytest.raises(EarlyStopSignal) as exc_info:
+        context.stop_early("enough evidence", detail={"score": 1})
+
+    signal = exc_info.value
+    assert signal.message == "enough evidence"
+    assert signal.detail == {"score": 1}
+    reason = signal.to_lifecycle_reason()
+    assert reason.code == "early_stop"
+    assert reason.message == "enough evidence"
+    assert reason.detail == {"score": 1}
+
+
+def test_context_stop_early_rejects_non_plain_detail() -> None:
+    context = StageContext(
+        run_uri="run-1",
+        stage_name="build",
+        resolved_config={},
+        stage_config={},
+    )
+
+    with pytest.raises(ValueError, match="plain data"):
+        context.stop_early("bad detail", detail=cast(dict[str, PlainData], {"x": object()}))
 
 
 def test_context_helpers_save_and_register_declared_outputs(tmp_path: Path) -> None:

@@ -99,6 +99,20 @@ class FailingStage:
         raise RuntimeError("stage failed intentionally")
 
 
+class EarlyStopStage:
+    def run(
+        self,
+        context: StageContext,
+        inputs: Mapping[str, ArtifactRef],
+    ) -> Mapping[str, ArtifactRef]:
+        _ = inputs
+        context.stop_early(
+            str(context.stage_config.get("message", "stopped early")),
+            detail={"stage": context.stage_name, "configured": True},
+        )
+        return {}
+
+
 class KeyboardInterruptStage:
     def run(
         self,

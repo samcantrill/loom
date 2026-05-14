@@ -136,6 +136,18 @@ class StageContext:
             )
         return self.inputs[name]
 
+    def stop_early(
+        self,
+        message: str,
+        *,
+        detail: Mapping[str, PlainData] | None = None,
+    ) -> None:
+        """Request controlled cancellation of the current run."""
+
+        from loom.pipeline.early_stopping import stop_early
+
+        stop_early(message, detail=detail)
+
     def load_input(
         self,
         name: str,
