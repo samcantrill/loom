@@ -270,9 +270,9 @@ make test-summary
 - Refinement summary: no separate implementation refinement pass used; targeted
   fixes were completed during the implementation pass before full validation.
 - Blocker-resolution summary: 0/3 blocker-resolution passes used.
-- PR preparation: PR body prepared in
-  `docs/roadmap/stage-12/phases/transfer-evidence-protocols-pr-body.md`;
-  PR open/verification pending.
+- PR preparation: PR opened as https://github.com/samcantrill/loom/pull/149
+  targeting `develop` from `codex/transfer-evidence-protocols`; verified with
+  `gh pr view 149 --json baseRefName,headRefName,state,url`.
 - Stack maintenance: none required; Phase 4 is a root phase targeting
   `develop`.
 - Remaining blockers: none.

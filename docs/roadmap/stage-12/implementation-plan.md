@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 4 in progress
+- Status: Phase 4 PR open
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -809,10 +809,10 @@ readiness-blocker behavior separately from export archive code.
 
 ### Phase 4: Transfer Evidence And Importer/Exporter Protocols
 
-- Status: in_progress
+- Status: pr_open
 - Branch: `codex/transfer-evidence-protocols`
 - Worktree: `/home/samcantrill/work/loom-worktrees/transfer-evidence-protocols`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/149
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -902,6 +902,16 @@ conformance, and package boundaries.
 - Phase execution plan:
   `docs/roadmap/stage-12/phases/transfer-evidence-protocols.md`.
 - Implementation started from updated `origin/develop` after Phase 3 merge.
+- Implementation summary: added public transfer-evidence helpers, unsupported
+  transfer diagnostics/records, queue delegated-verification preservation for
+  `unsupported` statuses, and fake/unsupported importer/exporter contract
+  coverage.
+- Tests and validation: targeted Phase 4 pytest set passed with 61 tests;
+  `make validate-pr` passed; `make test-summary` passed with package 77,
+  unit 1051, contract 179, integration 148, e2e 41, and config-extra 438
+  passing.
+- PR opened as https://github.com/samcantrill/loom/pull/149 targeting
+  `develop` from `codex/transfer-evidence-protocols`.
 
 ### Phase 5: CLI, Docs, Hardening, And Final Validation
 
