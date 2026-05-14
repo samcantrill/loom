@@ -8,6 +8,7 @@ from loom.pipeline.sweep import (
     TRIALS_MANIFEST_FILE_NAME,
     SWEEP_MANIFEST_FILE_NAME,
     SWEEP_MANIFEST_SCHEMA_VERSION,
+    SWEEP_SPEC_SCHEMA_VERSION,
     TRIALS_MANIFEST_SCHEMA_VERSION,
     SweepManifest,
     SweepManifestCompatibilityDiagnostic,
@@ -15,6 +16,7 @@ from loom.pipeline.sweep import (
     TrialsManifest,
     check_sweep_manifest_payload,
     check_trials_manifest_payload,
+    plan_sweep,
 )
 
 pytestmark = pytest.mark.contract
@@ -122,3 +124,27 @@ def test_trials_manifest_compatibility_reports_schema_and_sweep_id_mismatch() ->
     assert diagnostics[0].code == "malformed_trials_manifest"
     assert diagnostics[0].detail["sweep_id"] == "sweep-1"
     assert "trial_id" not in diagnostics[0].detail
+
+
+def test_planned_grid_manifests_preserve_phase_one_schema_shape() -> None:
+    plan = plan_sweep(
+        {
+            "schema_version": SWEEP_SPEC_SCHEMA_VERSION,
+            "mode": "grid",
+            "sweep_id": "contract-grid",
+            "run_uri_root": "file:///tmp/contract-grid",
+            "grid": {"pipeline.x": [1, 2]},
+        },
+        created_at="2026-05-14T00:00:00Z",
+    )
+
+    sweep_payload = plan.sweep_manifest.to_dict()
+    trials_payload = plan.trials_manifest.to_dict()
+
+    assert sweep_payload["schema_version"] == SWEEP_MANIFEST_SCHEMA_VERSION
+    assert trials_payload["schema_version"] == TRIALS_MANIFEST_SCHEMA_VERSION
+    assert sweep_payload["provider"]["provider_type"] == "loom.grid"
+    assert trials_payload["trials"][0]["trial_id"] == "trial-0001"
+    assert trials_payload["trials"][0]["run_uri"] == (
+        "file:///tmp/contract-grid/trial-0001"
+    )

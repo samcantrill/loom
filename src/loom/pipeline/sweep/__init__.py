@@ -26,6 +26,7 @@ from .feedback import (
     SweepFeedbackStatus,
     SweepTrialFeedbackRecord,
 )
+from .grid import GridSweepProposalProvider
 from .manifest import (
     SWEEP_MANIFEST_FILE_NAME,
     SWEEP_MANIFEST_SCHEMA_VERSION,
@@ -41,6 +42,7 @@ from .manifest import (
     write_sweep_manifest,
     write_trials_manifest,
 )
+from .manual import ManualSweepProposalProvider
 from .providers import (
     FiniteSweepProposalProvider,
     SweepProviderContext,
@@ -49,6 +51,31 @@ from .providers import (
     TrialProposal,
     provider_is_finite,
     provider_trial_count,
+)
+from .runner import (
+    AUTHORED_SWEEP_SPEC_FILE_NAME,
+    SweepPlan,
+    SweepPlanCompatibilityResult,
+    SweepPlanPaths,
+    build_trial_id,
+    build_trial_run_uri,
+    check_existing_sweep_plan,
+    plan_sweep,
+    plan_sweep_from_file,
+    provider_for_spec,
+    read_sweep_plan,
+    trial_override_expressions,
+    write_sweep_plan,
+)
+from .spec import (
+    DEFAULT_MAX_GENERATED_TRIALS,
+    SWEEP_SPEC_SCHEMA_VERSION,
+    GridSweepSpec,
+    ManualSweepSpec,
+    ManualTrialSpec,
+    SweepMode,
+    parse_sweep_spec,
+    sweep_spec_to_dict,
 )
 from .trials import SweepTrialRecord
 
@@ -67,6 +94,29 @@ __all__ = [
     "SweepFeedbackObservation",
     "SweepFeedbackStatus",
     "SweepTrialFeedbackRecord",
+    "SWEEP_SPEC_SCHEMA_VERSION",
+    "DEFAULT_MAX_GENERATED_TRIALS",
+    "SweepMode",
+    "GridSweepSpec",
+    "ManualSweepSpec",
+    "ManualTrialSpec",
+    "parse_sweep_spec",
+    "sweep_spec_to_dict",
+    "GridSweepProposalProvider",
+    "ManualSweepProposalProvider",
+    "AUTHORED_SWEEP_SPEC_FILE_NAME",
+    "SweepPlan",
+    "SweepPlanPaths",
+    "SweepPlanCompatibilityResult",
+    "provider_for_spec",
+    "plan_sweep",
+    "plan_sweep_from_file",
+    "write_sweep_plan",
+    "read_sweep_plan",
+    "check_existing_sweep_plan",
+    "build_trial_id",
+    "build_trial_run_uri",
+    "trial_override_expressions",
     "SWEEP_MANIFEST_SCHEMA_VERSION",
     "TRIALS_MANIFEST_SCHEMA_VERSION",
     "SWEEP_MANIFEST_FILE_NAME",
