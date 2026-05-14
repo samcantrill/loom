@@ -7,12 +7,19 @@ import pytest
 from loom.pipeline.sweep import (
     DirectSweepRunResult,
     DirectSweepTrialResult,
+    QueueSweepDispatchResult,
+    QueueSweepTrialResult,
     SWEEP_DISPATCH_SCHEMA_VERSION,
+    SweepAggregateStatus,
     SweepDispatchRequest,
     SweepDispatchResult,
     SweepDispatchStatus,
+    SweepQueueDispatchStatus,
     SweepProtocolError,
     SweepRunStatus,
+    SweepStatusSummary,
+    SweepTrialOutcome,
+    SweepTrialStatus,
 )
 
 pytestmark = pytest.mark.contract
@@ -97,3 +104,49 @@ def test_direct_dispatch_result_contract_exposes_counts() -> None:
     assert result.trial_count == 1
     assert result.failed_count == 0
     assert result.to_dict()["trial_results"] == [trial_result.to_dict()]
+
+
+def test_queue_dispatch_result_contract_exposes_submission_counts() -> None:
+    request = SweepDispatchRequest(**_TRIAL_COMMON, run_uri="file:///runs/trial-1")
+    dispatch_result = SweepDispatchResult(
+        request=request,
+        status=SweepDispatchStatus.QUEUED,
+        run_uri=request.run_uri,
+        result_metadata={"queue_item_id": "queue-1"},
+    )
+    trial_result = QueueSweepTrialResult(dispatch_result=dispatch_result)
+    result = QueueSweepDispatchResult(
+        sweep_id="sweep-1",
+        status=SweepQueueDispatchStatus.SUBMITTED,
+        trial_results=(trial_result,),
+        requested_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:01Z",
+    )
+
+    assert result.trial_count == 1
+    assert result.submitted_count == 1
+    assert result.failed_count == 0
+    assert result.to_dict()["trial_results"] == [trial_result.to_dict()]
+
+
+def test_sweep_status_summary_contract_exposes_counts() -> None:
+    trial = SweepTrialStatus(
+        sweep_id="sweep-1",
+        trial_id="trial-1",
+        trial_index=0,
+        outcome=SweepTrialOutcome.EARLY_STOPPED,
+        run_uri="file:///runs/trial-1",
+        run_status="CANCELLED",
+        early_stopped=True,
+    )
+    summary = SweepStatusSummary(
+        sweep_id="sweep-1",
+        status=SweepAggregateStatus.SUCCEEDED,
+        trials=(trial,),
+    )
+
+    assert summary.trial_count == 1
+    assert summary.early_stopped_count == 1
+    counts = summary.to_dict()["counts"]
+    assert isinstance(counts, dict)
+    assert counts["early_stopped"] == 1

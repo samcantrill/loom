@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from loom.serialization import PlainData, PlainDataError, ensure_plain_data
+from loom.serialization import PlainData, PlainDataError, ensure_plain_data, thaw_plain_data
 from loom.timestamps import utc_timestamp
 
 from .errors import SweepProtocolError
 
 if TYPE_CHECKING:
     from loom.pipeline.execution import RunRequest
+    from loom.pipeline.stores import WorkspaceCoordinationStore
+    from loom.queue import QueueEnqueueRequest
 
     from .runner import SweepPlan
     from .trials import SweepTrialRecord
@@ -35,6 +38,13 @@ class SweepRunStatus(StrEnum):
     """Aggregate outcome for direct sweep dispatch."""
 
     SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class SweepQueueDispatchStatus(StrEnum):
+    """Aggregate outcome for queue sweep submission."""
+
+    SUBMITTED = "submitted"
     FAILED = "failed"
 
 
@@ -396,6 +406,109 @@ class DirectSweepRunResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class QueueSweepTrialResult:
+    """Queue-dispatch outcome for one planned trial."""
+
+    dispatch_result: SweepDispatchResult
+    queue_item: object | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dispatch_result, SweepDispatchResult):
+            raise SweepProtocolError("dispatch_result must be SweepDispatchResult")
+
+    @property
+    def sweep_id(self) -> str:
+        return self.dispatch_result.sweep_id
+
+    @property
+    def trial_id(self) -> str:
+        return self.dispatch_result.trial_id
+
+    @property
+    def run_uri(self) -> str | None:
+        return self.dispatch_result.run_uri
+
+    @property
+    def queue_item_id(self) -> str | None:
+        raw = getattr(self.queue_item, "queue_item_id", None)
+        return raw if isinstance(raw, str) else None
+
+    @property
+    def queue_status(self) -> str | None:
+        raw = getattr(self.queue_item, "status", None)
+        value = getattr(raw, "value", raw)
+        return value if isinstance(value, str) else None
+
+    @property
+    def submitted(self) -> bool:
+        return self.dispatch_result.status == SweepDispatchStatus.QUEUED
+
+    @property
+    def failed(self) -> bool:
+        return self.dispatch_result.status == SweepDispatchStatus.FAILED
+
+    def to_dict(self) -> dict[str, PlainData]:
+        queue_item_dict = _optional_object_dict(self.queue_item)
+        return {
+            "dispatch_result": self.dispatch_result.to_dict(),
+            "run_uri": self.run_uri,
+            "queue_item_id": self.queue_item_id,
+            "queue_status": self.queue_status,
+            "submitted": self.submitted,
+            "failed": self.failed,
+            "queue_item": queue_item_dict,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class QueueSweepDispatchResult:
+    """Aggregate result for queue-backed finite sweep submission."""
+
+    sweep_id: str
+    status: SweepQueueDispatchStatus
+    trial_results: Sequence[QueueSweepTrialResult]
+    requested_at: str
+    finished_at: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sweep_id", _text(self.sweep_id, "sweep_id"))
+        object.__setattr__(self, "status", SweepQueueDispatchStatus(self.status))
+        object.__setattr__(
+            self,
+            "trial_results",
+            _normalize_queue_trial_results(self.trial_results),
+        )
+        object.__setattr__(
+            self, "requested_at", _text(self.requested_at, "requested_at")
+        )
+        object.__setattr__(self, "finished_at", _text(self.finished_at, "finished_at"))
+
+    @property
+    def trial_count(self) -> int:
+        return len(self.trial_results)
+
+    @property
+    def submitted_count(self) -> int:
+        return sum(1 for result in self.trial_results if result.submitted)
+
+    @property
+    def failed_count(self) -> int:
+        return sum(1 for result in self.trial_results if result.failed)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "sweep_id": self.sweep_id,
+            "status": self.status.value,
+            "requested_at": self.requested_at,
+            "finished_at": self.finished_at,
+            "trial_count": self.trial_count,
+            "submitted_count": self.submitted_count,
+            "failed_count": self.failed_count,
+            "trial_results": [result.to_dict() for result in self.trial_results],
+        }
+
+
 def build_dispatch_requests(
     plan: "SweepPlan",
     *,
@@ -479,9 +592,17 @@ def run_sweep_direct(
     sweep_dir: str | None = None,
     open_existing: bool = False,
     requested_at: str | None = None,
+    coordination_store: "WorkspaceCoordinationStore | None" = None,
+    workspace_id: str | None = None,
+    workspace_root_uri: str | None = None,
 ) -> DirectSweepRunResult:
     """Run planned trials sequentially through a `PipelineRunner`-like object."""
 
+    from .coordination import (
+        ensure_sweep_coordination_identity,
+        record_sweep_trial_coordination,
+        trial_state_from_run_status,
+    )
     from .runner import check_existing_sweep_plan, write_sweep_plan
 
     if sweep_dir is not None:
@@ -495,6 +616,17 @@ def run_sweep_direct(
             write_sweep_plan(plan, sweep_dir)
 
     started_at = requested_at or utc_timestamp()
+    if coordination_store is not None:
+        if workspace_id is None:
+            raise SweepProtocolError(
+                "workspace_id is required when coordination_store is provided"
+            )
+        ensure_sweep_coordination_identity(
+            plan,
+            coordination_store,
+            workspace_id=workspace_id,
+            workspace_root_uri=workspace_root_uri,
+        )
     dispatch_requests = build_dispatch_requests(plan, requested_at=started_at)
     trial_results: list[DirectSweepTrialResult] = []
     for trial, dispatch_request in zip(plan.trials, dispatch_requests, strict=True):
@@ -533,6 +665,14 @@ def run_sweep_direct(
                     run_result=None,
                 )
             )
+            if coordination_store is not None:
+                record_sweep_trial_coordination(
+                    plan,
+                    trial,
+                    coordination_store,
+                    state="failed",
+                    metadata={"dispatch_status": dispatch_result.status.value},
+                )
             continue
 
         dispatch_result = SweepDispatchResult(
@@ -550,6 +690,14 @@ def run_sweep_direct(
                 run_result=run_result,
             )
         )
+        if coordination_store is not None:
+            record_sweep_trial_coordination(
+                plan,
+                trial,
+                coordination_store,
+                state=trial_state_from_run_status(run_result),
+                metadata={"dispatch_status": dispatch_result.status.value},
+            )
 
     failed = any(result.failed for result in trial_results)
     return DirectSweepRunResult(
@@ -557,6 +705,228 @@ def run_sweep_direct(
         status=SweepRunStatus.FAILED if failed else SweepRunStatus.SUCCEEDED,
         trial_results=tuple(trial_results),
         started_at=started_at,
+        finished_at=utc_timestamp(),
+    )
+
+
+def build_queue_item_id(sweep_id: str, trial_id: str) -> str:
+    """Build a stable queue-safe item id for one sweep trial."""
+
+    digest = hashlib.sha256(sweep_id.encode("utf-8")).hexdigest()[:12]
+    return f"sweep-{digest}:{_queue_safe_component(trial_id)}"
+
+
+def build_queue_enqueue_request(
+    run_request: "RunRequest",
+    dispatch_request: SweepDispatchRequest,
+    *,
+    queue_name: str,
+    queue_item_id: str | None = None,
+    adapter: str = "fake",
+    entrypoint: str = "fake",
+    resources: Mapping[str, int] | None = None,
+    snapshot: Mapping[str, PlainData] | None = None,
+    drift_inputs: Mapping[str, PlainData] | None = None,
+    delegated_verification: Mapping[str, PlainData] | None = None,
+    launch_metadata: Mapping[str, PlainData] | None = None,
+    metadata: Mapping[str, PlainData] | None = None,
+) -> "QueueEnqueueRequest":
+    """Build a queue enqueue request for one planned sweep trial run."""
+
+    from loom.queue import QueueEnqueueRequest
+
+    if run_request.run_uri is None:
+        raise SweepProtocolError("queue dispatch requires trial run_uri")
+    queue_metadata = {
+        "sweep_id": dispatch_request.sweep_id,
+        "trial_id": dispatch_request.trial_id,
+        "trial_index": dispatch_request.trial_index,
+        "dispatch_request": _thawed_mapping(
+            dispatch_request.to_dict(),
+            "dispatch_request",
+        ),
+        **_thawed_mapping(dict(metadata or {}), "metadata"),
+    }
+    run_metadata = {
+        **_thawed_mapping(dict(run_request.metadata), "run_metadata"),
+        "sweep_id": dispatch_request.sweep_id,
+        "trial_id": dispatch_request.trial_id,
+        "trial_index": dispatch_request.trial_index,
+    }
+    return QueueEnqueueRequest(
+        queue_item_id=queue_item_id
+        or build_queue_item_id(dispatch_request.sweep_id, dispatch_request.trial_id),
+        queue_name=queue_name,
+        run_uri=run_request.run_uri,
+        request=_queue_run_request_snapshot(run_request),
+        tags={
+            "sweep_id": dispatch_request.sweep_id,
+            "trial_id": dispatch_request.trial_id,
+        },
+        run_metadata=run_metadata,
+        adapter=adapter,
+        entrypoint=entrypoint,
+        resources={} if resources is None else resources,
+        snapshot={} if snapshot is None else snapshot,
+        drift_inputs={} if drift_inputs is None else drift_inputs,
+        delegated_verification={}
+        if delegated_verification is None
+        else delegated_verification,
+        launch_metadata={} if launch_metadata is None else launch_metadata,
+        metadata=queue_metadata,
+    )
+
+
+def enqueue_sweep_trials(
+    plan: "SweepPlan",
+    *,
+    queue_service: Any,
+    queue_name: str,
+    request_template: "RunRequest",
+    request_factory: Callable[["SweepTrialRecord", SweepDispatchRequest], "RunRequest"] | None = None,
+    enqueue_request_factory: Callable[["SweepTrialRecord", SweepDispatchRequest, "RunRequest"], "QueueEnqueueRequest"] | None = None,
+    sweep_dir: str | None = None,
+    open_existing: bool = False,
+    requested_at: str | None = None,
+    adapter: str = "fake",
+    entrypoint: str = "fake",
+    resources: Mapping[str, int] | None = None,
+    snapshot: Mapping[str, PlainData] | None = None,
+    drift_inputs: Mapping[str, PlainData] | None = None,
+    delegated_verification: Mapping[str, PlainData] | None = None,
+    launch_metadata: Mapping[str, PlainData] | None = None,
+    coordination_store: "WorkspaceCoordinationStore | None" = None,
+    workspace_id: str | None = None,
+    workspace_root_uri: str | None = None,
+) -> QueueSweepDispatchResult:
+    """Submit planned trials to a whole-run queue service without draining it."""
+
+    from .coordination import (
+        ensure_sweep_coordination_identity,
+        record_sweep_trial_coordination,
+        trial_state_from_queue_status,
+    )
+    from .runner import check_existing_sweep_plan, write_sweep_plan
+
+    if sweep_dir is not None:
+        compatibility = check_existing_sweep_plan(sweep_dir, expected_plan=plan)
+        if compatibility.diagnostics:
+            codes = ", ".join(
+                diagnostic.code for diagnostic in compatibility.diagnostics
+            )
+            raise SweepProtocolError(f"incompatible existing sweep plan: {codes}")
+        if compatibility.sweep_manifest is None or compatibility.trials_manifest is None:
+            write_sweep_plan(plan, sweep_dir)
+
+    timestamp = requested_at or utc_timestamp()
+    if coordination_store is not None:
+        if workspace_id is None:
+            raise SweepProtocolError(
+                "workspace_id is required when coordination_store is provided"
+            )
+        ensure_sweep_coordination_identity(
+            plan,
+            coordination_store,
+            workspace_id=workspace_id,
+            workspace_root_uri=workspace_root_uri,
+        )
+    dispatch_requests = build_dispatch_requests(plan, requested_at=timestamp)
+    trial_results: list[QueueSweepTrialResult] = []
+    for trial, dispatch_request in zip(plan.trials, dispatch_requests, strict=True):
+        try:
+            base_request = (
+                request_factory(trial, dispatch_request)
+                if request_factory is not None
+                else request_template
+            )
+            run_request = build_trial_run_request(
+                base_request,
+                trial,
+                dispatch_request,
+                open_existing=open_existing,
+            )
+            enqueue_request = (
+                enqueue_request_factory(trial, dispatch_request, run_request)
+                if enqueue_request_factory is not None
+                else build_queue_enqueue_request(
+                    run_request,
+                    dispatch_request,
+                    queue_name=queue_name,
+                    adapter=adapter,
+                    entrypoint=entrypoint,
+                    resources=resources,
+                    snapshot=snapshot,
+                    drift_inputs=drift_inputs,
+                    delegated_verification=delegated_verification,
+                    launch_metadata=launch_metadata,
+                )
+            )
+            queue_item = queue_service.enqueue(enqueue_request)
+        except Exception as exc:  # noqa: BLE001 - submission failures are per-trial.
+            dispatch_result = SweepDispatchResult(
+                request=dispatch_request,
+                status=SweepDispatchStatus.FAILED,
+                run_uri=dispatch_request.run_uri,
+                dispatched_at=utc_timestamp(),
+                reason=str(exc) or type(exc).__name__,
+                result_metadata={
+                    "exception_type": f"{type(exc).__module__}.{type(exc).__name__}",
+                },
+            )
+            trial_results.append(
+                QueueSweepTrialResult(
+                    dispatch_result=dispatch_result,
+                    queue_item=None,
+                )
+            )
+            if coordination_store is not None:
+                record_sweep_trial_coordination(
+                    plan,
+                    trial,
+                    coordination_store,
+                    state="failed",
+                    metadata={"dispatch_status": dispatch_result.status.value},
+                )
+            continue
+
+        dispatch_result = SweepDispatchResult(
+            request=dispatch_request,
+            status=SweepDispatchStatus.QUEUED,
+            run_uri=queue_item.run_uri,
+            dispatched_at=getattr(queue_item, "enqueued_at", utc_timestamp()),
+            result_metadata={
+                "queue_item_id": queue_item.queue_item_id,
+                "queue_name": queue_item.queue_name,
+                "queue_status": _enum_value(queue_item.status),
+            },
+        )
+        trial_results.append(
+            QueueSweepTrialResult(
+                dispatch_result=dispatch_result,
+                queue_item=queue_item,
+            )
+        )
+        if coordination_store is not None:
+            record_sweep_trial_coordination(
+                plan,
+                trial,
+                coordination_store,
+                state=trial_state_from_queue_status(queue_item),
+                metadata={
+                    "dispatch_status": dispatch_result.status.value,
+                    "queue_item_id": queue_item.queue_item_id,
+                    "queue_status": _enum_value(queue_item.status),
+                },
+            )
+
+    failed = any(result.failed for result in trial_results)
+    return QueueSweepDispatchResult(
+        sweep_id=plan.sweep_id,
+        status=SweepQueueDispatchStatus.FAILED
+        if failed
+        else SweepQueueDispatchStatus.SUBMITTED,
+        trial_results=tuple(trial_results),
+        requested_at=timestamp,
         finished_at=utc_timestamp(),
     )
 
@@ -569,6 +939,19 @@ def _normalize_direct_trial_results(
         if not isinstance(value, DirectSweepTrialResult):
             raise SweepProtocolError(
                 "trial_results must contain DirectSweepTrialResult values"
+            )
+        normalized.append(value)
+    return tuple(normalized)
+
+
+def _normalize_queue_trial_results(
+    values: Sequence[QueueSweepTrialResult],
+) -> tuple[QueueSweepTrialResult, ...]:
+    normalized: list[QueueSweepTrialResult] = []
+    for value in values:
+        if not isinstance(value, QueueSweepTrialResult):
+            raise SweepProtocolError(
+                "trial_results must contain QueueSweepTrialResult values"
             )
         normalized.append(value)
     return tuple(normalized)
@@ -601,6 +984,60 @@ def _run_result_reason_code(run_result: object | None) -> str | None:
     return code if isinstance(code, str) else None
 
 
+def _queue_run_request_snapshot(request: "RunRequest") -> dict[str, PlainData]:
+    from loom.pipeline.runtime import parse_run_options
+
+    snapshot: dict[str, PlainData] = {
+        "run_uri": request.run_uri,
+        "open_existing": request.open_existing,
+        "options": _thawed_mapping(
+            parse_run_options(request.options).to_dict(),
+            "request.options",
+        ),
+        "metadata": _thawed_mapping(dict(request.metadata), "request.metadata"),
+        "has_config": request.config is not None,
+        "has_pipeline": request.pipeline is not None,
+    }
+    if isinstance(request.config, Mapping):
+        snapshot["config"] = _thawed_mapping(request.config, "request.config")
+    return snapshot
+
+
+def _optional_object_dict(value: object | None) -> PlainData:
+    if value is None:
+        return None
+    to_dict = getattr(value, "to_dict", None)
+    if not callable(to_dict):
+        return None
+    return ensure_plain_data(to_dict(), path="queue_item")
+
+
+def _thawed_mapping(value: Mapping[str, object], path: str) -> dict[str, PlainData]:
+    thawed = thaw_plain_data(value, path=path)
+    if not isinstance(thawed, dict):
+        raise SweepProtocolError(f"{path} must be a mapping")
+    return thawed
+
+
+def _enum_value(value: object) -> str:
+    raw = getattr(value, "value", value)
+    return raw if isinstance(raw, str) else str(raw)
+
+
+def _queue_safe_component(value: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SweepProtocolError("queue item component must be a non-empty string")
+    sanitized = "".join(
+        character
+        if character.isalnum() or character in {"_", ".", ":", "-"}
+        else "-"
+        for character in value
+    )
+    if sanitized[0].isalnum():
+        return sanitized
+    return f"q{sanitized}"
+
+
 def cast_status(value: object, field_name: str) -> SweepDispatchStatus:
     if isinstance(value, SweepDispatchStatus):
         return value
@@ -616,7 +1053,20 @@ def cast_status(value: object, field_name: str) -> SweepDispatchStatus:
 
 __all__ = [
     "SWEEP_DISPATCH_SCHEMA_VERSION",
+    "DirectSweepRunResult",
+    "DirectSweepTrialResult",
+    "QueueSweepDispatchResult",
+    "QueueSweepTrialResult",
     "SweepDispatchRequest",
     "SweepDispatchResult",
     "SweepDispatchStatus",
+    "SweepQueueDispatchStatus",
+    "SweepRunStatus",
+    "build_dispatch_requests",
+    "build_queue_enqueue_request",
+    "build_queue_item_id",
+    "build_trial_run_request",
+    "cast_status",
+    "enqueue_sweep_trials",
+    "run_sweep_direct",
 ]
