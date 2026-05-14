@@ -82,8 +82,36 @@ def test_unsupported_transfer_helpers_share_adapter_identity() -> None:
 
     assert verification.status is TransferVerificationStatus.UNSUPPORTED
     assert verification.checks[0].status is TransferVerificationStatus.UNSUPPORTED
+    assert verification.details["reason"] == "object-store transfer is not implemented"
     assert diagnostic.code == "run_transfer.unsupported"
     assert diagnostic.severity is RunExchangeDiagnosticSeverity.ERROR
     assert diagnostic.details["adapter"] == adapter.to_dict()
+    assert diagnostic.details["reason"] == "object-store transfer is not implemented"
     assert record.adapter == adapter
     assert record.to_dict()["detail"] == {"provider": "object-store"}
+
+
+def test_unsupported_transfer_details_cannot_override_canonical_fields() -> None:
+    adapter = RunAdapterIdentity(name="object-store", kind=TransferRecordKind.UNKNOWN)
+    details = {
+        "adapter": {"name": "wrong"},
+        "reason": "wrong reason",
+        "provider": "object-store",
+    }
+
+    verification = unsupported_transfer_verification(
+        adapter,
+        "object-store transfer is not implemented",
+        details=details,
+    )
+    diagnostic = unsupported_transfer_diagnostic(
+        adapter,
+        "object-store transfer is not implemented",
+        details=details,
+    )
+
+    assert verification.details["reason"] == "object-store transfer is not implemented"
+    assert verification.details["provider"] == "object-store"
+    assert diagnostic.details["adapter"] == adapter.to_dict()
+    assert diagnostic.details["reason"] == "object-store transfer is not implemented"
+    assert diagnostic.details["provider"] == "object-store"

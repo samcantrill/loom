@@ -70,7 +70,7 @@ def unsupported_transfer_verification(
                 details=detail,
             ),
         ),
-        details={"reason": reason, **detail},
+        details={**detail, "reason": reason},
     )
 
 
@@ -92,9 +92,9 @@ def unsupported_transfer_diagnostic(
         message=reason,
         severity=RunExchangeDiagnosticSeverity.ERROR,
         details={
+            **dict(details or {}),
             "adapter": adapter.to_dict(),
             "reason": reason,
-            **dict(details or {}),
         },
     )
 
