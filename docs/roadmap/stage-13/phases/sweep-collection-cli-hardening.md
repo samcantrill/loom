@@ -371,7 +371,8 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: unused; not needed after targeted and full
+  validation passed without requiring a separate refiner pass.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -380,10 +381,26 @@ make test-summary
 - Draft plan: completed locally on 2026-05-14.
 - Final phase execution plan: completed locally on 2026-05-14 after refining
   the CLI argument contract and queue submit-only scope.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+- Implementation summary: added versioned metadata-first sweep collection
+  records and injected-reader collection helpers; exported collection from
+  `loom.pipeline.sweep`; added `loom sweep plan/run/status/collect` as thin
+  wrappers over public sweep APIs; preserved submit-only queue behavior; added
+  JSON config/queue fallbacks for dependency-light CLI tests; documented the
+  supported v13 workflow and deferred extraction behavior.
+- Implementation validation: targeted Ruff and targeted pytest passed for the
+  new sweep collection, CLI, integration/e2e, package, and import-boundary
+  coverage (`49 passed`). `make validate-pr` passed, including Ruff, Pyright,
+  default and config-extra harnesses, and package build. `make test-summary`
+  passed with package `80 passed, 1 skipped`; unit `1088 passed, 7 skipped, 1
+  deselected`; contract `199 passed, 2 skipped`; integration `155 passed, 8
+  skipped, 13 deselected`; e2e `43 passed, 2 deselected`; config-extra
+  `438 passed, 1574 deselected`.
+- Refinement summary: no separate implementation refinement pass was needed;
+  local fixes before full validation were limited to type/import and
+  dependency-light CLI behavior found during targeted validation.
+- Blocker-resolution summary: none used.
+- PR preparation: pending branch push and PR creation after validation evidence
+  update.
+- Stack maintenance: root phase from updated `develop`; no successor branch is
+  expected for Stage 13.
+- Remaining blockers: none.
