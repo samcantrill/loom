@@ -71,6 +71,27 @@ def test_collect_sweep_results_turns_artifact_reader_failures_into_diagnostics()
     assert result.trials[0].diagnostics[0].trial_id == "trial-0001"
 
 
+def test_collect_sweep_results_turns_malformed_artifacts_into_diagnostics() -> None:
+    plan = _plan()
+
+    result = collect_sweep_results(
+        plan,
+        artifact_reader=lambda _run_uri: {
+            "bad": {
+                "artifact_id": {"not": object()},
+                "uri": "file:///tmp/bad",
+                "artifact_type": "json",
+            }
+        },
+        collected_at="2026-05-14T00:00:00Z",
+    )
+
+    assert result.artifact_count == 0
+    assert len(result.diagnostics) == 2
+    assert result.diagnostics[0].code == "artifact_collection_malformed"
+    assert "plain data" in result.diagnostics[0].message
+
+
 def _plan():
     return plan_sweep(
         ManualSweepSpec(

@@ -568,8 +568,8 @@ def _artifacts_from_mapping(
     artifacts: Mapping[str, object],
 ) -> tuple[SweepCollectedArtifact, ...]:
     collected: list[SweepCollectedArtifact] = []
-    for key, artifact in sorted(artifacts.items()):
-        collected.append(_artifact_from_object(key, artifact))
+    for key in sorted(artifacts, key=str):
+        collected.append(_artifact_from_object(key, artifacts[key]))
     return tuple(collected)
 
 
@@ -597,7 +597,10 @@ def _artifact_payload(artifact: object) -> dict[str, PlainData]:
         raw = to_dict()
     else:
         raw = artifact
-    payload = ensure_plain_data(raw, path="artifact")
+    try:
+        payload = ensure_plain_data(raw, path="artifact")
+    except (PlainDataError, TypeError) as exc:
+        raise SweepProtocolError("artifact payload must contain plain data") from exc
     if not isinstance(payload, dict):
         raise SweepProtocolError("artifact payload must be a mapping")
     return dict(payload)
