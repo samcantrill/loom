@@ -193,7 +193,7 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: used by managing Codex local refinement; tightened metadata-only export/payload-selection defaults before final validation
-- PR review: unused
+- PR review: used by managing Codex local pre-submit review; no blocking findings
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -204,6 +204,6 @@ make test-summary
 - Implementation validation: targeted `UV_CACHE_DIR=/tmp/uv-cache uv run --isolated --locked --group dev python -m pytest tests/package/test_runs_api.py tests/package/test_import_boundaries.py tests/contracts/test_run_exchange_contract.py tests/unit/loom/runs/test_run_exchange_models.py` passed with 53 tests; targeted Ruff passed; targeted repo-shaped Pyright passed; `make validate-pr` passed outside the sandbox; `make test-summary` passed and wrote `build/test-summary.md`.
 - Refinement summary: manager review found the initial model defaults implied payload inclusion and some public policy values overpromised deferred import behavior; changed `RunBundlePayloadSelection` and `RunBundleExportOptions` to metadata-only defaults, removed deferred collision/checksum/target-identity option values, and added unit tests for those contracts.
 - Blocker-resolution summary:
-- PR preparation: PR body drafted at `docs/roadmap/stage-12/phases/portable-run-exchange-contracts-pr-body.md`; PR creation pending.
+- PR preparation: PR body drafted at `docs/roadmap/stage-12/phases/portable-run-exchange-contracts-pr-body.md`; PR opened at `https://github.com/samcantrill/loom/pull/146`; verified with `gh pr view 146 --json baseRefName,headRefName,state,url,statusCheckRollup,reviewDecision,mergeable` and confirmed `baseRefName=develop`, `headRefName=codex/portable-run-exchange-contracts`, `state=OPEN`, `mergeable=MERGEABLE`, CI `checks` in progress.
 - Stack maintenance:
 - Remaining blockers: none for PR submission.
