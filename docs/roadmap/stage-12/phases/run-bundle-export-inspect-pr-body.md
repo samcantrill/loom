@@ -45,8 +45,8 @@ New tests cover package exports/import boundaries, metadata-only defaults, expli
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| package | passed | 77 | 0 | 0 | 1 | 0 | 78 | 12.63s |
-| unit | passed | 1041 | 0 | 0 | 7 | 1 | 1048 | 49.43s |
+| package | passed | 77 | 0 | 0 | 1 | 0 | 78 | 14.14s |
+| unit | passed | 1041 | 0 | 0 | 7 | 1 | 1048 | 52.00s |
 | contract | passed | 174 | 0 | 0 | 2 | 0 | 176 | 11.03s |
 | integration | passed | 147 | 0 | 0 | 8 | 13 | 155 | 52.23s |
 | e2e | passed | 41 | 0 | 0 | 0 | 2 | 41 | 36.67s |
