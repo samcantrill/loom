@@ -192,7 +192,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used by managing Codex local refinement; tightened metadata-only export/payload-selection defaults before final validation
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -200,10 +200,10 @@ make test-summary
 
 - Draft plan: completed in the Phase 1 worktree.
 - Final phase execution plan: completed; no separate refinement pass used.
-- Implementation summary:
-- Implementation validation:
-- Refinement summary:
+- Implementation summary: added import-light portable-run exchange records, strict local bundle manifest records, adapter identity, shared diagnostics, result envelopes, transfer evidence placeholders, migration-readiness blockers, and minimal `RunExporter`/`RunImporter` protocols under `loom.runs`; exported the contract through the public runs package and added package, unit, and contract coverage.
+- Implementation validation: targeted `UV_CACHE_DIR=/tmp/uv_cache uv run --active pytest tests/package/test_runs_api.py tests/package/test_import_boundaries.py tests/contracts/test_run_exchange_contract.py tests/unit/loom/runs/test_run_exchange_models.py` passed with 52 tests; targeted Ruff passed; targeted repo-shaped Pyright passed after dependency downloads; `make validate-pr` passed outside the sandbox; `make test-summary` passed and wrote `build/test-summary.md`.
+- Refinement summary: manager review found the initial model defaults implied payload inclusion; changed `RunBundlePayloadSelection` and `RunBundleExportOptions` to metadata-only defaults and added a unit test for that contract.
 - Blocker-resolution summary:
-- PR preparation:
+- PR preparation: PR body drafted at `docs/roadmap/stage-12/phases/portable-run-exchange-contracts-pr-body.md`; PR creation pending.
 - Stack maintenance:
-- Remaining blockers:
+- Remaining blockers: none for PR submission.
