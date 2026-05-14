@@ -64,6 +64,10 @@ _ERROR_SEVERITIES = {RunExchangeDiagnosticSeverity.ERROR}
 _IMPORT_PAYLOAD_ROOT = "imported_payloads"
 
 
+class _ImportTargetCollision(Exception):
+    """Raised when the target run appears before commit ownership is acquired."""
+
+
 class LocalRunBundleImporter:
     """Concrete local bundle importer over the Phase 1 importer protocol."""
 
@@ -191,6 +195,31 @@ class LocalRunBundleImporter:
                 is RunImportMaterializationPolicy.COMPLETE,
             )
             imported_payload_refs = tuple(copied_payloads.payload_refs)
+        except _ImportTargetCollision:
+            diagnostics.append(
+                _diagnostic(
+                    "run_bundle_import.target_collision",
+                    "target run already exists",
+                    target_run_uri=target_run_uri,
+                    target_path=str(target_dir),
+                )
+            )
+            blockers.append(
+                _blocker(
+                    MigrationReadinessBlockerCode.RUN_URI_COLLISION,
+                    "target run already exists",
+                    target_run_uri=target_run_uri,
+                )
+            )
+            return _bundle_import_result(
+                status=RunExchangeOperationStatus.FAILED,
+                source_identity=record.source_identity,
+                adapter=record.adapter,
+                target_run_uri=target_run_uri,
+                readiness=_historical_readiness(*blockers),
+                diagnostics=diagnostics,
+                import_provenance=import_provenance,
+            )
         except Exception as exc:  # noqa: BLE001 - convert failed imports to diagnostics.
             if target_dir.exists():
                 shutil.rmtree(target_dir, ignore_errors=True)
@@ -682,7 +711,7 @@ def _write_imported_run(
     complete: bool,
 ) -> _CopiedPayloads:
     from loom.pipeline.status import RunStatusRecord, StageStatusRecord
-    from loom.pipeline.stores import LocalRunStore
+    from loom.pipeline.stores import LocalRunStore, RunAlreadyExistsError
 
     target_collection.mkdir(parents=True, exist_ok=True)
     store = LocalRunStore(target_collection)
@@ -711,7 +740,10 @@ def _write_imported_run(
                 complete=complete,
             )
 
-        store.create_run(target_run_uri, metadata=run_metadata)
+        try:
+            store.create_run(target_run_uri, metadata=run_metadata)
+        except RunAlreadyExistsError as exc:
+            raise _ImportTargetCollision(str(exc)) from exc
         if staging_dir is not None:
             _promote_staged_payloads(staging_dir, payload_root)
             staging_dir = None
