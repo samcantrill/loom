@@ -1573,3 +1573,34 @@ def test_import_root_does_not_import_plugins() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_import_operations_is_import_light_and_no_forbidden_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.operations
+
+        for forbidden in (
+            "loom.runs",
+            "loom.diagnostics",
+            "loom.pipeline",
+            "loom.cli",
+            "loom.plugins",
+            "loom.authority",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.operations")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
