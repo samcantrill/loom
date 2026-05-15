@@ -239,6 +239,15 @@ from .local_artifacts import (
     LocalRunArtifactStore,
     LocalStageArtifactStore,
 )
+from .artifact_materialization import (
+    ArtifactMaterializationError,
+    ArtifactMaterializationRequest,
+    ArtifactMaterializationResult,
+    LocalMaterializationPolicy,
+    artifact_materialization_location,
+    artifact_materialized_ref,
+    materialize_artifact_locally,
+)
 from .local_runs import LocalRunStore
 from .materialization_read_models import (
     AuthoritativeReadOptions,
@@ -349,6 +358,13 @@ __all__ = [
     "LocalArtifactStore",
     "LocalRunArtifactStore",
     "LocalStageArtifactStore",
+    "ArtifactMaterializationError",
+    "LocalMaterializationPolicy",
+    "ArtifactMaterializationRequest",
+    "ArtifactMaterializationResult",
+    "materialize_artifact_locally",
+    "artifact_materialization_location",
+    "artifact_materialized_ref",
     "PerRunAuthorityStore",
     "RunStore",
     "StageStore",
