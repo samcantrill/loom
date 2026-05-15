@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import cast
 
 from loom.serialization import PlainData, ensure_plain_data
@@ -87,7 +88,12 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
         "run_uri.slurm.local",
         "run_uri.slurm.active_submission",
     ),
-    PreflightGroup.ARTIFACTS: ("artifact_store.available",),
+    PreflightGroup.ARTIFACTS: (
+        "artifact_store.available",
+        "artifact_backends.registry",
+        "artifact_backends.handlers",
+        "artifact_backends.capabilities",
+    ),
     PreflightGroup.CODECS: ("codec_registry.available",),
     PreflightGroup.EXECUTOR: (
         "executor.local",
@@ -173,6 +179,49 @@ class PreflightResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactBackendPreflightTarget:
+    """Explicit metadata-only artifact-backend preflight target."""
+
+    target_id: str
+    store: object
+    required_operations: Iterable[str] = ()
+    config: Mapping[str, PlainData] = field(default_factory=dict)
+    run_context: Mapping[str, PlainData] = field(default_factory=dict)
+    details: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "target_id", _non_empty_str(self.target_id, field="target_id")
+        )
+        if self.store is None:
+            raise PreflightError("store must not be None")
+        object.__setattr__(
+            self,
+            "required_operations",
+            _str_tuple(tuple(self.required_operations), "required_operations"),
+        )
+        object.__setattr__(self, "config", _plain_mapping(self.config, field="config"))
+        object.__setattr__(
+            self,
+            "run_context",
+            _plain_mapping(self.run_context, field="run_context"),
+        )
+        object.__setattr__(
+            self, "details", _plain_mapping(self.details, field="details")
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "target_id": self.target_id,
+            "store": _object_summary(self.store),
+            "required_operations": list(self.required_operations),
+            "config": dict(self.config),
+            "run_context": dict(self.run_context),
+            "details": dict(self.details),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PreflightRequest:
     config_path: str | Path
     groups: Iterable[str | PreflightGroup] | None = None
@@ -187,6 +236,9 @@ class PreflightRequest:
     plugin_groups: tuple[str, ...] = ()
     plugin_names: tuple[str, ...] = ()
     plugin_packages: tuple[str, ...] = ()
+    artifact_backend_targets: tuple[ArtifactBackendPreflightTarget, ...] = ()
+    artifact_backend_registry: object | None = None
+    artifact_backend_handlers: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "config_path", _path_like(self.config_path, "config_path"))
@@ -203,6 +255,16 @@ class PreflightRequest:
             self,
             "plugin_packages",
             _str_tuple(self.plugin_packages, "plugin_packages"),
+        )
+        object.__setattr__(
+            self,
+            "artifact_backend_targets",
+            _artifact_backend_targets(self.artifact_backend_targets),
+        )
+        object.__setattr__(
+            self,
+            "artifact_backend_handlers",
+            _object_mapping(self.artifact_backend_handlers, "artifact_backend_handlers"),
         )
 
 
@@ -276,6 +338,46 @@ def _non_empty_str(value: object, *, field: str) -> str:
     return value
 
 
+def _artifact_backend_targets(
+    values: Iterable[ArtifactBackendPreflightTarget],
+) -> tuple[ArtifactBackendPreflightTarget, ...]:
+    if isinstance(values, str) or not isinstance(values, Iterable):
+        raise PreflightError("artifact_backend_targets must be a sequence")
+    output: list[ArtifactBackendPreflightTarget] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, ArtifactBackendPreflightTarget):
+            raise PreflightError(
+                "artifact_backend_targets"
+                f"[{index}] must be ArtifactBackendPreflightTarget"
+            )
+        output.append(value)
+    return tuple(output)
+
+
+def _object_mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise PreflightError(f"{field} must be a mapping")
+    output: dict[str, object] = {}
+    for key, item in value.items():
+        output[_non_empty_str(key, field=f"{field} key")] = item
+    return MappingProxyType(output)
+
+
+def _object_summary(value: object) -> PlainData:
+    if isinstance(value, Mapping):
+        summary = dict(value)
+    elif hasattr(value, "to_summary"):
+        summary = getattr(value, "to_summary")()
+    elif hasattr(value, "to_dict"):
+        summary = getattr(value, "to_dict")()
+    else:
+        summary = {"type": type(value).__name__}
+    try:
+        return ensure_plain_data(summary, path="store")
+    except PlainDataError as exc:
+        raise PreflightError(f"store summary must be plain data: {exc}") from exc
+
+
 def _plain_mapping(value: Mapping[str, PlainData], *, field: str) -> Mapping[str, PlainData]:
     try:
         normalized = ensure_plain_data(dict(value), path=field)
@@ -307,6 +409,7 @@ def _str_tuple(values: tuple[str, ...], field: str) -> tuple[str, ...]:
 
 
 __all__ = [
+    "ArtifactBackendPreflightTarget",
     "DEFAULT_PREFLIGHT_GROUPS",
     "ALL_PREFLIGHT_GROUPS",
     "OPTIONAL_PREFLIGHT_GROUPS",

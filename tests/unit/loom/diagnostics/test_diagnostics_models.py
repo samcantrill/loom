@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from loom.diagnostics.models import (
+    ArtifactBackendPreflightTarget,
     PreflightCheckResult,
     PreflightCheckStatus,
     PreflightError,
@@ -118,3 +119,22 @@ def test_request_normalizes_iterables_without_touching_group_policy() -> None:
     assert request.groups == ("run", "artifacts")
     assert request.overlays == ("overlay.yaml",)
     assert request.overrides == ("pipeline.name=demo",)
+
+
+def test_request_normalizes_artifact_backend_targets() -> None:
+    target = ArtifactBackendPreflightTarget(
+        target_id="external-input",
+        store={"kind": "object-store"},
+        required_operations=("read",),
+        details={"source": "fixture"},
+    )
+
+    request = PreflightRequest(
+        config_path="config.yaml",
+        artifact_backend_targets=(target,),
+        artifact_backend_handlers={"object-store": object()},
+    )
+
+    assert request.artifact_backend_targets == (target,)
+    assert request.artifact_backend_handlers["object-store"]
+    assert target.to_dict()["required_operations"] == ["read"]

@@ -43,13 +43,13 @@ def test_missing_run_uri_skips_run_path_dependent_groups() -> None:
     )
 
     assert result.status is PreflightStatus.SKIP
-    assert [check.status for check in result.checks] == [
-        PreflightCheckStatus.SKIP,
-        PreflightCheckStatus.SKIP,
-    ]
+    assert all(check.status is PreflightCheckStatus.SKIP for check in result.checks)
     assert [check.details["reason"] for check in result.checks] == [
         "missing_run_uri",
         "missing_run_uri",
+        "no_artifact_backend_targets",
+        "no_artifact_backend_targets",
+        "no_artifact_backend_targets",
     ]
 
 

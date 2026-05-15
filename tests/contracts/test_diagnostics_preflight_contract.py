@@ -50,7 +50,12 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
             "run_uri.slurm.local",
             "run_uri.slurm.active_submission",
         ),
-        PreflightGroup.ARTIFACTS: ("artifact_store.available",),
+        PreflightGroup.ARTIFACTS: (
+            "artifact_store.available",
+            "artifact_backends.registry",
+            "artifact_backends.handlers",
+            "artifact_backends.capabilities",
+        ),
         PreflightGroup.CODECS: ("codec_registry.available",),
         PreflightGroup.EXECUTOR: (
             "executor.local",

@@ -30,6 +30,15 @@ from .transfer import (
     unsupported_transfer_record,
     unsupported_transfer_verification,
 )
+from .artifact_metadata import (
+    ARTIFACT_LOCATION_METADATA_KEY,
+    ARTIFACT_LOCATIONS_METADATA_KEY,
+    EXTERNAL_ARTIFACT_METADATA_KEY,
+    PUBLISHED_ARTIFACT_METADATA_KEY,
+    UNSUPPORTED_MATERIALIZATION_METADATA_KEY,
+    collect_artifact_metadata_summaries,
+    unsupported_materialization_summary,
+)
 from .errors import (
     CatalogError,
     CatalogFeatureUnavailableError,
@@ -115,6 +124,13 @@ __all__ = [
     "unsupported_transfer_diagnostic",
     "unsupported_transfer_record",
     "unsupported_transfer_verification",
+    "ARTIFACT_LOCATION_METADATA_KEY",
+    "ARTIFACT_LOCATIONS_METADATA_KEY",
+    "EXTERNAL_ARTIFACT_METADATA_KEY",
+    "PUBLISHED_ARTIFACT_METADATA_KEY",
+    "UNSUPPORTED_MATERIALIZATION_METADATA_KEY",
+    "collect_artifact_metadata_summaries",
+    "unsupported_materialization_summary",
     "CatalogError",
     "CatalogFeatureUnavailableError",
     "CatalogStorageError",

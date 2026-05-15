@@ -19,9 +19,10 @@ from loom.state_sources import (
     redacted_authority_summary,
     unavailable_authority_source,
 )
-from loom.serialization import PlainData
+from loom.serialization import PlainData, ensure_plain_data
 
 from .models import (
+    ArtifactBackendPreflightTarget,
     STABLE_CHECK_IDS,
     PreflightCheckResult,
     PreflightCheckStatus,
@@ -643,6 +644,13 @@ def _check_slurm_run_uri_local(context: _Context) -> tuple[PreflightCheckResult,
     )
 
 
+def _check_artifacts(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    return (
+        *_check_artifact_store(context),
+        *_check_artifact_backends(context),
+    )
+
+
 def _check_artifact_store(context: _Context) -> tuple[PreflightCheckResult, ...]:
     try:
         run_uri = _selected_run_uri(context)
@@ -703,6 +711,418 @@ def _check_artifact_store(context: _Context) -> tuple[PreflightCheckResult, ...]
             },
         ),
     )
+
+
+@dataclass(frozen=True)
+class _ResolvedArtifactBackendTarget:
+    target: ArtifactBackendPreflightTarget
+    backend_kind: str | None
+    handler: object | None
+    handler_source: str
+    registry_diagnostics: tuple[object, ...] = ()
+    handler_diagnostics: tuple[object, ...] = ()
+
+
+def _check_artifact_backends(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    targets = context.request.artifact_backend_targets
+    if not targets:
+        details = {"reason": "no_artifact_backend_targets"}
+        return (
+            _skip(
+                "artifact_backends.registry",
+                PreflightGroup.ARTIFACTS,
+                "no artifact backend targets configured",
+                details,
+            ),
+            _skip(
+                "artifact_backends.handlers",
+                PreflightGroup.ARTIFACTS,
+                "no artifact backend targets configured",
+                details,
+            ),
+            _skip(
+                "artifact_backends.capabilities",
+                PreflightGroup.ARTIFACTS,
+                "no artifact backend targets configured",
+                details,
+            ),
+        )
+
+    resolved = _resolve_artifact_backend_targets(context)
+    return (
+        _artifact_backend_registry_check(resolved),
+        _artifact_backend_handler_check(resolved),
+        _artifact_backend_capability_check(resolved),
+    )
+
+
+def _resolve_artifact_backend_targets(
+    context: _Context,
+) -> tuple[_ResolvedArtifactBackendTarget, ...]:
+    from loom.artifacts import ArtifactStoreRef
+    from loom.pipeline.stores import (
+        ArtifactStoreBackendDiagnostic,
+        ArtifactStoreBackendDiagnosticSeverity,
+        ArtifactStoreBackendHandler,
+        ArtifactStoreBackendRegistry,
+        ArtifactStoreBackendRegistryError,
+        normalize_artifact_store_backend_kind,
+    )
+
+    registry = context.request.artifact_backend_registry
+    if registry is not None and not isinstance(registry, ArtifactStoreBackendRegistry):
+        diagnostic = ArtifactStoreBackendDiagnostic(
+            code="invalid_artifact_store_backend_registry",
+            message="artifact backend registry must be ArtifactStoreBackendRegistry",
+            severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+        )
+        return tuple(
+            _ResolvedArtifactBackendTarget(
+                target=target,
+                backend_kind=None,
+                handler=None,
+                handler_source="missing",
+                registry_diagnostics=(diagnostic,),
+                handler_diagnostics=(diagnostic,),
+            )
+            for target in context.request.artifact_backend_targets
+        )
+
+    supplied_handlers: dict[str, object] = {}
+    for key, handler in context.request.artifact_backend_handlers.items():
+        try:
+            supplied_handlers[normalize_artifact_store_backend_kind(key)] = handler
+        except Exception:  # noqa: BLE001
+            supplied_handlers[key] = handler
+    resolved: list[_ResolvedArtifactBackendTarget] = []
+    for target in context.request.artifact_backend_targets:
+        registry_diagnostics: list[object] = []
+        handler_diagnostics: list[object] = []
+        handler: object | None = None
+        handler_source = "missing"
+
+        if not isinstance(target.store, ArtifactStoreRef):
+            diagnostic = ArtifactStoreBackendDiagnostic(
+                code="invalid_artifact_backend_preflight_store",
+                message="artifact backend preflight target store must be ArtifactStoreRef",
+                severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                detail={"target_id": target.target_id},
+            )
+            resolved.append(
+                _ResolvedArtifactBackendTarget(
+                    target=target,
+                    backend_kind=None,
+                    handler=None,
+                    handler_source=handler_source,
+                    registry_diagnostics=(diagnostic,),
+                    handler_diagnostics=(diagnostic,),
+                )
+            )
+            continue
+
+        try:
+            backend_kind = normalize_artifact_store_backend_kind(target.store.kind)
+        except Exception as exc:  # noqa: BLE001
+            diagnostic = ArtifactStoreBackendDiagnostic(
+                code="invalid_artifact_store_backend_kind",
+                message=str(exc),
+                severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                detail={"target_id": target.target_id},
+            )
+            resolved.append(
+                _ResolvedArtifactBackendTarget(
+                    target=target,
+                    backend_kind=None,
+                    handler=None,
+                    handler_source=handler_source,
+                    registry_diagnostics=(diagnostic,),
+                    handler_diagnostics=(diagnostic,),
+                )
+            )
+            continue
+
+        supplied = supplied_handlers.get(backend_kind)
+        if supplied is not None:
+            if isinstance(supplied, ArtifactStoreBackendHandler):
+                handler = supplied
+                handler_source = "supplied_handler"
+            else:
+                handler_diagnostics.append(
+                    ArtifactStoreBackendDiagnostic(
+                        code="invalid_artifact_store_backend_handler",
+                        message=(
+                            "artifact backend handler must implement "
+                            "ArtifactStoreBackendHandler"
+                        ),
+                        severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                        detail={
+                            "target_id": target.target_id,
+                            "backend_kind": backend_kind,
+                        },
+                    )
+                )
+        elif registry is not None:
+            try:
+                handler = registry.create_handler(
+                    backend_kind,
+                    target.store,
+                    config=target.config,
+                    run_context=target.run_context,
+                )
+                handler_source = "registry"
+            except ArtifactStoreBackendRegistryError as exc:
+                registry_diagnostics.append(exc.diagnostic)
+            except Exception as exc:  # noqa: BLE001
+                registry_diagnostics.append(
+                    ArtifactStoreBackendDiagnostic(
+                        code="artifact_store_backend_handler_create_failed",
+                        message=str(exc),
+                        severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                        detail={
+                            "target_id": target.target_id,
+                            "backend_kind": backend_kind,
+                        },
+                    )
+                )
+        else:
+            registry_diagnostics.append(
+                ArtifactStoreBackendDiagnostic(
+                    code="missing_artifact_store_backend_registry",
+                    message="artifact backend target has no supplied registry or handler",
+                    severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                    detail={
+                        "target_id": target.target_id,
+                        "backend_kind": backend_kind,
+                    },
+                )
+            )
+
+        if handler is None and not handler_diagnostics:
+            handler_diagnostics.append(
+                ArtifactStoreBackendDiagnostic(
+                    code="missing_artifact_store_backend_handler",
+                    message="artifact backend target has no configured handler",
+                    severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                    detail={
+                        "target_id": target.target_id,
+                        "backend_kind": backend_kind,
+                    },
+                )
+            )
+        if isinstance(handler, ArtifactStoreBackendHandler):
+            try:
+                handler_diagnostics.extend(handler.validate_store_ref(target.store))
+            except Exception as exc:  # noqa: BLE001
+                handler_diagnostics.append(
+                    ArtifactStoreBackendDiagnostic(
+                        code="artifact_store_backend_ref_validation_failed",
+                        message=str(exc),
+                        severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                        detail={
+                            "target_id": target.target_id,
+                            "backend_kind": backend_kind,
+                        },
+                    )
+                )
+
+        resolved.append(
+            _ResolvedArtifactBackendTarget(
+                target=target,
+                backend_kind=backend_kind,
+                handler=handler,
+                handler_source=handler_source,
+                registry_diagnostics=tuple(registry_diagnostics),
+                handler_diagnostics=tuple(handler_diagnostics),
+            )
+        )
+    return tuple(resolved)
+
+
+def _artifact_backend_registry_check(
+    resolved: tuple[_ResolvedArtifactBackendTarget, ...],
+) -> PreflightCheckResult:
+    diagnostics = tuple(
+        diagnostic
+        for item in resolved
+        for diagnostic in item.registry_diagnostics
+    )
+    status, severity = _artifact_backend_preflight_status(diagnostics)
+    return _result(
+        "artifact_backends.registry",
+        PreflightGroup.ARTIFACTS,
+        status,
+        severity,
+        _artifact_backend_message(
+            "artifact backend registry",
+            status=status,
+            diagnostic_count=len(diagnostics),
+        ),
+        _artifact_backend_details(resolved, diagnostics=diagnostics),
+    )
+
+
+def _artifact_backend_handler_check(
+    resolved: tuple[_ResolvedArtifactBackendTarget, ...],
+) -> PreflightCheckResult:
+    diagnostics = tuple(
+        diagnostic for item in resolved for diagnostic in item.handler_diagnostics
+    )
+    status, severity = _artifact_backend_preflight_status(diagnostics)
+    return _result(
+        "artifact_backends.handlers",
+        PreflightGroup.ARTIFACTS,
+        status,
+        severity,
+        _artifact_backend_message(
+            "artifact backend handlers",
+            status=status,
+            diagnostic_count=len(diagnostics),
+        ),
+        _artifact_backend_details(resolved, diagnostics=diagnostics),
+    )
+
+
+def _artifact_backend_capability_check(
+    resolved: tuple[_ResolvedArtifactBackendTarget, ...],
+) -> PreflightCheckResult:
+    from loom.pipeline.stores import (
+        ArtifactStoreBackendDiagnostic,
+        ArtifactStoreBackendDiagnosticSeverity,
+        ArtifactStoreBackendHandler,
+        admit_artifact_store_operations,
+    )
+
+    diagnostics: list[object] = []
+    operation_results: list[PlainData] = []
+    for item in resolved:
+        source = item.handler if isinstance(item.handler, ArtifactStoreBackendHandler) else None
+        results = admit_artifact_store_operations(
+            source,
+            item.target.required_operations,
+        )
+        for result in results:
+            operation_results.append(result.to_dict())
+            diagnostics.extend(result.diagnostics)
+        if source is None and item.target.required_operations:
+            diagnostics.append(
+                ArtifactStoreBackendDiagnostic(
+                    code="artifact_store_backend_capability_handler_missing",
+                    message="required artifact backend operations have no handler",
+                    severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                    detail={
+                        "target_id": item.target.target_id,
+                        "backend_kind": item.backend_kind,
+                        "required_operations": list(item.target.required_operations),
+                    },
+                )
+            )
+
+    status, severity = _artifact_backend_preflight_status(tuple(diagnostics))
+    details = dict(
+        _artifact_backend_details(tuple(resolved), diagnostics=tuple(diagnostics))
+    )
+    details["operation_results"] = operation_results
+    return _result(
+        "artifact_backends.capabilities",
+        PreflightGroup.ARTIFACTS,
+        status,
+        severity,
+        _artifact_backend_message(
+            "artifact backend capabilities",
+            status=status,
+            diagnostic_count=len(diagnostics),
+        ),
+        details,
+    )
+
+
+def _artifact_backend_preflight_status(
+    diagnostics: tuple[object, ...],
+) -> tuple[PreflightCheckStatus, PreflightSeverity]:
+    from loom.pipeline.stores import ArtifactStoreBackendDiagnosticSeverity
+
+    severities = {
+        getattr(getattr(diagnostic, "severity", None), "value", None)
+        for diagnostic in diagnostics
+    }
+    if ArtifactStoreBackendDiagnosticSeverity.ERROR.value in severities:
+        return PreflightCheckStatus.FAIL, PreflightSeverity.ERROR
+    if ArtifactStoreBackendDiagnosticSeverity.WARNING.value in severities:
+        return PreflightCheckStatus.WARN, PreflightSeverity.WARNING
+    return PreflightCheckStatus.PASS, PreflightSeverity.INFO
+
+
+def _artifact_backend_message(
+    label: str,
+    *,
+    status: PreflightCheckStatus,
+    diagnostic_count: int,
+) -> str:
+    if status is PreflightCheckStatus.PASS:
+        return f"{label} checks passed"
+    if status is PreflightCheckStatus.WARN:
+        return f"{label} checks reported {diagnostic_count} warning(s)"
+    return f"{label} checks failed"
+
+
+def _artifact_backend_details(
+    resolved: tuple[_ResolvedArtifactBackendTarget, ...],
+    *,
+    diagnostics: tuple[object, ...],
+) -> Mapping[str, PlainData]:
+    payload = {
+        "target_count": len(resolved),
+        "targets": [_artifact_backend_target_detail(item) for item in resolved],
+        "diagnostic_count": len(diagnostics),
+        "diagnostics": [
+            cast(Mapping[str, PlainData], cast(Any, diagnostic).to_dict())
+            for diagnostic in diagnostics
+            if hasattr(diagnostic, "to_dict")
+        ],
+    }
+    return cast(
+        Mapping[str, PlainData],
+        ensure_plain_data(payload, path="artifact_backend_details"),
+    )
+
+
+def _artifact_backend_target_detail(
+    item: _ResolvedArtifactBackendTarget,
+) -> Mapping[str, PlainData]:
+    target = item.target
+    return {
+        "target_id": target.target_id,
+        "backend_kind": item.backend_kind,
+        "handler_source": item.handler_source,
+        "handler_configured": item.handler is not None,
+        "required_operations": list(target.required_operations),
+        "store": _redacted_artifact_backend_store(item),
+        "details": dict(target.details),
+    }
+
+
+def _redacted_artifact_backend_store(
+    item: _ResolvedArtifactBackendTarget,
+) -> PlainData:
+    from loom.artifacts import ArtifactStoreRef
+    from loom.pipeline.stores import ArtifactStoreBackendHandler
+
+    store = item.target.store
+    if isinstance(store, ArtifactStoreRef) and isinstance(
+        item.handler, ArtifactStoreBackendHandler
+    ):
+        try:
+            store = item.handler.redact_store_ref(store)
+        except Exception:  # noqa: BLE001 - diagnostics fall back to display summary.
+            pass
+    summary = (
+        cast(Any, store).to_summary()
+        if hasattr(store, "to_summary")
+        else {"type": type(store).__name__}
+    )
+    if isinstance(summary, Mapping) and summary.get("display_uri") is not None:
+        summary = {**summary, "uri": None}
+    return cast(PlainData, ensure_plain_data(summary, path="artifact_backend_store"))
 
 
 def _authority_policy_details(context: _Context) -> dict[str, PlainData]:
@@ -1858,7 +2278,7 @@ _CHECKS = {
     PreflightGroup.SELECTORS: _check_selectors,
     PreflightGroup.RUNTIME: _check_runtime,
     PreflightGroup.RUN: _check_run_uri,
-    PreflightGroup.ARTIFACTS: _check_artifact_store,
+    PreflightGroup.ARTIFACTS: _check_artifacts,
     PreflightGroup.CODECS: _check_codecs,
     PreflightGroup.EXECUTOR: _check_executor,
     PreflightGroup.RESOURCES: _check_resources,
