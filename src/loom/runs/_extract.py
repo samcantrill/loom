@@ -19,7 +19,7 @@ from loom.pipeline.stores import (
     RunNotFoundError,
     UnsafeStorePathError,
 )
-from loom.serialization import PlainData
+from loom.serialization import PlainData, thaw_plain_data
 
 from .models import (
     ArtifactSummary,
@@ -295,7 +295,7 @@ def _artifact_summary(
         checksum=artifact.checksum,
         fingerprint=artifact.fingerprint,
         producer_stage=artifact.producer_stage,
-        metadata=artifact.metadata,
+        metadata=cast(Mapping[str, PlainData], thaw_plain_data(artifact.metadata)),
         state_source=state_source,
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .models import (
+    ArtifactBackendPreflightTarget,
     PreflightCheckResult,
     PreflightCheckStatus,
     PreflightError,
@@ -52,6 +53,7 @@ __all__ = [
     "PreflightCheckStatus",
     "PreflightSeverity",
     "PreflightGroup",
+    "ArtifactBackendPreflightTarget",
     "PreflightCheckResult",
     "PreflightResult",
     "PreflightRequest",
