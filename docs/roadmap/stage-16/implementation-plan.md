@@ -5,7 +5,7 @@ Roadmap stage: `v16`
 Planning document: `docs/roadmap/stage-16/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: ready for Phase 1 execution planning
+Current phase: Phase 3 in progress
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-15 after
@@ -278,7 +278,7 @@ contracts and return the same operation evidence used by bundles and preflight.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `shared-operation-evidence-contracts` | merged | `codex/shared-operation-evidence-contracts` | [#166](https://github.com/samcantrill/loom/pull/166) | `loom.operations`, narrow compatibility projections | Add shared operation/evidence value objects and bounded adoption | Unit/contract/package import-boundary tests, `make validate-pr`, `make test-summary` | Unsupported operation, checksum evidence, redacted diagnostic |
-| 2 | `local-materialization-copy-records` | pr_open | `codex/local-materialization-copy-records` | [#167](https://github.com/samcantrill/loom/pull/167) | `loom.pipeline.stores`, public store exports | Add materialization records and copy-only local behavior | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Local copy, checksum mismatch, unsupported non-copy policy |
+| 2 | `local-materialization-copy-records` | merged | `codex/local-materialization-copy-records` | [#167](https://github.com/samcantrill/loom/pull/167) | `loom.pipeline.stores`, public store exports | Add materialization records and copy-only local behavior | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Local copy, checksum mismatch, unsupported non-copy policy |
 | 3 | `fake-backend-payload-operations` | pending | `codex/fake-backend-payload-operations` | pending | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
 | 4 | `bundle-preflight-materialization` | pending | `codex/bundle-preflight-materialization` | pending | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
 | 5 | `no-backend-user-facing-handles` | pending | `codex/no-backend-user-facing-handles` | pending | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
@@ -408,7 +408,7 @@ touches shared projection contracts
 
 ## Phase 2: Local Materialization Records And Copy Semantics
 
-Status: pr_open
+Status: merged
 Slug: `local-materialization-copy-records`
 Branch: `codex/local-materialization-copy-records`
 Worktree: `/home/samcantrill/work/loom-worktrees/local-materialization-copy-records`
@@ -509,8 +509,8 @@ payload operation records
 - Implementation: complete. Added store-owned artifact materialization request/result records, copy-only local materialization, checksum evidence, derived location/materialized-ref projections, unsupported non-copy policy results, and public store exports.
 - Validation: `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green.
 - PR: [#167](https://github.com/samcantrill/loom/pull/167) opened against `develop` and verified with `gh pr view 167 --json baseRefName,headRefName,state,url`.
-- Merge: pending
-- Follow-up: pending
+- Merge: merged into `develop` on 2026-05-15 as squash commit `ddb2a326b27e055c7d1f5c544f90d1b00a9a9464`; target verified with `gh pr view 167 --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` before merge, CI check `checks` succeeded, and the branch was kept because Phase 3 had stacked work.
+- Follow-up: rebase Phase 3 from `codex/local-materialization-copy-records` onto updated `develop` and target its PR to `develop`.
 
 ## Phase 3: Backend Handler Materialization And Fake Remote Operations
 
