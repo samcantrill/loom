@@ -41,6 +41,7 @@ def test_full_local_preflight_passes_and_writes_no_run_documents(tmp_path: Path)
         "artifact_backends.registry",
         "artifact_backends.handlers",
         "artifact_backends.capabilities",
+        "artifact_backends.materialization",
         "codec_registry.available",
         "executor.local",
         "executor.resolve",

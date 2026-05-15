@@ -55,6 +55,7 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
             "artifact_backends.registry",
             "artifact_backends.handlers",
             "artifact_backends.capabilities",
+            "artifact_backends.materialization",
         ),
         PreflightGroup.CODECS: ("codec_registry.available",),
         PreflightGroup.EXECUTOR: (

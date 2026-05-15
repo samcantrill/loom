@@ -23,6 +23,8 @@ from loom.pipeline.stores import (
     ArtifactStoreCapabilities,
     ArtifactStoreCapabilityRecord,
     ArtifactStoreCapabilitySupport,
+    ArtifactStorePayloadOperationRequest,
+    ArtifactStorePayloadOperationResult,
 )
 from loom.serialization import PlainData
 
@@ -35,6 +37,7 @@ class _FakeHandler:
         self,
         *,
         write_support: ArtifactStoreCapabilitySupport = ArtifactStoreCapabilitySupport.SUPPORTED,
+        materialize_support: ArtifactStoreCapabilitySupport | None = None,
     ) -> None:
         self._descriptor = ArtifactStoreBackendDescriptor(
             kind="object_store",
@@ -42,22 +45,34 @@ class _FakeHandler:
             supported_uri_schemes=("s3",),
         )
         self._store_ref = ArtifactStoreRef(kind="object-store", uri="s3://secret")
-        self._capabilities = ArtifactStoreCapabilities(
-            backend_kind="object-store",
-            records=(
+        records = [
+            ArtifactStoreCapabilityRecord(
+                ArtifactStoreBackendOperation.READ,
+                ArtifactStoreCapabilitySupport.SUPPORTED,
+            ),
+            ArtifactStoreCapabilityRecord(
+                ArtifactStoreBackendOperation.WRITE,
+                write_support,
+                message="write is unavailable"
+                if write_support
+                is not ArtifactStoreCapabilitySupport.SUPPORTED
+                else None,
+            ),
+        ]
+        if materialize_support is not None:
+            records.append(
                 ArtifactStoreCapabilityRecord(
-                    ArtifactStoreBackendOperation.READ,
-                    ArtifactStoreCapabilitySupport.SUPPORTED,
-                ),
-                ArtifactStoreCapabilityRecord(
-                    ArtifactStoreBackendOperation.WRITE,
-                    write_support,
-                    message="write is unavailable"
-                    if write_support
+                    ArtifactStoreBackendOperation.MATERIALIZE,
+                    materialize_support,
+                    message="materialization is unavailable"
+                    if materialize_support
                     is not ArtifactStoreCapabilitySupport.SUPPORTED
                     else None,
-                ),
-            ),
+                )
+            )
+        self._capabilities = ArtifactStoreCapabilities(
+            backend_kind="object-store",
+            records=tuple(records),
         )
 
     @property
@@ -109,6 +124,20 @@ class _FakeHandler:
         )
 
 
+class _PayloadFakeHandler(_FakeHandler):
+    def __init__(self) -> None:
+        super().__init__(
+            materialize_support=ArtifactStoreCapabilitySupport.SUPPORTED,
+        )
+
+    def payload_operation(
+        self,
+        request: ArtifactStorePayloadOperationRequest,
+    ) -> ArtifactStorePayloadOperationResult | ArtifactStoreBackendOperationResult:
+        del request
+        raise AssertionError("cheap preflight must not call payload_operation()")
+
+
 def _target(
     *operations: ArtifactStoreBackendOperation,
 ) -> ArtifactBackendPreflightTarget:
@@ -141,6 +170,7 @@ def test_artifact_backend_preflight_skips_without_targets_and_discovery(
         "artifact_backends.registry",
         "artifact_backends.handlers",
         "artifact_backends.capabilities",
+        "artifact_backends.materialization",
     ]
     assert by_id["artifact_backends.registry"].status is PreflightCheckStatus.SKIP
     assert by_id["artifact_backends.handlers"].details["reason"] == (
@@ -189,6 +219,54 @@ def test_required_unsupported_write_fails_closed() -> None:
     assert capability.status is PreflightCheckStatus.FAIL
     operation_results = cast(list[dict[str, Any]], capability.details["operation_results"])
     assert operation_results[0]["support"] == "unsupported"
+
+
+def test_required_materialization_needs_payload_handler_protocol() -> None:
+    result = run_preflight(
+        PreflightRequest(
+            config_path="missing.yaml",
+            groups=("artifacts",),
+            artifact_backend_targets=(
+                _target(ArtifactStoreBackendOperation.MATERIALIZE),
+            ),
+            artifact_backend_handlers={
+                "object_store": _FakeHandler(
+                    materialize_support=ArtifactStoreCapabilitySupport.SUPPORTED
+                )
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert by_id["artifact_backends.capabilities"].status is PreflightCheckStatus.PASS
+    materialization = by_id["artifact_backends.materialization"]
+    assert materialization.status is PreflightCheckStatus.FAIL
+    diagnostics = cast(list[dict[str, Any]], materialization.details["diagnostics"])
+    assert diagnostics[0]["code"] == "artifact_store_backend_payload_handler_missing"
+
+
+def test_payload_materialization_readiness_is_cheap_and_passes() -> None:
+    result = run_preflight(
+        PreflightRequest(
+            config_path="missing.yaml",
+            groups=("artifacts",),
+            artifact_backend_targets=(
+                _target(ArtifactStoreBackendOperation.MATERIALIZE),
+            ),
+            artifact_backend_handlers={"object_store": _PayloadFakeHandler()},
+        )
+    )
+
+    materialization = {
+        check.check_id: check for check in result.checks
+    }["artifact_backends.materialization"]
+    assert materialization.status is PreflightCheckStatus.PASS
+    targets = cast(
+        list[dict[str, Any]],
+        materialization.details["materialization_targets"],
+    )
+    assert targets[0]["payload_handler_configured"] is True
+    assert targets[0]["expensive_probe"] is False
 
 
 def test_plugin_metadata_does_not_satisfy_backend_readiness() -> None:

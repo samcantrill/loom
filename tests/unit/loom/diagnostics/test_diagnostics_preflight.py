@@ -50,6 +50,7 @@ def test_missing_run_uri_skips_run_path_dependent_groups() -> None:
         "no_artifact_backend_targets",
         "no_artifact_backend_targets",
         "no_artifact_backend_targets",
+        "no_artifact_backend_targets",
     ]
 
 

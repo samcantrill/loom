@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import io
 import tarfile
+import tempfile
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, cast
 
 from loom.fingerprints import compare_digests, hash_bytes
 from loom.io.errors import UnsupportedURIError
-from loom.io.uris import get_uri_scheme, uri_to_path
+from loom.io.uris import get_uri_scheme, path_to_file_uri, uri_to_path
 from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 
 from .artifact_metadata import (
@@ -38,13 +40,13 @@ from .models import (
     RunExchangeDiagnostic,
     RunExchangeDiagnosticSeverity,
     RunExchangeOperationStatus,
-    RunExporter,
     RunTargetIdentityPolicyMode,
     TransferRecordKind,
 )
 
 if TYPE_CHECKING:
     from loom.pipeline.stores import (
+        ArtifactStoreBackendPayloadHandler,
         AuthoritativeReadOptions,
         CompletedRunBundleMetadata,
         LocalMaterializationRequest,
@@ -60,6 +62,7 @@ LOCAL_RUN_BUNDLE_ADAPTER = RunAdapterIdentity(
     kind=TransferRecordKind.BUNDLE.value,
 )
 RUN_BUNDLE_MANIFEST_MEMBER = "manifest.json"
+RUN_BUNDLE_MATERIALIZATION_OPERATIONS_KEY = "stage_16_materialization_operations"
 
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_MEMBER_BYTES = 1024 * 1024 * 1024
@@ -71,8 +74,16 @@ class LocalRunBundleExporter:
 
     adapter = LOCAL_RUN_BUNDLE_ADAPTER
 
-    def __init__(self, destination: str | Path) -> None:
+    def __init__(
+        self,
+        destination: str | Path,
+        *,
+        payload_handler: "ArtifactStoreBackendPayloadHandler | None" = None,
+        materialization_root: str | Path | None = None,
+    ) -> None:
         self.destination = Path(destination)
+        self.payload_handler = payload_handler
+        self.materialization_root = materialization_root
 
     def export(
         self,
@@ -80,7 +91,13 @@ class LocalRunBundleExporter:
         *,
         options: RunBundleExportOptions | None = None,
     ) -> RunBundleExportResult:
-        return write_local_run_bundle(record, self.destination, options=options)
+        return write_local_run_bundle(
+            record,
+            self.destination,
+            options=options,
+            payload_handler=self.payload_handler,
+            materialization_root=self.materialization_root,
+        )
 
 
 def build_portable_run_export_record(
@@ -128,13 +145,20 @@ def export_completed_run_bundle(
     destination: str | Path,
     *,
     options: RunBundleExportOptions | None = None,
+    payload_handler: "ArtifactStoreBackendPayloadHandler | None" = None,
+    materialization_root: str | Path | None = None,
 ) -> RunBundleExportResult:
     """Export completed-run metadata through the local bundle adapter."""
 
     export_options = options or RunBundleExportOptions()
     record = build_portable_run_export_record(metadata, options=export_options)
-    exporter: RunExporter = LocalRunBundleExporter(destination)
-    return exporter.export(record, options=export_options)
+    return write_local_run_bundle(
+        record,
+        destination,
+        options=export_options,
+        payload_handler=payload_handler,
+        materialization_root=materialization_root,
+    )
 
 
 def export_run_bundle(
@@ -146,6 +170,8 @@ def export_run_bundle(
     read_options: "AuthoritativeReadOptions | None" = None,
     local_paths: "LocalRunStorePaths | None" = None,
     local_materialization: "LocalMaterializationRequest | None" = None,
+    payload_handler: "ArtifactStoreBackendPayloadHandler | None" = None,
+    materialization_root: str | Path | None = None,
 ) -> RunBundleExportResult:
     """Read completed-run facts from an authority store and write a local bundle."""
 
@@ -173,6 +199,8 @@ def export_run_bundle(
         metadata,
         destination,
         options=export_options,
+        payload_handler=payload_handler,
+        materialization_root=materialization_root,
     )
 
 
@@ -181,6 +209,8 @@ def write_local_run_bundle(
     destination: str | Path,
     *,
     options: RunBundleExportOptions | None = None,
+    payload_handler: "ArtifactStoreBackendPayloadHandler | None" = None,
+    materialization_root: str | Path | None = None,
 ) -> RunBundleExportResult:
     """Materialize a portable export record as a local bundle archive."""
 
@@ -196,6 +226,7 @@ def write_local_run_bundle(
             diagnostics=(diagnostic,),
         )
 
+    export_options = options or RunBundleExportOptions()
     manifest = record.manifest
     diagnostics = _dedupe_diagnostics(
         (*record.diagnostics, *manifest.diagnostics, *manifest.warnings)
@@ -211,17 +242,37 @@ def write_local_run_bundle(
         )
 
     destination_path = Path(destination)
-    destination_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_bytes = stable_json_bytes(manifest.to_dict())
-    payload_sources = _payload_sources(manifest.entries)
+    with ExitStack() as stack:
+        manifest, materialization_diagnostics = _maybe_materialize_manifest_payloads(
+            manifest,
+            options=export_options,
+            payload_handler=payload_handler,
+            materialization_root=materialization_root,
+            destination_path=destination_path,
+            stack=stack,
+        )
+        diagnostics = _dedupe_diagnostics((*diagnostics, *materialization_diagnostics))
+        if _has_error(diagnostics):
+            return RunBundleExportResult(
+                status=RunExchangeOperationStatus.FAILED,
+                adapter=record.adapter,
+                manifest=manifest,
+                exported_payload_count=0,
+                diagnostics=tuple(diagnostics),
+                extensions=_run_exchange_extensions(manifest),
+            )
 
-    with tarfile.open(destination_path, "w") as archive:
-        _add_bytes_member(archive, RUN_BUNDLE_MANIFEST_MEMBER, manifest_bytes)
-        for entry in manifest.entries:
-            source = payload_sources.get(entry.path)
-            if source is None:
-                continue
-            _add_file_member(archive, entry.path, source)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_bytes = stable_json_bytes(manifest.to_dict())
+        payload_sources = _payload_sources(manifest.entries)
+
+        with tarfile.open(destination_path, "w") as archive:
+            _add_bytes_member(archive, RUN_BUNDLE_MANIFEST_MEMBER, manifest_bytes)
+            for entry in manifest.entries:
+                source = payload_sources.get(entry.path)
+                if source is None:
+                    continue
+                _add_file_member(archive, entry.path, source)
 
     return RunBundleExportResult(
         status=RunExchangeOperationStatus.SUCCEEDED,
@@ -315,6 +366,11 @@ def _build_manifest(
             include_artifacts=options.include_payloads,
             include_logs=options.include_logs,
             include_workspace=options.include_workspace,
+            extensions={
+                "materialize_payloads": options.materialize_payloads,
+            }
+            if options.materialize_payloads
+            else {},
         ),
         checksums={
             entry.path: entry.checksum
@@ -400,10 +456,16 @@ def _unsupported_materialization_warnings(
 def _run_exchange_extensions(
     manifest: RunBundleManifest,
 ) -> Mapping[str, PlainData]:
+    extensions: dict[str, PlainData] = {}
     summary = manifest.extensions.get(RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY)
-    if summary is None:
-        return {}
-    return {RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY: thaw_plain_data(summary)}
+    if summary is not None:
+        extensions[RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY] = thaw_plain_data(summary)
+    materialization = manifest.extensions.get(RUN_BUNDLE_MATERIALIZATION_OPERATIONS_KEY)
+    if materialization is not None:
+        extensions[RUN_BUNDLE_MATERIALIZATION_OPERATIONS_KEY] = thaw_plain_data(
+            materialization
+        )
+    return extensions
 
 
 def _plain_or_none(value: object) -> PlainData:
@@ -421,7 +483,7 @@ def _selected_payload_refs(
     for index, ref in enumerate(metadata.materialized_refs, start=1):
         if not _select_ref(ref, options):
             continue
-        payload_ref, ref_diagnostics = _payload_ref(index, ref)
+        payload_ref, ref_diagnostics = _payload_ref(index, ref, options=options)
         selected.append(payload_ref)
         diagnostics.extend(ref_diagnostics)
 
@@ -454,12 +516,14 @@ def _select_ref(ref: "MaterializedRef", options: RunBundleExportOptions) -> bool
 def _payload_ref(
     index: int,
     ref: "MaterializedRef",
+    *,
+    options: RunBundleExportOptions,
 ) -> tuple[RunBundlePayloadReference, tuple[RunExchangeDiagnostic, ...]]:
     diagnostics: list[RunExchangeDiagnostic] = []
     entry_path = _archive_path_for_ref(index, ref)
     checksum = ref.checksum
     size = _file_size(ref.uri)
-    if size is None:
+    if size is None and not options.materialize_payloads:
         diagnostics.append(
             _diagnostic(
                 "run_bundle_export.payload_missing",
@@ -480,6 +544,225 @@ def _payload_ref(
             extensions={"materialized_ref": thaw_plain_data(ref.to_dict())},
         ),
         tuple(diagnostics),
+    )
+
+
+def _maybe_materialize_manifest_payloads(
+    manifest: RunBundleManifest,
+    *,
+    options: RunBundleExportOptions,
+    payload_handler: "ArtifactStoreBackendPayloadHandler | None",
+    materialization_root: str | Path | None,
+    destination_path: Path,
+    stack: ExitStack,
+) -> tuple[RunBundleManifest, tuple[RunExchangeDiagnostic, ...]]:
+    if not options.materialize_payloads:
+        return manifest, ()
+    refs_to_materialize = tuple(
+        ref
+        for ref in manifest.payload_refs
+        if ref.selected and _file_size(ref.uri) is None
+    )
+    if not refs_to_materialize:
+        return manifest, ()
+
+    from loom.pipeline.stores import ArtifactStoreBackendPayloadHandler
+
+    if payload_handler is None:
+        return (
+            manifest,
+            tuple(
+                _diagnostic(
+                    "run_bundle_export.materializer_missing",
+                    "explicit payload materialization requires a payload handler",
+                    payload_uri=ref.uri,
+                    entry_id=ref.entry_id,
+                )
+                for ref in refs_to_materialize
+            ),
+        )
+    if not isinstance(payload_handler, ArtifactStoreBackendPayloadHandler):
+        return (
+            manifest,
+            (
+                _diagnostic(
+                    "run_bundle_export.materializer_invalid",
+                    "payload handler must implement ArtifactStoreBackendPayloadHandler",
+                ),
+            ),
+        )
+
+    staging_root = _materialization_staging_root(
+        materialization_root=materialization_root,
+        destination_path=destination_path,
+        stack=stack,
+    )
+    diagnostics: list[RunExchangeDiagnostic] = []
+    materialized_by_entry: dict[str, RunBundlePayloadReference] = {}
+    operation_records: list[PlainData] = []
+    for ref in refs_to_materialize:
+        materialized_ref, operation_record, ref_diagnostics = _materialize_payload_ref(
+            ref,
+            payload_handler=payload_handler,
+            staging_root=staging_root,
+        )
+        operation_records.append(operation_record)
+        diagnostics.extend(ref_diagnostics)
+        if materialized_ref is not None:
+            materialized_by_entry[ref.entry_id] = materialized_ref
+
+    if not materialized_by_entry and not operation_records:
+        return manifest, tuple(diagnostics)
+
+    payload_refs = tuple(
+        materialized_by_entry.get(ref.entry_id, ref) for ref in manifest.payload_refs
+    )
+    entries_by_path = {entry.path: entry for entry in manifest.entries}
+    for ref in materialized_by_entry.values():
+        entries_by_path[normalize_bundle_member_path(ref.entry_id)] = _entry_from_ref(ref)
+    entries = tuple(entries_by_path[path] for path in sorted(entries_by_path))
+    return (
+        replace(
+            manifest,
+            entries=entries,
+            payload_refs=payload_refs,
+            checksums={
+                entry.path: entry.checksum
+                for entry in entries
+                if entry.checksum is not None
+            },
+            extensions={
+                **cast(
+                    Mapping[str, PlainData],
+                    thaw_plain_data(manifest.extensions, path="extensions"),
+                ),
+                RUN_BUNDLE_MATERIALIZATION_OPERATIONS_KEY: operation_records,
+            },
+        ),
+        tuple(diagnostics),
+    )
+
+
+def _materialization_staging_root(
+    *,
+    materialization_root: str | Path | None,
+    destination_path: Path,
+    stack: ExitStack,
+) -> Path:
+    if materialization_root is not None:
+        root = Path(materialization_root).resolve(strict=False)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = stack.enter_context(
+        tempfile.TemporaryDirectory(
+            prefix=f".{destination_path.name}.materialized-",
+            dir=str(destination_path.parent),
+        )
+    )
+    return Path(temp_dir)
+
+
+def _materialize_payload_ref(
+    ref: RunBundlePayloadReference,
+    *,
+    payload_handler: "ArtifactStoreBackendPayloadHandler",
+    staging_root: Path,
+) -> tuple[
+    RunBundlePayloadReference | None,
+    PlainData,
+    tuple[RunExchangeDiagnostic, ...],
+]:
+    from loom.pipeline.stores import (
+        ArtifactStoreBackendOperation,
+        ArtifactStoreBackendOperationResult,
+        ArtifactStorePayloadOperationRequest,
+        ArtifactStorePayloadOperationResult,
+    )
+
+    target_path = (staging_root / normalize_bundle_member_path(ref.entry_id)).resolve(
+        strict=False
+    )
+    request = ArtifactStorePayloadOperationRequest(
+        operation=ArtifactStoreBackendOperation.MATERIALIZE,
+        source_uri=ref.uri,
+        target_uri=path_to_file_uri(target_path),
+        checksum=ref.checksum,
+        detail={"bundle_entry_id": ref.entry_id},
+    )
+    result = payload_handler.payload_operation(request)
+    if isinstance(result, ArtifactStoreBackendOperationResult):
+        payload = result.to_dict()
+        return (
+            None,
+            payload,
+            (
+                _diagnostic(
+                    "run_bundle_export.materialization_unsupported",
+                    "artifact backend payload materialization is unsupported",
+                    operation_result=payload,
+                    entry_id=ref.entry_id,
+                ),
+            ),
+        )
+    if not isinstance(result, ArtifactStorePayloadOperationResult):
+        return (
+            None,
+            None,
+            (
+                _diagnostic(
+                    "run_bundle_export.materialization_invalid_result",
+                    "payload handler returned an invalid materialization result",
+                    entry_id=ref.entry_id,
+                ),
+            ),
+        )
+    payload = result.to_dict()
+    target_uri = (
+        result.location.uri
+        if result.location is not None and result.location.uri is not None
+        else request.target_uri
+    )
+    if not result.succeeded or target_uri is None or _file_size(target_uri) is None:
+        return (
+            None,
+            payload,
+            (
+                _diagnostic(
+                    "run_bundle_export.materialization_failed",
+                    "artifact payload materialization failed",
+                    operation_result=payload,
+                    entry_id=ref.entry_id,
+                ),
+            ),
+        )
+    checksum = (
+        result.location.checksum
+        if result.location is not None and result.location.checksum is not None
+        else ref.checksum
+    )
+    size_bytes = result.bytes_processed if result.bytes_processed is not None else _file_size(target_uri)
+    extensions = cast(
+        Mapping[str, PlainData],
+        thaw_plain_data(ref.extensions, path="extensions"),
+    )
+    return (
+        RunBundlePayloadReference(
+            entry_id=ref.entry_id,
+            uri=target_uri,
+            kind=ref.kind,
+            selected=ref.selected,
+            checksum_algorithm="sha256" if checksum is not None else None,
+            checksum=checksum,
+            size_bytes=size_bytes,
+            extensions={
+                **dict(extensions),
+                "original_source_uri": ref.uri,
+                "materialization_operation": payload,
+            },
+        ),
+        payload,
+        (),
     )
 
 
@@ -757,6 +1040,7 @@ def _diagnostic(
 __all__ = [
     "LOCAL_RUN_BUNDLE_ADAPTER",
     "RUN_BUNDLE_MANIFEST_MEMBER",
+    "RUN_BUNDLE_MATERIALIZATION_OPERATIONS_KEY",
     "LocalRunBundleExporter",
     "build_portable_run_export_record",
     "export_completed_run_bundle",
