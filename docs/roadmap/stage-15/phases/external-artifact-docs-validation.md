@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_ready
 - Roadmap stage: `v15`
 - Phase: 6
 - Slug: `external-artifact-docs-validation`
@@ -113,3 +113,35 @@ test exposes a concrete boundary issue.
 - Phase implementation refinement: unused
 - Phase PR review: unused
 - Blocker-resolution passes: 0 of 3 used
+
+## Implementation Summary
+
+- Updated artifact, remote-store, plugin, preflight, and run-catalog feature
+  docs to describe the final Stage 15 metadata-first boundary, backend
+  registry/handler readiness split, fake adapter examples, and Stage 16
+  materialization handoff.
+- Extended the artifact-store backend contract fixtures so tracking-system and
+  object-store shapes demonstrate redaction, capability admission, explicit
+  lookup or unsupported-operation results, and run-exchange metadata
+  preservation through public Stage 15 contracts.
+- Added Stage 15 import-boundary tests proving public defaults, default
+  artifact-backend preflight, and bundle inspection avoid plugin discovery,
+  optional service SDK imports, and backend client packages.
+
+## Validation Evidence
+
+| Command/check | Result |
+| --- | --- |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check tests/contracts/test_artifact_store_backend_contract.py tests/package/test_import_boundaries.py` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pyright tests/contracts/test_artifact_store_backend_contract.py tests/package/test_import_boundaries.py` | passed: 0 errors |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_artifact_store_backend_contract.py tests/package/test_import_boundaries.py` | passed: 54 passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/package tests/contracts tests/unit/loom` | passed outside sandbox: 1481 passed / 11 skipped |
+| `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | passed outside sandbox: Ruff passed, Pyright passed with 0 errors, default harness passed with 1657 passed / 26 skipped / 18 deselected, config-extra passed with 440 passed / 1694 deselected, and build passed |
+| `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | passed: package 93 passed / 1 skipped; unit 1165 passed / 7 skipped / 1 deselected; contract 228 passed / 2 skipped; integration 156 passed / 8 skipped / 13 deselected; e2e 43 passed / 2 deselected; config-extra 440 passed / 1694 deselected |
+
+## PR Preparation
+
+- PR body:
+  `docs/roadmap/stage-15/phases/external-artifact-docs-validation-pr-body.md`
+- Target branch: `develop`
+- Local automated review: pending after PR creation
