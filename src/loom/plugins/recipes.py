@@ -2,16 +2,29 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
-from loom.config.recipes import RecipeCatalog
+from collections.abc import Callable, Iterable
+from typing import Any, Protocol, cast
 
 from .entrypoints import LOOM_RECIPES_GROUP, PluginLoadResult, PluginRecord, load_entry_points
+
+RecipeImplementation = Callable[..., object] | type[Any]
+
+
+class RecipeCatalogLike(Protocol):
+    """Structural catalog surface required by recipe plugin loading."""
+
+    def register(
+        self,
+        name: str,
+        recipe: RecipeImplementation,
+        *,
+        replace: bool = False,
+    ) -> None: ...
 
 
 def load_recipe_entry_points(
     records: Iterable[PluginRecord],
-    catalog: RecipeCatalog,
+    catalog: RecipeCatalogLike,
     *,
     selected: Iterable[PluginRecord] | None = None,
     strict: bool = True,
@@ -25,7 +38,7 @@ def load_recipe_entry_points(
         strict=strict,
         register=lambda record, value: catalog.register(
             name=record.name,
-            recipe=value,
+            recipe=cast(RecipeImplementation, value),
             replace=replace,
         ),
     )
@@ -41,5 +54,6 @@ def _filter_records(
 
 
 __all__ = [
+    "RecipeCatalogLike",
     "load_recipe_entry_points",
 ]

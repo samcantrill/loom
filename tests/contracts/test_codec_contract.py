@@ -72,7 +72,7 @@ def test_contract_codec_adapter_loads_fake_entry_point_into_registry(
     )
 
     module = ModuleType("loom.plugins.contract_codec_adapter")
-    module.factory = lambda: _ContractCodec("contract")
+    setattr(module, "factory", lambda: _ContractCodec("contract"))
     monkeypatch.setattr(importlib, "import_module", lambda name, package=None: module)
 
     load_codec_entry_points((record,), registry, strict=True)
@@ -94,12 +94,12 @@ def test_contract_codec_adapter_rejects_duplicate_runtime_keys(
     )
 
     module = ModuleType("loom.plugins.contract_codec_duplicate")
-    module.klass = _ContractCodec
+    setattr(module, "klass", _ContractCodec)
 
     def factory() -> _ContractCodec:
         return _ContractCodec("factory")
 
-    module.factory = factory
+    setattr(module, "factory", factory)
     monkeypatch.setattr(importlib, "import_module", lambda name, package=None: module)
 
     result = load_codec_entry_points((duplicate_a, duplicate_b), CodecRegistry(), strict=False)

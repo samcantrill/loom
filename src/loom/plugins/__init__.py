@@ -1,5 +1,10 @@
 """Plugin discovery API."""
 
+from __future__ import annotations
+
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from .entrypoints import (
     KNOWN_PLUGIN_GROUPS,
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
@@ -20,8 +25,6 @@ from .entrypoints import (
     list_entry_points,
     load_entry_points,
 )
-from .codecs import load_codec_entry_points
-from .recipes import load_recipe_entry_points
 from .errors import (
     PluginDiscoveryError,
     PluginDuplicateError,
@@ -29,6 +32,25 @@ from .errors import (
     PluginInvalidEntryPointError,
     PluginRegistrationError,
 )
+
+if TYPE_CHECKING:
+    from .codecs import load_codec_entry_points as load_codec_entry_points
+    from .recipes import load_recipe_entry_points as load_recipe_entry_points
+
+_LAZY_EXPORTS = {
+    "load_codec_entry_points": ".codecs",
+    "load_recipe_entry_points": ".recipes",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(_LAZY_EXPORTS[name], __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "KNOWN_PLUGIN_GROUPS",
@@ -51,9 +73,9 @@ __all__ = [
     "PluginLoadResult",
     "PluginRecord",
     "PluginRegistrationError",
-    "load_codec_entry_points",
     "find_plugin_duplicates",
     "list_entry_points",
+    "load_codec_entry_points",
     "load_recipe_entry_points",
     "load_entry_points",
 ]

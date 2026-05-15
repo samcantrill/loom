@@ -61,3 +61,24 @@ def test_import_loom_root_does_not_export_plugins() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_import_loom_plugins_is_import_light() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.plugins
+
+        for forbidden in ("loom.config", "loom.io", "loom.cli", "omegaconf", "yaml"):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.plugins")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"

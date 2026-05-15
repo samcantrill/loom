@@ -2,9 +2,9 @@
 
 import pytest
 
-import importlib
 from typing import Any, cast
 from types import ModuleType
+import importlib
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -113,7 +113,7 @@ def test_contract_recipe_adapter_loads_fake_entry_point_into_catalog(
     def plugin_recipe(value: str) -> dict[str, str]:
         return {"value": value}
 
-    module.recipe = plugin_recipe
+    setattr(module, "recipe", plugin_recipe)
     monkeypatch.setattr(importlib, "import_module", lambda name, package=None: module)
 
     load_recipe_entry_points(records=(record,), catalog=catalog, strict=True)
@@ -123,7 +123,9 @@ def test_contract_recipe_adapter_loads_fake_entry_point_into_catalog(
     )
 
     assert expanded["pipeline"] == {"value": "from-adapter"}
-    assert manifest == [{"name": "plugin", "value": {"value": "from-adapter"}}]
+    assert len(manifest) == 1
+    assert manifest[0]["name"] == "plugin"
+    assert manifest[0]["arguments"] == {"value": "from-adapter"}
 
 
 def test_contract_recipe_adapter_duplicate_entry_point_names_fail_closed() -> None:

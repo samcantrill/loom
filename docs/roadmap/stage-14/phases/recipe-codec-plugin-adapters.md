@@ -477,8 +477,8 @@ run during PR preparation so the PR body can report suite-level evidence.
 
 - Phase planning draft: completed.
 - Phase planning refinement: completed for the expanded path.
-- Phase implementation refinement: unused until implementation validation or
-  adapter API review finds a blocker.
+- Phase implementation refinement: used for the Phase 2 Pyright and
+  import-light adapter blocker found during `make validate-pr` review.
 - PR body draft/refine: unused until PR preparation.
 - PR review: unused until the manager or reviewer consumes the single review
   pass.
@@ -492,7 +492,14 @@ run during PR preparation so the PR body can report suite-level evidence.
 - Implementation summary: completed.
 - Implementation validation: completed for targeted phase checks via
   `uv run pytest tests/unit/loom/plugins tests/contracts/test_plugin_discovery_contract.py tests/contracts/test_recipe_contract.py tests/contracts/test_codec_contract.py`
-  (26 passed, 1 skipped).
+  (26 passed, 1 skipped). Manager-local refinement kept `import loom.plugins`
+  import-light through lazy adapter exports, fixed Phase 2 Pyright test typing,
+  and reran targeted Ruff, Pyright, and plugin/contract/package tests (37
+  passed).
+- Refinement summary: used the implementation-refinement pass to keep recipe
+  adapter typing structural instead of importing config registries at plugin
+  package import time, make contract fake modules Pyright-clean, and align the
+  recipe adapter contract test with the existing recipe manifest shape.
 - PR preparation: pending.
 - Stack maintenance: root phase targets `develop`; no predecessor branch exists
   and no retarget or rebase is needed at planning time.
