@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_ready
 - Roadmap stage: `v15`
 - Phase: 5
 - Slug: `stage-12-exchange-rework`
@@ -133,6 +133,38 @@ mutation policy.
 - Phase execution plan draft: used
 - Phase execution plan refine: not needed; the source recheck resolved the
   extension-vs-schema decision before implementation
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted validation and full PR
+  gate passed
 - Phase PR review: unused
 - Blocker-resolution passes: 0 of 3 used
+
+## Implementation Summary
+
+- Added the versioned `stage_15_artifact_summaries` run-exchange extension and
+  public projection helper for Stage 15 artifact metadata summaries.
+- Local bundle export now projects Stage 15 summaries into manifest/export
+  extensions while preserving the existing `completed_run` extension and
+  metadata-only default payload selection.
+- Bundle inspect and import-record construction preserve the extension without
+  extracting payloads.
+- Local bundle import carries the extension into import provenance and preserves
+  external artifact metadata in historical imported artifact indexes.
+- Unsupported materialization evidence surfaces as warning diagnostics, not as
+  failed metadata-only export/import or implicit remote materialization.
+- `docs/features/run-catalog.md` now documents the extension-field mapping and
+  metadata-only import/export boundary.
+
+## Validation Evidence
+
+| Command/check | Result |
+| --- | --- |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/runs/test_artifact_metadata.py tests/unit/loom/runs/test_bundle_export.py tests/unit/loom/runs/test_bundle_import.py tests/contracts/test_run_exchange_contract.py tests/contracts/test_run_bundle_export_contract.py tests/contracts/test_cli_runs_contract.py tests/package/test_runs_api.py` | passed: 26 passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/runs tests/unit/loom/cli tests/contracts/test_run_exchange_contract.py tests/contracts/test_run_bundle_export_contract.py tests/contracts/test_cli_runs_contract.py` | passed outside sandbox: 172 passed / 4 skipped |
+| `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` | passed outside sandbox: Ruff passed, Pyright passed with 0 errors, default harness passed with 1653 passed / 26 skipped / 18 deselected, config-extra passed with 440 passed / 1690 deselected, and build passed |
+| `UV_CACHE_DIR=/tmp/uv-cache make test-summary` | passed: package 90 passed / 1 skipped; unit 1165 passed / 7 skipped / 1 deselected; contract 227 passed / 2 skipped; integration 156 passed / 8 skipped / 13 deselected; e2e 43 passed / 2 deselected; config-extra 440 passed / 1690 deselected |
+
+## PR Preparation
+
+- PR body: `docs/roadmap/stage-15/phases/stage-12-exchange-rework-pr-body.md`
+- Target branch: `develop`
+- Local automated review: pending after PR creation
