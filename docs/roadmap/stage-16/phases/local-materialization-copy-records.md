@@ -10,17 +10,17 @@
 - Phase execution plan path: `docs/roadmap/stage-16/phases/local-materialization-copy-records.md`
 - Full plan: `docs/roadmap/stage-16/implementation-plan.md`
 - Source phase: `Phase 2: Local Materialization Records And Copy Semantics`
-- Stack predecessor: `codex/shared-operation-evidence-contracts` / PR [#166](https://github.com/samcantrill/loom/pull/166)
-- Base branch: `codex/shared-operation-evidence-contracts`
-- Target branch: `codex/shared-operation-evidence-contracts` until Phase 1 merges; retarget to `develop` after replaying onto merged Phase 1
-- Merge eligibility: eligible only after Phase 1 is merged or this branch is retargeted/rebased according to stack state, phase validation passes, automated review passes, and PR target verification succeeds
+- Stack predecessor: none; Phase 1 merged before PR preparation
+- Base branch: `develop`
+- Target branch: `develop`
+- Merge eligibility: eligible only after phase validation, automated review, GitHub CI, and PR target verification against `develop`
 - Workflow path: expanded path
 - Successor dependency notes: Phase 3 should branch from this branch if Phase 2 remains unmerged
 - Plan quality gate: passed in the implementation plan on 2026-05-15
 - Plan quality gate loop budget: consumed and passed; do not rerun unless the implementation plan changes
 - Draft pass: complete in this artifact
 - Refine pass: complete in this artifact
-- Setup limitations: Phase 1 CI is still pending when this plan is drafted; this phase is intentionally stacked on the open Phase 1 branch
+- Setup limitations: initial implementation started stacked on Phase 1, then branch was replayed onto `origin/develop` after Phase 1 merged
 - Blockers: none
 
 ## Objective
@@ -33,11 +33,11 @@ Phase 1 added the shared operation/evidence vocabulary. This phase uses that voc
 
 ## Stack Context
 
-- Root or stacked phase: stacked on Phase 1
-- Current predecessor branch or PR: `codex/shared-operation-evidence-contracts`, PR [#166](https://github.com/samcantrill/loom/pull/166)
-- Why this base branch is correct: Phase 2 depends on `loom.operations`, and Phase 1 is open, validated locally, and recorded as `pr_open`
-- Retarget/rebase plan after predecessor merge: after Phase 1 merges into `develop`, rebase this branch onto updated `develop`, retarget its PR to `develop`, rerun validation, and record stack maintenance
-- Branch cleanup constraints: do not delete Phase 1 branch while Phase 2 targets or depends on it
+- Root or stacked phase: root phase after Phase 1 merge
+- Current predecessor branch or PR: none; Phase 1 PR [#166](https://github.com/samcantrill/loom/pull/166) merged into `develop`
+- Why this base branch is correct: Phase 2 depends on `loom.operations`, and the branch was replayed onto `origin/develop` after Phase 1 merged
+- Retarget/rebase plan after predecessor merge: completed before PR preparation
+- Branch cleanup constraints: no successor branch depends on Phase 1 after this replay
 
 ## Source Phase Summary
 
@@ -226,5 +226,5 @@ make test-summary
 - Refinement summary: pending
 - Blocker-resolution summary: none
 - PR preparation: pending
-- Stack maintenance: stacked on Phase 1 until Phase 1 merges
+- Stack maintenance: branch replayed from `codex/shared-operation-evidence-contracts` onto `origin/develop` after Phase 1 merged
 - Remaining blockers: none
