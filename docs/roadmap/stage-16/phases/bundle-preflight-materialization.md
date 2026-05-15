@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: scope-complete plan - ready for implementation
+- Status: implemented and validated; PR ready
 - Feature focus: Artifact Payload Materialization
 - PR title: `Artifact Payload Materialization - Phase 4: Bundle And Preflight Materialization`
 - Branch: `codex/bundle-preflight-materialization`
@@ -10,9 +10,9 @@
 - Phase execution plan path: `docs/roadmap/stage-16/phases/bundle-preflight-materialization.md`
 - Full plan: `docs/roadmap/stage-16/implementation-plan.md`
 - Source phase: `Phase 4: Bundle, Import, Catalog, And Preflight Integration`
-- Stack predecessor: `codex/fake-backend-payload-operations` / PR [#168](https://github.com/samcantrill/loom/pull/168)
-- Base branch: `codex/fake-backend-payload-operations`
-- Target branch: `codex/fake-backend-payload-operations` until Phase 3 merges; retarget to `develop` after replaying onto merged Phase 3
+- Stack predecessor: none; Phase 3 merged in PR [#168](https://github.com/samcantrill/loom/pull/168)
+- Base branch: `develop`
+- Target branch: `develop`
 - Workflow path: expanded path
 - Plan quality gate: passed in the implementation plan on 2026-05-15
 - Draft/refine status: single scope-complete pass; no unresolved design blockers
@@ -83,8 +83,8 @@ movement, or implicit downloads.
 
 ## Completion Notes
 
-- Implementation summary: pending
-- Implementation validation: pending
-- PR preparation: pending
-- Stack maintenance: stacked on Phase 3 until Phase 3 merges
+- Implementation summary: complete. Added API-level bundle export materialization through a supplied payload handler, preserved metadata-only defaults, projected operation evidence through manifest/ref extensions, and added cheap artifact-backend materialization readiness preflight.
+- Implementation validation: targeted Phase 4 suites passed; `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green.
+- PR preparation: PR body prepared in `docs/roadmap/stage-16/phases/bundle-preflight-materialization-pr-body.md`; PR open pending.
+- Stack maintenance: replayed from `codex/fake-backend-payload-operations` onto updated `develop` after Phase 3 merged.
 - Remaining blockers: none
