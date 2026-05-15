@@ -266,7 +266,43 @@ def test_import_queue_control_modules_do_not_import_authority_or_config() -> Non
     assert result.stdout.strip() == "ok"
 
 
-def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modules() -> None:
+def test_import_artifacts_does_not_import_store_plugins_or_services() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.artifacts
+
+        for forbidden in (
+            "loom.pipeline",
+            "loom.pipeline.stores",
+            "loom.plugins",
+            "loom.diagnostics",
+            "loom.runs",
+            "loom.cli",
+            "loom.config",
+            "fastapi",
+            "starlette",
+            "pydantic",
+            "yaml",
+            "omegaconf",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.artifacts")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modules() -> (
+    None
+):
     script = dedent(
         """
         import sys
@@ -325,7 +361,9 @@ def test_import_queue_slurm_adapter_uses_public_scheduler_boundary_only() -> Non
     assert result.stdout.strip() == "ok"
 
 
-def test_import_queue_preflight_avoids_private_authority_and_scheduler_modules() -> None:
+def test_import_queue_preflight_avoids_private_authority_and_scheduler_modules() -> (
+    None
+):
     script = dedent(
         """
         import sys
@@ -1301,7 +1339,9 @@ def test_import_config_does_not_import_plugins() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -1319,7 +1359,9 @@ def test_import_pipeline_does_not_import_plugins() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
 
@@ -1337,6 +1379,8 @@ def test_import_root_does_not_import_plugins() -> None:
         """
     )
 
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
