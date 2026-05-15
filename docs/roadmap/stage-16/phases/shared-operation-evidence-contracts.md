@@ -231,9 +231,9 @@ make test-summary
 
 - Draft plan: completed in this artifact
 - Final phase execution plan: refined and ready for implementation
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Implementation summary: `src/loom/operations.py` added with strict shared operation/evidence dataclasses and enums, redacted plain-data helpers, unsupported/not-implemented constructors, and strict `to_dict`/`from_dict` validation. Added phase-scoped unit, contract, and package tests in `tests/unit/loom/test_operations.py`, `tests/contracts/test_operation_evidence_contract.py`, `tests/package/test_operations_api.py`, and `tests/package/test_import_boundaries.py`.
+- Implementation validation: `uv run pytest tests/unit/loom/test_operations.py tests/contracts/test_operation_evidence_contract.py tests/package/test_operations_api.py tests/package/test_import_boundaries.py` -> `64 passed`; `uv run pytest tests/contracts/test_transfer_evidence_contract.py tests/contracts/test_artifact_store_backend_contract.py tests/contracts/test_backend_diagnostics_contract.py` -> `8 passed`; `uv run ruff check src/loom/operations.py tests/unit/loom/test_operations.py tests/contracts/test_operation_evidence_contract.py tests/package/test_operations_api.py tests/package/test_import_boundaries.py` -> passed; `uv run pyright src/loom/operations.py tests/unit/loom/test_operations.py tests/contracts/test_operation_evidence_contract.py tests/package/test_operations_api.py` -> `0 errors`; `git diff --check` -> passed.
+- Refinement summary: one implementation-pass clean-up only; no scope-expanding changes.
 - Blocker-resolution summary: none
 - PR preparation: pending
 - Stack maintenance: root phase targeting `develop`; Phase 2 may stack on this branch if Phase 1 is not merged
