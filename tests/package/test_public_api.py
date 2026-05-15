@@ -7,7 +7,18 @@ pytestmark = pytest.mark.package
 
 
 def test_public_root_symbols() -> None:
-    from loom import ArtifactAddress, ArtifactRef, Fingerprint, InMemoryManifest, ManifestView, Record, ResourceRef, __all__, __version__, hash_mapping
+    from loom import (
+        ArtifactAddress,
+        ArtifactRef,
+        Fingerprint,
+        InMemoryManifest,
+        ManifestView,
+        Record,
+        ResourceRef,
+        __all__,
+        __version__,
+        hash_mapping,
+    )
 
     assert __version__
     assert __all__
@@ -102,6 +113,38 @@ def test_public_io_imports_are_explicit_and_stable() -> None:
     assert CodecDecodeError
 
 
+def test_artifacts_exports_include_external_records() -> None:
+    from loom.artifacts import (
+        ArtifactLocationKind,
+        ArtifactLocationSummary,
+        ArtifactStoreRef,
+        ExternalArtifactDeclaration,
+        ImmutableArtifactLookupRequest,
+        ImmutableArtifactLookupResult,
+        PublishedArtifactRecord,
+    )
+
+    assert ArtifactLocationKind
+    assert ArtifactStoreRef
+    assert ArtifactLocationSummary
+    assert ExternalArtifactDeclaration
+    assert PublishedArtifactRecord
+    assert ImmutableArtifactLookupRequest
+    assert ImmutableArtifactLookupResult
+
+
+def test_artifacts_module_exports_phase_1_records_in_all() -> None:
+    import loom.artifacts
+
+    assert "ArtifactLocationKind" in loom.artifacts.__all__
+    assert "ArtifactStoreRef" in loom.artifacts.__all__
+    assert "ArtifactLocationSummary" in loom.artifacts.__all__
+    assert "ExternalArtifactDeclaration" in loom.artifacts.__all__
+    assert "PublishedArtifactRecord" in loom.artifacts.__all__
+    assert "ImmutableArtifactLookupRequest" in loom.artifacts.__all__
+    assert "ImmutableArtifactLookupResult" in loom.artifacts.__all__
+
+
 def test_public_import_paths() -> None:
     from loom.fingerprints import Fingerprint, hash_mapping
     from loom.ids import Checksum, Fingerprint as IdFingerprint, ResourceType
@@ -110,7 +153,12 @@ def test_public_import_paths() -> None:
     from loom.records import Record
     from loom.serialization import PlainData
     from loom.serialization import dataclass_to_dict
-    from loom.provenance import capture_command_provenance, ProvenanceCaptureOptions, StageProvenance, RunProvenance
+    from loom.provenance import (
+        capture_command_provenance,
+        ProvenanceCaptureOptions,
+        StageProvenance,
+        RunProvenance,
+    )
 
     assert Fingerprint
     assert hash_mapping

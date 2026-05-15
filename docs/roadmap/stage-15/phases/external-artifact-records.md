@@ -421,9 +421,11 @@ make test-summary
 - Phase execution plan draft: complete.
 - Phase execution plan refine: complete; expanded-path refine was used because
   Phase 1 is public persisted API work.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: not needed; manager completed a scoped
+  validation fix after executor shutdown.
 - PR review: unused.
-- Blocker resolution: 0/3 used.
+- Blocker resolution: 1/3 used for manager-local Pyright/type compatibility
+  fixes after the implementation handoff was incomplete.
 
 ## Completion Notes
 
@@ -431,11 +433,44 @@ make test-summary
   `docs/roadmap/stage-15/phases/external-artifact-records.md`.
 - Final phase execution plan: completed in the same artifact after the
   expanded-path refine pass.
-- Implementation summary: not started.
-- Implementation validation: not run.
-- Refinement summary: plan-only refine complete; no product-code refinement
-  pass used.
-- Blocker-resolution summary: none used.
+- Implementation summary: added strict backend-neutral artifact record types
+  (`ArtifactLocationKind`, `ArtifactStoreRef`,
+  `ArtifactLocationSummary`, `ExternalArtifactDeclaration`,
+  `PublishedArtifactRecord`, `ImmutableArtifactLookupRequest`, and
+  `ImmutableArtifactLookupResult`) to `src/loom/artifacts.py` with strict
+  `to_dict`/`from_dict` validation, enum/value checks, digest validation,
+  non-negative size checks, plain-data freezing/thawing, summary helpers, and
+  unknown-field rejection; kept `ArtifactRef` and existing `ArtifactAddress`
+  compatibility unchanged.
+- Unit coverage: extended `tests/unit/loom/test_artifacts.py` to include strict
+  round trips and contract-shape tests for all new record types and to confirm
+  `ArtifactRef` metadata immutability/compatibility.
+- Package coverage: updated `tests/package/test_public_api.py` and
+  `tests/package/test_import_boundaries.py` to assert new record exports from
+  `loom.artifacts.__all__` and artifact-module import-light boundaries.
+- Contract coverage: added `tests/contracts/test_external_artifact_records_contract.py`
+  for serialized field sets, enum values, strict failure cases, and summary
+  interoperability across legacy `ArtifactRef` and new records.
+- Implementation validation:
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/test_artifacts.py tests/contracts/test_external_artifact_records_contract.py tests/package/test_public_api.py tests/package/test_import.py tests/package/test_import_boundaries.py`
+    passed: 88 passed in 14.72s.
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom tests/contracts tests/package`
+    was attempted in the sandbox but hit sandbox socket restrictions in
+    `LocalAuthorityService.start()` (`PermissionError: Operation not
+    permitted`) and stalled in the larger suite; the same coverage was
+    subsequently covered by the escalated PR gate.
+  - `make validate-pr` passed outside the sandbox after rerun with approved
+    permissions because multiprocessing socket tests are blocked by the
+    default sandbox: Ruff passed, Pyright passed with 0 errors, default harness
+    passed with 1622 passed / 26 skipped / 18 deselected, config-extra harness
+    passed with 440 passed / 1659 deselected, and `uv build` produced the sdist
+    and wheel.
+- Refinement summary: plan-only refine complete; no separate
+  `loom_phase_refiner` pass was used. The manager completed one scoped local
+  validation fix to preserve generic store kinds, restore positive-integer
+  legacy `ArtifactRef.schema_version` compatibility, and satisfy Pyright.
+- Blocker-resolution summary: 1/3 used for the manager-local Pyright/type
+  compatibility fix described above.
 - PR preparation: not started.
 - Stack maintenance: root branch reset to current `develop`
   (`1ec6cd93c6722fbbd5ad72eab48eb773887187e1`) after verifying the local
