@@ -5,7 +5,7 @@ Roadmap stage: `v16`
 Planning document: `docs/roadmap/stage-16/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 in progress
+Current phase: Phase 4 in progress
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-15 after
@@ -279,7 +279,7 @@ contracts and return the same operation evidence used by bundles and preflight.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `shared-operation-evidence-contracts` | merged | `codex/shared-operation-evidence-contracts` | [#166](https://github.com/samcantrill/loom/pull/166) | `loom.operations`, narrow compatibility projections | Add shared operation/evidence value objects and bounded adoption | Unit/contract/package import-boundary tests, `make validate-pr`, `make test-summary` | Unsupported operation, checksum evidence, redacted diagnostic |
 | 2 | `local-materialization-copy-records` | merged | `codex/local-materialization-copy-records` | [#167](https://github.com/samcantrill/loom/pull/167) | `loom.pipeline.stores`, public store exports | Add materialization records and copy-only local behavior | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Local copy, checksum mismatch, unsupported non-copy policy |
-| 3 | `fake-backend-payload-operations` | pending | `codex/fake-backend-payload-operations` | pending | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
+| 3 | `fake-backend-payload-operations` | pr_open | `codex/fake-backend-payload-operations` | [#168](https://github.com/samcantrill/loom/pull/168) | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
 | 4 | `bundle-preflight-materialization` | pending | `codex/bundle-preflight-materialization` | pending | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
 | 5 | `no-backend-user-facing-handles` | pending | `codex/no-backend-user-facing-handles` | pending | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
 
@@ -514,11 +514,11 @@ payload operation records
 
 ## Phase 3: Backend Handler Materialization And Fake Remote Operations
 
-Status: pending
+Status: pr_open
 Slug: `fake-backend-payload-operations`
 Branch: `codex/fake-backend-payload-operations`
 Worktree: `/home/samcantrill/work/loom-worktrees/fake-backend-payload-operations`
-PR: pending
+PR: [#168](https://github.com/samcantrill/loom/pull/168)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase extends backend protocol
@@ -591,13 +591,12 @@ behavior and fake conformance coverage
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available
+- Phase execution plan: complete in `docs/roadmap/stage-16/phases/fake-backend-payload-operations.md`
+- Planning/refinement budget: expanded path; draft and refine used
+- Implementation/refinement budget: not needed; targeted validation and the full PR gate passed without implementation blockers
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phases 1 and 2 merged or valid as stack
-  predecessors
+- Pre-submit blocker gate: Phases 1 and 2 merged; Phase 3 replayed onto updated `develop`
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -611,9 +610,9 @@ behavior and fake conformance coverage
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: complete. Added payload operation records/protocols, public store exports, and fake object-store/tracking-system payload operation coverage.
+- Validation: `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green.
+- PR: [#168](https://github.com/samcantrill/loom/pull/168) opened against `develop` and verified with `gh pr view 168 --json baseRefName,headRefName,state,url`.
 - Merge: pending
 - Follow-up: pending
 
