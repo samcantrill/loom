@@ -16,10 +16,28 @@ from loom.runs import (
     ComparisonSection,
     ComparisonStatus,
     ListRunsResult,
+    MigrationReadinessBlocker,
+    MigrationReadinessBlockerCode,
+    MigrationResumeReadiness,
+    PortableRunSourceIdentity,
+    PortableRunTargetIdentityPolicy,
+    RUN_BUNDLE_MANIFEST_SCHEMA_VERSION,
+    RunAdapterIdentity,
+    RunBundleExportOptions,
+    RunBundleExportResult,
+    RunBundleImportPolicy,
+    RunBundleImportResult,
+    RunBundleInspection,
+    RunBundleManifest,
     RunComparison,
+    RunExchangeDiagnostic,
+    RunExchangeOperationStatus,
     RunFilter,
     RunFilterKind,
+    RunImportResumeMode,
     RunSummary,
+    RunTargetIdentityPolicyMode,
+    TransferRecordKind,
 )
 
 
@@ -228,6 +246,180 @@ def test_runs_diff_text_shows_non_same_entries(
     assert stderr.getvalue() == ""
 
 
+def test_runs_export_json_builds_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def build_runs_export_result(
+        run_uri: str,
+        destination: object,
+        options: RunBundleExportOptions,
+    ) -> RunBundleExportResult:
+        calls["run_uri"] = run_uri
+        calls["destination"] = destination
+        calls["options"] = options
+        return RunBundleExportResult(
+            status=RunExchangeOperationStatus.SUCCEEDED,
+            adapter=_adapter(),
+            manifest=_manifest(run_uri=run_uri),
+            exported_payload_count=2,
+        )
+
+    monkeypatch.setattr(
+        runs_command,
+        "build_runs_export_result",
+        build_runs_export_result,
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "runs",
+                "export",
+                "file:///tmp/runs/a",
+                "/tmp/bundle.tar",
+                "--include-payloads",
+                "--include-logs",
+                "--include-workspace",
+                "--verify-checksums",
+                "--max-payload-count",
+                "3",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    options = calls["options"]
+    assert isinstance(options, RunBundleExportOptions)
+    assert calls["run_uri"] == "file:///tmp/runs/a"
+    assert str(calls["destination"]) == "/tmp/bundle.tar"
+    assert options.include_payloads is True
+    assert options.include_logs is True
+    assert options.include_workspace is True
+    assert options.verify_checksums is True
+    assert options.max_payload_count == 3
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == runs_command.RUNS_EXPORT_SCHEMA_VERSION
+    assert payload["ok"] is True
+    assert payload["result"]["exported_payload_count"] == 2
+    assert stderr.getvalue() == ""
+
+
+def test_runs_inspect_text_uses_public_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def build_runs_inspect_result(
+        bundle: object,
+        *,
+        verify_checksums: bool = False,
+    ) -> RunBundleInspection:
+        calls["bundle"] = bundle
+        calls["verify_checksums"] = verify_checksums
+        return RunBundleInspection(
+            status=RunExchangeOperationStatus.SUCCEEDED,
+            manifest=_manifest(),
+            included_payload_count=0,
+        )
+
+    monkeypatch.setattr(
+        runs_command,
+        "build_runs_inspect_result",
+        build_runs_inspect_result,
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["runs", "inspect", "/tmp/bundle.tar", "--verify-checksums"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    assert str(calls["bundle"]) == "/tmp/bundle.tar"
+    assert calls["verify_checksums"] is True
+    output = stdout.getvalue()
+    assert "runs inspect /tmp/bundle.tar: succeeded" in output
+    assert "source: kind=local_bundle run_uri=file:///tmp/runs/a" in output
+    assert stderr.getvalue() == ""
+
+
+def test_runs_import_failed_result_returns_run_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def build_runs_import_result(
+        bundle: object,
+        target_collection: object,
+        policy: RunBundleImportPolicy,
+    ) -> RunBundleImportResult:
+        calls["bundle"] = bundle
+        calls["target_collection"] = target_collection
+        calls["policy"] = policy
+        return RunBundleImportResult(
+            status=RunExchangeOperationStatus.FAILED,
+            source_identity=_source_identity(),
+            adapter=_adapter(),
+            target_run_uri=None,
+            imported_entry_count=0,
+            imported_payload_count=0,
+            readiness=_readiness(),
+            diagnostics=(
+                RunExchangeDiagnostic(
+                    code="run_bundle_import.run_uri_collision",
+                    message="target run already exists",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        runs_command,
+        "build_runs_import_result",
+        build_runs_import_result,
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "runs",
+                "import",
+                "/tmp/bundle.tar",
+                "/tmp/target-runs",
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 6
+    )
+
+    assert str(calls["bundle"]) == "/tmp/bundle.tar"
+    assert str(calls["target_collection"]) == "/tmp/target-runs"
+    assert isinstance(calls["policy"], RunBundleImportPolicy)
+    payload = json.loads(stdout.getvalue())
+    assert payload["schema_version"] == runs_command.RUNS_IMPORT_SCHEMA_VERSION
+    assert payload["ok"] is False
+    assert payload["result"]["diagnostics"][0]["code"] == (
+        "run_bundle_import.run_uri_collision"
+    )
+    assert stderr.getvalue() == ""
+
+
 def test_runs_missing_action_is_usage_error() -> None:
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -236,3 +428,41 @@ def test_runs_missing_action_is_usage_error() -> None:
 
     assert stdout.getvalue() == ""
     assert "usage: loom runs" in stderr.getvalue()
+
+
+def _adapter() -> RunAdapterIdentity:
+    return RunAdapterIdentity(
+        name="local-bundle",
+        version="1",
+        kind=TransferRecordKind.BUNDLE,
+    )
+
+
+def _source_identity(run_uri: str = "file:///tmp/runs/a") -> PortableRunSourceIdentity:
+    return PortableRunSourceIdentity(
+        source_kind=TransferRecordKind.BUNDLE,
+        run_uri=run_uri,
+    )
+
+
+def _manifest(run_uri: str = "file:///tmp/runs/a") -> RunBundleManifest:
+    return RunBundleManifest(
+        schema_version=RUN_BUNDLE_MANIFEST_SCHEMA_VERSION,
+        run_uri=run_uri,
+        source_identity=_source_identity(run_uri),
+        target_identity=PortableRunTargetIdentityPolicy(
+            mode=RunTargetIdentityPolicyMode.TARGET_LOCAL,
+        ),
+    )
+
+
+def _readiness() -> MigrationResumeReadiness:
+    return MigrationResumeReadiness(
+        mode=RunImportResumeMode.HISTORICAL_ONLY,
+        blockers=(
+            MigrationReadinessBlocker(
+                code=MigrationReadinessBlockerCode.HISTORICAL_ONLY_POLICY,
+                message="historical-only import",
+            ),
+        ),
+    )

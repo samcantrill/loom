@@ -54,6 +54,35 @@ def test_slurm_adapter_submits_and_records_durable_handoff_without_leases() -> N
     assert [call[0] for call in runner.calls] == ["sbatch", "squeue"]
 
 
+def test_slurm_adapter_preserves_unsupported_delegated_verification() -> None:
+    runner = FakeSlurmCommandRunner(starting_job_id=42)
+    adapter = SlurmQueueDispatchAdapter(command_runner=runner)
+    data = _item("item-1").to_dict()
+    launch_contract = cast(dict[str, object], _mapping(data["launch_contract"]))
+    delegated = cast(
+        dict[str, object],
+        _mapping(launch_contract["delegated_verification"]),
+    )
+    delegated["portable_run_transfer"] = {
+        "status": "unsupported",
+        "reason": "object-store transfer is not implemented",
+    }
+    item = QueueItem.from_dict(data)
+
+    result = adapter.dispatch(item)
+
+    evidence = _mapping(thaw_plain_data(result.evidence, path="evidence"))
+    verification = _mapping(evidence["delegated_launch_verification"])
+    checks = [
+        _mapping(check)
+        for check in _sequence(verification["checks"])
+        if _mapping(check)["name"] == "portable_run_transfer"
+    ]
+    assert "portable_run_transfer" in _sequence(verification["unsupported"])
+    assert checks[0]["status"] == "unsupported"
+    assert checks[0]["reason"] == "object-store transfer is not implemented"
+
+
 def test_slurm_adapter_inspects_terminal_scheduler_state() -> None:
     runner = FakeSlurmCommandRunner(
         scripted_results={

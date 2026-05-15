@@ -72,6 +72,7 @@ from .lifecycle import (
     persist_stage_failure,
     record_stage_failure_and_failed_run,
     write_stage_artifact_index_refs,
+    write_cancelled_run,
     write_failed_run,
     write_run_status,
     write_stage_blocked,
@@ -125,6 +126,8 @@ class _ExecutionOutcome:
     outputs_by_stage: dict[str, dict[str, ArtifactRef]]
     failed_stage: str | None
     failure: ExecutionFailure | None
+    cancelled_stage: str | None = None
+    cancellation_reason: LifecycleReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,7 +506,7 @@ class PipelineRunner:
             )
 
         finished_at = self.clock()
-        if outcome.failure is None:
+        if outcome.failure is None and outcome.cancellation_reason is None:
             write_run_status(
                 self.run_store,
                 run_uri=run_uri,
@@ -520,8 +523,42 @@ class PipelineRunner:
                 payload={"status": RunStatus.SUCCEEDED.value},
             )
             run_status = RunStatus.SUCCEEDED
+        elif outcome.cancellation_reason is not None:
+            write_cancelled_run(
+                self.run_store,
+                run_uri=run_uri,
+                created_at=created_at,
+                started_at=started_at,
+                cancelled_at=finished_at,
+                reason=outcome.cancellation_reason,
+                stage_name=outcome.cancelled_stage,
+            )
+            self._emit_run_event(
+                run_uri,
+                "run.cancelled",
+                timestamp=finished_at,
+                payload={
+                    "status": RunStatus.CANCELLED.value,
+                    "cancelled_stage": outcome.cancelled_stage,
+                    "reason": outcome.cancellation_reason.to_dict(),
+                },
+            )
+            run_status = RunStatus.CANCELLED
+            for stage_plan in plan.ordered_stage_plans:
+                if stage_plan.stage_name not in outcome.stage_results:
+                    outcome.stage_results[stage_plan.stage_name] = (
+                        self._block_stage_after_failure(
+                            run_uri=run_uri,
+                            stage_plan=stage_plan,
+                            blocked_by=outcome.cancelled_stage
+                            or outcome.cancellation_reason.code,
+                        )
+                    )
         else:
-            self._write_failed_run(run_uri, created_at, started_at, outcome.failure)
+            failure = outcome.failure
+            if failure is None:
+                raise PipelineExecutionError("execution failed without failure metadata")
+            self._write_failed_run(run_uri, created_at, started_at, failure)
             self._emit_run_event(
                 run_uri,
                 "run.failed",
@@ -529,7 +566,7 @@ class PipelineRunner:
                 payload={
                     "status": RunStatus.FAILED.value,
                     "failed_stage": outcome.failed_stage,
-                    "failure_type": outcome.failure.failure_type,
+                    "failure_type": failure.failure_type,
                 },
             )
             run_status = RunStatus.FAILED
@@ -539,7 +576,7 @@ class PipelineRunner:
                         self._block_stage_after_failure(
                             run_uri=run_uri,
                             stage_plan=stage_plan,
-                            blocked_by=outcome.failed_stage or outcome.failure.stage_name,
+                            blocked_by=outcome.failed_stage or failure.stage_name,
                         )
                     )
         artifact_index = self.run_store.read_artifact_index(run_uri)
@@ -547,6 +584,10 @@ class PipelineRunner:
             stage_plan.stage_name: outcome.stage_results[stage_plan.stage_name]
             for stage_plan in plan.ordered_stage_plans
         }
+        result_metadata: dict[str, PlainData] = dict(request.metadata)
+        if outcome.cancellation_reason is not None:
+            result_metadata["reason"] = outcome.cancellation_reason.to_dict()
+            result_metadata["reason_code"] = outcome.cancellation_reason.code
         result = RunResult(
             run_uri=run_uri,
             status=run_status,
@@ -557,7 +598,7 @@ class PipelineRunner:
             failed_stage=outcome.failed_stage,
             failure=outcome.failure,
             artifact_index=artifact_index,
-            metadata=request.metadata,
+            metadata=result_metadata,
         )
         self._write_offline_evidence_manifest_if_needed(run_uri)
         return result
@@ -581,13 +622,15 @@ class PipelineRunner:
         outputs_by_stage: dict[str, dict[str, ArtifactRef]] = {}
         failed_stage: str | None = None
         failure: ExecutionFailure | None = None
+        cancelled_stage: str | None = None
+        cancellation_reason: LifecycleReason | None = None
         for stage_plan in plan.ordered_stage_plans:
             stage = spec.get_stage(stage_plan.stage_name)
-            if failed_stage is not None:
+            if failed_stage is not None or cancelled_stage is not None:
                 stage_results[stage.name] = self._block_stage_after_failure(
                     run_uri=run_uri,
                     stage_plan=stage_plan,
-                    blocked_by=failed_stage,
+                    blocked_by=failed_stage or cancelled_stage or "cancelled",
                 )
                 continue
             result = self._run_controller_stage_action(
@@ -609,6 +652,9 @@ class PipelineRunner:
             stage_results[stage.name] = result
             if result.status == StageStatus.SUCCEEDED:
                 outputs_by_stage[stage.name] = dict(result.outputs)
+            elif result.status == StageStatus.CANCELLED:
+                cancelled_stage = stage.name
+                cancellation_reason = _stage_cancellation_reason(result)
             elif result.failure is not None:
                 failed_stage = stage.name
                 failure = result.failure
@@ -617,6 +663,8 @@ class PipelineRunner:
             outputs_by_stage=outputs_by_stage,
             failed_stage=failed_stage,
             failure=failure,
+            cancelled_stage=cancelled_stage,
+            cancellation_reason=cancellation_reason,
         )
 
     def _run_parallel_plan(self, context: _ParallelPlanContext) -> _ExecutionOutcome:
@@ -628,6 +676,8 @@ class PipelineRunner:
         stopped = False
         failed_stage: str | None = None
         failure: ExecutionFailure | None = None
+        cancelled_stage: str | None = None
+        cancellation_reason: LifecycleReason | None = None
         active: dict[Future[StageRunResult], _ParallelTask] = {}
         with ThreadPoolExecutor(
             max_workers=context.policy.max_parallel_stages,
@@ -652,6 +702,12 @@ class PipelineRunner:
                             not context.policy.continue_independent
                             or _failure_requires_global_stop(failure)
                         ):
+                            stopped = True
+                    if cancellation_reason is None:
+                        cancelled_stage, cancellation_reason = (
+                            _first_stage_cancellation(stage_results)
+                        )
+                        if cancellation_reason is not None:
                             stopped = True
                 if len(stage_results) >= len(stage_order):
                     break
@@ -678,6 +734,14 @@ class PipelineRunner:
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
                         outputs_by_stage[task.stage_name] = dict(result.outputs)
+                        continue
+                    if (
+                        result.status == StageStatus.CANCELLED
+                        and cancellation_reason is None
+                    ):
+                        cancelled_stage = task.stage_name
+                        cancellation_reason = _stage_cancellation_reason(result)
+                        stopped = True
                         continue
                     if result.failure is not None and failure is None:
                         failed_stage = task.stage_name
@@ -707,23 +771,33 @@ class PipelineRunner:
                     stage_results[task.stage_name] = result
                     if result.status == StageStatus.SUCCEEDED:
                         outputs_by_stage[task.stage_name] = dict(result.outputs)
+                    elif (
+                        result.status == StageStatus.CANCELLED
+                        and cancellation_reason is None
+                    ):
+                        cancelled_stage = task.stage_name
+                        cancellation_reason = _stage_cancellation_reason(result)
                     elif result.failure is not None and failure is None:
                         failed_stage = task.stage_name
                         failure = result.failure
                     active.pop(future, None)
-        if failure is not None:
+        if failure is not None or cancellation_reason is not None:
             for stage_name in stage_order:
                 if stage_name not in stage_results:
                     stage_results[stage_name] = self._block_stage_after_failure(
                         run_uri=context.run_uri,
                         stage_plan=plan_by_stage[stage_name],
-                        blocked_by=failed_stage or failure.stage_name,
+                        blocked_by=failed_stage
+                        or cancelled_stage
+                        or (failure.stage_name if failure is not None else "cancelled"),
                     )
         return _ExecutionOutcome(
             stage_results=stage_results,
             outputs_by_stage=outputs_by_stage,
             failed_stage=failed_stage,
             failure=failure,
+            cancelled_stage=cancelled_stage,
+            cancellation_reason=cancellation_reason,
         )
 
     def _run_controller_stage_action(
@@ -861,6 +935,8 @@ class PipelineRunner:
                 if result.status == StageStatus.SUCCEEDED:
                     outputs_by_stage[stage_name] = dict(result.outputs)
                 progressed = True
+                if result.status == StageStatus.CANCELLED:
+                    return progressed
                 if result.failure is not None and (
                     not context.policy.continue_independent
                     or _failure_requires_global_stop(result.failure)
@@ -2152,6 +2228,28 @@ def _first_stage_failure(
         if result.failure is not None:
             return stage_name, result.failure
     return None, None
+
+
+def _first_stage_cancellation(
+    stage_results: Mapping[str, StageRunResult],
+) -> tuple[str | None, LifecycleReason | None]:
+    for stage_name, result in stage_results.items():
+        if result.status == StageStatus.CANCELLED:
+            return stage_name, _stage_cancellation_reason(result)
+    return None, None
+
+
+def _stage_cancellation_reason(result: StageRunResult) -> LifecycleReason:
+    raw = result.executor_metadata.get("lifecycle_reason")
+    if isinstance(raw, Mapping):
+        try:
+            return LifecycleReason.from_dict(raw)
+        except Exception:
+            pass
+    return LifecycleReason(
+        code="early_stop",
+        message="stage requested early stop",
+    )
 
 
 def _resource_lease_ttl_seconds(settings: Mapping[str, PlainData]) -> int:

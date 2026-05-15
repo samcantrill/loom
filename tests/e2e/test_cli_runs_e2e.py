@@ -11,6 +11,7 @@ import pytest
 from loom.artifacts import ArtifactRef
 from loom.cli.main import main
 from loom.fingerprints import format_digest
+from loom.io.uris import path_to_file_uri
 from loom.pipeline.execution import create_authority_backed_serial_run_store
 from loom.pipeline.status import (
     RunStatus,
@@ -103,6 +104,62 @@ def test_cli_runs_index_list_and_diff(tmp_path: Path) -> None:
     assert diff_stderr.getvalue() == ""
 
 
+def test_cli_runs_bundle_exchange_happy_path(tmp_path: Path) -> None:
+    run_uri = _create_completed_authority_run(tmp_path / "source-runs" / "run-1")
+    bundle_path = tmp_path / "bundle.tar"
+    target_collection = tmp_path / "target-runs"
+
+    export_stdout = io.StringIO()
+    export_stderr = io.StringIO()
+    assert (
+        main(
+            [
+                "runs",
+                "export",
+                run_uri,
+                str(bundle_path),
+                "--include-payloads",
+                "--format",
+                "json",
+            ],
+            stdout=export_stdout,
+            stderr=export_stderr,
+        )
+        == 0
+    )
+    export_payload = json.loads(export_stdout.getvalue())
+    assert export_payload["schema_version"] == "loom.cli.runs.export.v1"
+    assert export_payload["result"]["exported_payload_count"] == 1
+    assert export_stderr.getvalue() == ""
+
+    inspect_stdout = io.StringIO()
+    inspect_stderr = io.StringIO()
+    assert (
+        main(
+            ["runs", "inspect", str(bundle_path)],
+            stdout=inspect_stdout,
+            stderr=inspect_stderr,
+        )
+        == 0
+    )
+    assert f"runs inspect {bundle_path}: succeeded" in inspect_stdout.getvalue()
+    assert inspect_stderr.getvalue() == ""
+
+    import_stdout = io.StringIO()
+    import_stderr = io.StringIO()
+    assert (
+        main(
+            ["runs", "import", str(bundle_path), str(target_collection)],
+            stdout=import_stdout,
+            stderr=import_stderr,
+        )
+        == 0
+    )
+    assert "target=file://" in import_stdout.getvalue()
+    assert (target_collection / "run-1").exists()
+    assert import_stderr.getvalue() == ""
+
+
 def _create_run(
     root: Path,
     run_path: Path,
@@ -154,5 +211,40 @@ def _create_run(
                 producer_stage="build",
             )
         },
+    )
+    return run_uri
+
+
+def _create_completed_authority_run(run_path: Path) -> str:
+    run_uri = path_to_run_uri(run_path)
+    payload = run_path / "artifacts" / "build" / "out.bin"
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_bytes(b"payload")
+    store = SQLitePerRunAuthorityStore(run_uri)
+    store.create_run(run_uri)
+    allocation = store.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
+    store.record_output_commit(
+        run_uri,
+        "build",
+        attempt_id=allocation.attempt.attempt_id,
+        fencing_token=allocation.lease.fencing_token,
+        outputs={
+            "out": ArtifactRef(
+                artifact_id="build/out",
+                uri=path_to_file_uri(payload),
+                artifact_type="bytes",
+            )
+        },
+    )
+    store.transition_run(
+        run_uri,
+        from_status=RunStatus.CREATED,
+        to_status=RunStatus.SUCCEEDED,
     )
     return run_uri

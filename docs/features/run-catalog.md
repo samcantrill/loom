@@ -286,31 +286,38 @@ Domain-specific comparison can be added through plugins later.
 
 ## Export
 
-Run export creates a portable bundle from an existing run.
+Run export creates a portable bundle from an existing completed run.
 
-Potential command:
+Implemented command:
 
 ```bash
-loom export RUN_DIR run.tar.zst
+loom runs export RUN_URI run.tar
 ```
 
-The initial format may be:
+The v12 local bundle format is:
 
 ```text
 tar archive
-optional compression
-manifest file
-run metadata
-state files
-provenance files
-artifact metadata
-selected artifact payloads
-logs
+manifest.json
+completed-run metadata
+source identity facts
+target-local import policy facts
+optional selected payload/log/workspace refs
+diagnostics and extension fields
 ```
 
-Compression choices should avoid adding a required heavyweight dependency.
-Standard library tar support is enough for an initial uncompressed or gzip
-bundle.
+Metadata-only export is the default. Payload movement is explicit:
+
+```bash
+loom runs export RUN_URI run.tar --include-payloads
+loom runs export RUN_URI run.tar --include-logs
+loom runs export RUN_URI run.tar --include-workspace
+loom runs export RUN_URI run.tar --verify-checksums
+```
+
+The local bundle archive is one first-party adapter over portable-run exchange
+records. It is not the protocol for later remote stores or external tracking
+providers.
 
 ## Export Manifest
 
@@ -347,25 +354,27 @@ missing artifact payloads
 large unexpected files
 ```
 
-The export command should have explicit flags for payload selection:
+The export command has explicit flags for payload selection:
 
 ```text
---metadata-only
---include-artifacts
+metadata-only default
+--include-payloads
 --include-logs
---exclude-temp
+--include-workspace
+--max-payload-count
 ```
 
 The default should be conservative and documented.
 
 ## Inspect
 
-Bundle inspection should read the manifest and summaries.
+Bundle inspection reads the manifest and summaries without extraction.
 
-Potential command:
+Implemented command:
 
 ```bash
-loom inspect run.tar.gz
+loom runs inspect run.tar
+loom runs inspect run.tar --verify-checksums
 ```
 
 It should report:
@@ -381,16 +390,18 @@ included payload count and size
 checksum validation status when requested
 ```
 
-Inspection should not extract files into the current directory.
+Inspection does not extract files into the current directory. Unsafe paths,
+duplicate archive members, unsupported schemas, checksum mismatches, and
+malformed archives surface as structured diagnostics.
 
 ## Import
 
 Run import copies a bundle into a local run collection.
 
-Potential command:
+Implemented command:
 
 ```bash
-loom import run.tar.gz --runs-dir runs/
+loom runs import run.tar runs/
 ```
 
 Import should:
@@ -398,13 +409,23 @@ Import should:
 ```text
 validate the bundle manifest
 reject unsafe paths
-create a new run directory or preserve the original run URI when safe
+create a target-local run directory
+preserve source run URI and bundle identity as provenance
 write imported metadata
-verify checksums when requested
-update or mark the catalog index stale
+verify checksums under the strict default policy
+refresh the local catalog view after a successful import
+record historical-only resume readiness blockers
 ```
 
 Import should not execute project code.
+
+Imported runs are historical-only in v12. Live migrated resume, merge,
+overwrite, fork, remote payload materialization, signed/encrypted bundles,
+deduplication, automatic post-run export dispatch, provider plugins, and
+concrete SSH/object-store transfer handlers are deferred.
+
+Offline evidence remains a separate authority-owned adapter. It shares portable
+import result semantics but is not converted into a local bundle before import.
 
 ## Run Store Boundary
 

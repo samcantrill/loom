@@ -519,9 +519,13 @@ class StageWorkerResult:
         ):
             raise RunRequestError("StageWorkerResult.attempt must be positive")
         object.__setattr__(self, "status", _stage_status(self.status))
-        if self.status not in {StageStatus.SUCCEEDED, StageStatus.FAILED}:
+        if self.status not in {
+            StageStatus.SUCCEEDED,
+            StageStatus.FAILED,
+            StageStatus.CANCELLED,
+        }:
             raise RunRequestError(
-                "StageWorkerResult.status must be SUCCEEDED or FAILED"
+                "StageWorkerResult.status must be SUCCEEDED, FAILED, or CANCELLED"
             )
         if not isinstance(self.started_at, str) or not self.started_at:
             raise RunRequestError(
@@ -567,6 +571,8 @@ class StageWorkerResult:
                 )
         if self.status == StageStatus.FAILED and failure is None:
             raise RunRequestError("StageWorkerResult.failure is required for FAILED")
+        if self.status == StageStatus.CANCELLED and failure is not None:
+            raise RunRequestError("StageWorkerResult.failure must be null for CANCELLED")
         if failure is not None:
             if failure.run_uri != self.run_uri:
                 raise RunRequestError("StageWorkerResult.failure.run_uri mismatch")
@@ -575,8 +581,10 @@ class StageWorkerResult:
             if failure.attempt != self.attempt:
                 raise RunRequestError("StageWorkerResult.failure.attempt mismatch")
         outputs = _artifact_ref_mapping(self.outputs, "outputs")
-        if self.status == StageStatus.FAILED and outputs:
-            raise RunRequestError("StageWorkerResult FAILED must not include outputs")
+        if self.status in {StageStatus.FAILED, StageStatus.CANCELLED} and outputs:
+            raise RunRequestError(
+                "StageWorkerResult FAILED or CANCELLED must not include outputs"
+            )
         object.__setattr__(self, "outputs", outputs)
         object.__setattr__(self, "failure", failure)
         object.__setattr__(
@@ -745,9 +753,17 @@ class StageExecutionResult:
                 "StageExecutionResult.stage_name must be a non-empty string"
             )
         object.__setattr__(self, "status", _stage_status(self.status))
-        if self.status not in {StageStatus.SUCCEEDED, StageStatus.FAILED}:
+        if self.status not in {
+            StageStatus.SUCCEEDED,
+            StageStatus.FAILED,
+            StageStatus.CANCELLED,
+        }:
             raise RunRequestError(
-                "StageExecutionResult.status must be SUCCEEDED or FAILED"
+                "StageExecutionResult.status must be SUCCEEDED, FAILED, or CANCELLED"
+            )
+        if self.status == StageStatus.CANCELLED and self.failure is not None:
+            raise RunRequestError(
+                "StageExecutionResult.failure must be null for CANCELLED"
             )
         if self.failure is not None and not isinstance(self.failure, ExecutionFailure):
             raise RunRequestError(
@@ -775,6 +791,8 @@ class StageExecutionResult:
             )
         if not isinstance(self.outputs, Mapping):
             raise RunRequestError("StageExecutionResult.outputs must be a mapping")
+        if self.status == StageStatus.CANCELLED and self.outputs:
+            raise RunRequestError("StageExecutionResult CANCELLED must not include outputs")
         for name in ("stdout_path", "stderr_path", "traceback_path"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, str):

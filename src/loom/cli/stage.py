@@ -94,7 +94,7 @@ def handle_run(namespace: argparse.Namespace) -> int:
             },
         ) from exc
 
-    ok = result.status == StageStatus.SUCCEEDED
+    ok = result.status in {StageStatus.SUCCEEDED, StageStatus.CANCELLED}
     if output_format is OutputFormat.JSON:
         sys.stdout.write(
             format_json_envelope(

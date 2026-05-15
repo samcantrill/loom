@@ -608,22 +608,37 @@ class AuthorityBackedSerialRunStore:
         )
 
     def read_run_status(self, run_uri: str) -> RunStatusRecord | None:
+        local_status = self.local_store.read_run_status(run_uri)
         try:
             snapshot = self.authority_store.snapshot(run_uri)
         except Exception:
-            return None
+            return local_status
         created_at = _created_at(self.local_store, run_uri, snapshot.revision.created_at)
         updated_at = snapshot.revision.created_at or created_at
+        local_matches = local_status is not None and local_status.status is snapshot.status
+        local_projection = local_status if local_matches else None
         return RunStatusRecord(
             run_uri=run_uri,
             status=snapshot.status,
             created_at=created_at,
-            updated_at=updated_at,
-            started_at=created_at if snapshot.status not in {RunStatus.CREATED} else None,
-            finished_at=updated_at
-            if snapshot.status
-            in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
-            else None,
+            updated_at=local_projection.updated_at
+            if local_projection is not None
+            else updated_at,
+            started_at=(
+                local_projection.started_at
+                if local_projection is not None
+                else created_at if snapshot.status not in {RunStatus.CREATED} else None
+            ),
+            finished_at=(
+                local_projection.finished_at
+                if local_projection is not None
+                else updated_at
+                if snapshot.status
+                in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
+                else None
+            ),
+            message=local_projection.message if local_projection is not None else None,
+            metadata=local_projection.metadata if local_projection is not None else {},
         )
 
     def write_run_status(self, run_uri: str, status: RunStatusRecord) -> None:

@@ -430,6 +430,36 @@ def test_import_stores_does_not_import_config_or_cli_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_sweep_contract_package_is_lightweight() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.sweep
+
+        for forbidden in (
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.queue",
+            "loom.cli",
+            "loom.authority",
+            "loom.authority._repository",
+            "loom.project",
+            "optuna",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.pipeline.sweep")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_authority_client_does_not_import_server_layers() -> None:
     script = dedent(
         """
@@ -1042,6 +1072,38 @@ def test_import_cli_run_remains_import_light() -> None:
         ):
             if forbidden in sys.modules:
                 raise SystemExit(f"{forbidden} was imported through loom.cli.run")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_import_cli_sweep_remains_import_light() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.cli.sweep
+
+        for forbidden in (
+            "loom.config",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.pipeline.stores",
+            "loom.queue",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+            "optuna",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.cli.sweep")
         print("ok")
         """
     )

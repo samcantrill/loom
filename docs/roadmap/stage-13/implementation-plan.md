@@ -2,7 +2,11 @@
 
 ## Metadata
 
+<<<<<<< HEAD
 - Status: plan quality gate passed; ready for Phase 1 execution planning
+=======
+- Status: Phases 1-5 merged; Stage 13 complete
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Roadmap stage: `v13`
 - Source planning notes:
   `docs/roadmap/stage-13/planning.md`
@@ -34,10 +38,19 @@
   review/refinement/confirmation
 - User phase approval: approved on 2026-05-14 for Phase 1 execution planning
   and the five-phase shape below.
+<<<<<<< HEAD
 - Current phase: none
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains; Phase 1 execution planning may begin.
+=======
+- Current phase: complete; all five Stage 13 phases are merged
+- Blockers:
+  - No roadmap-stage planning blocker remains.
+  - No plan-quality blocker remains.
+  - No implementation, validation, review, CI, or merge blocker remains for
+    Stage 13.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 ## Summary
 
@@ -404,11 +417,19 @@ Required suite categories:
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+<<<<<<< HEAD
 | 1 | `sweep-contracts-manifests` | pending | `codex/sweep-contracts-manifests` | pending | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
 | 2 | `grid-manual-planning` | pending | `codex/grid-manual-planning` | pending | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
 | 3 | `early-stop-direct-dispatch` | pending | `codex/early-stop-direct-dispatch` | pending | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
 | 4 | `coordination-queue-status` | pending | `codex/coordination-queue-status` | pending | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
 | 5 | `sweep-collection-cli-hardening` | pending | `codex/sweep-collection-cli-hardening` | pending | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
+=======
+| 1 | `sweep-contracts-manifests` | merged | `codex/sweep-contracts-manifests` | [#151](https://github.com/samcantrill/loom/pull/151) | `loom.pipeline.sweep` contracts, models, manifests | Establish provider/proposal, dispatch, feedback, extraction, trial/sweep models, and manifest contracts | Package, unit, contract | Provider records, dispatch records, manifest round-trip, unsupported extraction |
+| 2 | `grid-manual-planning` | merged | `codex/grid-manual-planning` | [#152](https://github.com/samcantrill/loom/pull/152) | `loom.pipeline.sweep` spec/grid/manual/planning | Implement grid/manual providers, deterministic expansion, IDs, guard, run URI mapping, and plan APIs | Unit, contract, narrow CLI smoke | Grid sweep, manual list, trial guard |
+| 3 | `early-stop-direct-dispatch` | merged | `codex/early-stop-direct-dispatch` | [#153](https://github.com/samcantrill/loom/pull/153) | `loom.pipeline.context`, execution lifecycle, sweep runner/dispatch | Implement cooperative early stop, direct dispatch, failure policy, and compatible resume | Unit, contract, integration | Early stop, failed trial visibility, sequential run |
+| 4 | `coordination-queue-status` | merged | `codex/coordination-queue-status` | [#154](https://github.com/samcantrill/loom/pull/154) | sweep coordination/dispatch/status and queue integration seams | Record authority coordination, enqueue finite queue trials, and aggregate status | Contract, integration | Coordination records, queue dispatch/status |
+| 5 | `sweep-collection-cli-hardening` | merged | `codex/sweep-collection-cli-hardening` | [#155](https://github.com/samcantrill/loom/pull/155) | sweep collection, CLI, docs, final hardening | Implement collection, unsupported extraction reporting, `loom sweep` CLI, docs, and final validation | Package, unit, contract, integration, limited e2e | Collection, CLI workflow, final gate |
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 ## Implementation Readiness Blockers
 
@@ -465,11 +486,19 @@ ordinary-run compatibility guardrail.
 
 ### Phase 1: Sweep Contracts And Manifests
 
+<<<<<<< HEAD
 - Status: pending
 - Slug: `sweep-contracts-manifests`
 - Branch: `codex/sweep-contracts-manifests`
 - Worktree: `/home/samcantrill/work/loom-worktrees/sweep-contracts-manifests`
 - PR: pending
+=======
+- Status: merged
+- Slug: `sweep-contracts-manifests`
+- Branch: `codex/sweep-contracts-manifests`
+- Worktree: `/home/samcantrill/work/loom-worktrees/sweep-contracts-manifests`
+- PR: [#151](https://github.com/samcantrill/loom/pull/151)
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -562,6 +591,7 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
+<<<<<<< HEAD
 - Phase execution plan: pending
 - Planning/refinement budget: unused
 - Implementation/refinement budget: unused
@@ -569,6 +599,17 @@ ordinary-run compatibility guardrail.
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: pending
 - Merge record: pending
+=======
+- Phase execution plan: complete
+- Planning/refinement budget: used for expanded-path draft/refine
+- Implementation/refinement budget: used as manager-local completion and
+  pre-submit correction after executor checkpoint
+- PR review budget: used by manager pre-submit review
+- Blocker-resolution budget: unused
+- Pre-submit blocker gate: passed
+- Merge record: complete; squash merged to `develop` as
+  `6facf9d6e5d94d56e3073f787fde6b6ea44a091d` on 2026-05-14 after CI passed.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 #### Risks And Stop Conditions
 
@@ -584,6 +625,7 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
+<<<<<<< HEAD
 - Implementation:
 - Validation:
 - PR:
@@ -597,6 +639,32 @@ ordinary-run compatibility guardrail.
 - Branch: `codex/grid-manual-planning`
 - Worktree: `/home/samcantrill/work/loom-worktrees/grid-manual-planning`
 - PR: pending
+=======
+- Implementation: Added import-light sweep provider/proposal, dispatch,
+  feedback, extraction, trial, and versioned manifest contract records under
+  `loom.pipeline.sweep`.
+- Validation: Targeted package tests passed (`45 passed`), targeted sweep
+  unit/contract tests passed (`16 passed`), targeted Ruff passed, `make
+  validate-pr` passed, and `make test-summary` passed.
+- PR: [#151](https://github.com/samcantrill/loom/pull/151), targeting
+  `develop` from `codex/sweep-contracts-manifests`.
+- Merge: Squash merged [#151](https://github.com/samcantrill/loom/pull/151)
+  into `develop` as `6facf9d6e5d94d56e3073f787fde6b6ea44a091d` on
+  2026-05-14. Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/sweep-contracts-manifests`, `mergeStateStatus=CLEAN`,
+  and GitHub CI `checks` completed successfully. Remote branch
+  `codex/sweep-contracts-manifests` was deleted after merge because no
+  successor branch depended on it.
+- Follow-up: Phase 2 owns grid/manual planning behavior over these contracts.
+
+### Phase 2: Grid And Manual Planning
+
+- Status: merged
+- Slug: `grid-manual-planning`
+- Branch: `codex/grid-manual-planning`
+- Worktree: `/home/samcantrill/work/loom-worktrees/grid-manual-planning`
+- PR: [#152](https://github.com/samcantrill/loom/pull/152)
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -672,6 +740,7 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
+<<<<<<< HEAD
 - Phase execution plan: pending
 - Planning/refinement budget: unused
 - Implementation/refinement budget: unused
@@ -679,6 +748,19 @@ ordinary-run compatibility guardrail.
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: pending
 - Merge record: pending
+=======
+- Phase execution plan: complete
+- Planning/refinement budget: used for expanded-path draft/refine in
+  `docs/roadmap/stage-13/phases/grid-manual-planning.md`
+- Implementation/refinement budget: used locally to address Pyright typing
+  findings after the first full validation run
+- PR review budget: used by manager pre-merge review
+- Blocker-resolution budget: unused
+- Pre-submit blocker gate: passed
+- Merge record: complete; squash merged to `develop` as
+  `98b2fc25e72be426f951c90da1cef9f9722c42ef` on 2026-05-14 after GitHub CI
+  passed.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 #### Risks And Stop Conditions
 
@@ -695,6 +777,7 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
+<<<<<<< HEAD
 - Implementation:
 - Validation:
 - PR:
@@ -708,6 +791,33 @@ ordinary-run compatibility guardrail.
 - Branch: `codex/early-stop-direct-dispatch`
 - Worktree: `/home/samcantrill/work/loom-worktrees/early-stop-direct-dispatch`
 - PR: pending
+=======
+- Implementation: Added trusted grid/manual sweep spec records, first-party
+  finite providers, deterministic proposal-to-trial materialization, default
+  generated-trial guard, run URI mapping, plan-only manifest/spec writes, and
+  compatible readback diagnostics.
+- Validation: Targeted Phase 2 tests passed (`71 passed`); `make validate-pr`
+  passed after local Pyright fixes; `make test-summary` passed.
+- PR: [#152](https://github.com/samcantrill/loom/pull/152), targeting
+  `develop` from `codex/grid-manual-planning`.
+- Merge: Squash merged [#152](https://github.com/samcantrill/loom/pull/152)
+  into `develop` as `98b2fc25e72be426f951c90da1cef9f9722c42ef` on
+  2026-05-14. Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/grid-manual-planning`, `mergeStateStatus=CLEAN`, and
+  GitHub CI `checks` completed successfully. Remote branch
+  `codex/grid-manual-planning` was deleted after merge because no successor
+  branch depended on it.
+- Follow-up: Phase 3 owns early-stop lifecycle mapping, direct dispatch, and
+  compatible execution resume over the Phase 2 plan records.
+
+### Phase 3: Early Stop And Direct Dispatch
+
+- Status: merged
+- Slug: `early-stop-direct-dispatch`
+- Branch: `codex/early-stop-direct-dispatch`
+- Worktree: `/home/samcantrill/work/loom-worktrees/early-stop-direct-dispatch`
+- PR: [#153](https://github.com/samcantrill/loom/pull/153)
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -794,6 +904,7 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
+<<<<<<< HEAD
 - Phase execution plan: pending
 - Planning/refinement budget: unused
 - Implementation/refinement budget: unused
@@ -801,6 +912,24 @@ ordinary-run compatibility guardrail.
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: pending
 - Merge record: pending
+=======
+- Phase execution plan: complete
+- Planning/refinement budget: used for expanded-path draft/refine in
+  `docs/roadmap/stage-13/phases/early-stop-direct-dispatch.md`
+- Implementation/refinement budget: not needed; targeted and final validation
+  passed after the implementation slice
+- PR review budget: used by manager pre-merge review
+- Blocker-resolution budget: 1/3 used for subprocess worker CLI cancellation
+  exit-code handling
+- Pre-submit blocker gate: passed
+- Merge record: complete; squash merged to `develop` as
+  `a047ed27f1108367aeb6911ea5c622147394b6a1` via PR
+  [#153](https://github.com/samcantrill/loom/pull/153). Pre-merge target
+  verification checked `baseRefName=develop`,
+  `headRefName=codex/early-stop-direct-dispatch`, `state=OPEN`, clean merge
+  state, and GitHub CI `checks` success on
+  `c2068e0131682740fca616b2946efc724419d32d`.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 #### Risks And Stop Conditions
 
@@ -819,6 +948,7 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
+<<<<<<< HEAD
 - Implementation:
 - Validation:
 - PR:
@@ -832,6 +962,35 @@ ordinary-run compatibility guardrail.
 - Branch: `codex/coordination-queue-status`
 - Worktree: `/home/samcantrill/work/loom-worktrees/coordination-queue-status`
 - PR: pending
+=======
+- Implementation: Added typed cooperative early-stop support, context helper,
+  cancellation lifecycle persistence, local/subprocess execution propagation,
+  direct sequential sweep dispatch, per-trial run request construction,
+  failure continuation, compatible manifest checks, and direct dispatch
+  aggregate result records.
+- Validation: Targeted Phase 3 tests passed (`52 passed`); adjacent
+  execution/executor tests passed (`71 passed`); package/import-boundary tests
+  passed (`45 passed`); `make validate-pr` passed; `make test-summary` passed
+  with package `79 passed`, unit `1077 passed`, contract `195 passed`,
+  integration `153 passed`, e2e `42 passed`, and config-extra `438 passed`.
+- PR: [#153](https://github.com/samcantrill/loom/pull/153), targeting
+  `develop` from `codex/early-stop-direct-dispatch`.
+- Merge: Squash merged [#153](https://github.com/samcantrill/loom/pull/153)
+  into `develop` at `a047ed27f1108367aeb6911ea5c622147394b6a1` after final
+  local `make validate-pr`, `make test-summary`, automated manager review, and
+  GitHub CI success. The remote branch
+  `codex/early-stop-direct-dispatch` was deleted after merge because no
+  successor depended on it.
+- Follow-up: Phase 4 should branch from updated `develop`.
+
+### Phase 4: Coordination, Queue Dispatch, And Status
+
+- Status: merged
+- Slug: `coordination-queue-status`
+- Branch: `codex/coordination-queue-status`
+- Worktree: `/home/samcantrill/work/loom-worktrees/coordination-queue-status`
+- PR: [#154](https://github.com/samcantrill/loom/pull/154)
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -916,6 +1075,7 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
+<<<<<<< HEAD
 - Phase execution plan: pending
 - Planning/refinement budget: unused
 - Implementation/refinement budget: unused
@@ -923,6 +1083,20 @@ ordinary-run compatibility guardrail.
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: pending
 - Merge record: pending
+=======
+- Phase execution plan: complete in
+  `docs/roadmap/stage-13/phases/coordination-queue-status.md`
+- Planning/refinement budget: used for expanded-path draft/refine in
+  `docs/roadmap/stage-13/phases/coordination-queue-status.md`
+- Implementation/refinement budget: not needed; targeted and final validation
+  passed after the implementation slice
+- PR review budget: used by the managing agent before merge; the review found
+  nested frozen mappings could leak into queued trial config snapshots.
+- Blocker-resolution budget: 1/3 used for the scoped queue snapshot thawing fix.
+- Pre-submit blocker gate: passed
+- Merge record: complete; squash merged to `develop` as
+  `b00675dc319282973345a5915e99c2256f72e21e` on 2026-05-14.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 #### Risks And Stop Conditions
 
@@ -939,6 +1113,7 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
+<<<<<<< HEAD
 - Implementation:
 - Validation:
 - PR:
@@ -948,11 +1123,43 @@ ordinary-run compatibility guardrail.
 ### Phase 5: Collection, CLI, Docs, And Hardening
 
 - Status: pending
+=======
+- Implementation: Added sweep coordination projection helpers, queue-backed
+  finite-trial submission records and enqueue helpers, optional coordination
+  updates for direct/queue dispatch, read-only sweep status aggregation, and
+  public sweep exports. Queue service enqueue now thaws nested structured
+  request fields before creating durable queue records so whole-run trial
+  intents can carry structured metadata.
+- Validation: Targeted Phase 4 tests passed (`42 passed`); broader queue and
+  coordination tests passed (`74 passed`); targeted Ruff passed; Pyright passed;
+  after the scoped queue snapshot thawing fix, `make validate-pr` passed; `make
+  test-summary` passed with package `79 passed`, unit `1083 passed`, contract
+  `197 passed`, integration `154 passed`, e2e `42 passed`, and config-extra
+  `438 passed`.
+- PR: [#154](https://github.com/samcantrill/loom/pull/154), targeting
+  `develop` from `codex/coordination-queue-status`.
+- Merge: Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/coordination-queue-status`, `state=OPEN`, head
+  `dab78594d6269a830be1de344559e48022071728`, clean merge state, and GitHub CI
+  `checks` success before squash merge through the GitHub API. The merged PR is
+  [#154](https://github.com/samcantrill/loom/pull/154), merge commit
+  `b00675dc319282973345a5915e99c2256f72e21e`.
+- Follow-up: Phase 5 should branch from updated `develop`; the merged Phase 4
+  remote branch was deleted because no successor branch depended on it.
+
+### Phase 5: Collection, CLI, Docs, And Hardening
+
+- Status: merged
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Slug: `sweep-collection-cli-hardening`
 - Branch: `codex/sweep-collection-cli-hardening`
 - Worktree:
   `/home/samcantrill/work/loom-worktrees/sweep-collection-cli-hardening`
+<<<<<<< HEAD
 - PR: pending
+=======
+- PR: [#155](https://github.com/samcantrill/loom/pull/155)
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -1039,6 +1246,7 @@ ordinary-run compatibility guardrail.
 
 #### Phase Workflow State
 
+<<<<<<< HEAD
 - Phase execution plan: pending
 - Planning/refinement budget: unused
 - Implementation/refinement budget: unused
@@ -1046,6 +1254,20 @@ ordinary-run compatibility guardrail.
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: pending
 - Merge record: pending
+=======
+- Phase execution plan: complete in
+  `docs/roadmap/stage-13/phases/sweep-collection-cli-hardening.md`
+- Planning/refinement budget: draft/refine used for expanded path
+- Implementation/refinement budget: unused; not needed after targeted and full
+  validation passed without a separate refiner pass
+- PR review budget: used by manager-local automated review on 2026-05-14
+- Blocker-resolution budget: 1/3 used for malformed artifact metadata
+  diagnostic handling
+- Pre-submit blocker gate: passed
+- Merge record: complete; squash merged to `develop` as
+  `be7f8e79c8f8d21cb974a80896581cff52ca65ed` on 2026-05-14 after local
+  validation, manager review, and GitHub CI passed.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 #### Risks And Stop Conditions
 
@@ -1063,11 +1285,40 @@ ordinary-run compatibility guardrail.
 
 #### Completion Summary
 
+<<<<<<< HEAD
 - Implementation:
 - Validation:
 - PR:
 - Merge:
 - Follow-up:
+=======
+- Implementation: Added versioned sweep collection records and injected-reader
+  collection helpers for trial facts, statuses, artifact refs, and unsupported
+  extraction diagnostics; exported collection APIs from `loom.pipeline.sweep`;
+  added `loom sweep plan/run/status/collect` with text and JSON output over
+  public sweep APIs; preserved queue submit-only behavior; documented the v13
+  CLI workflow and final deferrals.
+- Validation: Targeted Phase 5 tests passed (`50 passed`); `make validate-pr`
+  passed, including Ruff, Pyright, default (`1538 passed, 26 skipped, 18
+  deselected`) and config-extra (`438 passed, 1575 deselected`) harnesses, and
+  package build; `make test-summary` passed with package `80 passed`, unit
+  `1089 passed`, contract `199 passed`, integration `155 passed`, e2e `43
+  passed`, and config-extra `438 passed`.
+- PR: [#155](https://github.com/samcantrill/loom/pull/155), targeting
+  `develop` from `codex/sweep-collection-cli-hardening`; PR target
+  verification confirmed `baseRefName=develop`, `headRefName=codex/sweep-collection-cli-hardening`,
+  and `state=OPEN`.
+- Merge: Squash merged [#155](https://github.com/samcantrill/loom/pull/155)
+  into `develop` as `be7f8e79c8f8d21cb974a80896581cff52ca65ed` on
+  2026-05-14. Pre-merge verification confirmed `baseRefName=develop`,
+  `headRefName=codex/sweep-collection-cli-hardening`, `mergeStateStatus=CLEAN`,
+  and GitHub CI `checks` completed successfully. The remote branch
+  `codex/sweep-collection-cli-hardening` was deleted after merge because no
+  successor branch depended on it.
+- Follow-up: Stage 13 is complete; future stages own concrete extraction
+  adapters, optimizer providers, retry/rerun policy, distributed controllers,
+  and sweep-specific export behavior if needed.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 ## Cross-Phase Review Notes
 

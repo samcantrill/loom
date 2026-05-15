@@ -2,7 +2,11 @@
 
 ## Metadata
 
+<<<<<<< HEAD
 - Status: Phase 1 PR open; CI in progress
+=======
+- Status: complete
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Roadmap stage: `v12`
 - Source planning notes:
   `docs/roadmap/stage-12/planning.md`
@@ -26,10 +30,18 @@
 - Refine pass: complete on 2026-05-14 after local plan-quality review
 - Plan quality gate: passed on 2026-05-14 after local
   review/refinement/confirmation
+<<<<<<< HEAD
 - Current phase: Phase 1 `pr_open`
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains.
+=======
+- Current phase: all phases merged
+- Blockers:
+  - No roadmap-stage planning blocker remains.
+  - No plan-quality blocker remains.
+  - No Stage 12 implementation blocker remains.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 ## Summary
 
@@ -375,10 +387,17 @@ Required suite categories:
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+<<<<<<< HEAD
 | 1 | `portable-run-exchange-contracts` | pr_open | `codex/portable-run-exchange-contracts` | [#146](https://github.com/samcantrill/loom/pull/146) | `loom.runs` models plus import-light neutral records and minimal protocols | Establish portable-run exchange, manifest, result, evidence, readiness, and importer/exporter protocol contracts | Package, unit, contract | Manifest models, fake/unsupported adapter records |
 | 2 | `run-bundle-export-inspect` | pending | `codex/run-bundle-export-inspect` | pending | `loom.runs` export and archive helpers | Implement export, archive safety, and inspect without extraction | Unit, contract, integration | Metadata-only export, inspect safety |
 | 3 | `run-bundle-import-offline-readiness` | pending | `codex/run-bundle-import-offline-readiness` | pending | `loom.runs` import plus `loom.authority.offline_import` adapter alignment | Implement safe import, offline-evidence alignment, provenance, and readiness blockers | Package, unit, contract, integration | Safe import, offline evidence, resume readiness |
 | 4 | `transfer-evidence-protocols` | pending | `codex/transfer-evidence-protocols` | pending | Transfer evidence mappings, importer/exporter conformance, queue mapping tests | Publish queue-consumable transfer verification and explicit fake/unsupported protocol behavior | Package, unit, contract, narrow integration | Queue evidence, fake/unsupported adapters |
+=======
+| 1 | `portable-run-exchange-contracts` | merged | `codex/portable-run-exchange-contracts` | [#146](https://github.com/samcantrill/loom/pull/146) | `loom.runs` models plus import-light neutral records and minimal protocols | Establish portable-run exchange, manifest, result, evidence, readiness, and importer/exporter protocol contracts | Package, unit, contract | Manifest models, fake/unsupported adapter records |
+| 2 | `run-bundle-export-inspect` | merged | `codex/run-bundle-export-inspect` | [#147](https://github.com/samcantrill/loom/pull/147) | `loom.runs` export and archive helpers | Implement export, archive safety, and inspect without extraction | Unit, contract, integration | Metadata-only export, inspect safety |
+| 3 | `run-bundle-import-offline-readiness` | merged | `codex/run-bundle-import-offline-readiness` | [#148](https://github.com/samcantrill/loom/pull/148) | `loom.runs` import plus `loom.authority.offline_import` adapter alignment | Implement safe import, offline-evidence alignment, provenance, and readiness blockers | Package, unit, contract, integration | Safe import, offline evidence, resume readiness |
+| 4 | `transfer-evidence-protocols` | in_progress | `codex/transfer-evidence-protocols` | pending | Transfer evidence mappings, importer/exporter conformance, queue mapping tests | Publish queue-consumable transfer verification and explicit fake/unsupported protocol behavior | Package, unit, contract, narrow integration | Queue evidence, fake/unsupported adapters |
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 | 5 | `run-bundle-cli-docs-hardening` | pending | `codex/run-bundle-cli-docs-hardening` | pending | CLI, docs, final hardening | Expose `loom runs export/inspect/import`, document behavior, and run final validation | Package, unit, contract, integration, e2e where practical | CLI workflow, docs, final gate |
 
 ## Implementation Readiness Blockers
@@ -434,7 +453,11 @@ DAQ-3, and fail-closed migration-resume behavior from DAQ-7.
 
 ### Phase 1: Portable Exchange And Bundle Manifest Contracts
 
+<<<<<<< HEAD
 - Status: pr_open
+=======
+- Status: merged
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Branch: `codex/portable-run-exchange-contracts`
 - Worktree: `/home/samcantrill/work/loom-worktrees/portable-run-exchange-contracts`
 - PR: [#146](https://github.com/samcantrill/loom/pull/146)
@@ -545,8 +568,17 @@ mutation changes beyond import-boundary-safe adapter records.
 
 - Phase execution plan added at
   `docs/roadmap/stage-12/phases/portable-run-exchange-contracts.md`.
+<<<<<<< HEAD
 - PR opened: [#146](https://github.com/samcantrill/loom/pull/146), targeting
   `develop` from `codex/portable-run-exchange-contracts`.
+=======
+- PR opened and merged:
+  [#146](https://github.com/samcantrill/loom/pull/146), targeting `develop`
+  from `codex/portable-run-exchange-contracts`.
+- Merge evidence: GitHub CI `checks` passed; PR target verified as `develop`;
+  PR merged on 2026-05-14 with merge commit
+  `a57f78568e0c4b9a2345d7cc847ae125cb2328f4`.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Implementation summary: added import-light portable-run exchange records,
   strict local bundle manifest records, shared diagnostics/result/readiness
   envelopes, transfer evidence placeholders, and minimal
@@ -555,6 +587,7 @@ mutation changes beyond import-boundary-safe adapter records.
   targeted Ruff and Pyright passed; `make validate-pr` passed outside the
   sandbox; `make test-summary` passed with overall 1910 passed, 0 failed, 0
   errors, 18 skipped, and 1497 deselected.
+<<<<<<< HEAD
 - Review status: managing Codex local pre-submit review completed with no
   blocking findings. CI `checks` was in progress when this metadata was
   recorded.
@@ -565,6 +598,17 @@ mutation changes beyond import-boundary-safe adapter records.
 - Branch: `codex/run-bundle-export-inspect`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-export-inspect`
 - PR: pending
+=======
+- Follow-up notes: no successor branch depended on the Phase 1 branch at merge
+  time; branch cleanup was safe.
+
+### Phase 2: Export, Archive Safety, And Inspect
+
+- Status: merged
+- Branch: `codex/run-bundle-export-inspect`
+- Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-export-inspect`
+- PR: [#147](https://github.com/samcantrill/loom/pull/147), merged
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -654,6 +698,7 @@ inspect-without-extraction proof.
 
 **Completion Summary**
 
+<<<<<<< HEAD
 - Pending.
 
 ### Phase 3: Import, Offline Alignment, And Resume Readiness
@@ -662,6 +707,34 @@ inspect-without-extraction proof.
 - Branch: `codex/run-bundle-import-offline-readiness`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-import-offline-readiness`
 - PR: pending
+=======
+- Phase execution plan:
+  `docs/roadmap/stage-12/phases/run-bundle-export-inspect.md`.
+- PR: [#147](https://github.com/samcantrill/loom/pull/147), merged into
+  `develop` on 2026-05-14 with merge commit
+  `143297c149f12bbba7d4135f45a05e1a03f4867a`.
+- Implementation summary: added metadata-backed export-record assembly,
+  strict local bundle writing, `RunExporter`-conforming local exporter,
+  traversal-safe archive member validation, metadata-only default export,
+  explicit selected-payload inclusion as regular archive members, and
+  inspect-without-extraction checksum diagnostics under `loom.runs`.
+- Tests and validation: targeted Phase 2 pytest set passed with 51 tests;
+  targeted Ruff and Pyright passed; `make validate-pr` passed outside the
+  sandbox; `make test-summary` passed with overall 1918 passed, 0 failed, 0
+  errors, 18 skipped, and 1505 deselected; GitHub CI `checks` passed before
+  merge.
+- Follow-up notes: Phase 3 should reuse the archive path validation and
+  manifest reader rather than inventing a separate import safety path. No
+  successor branch depended on the Phase 2 branch at merge time; remote branch
+  cleanup was safe and completed.
+
+### Phase 3: Import, Offline Alignment, And Resume Readiness
+
+- Status: merged
+- Branch: `codex/run-bundle-import-offline-readiness`
+- Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-import-offline-readiness`
+- PR: https://github.com/samcantrill/loom/pull/148
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -762,6 +835,7 @@ readiness-blocker behavior separately from export archive code.
 
 **Completion Summary**
 
+<<<<<<< HEAD
 - Pending.
 
 ### Phase 4: Transfer Evidence And Importer/Exporter Protocols
@@ -770,6 +844,38 @@ readiness-blocker behavior separately from export archive code.
 - Branch: `codex/transfer-evidence-protocols`
 - Worktree: `/home/samcantrill/work/loom-worktrees/transfer-evidence-protocols`
 - PR: pending
+=======
+- Phase execution plan:
+  `docs/roadmap/stage-12/phases/run-bundle-import-offline-readiness.md`.
+- Implementation started from updated `origin/develop` after Phase 2 merge.
+- Implementation summary: added safe local bundle import and offline-evidence
+  adapter alignment through shared portable-run import results, with
+  target-local identity, strict collision rejection, historical-only readiness,
+  source provenance, copied payload rebasing, and catalog visibility for
+  imported historical runs.
+- Tests and validation: targeted Phase 3 pytest set passed with 53 tests;
+  targeted Ruff and Pyright passed; `make validate-pr` passed; `make
+  test-summary` passed with package 77 passed, unit 1048 passed, contract 176
+  passed, integration 148 passed, e2e 41 passed, and config-extra 438 passed.
+- PR status: opened as https://github.com/samcantrill/loom/pull/148 targeting
+  `develop`; base/head verified after creation.
+- Automated review and merge: manager review found and fixed two import-safety
+  issues before merge: payload extraction now stages before commit, and late
+  target collisions no longer remove a target the importer did not create.
+  Final pre-merge verification confirmed base `develop`, head
+  `codex/run-bundle-import-offline-readiness`, mergeable state, and GitHub CI
+  `checks` success. PR #148 merged to `develop` with merge commit
+  `5590bd787b5ab09c787b1262d9ead586222b63dc`.
+- Follow-up notes: no successor branch depended on the Phase 3 branch at merge
+  time; remote branch cleanup is safe.
+
+### Phase 4: Transfer Evidence And Importer/Exporter Protocols
+
+- Status: merged
+- Branch: `codex/transfer-evidence-protocols`
+- Worktree: `/home/samcantrill/work/loom-worktrees/transfer-evidence-protocols`
+- PR: https://github.com/samcantrill/loom/pull/149
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -856,6 +962,7 @@ conformance, and package boundaries.
 
 **Completion Summary**
 
+<<<<<<< HEAD
 - Pending.
 
 ### Phase 5: CLI, Docs, Hardening, And Final Validation
@@ -864,6 +971,34 @@ conformance, and package boundaries.
 - Branch: `codex/run-bundle-cli-docs-hardening`
 - Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-cli-docs-hardening`
 - PR: pending
+=======
+- Phase execution plan:
+  `docs/roadmap/stage-12/phases/transfer-evidence-protocols.md`.
+- Implementation started from updated `origin/develop` after Phase 3 merge.
+- Implementation summary: added public transfer-evidence helpers, unsupported
+  transfer diagnostics/records, queue delegated-verification preservation for
+  `unsupported` statuses, and fake/unsupported importer/exporter contract
+  coverage.
+- Tests and validation: targeted Phase 4 transfer-evidence checks passed;
+  `make validate-pr` passed; `make test-summary` passed with package 77,
+  unit 1052, contract 179, integration 148, e2e 41, and config-extra 438
+  passing.
+- PR opened as https://github.com/samcantrill/loom/pull/149 targeting
+  `develop` from `codex/transfer-evidence-protocols`.
+- Automated review and merge: manager review found one structured-detail
+  override issue in unsupported transfer diagnostics; fixed in the phase branch,
+  revalidated, and GitHub CI `checks` passed. PR #149 was squash-merged into
+  `develop` as merge commit `5b64dc68b5cda686c19076861f61d4bcff7c6050`.
+- Follow-up notes: no successor branch depended on the Phase 4 branch at merge
+  time; local cleanup may remove the Phase 4 worktree and stale branch refs.
+
+### Phase 5: CLI, Docs, Hardening, And Final Validation
+
+- Status: merged
+- Branch: `codex/run-bundle-cli-docs-hardening`
+- Worktree: `/home/samcantrill/work/loom-worktrees/run-bundle-cli-docs-hardening`
+- PR: https://github.com/samcantrill/loom/pull/150
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 - Base branch: `develop`
 - Target branch: `develop`
 - Workflow path: expanded path
@@ -949,7 +1084,29 @@ final validation evidence.
 
 **Completion Summary**
 
+<<<<<<< HEAD
 - Pending.
+=======
+- Phase execution plan:
+  `docs/roadmap/stage-12/phases/run-bundle-cli-docs-hardening.md`.
+- Implementation started from updated `origin/develop` after Phase 4 merge.
+- Implementation summary: added `loom runs export`, `loom runs inspect`, and
+  `loom runs import` with text/JSON output, public API delegation, local
+  SQLite authority export wiring, strict historical import behavior, and docs
+  for v12 bundle behavior and deferrals.
+- Tests and validation: targeted Phase 5 checks passed with 65 tests; `make
+  validate-pr` passed; `make test-summary` passed with package 77, unit 1055,
+  contract 180, integration 149, e2e 42, and config-extra 438 passing.
+- PR opened as https://github.com/samcantrill/loom/pull/150 targeting
+  `develop` from `codex/run-bundle-cli-docs-hardening`.
+- Automated review and merge: manager review found one documentation scope
+  inconsistency around deferred bundle commands; fixed in the phase branch,
+  revalidated, and GitHub CI `checks` passed. PR #150 was squash-merged into
+  `develop` as merge commit `0962575c8e2ce9b9196876a1a6a2f4926379c922`.
+- Follow-up notes: Phase 5 was the final Stage 12 phase; no successor branch
+  depended on the Phase 5 branch at merge time. Local cleanup may remove the
+  Phase 5 worktree and stale branch refs.
+>>>>>>> e4761e506332816edae7d6499a76a29558e89736
 
 ## Cross-Phase Review Notes
 

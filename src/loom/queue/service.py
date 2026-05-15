@@ -192,10 +192,13 @@ class QueueService:
             adapter=request.adapter,
             entrypoint=request.entrypoint,
             resources=request.resources,
-            snapshot=request.snapshot,
-            drift_inputs=request.drift_inputs,
-            delegated_verification=request.delegated_verification,
-            metadata=request.launch_metadata,
+            snapshot=_thawed_mapping(request.snapshot, "snapshot"),
+            drift_inputs=_thawed_mapping(request.drift_inputs, "drift_inputs"),
+            delegated_verification=_thawed_mapping(
+                request.delegated_verification,
+                "delegated_verification",
+            ),
+            metadata=_thawed_mapping(request.launch_metadata, "launch_metadata"),
         )
         item = QueueItem(
             queue_item_id=request.queue_item_id,
@@ -204,14 +207,14 @@ class QueueService:
             run_uri=request.run_uri,
             run_intent=RunIntent(
                 run_uri=request.run_uri,
-                request=request.request,
+                request=_thawed_mapping(request.request, "request"),
                 tags=request.tags,
-                metadata=request.run_metadata,
+                metadata=_thawed_mapping(request.run_metadata, "run_metadata"),
             ),
             launch_contract=launch_contract,
             enqueued_at=now,
             updated_at=now,
-            metadata=request.metadata,
+            metadata=_thawed_mapping(request.metadata, "metadata"),
         )
         return self.repository.enqueue(item)
 
@@ -323,6 +326,13 @@ def _plain_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, Pl
     if not isinstance(frozen, Mapping):
         raise QueueServiceError(f"{path} must be a mapping")
     return cast(Mapping[str, PlainData], frozen)
+
+
+def _thawed_mapping(value: Mapping[str, PlainData], path: str) -> Mapping[str, PlainData]:
+    thawed = thaw_plain_data(value, path=path)
+    if not isinstance(thawed, Mapping):
+        raise QueueServiceError(f"{path} must be a mapping")
+    return cast(Mapping[str, PlainData], thawed)
 
 
 def _string_mapping(value: Mapping[str, str], path: str) -> Mapping[str, str]:

@@ -562,7 +562,7 @@ def _result_from_execution_result(
         stdout_path=execution_result.stdout_path or worker_request.stdout_path,
         stderr_path=execution_result.stderr_path or worker_request.stderr_path,
         traceback_path=execution_result.traceback_path or worker_request.traceback_path,
-        exit_code=0 if execution_result.status == StageStatus.SUCCEEDED else 1,
+        exit_code=0 if execution_result.status != StageStatus.FAILED else 1,
         executor_metadata=execution_result.executor_metadata,
     )
 
