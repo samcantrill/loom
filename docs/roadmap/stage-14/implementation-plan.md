@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: plan quality gate passed; ready for Phase 1 execution planning
+- Status: Phase 1 merged; ready for Phase 2 execution planning
 - Roadmap stage: `v14`
 - Source planning notes:
   `docs/roadmap/stage-14/planning.md`
@@ -28,10 +28,10 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: none
+- Current phase: Phase 2 pending execution planning
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 1 execution planning may begin.
+  - No plan-quality blocker remains; Phase 2 execution planning may begin.
 
 ## Summary
 
@@ -319,7 +319,7 @@ versioning.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `plugin-records-discovery` | pending | `codex/plugin-records-discovery` | pending | `src/loom/plugins`, package exports, fake entry point tests | Add plugin records, errors, group constants, deterministic listing/loading, and import-safety coverage | Unit/package/contract tests plus `make validate-pr` before PR | Fake listing, duplicates, load failures, import safety |
+| 1 | `plugin-records-discovery` | merged | `codex/plugin-records-discovery` | [#156](https://github.com/samcantrill/loom/pull/156) | `src/loom/plugins`, package exports, fake entry point tests | Add plugin records, errors, group constants, deterministic listing/loading, and import-safety coverage | `make validate-pr`, `make test-summary`, and CI passed | Fake listing, duplicates, load failures, import safety |
 | 2 | `recipe-codec-plugin-adapters` | pending | `codex/recipe-codec-plugin-adapters` | pending | Recipe and codec loader adapters plus contract tests | Add explicit recipe and codec entry point loading into supplied registries | Unit/contract tests plus `make validate-pr` before PR | Fake recipe load, fake codec instance/class/factory load, duplicate codec key |
 | 3 | `plugin-cli-preflight-summaries` | pending | `codex/plugin-cli-preflight-summaries` | pending | CLI commands, preflight diagnostics, summary helpers | Expose plugin list/check, requested preflight checks, and plain summaries | CLI/unit/preflight tests plus `make validate-pr` before PR | Best-effort failures, CLI JSON/text, requested plugin preflight |
 | 4 | `future-plugin-group-readiness` | pending | `codex/future-plugin-group-readiness` | pending | Future group constants/docs/tests and readiness classifications | Add listing/check coverage and docs for future groups, especially metadata-only artifact-store backends | Unit/CLI/preflight/docs tests plus `make validate-pr` and `make test-summary` before final PR | Future group listing, artifact-store backend listing-only, premature registration fail-closed |
@@ -380,11 +380,11 @@ metadata-only constraint.
 
 ## Phase 1: Plugin Records And Generic Discovery
 
-Status: pending
+Status: merged
 Slug: `plugin-records-discovery`
 Branch: `codex/plugin-records-discovery`
 Worktree: `/home/samcantrill/work/loom-worktrees/plugin-records-discovery`
-PR: pending
+PR: [#156](https://github.com/samcantrill/loom/pull/156), merged 2026-05-15
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates public APIs and
@@ -465,14 +465,16 @@ entry point group contracts
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path recommended
-- Implementation/refinement budget: one refiner pass available if validation
-  or API review finds blockers
-- PR review budget: one reviewer pass
+- Phase execution plan: completed in
+  `docs/roadmap/stage-14/phases/plugin-records-discovery.md`
+- Planning/refinement budget: used for expanded-path planning
+- Implementation/refinement budget: used for Phase 1 test-typing validation
+  blocker found by Pyright
+- PR review budget: used by manager local review before merge
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: no unresolved API/import-boundary blocker
-- Merge record: pending
+- Pre-submit blocker gate: passed; no unresolved API/import-boundary blocker
+- Merge record: merged into `develop` by PR #156 at merge commit
+  `78589eb761396a4399124d771859dbc8e00f012d`
 
 ### Risks And Stop Conditions
 
@@ -490,11 +492,20 @@ entry point group contracts
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: added import-light `loom.plugins` package with public group
+  constants, plugin records/results/errors, metadata-only listing, selected
+  explicit loading, duplicate detection before target imports, and plain
+  summaries that omit loaded objects.
+- Validation: targeted plugin/package/contract tests passed; `make
+  validate-pr` passed; `make test-summary` passed with package 85, unit 1099,
+  contract 204, integration 155, e2e 43, and config-extra 438 tests passed;
+  GitHub CI `checks` passed on PR #156.
+- PR: [#156](https://github.com/samcantrill/loom/pull/156) targeted
+  `develop` from `codex/plugin-records-discovery`.
+- Merge: merged 2026-05-15 with merge commit
+  `78589eb761396a4399124d771859dbc8e00f012d`.
+- Follow-up: Phase 2 may branch from updated `develop`; no successor depends
+  on the Phase 1 branch.
 
 ## Phase 2: Recipe And Codec Registry Adapters
 
