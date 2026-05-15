@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: plan quality gate passed; ready for Phase 1 execution planning
+- Status: Phase 1 merged; ready for Phase 2 execution planning
 - Roadmap stage: `v15`
 - Source planning notes:
   `docs/roadmap/stage-15/planning.md`
@@ -28,12 +28,12 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: none
+- Current phase: ready for Phase 2 execution planning
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains.
-  - No phase execution plan exists yet; do not start product implementation
-    until Phase 1 execution planning is complete.
+  - No Phase 2 execution plan exists yet; do not start Phase 2 product
+    implementation until Phase 2 execution planning is complete.
 
 ## Summary
 
@@ -363,7 +363,7 @@ and project-specific adapters without adding those services to core.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `external-artifact-records` | pending | TBD | TBD | `loom.artifacts`, artifact package tests | Add external/published/location records and `ArtifactRef` compatibility contracts | Artifact/package/contract tests plus full PR gate | Old `ArtifactRef`, external declaration, published record, location summary |
+| 1 | `external-artifact-records` | merged | `codex/external-artifact-records` | https://github.com/samcantrill/loom/pull/160 | `loom.artifacts`, artifact package tests | Add external/published/location records and `ArtifactRef` compatibility contracts | Artifact/package/contract tests plus full PR gate | Old `ArtifactRef`, external declaration, published record, location summary |
 | 2 | `artifact-store-backend-contracts` | pending | TBD | TBD | `loom.pipeline.stores`, optional lazy plugin adapter | Add backend descriptor/factory, registry, capabilities, fake handlers, and supplied-registry plugin adapter boundary | Store/plugin contract tests plus full PR gate | MLflow-like fake descriptor, object-store-style fake descriptor |
 | 3 | `immutable-artifact-semantics` | pending | TBD | TBD | artifact/store registration and lookup APIs | Add external immutable input and published immutable output registration/lookup semantics | Unit/contract tests plus full PR gate | Explicit compatible/incompatible/missing/unsupported lookup |
 | 4 | `backend-preflight-catalog-bundles` | pending | TBD | TBD | diagnostics, catalog projections, bundle metadata preservation | Add backend/config/capability checks and metadata-only catalog/bundle preservation | Diagnostics/run-catalog/bundle tests plus full PR gate | Missing handler, unsupported write, redacted summaries |
@@ -420,13 +420,13 @@ Findings from the review pass:
 
 ## Phase 1: External Artifact Records And Compatibility Contracts
 
-Status: pending
+Status: merged
 Slug: `external-artifact-records`
-Branch: TBD
-Worktree: TBD
-PR: TBD
-Base branch: TBD
-Target branch: TBD
+Branch: `codex/external-artifact-records`
+Worktree: `/home/samcantrill/work/loom-worktrees/external-artifact-records`
+PR: https://github.com/samcantrill/loom/pull/160
+Base branch: `develop`
+Target branch: `develop`
 Workflow path: expanded path because this phase creates public persisted
 artifact records and compatibility contracts
 
@@ -536,6 +536,30 @@ location semantics.
 
 Keep the diff focused on records, validation, serialization, and tests. Do not
 include store registry or preflight work in this phase.
+
+### Merge Metadata
+
+- Merged: 2026-05-15 via squash merge to `develop`
+- Merge commit: `be05f6e9b71f4bcd2b6372df2c6d16f9009ac48b`
+- PR: https://github.com/samcantrill/loom/pull/160
+- Implementation summary: added strict backend-neutral artifact records in
+  `loom.artifacts`, including location kinds, generic store refs, location
+  summaries, external declarations, published records, and immutable lookup
+  request/result records; preserved `ArtifactRef` top-level compatibility and
+  kept backend/plugin/preflight/catalog/bundle behavior out of scope.
+- Checks:
+  - Focused Phase 1 pytest paths passed: 88 passed in 14.72s.
+  - `make validate-pr` passed outside the sandbox: Ruff passed, Pyright passed
+    with 0 errors, default harness passed, config-extra harness passed, and
+    build passed.
+  - `make test-summary` passed: overall 2090 passed / 18 skipped / 1675
+    deselected.
+  - GitHub checks were unavailable; `gh pr checks 160 --watch=false` reported
+    no checks on the branch.
+- Automated review: managing agent local review approved with no blocking or
+  non-blocking findings.
+- Follow-up notes: remote phase branch cleanup and worktree removal are safe
+  because no successor branch depends on Phase 1.
 
 ## Phase 2: Artifact-Store Backend Contracts
 
