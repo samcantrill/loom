@@ -31,9 +31,9 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Partial live rerun; previously passed in phase evidence | Live rerun passed Ruff and Pyright with 0 errors, then the default harness remained active without final output beyond the recorded completed suite evidence. Phase notes record a prior completed `make validate-pr` pass. |
+| `make validate-pr` | Passed | Ruff, Pyright, default test harness, config-extra harness, and build completed successfully. |
 | `make test-summary` | Passed | `build/test-summary.md` generated 2026-05-15T02:20:22+00:00 with overall status `passed`. |
-| GitHub checks | Pending | To run after PR creation. |
+| GitHub checks | Passed | PR #156 `checks` workflow completed successfully. |
 
 ### Test Suite Summary
 
