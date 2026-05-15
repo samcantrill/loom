@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from types import ModuleType
 
 import importlib
@@ -36,14 +36,20 @@ class _DummyEP:
         self.value = value
 
 
-def _fake_provider(entries: Iterable[object]) -> callable[[], list[object]]:
+class _FactoryModule(ModuleType):
+    factory: Callable[[], object]
+
+
+def _fake_provider(entries: Iterable[object]) -> Callable[[], list[object]]:
     return lambda: list(entries)
 
 
 def _module_for_name(name: str, with_factory: bool = True) -> ModuleType:
-    module = ModuleType(name)
     if with_factory:
+        module = _FactoryModule(name)
         module.factory = lambda: object()  # noqa: E731
+        return module
+    module = ModuleType(name)
     return module
 
 

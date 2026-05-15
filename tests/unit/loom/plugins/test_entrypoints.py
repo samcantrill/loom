@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -24,6 +24,10 @@ from loom.plugins import (
 )
 
 
+class _FactoryModule(ModuleType):
+    factory: Callable[[], object]
+
+
 class _TrackingModuleFactory:
     def __init__(self, with_factory: bool = True) -> None:
         self.calls: list[str] = []
@@ -31,7 +35,7 @@ class _TrackingModuleFactory:
 
     def __call__(self, name: str, package: str | None = None) -> ModuleType:
         self.calls.append(name)
-        module = ModuleType(name)
+        module = _FactoryModule(name)
         if self.with_factory:
             module.factory = lambda: object()  # noqa: E731
         return module
@@ -75,7 +79,7 @@ def _fake_entry_point(
     )
 
 
-def _fake_provider(entries: Iterable[object]) -> callable[[], list[object]]:
+def _fake_provider(entries: Iterable[object]) -> Callable[[], list[object]]:
     return lambda: list(entries)
 
 
@@ -274,7 +278,7 @@ def test_best_effort_collects_failures_and_duplicates(monkeypatch: pytest.Monkey
     )
 
     def import_module(name: str, package: str | None = None) -> ModuleType:
-        module = ModuleType(name)
+        module = _FactoryModule(name)
         if name == "loom.plugins._ok":
             module.factory = lambda: object()  # noqa: E731
         if name == "loom.plugins._missing":
@@ -295,7 +299,7 @@ def test_best_effort_collects_failures_and_duplicates(monkeypatch: pytest.Monkey
 
 
 def test_registration_failure_is_reported_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("loom.plugins._register")
+    module = _FactoryModule("loom.plugins._register")
     module.factory = lambda: "plugin"  # noqa: E731
 
     def import_module(name: str, package: str | None = None) -> ModuleType:
@@ -350,14 +354,17 @@ def test_load_result_summary_keeps_only_plain_data(monkeypatch: pytest.MonkeyPat
         value="loom.plugins._plain:factory",
     )
 
-    module = ModuleType("loom.plugins._plain")
+    module = _FactoryModule("loom.plugins._plain")
     module.factory = lambda: {"secret": object()}  # noqa: E731
 
     monkeypatch.setattr(importlib, "import_module", lambda name, package=None: module)
 
     result = load_entry_points((record,), strict=False)
     summary = result.to_summary()
-    loaded_summary = summary["loaded"][0]
+    loaded_entries = summary["loaded"]
+    assert isinstance(loaded_entries, list)
+    loaded_summary = loaded_entries[0]
+    assert isinstance(loaded_summary, dict)
     assert loaded_summary["group"] == LOOM_CODECS_GROUP
     assert loaded_summary["name"] == "plain"
     assert loaded_summary["value"] == "loom.plugins._plain:factory"

@@ -451,8 +451,8 @@ make test-summary
 
 - Phase planning draft: completed.
 - Phase planning refinement: completed for the expanded path.
-- Phase implementation refinement: unused; one pass remains available if
-  targeted validation, coverage, or API review finds a blocker.
+- Phase implementation refinement: used for the Phase 1 test typing blocker
+  found by Pyright during `make validate-pr`.
 - PR body draft/refine: unused until PR preparation.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
@@ -466,12 +466,15 @@ make test-summary
   records/errors/listing/loading and selected strict/best-effort handling; package
   unit tests, plugin package API tests, import-boundary checks, and focused
   contract tests are added.
-- Implementation validation: in-progress; attempted targeted test command,
-  but full environment validation was blocked by missing writable cache/networked test
-  dependency fetch in this runtime (uv/build tooling constraints).
-- Refinement summary: no additional refinement pass used; implementation refinement
-  budget remains unused.
+- Implementation validation: targeted Pyright passed with 0 errors and focused
+  plugin discovery tests passed with 15 tests in the implementation refinement
+  pass. A broad `make validate-pr` rerun passed Ruff and Pyright with 0 errors
+  but was interrupted after the default pytest leg stalled without additional
+  output; full PR validation remains a PR-preparation obligation.
+- Refinement summary: fixed Phase 1 test typing for fake entry point providers,
+  fake module factories, and plain summary indexing; implementation refinement
+  budget is used.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not needed for this root phase yet.
-- Remaining blockers: none.
+- Remaining blockers: none for the scoped Phase 1 test typing blocker.
