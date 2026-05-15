@@ -4,20 +4,19 @@
 
 - Roadmap stage: v15
 - Source roadmap: `docs/roadmap.md`
-- Previous version status: `docs/roadmap/stage-14/planning.md` exists in the
-  current checkout as a confirmed planning artifact with design-safety review
-  passed. No Stage 14 implementation plan or landed plugin-discovery
-  implementation is present in this checkout. Stage 15 planning can proceed
-  from the confirmed Stage 14 group-spelling decision for
-  `loom.artifact_store_backends` and the targeted Stage 14 artifact-store
-  backend addendum, which keeps that group metadata-only until Stage 15 defines
-  the store-owned descriptor/factory, registry, capability, and check
-  contracts. Implementation-plan drafting must recheck the final Stage 14
-  implementation plan, loader contracts, and landed code before depending on
-  them.
-- Planning artifact status: draft
-- Current discussion stage: latest Stage 14 artifact-store backend design pass
-  complete; examples and validation strategy pending
+- Previous version status:
+  `docs/roadmap/stage-14/implementation-plan.md` is complete and records all
+  Stage 14 plugin-discovery phases merged. The landed public plugin API
+  exports `LOOM_ARTIFACT_STORE_BACKENDS_GROUP =
+  "loom.artifact_store_backends"`, generic metadata listing/loading helpers,
+  plugin diagnostic summaries, and readiness metadata. Recipes and codecs are
+  the only registry-ready groups; artifact-store backends remain listing-only
+  in Stage 14 CLI/preflight diagnostics until Stage 15 defines the
+  store-owned descriptor/factory, registry, capability, run-context handoff,
+  and backend availability contracts.
+- Planning artifact status: confirmed and converted to implementation plan
+- Current discussion stage: implementation-plan draft created and local
+  plan-quality gate passed
 - Stage gates:
   - Roadmap framing: confirmed
   - Intent discovery: confirmed
@@ -29,11 +28,12 @@
   - Design safety review: passed with required planning revisions recorded;
     renewed review after Stage 14 revisions passed; latest targeted
     artifact-store backend pass passed
-  - Examples and validation strategy: pending
-  - Phase shaping: pending
-  - Implementation readiness: pending
-  - Handoff: pending
-- Related implementation plan: none yet
+  - Examples and validation strategy: confirmed
+  - Phase shaping: confirmed
+  - Implementation readiness: confirmed
+  - Handoff: implementation-plan draft created; local plan-quality gate passed
+- Related implementation plan:
+  `docs/roadmap/stage-15/implementation-plan.md`
 - Related feature docs:
   - `docs/features/remote-stores.md`
   - `docs/features/artifacts.md`
@@ -46,12 +46,10 @@
 - Blockers:
   - None from design-safety review, renewed Stage 14 alignment review, or the
     latest targeted artifact-store backend pass.
-  - Stage 14 plugin discovery is confirmed at planning level but not implemented
-    in this checkout. This is an accepted planning dependency for now;
-    implementation-plan drafting must recheck the final Stage 14 implementation
-    plan, group constants, loader contracts, descriptor/factory assumptions,
-    import-only diagnostics, run-readiness semantics, and landed code.
-  - Examples, validation, and full phase shaping are not yet confirmed.
+  - Stage 14 implementation artifacts and landed plugin APIs were rechecked on
+    2026-05-15 for implementation-plan drafting.
+  - Stage 12 portable-run exchange source APIs were rechecked on 2026-05-15 for
+    implementation-plan drafting.
 
 ## Source Evidence
 
@@ -60,7 +58,7 @@
 | `docs/roadmap.md` | V15 defines backend-neutral artifact-store APIs, external immutable refs, multi-location artifact semantics, fake handlers, bundle ref semantics, preflight checks, and immutable artifact lookup. | roadmap scope | This is an interface-contract stage, not a payload-transfer or cloud-adapter stage. |
 | `docs/roadmap.md` | V15 defers real cloud backend adapters, remote payload export/import, implicit downloads, credential refresh, distributed caches, remote GC, automatic global cache lookup, partial stage reuse, and first-party MLflow/DVC implementations. | scope boundaries | Strong default is fake backends and metadata-only preservation in core. |
 | `docs/roadmap.md` v16 | V16 owns explicit payload materialization, publish/upload/download paths, and at most one optional backend family if selected later. | future boundary | Stage 15 should define operation records and unsupported behavior without implementing transfer paths. |
-| `docs/roadmap.md` v14 | Stage 14 owns explicit plugin discovery. Store backend hooks in Stage 15 must be compatible with plugin loading, but Stage 14 should not predefine Stage 15 store semantics. | prerequisite and dependency risk | Stage 14 planning is now confirmed and records the backend-oriented group spelling `loom.artifact_store_backends`; implementation planning must still recheck the final implementation plan and landed code. |
+| `docs/roadmap.md` v14 and `docs/roadmap/stage-14/implementation-plan.md` | Stage 14 owns explicit plugin discovery and is complete. Store backend hooks in Stage 15 must be compatible with plugin loading, but Stage 14 does not define Stage 15 store semantics. | prerequisite and dependency alignment | Stage 14 landed the backend-oriented group spelling `loom.artifact_store_backends`; recipes/codecs are registry-ready and artifact-store backends are listing-only until Stage 15 defines their supplied-registry adapter contract. |
 | `docs/features/remote-stores.md` | Remote stores preserve the `ArtifactStore` protocol, avoid hard SDK dependencies, declare capabilities, redact credentials, document atomicity and consistency, use manifest-last commit where needed, and keep tests fake-backend-first. | remote-store contract | Strongest source for capability, credential, consistency, staging, cache, preflight, and plugin boundaries. |
 | `docs/features/artifacts.md` | `ArtifactRef` is lightweight immutable metadata; local store supports `save`, `register`, `load`, `exists`, and checksum validation; remote stores should not require changing the `ArtifactRef` shape. | artifact contract | Current code already has a run-scoped `ArtifactStore` protocol and local implementation. |
 | `src/loom/artifacts.py` | `ArtifactRef` currently allows known fields only: artifact id, URI, type, codec, schema version, checksum, fingerprint, producer stage, timestamp, and plain metadata. | compatibility risk | New multi-location or external-ref fields may need metadata conventions, wrapper records, or a versioned schema change. |
@@ -68,11 +66,11 @@
 | `src/loom/pipeline/stores/local_artifacts.py` | `LocalArtifactStore` accepts only local/file URIs, can explicitly allow external local paths, computes checksums for files, and rejects unsupported URI schemes. | local reference behavior | Useful as a baseline for fake remote behavior and for preserving local store compatibility. |
 | `src/loom/pipeline/stores/capabilities.py` | Authority backend capability records already exist for lifecycle stores, including artifact-fact and materialization-ref capabilities. | capability vocabulary | Artifact-store capabilities should not be confused with authority capabilities, but can reuse style and plain-data serialization patterns. |
 | `docs/features/run-catalog.md` | Catalogs are derived from run-store metadata and should not assume all artifact payloads are local files; export may use metadata-only mode for future remote stores. | catalog and bundle semantics | Stage 15 should define metadata preservation for external/remote refs without claiming payload availability. |
-| `docs/roadmap/stage-12/planning.md` and `implementation-plan.md` | Bundle manifests preserve opaque external/remote refs as metadata and defer backend-specific semantics to Stage 15/16. | adjacent artifact exchange | Stage 15 must give those opaque fields a stable contract without requiring downloads. |
+| `docs/roadmap/stage-12/planning.md`, `docs/roadmap/stage-12/implementation-plan.md`, and `src/loom/runs` | Bundle manifests, portable export/import records, importer/exporter protocols, and result envelopes use strict plain records with `extensions` fields. External/remote refs are preserved as metadata and backend-specific semantics are deferred to Stage 15/16. | adjacent artifact exchange | Stage 15 must give those extension fields a stable external-artifact summary contract without requiring downloads. |
 | User clarification on Stage 12 | The user expects Stage 12 to be reworked after Stage 15 clarifies generic external artifact interfaces. | adjacent artifact exchange | Stage 15 should define reusable artifact-reference and adapter semantics that Stage 12 portable-run exchange can adopt instead of preserving opaque refs forever. |
 | `docs/features/preflight.md` | Existing preflight groups include artifact checks; plugin checks and remote artifact credential probing are deferred or opt-in because they can be environment-specific or slow. | diagnostics surface | Stage 15 should add stable check IDs and cheap/default versus opt-in network checks. |
-| `src/loom/diagnostics/models.py` and `src/loom/diagnostics/preflight.py` | Current stable artifact preflight is `artifact_store.available`; groups do not yet include plugins or remote artifact checks. | current diagnostics code | New checks must fit the existing result model and avoid writing final run state. |
-| `docs/features/plugins.md` and `docs/roadmap/stage-14/planning.md` | Plugin discovery is explicit and opt-in; Stage 14 reserves `loom.artifact_store_backends` as a listing/check namespace and records a contract-specific registry-adapter pattern. The latest targeted addendum keeps artifact-store backend behavior metadata-only in Stage 14: no backend loader, no store registry mutation, no raw `ArtifactStore` or local-root factory target, no run-readiness claim, and only clearly labelled import-only diagnostics if target import checks are ever selected. | plugin compatibility | Stage 15 should define the store-owned backend descriptor/factory/config/capability/registry target shape, with contract/API versioning and distinct backend availability checks, that a later Stage 14 loader can adapt into a supplied registry without making a universal plugin object protocol. |
+| `src/loom/diagnostics/models.py` and `src/loom/diagnostics/preflight.py` | Current stable artifact preflight is `artifact_store.available`; Stage 14 added optional plugin checks `plugins.metadata` and `plugins.load` with explicit selectors and listing-only future-group handling. No remote artifact-store backend availability checks exist yet. | current diagnostics code | New backend checks must fit the existing result model, stay distinct from plugin metadata/load checks, and avoid writing final run state. |
+| `docs/features/plugins.md`, `src/loom/plugins`, and Stage 14 tests | Plugin discovery is explicit and opt-in. Landed Stage 14 exports `LOOM_ARTIFACT_STORE_BACKENDS_GROUP`, `PluginRecord`, `list_entry_points`, `load_entry_points`, plugin diagnostic/readiness summaries, and `LOADABLE_PLUGIN_GROUPS == (loom.recipes, loom.codecs)`. Artifact-store backends are listing-only in CLI/preflight diagnostics; no `load_artifact_store_backend_entry_points` exists. | plugin compatibility | Stage 15 should define the store-owned backend descriptor/factory/config/capability/registry target shape and, if it lands a plugin adapter, keep it explicit and supplied-registry-based. Stage 14 metadata or import checks must not become backend availability or run-readiness checks. |
 | User clarification on Stage 14 | The user wants Stage 15 aligned with Stage 14. | plugin compatibility | Stage 15 should be explicit about the plugin-loadable adapter object shape while still keeping plugin discovery itself in Stage 14. |
 | `docs/features/io.md` | URI parsing is centralized, remote schemes are not converted to paths, and I/O codecs do not own artifact-store layout or run-store state. | URI and source boundary | Stage 15 should keep URI/config validation backend-neutral and avoid making I/O a remote store layer. |
 | `docs/structure.md` and `docs/GLOSSARY.md` | Keep `loom` domain-neutral; distinguish `ArtifactRef`, `ArtifactAddress`, run store, artifact store, authority, run catalog, status, planner action, checksum, and fingerprint. | vocabulary and architecture | Stage 15 must not introduce domain cache semantics or external service assumptions into core. |
@@ -83,8 +81,8 @@
 | --- | --- | --- | --- |
 | Roadmap and workflow docs | `.codex/workflows/roadmap-stage-planning.md`, `docs/roadmap.md` v15/v16/v14, module coverage table | Workflow requires a source-backed briefing, then user clarification before capability triage. Roadmap makes v15 an interface-contract stage and v16 the payload-materialization stage. | None for startup. |
 | Feature docs | `remote-stores.md`, targeted `artifacts.md`, `run-catalog.md`, `preflight.md`, `plugins.md`, `io.md`, `reliability.md`, `testing.md`, `structure.md`, `GLOSSARY.md` | Feature docs support fake-backend tests, metadata-only refs, redaction, capabilities, manifest-last commit semantics, plugin backend model, conservative staging/cache cleanup, import-boundary tests, and no hard remote dependencies. | None for design-safety review. |
-| Source and tests | `src/loom/artifacts.py`, `src/loom/pipeline/stores/artifact_store.py`, `src/loom/pipeline/stores/local_artifacts.py`, `src/loom/pipeline/stores/capabilities.py`, `src/loom/diagnostics/*`, broad `rg` over artifact/store/preflight/plugin references | Current `ArtifactRef` is strict and compact; local artifact store is file-only; authority capabilities exist separately; preflight has only a local artifact-store availability check. | Need exact Stage 12/14 landed APIs before implementation planning locks bundle/plugin integration. |
-| Prior or adjacent plans | Stage 12 planning/implementation plan, Stage 13 planning, Stage 14 confirmed planning, renewed plugin-structure revisions, and targeted artifact-store backend addendum | Stage 12 Phase 1 keeps external refs in opaque extension fields until Stage 15 defines stable summaries; Stage 13 expects external refs to remain ordinary artifact metadata; Stage 14 explicitly avoids defining Stage 15 artifact-store backend semantics, confirms `loom.artifact_store_backends` as the backend-oriented group spelling, and keeps artifact-store backend entries listing/check-only until a Stage 15 descriptor/factory and registry contract exists. | Implementation planning must recheck the exact landed Stage 12 exchange records and Stage 14 plugin loader APIs; Stage 15 should supply the missing artifact-store backend descriptor/factory, registry, contract/API version, and backend check contract rather than depending on a raw plugin object shape or current local-root `ArtifactStoreFactory`. |
+| Source and tests | `src/loom/artifacts.py`, `src/loom/pipeline/stores/artifact_store.py`, `src/loom/pipeline/stores/local_artifacts.py`, `src/loom/pipeline/stores/capabilities.py`, `src/loom/diagnostics/*`, `src/loom/plugins/*`, `src/loom/runs/*`, and targeted plugin/run-exchange tests | Current `ArtifactRef` is strict and compact; local artifact store is file-only; authority capabilities exist separately; preflight has only a local artifact-store availability check; Stage 14 plugin code keeps artifact-store backends listing-only; Stage 12 run exchange has extension fields ready to consume Stage 15 summaries. | None for implementation-plan drafting. Phase planners must still recheck current source before code changes. |
+| Prior or adjacent plans | Stage 12 planning/implementation plan, Stage 13 planning, Stage 14 implementation plan, renewed plugin-structure revisions, and targeted artifact-store backend addendum | Stage 12 has portable-run exchange records and extension fields; Stage 13 expects external refs to remain ordinary artifact metadata; Stage 14 completed plugin discovery and explicitly avoids defining Stage 15 artifact-store backend semantics. | Stage 15 should supply the missing artifact-store backend descriptor/factory, registry, contract/API version, and backend check contract rather than depending on a raw plugin object shape or current local-root `ArtifactStoreFactory`. |
 
 ## Roadmap Extraction
 
@@ -112,8 +110,8 @@ Prerequisites:
 
 - Stable `ArtifactRef` and local `ArtifactStore` semantics.
 - Stage 12 bundle/export manifest fields that can preserve opaque external refs.
-- Stage 14 plugin discovery group names and explicit loading conventions, or a
-  conservative Stage 15 contract that Stage 14 can adopt later.
+- Stage 14 plugin discovery group names, generic entry point records, explicit
+  loading helpers, and listing-only readiness for artifact-store backends.
 - Stage 12 portable-run exchange and bundle manifests are expected to be
   revisited after Stage 15 defines stable external artifact semantics.
 - Existing preflight result model and CLI formatting.
@@ -190,10 +188,11 @@ Why this stage exists:
   gap for reusable project-declared artifacts, shared read-only references,
   remote object stores, and external tracking systems.
 - Stage 12 deliberately preserves external refs as opaque bundle metadata until
-  this stage defines stable semantics. Stage 14 is preparing explicit plugin
-  discovery, but artifact-store backend plugins need this stage to define what
-  a backend handler actually provides. Stage 16 then uses the contract to add
-  explicit payload movement only after the durable metadata shape is stable.
+  this stage defines stable semantics. Stage 14 has landed explicit plugin
+  discovery and keeps artifact-store backend entries listing-only, so backend
+  plugins need this stage to define what a backend handler actually provides.
+  Stage 16 then uses the contract to add explicit payload movement only after
+  the durable metadata shape is stable.
 
 Impacted or linked work:
 
@@ -211,8 +210,10 @@ Impacted or linked work:
   cheap default checks and explicit opt-in expensive/network checks.
 - `loom.runs` and bundle/export code need metadata-only ref preservation
   semantics and compatibility records, not default payload downloads.
-- `loom.plugins` or Stage 14 plugin loading needs a stable artifact-store
-  backend entry point target shape.
+- `loom.plugins` exposes the landed Stage 14 discovery/readiness primitives;
+  Stage 15 needs a stable artifact-store backend entry point target shape and
+  supplied-registry adapter boundary before backend entries can be loaded
+  usefully.
 - `loom.io.uris` can provide URI parsing/redaction helpers, but I/O should not
   become the artifact-store or remote-backend layer.
 
@@ -273,10 +274,11 @@ Visible assumptions, risks, and constraints:
 - Credential checks and remote existence probes can be slow, unavailable, or
   environment-specific. Defaults should avoid network-heavy behavior unless the
   user selects it.
-- Stage 14 planning is final in this checkout, but implementation has not
-  landed. Stage 15 should preserve plugin freedom, use the confirmed
-  `loom.artifact_store_backends` group spelling in examples and planning, and
-  record a revisit trigger for implementation-plan and landed-loader alignment.
+- Stage 14 implementation is complete, but it intentionally does not provide an
+  artifact-store backend loader. Stage 15 should preserve plugin freedom, use
+  the landed `loom.artifact_store_backends` group spelling in examples and
+  planning, and keep Stage 14 CLI/preflight metadata checks distinct from
+  Stage 15 backend availability and run-readiness checks.
 
 User clarification questions and resolved answers:
 
@@ -285,8 +287,9 @@ User clarification questions and resolved answers:
 - Stage 15 should consider an example such as MLflow, but the example is a
   compatibility/design pressure test rather than a concrete adapter
   implementation.
-- Stage 15 should align with Stage 14 plugin-discovery planning by defining the
-  artifact-store backend handler/factory contract that Stage 14 can later load.
+- Stage 15 should align with landed Stage 14 plugin-discovery APIs by defining
+  the artifact-store backend handler/factory contract that explicit plugin
+  adapters can load into a supplied store registry.
 - Renewed Stage 14 alignment confirmed that the contract should include a
   stable handler/factory/config/capability/registry shape for
   `loom.artifact_store_backends`, while avoiding a universal plugin object
@@ -334,7 +337,9 @@ Success criteria:
 - The interface remains backend-neutral and arbitrary-adapter friendly.
 - MLflow-like behavior can be explained through the contract without adding an
   MLflow dependency or special-case API.
-- Stage 14 has a clear artifact-store backend target object shape to load.
+- Stage 14 has a clear artifact-store backend target object shape available for
+  explicit future/plugin-adapter loading once Stage 15 defines the store-owned
+  registry contract.
 - Stage 12 has a clear rework path from opaque external-ref extension fields to
   stable metadata records.
 
@@ -456,10 +461,10 @@ Design-safety review follow-up:
 | Context compaction/reset checkpoint | Checkpoint recorded in this artifact | Reload this artifact plus source roadmap and related feature docs before design agreement | None | Design agreement review |
 | Design agreement review | Adjacent-record-first artifact compatibility, stores-owned backend contracts, Stage 14 loader target shape, capability model, explicit immutable lookup, preflight policy, Stage 12 exchange ownership, and example strategy confirmed | Keep contracts generic, import-light, plain-data serializable, fake-backend-first, and metadata-only by default | None for design agreement | Design safety review |
 | Design safety review | Passed with required planning revisions; renewed Stage 14 alignment review passed; latest targeted artifact-store backend pass passed; no blockers or `needs discussion` decisions remain | Use `loom.artifact_store_backends`; define contract-specific descriptor/factory/handler/config/capability/registry shape with contract/API versioning; keep Stage 14 checks metadata-only; keep Stage 12 rework metadata-only; keep handler contracts metadata/check/lookup-oriented until Stage 16 payload materialization | None for design safety | Examples and validation strategy |
-| Examples and validation strategy | Pending | Pending | Pending | Pending |
-| Phase shaping | Pending | Pending | Pending | Pending |
-| Implementation readiness | Pending | Pending | Pending | Pending |
-| Handoff | Pending | Pending | Pending | Pending |
+| Examples and validation strategy | MLflow-like and object-store-style examples confirmed as pressure tests for the same generic contracts | Fake handlers/backends only; no service SDKs, network, credentials, or payload access in default tests | None | Phase shaping |
+| Phase shaping | Six implementation-plan phase candidates confirmed: contracts, backend registry/fakes, registration/lookup, preflight/catalog/bundle preservation, Stage 12 rework, and examples/docs/validation hardening | Keep implementation phases small and do not implement future Stage 16 payload movement | None | Implementation readiness |
+| Implementation readiness | Planning artifact has confirmed requirements, design decisions, design-safety evidence, examples/validation, phase shape, and completed Stage 12/14 source/API rechecks | Phase execution planners must still recheck current source before making code changes | None | Handoff |
+| Handoff | `docs/roadmap/stage-15/implementation-plan.md` drafted from this planning artifact and locally quality-gated | Do not create phase execution plans until selecting Phase 1 and creating its phase execution plan | None | Phase 1 execution planning |
 
 ## Capability Triage
 
@@ -467,7 +472,7 @@ Design-safety review follow-up:
 | --- | --- | --- | --- |
 | Backend-neutral artifact-store config/ref records | include, confirmed | Roadmap explicitly requires store config/ref value objects; user asked for generic and arbitrary interfaces. | Design pass owns exact shape. |
 | Artifact-store capability model | include, confirmed | Required for preflight, unsupported operations, fake backend tests, and arbitrary adapter behavior. | Design pass owns exact fields. |
-| Store registry and handler hooks | include, confirmed | Needed for Stage 14 plugin compatibility and optional future backends. | Define the target contract Stage 14 can load; avoid depending on final Stage 14 internals until finalized. |
+| Store registry and handler hooks | include, confirmed | Needed for Stage 14 plugin compatibility and optional future backends. | Define the target contract that explicit plugin adapters can load through the landed Stage 14 generic discovery primitives, without changing Stage 14 metadata-only CLI/preflight semantics. |
 | External immutable input artifact registration | include, confirmed | Roadmap explicitly requires authored/preflight registration. | Design pass owns config shape and validation strictness. |
 | Published immutable output registration and lookup | include, confirmed | Enables explicit reuse without automatic global cache semantics. | Design pass owns planner integration boundary. |
 | Multi-location artifact semantics | include, confirmed | Distinguishes managed, external, published, staging, cache, and materialized locations. | Adjacent typed records are the default compatibility strategy. |
@@ -486,7 +491,7 @@ Design-safety review follow-up:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | FRQ-1 | Confirm v15 is primarily an interface and metadata-contract stage, not a payload-transfer or concrete-backend stage. | Roadmap framing | 1 | Keep Stage 15 contract-only with fake backends; defer real backends and payload movement to V16 or later. | Prevents scope creep and dependency churn. | User confirmed generic interfaces/adapters focus. | confirmed |
 | FRQ-2 | Choose the user-visible primary outcome: external immutable inputs, published immutable outputs, remote-store handler readiness, or balanced foundation. | FRQ-1 | 2 | Balanced foundation, with explicit immutable lookup and adapter-ready metadata as the main user-visible behavior. | Phase shape depends on which path gets first-class examples and CLI/API emphasis. | User confirmed generic/arbitrary aspects and interfaces/adapters rather than one concrete backend. | confirmed |
-| FRQ-3 | Decide how hard to lean on Stage 14 plugin compatibility while Stage 14 planning is confirmed but implementation is not landed. | FRQ-1 | 3 | Define a generic handler/factory contract, use the confirmed `loom.artifact_store_backends` group spelling, and record a Stage 14 implementation recheck trigger. | Avoids blocking planning on Stage 14 implementation while preserving future plugin loading. | User asked to align with Stage 14. | confirmed |
+| FRQ-3 | Decide how hard to lean on Stage 14 plugin compatibility after Stage 14 plugin discovery landed. | FRQ-1 | 3 | Define a generic handler/factory contract, use the landed `loom.artifact_store_backends` group spelling, and keep artifact-store backend loading explicit and supplied-registry-based. | Preserves Stage 14's listing-only CLI/preflight boundary while giving Stage 15 a stable adapter target. | User asked to align with Stage 14. | confirmed |
 | FRQ-4 | Decide whether `ArtifactRef` should be schema-expanded or whether external/multi-location semantics should live in adjacent records with compatible `ArtifactRef` metadata. | FRQ-1 | 4 | Prefer adjacent typed records plus stable metadata summaries by default, but explicitly evaluate whether a minimal versioned `ArtifactRef` revision improves guarantees enough to justify the persisted compatibility cost. | `ArtifactRef.from_dict` is strict; top-level changes affect persisted compatibility, but a narrow revision could improve validation and make external/published refs less ambiguous. | User agreed: adjacent typed records are the default, with a narrow versioned `ArtifactRef` revision allowed only for concrete guarantee improvements. | confirmed |
 | FRQ-5 | Define default preflight strictness for remote/external checks. | FRQ-1, FRQ-2 | 5 | Cheap local/config/plugin/capability checks by default; selected remote write backends fail closed when required capabilities are missing; network/credential/payload probes are opt-in. | Avoids surprising slow checks while keeping explicitly selected remote-write runs honest. | User agreed. | confirmed |
 | FRQ-6 | Define the Stage 12 rework target for bundle/export/import and portable-run exchange. | FRQ-1, FRQ-4 | 6 | Include a Stage 15 phase or equivalent scoped work item that updates Stage 12 portable-run exchange and bundle/export/import metadata semantics to adopt Stage 15 external artifact records. | Prevents Stage 12 from hardening an incompatible bundle extension shape. | User explicitly said Stage 12 rework is important and should be included. | confirmed |
@@ -605,9 +610,11 @@ Likely modules or packages:
   rework. This layer consumes Stage 15 external artifact summaries and
   unsupported-materialization diagnostics without making stores import
   `loom.runs`.
-- `loom.plugins`: Stage 14 remains the discovery/loading coordinator. Stage 15
-  defines the artifact-store backend target object shape that plugin loading
-  can instantiate or register after Stage 14 group names are finalized.
+- `loom.plugins`: Stage 14 remains the discovery/loading coordinator and
+  artifact-store backend metadata/readiness namespace. Stage 15 defines the
+  artifact-store backend target object shape and supplied-registry adapter
+  boundary that explicit plugin loading can use without making CLI/preflight
+  metadata checks claim backend availability.
 
 Public API or protocol candidates:
 
@@ -756,8 +763,9 @@ Future-roadmap impact:
 
 - Stage 12 rework adopts Stage 15 summaries in portable-run exchange and
   bundle/export/import metadata.
-- Stage 14 plugin discovery can load artifact-store backend handlers once group
-  names and loader contracts are finalized.
+- Stage 14 plugin discovery can support artifact-store backend handlers through
+  explicit store-owned adapters once the Stage 15 descriptor/factory, registry,
+  and compatibility contracts exist.
 - Stage 16 payload materialization consumes capabilities, store refs,
   operation results, staging/cache records, and unsupported diagnostics.
 - Stage 17/18 container and HPC execution can use location/capability facts for
@@ -783,7 +791,7 @@ Compatibility constraints:
 | --- | --- | --- | --- |
 | DAQ-1 | Artifact ref compatibility strategy | Recorded recommendation: keep broad semantics in adjacent typed records and stable metadata summaries; permit a minimal versioned `ArtifactRef` revision only if it gives concrete validation, compatibility, or ambiguity-reduction guarantees that adjacent records cannot provide. | confirmed |
 | DAQ-2 | Store handler package ownership | Recorded recommendation: place artifact identity/location records in `loom.artifacts`, backend contracts/capabilities/registries/fakes in `loom.pipeline.stores`, Stage 12 exchange rework in `loom.runs`, and CLI/preflight as wrappers. | confirmed |
-| DAQ-3 | Stage 14 plugin alignment | Recorded recommendation: Stage 15 defines the artifact-store backend descriptor/factory/handler/config/capability target shape, explicit registry behavior, contract/API versioning, and backend diagnostics; Stage 14 owns discovery, entry point constants, metadata-only listing/check, and later explicit loading adapters. Use the confirmed backend-oriented group spelling `loom.artifact_store_backends`; implementation-plan drafting must recheck final Stage 14 implementation-plan and landed loader contracts. | confirmed after latest pass |
+| DAQ-3 | Stage 14 plugin alignment | Recorded recommendation: Stage 15 defines the artifact-store backend descriptor/factory/handler/config/capability target shape, explicit registry behavior, contract/API versioning, and backend diagnostics; Stage 14 owns discovery, entry point constants, metadata-only CLI/preflight listing/check, and generic explicit loading primitives. Use the landed backend-oriented group spelling `loom.artifact_store_backends`; backend availability and run-readiness remain Stage 15 checks. | confirmed after Stage 14 implementation recheck |
 | DAQ-4 | Capability model granularity | Recorded recommendation: include operation-specific support records for readable, writable, listable, delete, checksum verification, commit/consistency behavior, and unknown support. Unknown is not sufficient for fail-closed selected writes. | confirmed |
 | DAQ-5 | Immutable lookup planner boundary | Recorded recommendation: immutable lookup is explicit, keyed by project-supplied identity and validation policy, and returns structured results for planner consumption only when configured. No automatic global cache lookup. | confirmed |
 | DAQ-6 | Preflight and network policy | Recorded recommendation: cheap checks by default; selected remote writes fail closed on missing/unknown required capabilities; network, credential, checksum, and payload probes are opt-in. | confirmed |
@@ -798,11 +806,11 @@ Compatibility constraints:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | DAQ-1 | Artifact ref compatibility strategy | Adjacent typed records carry external, published, and multi-location semantics; `ArtifactRef` remains stable unless a narrow versioned revision proves materially better. | User agreed after asking whether revising `ArtifactRef` could improve guarantees. | Encoding all semantics only in untyped metadata; broad top-level `ArtifactRef` schema expansion by default. | Preserves existing persisted refs while allowing typed validation and future schema revision only with concrete benefit. | Avoids breaking local store and run indexes while keeping semantics testable. | Adjacent records can evolve without forcing all refs to become remote-aware. | Stage 12 can consume summaries; Stage 16 can add materialization records; Stage 20 can consume cleanup hints. | Artifact identity records remain broadly reusable; `ArtifactRef` remains the compact produced-output pointer. | Contract tests for old/new ref round-trip, summary projection, and invalid external metadata. | Debt: potential two-record model. Revisit if implementation shows callers cannot enforce location semantics without a minimal top-level field. | confirmed |
 | DAQ-2 | Store handler package ownership | Put artifact identity/location records in `loom.artifacts`; backend handlers/capabilities/registry/fakes in `loom.pipeline.stores`; Stage 12 exchange changes in `loom.runs`. | User agreed to Stage 14 alignment and Stage 12 rework. | Put remote-store semantics in `loom.io`; make plugins own store semantics; make bundle/export code own artifact semantics. | Matches existing source-tree direction and keeps lower layers from importing run-exchange or plugin discovery. | Keeps ownership reviewable and prevents circular imports. | Backends, bundle exchange, and diagnostics can all consume stable records. | Preserves Stage 14/16/19/20 flexibility. | Handler protocol remains store-owned; plugin loading wraps it externally. | Import-boundary package tests and docs. | Revisit if `loom.artifacts` module becomes too large and needs a compatibility-preserving package split. | confirmed |
-| DAQ-3 | Stage 14 plugin alignment | Stage 15 defines a plugin-loadable descriptor/factory plus normalized handler/config/capability target, explicit registry, contract/API versioning, and backend diagnostics for the confirmed `loom.artifact_store_backends` group; Stage 14 owns discovery/listing/check mechanics and group constants. | User asked to align with Stage 14, then requested renewed review and a later targeted design pass after Stage 14 revised artifact-store backend structure. | Stage 15 implementing discovery; Stage 14 registering arbitrary store instances without a handler contract; using a group name that implies raw `ArtifactStore` instance loading; accepting current local-root `ArtifactStoreFactory` callables as plugin targets; defining a universal plugin object protocol. | Keeps discovery generic while giving adapter authors a concrete target shape. | Avoids duplicate plugin systems, raw-instance coupling, local-root construction lock-in, and premature universal object contracts. | Future plugin loaders can normalize loaded descriptors/factories into the supplied registry without changing store semantics. | Stage 14 implementation plan and landed code must be rechecked before implementation planning. | Descriptor/factory/handler/config/capability protocol is the reusable store adapter contract; registry adapters stay contract-specific. | Fake entry point tests after Stage 14 lands; Stage 15 descriptor/handler contract tests; docs/examples use `loom.artifact_store_backends`; validation covers programmatic registry use without plugins and proves Stage 14 metadata/import checks do not imply backend availability. | Debt: Stage 14 implementation is not landed. Revisit at implementation-plan drafting and after Stage 14 merge. | confirmed after latest pass |
+| DAQ-3 | Stage 14 plugin alignment | Stage 15 defines a plugin-loadable descriptor/factory plus normalized handler/config/capability target, explicit registry, contract/API versioning, and backend diagnostics for the landed `loom.artifact_store_backends` group; Stage 14 owns discovery/listing/check mechanics, group constants, and generic entry point loading primitives. | User asked to align with Stage 14, then requested renewed review and later targeted design passes after Stage 14 revised artifact-store backend structure and implementation completed. | Stage 15 implementing discovery; Stage 14 registering arbitrary store instances without a handler contract; using a group name that implies raw `ArtifactStore` instance loading; accepting current local-root `ArtifactStoreFactory` callables as plugin targets; defining a universal plugin object protocol; treating `loom plugins check` listing-only success as backend availability. | Keeps discovery generic while giving adapter authors a concrete target shape. | Avoids duplicate plugin systems, raw-instance coupling, local-root construction lock-in, premature universal object contracts, and false run-readiness claims. | Store-owned plugin adapters can normalize loaded descriptors/factories into a supplied registry without changing store semantics or Stage 14 metadata-only CLI/preflight behavior. | Stage 16 consumes the resulting registry/capability contract for materialization; later plugin readiness can be widened only with config-aware backend checks. | Descriptor/factory/handler/config/capability protocol is the reusable store adapter contract; registry adapters stay contract-specific and supplied-registry-based. | Stage 15 descriptor/handler contract tests; docs/examples use `loom.artifact_store_backends`; validation covers programmatic registry use without plugins and proves Stage 14 metadata/import checks do not imply backend availability. | Debt: Stage 14 generic plugin diagnostics still classify artifact-store backends as listing-only. Revisit only if Stage 15 adds a config-aware plugin adapter and can update readiness wording without implying run-readiness. | confirmed after Stage 14 implementation recheck |
 | DAQ-4 | Capability model granularity | Use operation-specific support records with supported/unsupported/unknown plus details for read, write, list, delete, checksum verification, commit/consistency, and materialization support. | User confirmed fail-closed selected remote writes. | Bare booleans only; scheme-based assumptions; treating unknown as supported. | Capability-aware behavior is the central remote-store safety contract. | More fields, but avoids scattered backend assumptions. | New operations can be added as records without changing every handler. | Stage 16 materialization, Stage 19 reliability, and Stage 20 cleanup consume capability facts. | Capabilities become plain-data adapter contract. | Unit tests for admission and unknown support; fake backends for supported/unsupported matrices. | Revisit if capability records duplicate authority capability types enough to justify shared helper extraction. | confirmed |
 | DAQ-5 | Immutable lookup planner boundary | Lookup is explicit and returns compatible/incompatible/missing/unsupported results validated by key, type, schema, checksum/fingerprint, and policy. | User agreed to generic interface scope. | Automatic global cache lookup; implicit planner reuse; domain-specific cache keys in core. | Keeps reuse useful but not surprising or domain-specific. | Central result model avoids ad hoc planner hooks. | Later project/backends can supply lookup adapters without changing planner defaults. | Stage 16 can materialize compatible refs explicitly; reliability can record lookup events later. | Lookup request/result is adapter-neutral. | Contract tests for validation paths and planner handoff. | Revisit when a real adapter shows missing validation facts. | confirmed |
 | DAQ-6 | Preflight and network policy | Cheap checks by default; selected remote write backends fail closed on missing/unknown required capabilities; expensive probes opt-in. | User agreed. | Always probing credentials/network; warning-only selected remote writes; never checking capabilities. | Balances reproducibility with local/offline testability. | Keeps preflight deterministic by default. | Optional check policies can grow without changing default behavior. | Stage 16 can add opt-in payload/materialization probes. | Preflight consumes capabilities and handler diagnostics. | Preflight unit/integration tests with fake handlers; no network default assertions. | Revisit if downstream deployments need named preflight policy profiles. | confirmed |
-| DAQ-7 | Stage 12 exchange rework boundary | Stage 15 includes scoped Stage 12 metadata rework for portable-run exchange and bundle/export/import; no payload materialization. | User said Stage 12 rework is important and should be included. | Leaving Stage 12 opaque forever; moving bundle semantics into stores; adding remote downloads. | Prevents incompatible durable bundle fields after external refs become first-class. | Keeps exchange changes reviewable and avoids later migration churn. | Portable-run exchange becomes a consumer of generic artifact summaries. | Stage 12 artifacts become compatible with Stage 15/16 external refs. | Exchange records adopt summary/result protocols. | Contract tests for round-trip metadata-only refs and unsupported materialization diagnostics. | Revisit after Stage 12 landed APIs are rechecked. | confirmed |
+| DAQ-7 | Stage 12 exchange rework boundary | Stage 15 includes scoped Stage 12 metadata rework for portable-run exchange and bundle/export/import; no payload materialization. | User said Stage 12 rework is important and should be included. | Leaving Stage 12 opaque forever; moving bundle semantics into stores; adding remote downloads. | Prevents incompatible durable bundle fields after external refs become first-class. | Keeps exchange changes reviewable and avoids later migration churn. | Portable-run exchange becomes a consumer of generic artifact summaries. | Stage 12 artifacts become compatible with Stage 15/16 external refs. | Exchange records adopt summary/result protocols. | Contract tests for round-trip metadata-only refs and unsupported materialization diagnostics. | Revisit during phase planning if current `src/loom/runs` exchange extension fields cannot carry Stage 15 summaries without schema widening. | confirmed after Stage 12 source recheck |
 | DAQ-8 | Examples and adapter pressure tests | Use MLflow-like and object-store-style examples only as docs/design fixtures and contract fixtures when executable without optional dependencies. | User agreed. | Implementing MLflow/S3; using only one example; domain-specific examples; auto-approving examples without validating both tracking-system indirection and object-store consistency semantics. | Two contrasting examples challenge genericity without dependencies and are material enough to record as a recommendation. | Keeps examples useful while avoiding service code. | Helps adapter authors map future backends without overfitting the public contract. | Validates Stage 14/16 compatibility assumptions and preserves optional adapter flexibility. | Examples exercise handler, capability, redaction, unsupported-operation, lookup, and record-summary contracts. | Docs/example fixtures and design-safety checklist; no installed MLflow/cloud packages in default tests. | Revisit when first real adapter is selected or examples start requiring backend-specific fields for core behavior. | confirmed |
 | DAQ-9 | Cache, staging, and materialized locations | Model as derived/non-authoritative location records with cleanup/reliability hints. | User agreed to metadata-first behavior. | Treating cache as source of truth; omitting staging facts until materialization. | Future materialization and cleanup need records, but authority must stay clear. | Avoids conflating payload availability with lifecycle truth. | Later stages can attach retry, cleanup, and retention policy. | Stage 16/19/20 consume records. | Location summaries include authoritative/derived distinction. | Tests for cache/staging not being used as authoritative lookup evidence. | Revisit when materialization semantics land. | confirmed |
 | DAQ-10 | Optional dependencies and backend metadata | Keep backend-specific facts namespaced and plain-data; optional dependencies stay outside core. | User confirmed no concrete backends. | Importing SDKs in core; requiring MLflow/DVC schemas in generic records. | Preserves import-light and domain-neutral core. | Prevents dependency churn and import failures. | Backend packages can evolve independently. | Stage 14 plugin loading and Stage 16 adapters remain optional. | Handler summaries separate loaded objects from serialized facts. | Package import tests and docs. | Revisit when an optional adapter family is explicitly selected. | confirmed |
@@ -813,7 +821,7 @@ Compatibility constraints:
 | --- | --- | --- | --- | --- | --- |
 | DAQ-1 | recorded recommendation | Could top-level `ArtifactRef` fields improve validation? Yes, but adjacent records preserve compatibility while keeping a narrow revision gate. | FR-1, FR-4, FR-7 | Reviewed and upheld in design-safety review | confirmed |
 | DAQ-2 | recorded recommendation | Could a new package be cleaner? Current module/package boundaries favor minimal churn and import safety. | FR-1, FR-5, FR-7, FR-9 | Reviewed and upheld in design-safety review | confirmed |
-| DAQ-3 | recorded recommendation | Could Stage 15 depend directly on Stage 14? No; Stage 14 planning is confirmed but implementation is not landed, so use the confirmed `loom.artifact_store_backends` spelling, define the contract-specific descriptor/factory/handler/config/capability registry target plus contract/API versioning, and keep a recheck trigger for loaders, metadata-only checks, import-only diagnostics, and code. | FR-5, FR-8 | Revise planning dependency and send to implementation-plan drafting | confirmed after latest pass |
+| DAQ-3 | recorded recommendation | Could Stage 15 depend directly on Stage 14? Yes, but only on the landed discovery/readiness primitives: `loom.artifact_store_backends`, `PluginRecord`, generic listing/loading helpers, and listing-only CLI/preflight metadata. Stage 15 still owns the contract-specific descriptor/factory/handler/config/capability registry target plus contract/API versioning. | FR-5, FR-8 | Updated planning for completed Stage 14 implementation and send to implementation-plan drafting | confirmed after Stage 14 implementation recheck |
 | DAQ-4 | recorded recommendation | Could capability records be too broad? Fields map directly to confirmed behavior and future roadmap consumers. | FR-1, FR-5, FR-6 | Reviewed and upheld with unknown-support obligation | confirmed |
 | DAQ-5 | recorded recommendation | Could lookup become implicit cache reuse? Boundary explicitly forbids automatic global cache lookup. | FR-3 | Reviewed and upheld in design-safety review | confirmed |
 | DAQ-6 | recorded recommendation | Could fail-closed block metadata-only flows? Only selected remote writes fail closed; metadata-only remains cheap. | FR-6 | Reviewed and upheld in design-safety review | confirmed |
@@ -847,13 +855,15 @@ Review status:
   `blocked` or `needs discussion` decision remains from design-safety review.
   Renewed review after the Stage 14 planning revisions also passed with no
   blocker or `needs discussion` decision. Examples/validation and phase shaping
-  still remain their own pending planning gates.
+  were later confirmed in their sections below. The later post-implementation
+  alignment review below supersedes the original Stage 14 implementation-absent
+  dependency.
 
 Findings:
 
 | Severity | Finding | Evidence | Required planning revision or action | Status |
 | --- | --- | --- | --- | --- |
-| Required revision | Stage 14 is no longer only a draft planning dependency in this checkout; Stage 15 must use the confirmed backend-oriented group spelling and still recheck implementation artifacts before coding. | `docs/roadmap/stage-14/planning.md` records design-safety passed and revises artifact-store plugin metadata to `loom.artifact_store_backends`, while no Stage 14 implementation plan or landed plugin code is present. | Update Stage 15 metadata, source evidence, DAQ-3, accepted debt, and examples/validation obligations to use `loom.artifact_store_backends` and retain a recheck trigger for Stage 14 implementation plan, loader contracts, and landed code. | recorded |
+| Required revision | Stage 14 was no longer only a draft planning dependency; Stage 15 had to use the confirmed backend-oriented group spelling and recheck implementation artifacts before coding. | `docs/roadmap/stage-14/planning.md` records design-safety passed and revises artifact-store plugin metadata to `loom.artifact_store_backends`. | Update Stage 15 metadata, source evidence, DAQ-3, accepted debt, and examples/validation obligations to use `loom.artifact_store_backends` and retain a recheck trigger for Stage 14 implementation plan, loader contracts, and landed code. | superseded by post-implementation alignment review |
 | Required revision | Stage 12 rework scope is valid but must be tied to the current portable-run exchange plan, where external refs are opaque extension fields until Stage 15 summaries land. | `docs/roadmap/stage-12/implementation-plan.md` Phase 1 records strict manifest records with extension fields for opaque external refs; Stage 15 FR-9 requires replacing opaque refs with stable metadata records. | Implementation-plan drafting must include a scoped Stage 12 metadata rework phase or work item that maps existing portable-run extension fields to Stage 15 summaries without adding payload materialization or authority mutation. | recorded |
 | Required revision | The handler/factory contract is reusable only if it separates metadata/config/ref checks from payload operations that belong to Stage 16. | `docs/roadmap.md` v15 owns interface and unsupported-operation records; v16 owns materialization, publish, upload, and download. `docs/features/remote-stores.md` lists put/get/write operations, but Stage 15 planning defers real transfer paths. | Handler protocols must be metadata/check/lookup/preflight oriented in Stage 15, with open/materialize/publish/upload/download represented as structured unsupported or capability-gated results unless a later stage implements them. | recorded |
 | Required revision | Capability records need a three-state or equivalent support model, not only booleans, because fail-closed selected writes depend on distinguishing unknown from unsupported and supported. | Stage 15 DAQ-4 already records supported/unsupported/unknown; `docs/features/remote-stores.md` shows an older boolean example; current authority capabilities use explicit support records but no unknown state. | Keep Stage 15 capability records operation-specific and capable of representing unknown, unsupported, supported, and explanatory diagnostics; do not reuse authority capability types directly unless they can preserve this distinction. | recorded |
@@ -868,7 +878,7 @@ Design decision classifications after safety review:
 | --- | --- | --- |
 | DAQ-1 Artifact ref compatibility strategy | recorded recommendation | Upheld. Adjacent typed records remain the default; narrow `ArtifactRef` revision remains gated by concrete validation or compatibility benefit. |
 | DAQ-2 Store handler package ownership | recorded recommendation | Upheld. `loom.artifacts`, `loom.pipeline.stores`, `loom.runs`, `loom.plugins`, `loom.diagnostics`, and CLI boundaries remain consistent with `docs/structure.md`. |
-| DAQ-3 Stage 14 plugin alignment | recorded recommendation | Upheld with revision. Use `loom.artifact_store_backends`; recheck Stage 14 implementation plan and landed loader code before implementation. |
+| DAQ-3 Stage 14 plugin alignment | recorded recommendation | Upheld with revision. Use `loom.artifact_store_backends`; later post-implementation review confirmed the landed Stage 14 API and listing-only artifact-store backend boundary. |
 | DAQ-4 Capability model granularity | recorded recommendation | Upheld with revision. Unknown support must remain representable and fail closed for selected writes. |
 | DAQ-5 Immutable lookup planner boundary | recorded recommendation | Upheld. Explicit lookup does not become automatic global cache reuse or partial stage reuse. |
 | DAQ-6 Preflight and network policy | recorded recommendation | Upheld. Cheap default checks plus opt-in network/credential/payload probes remain the safe default. |
@@ -912,7 +922,7 @@ Decision/status updates from renewed review:
 | Decision | Renewed classification | Result |
 | --- | --- | --- |
 | DAQ-1 Artifact ref compatibility strategy | recorded recommendation | Upheld. Adjacent typed records remain default; minimal `ArtifactRef` revision is still a narrow guarantee-driven escape hatch. |
-| DAQ-3 Stage 14 plugin alignment | recorded recommendation | Strengthened. Stage 15 must define handler/factory/config/capability registry semantics for `loom.artifact_store_backends`; Stage 14 remains discovery and adapter loading only. |
+| DAQ-3 Stage 14 plugin alignment | recorded recommendation | Strengthened. Stage 15 must define handler/factory/config/capability registry semantics for `loom.artifact_store_backends`; Stage 14 remains discovery, metadata diagnostics, and generic explicit loading primitives only. |
 | DAQ-7 Stage 12 exchange rework boundary | recorded recommendation | Upheld. Rework is stable metadata adoption only, with no credential, network, or payload materialization behavior. |
 | DAQ-10 Optional dependencies and backend-specific metadata | recorded recommendation | Upheld. Backend-specific details stay namespaced/plain-data and cannot be required for core behavior. |
 
@@ -951,12 +961,47 @@ Decision/status updates from latest pass:
 | DAQ-4 Capability model granularity | recorded recommendation | Upheld with sharper boundary. Unknown backend capability remains fail-closed for selected writes, and Stage 14 metadata/import checks cannot turn unknown into supported. |
 | DAQ-6 Preflight and network policy | recorded recommendation | Upheld with sharper boundary. Stage 15 backend preflight/check IDs must be separate from Stage 14 plugin metadata checks and must avoid default network, credential, or payload probes. |
 
+### Post-Stage 14 Implementation Alignment Review
+
+Review status:
+
+- Reviewer: managing Codex local review after Stage 14 implementation
+  completion.
+- Review date: 2026-05-15.
+- Trigger: user reported `docs/roadmap/stage-14/implementation-plan.md` is
+  complete and requested Stage 15 planning update/review before converting to
+  an implementation plan.
+- Sources rechecked: `docs/roadmap/stage-14/implementation-plan.md`,
+  `docs/features/plugins.md`, `src/loom/plugins/entrypoints.py`,
+  `src/loom/plugins/diagnostics.py`, `src/loom/plugins/__init__.py`,
+  targeted plugin tests, `src/loom/runs/models.py`,
+  `src/loom/runs/bundles.py`, and run-exchange contract tests.
+- Gate result: passed. No blocker or `needs discussion` item remains for
+  implementation-plan drafting.
+
+Findings:
+
+| Severity | Finding | Evidence | Planning update or implementation-plan obligation | Status |
+| --- | --- | --- | --- | --- |
+| Required update | Stage 14 is now a landed public API dependency, not only a planning assumption. | Stage 14 plan records all phases merged; `src/loom/plugins` exports `LOOM_ARTIFACT_STORE_BACKENDS_GROUP = "loom.artifact_store_backends"` and readiness metadata. | Stage 15 metadata, source evidence, DAQ-3, accepted debt, and implementation-plan context now refer to completed Stage 14 and the landed group/readiness API. | recorded |
+| Required boundary | Artifact-store backend plugin entries remain listing-only for Stage 14 CLI/preflight diagnostics. | `LOADABLE_PLUGIN_GROUPS` contains only `loom.recipes` and `loom.codecs`; `plugin_group_readiness(loom.artifact_store_backends).status` is `listing-only`; no `load_artifact_store_backend_entry_points` is exported. | Stage 15 may use generic entry point primitives and define a supplied-registry adapter, but Stage 14 metadata/list/import checks must not be treated as backend availability, capability admission, or run-readiness. | recorded |
+| Required boundary | Generic `load_entry_points(...)` is available, but it is not the artifact-store backend contract. | Stage 14's generic loader imports selected targets and can call a registration callback, while diagnostics load only registry-ready groups. | Stage 15 backend adapters must normalize loaded descriptor/factory objects into a store-owned registry with contract/API versioning; raw `ArtifactStore`, local-root factories, plugin-owned registries, and universal plugin objects stay rejected. | recorded |
+| Required update | Stage 12 exchange APIs are concrete enough for a scoped metadata rework. | `RunBundleManifest`, `PortableRunExportRecord`, `PortableRunImportRecord`, exchange results, and payload selection records include strict plain-data schemas with `extensions`; local bundle export builds manifests from completed-run metadata. | Phase shaping and implementation-plan Phase 5 should map Stage 15 external/published/location summaries into run-exchange extension fields or a narrow schema revision without downloads, credentials, payload access, or authority mutation. | recorded |
+
+Decision/status updates from post-implementation review:
+
+| Decision | Result |
+| --- | --- |
+| DAQ-3 Stage 14 plugin alignment | Confirmed against landed code. Stage 15 depends on group constants, generic metadata/list/load primitives, and readiness summaries only; it owns backend descriptor/factory, registry, capabilities, backend availability checks, and run-context handoff. |
+| DAQ-7 Stage 12 exchange rework boundary | Confirmed against landed source APIs. Rework remains metadata-only and should consume existing strict records and extension points unless implementation proves a minimal schema revision is necessary. |
+| DAQ-8 Examples and adapter pressure tests | Confirmed. MLflow-like and object-store-style examples must exercise the same generic contracts and must not require optional packages. |
+
 Accepted risks:
 
 | Risk | Why accepted | Revisit trigger |
 | --- | --- | --- |
-| Stage 14 implementation is not landed. | Stage 14 planning has enough confirmed group, discovery, listing/check, and artifact-store backend metadata-only boundaries for Stage 15 planning to proceed, and Stage 15 defines only the store-owned backend descriptor/factory, handler, and registry shape. | Stage 15 implementation-plan drafting, Stage 14 implementation-plan publication, Stage 14 merge, or mismatch in group constants, loader APIs, metadata-check semantics, import-only diagnostics, descriptor/factory assumptions, or run-readiness wording. |
-| Stage 12 Phase 1 may land opaque extension fields before Stage 15 summaries exist. | The current v12 plan explicitly reserves extension fields for future external refs; Stage 15 can rework metadata without requiring payload movement. | Any Stage 12 bundle/export/import phase hardens opaque external refs as permanent provider-specific schema or starts requiring payload access for metadata-only workflows. |
+| Stage 14 plugin diagnostics still classify artifact-store backends as listing-only. | That avoids false backend availability or run-readiness until Stage 15 defines configured backend registry/capability checks. | Stage 15 lands a supplied-registry backend adapter and can update plugin docs/readiness wording without making CLI/preflight metadata checks imply run-readiness. |
+| Stage 12 run-exchange external artifact facts currently fit through generic extension fields. | Existing strict records preserve forward-compatible extension points without forcing payload materialization. | Implementation proves external artifact summaries need a narrow versioned schema field to avoid ambiguous exchange semantics. |
 | Adjacent artifact records introduce two-record coordination. | This preserves persisted `ArtifactRef` compatibility and local-store behavior while adding typed semantics. | Callers cannot enforce location semantics, summary projection becomes ambiguous, or compatibility tests show a top-level versioned `ArtifactRef` field would reduce risk. |
 | Capability model may overlap authority capability records. | Artifact-store capabilities are about payload/ref operations and consistency, not authority lifecycle truth; reusing style is safer than conflating types. | Duplicate helpers become substantial, or authority capability types gain a generic support-state model suitable for extraction without coupling stores to authority. |
 | Backend-specific namespaced metadata can accumulate. | Namespaced plain data is necessary for arbitrary adapters, but core-owned summary fields and redaction rules bound its use. | A planned core behavior requires backend-specific fields, or persisted metadata includes secrets, SDK objects, or non-plain values. |
@@ -1079,41 +1124,210 @@ Accepted debt:
 
 | Debt | Reason accepted | Revisit trigger |
 | --- | --- | --- |
-| Stage 14 plugin discovery is confirmed at planning level but not implemented in this checkout. | Stage 15 can define the descriptor/factory/handler/config/capability registry target shape and use the confirmed `loom.artifact_store_backends` group spelling without blocking on discovery implementation. | Implementation-plan drafting, Stage 14 implementation-plan publication, Stage 14 merge, or any mismatch in group constants, loader APIs, metadata-only checks, import-only diagnostics, contract/API version assumptions, run-readiness wording, or registry-adapter assumptions. |
+| Stage 14 plugin diagnostics classify artifact-store backends as listing-only. | This is the correct default until Stage 15 defines configured backend registry/capability checks; it prevents metadata checks from implying backend availability. | Stage 15 lands a supplied-registry backend plugin adapter and can update plugin docs/readiness wording without making CLI/preflight metadata checks imply run-readiness. |
 | Adjacent records may require callers to carry both `ArtifactRef` and location summaries. | Preserves persisted ref compatibility while adding validation. | If implementation cannot enforce location semantics without top-level fields. |
-| Stage 12 exchange rework depends on APIs that may not have landed yet and may currently preserve external refs as opaque extension fields. | User wants rework included and Stage 15 needs to prevent opaque-ref lock-in while avoiding payload materialization. | Phase planning must recheck current Stage 12 code and adjust scope before replacing extension fields with Stage 15 summaries. |
+| Stage 12 exchange rework currently uses generic extension fields for future external refs. | User wants rework included and Stage 15 needs to prevent opaque-ref lock-in while avoiding payload materialization. | Phase planning finds that extension fields cannot carry Stage 15 summaries clearly enough and records a minimal schema revision instead. |
 | Stage 15 capability records may overlap authority capability style. | Artifact-store capabilities need unknown/unsupported/supported semantics for payload/ref operations that authority lifecycle records do not currently own. | Extract shared helpers only if this can happen without coupling artifact stores to authority or losing unknown-support semantics. |
 
 ## Examples And Validation Strategy
 
 Examples:
 
-- MLflow-like tracking-system artifact adapter example.
-- Object-store-style artifact adapter example.
+- MLflow-like tracking-system artifact adapter example:
+  - Purpose: pressure-test tracking-system indirection without adding an
+    MLflow dependency or a domain-specific core API.
+  - Mapping: a fake descriptor advertises a tracking-style backend kind,
+    contract/API version, redacted tracking URI, artifact URI pattern, run
+    identity fields, supported URI schemes, and config validation. It
+    normalizes into `ArtifactStoreBackendRegistry` through the Stage 15
+    descriptor/factory contract.
+  - External input: an authored immutable input declaration references a
+    tracking run/artifact path through `ArtifactStoreRef` plus
+    `ExternalArtifactDeclaration`, with type, schema version,
+    checksum/fingerprint facts, immutability assertion, and namespaced
+    backend details.
+  - Published output: a published record maps producer provenance, project
+    reuse key, validation policy, checksum/fingerprint evidence, and
+    unsupported materialization diagnostics without uploading payloads.
+  - Capability expectations: read/list may be supported or unknown by the fake
+    backend; write/delete/materialize are explicit support records rather than
+    assumed from scheme. Selected write with unknown capability fails closed.
+  - Redaction: credentials, tokens, and service-specific connection details do
+    not persist in summaries, CLI output, catalog rows, bundle manifests, or
+    preflight diagnostics.
+- Object-store-style artifact adapter example:
+  - Purpose: pressure-test object-addressed artifact refs, eventual
+    consistency hints, checksum facts, listing behavior, duplicate backend
+    names, and unsupported operations with the same generic contracts.
+  - Mapping: a fake descriptor advertises an object-store-style backend kind,
+    contract/API version, supported object URI schemes, bucket/root config,
+    redacted display URI, config validation, capability records, consistency
+    hints, and manifest/commit policy facts.
+  - External input: a stable object URI becomes a metadata-only external
+    artifact declaration with checksum/fingerprint validation policy and
+    backend-owned namespaced details.
+  - Published output: an immutable output record uses a project-supplied reuse
+    key and validation evidence; Stage 15 records lookup results but does not
+    upload, download, delete, or garbage collect payloads.
+  - Capability expectations: read/write/list/delete/checksum verification are
+    operation-specific support records. Unknown or unsupported selected writes
+    fail preflight; metadata-only preservation remains allowed.
+  - Consistency: consistency and commit-policy hints are descriptive inputs for
+    later Stage 16/19 behavior, not hidden retry, staging, or cleanup policy.
 
 Validation strategy:
 
-- Pending examples and validation stage.
+- Package and import-boundary tests:
+  - `loom.artifacts` must not import stores, diagnostics, plugins, or runs.
+  - Store contracts may depend on artifact value objects but must not import
+    plugin discovery or bundle internals.
+  - `import loom`, CLI help, and default preflight paths must not discover or
+    load backend plugin targets.
+- Plain-data and schema tests:
+  - Old `ArtifactRef` round trips continue to pass.
+  - External, published, and location summaries validate strict plain data,
+    reject unknown or secret-bearing core fields, preserve namespaced backend
+    details, and project to/from stable metadata summaries.
+  - Adjacent summaries prove enough guarantees for location kind,
+    validation-policy enforcement, and compatibility-safe persistence. If they
+    cannot, implementation-plan drafting must record a minimal versioned
+    `ArtifactRef` revision and the compatibility reason.
+- Backend descriptor/factory and registry contract tests:
+  - Descriptor/factory contract/API version compatibility is checked before
+    registration.
+  - Backend kind/key normalization, supported URI-scheme declarations, config
+    validation/redaction, run-context handoff, duplicate handling, and missing
+    handler diagnostics are deterministic.
+  - Programmatic registration works without plugins.
+  - A fake Stage 14-style adapter can normalize a loaded descriptor/factory
+    into a supplied `ArtifactStoreBackendRegistry`.
+  - Raw `ArtifactStore` instances, current local-root `ArtifactStoreFactory`
+    callables, plugin-owned registries, and arbitrary universal plugin objects
+    are rejected as backend plugin targets.
+- Capability and preflight tests:
+  - Capabilities distinguish supported, unsupported, and unknown for read,
+    write, list, delete, checksum verification, commit/consistency, lookup,
+    and materialization-related operations.
+  - Selected remote writes fail closed on missing, unknown, or unsupported
+    required capabilities.
+  - Stage 14 metadata checks and import-only diagnostics do not satisfy Stage
+    15 backend availability, capability admission, URI/config validation, or
+    run-readiness checks.
+  - Default checks do not perform network, credential, checksum, payload, or
+    service-SDK probes.
+- Catalog, bundle, and Stage 12 exchange tests:
+  - Run catalog projections preserve external/published/location summaries as
+    metadata-only records with redacted display fields.
+  - Bundle/export/import manifests preserve Stage 15 summaries without
+    materializing payloads or mutating authority state.
+  - Stage 12 portable-run exchange rework maps any current opaque external-ref
+    extension fields to Stage 15 summaries and records unsupported
+    materialization diagnostics.
+- Example fixture tests and documentation checks:
+  - MLflow-like and object-store-style examples both use the same descriptor,
+    registry, store ref, capability, lookup, redaction, unsupported-operation,
+    and summary contracts.
+  - Default tests use fake handlers/backends only. No MLflow, cloud SDK,
+    container, network, credential, or external service dependency is allowed.
+  - Documentation labels examples as design fixtures and contract fixtures, not
+    first-party adapters.
+
+Validation gate status:
+
+- Confirmed. Implementation-plan drafting should translate this strategy into
+  suite-level obligations per phase. Stage 12/14 APIs were rechecked for this
+  handoff; phase planners must recheck current source again before code
+  changes.
 
 ## Phase Shaping
 
 Candidate phase boundaries:
 
-- Phase candidate: external artifact contracts and `ArtifactRef` compatibility
-  strategy.
-- Phase candidate: store backend descriptor/factory, handler registry,
-  capabilities, fake backends, and Stage 14 plugin-loadable target shape.
-- Phase candidate: external immutable input and published immutable output
-  registration/lookup semantics.
-- Phase candidate: preflight, catalog, and bundle metadata preservation.
-- Phase candidate: Stage 12 portable-run exchange and bundle/export/import
-  rework to adopt Stage 15 external artifact records.
-- Phase candidate: examples, docs, and validation hardening with MLflow-like
-  and object-store-style examples.
+- Phase 1 candidate: external artifact records and compatibility contracts.
+  - Scope: `ArtifactLocationKind`, `ArtifactLocationSummary`,
+    `ArtifactStoreRef`/config summary, `ExternalArtifactDeclaration`,
+    `PublishedArtifactRecord`, immutable lookup request/result records, redaction
+    helpers, strict plain-data serialization, and the adjacent-record-first
+    `ArtifactRef` compatibility strategy.
+  - Acceptance focus: old `ArtifactRef` round trips remain compatible; new
+    summaries provide typed external, published, and multi-location semantics;
+    secret-bearing fields are rejected; examples can be represented without
+    backend SDKs.
+  - Out of scope: backend registry, plugin loading, preflight integration,
+    catalog/bundle rewrites, payload materialization, and real adapters.
+- Phase 2 candidate: backend descriptor/factory, handler registry,
+  capabilities, and fake backends.
+  - Scope: store-owned descriptor/factory contract with contract/API versioning,
+    normalized handler protocol, explicit backend registry, operation-specific
+    capability records, config validation/redaction hooks, fake MLflow-like and
+    object-store-style handlers, duplicate/missing diagnostics, and
+    programmatic registration. A supplied-registry plugin adapter may be
+    included once the registry contract exists, but it must use Stage 14
+    generic discovery primitives explicitly and must not make metadata checks
+    claim backend availability.
+  - Acceptance focus: Stage 14-style adapter tests can normalize a loaded fake
+    descriptor/factory into a supplied registry, but raw `ArtifactStore`
+    objects, local-root factories, universal plugin objects, and plugin-owned
+    registries are rejected.
+  - Out of scope: changing Stage 14 CLI/preflight listing-only diagnostics
+    into backend availability checks, automatic plugin loading, remote SDKs,
+    network probes, payload upload/download, and execution-run store
+    replacement beyond explicit fake contracts.
+- Phase 3 candidate: external immutable input and published immutable output
+  semantics.
+  - Scope: declaration/registration behavior for external immutable inputs,
+    published immutable output records, explicit immutable lookup by
+    project-supplied key and validation policy, compatibility/incompatibility
+    results, and unsupported-operation diagnostics.
+  - Acceptance focus: lookup is explicit and does not become automatic global
+    cache reuse; selected remote write/publish paths fail closed when required
+    capabilities are unknown or unsupported; metadata-only workflows remain
+    available.
+  - Out of scope: planner-driven partial stage reuse, automatic cache lookup,
+    payload publish/upload/download, retention deletion, and domain-specific
+    artifact schemas.
+- Phase 4 candidate: backend preflight, run catalog, and bundle metadata
+  preservation.
+  - Scope: Stage 15 backend availability/check IDs separate from Stage 14
+    plugin metadata checks, URI/config validation, capability admission,
+    selected write fail-closed checks, run catalog projections, bundle/export
+    metadata preservation, and unsupported materialization diagnostics.
+  - Acceptance focus: Stage 14 metadata/import checks never satisfy Stage 15
+    backend availability or run-readiness; default checks avoid network,
+    credential, checksum, payload, and SDK probes; catalogs and bundles preserve
+    summaries with redaction.
+  - Out of scope: standalone testing plan unless implementation-plan quality
+    gate finds embedded suite obligations too large, Stage 16 materialization,
+    remote payload export/import, and authority mutation.
+- Phase 5 candidate: Stage 12 portable-run exchange rework.
+  - Scope: recheck landed Stage 12 records and replace opaque external-ref
+    extension fields with Stage 15 external/published/location summaries where
+    appropriate, preserving metadata-only exchange and unsupported
+    materialization diagnostics.
+  - Acceptance focus: portable-run export/import round trips preserve external
+    artifact facts without downloads, credential checks, payload access, or
+    backend-specific permanent schemas.
+  - Out of scope: changing Stage 12 authority semantics, adding materialization,
+    requiring remote access during exchange, or locking provider-specific
+    schemas into the core exchange format.
+- Phase 6 candidate: examples, docs, and validation hardening.
+  - Scope: MLflow-like and object-store-style design fixtures, adapter author
+    guidance, validation matrix coverage, import-boundary tests, contract tests,
+    and documentation that distinguishes fake design pressure tests from real
+    first-party adapters.
+  - Acceptance focus: both examples use the same generic contracts and expose
+    no optional dependencies; implementation evidence is easy to review before
+    Stage 16 materialization work begins.
+  - Out of scope: real MLflow/S3/GCS/Azure/DVC/HTTP adapter implementations,
+    cloud credentials, service containers, or opt-in integration suites.
 
 Reviewability notes:
 
-- Pending phase shaping.
+- Confirmed. These phase candidates are implementation-plan input, not final
+  phase execution plans. Implementation-plan drafting may merge or split them
+  for reviewability, but it must preserve the Stage 14 metadata-only boundary,
+  Stage 12 metadata-only rework boundary, Stage 16 payload-materialization
+  boundary, and fake-backend-first validation obligations.
 
 ## Implementation Readiness
 
@@ -1126,19 +1340,26 @@ Readiness checklist:
 - Design-safety review completed: yes, original review, renewed Stage 14
   alignment review, and latest targeted artifact-store backend pass all passed
   with required planning revisions
-- Examples and validation strategy confirmed: no
-- Phase shaping confirmed: no
+- Examples and validation strategy confirmed: yes
+- Phase shaping confirmed: yes
 - Open design-safety blockers resolved or accepted: yes
+- Implementation-plan drafting prerequisites recorded: yes, recheck landed
+  Stage 12 portable-run exchange records and Stage 14 plugin artifacts was
+  completed for this handoff
+- Ready for implementation-plan draft: yes; draft created and locally
+  quality-gated
 
 Open questions:
 
 - None from design-safety review, renewed Stage 14 alignment review, or latest
   targeted artifact-store backend pass.
-  Examples/validation and phase shaping remain pending planning gates.
+- None from examples/validation or phase shaping.
 
 Handoff notes:
 
-- Do not draft `docs/roadmap/stage-15/implementation-plan.md` until this
-  planning artifact records confirmed examples/validation, confirmed phase
-  shaping, no unresolved blockers or `needs discussion` decisions, and final
-  implementation readiness.
+- This planning artifact has been converted into
+  `docs/roadmap/stage-15/implementation-plan.md`.
+- The implementation plan used this artifact as the primary source and used the
+  completed Stage 12/14 source/API rechecks recorded above.
+- Do not create phase execution plans until Phase 1 is selected and its phase
+  execution plan is drafted.
