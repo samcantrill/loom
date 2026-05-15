@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: scope-complete phase execution plan; ready for implementation
+- Status: implementation complete; ready for PR preparation
 - Feature focus: Plugin Discovery
 - PR title:
   `Plugin Discovery - Phase 3: CLI, Preflight, And Summaries`
@@ -32,8 +32,9 @@
   planning refinement is required before implementation unless the manager
   reopens scope.
 - Setup limitations: branch and worktree were created from local `develop` as
-  assigned. No product code was implemented, no broad validation was run during
-  planning, and the control checkout has an unrelated local edit in
+  assigned. The initial implementation worker exhausted context before making
+  product-code edits, so the managing agent completed the implementation in
+  this worktree. The control checkout has an unrelated local edit in
   `docs/roadmap/stage-15/planning.md` that this phase leaves untouched.
 - Blockers: none.
 
@@ -523,8 +524,8 @@ run during PR preparation so the PR body can report suite-level evidence.
 
 - Phase planning draft: completed.
 - Phase planning refinement: completed for the expanded path.
-- Phase implementation refinement: unused; one pass remains available for the
-  expanded-path implementation or for targeted validation/review blockers.
+- Phase implementation refinement: not needed; targeted validation and the full
+  PR gate passed after the implementation commit.
 - PR body draft/refine: unused until PR preparation.
 - PR review: unused until the manager or reviewer consumes the single review
   pass.
@@ -535,8 +536,29 @@ run during PR preparation so the PR body can report suite-level evidence.
 - Draft plan: completed in
   `docs/roadmap/stage-14/phases/plugin-cli-preflight-summaries.md`.
 - Final phase execution plan: completed and ready for implementation handoff.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: added `loom plugins list` and `loom plugins check`
+  with stable JSON schema versions, metadata-only default listing, explicit
+  selected load/check behavior over scratch recipe/codec registries,
+  listing-only future-group diagnostics, import-light plugin diagnostic
+  summaries, and selected `plugins` preflight checks with `plugins.metadata`
+  and `plugins.load`.
+- Implementation validation:
+  - Focused suite passed:
+    `uv run pytest tests/unit/loom/plugins tests/unit/loom/cli/test_plugins.py
+    tests/unit/loom/cli/test_preflight.py
+    tests/unit/loom/diagnostics/test_preflight_plugins.py
+    tests/contracts/test_cli_plugins_contract.py
+    tests/contracts/test_diagnostics_preflight_contract.py
+    tests/package/test_plugins_api.py
+    tests/integration/diagnostics/test_plugin_preflight.py`
+    with 43 passed.
+  - `uv run ruff check ...` passed for touched source and test paths.
+  - `uv run pyright ...` passed for touched source and test paths.
+  - `make validate-pr` passed: Ruff, Pyright, default suite
+    (1583 passed, 26 skipped, 18 deselected), config-extra suite
+    (440 passed, 1620 deselected), and build.
+  - `make test-summary` passed: package 87, unit 1117, contract 208,
+    integration 156, e2e 43, and config-extra 440 tests passed.
 - PR preparation: pending.
 - Stack maintenance: root phase targets `develop`; no predecessor branch exists
   and no retarget or rebase is needed at planning time.
