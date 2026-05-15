@@ -1,5 +1,9 @@
 """Package-level plugin public API tests."""
 
+import subprocess
+import sys
+from textwrap import dedent
+
 import pytest
 
 
@@ -36,6 +40,22 @@ def test_import_loom_plugins_public_symbols() -> None:
 
 
 def test_import_loom_root_does_not_export_plugins() -> None:
-    import loom
+    script = dedent(
+        """
+        import sys
 
-    assert not hasattr(loom, "plugins")
+        import loom
+
+        if "loom.plugins" in sys.modules:
+            raise SystemExit("loom.plugins was imported eagerly")
+        if "plugins" in loom.__all__:
+            raise SystemExit("loom.plugins is exported from the root package")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 
 import importlib
 import pytest
