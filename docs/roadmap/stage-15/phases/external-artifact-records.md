@@ -465,6 +465,10 @@ make test-summary
     passed with 1622 passed / 26 skipped / 18 deselected, config-extra harness
     passed with 440 passed / 1659 deselected, and `uv build` produced the sdist
     and wheel.
+  - `make test-summary` passed outside the sandbox and wrote
+    `build/test-summary.md`: overall 2090 passed / 18 skipped / 1675
+    deselected across package, unit, contract, integration, e2e, and
+    config-extra suites.
 - Refinement summary: plan-only refine complete; no separate
   `loom_phase_refiner` pass was used. The manager completed one scoped local
   validation fix to preserve generic store kinds, restore positive-integer
