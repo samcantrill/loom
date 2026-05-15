@@ -746,6 +746,12 @@ def _check_artifact_backends(context: _Context) -> tuple[PreflightCheckResult, .
                 "no artifact backend targets configured",
                 details,
             ),
+            _skip(
+                "artifact_backends.materialization",
+                PreflightGroup.ARTIFACTS,
+                "no artifact backend targets configured",
+                details,
+            ),
         )
 
     resolved = _resolve_artifact_backend_targets(context)
@@ -753,6 +759,7 @@ def _check_artifact_backends(context: _Context) -> tuple[PreflightCheckResult, .
         _artifact_backend_registry_check(resolved),
         _artifact_backend_handler_check(resolved),
         _artifact_backend_capability_check(resolved),
+        _artifact_backend_materialization_check(resolved),
     )
 
 
@@ -1029,6 +1036,105 @@ def _artifact_backend_capability_check(
         severity,
         _artifact_backend_message(
             "artifact backend capabilities",
+            status=status,
+            diagnostic_count=len(diagnostics),
+        ),
+        details,
+    )
+
+
+def _artifact_backend_materialization_check(
+    resolved: tuple[_ResolvedArtifactBackendTarget, ...],
+) -> PreflightCheckResult:
+    from loom.pipeline.stores import (
+        ArtifactStoreBackendDiagnostic,
+        ArtifactStoreBackendDiagnosticSeverity,
+        ArtifactStoreBackendOperation,
+        ArtifactStoreBackendPayloadHandler,
+    )
+
+    payload_operations = {
+        ArtifactStoreBackendOperation.PUBLISH.value,
+        ArtifactStoreBackendOperation.MATERIALIZE.value,
+        ArtifactStoreBackendOperation.UPLOAD.value,
+        ArtifactStoreBackendOperation.DOWNLOAD.value,
+        ArtifactStoreBackendOperation.VERIFY_CHECKSUM.value,
+    }
+    materialization_targets = tuple(
+        item
+        for item in resolved
+        if any(
+            operation in payload_operations
+            for operation in item.target.required_operations
+        )
+    )
+    if not materialization_targets:
+        return _skip(
+            "artifact_backends.materialization",
+            PreflightGroup.ARTIFACTS,
+            "no artifact backend materialization targets configured",
+            {"reason": "no_materialization_targets"},
+        )
+
+    diagnostics: list[object] = []
+    readiness: list[PlainData] = []
+    for item in materialization_targets:
+        payload_handler_configured = isinstance(
+            item.handler,
+            ArtifactStoreBackendPayloadHandler,
+        )
+        readiness.append(
+            {
+                "target_id": item.target.target_id,
+                "backend_kind": item.backend_kind,
+                "payload_handler_configured": payload_handler_configured,
+                "required_operations": list(item.target.required_operations),
+                "expensive_probe": False,
+            }
+        )
+        if item.handler is None:
+            diagnostics.append(
+                ArtifactStoreBackendDiagnostic(
+                    code="artifact_store_backend_materialization_handler_missing",
+                    message="payload materialization target has no configured handler",
+                    severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                    detail={
+                        "target_id": item.target.target_id,
+                        "backend_kind": item.backend_kind,
+                    },
+                )
+            )
+            continue
+        if not payload_handler_configured:
+            diagnostics.append(
+                ArtifactStoreBackendDiagnostic(
+                    code="artifact_store_backend_payload_handler_missing",
+                    message=(
+                        "payload materialization target requires "
+                        "ArtifactStoreBackendPayloadHandler"
+                    ),
+                    severity=ArtifactStoreBackendDiagnosticSeverity.ERROR,
+                    detail={
+                        "target_id": item.target.target_id,
+                        "backend_kind": item.backend_kind,
+                        "required_operations": list(item.target.required_operations),
+                    },
+                )
+            )
+
+    status, severity = _artifact_backend_preflight_status(tuple(diagnostics))
+    details = dict(
+        _artifact_backend_details(tuple(resolved), diagnostics=tuple(diagnostics))
+    )
+    details["materialization_targets"] = readiness
+    details["expensive_probe"] = False
+    return _result(
+        "artifact_backends.materialization",
+        PreflightGroup.ARTIFACTS,
+        status,
+        severity,
+        _artifact_backend_message(
+            "artifact backend materialization readiness",
             status=status,
             diagnostic_count=len(diagnostics),
         ),

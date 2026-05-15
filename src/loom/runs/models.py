@@ -1500,6 +1500,7 @@ class RunBundleExportOptions:
     """Options controlling bundle export behavior and selection."""
 
     include_payloads: bool = False
+    materialize_payloads: bool = False
     include_logs: bool = False
     include_workspace: bool = False
     verify_checksums: bool = False
@@ -1508,6 +1509,7 @@ class RunBundleExportOptions:
 
     def __post_init__(self) -> None:
         _coerce_bool(self.include_payloads, "include_payloads")
+        _coerce_bool(self.materialize_payloads, "materialize_payloads")
         _coerce_bool(self.include_logs, "include_logs")
         _coerce_bool(self.include_workspace, "include_workspace")
         _coerce_bool(self.verify_checksums, "verify_checksums")
@@ -1526,6 +1528,7 @@ class RunBundleExportOptions:
     def to_dict(self) -> dict[str, PlainData]:
         return {
             "include_payloads": self.include_payloads,
+            "materialize_payloads": self.materialize_payloads,
             "include_logs": self.include_logs,
             "include_workspace": self.include_workspace,
             "verify_checksums": self.verify_checksums,
@@ -1546,9 +1549,11 @@ class RunBundleExportOptions:
                 "max_payload_count",
                 "extensions",
             },
+            optional={"materialize_payloads"},
         )
         return cls(
             include_payloads=cast(bool, payload["include_payloads"]),
+            materialize_payloads=cast(bool, payload.get("materialize_payloads", False)),
             include_logs=cast(bool, payload["include_logs"]),
             include_workspace=cast(bool, payload["include_workspace"]),
             verify_checksums=cast(bool, payload["verify_checksums"]),

@@ -88,6 +88,7 @@ def test_payload_and_export_defaults_are_metadata_only() -> None:
     }
     assert RunBundleExportOptions().to_dict() == {
         "include_payloads": False,
+        "materialize_payloads": False,
         "include_logs": False,
         "include_workspace": False,
         "verify_checksums": False,

@@ -93,6 +93,7 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
         "artifact_backends.registry",
         "artifact_backends.handlers",
         "artifact_backends.capabilities",
+        "artifact_backends.materialization",
     ),
     PreflightGroup.CODECS: ("codec_registry.available",),
     PreflightGroup.EXECUTOR: (
