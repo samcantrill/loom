@@ -475,7 +475,14 @@ make test-summary
   legacy `ArtifactRef.schema_version` compatibility, and satisfy Pyright.
 - Blocker-resolution summary: 1/3 used for the manager-local Pyright/type
   compatibility fix described above.
-- PR preparation: not started.
+- PR preparation: complete; PR body committed at
+  `docs/roadmap/stage-15/phases/external-artifact-records-pr-body.md`, branch
+  pushed to `origin/codex/external-artifact-records`, and PR opened as
+  https://github.com/samcantrill/loom/pull/160.
+- PR verification: `gh pr view 160 --json baseRefName,headRefName,state,url`
+  returned `baseRefName=develop`,
+  `headRefName=codex/external-artifact-records`, `state=OPEN`, and the PR URL
+  above.
 - Stack maintenance: root branch reset to current `develop`
   (`1ec6cd93c6722fbbd5ad72eab48eb773887187e1`) after verifying the local
   Stage 15 planning artifacts matched the landed files; no predecessor.
