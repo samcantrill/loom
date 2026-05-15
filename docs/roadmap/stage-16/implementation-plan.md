@@ -5,7 +5,7 @@ Roadmap stage: `v16`
 Planning document: `docs/roadmap/stage-16/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 in progress
+Current phase: Phase 5 PR open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-15 after
@@ -281,7 +281,7 @@ contracts and return the same operation evidence used by bundles and preflight.
 | 2 | `local-materialization-copy-records` | merged | `codex/local-materialization-copy-records` | [#167](https://github.com/samcantrill/loom/pull/167) | `loom.pipeline.stores`, public store exports | Add materialization records and copy-only local behavior | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Local copy, checksum mismatch, unsupported non-copy policy |
 | 3 | `fake-backend-payload-operations` | merged | `codex/fake-backend-payload-operations` | [#168](https://github.com/samcantrill/loom/pull/168) | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
 | 4 | `bundle-preflight-materialization` | merged | `codex/bundle-preflight-materialization` | [#169](https://github.com/samcantrill/loom/pull/169) | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
-| 5 | `no-backend-user-facing-handles` | in_progress | `codex/no-backend-user-facing-handles` | pending | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
+| 5 | `no-backend-user-facing-handles` | pr_open | `codex/no-backend-user-facing-handles` | [#170](https://github.com/samcantrill/loom/pull/170) | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
 
 ## Implementation Readiness Blockers
 
@@ -751,11 +751,11 @@ exchange, diagnostics, and possible CLI/API behavior
 
 ## Phase 5: No-Backend Finalization And User-Facing Handles
 
-Status: in_progress
+Status: pr_open
 Slug: `no-backend-user-facing-handles`
 Branch: `codex/no-backend-user-facing-handles`
 Worktree: `/home/samcantrill/work/loom-worktrees/no-backend-user-facing-handles`
-PR: pending
+PR: [#170](https://github.com/samcantrill/loom/pull/170)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase hardens public API, docs,
@@ -825,13 +825,12 @@ examples, packaging, and final validation
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available
+- Phase execution plan: complete in `docs/roadmap/stage-16/phases/no-backend-user-facing-handles.md`
+- Planning/refinement budget: expanded path; draft/refine used in the phase artifact
+- Implementation/refinement budget: not needed; targeted validation and the full PR gate passed without implementation blockers
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phases 1 through 4 merged or valid as stack
-  predecessors
+- Pre-submit blocker gate: Phases 1 through 4 merged; Phase 5 replayed onto updated `develop`
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -844,11 +843,11 @@ examples, packaging, and final validation
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: complete. Finalized no-backend user-facing docs, examples-by-documentation, package import hardening, structured unsupported/not-implemented payload handles, and no-optional-SDK coverage.
+- Validation: targeted package/contract checks passed with 105 passed and 1 skipped; broad package/contract/unit/integration checks passed with `--extra config` and 1771 passed; `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green.
+- PR: [#170](https://github.com/samcantrill/loom/pull/170) opened against `develop` and verified with `gh pr view 170 --json baseRefName,headRefName,state,url,statusCheckRollup,mergeable`; GitHub CI `checks` was in progress at verification time.
 - Merge: pending
-- Follow-up: pending
+- Follow-up: merge Phase 5 into `develop` when CI and automated review gates pass, then record final Stage 16 completion metadata.
 
 ## Cross-Phase Validation
 
