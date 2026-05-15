@@ -3,6 +3,8 @@
 import pytest
 
 from typing import Any, cast
+from types import ModuleType
+import importlib
 
 pytest.importorskip("pydantic")
 pytest.importorskip("omegaconf")
@@ -11,6 +13,12 @@ pytest.importorskip("yaml")
 from loom.config.recipes import Recipe, RecipeCatalog
 from loom.config.errors import InvalidRecipeOutputError
 from loom.config.recipes.expansion import expand_recipes
+from loom.plugins import (
+    LOOM_RECIPES_GROUP,
+    PluginDuplicateError,
+    PluginRecord,
+    load_recipe_entry_points,
+)
 from tests.support.config_samples import ArgumentRecipe, DownstreamRecipe, NestedOutputRecipe, function_recipe, nested_output_recipe
 
 
@@ -88,3 +96,49 @@ def test_contract_recipe_output_can_be_nested_recipe() -> None:
     assert inner["value"] == "nested:x-inner"
     assert manifest[0]["name"] == "nested-output"
     assert manifest[1]["name"] == "downstream"
+
+
+def test_contract_recipe_adapter_loads_fake_entry_point_into_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = RecipeCatalog()
+    record = PluginRecord(
+        group=LOOM_RECIPES_GROUP,
+        name="plugin",
+        value="loom.plugins.contract_recipe_adapter:recipe",
+    )
+
+    module = ModuleType("loom.plugins.contract_recipe_adapter")
+
+    def plugin_recipe(value: str) -> dict[str, str]:
+        return {"value": value}
+
+    setattr(module, "recipe", plugin_recipe)
+    monkeypatch.setattr(importlib, "import_module", lambda name, package=None: module)
+
+    load_recipe_entry_points(records=(record,), catalog=catalog, strict=True)
+    expanded, manifest = expand_recipes(
+        {"pipeline": {"_recipe_": "plugin", "value": "from-adapter"}},
+        catalog=catalog,
+    )
+
+    assert expanded["pipeline"] == {"value": "from-adapter"}
+    assert len(manifest) == 1
+    assert manifest[0]["name"] == "plugin"
+    assert manifest[0]["arguments"] == {"value": "from-adapter"}
+
+
+def test_contract_recipe_adapter_duplicate_entry_point_names_fail_closed() -> None:
+    duplicate_a = PluginRecord(
+        group=LOOM_RECIPES_GROUP,
+        name="same",
+        value="loom.plugins.contract_recipe_duplicate:first",
+    )
+    duplicate_b = PluginRecord(
+        group=LOOM_RECIPES_GROUP,
+        name="same",
+        value="loom.plugins.contract_recipe_duplicate:second",
+    )
+
+    with pytest.raises(PluginDuplicateError):
+        load_recipe_entry_points((duplicate_a, duplicate_b), RecipeCatalog(), strict=True)
