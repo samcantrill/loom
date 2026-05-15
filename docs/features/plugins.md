@@ -632,6 +632,14 @@ report installed entry point metadata, but Stage 14 must not import targets,
 construct runtime objects, mutate registries, probe credentials, validate URI
 schemes, or claim run readiness for that group.
 
+Stage 15 adds a specialized artifact-store backend adapter boundary without
+changing the generic readiness table above. Artifact-store backend entry points
+may be loaded only by code that supplies an `ArtifactStoreBackendRegistry`.
+Loading a descriptor into that supplied registry proves descriptor compatibility;
+it does not prove URI reachability, credentials, read/write/list support, or run
+readiness. Those facts are checked through Stage 15 backend preflight targets
+and handler capability admission.
+
 ### 7.7 CLI Commands
 
 Do not support arbitrary third-party CLI command injection in v0.

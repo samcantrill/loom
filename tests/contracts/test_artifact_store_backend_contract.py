@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any, cast
 
 import pytest
 
-from loom.artifacts import ArtifactStoreRef, ImmutableArtifactLookupRequest
+from loom.artifacts import (
+    ArtifactLocationKind,
+    ArtifactLocationSummary,
+    ArtifactRef,
+    ArtifactStoreRef,
+    ExternalArtifactDeclaration,
+    ImmutableArtifactLookupRequest,
+    ImmutableArtifactLookupResult,
+    PublishedArtifactRecord,
+)
 from loom.pipeline.stores import (
     ArtifactStore,
     ArtifactStoreBackendDescriptor,
@@ -20,8 +30,20 @@ from loom.pipeline.stores import (
     ArtifactStoreCapabilities,
     ArtifactStoreCapabilityRecord,
     ArtifactStoreCapabilitySupport,
+    ArtifactFactRecord,
+    BackendRevision,
+    admit_artifact_store_operations,
+    artifact_ref_from_external_declaration,
+    lookup_immutable_artifact,
 )
-from loom.serialization import PlainData
+from loom.runs import (
+    EXTERNAL_ARTIFACT_METADATA_KEY,
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
+    UNSUPPORTED_MATERIALIZATION_METADATA_KEY,
+    collect_run_exchange_artifact_summaries,
+    unsupported_materialization_summary,
+)
+from loom.serialization import PlainData, thaw_plain_data
 
 
 pytestmark = pytest.mark.contract
@@ -68,7 +90,7 @@ class _BaseFakeHandler:
         return ArtifactStoreRef(
             kind=store_ref.kind,
             key=store_ref.key,
-            uri=store_ref.uri,
+            uri=None,
             display_uri=store_ref.display_uri or "<redacted>",
             details=store_ref.details,
         )
@@ -79,7 +101,7 @@ class _BaseFakeHandler:
     def lookup(
         self,
         request: ImmutableArtifactLookupRequest,
-    ) -> ArtifactStoreBackendOperationResult:
+    ) -> ImmutableArtifactLookupResult | ArtifactStoreBackendOperationResult:
         del request
         return ArtifactStoreBackendOperationResult.unknown(
             ArtifactStoreBackendOperation.LOOKUP,
@@ -97,6 +119,49 @@ class _BaseFakeHandler:
             operation,
             message=message,
             detail=detail,
+        )
+
+
+class _TrackingSystemHandler(_BaseFakeHandler):
+    def lookup(
+        self,
+        request: ImmutableArtifactLookupRequest,
+    ) -> ImmutableArtifactLookupResult:
+        checksum = cast(str | None, request.validation_policy.get("checksum"))
+        location = ArtifactLocationSummary(
+            kind=ArtifactLocationKind.PUBLISHED_IMMUTABLE,
+            authority="authoritative",
+            uri="runs:/registered/model/latest",
+            display_uri="runs:/registered/model/latest",
+            store=ArtifactStoreRef(
+                kind=self.store_ref.kind,
+                display_uri=self.store_ref.display_uri or "tracking://redacted",
+            ),
+            checksum=checksum,
+            details={"source": "fake-tracking-system"},
+        )
+        published = PublishedArtifactRecord(
+            artifact_id="published-model",
+            uri="runs:/registered/model/latest",
+            artifact_type=request.artifact_type,
+            codec_key="json.v1",
+            artifact_schema_version=request.artifact_schema_version,
+            producer_run_uri="file:///runs/source/run-1",
+            producer_stage="train",
+            producer_artifact_id="model",
+            reuse_key=request.reuse_key,
+            validation_policy=request.validation_policy,
+            store=location.store,
+            location=location,
+            checksum=checksum,
+            metadata={"fixture": "tracking-system"},
+        )
+        return ImmutableArtifactLookupResult(
+            status="compatible",
+            request=request,
+            published=published,
+            location=location,
+            details={"handler": "tracking-system-fixture"},
         )
 
 
@@ -162,9 +227,9 @@ class _FakeTrackingFactory:
         *,
         config: Mapping[str, PlainData] | None = None,
         run_context: Mapping[str, PlainData] | None = None,
-    ) -> _BaseFakeHandler:
+    ) -> _TrackingSystemHandler:
         del config, run_context
-        return _BaseFakeHandler(
+        return _TrackingSystemHandler(
             descriptor=self.descriptor,
             store_ref=store_ref,
             capabilities=self.capabilities(),
@@ -262,6 +327,108 @@ def test_fake_tracking_and_object_store_factories_share_contract_shape() -> None
     assert not object_handler.capabilities.supports(
         ArtifactStoreBackendOperation.MATERIALIZE
     )
+
+
+def test_fake_backends_demonstrate_lookup_capability_and_run_exchange_metadata() -> (
+    None
+):
+    registry = ArtifactStoreBackendRegistry(
+        (_FakeTrackingFactory(), _FakeObjectStoreFactory())
+    )
+    tracking_ref = ArtifactStoreRef(
+        kind="tracking-system",
+        uri="tracking://private.example/runs/model",
+        display_uri="tracking://redacted/runs/model",
+    )
+    object_ref = ArtifactStoreRef(
+        kind="object-store",
+        uri="s3://secret-bucket/models/champion.json",
+        display_uri="s3://redacted/models/champion.json",
+    )
+    tracking_handler = registry.create_handler("tracking-system", tracking_ref)
+    object_handler = registry.create_handler("object-store", object_ref)
+
+    assert admit_artifact_store_operations(
+        tracking_handler,
+        (ArtifactStoreBackendOperation.READ, ArtifactStoreBackendOperation.LOOKUP),
+    ) == ()
+
+    publish_admission = admit_artifact_store_operations(
+        tracking_handler,
+        (ArtifactStoreBackendOperation.PUBLISH,),
+    )
+    assert publish_admission[0].support is ArtifactStoreCapabilitySupport.UNSUPPORTED
+
+    materialize_result = object_handler.unsupported_operation(
+        ArtifactStoreBackendOperation.MATERIALIZE,
+        message="object-store fixture only preserves metadata in Stage 15",
+    )
+    assert materialize_result.to_dict()["support"] == "unsupported"
+
+    request = ImmutableArtifactLookupRequest(
+        reuse_key="model:champion",
+        artifact_type="model",
+        artifact_schema_version=1,
+        validation_policy={"checksum": "sha256:" + "4" * 64},
+        store=tracking_ref,
+    )
+    lookup = lookup_immutable_artifact(request, tracking_handler)
+    assert lookup.status == "compatible"
+    assert lookup.published is not None
+    assert lookup.location is not None
+    assert lookup.location.store is not None
+    assert lookup.location.store.display_uri == "tracking://redacted/runs/model"
+
+    declaration = ExternalArtifactDeclaration(
+        artifact_id="external-model",
+        uri="s3://secret-bucket/models/champion.json",
+        artifact_type="model",
+        codec_key="json.v1",
+        artifact_schema_version=1,
+        store=object_handler.redact_store_ref(object_ref),
+        location=ArtifactLocationSummary(
+            kind=ArtifactLocationKind.EXTERNAL_IMMUTABLE,
+            authority="authoritative",
+            display_uri="s3://redacted/models/champion.json",
+            store=object_handler.redact_store_ref(object_ref),
+            checksum="sha256:" + "5" * 64,
+            details={"adapter_shape": "object-store"},
+        ),
+        checksum="sha256:" + "5" * 64,
+        metadata={"fixture": "object-store"},
+    )
+    artifact = artifact_ref_from_external_declaration(declaration)
+    artifact = ArtifactRef(
+        **{
+            **artifact.to_dict(),
+            "metadata": {
+                **cast(dict[str, PlainData], thaw_plain_data(artifact.metadata)),
+                UNSUPPORTED_MATERIALIZATION_METADATA_KEY: unsupported_materialization_summary(
+                    "object-store payload materialization is deferred to Stage 16",
+                    location=declaration.location,
+                ),
+            },
+        }
+    )
+    summary = collect_run_exchange_artifact_summaries(
+        (
+            ArtifactFactRecord(
+                artifact_name="model",
+                artifact=artifact,
+                commit_id="commit-1",
+                revision=BackendRevision(sequence=1, token="rev-1"),
+            ),
+        )
+    )
+
+    assert summary["schema_version"] == 1
+    preserved = cast(list[dict[str, Any]], summary["artifacts"])[0]
+    summaries = cast(dict[str, Any], preserved["summaries"])
+    external = cast(dict[str, Any], summaries[EXTERNAL_ARTIFACT_METADATA_KEY])
+    assert external["store"]["uri"] is None
+    assert external["store"]["display_uri"] == "s3://redacted/models/champion.json"
+    assert UNSUPPORTED_MATERIALIZATION_METADATA_KEY in summaries
+    assert RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY == "stage_15_artifact_summaries"
 
 
 def test_contract_rejects_raw_store_instances_and_descriptor_without_factory() -> None:

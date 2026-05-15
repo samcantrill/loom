@@ -71,6 +71,20 @@ The initial implementation should support local filesystem artifacts well. Remot
 artifact stores, content-addressed storage, and artifact registry services should
 be deferred until local behavior is stable.
 
+Stage 15 adds metadata-first external artifact contracts without changing that
+boundary. `ArtifactStoreRef`, `ArtifactLocationSummary`,
+`ExternalArtifactDeclaration`, `PublishedArtifactRecord`,
+`ImmutableArtifactLookupRequest`, and `ImmutableArtifactLookupResult` are strict
+plain-data records for external immutable inputs, published immutable outputs,
+multi-location summaries, and explicit lookup outcomes. They are adjacent to
+`ArtifactRef`; they do not make `ArtifactRef` load bytes, probe credentials, or
+own provider-specific schemas.
+
+Use these records when a project needs to preserve facts such as a redacted
+object-store URI, a tracking-system run artifact URI, checksum evidence, reuse
+keys, or unsupported-materialization context. Payload movement remains a later
+materialization concern.
+
 ---
 
 ## 3. Package Boundary

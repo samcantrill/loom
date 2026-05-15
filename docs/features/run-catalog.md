@@ -434,6 +434,11 @@ provenance and keeps imported artifact refs metadata-only unless payloads were
 explicitly included and copied. Unsupported remote materialization is recorded as
 a warning diagnostic, not as an implicit download attempt.
 
+The Stage 15 extension is the stable handoff to Stage 16 materialization. It is
+not a provider protocol and should not be used to infer that a remote URI is
+reachable or writable. Adapter-specific import behavior must remain opt-in and
+capability-checked.
+
 Imported runs are historical-only in v12. Live migrated resume, merge,
 overwrite, fork, remote payload materialization, signed/encrypted bundles,
 deduplication, automatic post-run export dispatch, provider plugins, and
