@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 2 merged; ready for Phase 3 execution planning
+- Status: Phase 3 merged; ready for Phase 4 execution planning
 - Roadmap stage: `v15`
 - Source planning notes:
   `docs/roadmap/stage-15/planning.md`
@@ -28,12 +28,12 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: ready for Phase 3 execution planning
+- Current phase: ready for Phase 4 execution planning
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains.
-  - No Phase 3 execution plan exists yet; do not start Phase 3 product
-    implementation until Phase 3 execution planning is complete.
+  - No Phase 4 execution plan exists yet; do not start Phase 4 product
+    implementation until Phase 4 execution planning is complete.
 
 ## Summary
 
@@ -365,7 +365,7 @@ and project-specific adapters without adding those services to core.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `external-artifact-records` | merged | `codex/external-artifact-records` | https://github.com/samcantrill/loom/pull/160 | `loom.artifacts`, artifact package tests | Add external/published/location records and `ArtifactRef` compatibility contracts | Artifact/package/contract tests plus full PR gate | Old `ArtifactRef`, external declaration, published record, location summary |
 | 2 | `artifact-store-backend-contracts` | merged | `codex/artifact-store-backend-contracts` | https://github.com/samcantrill/loom/pull/161 | `loom.pipeline.stores`, optional lazy plugin adapter | Add backend descriptor/factory, registry, capabilities, fake handlers, and supplied-registry plugin adapter boundary | Store/plugin contract tests plus full PR gate | MLflow-like fake descriptor, object-store-style fake descriptor |
-| 3 | `immutable-artifact-semantics` | pending | TBD | TBD | artifact/store registration and lookup APIs | Add external immutable input and published immutable output registration/lookup semantics | Unit/contract tests plus full PR gate | Explicit compatible/incompatible/missing/unsupported lookup |
+| 3 | `immutable-artifact-semantics` | merged | `codex/immutable-artifact-semantics` | https://github.com/samcantrill/loom/pull/162 | artifact/store registration and lookup APIs | Add external immutable input and published immutable output registration/lookup semantics | Unit/contract tests plus full PR gate | Explicit compatible/incompatible/missing/unsupported lookup |
 | 4 | `backend-preflight-catalog-bundles` | pending | TBD | TBD | diagnostics, catalog projections, bundle metadata preservation | Add backend/config/capability checks and metadata-only catalog/bundle preservation | Diagnostics/run-catalog/bundle tests plus full PR gate | Missing handler, unsupported write, redacted summaries |
 | 5 | `stage-12-exchange-rework` | pending | TBD | TBD | `loom.runs` portable-run exchange | Rework Stage 12 exchange/export/import metadata to consume Stage 15 summaries | Run exchange/import/export tests plus full PR gate | Metadata-only external refs round trip through exchange |
 | 6 | `external-artifact-docs-validation` | pending | TBD | TBD | docs, examples, cross-cutting tests | Add examples, docs, validation matrix, import-boundary hardening | Full validation and test summary | MLflow-like and object-store-style fake examples |
@@ -712,13 +712,13 @@ records, but should not replace execution artifact-store wiring.
 
 ## Phase 3: Immutable Artifact Semantics
 
-Status: pending
+Status: merged
 Slug: `immutable-artifact-semantics`
-Branch: TBD
-Worktree: TBD
-PR: TBD
-Base branch: TBD
-Target branch: TBD
+Branch: `codex/immutable-artifact-semantics`
+Worktree: `/home/samcantrill/work/loom-worktrees/immutable-artifact-semantics`
+PR: https://github.com/samcantrill/loom/pull/162
+Base branch: `develop`
+Target branch: `develop`
 Workflow path: expanded path because this phase connects new public records to
 store semantics and lookup behavior
 
@@ -813,6 +813,34 @@ Revisit when first optional backend adapter lands.
 
 Do not touch run catalog or bundle code in this phase except via tests proving
 records are serializable.
+
+### Merge Metadata
+
+- Merged: 2026-05-15 via squash merge to `develop`
+- Merge commit: `f5816161edc819c9d052cf934dbfd609dcd3af10`
+- PR: https://github.com/samcantrill/loom/pull/162
+- Implementation summary: added `loom.pipeline.stores.immutable_artifacts`
+  with metadata-only external declaration and published-record validation,
+  fail-closed selected operation admission, explicit immutable lookup,
+  validation-policy comparison, and `ArtifactRef` projection helpers; exported
+  the public store helper names; and added unit, contract, and package
+  coverage for explicit lookup and metadata-only semantics.
+- Checks:
+  - Focused Phase 3 pytest paths passed: 68 passed.
+  - Broad Phase 3 pytest target passed outside the sandbox: 1376 passed / 10
+    skipped.
+  - `make validate-pr` passed outside the sandbox: Ruff passed, Pyright passed
+    with 0 errors, default pytest passed, config-extra pytest passed, and build
+    passed.
+  - `make test-summary` passed: overall 2110 passed / 18 skipped / 1695
+    deselected.
+  - GitHub CI `checks` job passed on the final PR head in 2m44s.
+- Automated review: managing agent local review approved with no blocking or
+  non-blocking findings; final pre-merge verification confirmed PR base
+  `develop`, head `codex/immutable-artifact-semantics`, successful CI, and
+  Phase 3-scoped diff.
+- Follow-up notes: branch/worktree cleanup is safe because no successor branch
+  depends on Phase 3.
 
 ## Phase 4: Backend Preflight, Catalog, And Bundle Preservation
 
