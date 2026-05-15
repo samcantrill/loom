@@ -65,10 +65,11 @@ tests/e2e
   validates complete user-visible workflows
 
 tests/contracts
-  validates extension-point behavior
+  validates extension-point behavior and fake backend contracts
 
 tests/package
-  validates import and distribution surface
+  validates import and distribution surface, including optional dependency
+  boundaries
 ```
 
 Tests should reinforce the architecture:
@@ -159,6 +160,7 @@ Stage contract
 ArtifactStore contract
 RunStore contract
 Executor contract
+Artifact-store backend and payload operation contracts
 ```
 
 ### 3.6 `tests/support`
@@ -228,6 +230,14 @@ domain-specific downstream package tests
 ```
 
 Those can exist as explicitly marked acceptance suites later.
+
+Stage 16 remote-like artifact coverage stays in this default-safe model. Core
+tests use fake object-store and tracking-system handlers to prove payload
+operation contracts, bundle materialization evidence, unsupported real-backend
+handles, and redaction. They must not import provider SDKs, require credentials,
+or perform network operations. Package tests should keep asserting that default
+artifact, store, run, preflight, and materialization imports do not load plugins
+or optional backend dependencies.
 
 ---
 

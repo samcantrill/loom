@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -396,6 +397,42 @@ def test_read_only_and_checksum_mismatch_fail_closed(tmp_path: Path) -> None:
     )
     assert unknown is not None
     assert unknown.support is ArtifactStoreCapabilitySupport.UNKNOWN
+
+
+def test_future_real_backend_payload_handle_is_not_implemented_and_redacted(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.bin"
+    request = ArtifactStorePayloadOperationRequest(
+        operation=ArtifactStoreBackendOperation.DOWNLOAD,
+        source_uri="s3://redacted/model.bin",
+        target_uri=path_to_file_uri(target.resolve(strict=False)),
+    )
+
+    result = ArtifactStorePayloadOperationResult.not_implemented(
+        request,
+        backend_kind="S3",
+        message="S3 payload materialization is not implemented in core Loom",
+        detail={
+            "provider": "s3",
+            "credential": "secret-token",
+            "uri": "s3://private-bucket/model.bin?token=secret-token",
+        },
+    )
+
+    payload = result.to_dict()
+    rendered = str(payload)
+
+    assert result.result.status is OperationStatus.NOT_IMPLEMENTED
+    assert result.result.adapter is not None
+    assert result.result.adapter.name == "s3"
+    assert result.result.diagnostics[0].code == "operation.not_implemented"
+    result_payload = cast(dict[str, object], payload["result"])
+    assert payload["detail"] == result_payload["details"]
+    assert "secret-token" not in rendered
+    assert "token=<redacted>" in rendered
+    assert "<redacted>" in rendered
+    assert not target.exists()
 
 
 def test_tracking_system_indirection_uses_the_same_payload_result_shape(

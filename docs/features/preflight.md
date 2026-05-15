@@ -135,6 +135,7 @@ artifact_store.available
 artifact_backends.registry
 artifact_backends.handlers
 artifact_backends.capabilities
+artifact_backends.materialization
 codec_registry.available
 executor.local
 executor.resolve
@@ -266,6 +267,14 @@ Default artifact backend checks must not discover plugins, import backend SDKs,
 contact tracking systems, probe credentials, call `handler.check()`, perform
 lookup, or materialize payloads. Generic Stage 14 plugin metadata/list/load
 results never satisfy Stage 15 backend availability or run-readiness checks.
+
+Stage 16 adds `artifact_backends.materialization` for selected artifact backend
+targets that request payload operations such as materialize, upload, download,
+publish, or checksum verification. The default check is still cheap: it verifies
+that a configured handler implements the store-owned payload protocol and that
+declared capabilities are present, but it does not call `payload_operation()`,
+move bytes, contact a service, or validate credentials. Expensive probes remain
+a future explicit option.
 
 ## Executor Checks
 

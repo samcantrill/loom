@@ -93,17 +93,19 @@ def test_non_copy_policy_contract_is_structured_unsupported(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.bin"
+    target = tmp_path / "target.bin"
     source.write_bytes(b"payload")
 
     result = materialize_artifact_locally(
         ArtifactMaterializationRequest(
             artifact=_artifact(source),
-            target_path=tmp_path / "target.bin",
+            target_path=target,
             policy=LocalMaterializationPolicy.SYMLINK,
         )
     )
 
     assert result.operation.status is OperationStatus.UNSUPPORTED
+    assert not target.exists()
     payload = result.to_dict()
     operation = cast(dict[str, object], payload["operation"])
     diagnostics = cast(list[dict[str, object]], operation["diagnostics"])
