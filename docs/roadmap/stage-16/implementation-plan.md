@@ -279,8 +279,8 @@ contracts and return the same operation evidence used by bundles and preflight.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `shared-operation-evidence-contracts` | merged | `codex/shared-operation-evidence-contracts` | [#166](https://github.com/samcantrill/loom/pull/166) | `loom.operations`, narrow compatibility projections | Add shared operation/evidence value objects and bounded adoption | Unit/contract/package import-boundary tests, `make validate-pr`, `make test-summary` | Unsupported operation, checksum evidence, redacted diagnostic |
 | 2 | `local-materialization-copy-records` | merged | `codex/local-materialization-copy-records` | [#167](https://github.com/samcantrill/loom/pull/167) | `loom.pipeline.stores`, public store exports | Add materialization records and copy-only local behavior | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Local copy, checksum mismatch, unsupported non-copy policy |
-| 3 | `fake-backend-payload-operations` | pr_open | `codex/fake-backend-payload-operations` | [#168](https://github.com/samcantrill/loom/pull/168) | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
-| 4 | `bundle-preflight-materialization` | pending | `codex/bundle-preflight-materialization` | pending | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
+| 3 | `fake-backend-payload-operations` | merged | `codex/fake-backend-payload-operations` | [#168](https://github.com/samcantrill/loom/pull/168) | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
+| 4 | `bundle-preflight-materialization` | in_progress | `codex/bundle-preflight-materialization` | pending | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
 | 5 | `no-backend-user-facing-handles` | pending | `codex/no-backend-user-facing-handles` | pending | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
 
 ## Implementation Readiness Blockers
@@ -514,7 +514,7 @@ payload operation records
 
 ## Phase 3: Backend Handler Materialization And Fake Remote Operations
 
-Status: pr_open
+Status: merged
 Slug: `fake-backend-payload-operations`
 Branch: `codex/fake-backend-payload-operations`
 Worktree: `/home/samcantrill/work/loom-worktrees/fake-backend-payload-operations`
@@ -613,12 +613,12 @@ behavior and fake conformance coverage
 - Implementation: complete. Added payload operation records/protocols, public store exports, and fake object-store/tracking-system payload operation coverage.
 - Validation: `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green.
 - PR: [#168](https://github.com/samcantrill/loom/pull/168) opened against `develop` and verified with `gh pr view 168 --json baseRefName,headRefName,state,url`.
-- Merge: pending
-- Follow-up: pending
+- Merge: merged into `develop` on 2026-05-15 as squash commit `325f024677481b98009bf8880445a433297b977f`; target verified with `gh pr view 168 --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` before merge, CI check `checks` succeeded, and the branch was kept because Phase 4 had stacked work.
+- Follow-up: rebase Phase 4 from `codex/fake-backend-payload-operations` onto updated `develop` and target its PR to `develop`.
 
 ## Phase 4: Bundle, Import, Catalog, And Preflight Integration
 
-Status: pending
+Status: in_progress
 Slug: `bundle-preflight-materialization`
 Branch: `codex/bundle-preflight-materialization`
 Worktree: `/home/samcantrill/work/loom-worktrees/bundle-preflight-materialization`
