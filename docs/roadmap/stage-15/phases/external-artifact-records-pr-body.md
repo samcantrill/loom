@@ -48,7 +48,7 @@ New tests implemented:
 | Focused Phase 1 pytest paths | passed | 88 passed in 14.72s |
 | `make validate-pr` | passed | Ruff passed; Pyright 0 errors; default harness 1622 passed / 26 skipped / 18 deselected; config-extra 440 passed / 1659 deselected; build passed |
 | `make test-summary` | passed | Overall 2090 passed / 18 skipped / 1675 deselected |
-| GitHub checks | pending | To run after PR creation |
+| GitHub checks | unavailable | `gh pr checks 160 --watch=false` reported no checks on the branch |
 
 ### Test Suite Summary
 
