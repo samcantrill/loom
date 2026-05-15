@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 4 PR open; ready for automated review and merge
+- Status: complete; all phases merged
 - Roadmap stage: `v14`
 - Source planning notes:
   `docs/roadmap/stage-14/planning.md`
@@ -28,11 +28,10 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: Phase 4 PR open
+- Current phase: complete
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 4 PR #159 is open against
-    `develop` and awaiting automated review/CI merge gates.
+  - No plan-quality blocker remains; all Stage 14 phases are merged.
 
 ## Summary
 
@@ -323,7 +322,7 @@ versioning.
 | 1 | `plugin-records-discovery` | merged | `codex/plugin-records-discovery` | [#156](https://github.com/samcantrill/loom/pull/156) | `src/loom/plugins`, package exports, fake entry point tests | Add plugin records, errors, group constants, deterministic listing/loading, and import-safety coverage | `make validate-pr`, `make test-summary`, and CI passed | Fake listing, duplicates, load failures, import safety |
 | 2 | `recipe-codec-plugin-adapters` | merged | `codex/recipe-codec-plugin-adapters` | [#157](https://github.com/samcantrill/loom/pull/157) | Recipe and codec loader adapters plus contract tests | Add explicit recipe and codec entry point loading into supplied registries | `make validate-pr`, `make test-summary`, and CI passed | Fake recipe load, fake codec instance/class/factory load, duplicate codec key |
 | 3 | `plugin-cli-preflight-summaries` | merged | `codex/plugin-cli-preflight-summaries` | [#158](https://github.com/samcantrill/loom/pull/158) | CLI commands, preflight diagnostics, summary helpers | Expose plugin list/check, requested preflight checks, and plain summaries | CLI/unit/preflight tests plus `make validate-pr` before PR | Best-effort failures, CLI JSON/text, requested plugin preflight |
-| 4 | `future-plugin-group-readiness` | pr_open | `codex/future-plugin-group-readiness` | [#159](https://github.com/samcantrill/loom/pull/159) | Future group constants/docs/tests and readiness classifications | Add listing/check coverage and docs for future groups, especially metadata-only artifact-store backends | Unit/CLI/preflight/docs tests plus `make validate-pr` and `make test-summary` before final PR | Future group listing, artifact-store backend listing-only, premature registration fail-closed |
+| 4 | `future-plugin-group-readiness` | merged | `codex/future-plugin-group-readiness` | [#159](https://github.com/samcantrill/loom/pull/159) | Future group constants/docs/tests and readiness classifications | Add listing/check coverage and docs for future groups, especially metadata-only artifact-store backends | Unit/CLI/preflight/docs tests plus `make validate-pr` and `make test-summary` before final PR | Future group listing, artifact-store backend listing-only, premature registration fail-closed |
 
 ## Implementation Readiness Blockers
 
@@ -740,11 +739,11 @@ surface
 
 ## Phase 4: Future Group Readiness And Contract Hooks
 
-Status: pr_open
+Status: merged
 Slug: `future-plugin-group-readiness`
 Branch: `codex/future-plugin-group-readiness`
 Worktree: `/home/samcantrill/work/loom-worktrees/future-plugin-group-readiness`
-PR: [#159](https://github.com/samcantrill/loom/pull/159), opened 2026-05-15
+PR: [#159](https://github.com/samcantrill/loom/pull/159), merged 2026-05-15
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase protects future public
@@ -825,11 +824,11 @@ contracts
 - Planning/refinement budget: used for expanded-path planning
 - Implementation/refinement budget: not needed after targeted validation and
   full PR gate passed
-- PR review budget: pending manager automated review completion
+- PR review budget: used by manager local automated review before merge
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: no Stage 15/19 semantics implemented in Stage 14
-- Merge record: pending; PR #159 targets `develop` from
-  `codex/future-plugin-group-readiness`
+- Merge record: merged into `develop` by PR #159 at merge commit
+  `eec79a5fff84640f5f03cf3983e9f8629261024c`
 
 ### Risks And Stop Conditions
 
@@ -858,8 +857,10 @@ contracts
   config-extra 440 tests passed.
 - PR: [#159](https://github.com/samcantrill/loom/pull/159) targets `develop`
   from `codex/future-plugin-group-readiness`.
-- Merge: pending
-- Follow-up: pending
+- Merge: merged 2026-05-15 with merge commit
+  `eec79a5fff84640f5f03cf3983e9f8629261024c`.
+- Follow-up: Stage 14 is complete. Future work may add loaders only after the
+  owning subsystem lands a stable registry/adapter contract.
 
 ## Cross-Phase Validation
 
