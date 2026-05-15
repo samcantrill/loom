@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 1 merged; ready for Phase 2 execution planning
+- Status: Phase 2 merged; ready for Phase 3 execution planning
 - Roadmap stage: `v14`
 - Source planning notes:
   `docs/roadmap/stage-14/planning.md`
@@ -28,10 +28,10 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: Phase 2 pending execution planning
+- Current phase: Phase 3 pending execution planning
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 2 execution planning may begin.
+  - No plan-quality blocker remains; Phase 3 execution planning may begin.
 
 ## Summary
 
@@ -320,7 +320,7 @@ versioning.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `plugin-records-discovery` | merged | `codex/plugin-records-discovery` | [#156](https://github.com/samcantrill/loom/pull/156) | `src/loom/plugins`, package exports, fake entry point tests | Add plugin records, errors, group constants, deterministic listing/loading, and import-safety coverage | `make validate-pr`, `make test-summary`, and CI passed | Fake listing, duplicates, load failures, import safety |
-| 2 | `recipe-codec-plugin-adapters` | pending | `codex/recipe-codec-plugin-adapters` | pending | Recipe and codec loader adapters plus contract tests | Add explicit recipe and codec entry point loading into supplied registries | Unit/contract tests plus `make validate-pr` before PR | Fake recipe load, fake codec instance/class/factory load, duplicate codec key |
+| 2 | `recipe-codec-plugin-adapters` | merged | `codex/recipe-codec-plugin-adapters` | [#157](https://github.com/samcantrill/loom/pull/157) | Recipe and codec loader adapters plus contract tests | Add explicit recipe and codec entry point loading into supplied registries | `make validate-pr`, `make test-summary`, and CI passed | Fake recipe load, fake codec instance/class/factory load, duplicate codec key |
 | 3 | `plugin-cli-preflight-summaries` | pending | `codex/plugin-cli-preflight-summaries` | pending | CLI commands, preflight diagnostics, summary helpers | Expose plugin list/check, requested preflight checks, and plain summaries | CLI/unit/preflight tests plus `make validate-pr` before PR | Best-effort failures, CLI JSON/text, requested plugin preflight |
 | 4 | `future-plugin-group-readiness` | pending | `codex/future-plugin-group-readiness` | pending | Future group constants/docs/tests and readiness classifications | Add listing/check coverage and docs for future groups, especially metadata-only artifact-store backends | Unit/CLI/preflight/docs tests plus `make validate-pr` and `make test-summary` before final PR | Future group listing, artifact-store backend listing-only, premature registration fail-closed |
 
@@ -509,11 +509,11 @@ entry point group contracts
 
 ## Phase 2: Recipe And Codec Registry Adapters
 
-Status: pending
+Status: merged
 Slug: `recipe-codec-plugin-adapters`
 Branch: `codex/recipe-codec-plugin-adapters`
 Worktree: `/home/samcantrill/work/loom-worktrees/recipe-codec-plugin-adapters`
-PR: pending
+PR: [#157](https://github.com/samcantrill/loom/pull/157), merged 2026-05-15
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase adds public registry adapter
@@ -578,14 +578,16 @@ behavior
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path recommended
-- Implementation/refinement budget: one refiner pass available if validation
-  or adapter API review finds blockers
-- PR review budget: one reviewer pass
+- Phase execution plan: completed in
+  `docs/roadmap/stage-14/phases/recipe-codec-plugin-adapters.md`
+- Planning/refinement budget: used for expanded-path planning
+- Implementation/refinement budget: used for Phase 2 Pyright and import-light
+  adapter blockers found during validation review
+- PR review budget: used by manager local review before merge
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: no registry API widening beyond plan
-- Merge record: pending
+- Pre-submit blocker gate: passed; no registry API widening beyond plan
+- Merge record: merged into `develop` by PR #157 at merge commit
+  `6f7db38c865b1fa9ed22054a0aed622da85289b4`
 
 ### Risks And Stop Conditions
 
@@ -601,11 +603,21 @@ behavior
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
-- Merge: pending
-- Follow-up: pending
+- Implementation: added lazy public recipe and codec adapter exports,
+  `load_recipe_entry_points(...)`, and `load_codec_entry_points(...)`.
+  Recipe plugins register into supplied catalogs under entry point names; codec
+  plugins register into supplied registries under runtime `codec.key` after
+  narrow instance/class/factory normalization.
+- Validation: targeted plugin/recipe/codec tests passed; `make validate-pr`
+  passed; `make test-summary` passed with package 86, unit 1106, contract 206,
+  integration 155, e2e 43, and config-extra 440 tests passed; GitHub CI
+  `checks` passed on PR #157.
+- PR: [#157](https://github.com/samcantrill/loom/pull/157) targeted
+  `develop` from `codex/recipe-codec-plugin-adapters`.
+- Merge: merged 2026-05-15 with merge commit
+  `6f7db38c865b1fa9ed22054a0aed622da85289b4`.
+- Follow-up: Phase 3 may branch from updated `develop`; no successor depends
+  on the Phase 2 branch.
 
 ## Phase 3: CLI, Preflight, And Provenance Summaries
 
