@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 5 merged; ready for Phase 6 execution planning
+- Status: complete; all phases merged
 - Roadmap stage: `v15`
 - Source planning notes:
   `docs/roadmap/stage-15/planning.md`
@@ -28,12 +28,11 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: ready for Phase 6 execution planning
+- Current phase: complete
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains.
-  - No Phase 6 execution plan exists yet; do not start Phase 6 product
-    implementation until Phase 6 execution planning is complete.
+  - No implementation blocker remains.
 
 ## Summary
 
@@ -368,7 +367,7 @@ and project-specific adapters without adding those services to core.
 | 3 | `immutable-artifact-semantics` | merged | `codex/immutable-artifact-semantics` | https://github.com/samcantrill/loom/pull/162 | artifact/store registration and lookup APIs | Add external immutable input and published immutable output registration/lookup semantics | Unit/contract tests plus full PR gate | Explicit compatible/incompatible/missing/unsupported lookup |
 | 4 | `backend-preflight-catalog-bundles` | merged | `codex/backend-preflight-catalog-bundles` | https://github.com/samcantrill/loom/pull/163 | diagnostics, catalog projections, bundle metadata preservation | Add backend/config/capability checks and metadata-only catalog/bundle preservation | Diagnostics/run-catalog/bundle tests plus full PR gate | Missing handler, unsupported write, redacted summaries |
 | 5 | `stage-12-exchange-rework` | merged | `codex/stage-12-exchange-rework` | https://github.com/samcantrill/loom/pull/164 | `loom.runs` portable-run exchange | Rework Stage 12 exchange/export/import metadata to consume Stage 15 summaries | Run exchange/import/export tests plus full PR gate | Metadata-only external refs round trip through exchange |
-| 6 | `external-artifact-docs-validation` | pending | TBD | TBD | docs, examples, cross-cutting tests | Add examples, docs, validation matrix, import-boundary hardening | Full validation and test summary | MLflow-like and object-store-style fake examples |
+| 6 | `external-artifact-docs-validation` | merged | `codex/external-artifact-docs-validation` | https://github.com/samcantrill/loom/pull/165 | docs, examples, cross-cutting tests | Add examples, docs, validation matrix, import-boundary hardening | Full validation and test summary | MLflow-like and object-store-style fake examples |
 
 ## Implementation Readiness Blockers
 
@@ -1108,13 +1107,13 @@ backend registry or preflight behavior here except through public summaries.
 
 ## Phase 6: Examples, Docs, And Validation Hardening
 
-Status: pending
+Status: merged
 Slug: `external-artifact-docs-validation`
-Branch: TBD
-Worktree: TBD
-PR: TBD
-Base branch: TBD
-Target branch: TBD
+Branch: `codex/external-artifact-docs-validation`
+Worktree: `/home/samcantrill/work/loom-worktrees/external-artifact-docs-validation`
+PR: https://github.com/samcantrill/loom/pull/165
+Base branch: `develop`
+Target branch: `develop`
 Workflow path: expanded path because this phase validates cross-cutting public
 contracts before Stage 16 builds on them
 
@@ -1210,6 +1209,41 @@ Revisit when a concrete optional backend family enters the roadmap.
 Keep final docs and validation hardening separate from earlier functional
 phases so review can focus on cross-cutting consistency and evidence.
 
+### Merge Metadata
+
+- Merged: 2026-05-15 via squash merge to `develop`
+- Merge commit: `6d50d77ede7fb3881e05f1e54b29db7d8b8ff632`
+- PR: https://github.com/samcantrill/loom/pull/165
+- Implementation summary: updated Stage 15 feature docs across artifacts,
+  remote stores, plugins, preflight, and run catalog; hardened contract
+  fixtures so tracking-system and object-store fake examples demonstrate
+  redaction, capability admission, explicit lookup/unsupported results, and
+  run-exchange metadata preservation; and added package import-boundary tests
+  proving Stage 15 defaults do not discover plugins or import optional backend
+  SDK/client packages.
+- Checks:
+  - Focused Ruff and Pyright checks passed for the edited contract and package
+    boundary tests; focused pytest passed with 54 passed.
+  - Broad Phase 6 pytest target passed outside the sandbox: 1481 passed / 11
+    skipped.
+  - `make validate-pr` passed outside the sandbox: Ruff passed, Pyright passed
+    with 0 errors, default harness passed with 1657 passed / 26 skipped / 18
+    deselected, config-extra passed with 440 passed / 1694 deselected, and
+    build passed.
+  - `make test-summary` passed: package 93 passed / 1 skipped; unit 1165
+    passed / 7 skipped / 1 deselected; contract 228 passed / 2 skipped;
+    integration 156 passed / 8 skipped / 13 deselected; e2e 43 passed / 2
+    deselected; config-extra 440 passed / 1694 deselected.
+  - GitHub CI `checks` job passed on the final PR head in 2m57s.
+- Automated review: managing agent local review approved with no blocking or
+  non-blocking findings; final pre-merge verification confirmed PR base
+  `develop`, head `codex/external-artifact-docs-validation`, successful CI,
+  and Phase 6-scoped diff.
+- Follow-up notes: the remote phase branch was deleted through the GitHub API
+  after merge because the first merge command merged the PR but did not delete
+  the branch due to the local `develop` worktree checkout; no successor branch
+  depends on Phase 6.
+
 ## Cross-Phase Validation
 
 - Full relevant test command: `make validate-pr`
@@ -1265,8 +1299,7 @@ Gate result:
 
 ## Final Approval
 
-- Approval status: plan-quality gate passed; ready for Phase 1 execution
-  planning
+- Approval status: implementation complete; all six phases merged
 - Approved scope: six-phase Stage 15 implementation shape above, preserving
   Stage 14 plugin metadata boundaries, Stage 12 metadata-only exchange rework,
   Stage 16 payload-materialization deferral, and fake-backend-first validation
