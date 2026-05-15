@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: scope-complete phase execution plan; ready for implementation
+- Status: implementation complete; ready for PR preparation
 - Feature focus: Plugin Discovery
 - PR title:
   `Plugin Discovery - Phase 4: Future Group Readiness And Contract Hooks`
@@ -158,8 +158,8 @@ make test-summary
 
 - Phase planning draft: completed.
 - Phase planning refinement: completed in this planning pass.
-- Phase implementation refinement: unused; one pass remains available if
-  validation or review finds blockers.
+- Phase implementation refinement: not needed; targeted validation and the full
+  PR gate passed after the implementation commit.
 - PR body draft/refine: unused until PR preparation.
 - PR review: unused until the manager or reviewer consumes the single review
   pass.
@@ -170,7 +170,24 @@ make test-summary
 - Draft plan: completed in
   `docs/roadmap/stage-14/phases/future-plugin-group-readiness.md`.
 - Final phase execution plan: completed and ready for implementation.
-- Implementation summary: pending.
-- Validation: pending.
+- Implementation summary: added public plugin group readiness metadata,
+  preserved recipes/codecs as the only registry-ready groups, locked all
+  future groups as listing-only in contracts/CLI/preflight tests, and updated
+  plugin feature docs with current contract evidence and revisit triggers.
+- Validation:
+  - Focused suite passed:
+    `uv run pytest tests/unit/loom/plugins tests/unit/loom/cli/test_plugins.py
+    tests/unit/loom/diagnostics/test_preflight_plugins.py
+    tests/contracts/test_plugin_future_groups_contract.py
+    tests/contracts/test_plugin_discovery_contract.py
+    tests/package/test_plugins_api.py`
+    with 53 passed.
+  - `uv run ruff check ...` passed for touched source, test, and docs paths.
+  - `uv run pyright ...` passed for touched source and tests.
+  - `make validate-pr` passed: Ruff, Pyright, default suite
+    (1599 passed, 26 skipped, 18 deselected), config-extra suite
+    (440 passed, 1636 deselected), and build.
+  - `make test-summary` passed: package 87, unit 1131, contract 210,
+    integration 156, e2e 43, and config-extra 440 tests passed.
 - PR: pending.
 - Merge: pending.
