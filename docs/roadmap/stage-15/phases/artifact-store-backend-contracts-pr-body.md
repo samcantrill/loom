@@ -48,7 +48,7 @@ store contract fixtures.
 | Broad Phase 2 pytest | Passed | 522 passed, 3 skipped |
 | `make validate-pr` | Passed | Ruff passed; Pyright 0 errors; default harness 1634 passed / 26 skipped / 18 deselected; config-extra 440 passed / 1671 deselected; build succeeded |
 | `make test-summary` | Passed | Overall 2102 passed / 18 skipped / 1687 deselected |
-| GitHub checks | Pending | To be checked after PR creation |
+| GitHub checks | Passed | CI `checks` job passed in 2m54s on PR #161 |
 
 ### Test Suite Summary
 

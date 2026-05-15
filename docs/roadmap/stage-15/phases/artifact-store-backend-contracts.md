@@ -2,9 +2,10 @@
 
 ## Metadata
 
-- Status: implementation complete; PR preparation in progress
+- Status: pr_open
 - Feature focus: External Artifact Interface
 - PR title: `External Artifact Interface - Phase 2: Artifact-Store Backend Contracts`
+- PR: https://github.com/samcantrill/loom/pull/161
 - Branch: `codex/artifact-store-backend-contracts`
 - Worktree: `/home/samcantrill/work/loom-worktrees/artifact-store-backend-contracts`
 - Phase execution plan path:
@@ -300,7 +301,9 @@ make test-summary
   the existing store export fixture after broad validation found the new public
   names missing from that assertion.
 - Blocker-resolution summary: none.
-- PR preparation: in progress; PR body drafted in
+- PR preparation: complete; PR #161 opened against `develop`, base/head
+  verified as `develop` / `codex/artifact-store-backend-contracts`, and PR
+  body drafted in
   `docs/roadmap/stage-15/phases/artifact-store-backend-contracts-pr-body.md`.
 - Stack maintenance: Phase 1 merged; no predecessor.
 - Remaining blockers: none.
