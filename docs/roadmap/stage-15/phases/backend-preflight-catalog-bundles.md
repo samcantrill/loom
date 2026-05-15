@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; implementation not started
+- Status: implemented; PR preparation complete
 - Feature focus: External Artifact Interface
 - PR title: `External Artifact Interface - Phase 4: Backend Preflight and Metadata Preservation`
 - Branch: `codex/backend-preflight-catalog-bundles`
@@ -175,8 +175,42 @@ make validate-pr
 make test-summary
 ```
 
+## Implementation Notes
+
+- Added `ArtifactBackendPreflightTarget` and explicit preflight request fields
+  for supplied artifact-backend targets, an optional registry, and optional
+  supplied handlers.
+- Added stable Stage 15 artifact-backend check IDs:
+  `artifact_backends.registry`, `artifact_backends.handlers`, and
+  `artifact_backends.capabilities`.
+- Added cheap, metadata-only backend diagnostics that normalize configured
+  targets, resolve supplied handlers or registry-created handlers, validate
+  store refs, redact store summaries, and fail closed for unknown/unsupported
+  required operations.
+- Added `loom.runs.artifact_metadata` helpers for external, published,
+  location, and unsupported-materialization summaries embedded in
+  `ArtifactRef.metadata`; catalog extraction now thaws artifact metadata before
+  preserving nested Stage 15 summaries.
+- Updated unit, integration, package, and contract tests for preflight check
+  IDs, redaction, missing-handler failures, unsupported write capability
+  failures, plugin-readiness separation, import boundaries, and catalog/bundle
+  metadata preservation.
+
+## Validation Evidence
+
+| Command/check | Result |
+| --- | --- |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check ...` | passed for changed source/tests |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pyright ...` | passed with 0 errors for changed source/tests |
+| Focused Phase 4 pytest paths | passed: 26 passed |
+| Import-boundary focused tests | passed: 3 passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/diagnostics tests/unit/loom/runs tests/contracts` | passed outside sandbox: 330 passed / 2 skipped |
+| `make validate-pr` | passed outside sandbox: Ruff, Pyright, default pytest, config-extra pytest, and build |
+| `make test-summary` | passed: overall 2117 passed / 18 skipped / 1702 deselected |
+
 ## Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: not needed; targeted and full validation
+  passed after the bounded integration expected-ID update.
 - PR review: pending.
 - Blocker-resolution budget: unused.
