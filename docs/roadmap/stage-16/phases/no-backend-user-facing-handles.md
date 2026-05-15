@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: scope-complete plan - ready for implementation
+- Status: implemented and validated; PR ready
 - Feature focus: Artifact Payload Materialization
 - PR title: `Artifact Payload Materialization - Phase 5: No-Backend User-Facing Handles`
 - Branch: `codex/no-backend-user-facing-handles`
@@ -10,9 +10,9 @@
 - Phase execution plan path: `docs/roadmap/stage-16/phases/no-backend-user-facing-handles.md`
 - Full plan: `docs/roadmap/stage-16/implementation-plan.md`
 - Source phase: `Phase 5: No-Backend Finalization And User-Facing Handles`
-- Stack predecessor: `codex/bundle-preflight-materialization` / PR [#169](https://github.com/samcantrill/loom/pull/169)
-- Base branch: `codex/bundle-preflight-materialization`
-- Target branch: `codex/bundle-preflight-materialization` until Phase 4 merges; retarget to `develop` after replaying onto merged Phase 4
+- Stack predecessor: none; Phase 4 merged in PR [#169](https://github.com/samcantrill/loom/pull/169)
+- Base branch: `develop`
+- Target branch: `develop`
 - Workflow path: expanded path
 - Plan quality gate: passed in the implementation plan on 2026-05-15
 - Draft/refine status: single scope-complete pass; no unresolved design blockers
@@ -66,7 +66,7 @@ catalog payload movement.
 - Targeted package/contract/doc checks:
   `uv run pytest tests/package tests/contracts/test_artifact_materialization_contract.py tests/contracts/test_artifact_store_payload_operations_contract.py`
 - Broad phase check:
-  `uv run pytest tests/package tests/contracts tests/unit/loom tests/integration`
+  `uv run --extra config pytest tests/package tests/contracts tests/unit/loom tests/integration`
 - Final PR gate: `make validate-pr`
 - Suite evidence: `make test-summary`
 
@@ -80,8 +80,8 @@ catalog payload movement.
 
 ## Completion Notes
 
-- Implementation summary: pending
-- Implementation validation: pending
-- PR preparation: pending
-- Stack maintenance: stacked on Phase 4 until Phase 4 merges
+- Implementation summary: complete. Updated public feature docs for artifact materialization, remote-store boundaries, run bundle/export/import behavior, preflight readiness, and testing expectations; hardened payload unsupported/not-implemented detail redaction; added package and contract coverage for no-backend defaults, no optional SDK imports, future real-backend handles, and future local policy failure.
+- Implementation validation: targeted package/contract checks passed; broad package/contract/unit/integration checks passed with the config extra; `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green. A raw broad pytest invocation without `--extra config` failed in optional-dependency diagnostics tests before the config extra was installed; the same path passed with `--extra config`.
+- PR preparation: PR body prepared in `docs/roadmap/stage-16/phases/no-backend-user-facing-handles-pr-body.md`; PR open pending.
+- Stack maintenance: replayed from `codex/bundle-preflight-materialization` onto updated `develop` after Phase 4 merged.
 - Remaining blockers: none
