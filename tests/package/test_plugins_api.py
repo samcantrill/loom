@@ -50,7 +50,10 @@ def test_import_loom_plugins_public_symbols() -> None:
         plugins.LOOM_RECIPES_GROUP,
         plugins.LOOM_CODECS_GROUP,
     )
-    assert plugins.LOOM_ARTIFACT_STORE_BACKENDS_GROUP in plugins.LISTING_ONLY_PLUGIN_GROUPS
+    assert (
+        plugins.LOOM_ARTIFACT_STORE_BACKENDS_GROUP in plugins.LISTING_ONLY_PLUGIN_GROUPS
+    )
+    assert plugins.load_artifact_store_backend_entry_points
     assert plugins.load_entry_points
 
 
