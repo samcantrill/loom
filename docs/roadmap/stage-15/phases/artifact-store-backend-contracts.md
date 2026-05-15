@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; implementation not started
+- Status: implementation complete; PR preparation in progress
 - Feature focus: External Artifact Interface
 - PR title: `External Artifact Interface - Phase 2: Artifact-Store Backend Contracts`
 - Branch: `codex/artifact-store-backend-contracts`
@@ -26,7 +26,8 @@
 - Draft pass: complete in this artifact.
 - Refine pass: complete in this artifact; field boundaries, plugin-loader
   boundary, and stop conditions were tightened for public contract work.
-- Setup limitations: no product checks were run during planning.
+- Setup limitations: sandboxed broad pytest hit local authority-service socket
+  restrictions; required validation was rerun outside the sandbox.
 - Blockers: none.
 
 ## Objective
@@ -267,7 +268,8 @@ make test-summary
 
 - Phase execution plan draft: complete.
 - Phase execution plan refine: complete.
-- Phase implementation refinement: unused.
+- Phase implementation refinement: not needed; targeted and full validation
+  passed after a focused export-fixture test update.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
@@ -275,10 +277,30 @@ make test-summary
 
 - Draft plan: complete.
 - Final phase execution plan: complete.
-- Implementation summary: not started.
-- Implementation validation: not run.
-- Refinement summary: none.
+- Implementation summary: added `loom.pipeline.stores.artifact_backends` with
+  descriptor/factory/handler protocols, operation-specific capability records,
+  structured diagnostics/results, contract version helpers, normalized
+  backend-kind registry behavior, and public store exports. Added lazy
+  `loom.plugins.load_artifact_store_backend_entry_points(...)` that uses Stage
+  14 entry-point loading into a caller-supplied registry while leaving generic
+  artifact-store backend readiness listing-only.
+- Implementation validation:
+  - Targeted focused command passed: 76 passed.
+  - Broad Phase 2 command passed outside the sandbox:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores tests/unit/loom/plugins tests/contracts tests/package`
+    with 522 passed and 3 skipped.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed: Ruff passed, Pyright
+    passed with 0 errors, default harness passed with 1634 passed / 26 skipped
+    / 18 deselected, config-extra passed with 440 passed / 1671 deselected,
+    and build succeeded.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed and wrote
+    `build/test-summary.md`: overall 2102 passed / 18 skipped / 1687
+    deselected.
+- Refinement summary: no `loom_phase_refiner` pass was used; local fix updated
+  the existing store export fixture after broad validation found the new public
+  names missing from that assertion.
 - Blocker-resolution summary: none.
-- PR preparation: not started.
+- PR preparation: in progress; PR body drafted in
+  `docs/roadmap/stage-15/phases/artifact-store-backend-contracts-pr-body.md`.
 - Stack maintenance: Phase 1 merged; no predecessor.
 - Remaining blockers: none.
