@@ -3,26 +3,40 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
+from loom.artifacts import (
+    ArtifactLocationKind,
+    ArtifactLocationSummary,
+    ArtifactRef,
+    ArtifactStoreRef,
+    ExternalArtifactDeclaration,
+)
 from loom.io.uris import path_to_file_uri
 from loom.pipeline.status import RunStatus
 from loom.pipeline.stores import (
+    ArtifactFactRecord,
     BackendRevision,
     CompletedRunBundleMetadata,
     MaterializedRef,
     MaterializedRefKind,
 )
 from loom.runs import (
+    EXTERNAL_ARTIFACT_METADATA_KEY,
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
+    UNSUPPORTED_MATERIALIZATION_METADATA_KEY,
     CatalogValidationError,
     RunBundleExportOptions,
+    RunExchangeDiagnosticSeverity,
     RunExchangeOperationStatus,
     build_portable_run_export_record,
     export_completed_run_bundle,
     normalize_bundle_member_path,
+    unsupported_materialization_summary,
 )
+from loom.serialization import thaw_plain_data
 
 
 def _metadata(refs: tuple[MaterializedRef, ...] = ()) -> CompletedRunBundleMetadata:
@@ -89,3 +103,92 @@ def test_explicit_payload_selection_reports_missing_file(tmp_path: Path) -> None
         "run_bundle_export.payload_missing"
     ]
     assert not (tmp_path / "bundle.tar").exists()
+
+
+def test_metadata_only_export_projects_stage_15_artifact_summaries(
+    tmp_path: Path,
+) -> None:
+    result = export_completed_run_bundle(
+        _metadata_with_external_artifact(),
+        tmp_path / "bundle.tar",
+    )
+
+    assert result.status is RunExchangeOperationStatus.SUCCEEDED
+    assert result.exported_payload_count == 0
+    assert result.manifest is not None
+    summary = cast(
+        dict[str, Any],
+        result.manifest.extensions[RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY],
+    )
+    artifact = cast(list[dict[str, Any]], summary["artifacts"])[0]
+    summaries = cast(dict[str, Any], artifact["summaries"])
+    external = cast(dict[str, Any], summaries[EXTERNAL_ARTIFACT_METADATA_KEY])
+    assert external["artifact_id"] == "external-model"
+    assert external["store"]["uri"] is None
+    assert external["store"]["display_uri"] == "s3://bucket/redacted/model"
+    assert (
+        summaries[UNSUPPORTED_MATERIALIZATION_METADATA_KEY]["code"]
+        == "artifact_materialization.unsupported"
+    )
+    assert result.extensions[RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY] == summary
+    assert [
+        diagnostic.code
+        for diagnostic in result.manifest.warnings
+        if diagnostic.severity is RunExchangeDiagnosticSeverity.WARNING
+    ] == ["run_exchange.artifact_materialization_unsupported"]
+
+
+def _metadata_with_external_artifact() -> CompletedRunBundleMetadata:
+    artifact = _external_artifact_ref()
+    return CompletedRunBundleMetadata(
+        run_uri="file:///runs/source/run-1",
+        status=RunStatus.SUCCEEDED,
+        schema_version=1,
+        revision=BackendRevision(sequence=1, token="rev-1"),
+        artifact_facts=(
+            ArtifactFactRecord(
+                artifact_name="model",
+                artifact=artifact,
+                commit_id="commit-1",
+                revision=BackendRevision(sequence=1, token="rev-1"),
+            ),
+        ),
+    )
+
+
+def _external_artifact_ref() -> ArtifactRef:
+    checksum = "sha256:" + "3" * 64
+    location = ArtifactLocationSummary(
+        kind=ArtifactLocationKind.EXTERNAL_IMMUTABLE,
+        authority="authoritative",
+        display_uri="s3://bucket/redacted/model",
+        store=ArtifactStoreRef(kind="object-store", display_uri="s3://bucket"),
+        checksum=checksum,
+    )
+    declaration = ExternalArtifactDeclaration(
+        artifact_id="external-model",
+        uri="s3://bucket/private/model",
+        artifact_type="model",
+        codec_key="json.v1",
+        artifact_schema_version=1,
+        store=ArtifactStoreRef(
+            kind="object-store",
+            display_uri="s3://bucket/redacted/model",
+        ),
+        location=location,
+        checksum=checksum,
+    )
+    return ArtifactRef(
+        artifact_id="external-model",
+        uri="s3://bucket/private/model",
+        artifact_type="model",
+        codec_key="json.v1",
+        checksum=checksum,
+        metadata={
+            EXTERNAL_ARTIFACT_METADATA_KEY: thaw_plain_data(declaration.to_summary()),
+            UNSUPPORTED_MATERIALIZATION_METADATA_KEY: unsupported_materialization_summary(
+                "remote materialization is deferred to Stage 16",
+                location=location,
+            ),
+        },
+    )

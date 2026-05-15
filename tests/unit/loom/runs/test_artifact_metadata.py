@@ -23,9 +23,12 @@ from loom.pipeline.stores.read_models import RunStatus
 from loom.runs import (
     EXTERNAL_ARTIFACT_METADATA_KEY,
     PUBLISHED_ARTIFACT_METADATA_KEY,
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_SCHEMA_VERSION,
     UNSUPPORTED_MATERIALIZATION_METADATA_KEY,
     ArtifactSummary,
     collect_artifact_metadata_summaries,
+    collect_run_exchange_artifact_summaries,
     unsupported_materialization_summary,
 )
 from loom.serialization import thaw_plain_data
@@ -153,3 +156,26 @@ def test_catalog_and_bundle_metadata_preserve_external_summaries() -> None:
     assert bundle_summaries[EXTERNAL_ARTIFACT_METADATA_KEY] == (
         catalog_summaries[EXTERNAL_ARTIFACT_METADATA_KEY]
     )
+
+
+def test_collect_run_exchange_artifact_summaries_projects_versioned_extension() -> None:
+    artifact = _artifact_ref()
+    summary = collect_run_exchange_artifact_summaries(
+        (
+            ArtifactFactRecord(
+                artifact_name="model",
+                artifact=artifact,
+                commit_id="commit-1",
+                revision=BackendRevision(sequence=1, token="rev-1"),
+            ),
+        )
+    )
+
+    assert RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY == "stage_15_artifact_summaries"
+    assert summary["schema_version"] == RUN_EXCHANGE_ARTIFACT_SUMMARIES_SCHEMA_VERSION
+    exchange_artifact = cast(list[dict[str, Any]], summary["artifacts"])[0]
+    assert exchange_artifact["artifact_name"] == "model"
+    assert exchange_artifact["artifact_id"] == artifact.artifact_id
+    exchange_summaries = cast(dict[str, Any], exchange_artifact["summaries"])
+    assert EXTERNAL_ARTIFACT_METADATA_KEY in exchange_summaries
+    assert UNSUPPORTED_MATERIALIZATION_METADATA_KEY in exchange_summaries
