@@ -20,6 +20,8 @@ from .entrypoints import (
     list_entry_points,
     load_entry_points,
 )
+from .codecs import load_codec_entry_points
+from .recipes import load_recipe_entry_points
 from .errors import (
     PluginDiscoveryError,
     PluginDuplicateError,
@@ -49,7 +51,9 @@ __all__ = [
     "PluginLoadResult",
     "PluginRecord",
     "PluginRegistrationError",
+    "load_codec_entry_points",
     "find_plugin_duplicates",
     "list_entry_points",
+    "load_recipe_entry_points",
     "load_entry_points",
 ]
