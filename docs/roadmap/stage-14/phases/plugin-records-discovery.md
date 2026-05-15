@@ -468,13 +468,16 @@ make test-summary
   contract tests are added.
 - Implementation validation: targeted Pyright passed with 0 errors and focused
   plugin discovery tests passed with 15 tests in the implementation refinement
-  pass. A broad `make validate-pr` rerun passed Ruff and Pyright with 0 errors
-  but was interrupted after the default pytest leg stalled without additional
-  output; full PR validation remains a PR-preparation obligation.
+  pass. Manager review tightened strict duplicate handling so duplicate
+  selections fail before any target import. Final PR preparation validation
+  passed with `make validate-pr`; `make test-summary` passed with package 85,
+  unit 1099, contract 204, integration 155, e2e 43, and config-extra 438 tests
+  passed.
 - Refinement summary: fixed Phase 1 test typing for fake entry point providers,
   fake module factories, and plain summary indexing; implementation refinement
   budget is used.
 - Blocker-resolution summary: none used.
-- PR preparation: pending.
+- PR preparation: validation evidence collected; PR body and PR submission
+  pending.
 - Stack maintenance: not needed for this root phase yet.
 - Remaining blockers: none for the scoped Phase 1 test typing blocker.
