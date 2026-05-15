@@ -6,7 +6,14 @@ from collections.abc import Mapping
 
 import pytest
 
-from loom.artifacts import ArtifactStoreRef, ImmutableArtifactLookupRequest
+from loom.artifacts import (
+    ArtifactLocationKind,
+    ArtifactLocationSummary,
+    ArtifactRef,
+    ArtifactStoreRef,
+    ImmutableArtifactLookupRequest,
+)
+from loom.operations import OperationResult, OperationStatus
 from loom.pipeline.stores import (
     ARTIFACT_STORE_BACKEND_CONTRACT_VERSION,
     ArtifactStoreBackendDescriptor,
@@ -20,6 +27,8 @@ from loom.pipeline.stores import (
     ArtifactStoreCapabilities,
     ArtifactStoreCapabilityRecord,
     ArtifactStoreCapabilitySupport,
+    ArtifactStorePayloadOperationRequest,
+    ArtifactStorePayloadOperationResult,
     artifact_store_backend_versions_compatible,
     normalize_artifact_store_backend_kind,
 )
@@ -245,6 +254,88 @@ def test_capabilities_fail_closed_for_unsupported_and_unknown_operations() -> No
 
     round_trip = ArtifactStoreCapabilities.from_dict(capabilities.to_dict())
     assert round_trip == capabilities
+
+
+def test_payload_operation_request_is_strict_and_limited_to_payload_ops() -> None:
+    artifact = ArtifactRef(
+        artifact_id="model",
+        uri="file:///tmp/source.bin",
+        artifact_type="bytes",
+        checksum="sha256:" + "1" * 64,
+    )
+    request = ArtifactStorePayloadOperationRequest(
+        operation=ArtifactStoreBackendOperation.UPLOAD,
+        artifact=artifact,
+        source_uri="file:///tmp/source.bin",
+        target_uri="object://bucket/model.bin",
+        checksum="sha256:" + "1" * 64,
+        detail={"caller": "unit"},
+    )
+
+    payload = request.to_dict()
+
+    assert payload["operation"] == "upload"
+    assert payload["artifact"] == artifact.to_dict()
+    assert ArtifactStorePayloadOperationRequest.from_dict(payload) == request
+
+    with pytest.raises(ArtifactStoreBackendError, match="payload"):
+        ArtifactStorePayloadOperationRequest(
+            operation=ArtifactStoreBackendOperation.READ,
+        )
+
+    with pytest.raises(ArtifactStoreBackendError):
+        ArtifactStorePayloadOperationRequest.from_dict({**payload, "extra": True})
+
+
+def test_payload_operation_result_uses_shared_operation_result() -> None:
+    request = ArtifactStorePayloadOperationRequest(
+        operation=ArtifactStoreBackendOperation.DOWNLOAD,
+        source_uri="object://bucket/model.bin",
+        target_uri="file:///tmp/model.bin",
+        checksum="sha256:" + "2" * 64,
+    )
+    location = ArtifactLocationSummary(
+        kind=ArtifactLocationKind.MATERIALIZED,
+        authority="derived",
+        uri="file:///tmp/model.bin",
+        display_uri="/tmp/model.bin",
+        checksum="sha256:" + "2" * 64,
+        size_bytes=7,
+    )
+    result = ArtifactStorePayloadOperationResult(
+        request=request,
+        result=OperationResult(
+            operation="artifact_store.download",
+            status=OperationStatus.SUCCEEDED,
+        ),
+        location=location,
+        bytes_processed=7,
+        detail={"fixture": "unit"},
+    )
+
+    payload = result.to_dict()
+
+    assert result.succeeded
+    assert payload["bytes_processed"] == 7
+    assert payload["location"] == location.to_dict()
+    assert ArtifactStorePayloadOperationResult.from_dict(payload) == result
+
+    unsupported = ArtifactStorePayloadOperationResult.unsupported(
+        request,
+        backend_kind="Object_Store",
+    )
+    assert unsupported.result.status is OperationStatus.UNSUPPORTED
+    assert unsupported.result.adapter is not None
+    assert unsupported.result.adapter.name == "object-store"
+
+    missing = ArtifactStorePayloadOperationResult.not_implemented(
+        request,
+        backend_kind="Object_Store",
+    )
+    assert missing.result.status is OperationStatus.NOT_IMPLEMENTED
+
+    with pytest.raises(ArtifactStoreBackendError):
+        ArtifactStorePayloadOperationResult.from_dict({**payload, "extra": True})
 
 
 def test_registry_reports_duplicate_missing_and_version_diagnostics() -> None:
