@@ -1286,3 +1286,57 @@ def test_pipeline_runner_executes_direct_spec_without_config_import() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_import_config_does_not_import_plugins() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.config
+
+        if "loom.plugins" in sys.modules:
+            raise SystemExit("loom.plugins was imported through loom.config")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_import_pipeline_does_not_import_plugins() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline
+
+        if "loom.plugins" in sys.modules:
+            raise SystemExit("loom.plugins was imported through loom.pipeline")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_import_root_does_not_import_plugins() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom
+
+        if "loom.plugins" in sys.modules:
+            raise SystemExit("loom.plugins was imported through root package import")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
