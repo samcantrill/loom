@@ -1,11 +1,11 @@
 # Roadmap Stage 16 Implementation Plan: Artifact Payload Materialization
 
-Status: draft
+Status: complete
 Roadmap stage: `v16`
 Planning document: `docs/roadmap/stage-16/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 PR open
+Current phase: all phases merged
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-15 after
@@ -281,7 +281,7 @@ contracts and return the same operation evidence used by bundles and preflight.
 | 2 | `local-materialization-copy-records` | merged | `codex/local-materialization-copy-records` | [#167](https://github.com/samcantrill/loom/pull/167) | `loom.pipeline.stores`, public store exports | Add materialization records and copy-only local behavior | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Local copy, checksum mismatch, unsupported non-copy policy |
 | 3 | `fake-backend-payload-operations` | merged | `codex/fake-backend-payload-operations` | [#168](https://github.com/samcantrill/loom/pull/168) | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
 | 4 | `bundle-preflight-materialization` | merged | `codex/bundle-preflight-materialization` | [#169](https://github.com/samcantrill/loom/pull/169) | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
-| 5 | `no-backend-user-facing-handles` | pr_open | `codex/no-backend-user-facing-handles` | [#170](https://github.com/samcantrill/loom/pull/170) | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
+| 5 | `no-backend-user-facing-handles` | merged | `codex/no-backend-user-facing-handles` | [#170](https://github.com/samcantrill/loom/pull/170) | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
 
 ## Implementation Readiness Blockers
 
@@ -751,7 +751,7 @@ exchange, diagnostics, and possible CLI/API behavior
 
 ## Phase 5: No-Backend Finalization And User-Facing Handles
 
-Status: pr_open
+Status: merged
 Slug: `no-backend-user-facing-handles`
 Branch: `codex/no-backend-user-facing-handles`
 Worktree: `/home/samcantrill/work/loom-worktrees/no-backend-user-facing-handles`
@@ -805,7 +805,7 @@ examples, packaging, and final validation
 
 | Command/check | Purpose | Required before phase complete |
 | --- | --- | --- |
-| `uv run pytest tests/package tests/contracts tests/unit/loom tests/integration` | Broad package, contract, unit, and integration coverage before final PR | yes |
+| `uv run --extra config pytest tests/package tests/contracts tests/unit/loom tests/integration` | Broad package, contract, unit, and integration coverage before final PR, including optional config diagnostics | yes |
 | `make validate-pr` | Full PR gate for phase | yes |
 | `make test-summary` | Suite-level PR evidence | yes |
 
@@ -831,7 +831,7 @@ examples, packaging, and final validation
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phases 1 through 4 merged; Phase 5 replayed onto updated `develop`
-- Merge record: pending
+- Merge record: merged into `develop` on 2026-05-15 as squash commit `273215763e82cc0cc70b41b165b3b5966d378e13`
 
 ### Risks And Stop Conditions
 
@@ -846,8 +846,25 @@ examples, packaging, and final validation
 - Implementation: complete. Finalized no-backend user-facing docs, examples-by-documentation, package import hardening, structured unsupported/not-implemented payload handles, and no-optional-SDK coverage.
 - Validation: targeted package/contract checks passed with 105 passed and 1 skipped; broad package/contract/unit/integration checks passed with `--extra config` and 1771 passed; `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green.
 - PR: [#170](https://github.com/samcantrill/loom/pull/170) opened against `develop` and verified with `gh pr view 170 --json baseRefName,headRefName,state,url,statusCheckRollup,mergeable`; GitHub CI `checks` was in progress at verification time.
-- Merge: pending
-- Follow-up: merge Phase 5 into `develop` when CI and automated review gates pass, then record final Stage 16 completion metadata.
+- Merge: merged into `develop` on 2026-05-15 as squash commit `273215763e82cc0cc70b41b165b3b5966d378e13`; target verified with `gh pr view 170 --json baseRefName,headRefName,state,url,mergeCommit,statusCheckRollup` before merge, CI check `checks` succeeded, and the branch was eligible for deletion because no successor phase depends on it.
+- Follow-up: none for Stage 16. Future work remains the deferred real-backend adapter, retry/timeout, and cleanup policy work called out in the roadmap.
+
+## Stage 16 Completion Summary
+
+- Status: complete on 2026-05-15. All five phase PRs merged into `develop`:
+  [#166](https://github.com/samcantrill/loom/pull/166),
+  [#167](https://github.com/samcantrill/loom/pull/167),
+  [#168](https://github.com/samcantrill/loom/pull/168),
+  [#169](https://github.com/samcantrill/loom/pull/169), and
+  [#170](https://github.com/samcantrill/loom/pull/170).
+- Final behavior: metadata-only workflows remain default; local
+  materialization is copy-only; fake backend payload operations cover
+  publish/materialize/upload/download/verify; bundle materialization is
+  explicit and handler-supplied; preflight readiness remains cheap; no real
+  backend family or provider SDK was added.
+- Final validation evidence: every phase ran `make validate-pr` and
+  `make test-summary`; the final Phase 5 gate passed locally and GitHub CI
+  `checks` passed before merge.
 
 ## Cross-Phase Validation
 
