@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
+from loom.serialization import thaw_plain_data
 from loom.runs import (
     CatalogValidationError,
     MigrationReadinessBlocker,
@@ -14,6 +17,7 @@ from loom.runs import (
     PortableRunExportRecord,
     PortableRunImportRecord,
     RUN_BUNDLE_MANIFEST_SCHEMA_VERSION,
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
     RunAdapterIdentity,
     RunBundleEntry,
     RunBundleEntryKind,
@@ -146,6 +150,39 @@ def _sample_records() -> tuple[
 def test_run_bundle_manifest_contract_shape() -> None:
     manifest = _sample_manifest()
     assert RunBundleManifest.from_dict(manifest.to_dict()) == manifest
+
+
+def test_run_bundle_manifest_preserves_stage_15_extension_without_schema_revision() -> None:
+    manifest = _sample_manifest()
+    payload = cast(dict[str, Any], manifest.to_dict())
+    extensions = cast(dict[str, Any], payload["extensions"])
+    payload["extensions"] = {
+        **extensions,
+        RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY: {
+            "schema_version": 1,
+            "artifacts": [
+                {
+                    "artifact_name": "model",
+                    "artifact_id": "external-model",
+                    "uri": "s3://bucket/private/model",
+                    "artifact_type": "model",
+                    "codec_key": "json.v1",
+                    "checksum": None,
+                    "fingerprint": None,
+                    "producer_stage": "train",
+                    "summaries": {},
+                }
+            ],
+        },
+    }
+
+    restored = RunBundleManifest.from_dict(payload)
+
+    assert restored.schema_version == RUN_BUNDLE_MANIFEST_SCHEMA_VERSION
+    assert (
+        thaw_plain_data(restored.extensions[RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY])
+        == payload["extensions"][RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY]
+    )
 
 
 def test_run_bundle_manifest_contract_rejects_unknown_fields() -> None:

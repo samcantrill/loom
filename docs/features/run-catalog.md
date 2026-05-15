@@ -315,6 +315,12 @@ loom runs export RUN_URI run.tar --include-workspace
 loom runs export RUN_URI run.tar --verify-checksums
 ```
 
+When artifacts carry Stage 15 external, published, location, or unsupported
+materialization summaries, export preserves those summaries in the bundle
+manifest extension `stage_15_artifact_summaries`. This is metadata only: export
+does not contact remote stores, check credentials, download payloads, or treat
+the local bundle format as a provider protocol.
+
 The local bundle archive is one first-party adapter over portable-run exchange
 records. It is not the protocol for later remote stores or external tracking
 providers.
@@ -394,6 +400,10 @@ Inspection does not extract files into the current directory. Unsafe paths,
 duplicate archive members, unsupported schemas, checksum mismatches, and
 malformed archives surface as structured diagnostics.
 
+Inspect output preserves the `stage_15_artifact_summaries` extension when it is
+present, so external references remain visible without reading or extracting
+payload members.
+
 ## Import
 
 Run import copies a bundle into a local run collection.
@@ -418,6 +428,11 @@ record historical-only resume readiness blockers
 ```
 
 Import should not execute project code.
+
+For Stage 15 summaries, import preserves the manifest extension in import
+provenance and keeps imported artifact refs metadata-only unless payloads were
+explicitly included and copied. Unsupported remote materialization is recorded as
+a warning diagnostic, not as an implicit download attempt.
 
 Imported runs are historical-only in v12. Live migrated resume, merge,
 overwrite, fork, remote payload materialization, signed/encrypted bundles,
