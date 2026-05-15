@@ -300,6 +300,195 @@ def test_import_artifacts_does_not_import_store_plugins_or_services() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_stage_15_public_defaults_do_not_import_plugins_or_optional_sdks() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.artifacts
+        import loom.pipeline.stores
+        import loom.runs
+
+        for forbidden in (
+            "loom.plugins",
+            "mlflow",
+            "boto3",
+            "botocore",
+            "s3fs",
+            "google.cloud",
+            "azure",
+            "dvc",
+            "wandb",
+            "requests",
+            "httpx",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported by Stage 15 public defaults")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_stage_15_default_preflight_avoids_backend_discovery_and_sdks() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.diagnostics.preflight as preflight
+        from loom.diagnostics import PreflightCheckStatus, PreflightRequest, run_preflight
+
+        def fail_provider():
+            raise AssertionError("default artifact backend preflight discovered plugins")
+
+        preflight._plugin_entry_point_provider = fail_provider
+        result = run_preflight(
+            PreflightRequest(config_path="missing.yaml", groups=("artifacts",))
+        )
+        by_id = {check.check_id: check for check in result.checks}
+        assert by_id["artifact_backends.registry"].status is PreflightCheckStatus.SKIP
+        assert by_id["artifact_backends.handlers"].details["reason"] == "no_artifact_backend_targets"
+
+        for forbidden in (
+            "loom.plugins",
+            "mlflow",
+            "boto3",
+            "botocore",
+            "s3fs",
+            "google.cloud",
+            "azure",
+            "dvc",
+            "wandb",
+            "requests",
+            "httpx",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported by default backend preflight")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() -> (
+    None
+):
+    script = dedent(
+        """
+        import io
+        import sys
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        from loom.runs import (
+            RUN_BUNDLE_MANIFEST_MEMBER,
+            RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
+            PortableRunSourceIdentity,
+            PortableRunTargetIdentityPolicy,
+            RunBundleManifest,
+            inspect_run_bundle,
+        )
+        from loom.serialization import stable_json_bytes
+
+        manifest = RunBundleManifest(
+            run_uri="file:///runs/source/run-1",
+            source_identity=PortableRunSourceIdentity(
+                source_kind="local",
+                run_uri="file:///runs/source/run-1",
+            ),
+            target_identity=PortableRunTargetIdentityPolicy(),
+            extensions={
+                RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY: {
+                    "schema_version": 1,
+                    "artifacts": [
+                        {
+                            "artifact_name": "model",
+                            "artifact_id": "external-model",
+                            "uri": "s3://secret-bucket/model",
+                            "artifact_type": "model",
+                            "codec_key": "json.v1",
+                            "checksum": None,
+                            "fingerprint": None,
+                            "producer_stage": "train",
+                            "summaries": {
+                                "external_artifact": {
+                                    "schema_version": 1,
+                                    "artifact_id": "external-model",
+                                    "uri": "s3://secret-bucket/model",
+                                    "artifact_type": "model",
+                                    "codec_key": "json.v1",
+                                    "artifact_schema_version": 1,
+                                    "store": {
+                                        "schema_version": 1,
+                                        "kind": "object-store",
+                                        "key": None,
+                                        "uri": None,
+                                        "display_uri": "s3://redacted/model",
+                                        "details": {},
+                                    },
+                                    "location": None,
+                                    "checksum": None,
+                                    "fingerprint": None,
+                                    "immutability": "declared",
+                                    "metadata": {},
+                                    "details": {},
+                                }
+                            },
+                        }
+                    ],
+                }
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle.tar"
+            manifest_bytes = stable_json_bytes(manifest.to_dict())
+            with tarfile.open(bundle, "w") as archive:
+                info = tarfile.TarInfo(RUN_BUNDLE_MANIFEST_MEMBER)
+                info.size = len(manifest_bytes)
+                archive.addfile(info, io.BytesIO(manifest_bytes))
+
+            inspection = inspect_run_bundle(bundle)
+
+        assert RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY in inspection.extensions
+        assert inspection.included_payload_count == 0
+        for forbidden in (
+            "loom.plugins",
+            "mlflow",
+            "boto3",
+            "botocore",
+            "s3fs",
+            "google.cloud",
+            "azure",
+            "dvc",
+            "wandb",
+            "requests",
+            "httpx",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported by bundle inspect")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_queue_local_adapter_avoids_private_authority_and_scheduler_modules() -> (
     None
 ):

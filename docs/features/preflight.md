@@ -132,6 +132,9 @@ runtime.profile
 runtime.stage_options
 run_uri.resolve
 artifact_store.available
+artifact_backends.registry
+artifact_backends.handlers
+artifact_backends.capabilities
 codec_registry.available
 executor.local
 executor.resolve
@@ -248,6 +251,21 @@ Preflight should not load large artifact payloads by default.
 
 Checksum validation of existing artifacts may be available behind an explicit
 option because it can be expensive.
+
+Stage 15 backend checks are explicit and metadata-only. They run only for
+configured `ArtifactBackendPreflightTarget` values supplied by the caller and
+report separate registry, handler, and capability results:
+
+```text
+artifact_backends.registry
+artifact_backends.handlers
+artifact_backends.capabilities
+```
+
+Default artifact backend checks must not discover plugins, import backend SDKs,
+contact tracking systems, probe credentials, call `handler.check()`, perform
+lookup, or materialize payloads. Generic Stage 14 plugin metadata/list/load
+results never satisfy Stage 15 backend availability or run-readiness checks.
 
 ## Executor Checks
 

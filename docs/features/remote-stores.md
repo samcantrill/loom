@@ -12,6 +12,32 @@ Remote stores are intentionally deferred until local filesystem behavior is
 stable. This document defines the boundary so the local design does not block
 future remote backends.
 
+Stage 15 implements the generic interface layer only. Core now has
+backend-neutral store references, backend descriptors/factories/handlers,
+capability records, explicit immutable lookup results, preflight capability
+checks, and metadata-preserving run exchange. It does not include first-party
+S3, GCS, Azure, HTTP, MLflow, DVC, W&B, or tracking-system adapters, and it does
+not import their SDKs.
+
+Adapter examples in this document are contract shapes. A future optional package
+can map an MLflow-like tracking URI or object-store prefix into the same
+generic records, but Stage 15 does not perform upload, download,
+materialization, deletion, credential refresh, or network probing.
+
+Two fake adapter shapes are used in contract tests:
+
+- A tracking-system-style backend reports a descriptor kind such as
+  `tracking-system`, accepts redacted `runs:` or `tracking:` URIs, supports
+  read and explicit lookup, and returns an `ImmutableArtifactLookupResult` that
+  points at a `PublishedArtifactRecord`. It does not publish payloads.
+- An object-store-style backend reports a descriptor kind such as
+  `object-store`, accepts redacted `s3:` or `gs:` URIs, supports read and
+  checksum-oriented metadata, and returns structured unsupported results for
+  materialization. It does not upload, download, or delete payloads in Stage 15.
+
+Both examples preserve only plain Stage 15 summaries in run exchange metadata.
+They are not supported first-party adapters.
+
 ## Scope
 
 This component owns:
@@ -114,6 +140,11 @@ options are structured
 ```
 
 Backend-specific schema validation belongs to the backend plugin.
+
+In Stage 15, backend plugins register into a caller-supplied
+`ArtifactStoreBackendRegistry`. Generic plugin discovery may list entry point
+metadata, but configured backend readiness comes from explicit registry/handler
+objects and capability admission, not from import success alone.
 
 ## Credentials
 
@@ -414,4 +445,3 @@ signed artifact manifests
 
 Remote stores should remain P3 until local artifact semantics, checksums, and
 run export behavior are stable.
-
