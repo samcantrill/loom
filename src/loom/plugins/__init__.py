@@ -48,10 +48,14 @@ from .errors import (
 )
 
 if TYPE_CHECKING:
+    from .artifact_backends import (
+        load_artifact_store_backend_entry_points as load_artifact_store_backend_entry_points,
+    )
     from .codecs import load_codec_entry_points as load_codec_entry_points
     from .recipes import load_recipe_entry_points as load_recipe_entry_points
 
 _LAZY_EXPORTS = {
+    "load_artifact_store_backend_entry_points": ".artifact_backends",
     "load_codec_entry_points": ".codecs",
     "load_recipe_entry_points": ".recipes",
 }
@@ -98,6 +102,7 @@ __all__ = [
     "check_plugin_records",
     "find_plugin_duplicates",
     "filter_plugin_records",
+    "load_artifact_store_backend_entry_points",
     "list_entry_points",
     "load_codec_entry_points",
     "load_recipe_entry_points",
