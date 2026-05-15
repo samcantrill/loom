@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 4 merged; ready for Phase 5 execution planning
+- Status: Phase 5 PR open; automated review and merge pending
 - Roadmap stage: `v15`
 - Source planning notes:
   `docs/roadmap/stage-15/planning.md`
@@ -28,12 +28,14 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: ready for Phase 5 execution planning
+- Current phase: Phase 5 PR open
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains.
-  - No Phase 5 execution plan exists yet; do not start Phase 5 product
-    implementation until Phase 5 execution planning is complete.
+  - Phase 5 validation passed and PR #164 is open against `develop`.
+  - No Phase 6 execution plan exists yet; do not start Phase 6 product
+    implementation until Phase 5 is merged and Phase 6 execution planning is
+    complete.
 
 ## Summary
 
@@ -367,7 +369,7 @@ and project-specific adapters without adding those services to core.
 | 2 | `artifact-store-backend-contracts` | merged | `codex/artifact-store-backend-contracts` | https://github.com/samcantrill/loom/pull/161 | `loom.pipeline.stores`, optional lazy plugin adapter | Add backend descriptor/factory, registry, capabilities, fake handlers, and supplied-registry plugin adapter boundary | Store/plugin contract tests plus full PR gate | MLflow-like fake descriptor, object-store-style fake descriptor |
 | 3 | `immutable-artifact-semantics` | merged | `codex/immutable-artifact-semantics` | https://github.com/samcantrill/loom/pull/162 | artifact/store registration and lookup APIs | Add external immutable input and published immutable output registration/lookup semantics | Unit/contract tests plus full PR gate | Explicit compatible/incompatible/missing/unsupported lookup |
 | 4 | `backend-preflight-catalog-bundles` | merged | `codex/backend-preflight-catalog-bundles` | https://github.com/samcantrill/loom/pull/163 | diagnostics, catalog projections, bundle metadata preservation | Add backend/config/capability checks and metadata-only catalog/bundle preservation | Diagnostics/run-catalog/bundle tests plus full PR gate | Missing handler, unsupported write, redacted summaries |
-| 5 | `stage-12-exchange-rework` | pending | TBD | TBD | `loom.runs` portable-run exchange | Rework Stage 12 exchange/export/import metadata to consume Stage 15 summaries | Run exchange/import/export tests plus full PR gate | Metadata-only external refs round trip through exchange |
+| 5 | `stage-12-exchange-rework` | pr_open | `codex/stage-12-exchange-rework` | https://github.com/samcantrill/loom/pull/164 | `loom.runs` portable-run exchange | Rework Stage 12 exchange/export/import metadata to consume Stage 15 summaries | Run exchange/import/export tests plus full PR gate | Metadata-only external refs round trip through exchange |
 | 6 | `external-artifact-docs-validation` | pending | TBD | TBD | docs, examples, cross-cutting tests | Add examples, docs, validation matrix, import-boundary hardening | Full validation and test summary | MLflow-like and object-store-style fake examples |
 
 ## Implementation Readiness Blockers
@@ -971,13 +973,13 @@ metadata projection tests; Phase 5 owns exchange rework.
 
 ## Phase 5: Stage 12 Exchange Metadata Rework
 
-Status: pending
+Status: pr_open
 Slug: `stage-12-exchange-rework`
-Branch: TBD
-Worktree: TBD
-PR: TBD
-Base branch: TBD
-Target branch: TBD
+Branch: `codex/stage-12-exchange-rework`
+Worktree: `/home/samcantrill/work/loom-worktrees/stage-12-exchange-rework`
+PR: https://github.com/samcantrill/loom/pull/164
+Base branch: `develop`
+Target branch: `develop`
 Workflow path: expanded path because this phase modifies persisted
 run-exchange and bundle metadata behavior
 
