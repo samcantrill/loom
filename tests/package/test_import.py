@@ -43,6 +43,7 @@ def test_import_loom_diagnostics_public_api() -> None:
         "PreflightCheckStatus",
         "PreflightSeverity",
         "PreflightGroup",
+        "ArtifactBackendPreflightTarget",
         "PreflightCheckResult",
         "PreflightResult",
         "PreflightRequest",
