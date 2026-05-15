@@ -1637,7 +1637,7 @@ loaded plugin provenance summaries
 
 ### 22.6 Phase 6: CLI Support
 
-Add when useful:
+Landed for plugin inspection:
 
 ```text
 loom plugins list
@@ -1651,6 +1651,9 @@ After registries stabilize:
 ```text
 load_source_entry_points
 load_executor_entry_points
+load_artifact_store_backend_entry_points
+load_run_exporter_entry_points
+load_sweep_provider_entry_points
 ```
 
 ### 22.8 Phase 8: Event Sink Plugins
