@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 1 merged; ready for Phase 2 execution planning
+- Status: Phase 2 merged; ready for Phase 3 execution planning
 - Roadmap stage: `v15`
 - Source planning notes:
   `docs/roadmap/stage-15/planning.md`
@@ -28,12 +28,12 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: ready for Phase 2 execution planning
+- Current phase: ready for Phase 3 execution planning
 - Blockers:
   - No roadmap-stage planning blocker remains.
   - No plan-quality blocker remains.
-  - No Phase 2 execution plan exists yet; do not start Phase 2 product
-    implementation until Phase 2 execution planning is complete.
+  - No Phase 3 execution plan exists yet; do not start Phase 3 product
+    implementation until Phase 3 execution planning is complete.
 
 ## Summary
 
@@ -364,7 +364,7 @@ and project-specific adapters without adding those services to core.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `external-artifact-records` | merged | `codex/external-artifact-records` | https://github.com/samcantrill/loom/pull/160 | `loom.artifacts`, artifact package tests | Add external/published/location records and `ArtifactRef` compatibility contracts | Artifact/package/contract tests plus full PR gate | Old `ArtifactRef`, external declaration, published record, location summary |
-| 2 | `artifact-store-backend-contracts` | pending | TBD | TBD | `loom.pipeline.stores`, optional lazy plugin adapter | Add backend descriptor/factory, registry, capabilities, fake handlers, and supplied-registry plugin adapter boundary | Store/plugin contract tests plus full PR gate | MLflow-like fake descriptor, object-store-style fake descriptor |
+| 2 | `artifact-store-backend-contracts` | merged | `codex/artifact-store-backend-contracts` | https://github.com/samcantrill/loom/pull/161 | `loom.pipeline.stores`, optional lazy plugin adapter | Add backend descriptor/factory, registry, capabilities, fake handlers, and supplied-registry plugin adapter boundary | Store/plugin contract tests plus full PR gate | MLflow-like fake descriptor, object-store-style fake descriptor |
 | 3 | `immutable-artifact-semantics` | pending | TBD | TBD | artifact/store registration and lookup APIs | Add external immutable input and published immutable output registration/lookup semantics | Unit/contract tests plus full PR gate | Explicit compatible/incompatible/missing/unsupported lookup |
 | 4 | `backend-preflight-catalog-bundles` | pending | TBD | TBD | diagnostics, catalog projections, bundle metadata preservation | Add backend/config/capability checks and metadata-only catalog/bundle preservation | Diagnostics/run-catalog/bundle tests plus full PR gate | Missing handler, unsupported write, redacted summaries |
 | 5 | `stage-12-exchange-rework` | pending | TBD | TBD | `loom.runs` portable-run exchange | Rework Stage 12 exchange/export/import metadata to consume Stage 15 summaries | Run exchange/import/export tests plus full PR gate | Metadata-only external refs round trip through exchange |
@@ -563,13 +563,13 @@ include store registry or preflight work in this phase.
 
 ## Phase 2: Artifact-Store Backend Contracts
 
-Status: pending
+Status: merged
 Slug: `artifact-store-backend-contracts`
-Branch: TBD
-Worktree: TBD
-PR: TBD
-Base branch: TBD
-Target branch: TBD
+Branch: `codex/artifact-store-backend-contracts`
+Worktree: `/home/samcantrill/work/loom-worktrees/artifact-store-backend-contracts`
+PR: https://github.com/samcantrill/loom/pull/161
+Base branch: `develop`
+Target branch: `develop`
 Workflow path: expanded path because this phase creates public backend
 contracts and an extension-point boundary
 
@@ -679,6 +679,36 @@ backend readiness.
 
 Keep runner integration minimal. This phase may define run-context handoff
 records, but should not replace execution artifact-store wiring.
+
+### Merge Metadata
+
+- Merged: 2026-05-15 via squash merge to `develop`
+- Merge commit: `0a87ad19755816b616ddadcc9713407e0ecf74a1`
+- PR: https://github.com/samcantrill/loom/pull/161
+- Implementation summary: added `loom.pipeline.stores.artifact_backends` with
+  backend descriptor/factory/handler protocols, operation-specific
+  capabilities, structured diagnostics/results, backend-kind normalization, and
+  `ArtifactStoreBackendRegistry`; exported the public store contract names; and
+  added lazy `loom.plugins.load_artifact_store_backend_entry_points(...)` for
+  Stage 14 entry-point loading into caller-supplied registries while preserving
+  generic artifact-store backend readiness as listing-only.
+- Checks:
+  - Focused Phase 2 pytest paths passed: 76 passed.
+  - Broad Phase 2 pytest target passed outside the sandbox: 522 passed / 3
+    skipped.
+  - `make validate-pr` passed outside the sandbox: Ruff passed, Pyright passed
+    with 0 errors, default harness passed with 1634 passed / 26 skipped / 18
+    deselected, config-extra passed with 440 passed / 1671 deselected, and
+    build passed.
+  - `make test-summary` passed: overall 2102 passed / 18 skipped / 1687
+    deselected.
+  - GitHub CI `checks` job passed on the final PR head in 2m54s.
+- Automated review: managing agent local review approved with no blocking or
+  non-blocking findings; final pre-merge verification confirmed PR base
+  `develop`, head `codex/artifact-store-backend-contracts`, successful CI, and
+  Phase 2-scoped diff.
+- Follow-up notes: branch/worktree cleanup is safe because no successor branch
+  depends on Phase 2.
 
 ## Phase 3: Immutable Artifact Semantics
 
