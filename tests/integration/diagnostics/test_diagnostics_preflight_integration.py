@@ -38,6 +38,9 @@ def test_full_local_preflight_passes_and_writes_no_run_documents(tmp_path: Path)
         "runtime.stage_options",
         "run_uri.resolve",
         "artifact_store.available",
+        "artifact_backends.registry",
+        "artifact_backends.handlers",
+        "artifact_backends.capabilities",
         "codec_registry.available",
         "executor.local",
         "executor.resolve",
@@ -45,7 +48,16 @@ def test_full_local_preflight_passes_and_writes_no_run_documents(tmp_path: Path)
         "resources.capabilities",
         "filesystem.input_exists",
     ]
-    assert all(check.status is PreflightCheckStatus.PASS for check in result.checks)
+    by_id = {check.check_id: check for check in result.checks}
+    assert all(
+        check.status is PreflightCheckStatus.PASS
+        for check in result.checks
+        if not check.check_id.startswith("artifact_backends.")
+    )
+    assert by_id["artifact_backends.registry"].status is PreflightCheckStatus.SKIP
+    assert by_id["artifact_backends.registry"].details["reason"] == (
+        "no_artifact_backend_targets"
+    )
     assert not run_dir.exists()
 
 
