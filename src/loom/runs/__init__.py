@@ -35,8 +35,11 @@ from .artifact_metadata import (
     ARTIFACT_LOCATIONS_METADATA_KEY,
     EXTERNAL_ARTIFACT_METADATA_KEY,
     PUBLISHED_ARTIFACT_METADATA_KEY,
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_SCHEMA_VERSION,
     UNSUPPORTED_MATERIALIZATION_METADATA_KEY,
     collect_artifact_metadata_summaries,
+    collect_run_exchange_artifact_summaries,
     unsupported_materialization_summary,
 )
 from .errors import (
@@ -128,8 +131,11 @@ __all__ = [
     "ARTIFACT_LOCATIONS_METADATA_KEY",
     "EXTERNAL_ARTIFACT_METADATA_KEY",
     "PUBLISHED_ARTIFACT_METADATA_KEY",
+    "RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY",
+    "RUN_EXCHANGE_ARTIFACT_SUMMARIES_SCHEMA_VERSION",
     "UNSUPPORTED_MATERIALIZATION_METADATA_KEY",
     "collect_artifact_metadata_summaries",
+    "collect_run_exchange_artifact_summaries",
     "unsupported_materialization_summary",
     "CatalogError",
     "CatalogFeatureUnavailableError",

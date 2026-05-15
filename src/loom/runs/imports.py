@@ -16,6 +16,7 @@ from loom.io.uris import path_to_file_uri
 from loom.serialization import PlainData, thaw_plain_data
 from loom.timestamps import utc_timestamp
 
+from .artifact_metadata import RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY
 from .bundles import (
     LOCAL_RUN_BUNDLE_ADAPTER,
     RUN_BUNDLE_MANIFEST_MEMBER,
@@ -331,7 +332,7 @@ def build_portable_run_import_record(
             "bundle_member": RUN_BUNDLE_MANIFEST_MEMBER,
         },
         diagnostics=diagnostics,
-        extensions={"bundle_path": str(path)},
+        extensions={"bundle_path": str(path), **_run_exchange_extensions(inspection.manifest)},
     )
 
 
@@ -863,7 +864,17 @@ def _bundle_import_provenance(
         "target_run_uri": target_run_uri,
         "imported_at": utc_timestamp(),
         "historical_only": True,
+        **_run_exchange_extensions(record.manifest),
     }
+
+
+def _run_exchange_extensions(
+    manifest: RunBundleManifest,
+) -> Mapping[str, PlainData]:
+    summary = manifest.extensions.get(RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY)
+    if summary is None:
+        return {}
+    return {RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY: thaw_plain_data(summary)}
 
 
 def _bundle_import_result(

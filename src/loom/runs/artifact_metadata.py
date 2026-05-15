@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import cast
 
 from loom.artifacts import (
@@ -20,6 +20,8 @@ PUBLISHED_ARTIFACT_METADATA_KEY = "published_artifact"
 ARTIFACT_LOCATION_METADATA_KEY = "artifact_location"
 ARTIFACT_LOCATIONS_METADATA_KEY = "artifact_locations"
 UNSUPPORTED_MATERIALIZATION_METADATA_KEY = "unsupported_materialization"
+RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY = "stage_15_artifact_summaries"
+RUN_EXCHANGE_ARTIFACT_SUMMARIES_SCHEMA_VERSION = 1
 
 
 def collect_artifact_metadata_summaries(
@@ -113,6 +115,55 @@ def unsupported_materialization_summary(
     )
 
 
+def collect_run_exchange_artifact_summaries(
+    artifact_facts: Iterable[object],
+) -> dict[str, PlainData]:
+    """Project Stage 15 artifact summaries into a run-exchange extension."""
+
+    artifacts: list[PlainData] = []
+    for fact in artifact_facts:
+        artifact = getattr(fact, "artifact", None)
+        if not isinstance(artifact, ArtifactRef):
+            raise CatalogValidationError(
+                "artifact_facts must expose ArtifactRef values as artifact"
+            )
+        summaries = collect_artifact_metadata_summaries(artifact)
+        if not summaries:
+            continue
+        artifact_name = getattr(fact, "artifact_name", artifact.artifact_id)
+        if not isinstance(artifact_name, str) or not artifact_name:
+            raise CatalogValidationError(
+                "artifact_facts must expose non-empty artifact_name values"
+            )
+        artifacts.append(
+            ensure_plain_data(
+                {
+                    "artifact_name": artifact_name,
+                    "artifact_id": artifact.artifact_id,
+                    "uri": artifact.uri,
+                    "artifact_type": artifact.artifact_type,
+                    "codec_key": artifact.codec_key,
+                    "checksum": artifact.checksum,
+                    "fingerprint": artifact.fingerprint,
+                    "producer_stage": artifact.producer_stage,
+                    "summaries": summaries,
+                },
+                path="artifact_metadata_summaries[]",
+            )
+        )
+
+    return cast(
+        dict[str, PlainData],
+        ensure_plain_data(
+            {
+                "schema_version": RUN_EXCHANGE_ARTIFACT_SUMMARIES_SCHEMA_VERSION,
+                "artifacts": artifacts,
+            },
+            path=RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
+        ),
+    )
+
+
 def _metadata(
     artifact_or_metadata: ArtifactRef | Mapping[str, PlainData],
 ) -> Mapping[str, PlainData]:
@@ -144,6 +195,9 @@ __all__ = [
     "ARTIFACT_LOCATION_METADATA_KEY",
     "ARTIFACT_LOCATIONS_METADATA_KEY",
     "UNSUPPORTED_MATERIALIZATION_METADATA_KEY",
+    "RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY",
+    "RUN_EXCHANGE_ARTIFACT_SUMMARIES_SCHEMA_VERSION",
     "collect_artifact_metadata_summaries",
+    "collect_run_exchange_artifact_summaries",
     "unsupported_materialization_summary",
 ]

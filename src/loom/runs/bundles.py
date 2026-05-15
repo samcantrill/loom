@@ -14,6 +14,11 @@ from loom.io.errors import UnsupportedURIError
 from loom.io.uris import get_uri_scheme, uri_to_path
 from loom.serialization import PlainData, stable_json_bytes, thaw_plain_data
 
+from .artifact_metadata import (
+    RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY,
+    UNSUPPORTED_MATERIALIZATION_METADATA_KEY,
+    collect_run_exchange_artifact_summaries,
+)
 from .errors import CatalogValidationError
 from .models import (
     RUN_BUNDLE_MANIFEST_KIND,
@@ -114,6 +119,7 @@ def build_portable_run_export_record(
         target_identity=target_identity,
         manifest=manifest,
         diagnostics=diagnostics,
+        extensions=_run_exchange_extensions(manifest),
     )
 
 
@@ -201,6 +207,7 @@ def write_local_run_bundle(
             manifest=manifest,
             exported_payload_count=0,
             diagnostics=tuple(diagnostics),
+            extensions=_run_exchange_extensions(manifest),
         )
 
     destination_path = Path(destination)
@@ -222,6 +229,7 @@ def write_local_run_bundle(
         manifest=manifest,
         exported_payload_count=len(payload_sources),
         diagnostics=tuple(diagnostics),
+        extensions=_run_exchange_extensions(manifest),
     )
 
 
@@ -255,6 +263,7 @@ def inspect_run_bundle(
         manifest=manifest,
         included_payload_count=sum(1 for ref in manifest.payload_refs if ref.selected),
         diagnostics=tuple(diagnostics),
+        extensions=_run_exchange_extensions(manifest),
     )
 
 
@@ -290,7 +299,10 @@ def _build_manifest(
         for ref in selected_refs
         if ref.size_bytes is not None
     )
-    warnings = tuple(_warning_diagnostics(metadata.warnings))
+    exchange_extensions, exchange_diagnostics, exchange_warnings = (
+        _artifact_exchange_extensions(metadata)
+    )
+    warnings = (*_warning_diagnostics(metadata.warnings), *exchange_warnings)
     return RunBundleManifest(
         schema_version=RUN_BUNDLE_MANIFEST_SCHEMA_VERSION,
         kind=RUN_BUNDLE_MANIFEST_KIND,
@@ -309,10 +321,95 @@ def _build_manifest(
             for entry in entries
             if entry.checksum is not None
         },
-        diagnostics=tuple(diagnostics),
+        diagnostics=(*diagnostics, *exchange_diagnostics),
         warnings=warnings,
-        extensions={"completed_run": metadata.to_dict()},
+        extensions={"completed_run": metadata.to_dict(), **exchange_extensions},
     )
+
+
+def _artifact_exchange_extensions(
+    metadata: "CompletedRunBundleMetadata",
+) -> tuple[
+    Mapping[str, PlainData],
+    tuple[RunExchangeDiagnostic, ...],
+    tuple[RunExchangeDiagnostic, ...],
+]:
+    try:
+        summary = collect_run_exchange_artifact_summaries(
+            _exchange_artifact_facts(metadata)
+        )
+    except CatalogValidationError as exc:
+        return (
+            {},
+            (
+                _diagnostic(
+                    "run_bundle_export.artifact_metadata_invalid",
+                    "Stage 15 artifact metadata could not be projected",
+                    error=str(exc),
+                ),
+            ),
+            (),
+        )
+    artifacts = summary.get("artifacts")
+    if not isinstance(artifacts, Sequence) or not artifacts:
+        return {}, (), ()
+    return (
+        {RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY: summary},
+        (),
+        _unsupported_materialization_warnings(summary),
+    )
+
+
+def _exchange_artifact_facts(metadata: "CompletedRunBundleMetadata") -> tuple[object, ...]:
+    artifact_facts = tuple(metadata.artifact_facts)
+    if artifact_facts:
+        return artifact_facts
+    return tuple(fact for stage in metadata.stages for fact in stage.artifact_facts)
+
+
+def _unsupported_materialization_warnings(
+    summary: Mapping[str, PlainData],
+) -> tuple[RunExchangeDiagnostic, ...]:
+    artifacts = summary.get("artifacts")
+    if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)):
+        return ()
+    warnings: list[RunExchangeDiagnostic] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, Mapping):
+            continue
+        summaries = artifact.get("summaries")
+        if not isinstance(summaries, Mapping):
+            continue
+        unsupported = summaries.get(UNSUPPORTED_MATERIALIZATION_METADATA_KEY)
+        if unsupported is None:
+            continue
+        warnings.append(
+            _diagnostic(
+                "run_exchange.artifact_materialization_unsupported",
+                "artifact payload materialization is unsupported by preserved metadata",
+                severity=RunExchangeDiagnosticSeverity.WARNING,
+                artifact_name=_plain_or_none(artifact.get("artifact_name")),
+                artifact_id=_plain_or_none(artifact.get("artifact_id")),
+                producer_stage=_plain_or_none(artifact.get("producer_stage")),
+                unsupported_materialization=cast(PlainData, unsupported),
+            )
+        )
+    return tuple(warnings)
+
+
+def _run_exchange_extensions(
+    manifest: RunBundleManifest,
+) -> Mapping[str, PlainData]:
+    summary = manifest.extensions.get(RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY)
+    if summary is None:
+        return {}
+    return {RUN_EXCHANGE_ARTIFACT_SUMMARIES_KEY: thaw_plain_data(summary)}
+
+
+def _plain_or_none(value: object) -> PlainData:
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def _selected_payload_refs(
@@ -645,12 +742,14 @@ def _dedupe_diagnostics(
 def _diagnostic(
     code: str,
     message: str,
+    *,
+    severity: RunExchangeDiagnosticSeverity = RunExchangeDiagnosticSeverity.ERROR,
     **details: PlainData,
 ) -> RunExchangeDiagnostic:
     return RunExchangeDiagnostic(
         code=code,
         message=message,
-        severity=RunExchangeDiagnosticSeverity.ERROR,
+        severity=severity,
         details=cast(Mapping[str, PlainData], details),
     )
 
