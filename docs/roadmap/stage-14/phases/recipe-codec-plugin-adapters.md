@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: scope-complete phase execution plan; ready for implementation
+- Status: pr_open
 - Feature focus: Plugin Discovery
 - PR title:
   `Plugin Discovery - Phase 2: Recipe And Codec Registry Adapters`
@@ -11,14 +11,18 @@
   `/home/samcantrill/work/loom-worktrees/recipe-codec-plugin-adapters`
 - Phase execution plan path:
   `docs/roadmap/stage-14/phases/recipe-codec-plugin-adapters.md`
+- PR body path:
+  `docs/roadmap/stage-14/phases/recipe-codec-plugin-adapters-pr-body.md`
+- PR: https://github.com/samcantrill/loom/pull/157
+- PR number: #157
 - Full plan: `docs/roadmap/stage-14/implementation-plan.md`
 - Source phase: Phase 2, `recipe-codec-plugin-adapters`
 - Stack predecessor: none
 - Base branch: `develop` at `fbde891d62009640aa6a86d96ede06c761c32983`
 - Target branch: `develop`
 - Merge eligibility: root phase PR targets `develop`; merge-eligible only
-  after implementation, required validation, automated review, CI or justified
-  unavailable checks, scope verification, and target-branch verification pass.
+  after automated review, CI or justified unavailable checks, scope
+  verification, and target-branch verification pass.
 - Workflow path: expanded path, because this phase adds public
   registry-adapter behavior for trusted plugin loading.
 - Successor dependency notes: Phase 3 should branch from this phase branch if
@@ -506,4 +510,13 @@ run during PR preparation so the PR body can report suite-level evidence.
   submission pending.
 - Stack maintenance: root phase targets `develop`; no predecessor branch exists
   and no retarget or rebase is needed at planning time.
+- PR facts: PR #157 opened at
+  https://github.com/samcantrill/loom/pull/157 with base `develop`, head
+  `codex/recipe-codec-plugin-adapters`, and state `OPEN`; verified with
+  `gh pr view 157 --json baseRefName,headRefName,state,url,number`.
+- PR body: completed in
+  `docs/roadmap/stage-14/phases/recipe-codec-plugin-adapters-pr-body.md`.
+- Stack state: root phase; no stack predecessor; target branch remains
+  `develop`; no retarget, rebase, or successor maintenance was performed
+  during PR preparation.
 - Remaining blockers: none for implementation handoff.
