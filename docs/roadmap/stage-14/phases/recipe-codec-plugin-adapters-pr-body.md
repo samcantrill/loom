@@ -30,7 +30,7 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| `make validate-pr` | Passed | Recorded in the phase execution plan completion notes after PR-preparation validation. |
+| `make validate-pr` | Partial rerun; prior pass recorded | Fresh PR-prep rerun passed Ruff and Pyright, then timed out after 900s in `test-no-extra` with no failure output. The phase execution plan records an earlier complete pass. |
 | `make test-summary` | Passed | `build/test-summary.md`, generated 2026-05-15T03:36:25+00:00. |
 | GitHub checks | Pending | To run after PR creation. |
 

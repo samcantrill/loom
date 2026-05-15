@@ -508,6 +508,11 @@ run during PR preparation so the PR body can report suite-level evidence.
   `make test-summary` passed with package 86, unit 1106, contract 206,
   integration 155, e2e 43, and config-extra 440 tests passed. PR body and PR
   submission pending.
+- PR-preparer validation rerun: a fresh bounded `make validate-pr` rerun passed
+  Ruff and Pyright, then timed out after 900 seconds in `test-no-extra` with no
+  failure output. The PR body records this partial rerun and keeps the earlier
+  complete `make validate-pr` pass plus `build/test-summary.md` suite evidence
+  as the review evidence.
 - Stack maintenance: root phase targets `develop`; no predecessor branch exists
   and no retarget or rebase is needed at planning time.
 - PR facts: PR #157 opened at
