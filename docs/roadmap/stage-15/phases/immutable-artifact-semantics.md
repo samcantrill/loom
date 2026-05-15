@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: final phase execution plan; implementation not started
+- Status: implemented; PR preparation complete
 - Feature focus: External Artifact Interface
 - PR title: `External Artifact Interface - Phase 3: Immutable Artifact Semantics`
 - Branch: `codex/immutable-artifact-semantics`
@@ -258,6 +258,37 @@ Final PR-preparation commands:
 make validate-pr
 make test-summary
 ```
+
+## Implementation Notes
+
+- Added `loom.pipeline.stores.immutable_artifacts` with metadata-only
+  declaration and published-record validation, fail-closed operation admission,
+  explicit immutable lookup, validation-policy comparison, and `ArtifactRef`
+  projection helpers.
+- Exported the immutable artifact semantics helpers from
+  `loom.pipeline.stores`.
+- Added focused unit, contract, and package coverage for metadata-only
+  validation, handler capability validation, unsupported/unknown capability
+  admission, explicit compatible/incompatible/missing/unsupported lookup, and
+  public exports.
+
+## Validation Evidence
+
+| Command/check | Result |
+| --- | --- |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/stores/immutable_artifacts.py tests/unit/loom/pipeline/stores/test_immutable_artifacts.py tests/contracts/test_immutable_artifact_semantics_contract.py tests/package/test_pipeline_store_api.py` | passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pyright src/loom/pipeline/stores/immutable_artifacts.py tests/unit/loom/pipeline/stores/test_immutable_artifacts.py tests/contracts/test_immutable_artifact_semantics_contract.py` | passed with 0 errors |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/stores/test_immutable_artifacts.py tests/contracts/test_immutable_artifact_semantics_contract.py tests/package/test_pipeline_store_api.py tests/unit/loom/pipeline/stores/test_store_errors.py` | passed: 68 passed |
+| `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom tests/unit/loom/pipeline/stores tests/contracts` | passed outside sandbox: 1376 passed / 10 skipped |
+| `make validate-pr` | passed outside sandbox: Ruff, Pyright, default pytest, config-extra pytest, and build |
+| `make test-summary` | passed: overall 2110 passed / 18 skipped / 1695 deselected |
+
+## Budget Status
+
+- Phase implementation refinement: not needed; targeted and full validation
+  passed after local fixes before PR preparation.
+- PR review: pending.
+- Blocker-resolution budget: unused.
 
 ## Handoff Notes For Implementation
 
