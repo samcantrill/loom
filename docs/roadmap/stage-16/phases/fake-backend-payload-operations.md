@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: refined phase execution plan - ready for implementation
+- Status: implementation complete - ready for PR
 - Feature focus: Artifact Payload Materialization
 - PR title: `Artifact Payload Materialization - Phase 3: Fake Backend Payload Operations`
 - Branch: `codex/fake-backend-payload-operations`
@@ -10,17 +10,17 @@
 - Phase execution plan path: `docs/roadmap/stage-16/phases/fake-backend-payload-operations.md`
 - Full plan: `docs/roadmap/stage-16/implementation-plan.md`
 - Source phase: `Phase 3: Backend Handler Materialization And Fake Remote Operations`
-- Stack predecessor: `codex/local-materialization-copy-records` / PR [#167](https://github.com/samcantrill/loom/pull/167)
-- Base branch: `codex/local-materialization-copy-records`
-- Target branch: `codex/local-materialization-copy-records` until Phase 2 merges; retarget to `develop` after replaying onto merged Phase 2
-- Merge eligibility: eligible only after Phase 2 is merged or this branch is retargeted/rebased according to stack state, phase validation passes, automated review passes, and PR target verification succeeds
+- Stack predecessor: none; Phase 2 merged into `develop` before PR preparation
+- Base branch: `develop`
+- Target branch: `develop`
+- Merge eligibility: eligible after phase validation passes, automated review passes, CI passes, and PR target verification confirms `develop`
 - Workflow path: expanded path
 - Successor dependency notes: Phase 4 should branch from this branch if Phase 3 remains unmerged
 - Plan quality gate: passed in the implementation plan on 2026-05-15
 - Plan quality gate loop budget: consumed and passed; do not rerun unless the implementation plan changes
 - Draft pass: complete in this artifact
 - Refine pass: complete in this artifact
-- Setup limitations: Phase 2 CI is pending when this plan is drafted; this phase is intentionally stacked on the open Phase 2 branch
+- Setup limitations: none; Phase 3 was replayed onto `develop` after Phase 2 squash merge
 - Blockers: none
 
 ## Objective
@@ -33,11 +33,11 @@ Phase 1 added shared operation/evidence records, and Phase 2 added copy-only loc
 
 ## Stack Context
 
-- Root or stacked phase: stacked on Phase 2
-- Current predecessor branch or PR: `codex/local-materialization-copy-records`, PR [#167](https://github.com/samcantrill/loom/pull/167)
-- Why this base branch is correct: Phase 3 depends on Phase 1 `loom.operations` and Phase 2 materialization records, and Phase 2 is open, validated locally, and recorded as `pr_open`
-- Retarget/rebase plan after predecessor merge: after Phase 2 merges into `develop`, rebase this branch onto updated `develop`, retarget its PR to `develop`, rerun validation, and record stack maintenance
-- Branch cleanup constraints: do not delete Phase 2 branch while Phase 3 targets or depends on it
+- Root or stacked phase: root PR after Phase 2 merge
+- Current predecessor branch or PR: none; Phase 2 PR [#167](https://github.com/samcantrill/loom/pull/167) merged into `develop`
+- Why this base branch is correct: Phase 3 depends on Phase 1 `loom.operations` and Phase 2 materialization records, both now merged on `develop`
+- Retarget/rebase plan after predecessor merge: completed on 2026-05-15 with `git rebase --onto origin/develop codex/local-materialization-copy-records codex/fake-backend-payload-operations`
+- Branch cleanup constraints: Phase 3 no longer depends on the Phase 2 branch
 
 ## Source Phase Summary
 
@@ -201,7 +201,7 @@ make test-summary
 
 - Planning draft pass: used
 - Planning refine pass: used
-- Phase implementation refinement: unused; one expanded-path pass remains available if targeted validation fails or review finds a bounded blocker
+- Phase implementation refinement: not needed; targeted validation and the full PR gate passed without implementation blockers
 - PR review: unused; one automated review pass remains available
 - Blocker resolution: 0/3 used
 
@@ -209,10 +209,10 @@ make test-summary
 
 - Draft plan: completed in this artifact
 - Final phase execution plan: refined and ready for implementation
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Implementation summary: complete. Added `UPLOAD` and `DOWNLOAD` backend operations, strict payload request/result records, a runtime-checkable companion payload handler protocol, public store exports, and fake object-store/tracking-system contract coverage.
+- Implementation validation: targeted Phase 3 suite passed with 73 tests; adjacent backend/materialization compatibility suite passed with 8 tests; `git diff --check`, Ruff changed-file checks, and Pyright changed-file checks passed. `make validate-pr` passed with Ruff, Pyright, default suite `1691 passed, 26 skipped, 18 deselected`, config-extra suite `440 passed, 1728 deselected`, and build. `make test-summary` passed with package `97 passed, 1 skipped`, unit `1184 passed, 7 skipped, 1 deselected`, contract `239 passed, 2 skipped`, integration `156 passed, 8 skipped, 13 deselected`, e2e `43 passed, 2 deselected`, and config-extra `440 passed, 1728 deselected`.
+- Refinement summary: no separate implementation refinement pass was needed because targeted validation and full PR validation passed.
 - Blocker-resolution summary: none
-- PR preparation: pending
-- Stack maintenance: stacked on Phase 2 until Phase 2 merges
+- PR preparation: body prepared in `docs/roadmap/stage-16/phases/fake-backend-payload-operations-pr-body.md`
+- Stack maintenance: replayed onto `develop` after Phase 2 merged; PR should target `develop`
 - Remaining blockers: none
