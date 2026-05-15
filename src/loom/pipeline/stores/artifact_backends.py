@@ -9,9 +9,16 @@ from enum import StrEnum
 from typing import Protocol, cast, runtime_checkable
 
 from loom.artifacts import (
+    ArtifactLocationSummary,
+    ArtifactRef,
     ArtifactStoreRef,
     ImmutableArtifactLookupRequest,
     ImmutableArtifactLookupResult,
+)
+from loom.operations import (
+    OperationAdapterIdentity,
+    OperationResult,
+    OperationStatus,
 )
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
@@ -56,6 +63,19 @@ class ArtifactStoreBackendOperation(StrEnum):
     LOOKUP = "lookup"
     PUBLISH = "publish"
     MATERIALIZE = "materialize"
+    UPLOAD = "upload"
+    DOWNLOAD = "download"
+
+
+_PAYLOAD_BACKEND_OPERATIONS = frozenset(
+    {
+        ArtifactStoreBackendOperation.PUBLISH,
+        ArtifactStoreBackendOperation.MATERIALIZE,
+        ArtifactStoreBackendOperation.UPLOAD,
+        ArtifactStoreBackendOperation.DOWNLOAD,
+        ArtifactStoreBackendOperation.VERIFY_CHECKSUM,
+    }
+)
 
 
 class ArtifactStoreCapabilitySupport(StrEnum):
@@ -442,6 +462,211 @@ class ArtifactStoreBackendOperationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactStorePayloadOperationRequest:
+    """Request for one explicit artifact-store payload operation."""
+
+    operation: ArtifactStoreBackendOperation
+    artifact: ArtifactRef | None = None
+    source_uri: str | None = None
+    target_uri: str | None = None
+    checksum: str | None = None
+    detail: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        operation = _coerce_operation(self.operation, "operation")
+        if operation not in _PAYLOAD_BACKEND_OPERATIONS:
+            raise ArtifactStoreBackendError(
+                "operation must be a payload artifact-store operation"
+            )
+        object.__setattr__(self, "operation", operation)
+        if self.artifact is not None and not isinstance(self.artifact, ArtifactRef):
+            raise ArtifactStoreBackendError("artifact must be an ArtifactRef or None")
+        if self.source_uri is not None:
+            object.__setattr__(
+                self,
+                "source_uri",
+                _require_non_empty_string(self.source_uri, "source_uri"),
+            )
+        if self.target_uri is not None:
+            object.__setattr__(
+                self,
+                "target_uri",
+                _require_non_empty_string(self.target_uri, "target_uri"),
+            )
+        if self.checksum is not None:
+            object.__setattr__(
+                self,
+                "checksum",
+                _require_non_empty_string(self.checksum, "checksum"),
+            )
+        object.__setattr__(self, "detail", _plain_mapping(self.detail, "detail"))
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "operation": self.operation.value,
+            "artifact": None if self.artifact is None else self.artifact.to_dict(),
+            "source_uri": self.source_uri,
+            "target_uri": self.target_uri,
+            "checksum": self.checksum,
+            "detail": thaw_plain_data(self.detail, path="detail"),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> ArtifactStorePayloadOperationRequest:
+        mapping = _mapping(data, "ArtifactStorePayloadOperationRequest")
+        _reject_unknown(
+            mapping,
+            {"operation", "artifact", "source_uri", "target_uri", "checksum", "detail"},
+            "ArtifactStorePayloadOperationRequest",
+        )
+        artifact_data = mapping.get("artifact")
+        return cls(
+            operation=_coerce_operation(_required(mapping, "operation"), "operation"),
+            artifact=None if artifact_data is None else ArtifactRef.from_dict(artifact_data),
+            source_uri=_optional_non_empty_string(mapping.get("source_uri"), "source_uri"),
+            target_uri=_optional_non_empty_string(mapping.get("target_uri"), "target_uri"),
+            checksum=_optional_non_empty_string(mapping.get("checksum"), "checksum"),
+            detail=_plain_mapping(mapping.get("detail", {}), "detail"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactStorePayloadOperationResult:
+    """Result of one explicit artifact-store payload operation."""
+
+    request: ArtifactStorePayloadOperationRequest
+    result: OperationResult
+    location: ArtifactLocationSummary | None = None
+    bytes_processed: int | None = None
+    detail: Mapping[str, PlainData] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, ArtifactStorePayloadOperationRequest):
+            raise ArtifactStoreBackendError(
+                "request must be an ArtifactStorePayloadOperationRequest"
+            )
+        if not isinstance(self.result, OperationResult):
+            raise ArtifactStoreBackendError("result must be an OperationResult")
+        if self.location is not None and not isinstance(
+            self.location,
+            ArtifactLocationSummary,
+        ):
+            raise ArtifactStoreBackendError(
+                "location must be an ArtifactLocationSummary or None"
+            )
+        if self.bytes_processed is not None and (
+            not isinstance(self.bytes_processed, int)
+            or isinstance(self.bytes_processed, bool)
+            or self.bytes_processed < 0
+        ):
+            raise ArtifactStoreBackendError(
+                "bytes_processed must be a non-negative int or None"
+            )
+        object.__setattr__(self, "detail", _plain_mapping(self.detail, "detail"))
+
+    @property
+    def succeeded(self) -> bool:
+        return self.result.status is OperationStatus.SUCCEEDED
+
+    @classmethod
+    def unsupported(
+        cls,
+        request: ArtifactStorePayloadOperationRequest,
+        *,
+        backend_kind: str,
+        message: str | None = None,
+        detail: Mapping[str, PlainData] | None = None,
+    ) -> ArtifactStorePayloadOperationResult:
+        result_message = (
+            message
+            if message is not None
+            else (
+                f"backend {backend_kind!r} does not support payload operation "
+                f"{request.operation.value!r}"
+            )
+        )
+        return cls(
+            request=request,
+            result=OperationResult.unsupported(
+                f"artifact_store.{request.operation.value}",
+                reason=result_message,
+                adapter=_operation_adapter(backend_kind),
+                details={
+                    "backend_kind": backend_kind,
+                    "operation": request.operation.value,
+                    **dict(detail or {}),
+                },
+            ),
+            detail={} if detail is None else detail,
+        )
+
+    @classmethod
+    def not_implemented(
+        cls,
+        request: ArtifactStorePayloadOperationRequest,
+        *,
+        backend_kind: str,
+        message: str | None = None,
+        detail: Mapping[str, PlainData] | None = None,
+    ) -> ArtifactStorePayloadOperationResult:
+        result_message = (
+            message
+            if message is not None
+            else (
+                f"backend {backend_kind!r} has not implemented payload operation "
+                f"{request.operation.value!r}"
+            )
+        )
+        return cls(
+            request=request,
+            result=OperationResult.not_implemented(
+                f"artifact_store.{request.operation.value}",
+                reason=result_message,
+                adapter=_operation_adapter(backend_kind),
+                details={
+                    "backend_kind": backend_kind,
+                    "operation": request.operation.value,
+                    **dict(detail or {}),
+                },
+            ),
+            detail={} if detail is None else detail,
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "request": self.request.to_dict(),
+            "result": self.result.to_dict(),
+            "location": None if self.location is None else self.location.to_summary(),
+            "bytes_processed": self.bytes_processed,
+            "detail": thaw_plain_data(self.detail, path="detail"),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> ArtifactStorePayloadOperationResult:
+        mapping = _mapping(data, "ArtifactStorePayloadOperationResult")
+        _reject_unknown(
+            mapping,
+            {"request", "result", "location", "bytes_processed", "detail"},
+            "ArtifactStorePayloadOperationResult",
+        )
+        location_data = mapping.get("location")
+        return cls(
+            request=ArtifactStorePayloadOperationRequest.from_dict(
+                _required(mapping, "request")
+            ),
+            result=OperationResult.from_dict(_required(mapping, "result")),
+            location=None
+            if location_data is None
+            else ArtifactLocationSummary.from_dict(location_data),
+            bytes_processed=_optional_non_negative_int(
+                mapping.get("bytes_processed"),
+                "bytes_processed",
+            ),
+            detail=_plain_mapping(mapping.get("detail", {}), "detail"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactStoreBackendDescriptor:
     """Serializable descriptor for an artifact-store backend factory."""
 
@@ -620,6 +845,25 @@ class ArtifactStoreBackendHandler(Protocol):
         message: str | None = None,
         detail: Mapping[str, PlainData] | None = None,
     ) -> ArtifactStoreBackendOperationResult: ...
+
+
+@runtime_checkable
+class ArtifactStoreBackendPayloadHandler(Protocol):
+    """Companion handler surface for explicit payload operations."""
+
+    @property
+    def descriptor(self) -> ArtifactStoreBackendDescriptor: ...
+
+    @property
+    def store_ref(self) -> ArtifactStoreRef: ...
+
+    @property
+    def capabilities(self) -> ArtifactStoreCapabilities: ...
+
+    def payload_operation(
+        self,
+        request: ArtifactStorePayloadOperationRequest,
+    ) -> ArtifactStorePayloadOperationResult | ArtifactStoreBackendOperationResult: ...
 
 
 class ArtifactStoreBackendRegistry:
@@ -849,6 +1093,14 @@ def _diagnostic_severity_values() -> tuple[str, ...]:
     return tuple(severity.value for severity in ArtifactStoreBackendDiagnosticSeverity)
 
 
+def _operation_adapter(backend_kind: str) -> OperationAdapterIdentity:
+    return OperationAdapterIdentity(
+        name=normalize_artifact_store_backend_kind(backend_kind, field="backend_kind"),
+        kind="artifact-store-backend",
+        version="1",
+    )
+
+
 def _normalize_uri_schemes(values: Iterable[object]) -> tuple[str, ...]:
     normalized: set[str] = set()
     for value in values:
@@ -881,6 +1133,14 @@ def _optional_non_empty_string(value: object, field: str) -> str | None:
     if value is None:
         return None
     return _require_non_empty_string(value, field)
+
+
+def _optional_non_negative_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ArtifactStoreBackendError(f"{field} must be a non-negative integer")
+    return value
 
 
 def _plain_mapping(value: object, field: str) -> Mapping[str, PlainData]:
@@ -939,9 +1199,12 @@ __all__ = [
     "ArtifactStoreCapabilityRecord",
     "ArtifactStoreCapabilities",
     "ArtifactStoreBackendOperationResult",
+    "ArtifactStorePayloadOperationRequest",
+    "ArtifactStorePayloadOperationResult",
     "ArtifactStoreBackendDescriptor",
     "ArtifactStoreBackendFactory",
     "ArtifactStoreBackendHandler",
+    "ArtifactStoreBackendPayloadHandler",
     "ArtifactStoreBackendRegistry",
     "artifact_store_backend_versions_compatible",
     "normalize_artifact_store_backend_kind",
