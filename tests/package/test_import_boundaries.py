@@ -300,7 +300,7 @@ def test_import_artifacts_does_not_import_store_plugins_or_services() -> None:
     assert result.stdout.strip() == "ok"
 
 
-def test_stage_15_public_defaults_do_not_import_plugins_or_optional_sdks() -> None:
+def test_stage_16_public_defaults_do_not_import_plugins_or_optional_sdks() -> None:
     script = dedent(
         """
         import sys
@@ -308,6 +308,26 @@ def test_stage_15_public_defaults_do_not_import_plugins_or_optional_sdks() -> No
         import loom.artifacts
         import loom.pipeline.stores
         import loom.runs
+        from loom.pipeline.stores import (
+            ArtifactStoreBackendOperation,
+            ArtifactStorePayloadOperationRequest,
+            ArtifactStorePayloadOperationResult,
+            LocalMaterializationPolicy,
+        )
+        from loom.runs import RunBundleExportOptions
+
+        request = ArtifactStorePayloadOperationRequest(
+            operation=ArtifactStoreBackendOperation.DOWNLOAD,
+            source_uri="s3://example-bucket/artifact.bin",
+            target_uri="file:///tmp/artifact.bin",
+        )
+        result = ArtifactStorePayloadOperationResult.not_implemented(
+            request,
+            backend_kind="s3",
+        )
+        assert result.result.status.value == "not_implemented"
+        assert LocalMaterializationPolicy.COPY.value == "copy"
+        assert RunBundleExportOptions(materialize_payloads=True).materialize_payloads
 
         for forbidden in (
             "loom.plugins",
@@ -323,7 +343,7 @@ def test_stage_15_public_defaults_do_not_import_plugins_or_optional_sdks() -> No
             "httpx",
         ):
             if forbidden in sys.modules:
-                raise SystemExit(f"{forbidden} was imported by Stage 15 public defaults")
+                raise SystemExit(f"{forbidden} was imported by Stage 16 public defaults")
         print("ok")
         """
     )
@@ -335,7 +355,7 @@ def test_stage_15_public_defaults_do_not_import_plugins_or_optional_sdks() -> No
     assert result.stdout.strip() == "ok"
 
 
-def test_stage_15_default_preflight_avoids_backend_discovery_and_sdks() -> None:
+def test_stage_16_default_preflight_avoids_backend_discovery_and_sdks() -> None:
     script = dedent(
         """
         import sys
@@ -353,6 +373,8 @@ def test_stage_15_default_preflight_avoids_backend_discovery_and_sdks() -> None:
         by_id = {check.check_id: check for check in result.checks}
         assert by_id["artifact_backends.registry"].status is PreflightCheckStatus.SKIP
         assert by_id["artifact_backends.handlers"].details["reason"] == "no_artifact_backend_targets"
+        assert by_id["artifact_backends.materialization"].status is PreflightCheckStatus.SKIP
+        assert by_id["artifact_backends.materialization"].details["reason"] == "no_artifact_backend_targets"
 
         for forbidden in (
             "loom.plugins",

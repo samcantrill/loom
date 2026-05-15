@@ -321,6 +321,31 @@ manifest extension `stage_15_artifact_summaries`. This is metadata only: export
 does not contact remote stores, check credentials, download payloads, or treat
 the local bundle format as a provider protocol.
 
+Stage 16 keeps that default and adds an explicit Python API materialization
+path for supported payload handlers. A caller may request backend
+materialization for selected payload refs by passing both a materialization
+option and a handler:
+
+```python
+from loom.runs import RunBundleExportOptions, export_completed_run_bundle
+
+result = export_completed_run_bundle(
+    metadata,
+    "run.tar",
+    options=RunBundleExportOptions(include_payloads=True, materialize_payloads=True),
+    payload_handler=fake_or_plugin_payload_handler,
+)
+```
+
+If the handler is missing, does not implement the payload protocol, reports
+unsupported materialization, fails checksum evidence, or returns an invalid
+result, export fails closed with structured diagnostics. Successful
+materialization records the operation evidence in the bundle manifest extension
+`stage_16_materialization_operations` and preserves the original remote source
+URI in the materialized payload ref extension. The CLI does not expose provider
+materialization flags in Stage 16 because core has no first-party backend
+registry or credential surface.
+
 The local bundle archive is one first-party adapter over portable-run exchange
 records. It is not the protocol for later remote stores or external tracking
 providers.
@@ -404,6 +429,10 @@ Inspect output preserves the `stage_15_artifact_summaries` extension when it is
 present, so external references remain visible without reading or extracting
 payload members.
 
+When `stage_16_materialization_operations` is present, inspect preserves that
+plain operation evidence in manifest extensions. It still does not extract files,
+download remote payloads, or probe backend credentials.
+
 ## Import
 
 Run import copies a bundle into a local run collection.
@@ -434,10 +463,10 @@ provenance and keeps imported artifact refs metadata-only unless payloads were
 explicitly included and copied. Unsupported remote materialization is recorded as
 a warning diagnostic, not as an implicit download attempt.
 
-The Stage 15 extension is the stable handoff to Stage 16 materialization. It is
-not a provider protocol and should not be used to infer that a remote URI is
-reachable or writable. Adapter-specific import behavior must remain opt-in and
-capability-checked.
+The Stage 15 and Stage 16 extensions are stable metadata and evidence handoffs.
+They are not provider protocols and should not be used to infer that a remote URI
+is reachable or writable. Adapter-specific import behavior must remain opt-in
+and capability-checked.
 
 Imported runs are historical-only in v12. Live migrated resume, merge,
 overwrite, fork, remote payload materialization, signed/encrypted bundles,
@@ -471,6 +500,10 @@ belong to the run. For future remote stores, export may need a staging step or a
 metadata-only mode.
 
 The catalog should not assume all artifact payloads are local files.
+It should also not infer materialization readiness from preserved remote URIs or
+bundle extension evidence. Catalog summaries remain metadata-only unless a
+future stage explicitly adds derived materialization projection with matching
+tests.
 
 ## Testing
 

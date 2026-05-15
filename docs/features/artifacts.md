@@ -85,6 +85,20 @@ object-store URI, a tracking-system run artifact URI, checksum evidence, reuse
 keys, or unsupported-materialization context. Payload movement remains a later
 materialization concern.
 
+Stage 16 adds explicit materialization and payload-operation handles without
+changing the `ArtifactRef` boundary. Local materialization is copy-only and lives
+under `loom.pipeline.stores`; future local policies such as hardlink, symlink,
+reflink, move, or cache promotion return structured unsupported results rather
+than silently copying. Remote-like payload movement is represented by
+store-owned payload operation request/result records and fake backend handlers,
+but core `loom` still ships no first-party S3, GCS, Azure, HTTP, MLflow, DVC,
+W&B, or tracking-system adapter and imports none of their SDKs.
+
+Bundle export can materialize supported remote-like payload refs only when the
+caller explicitly opts in and supplies a payload handler. Metadata-only bundle,
+catalog, inspect, import, and preflight paths stay credential-free and do not
+download or upload payloads implicitly.
+
 ---
 
 ## 3. Package Boundary

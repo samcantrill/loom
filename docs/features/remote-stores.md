@@ -12,31 +12,60 @@ Remote stores are intentionally deferred until local filesystem behavior is
 stable. This document defines the boundary so the local design does not block
 future remote backends.
 
-Stage 15 implements the generic interface layer only. Core now has
+Stage 15 implements the generic metadata interface layer. Core now has
 backend-neutral store references, backend descriptors/factories/handlers,
 capability records, explicit immutable lookup results, preflight capability
 checks, and metadata-preserving run exchange. It does not include first-party
 S3, GCS, Azure, HTTP, MLflow, DVC, W&B, or tracking-system adapters, and it does
 not import their SDKs.
 
+Stage 16 adds explicit payload-operation records and fake backend conformance
+for publish, materialize, upload, download, and checksum verification. This is
+still not a real backend selection: provider adapters, credential chains,
+network operations, retry policy, and cleanup policy remain future work.
+
 Adapter examples in this document are contract shapes. A future optional package
 can map an MLflow-like tracking URI or object-store prefix into the same
-generic records, but Stage 15 does not perform upload, download,
-materialization, deletion, credential refresh, or network probing.
+generic records, but core `loom` does not perform provider upload, download,
+materialization, deletion, credential refresh, or network probing unless an
+explicit caller-supplied handler implements the store-owned payload protocol.
 
 Two fake adapter shapes are used in contract tests:
 
 - A tracking-system-style backend reports a descriptor kind such as
   `tracking-system`, accepts redacted `runs:` or `tracking:` URIs, supports
-  read and explicit lookup, and returns an `ImmutableArtifactLookupResult` that
-  points at a `PublishedArtifactRecord`. It does not publish payloads.
+  read and explicit lookup, and can resolve a tracking URI to an object-store
+  payload location through the same payload result shape.
 - An object-store-style backend reports a descriptor kind such as
   `object-store`, accepts redacted `s3:` or `gs:` URIs, supports read and
-  checksum-oriented metadata, and returns structured unsupported results for
-  materialization. It does not upload, download, or delete payloads in Stage 15.
+  checksum-oriented metadata, and can fake upload, download, materialize, or
+  checksum verification without importing a provider SDK.
 
-Both examples preserve only plain Stage 15 summaries in run exchange metadata.
-They are not supported first-party adapters.
+Both examples preserve only plain summaries and operation evidence in run
+exchange metadata. They are not supported first-party adapters.
+
+## Stage 16 No-Backend Boundary
+
+Core `loom` intentionally ends Stage 16 with no real backend family selected.
+User-facing handles should therefore be explicit about the difference between:
+
+```text
+metadata preservation:
+  record and inspect redacted refs, checksums, and unsupported context
+
+local materialization:
+  copy local file payloads only when the caller asks for copy
+
+fake payload operations:
+  prove the public request/result/protocol shape without provider SDKs
+
+future real adapters:
+  return unsupported or not-implemented results until an optional backend exists
+```
+
+Revisit this boundary only when a concrete backend is selected, fake
+object-store/tracking behavior cannot represent the needed operation shape, or a
+downstream workflow requires a provider SDK behind an optional plugin package.
 
 ## Scope
 
@@ -317,6 +346,7 @@ local filesystem implementation
 backend registry
 configuration handoff
 redaction helpers
+payload operation request/result protocols
 test fakes
 ```
 
@@ -382,6 +412,12 @@ checksum verification when requested
 
 The default should avoid unexpectedly downloading large remote payloads.
 
+Stage 16 exposes the explicit payload materialization path at the Python API
+boundary: bundle export can request materialization only when the caller passes
+`RunBundleExportOptions(materialize_payloads=True)` and a payload handler. CLI
+bundle export remains metadata-only for remote refs because core has no
+first-party backend registry or credential surface to resolve providers.
+
 ## Security
 
 Remote store code must guard against:
@@ -412,6 +448,8 @@ checksum mismatch handling
 preflight missing plugin
 preflight unsupported operation
 metadata-only export with remote URIs
+explicit fake materialization in bundle export
+not-implemented real-backend payload handles without optional SDK imports
 ```
 
 Backend plugin tests may use cloud SDK fakes or optional integration tests, but

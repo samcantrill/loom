@@ -585,19 +585,20 @@ class ArtifactStorePayloadOperationResult:
                 f"{request.operation.value!r}"
             )
         )
+        operation = OperationResult.unsupported(
+            f"artifact_store.{request.operation.value}",
+            reason=result_message,
+            adapter=_operation_adapter(backend_kind),
+            details={
+                "backend_kind": backend_kind,
+                "operation": request.operation.value,
+                **dict(detail or {}),
+            },
+        )
         return cls(
             request=request,
-            result=OperationResult.unsupported(
-                f"artifact_store.{request.operation.value}",
-                reason=result_message,
-                adapter=_operation_adapter(backend_kind),
-                details={
-                    "backend_kind": backend_kind,
-                    "operation": request.operation.value,
-                    **dict(detail or {}),
-                },
-            ),
-            detail={} if detail is None else detail,
+            result=operation,
+            detail=operation.details,
         )
 
     @classmethod
@@ -617,19 +618,20 @@ class ArtifactStorePayloadOperationResult:
                 f"{request.operation.value!r}"
             )
         )
+        operation = OperationResult.not_implemented(
+            f"artifact_store.{request.operation.value}",
+            reason=result_message,
+            adapter=_operation_adapter(backend_kind),
+            details={
+                "backend_kind": backend_kind,
+                "operation": request.operation.value,
+                **dict(detail or {}),
+            },
+        )
         return cls(
             request=request,
-            result=OperationResult.not_implemented(
-                f"artifact_store.{request.operation.value}",
-                reason=result_message,
-                adapter=_operation_adapter(backend_kind),
-                details={
-                    "backend_kind": backend_kind,
-                    "operation": request.operation.value,
-                    **dict(detail or {}),
-                },
-            ),
-            detail={} if detail is None else detail,
+            result=operation,
+            detail=operation.details,
         )
 
     def to_dict(self) -> dict[str, PlainData]:
