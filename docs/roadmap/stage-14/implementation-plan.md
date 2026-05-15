@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: Phase 2 merged; ready for Phase 3 execution planning
+- Status: Phase 3 PR open; ready for automated review and merge
 - Roadmap stage: `v14`
 - Source planning notes:
   `docs/roadmap/stage-14/planning.md`
@@ -28,10 +28,11 @@
 - Refine pass: complete on 2026-05-15 after local plan-quality review
 - Plan quality gate: passed on 2026-05-15 after local
   review/refinement/confirmation
-- Current phase: Phase 3 pending execution planning
+- Current phase: Phase 3 PR open
 - Blockers:
   - No roadmap-stage planning blocker remains.
-  - No plan-quality blocker remains; Phase 3 execution planning may begin.
+  - No plan-quality blocker remains; Phase 3 PR #158 is open against
+    `develop` and awaiting automated review/CI merge gates.
 
 ## Summary
 
@@ -321,7 +322,7 @@ versioning.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `plugin-records-discovery` | merged | `codex/plugin-records-discovery` | [#156](https://github.com/samcantrill/loom/pull/156) | `src/loom/plugins`, package exports, fake entry point tests | Add plugin records, errors, group constants, deterministic listing/loading, and import-safety coverage | `make validate-pr`, `make test-summary`, and CI passed | Fake listing, duplicates, load failures, import safety |
 | 2 | `recipe-codec-plugin-adapters` | merged | `codex/recipe-codec-plugin-adapters` | [#157](https://github.com/samcantrill/loom/pull/157) | Recipe and codec loader adapters plus contract tests | Add explicit recipe and codec entry point loading into supplied registries | `make validate-pr`, `make test-summary`, and CI passed | Fake recipe load, fake codec instance/class/factory load, duplicate codec key |
-| 3 | `plugin-cli-preflight-summaries` | pending | `codex/plugin-cli-preflight-summaries` | pending | CLI commands, preflight diagnostics, summary helpers | Expose plugin list/check, requested preflight checks, and plain summaries | CLI/unit/preflight tests plus `make validate-pr` before PR | Best-effort failures, CLI JSON/text, requested plugin preflight |
+| 3 | `plugin-cli-preflight-summaries` | pr_open | `codex/plugin-cli-preflight-summaries` | [#158](https://github.com/samcantrill/loom/pull/158) | CLI commands, preflight diagnostics, summary helpers | Expose plugin list/check, requested preflight checks, and plain summaries | CLI/unit/preflight tests plus `make validate-pr` before PR | Best-effort failures, CLI JSON/text, requested plugin preflight |
 | 4 | `future-plugin-group-readiness` | pending | `codex/future-plugin-group-readiness` | pending | Future group constants/docs/tests and readiness classifications | Add listing/check coverage and docs for future groups, especially metadata-only artifact-store backends | Unit/CLI/preflight/docs tests plus `make validate-pr` and `make test-summary` before final PR | Future group listing, artifact-store backend listing-only, premature registration fail-closed |
 
 ## Implementation Readiness Blockers
@@ -621,11 +622,11 @@ behavior
 
 ## Phase 3: CLI, Preflight, And Provenance Summaries
 
-Status: pending
+Status: pr_open
 Slug: `plugin-cli-preflight-summaries`
 Branch: `codex/plugin-cli-preflight-summaries`
 Worktree: `/home/samcantrill/work/loom-worktrees/plugin-cli-preflight-summaries`
-PR: pending
+PR: [#158](https://github.com/samcantrill/loom/pull/158), opened 2026-05-15
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase adds CLI and diagnostics
@@ -695,14 +696,16 @@ surface
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path recommended
-- Implementation/refinement budget: one refiner pass available if validation
-  or CLI/preflight review finds blockers
-- PR review budget: one reviewer pass
+- Phase execution plan: completed in
+  `docs/roadmap/stage-14/phases/plugin-cli-preflight-summaries.md`
+- Planning/refinement budget: used for expanded-path planning
+- Implementation/refinement budget: not needed after targeted validation and
+  full PR gate passed
+- PR review budget: pending manager automated review completion
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: no broad plugin import scan or false readiness claim
-- Merge record: pending
+- Merge record: pending; PR #158 targets `develop` from
+  `codex/plugin-cli-preflight-summaries`
 
 ### Risks And Stop Conditions
 
@@ -720,9 +723,16 @@ surface
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: added `loom plugins list`, `loom plugins check`, plugin
+  diagnostic summary helpers, selected plugin preflight selectors and checks,
+  and listing-only status for unsupported future groups without adding future
+  loaders or provenance persistence.
+- Validation: focused Phase 3 suite passed with 43 tests; touched-path Ruff and
+  Pyright passed; `make validate-pr` passed; `make test-summary` passed with
+  package 87, unit 1117, contract 208, integration 156, e2e 43, and
+  config-extra 440 tests passed.
+- PR: [#158](https://github.com/samcantrill/loom/pull/158) targets `develop`
+  from `codex/plugin-cli-preflight-summaries`.
 - Merge: pending
 - Follow-up: pending
 
