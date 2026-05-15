@@ -256,6 +256,13 @@ def load_entry_points(
 
     duplicate_records = find_plugin_duplicates(selected_records)
     duplicates_by_key = {(duplicate.group, duplicate.name): duplicate for duplicate in duplicate_records}
+    if strict and duplicate_records:
+        duplicate_result = PluginLoadResult(
+            loaded=(),
+            duplicates=tuple(duplicate_records),
+            failures=(),
+        )
+        raise PluginDuplicateError(duplicate_records, result=duplicate_result)
 
     selected_by_key: dict[tuple[str, str], PluginRecord] = {}
     for record in selected_records:
@@ -298,8 +305,6 @@ def load_entry_points(
     )
 
     if strict:
-        if duplicate_records:
-            raise PluginDuplicateError(duplicate_records, result=result)
         if failures:
             if any(failure.operation == "registration" for failure in failures):
                 raise PluginRegistrationError(

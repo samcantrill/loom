@@ -212,7 +212,9 @@ def test_load_entry_points_loads_only_selected_records(monkeypatch: pytest.Monke
     assert result.failures == ()
 
 
-def test_strict_mode_fails_closed_for_duplicates() -> None:
+def test_strict_mode_fails_closed_for_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     duplicate_a = PluginRecord(
         group=LOOM_CODECS_GROUP,
         name="shared",
@@ -223,15 +225,23 @@ def test_strict_mode_fails_closed_for_duplicates() -> None:
         name="shared",
         value="loom.plugins._dup:second",
     )
+    unique = PluginRecord(
+        group=LOOM_CODECS_GROUP,
+        name="unique",
+        value="loom.plugins._unique:factory",
+    )
+    tracker = _TrackingModuleFactory()
+    monkeypatch.setattr(importlib, "import_module", tracker)
 
     with pytest.raises(PluginDuplicateError) as exc_info:
-        load_entry_points((duplicate_a, duplicate_b), strict=True)
+        load_entry_points((duplicate_a, duplicate_b, unique), strict=True)
 
     strict_result = exc_info.value.result
     assert strict_result is not None
     assert strict_result.duplicate_count == 1
     assert strict_result.failure_count == 0
     assert strict_result.loaded_count == 0
+    assert tracker.calls == []
 
 
 def test_strict_mode_wraps_load_failure(
