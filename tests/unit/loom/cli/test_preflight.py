@@ -80,6 +80,12 @@ def test_preflight_json_passes_cli_options_to_diagnostics(monkeypatch: pytest.Mo
                 "review",
                 "--check",
                 "config",
+                "--plugin-group",
+                "loom.recipes",
+                "--plugin-name",
+                "alpha",
+                "--plugin-package",
+                "plugin-a",
                 "--format",
                 "json",
             ],
@@ -95,6 +101,9 @@ def test_preflight_json_passes_cli_options_to_diagnostics(monkeypatch: pytest.Mo
     assert request.overrides == ("a=1",)
     assert request.run_uri == "file:///abs/runs/demo"
     assert request.groups == ("config",)
+    assert request.plugin_groups == ("loom.recipes",)
+    assert request.plugin_names == ("alpha",)
+    assert request.plugin_packages == ("plugin-a",)
     assert request.runtime_options == {
         "run_uri": "file:///abs/runs/demo",
         "executor": "local",

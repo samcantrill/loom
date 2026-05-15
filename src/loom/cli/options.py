@@ -150,6 +150,9 @@ class PreflightCliOptions:
     tags: tuple[tuple[str, str], ...] = ()
     notes: tuple[str, ...] = ()
     check_groups: tuple[str, ...] = ()
+    plugin_groups: tuple[str, ...] = ()
+    plugin_names: tuple[str, ...] = ()
+    plugin_packages: tuple[str, ...] = ()
     strict: bool = False
 
     @classmethod
@@ -165,6 +168,9 @@ class PreflightCliOptions:
             tags=_tag_pairs(getattr(namespace, "tag", ()) or ()),
             notes=_notes(getattr(namespace, "note", ()) or ()),
             check_groups=tuple(getattr(namespace, "check_group", ()) or ()),
+            plugin_groups=tuple(getattr(namespace, "plugin_group", ()) or ()),
+            plugin_names=tuple(getattr(namespace, "plugin_name", ()) or ()),
+            plugin_packages=tuple(getattr(namespace, "plugin_package", ()) or ()),
             strict=bool(getattr(namespace, "strict", False)),
         )
 
