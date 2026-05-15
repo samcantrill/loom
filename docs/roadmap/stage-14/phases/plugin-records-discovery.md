@@ -462,9 +462,15 @@ make test-summary
 - Draft plan: completed in
   `docs/roadmap/stage-14/phases/plugin-records-discovery.md`.
 - Final phase execution plan: completed and ready for implementation handoff.
-- Implementation summary: pending.
-- Implementation validation: pending.
-- Refinement summary: pending; implementation refinement budget is unused.
+- Implementation summary: implemented through `src/loom/plugins` import-light discovery
+  records/errors/listing/loading and selected strict/best-effort handling; package
+  unit tests, plugin package API tests, import-boundary checks, and focused
+  contract tests are added.
+- Implementation validation: in-progress; attempted targeted test command,
+  but full environment validation was blocked by missing writable cache/networked test
+  dependency fetch in this runtime (uv/build tooling constraints).
+- Refinement summary: no additional refinement pass used; implementation refinement
+  budget remains unused.
 - Blocker-resolution summary: none used.
 - PR preparation: pending.
 - Stack maintenance: not needed for this root phase yet.
