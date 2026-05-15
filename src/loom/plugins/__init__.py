@@ -29,11 +29,14 @@ from .diagnostics import (
     LISTING_ONLY_PLUGIN_GROUPS,
     LOADABLE_PLUGIN_GROUPS,
     PLUGIN_GROUP_READINESS,
+    PLUGIN_GROUP_READINESS_DETAILS,
     PluginDiagnosticResult,
+    PluginGroupReadiness,
     PluginMissingRequest,
     PluginSelection,
     check_plugin_records,
     filter_plugin_records,
+    plugin_group_readiness,
     summarize_plugin_records,
 )
 from .errors import (
@@ -76,6 +79,7 @@ __all__ = [
     "LISTING_ONLY_PLUGIN_GROUPS",
     "LOADABLE_PLUGIN_GROUPS",
     "PLUGIN_GROUP_READINESS",
+    "PLUGIN_GROUP_READINESS_DETAILS",
     "LoadedPlugin",
     "PluginDiagnosticResult",
     "PluginDiscoveryError",
@@ -83,6 +87,7 @@ __all__ = [
     "PluginDuplicateError",
     "PluginError",
     "PluginFailure",
+    "PluginGroupReadiness",
     "PluginInvalidEntryPointError",
     "PluginLoadError",
     "PluginLoadResult",
@@ -97,5 +102,6 @@ __all__ = [
     "load_codec_entry_points",
     "load_recipe_entry_points",
     "load_entry_points",
+    "plugin_group_readiness",
     "summarize_plugin_records",
 ]

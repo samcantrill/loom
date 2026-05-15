@@ -14,11 +14,25 @@ import loom.cli.plugins as plugins_command
 from loom.cli.main import main
 from loom.plugins import (
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+    LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RUN_EXPORTERS_GROUP,
+    LOOM_SOURCES_GROUP,
+    LOOM_SWEEP_PROVIDERS_GROUP,
 )
 
 
 pytestmark = pytest.mark.unit
+
+_FUTURE_GROUPS = (
+    LOOM_SOURCES_GROUP,
+    LOOM_EXECUTORS_GROUP,
+    LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
+    LOOM_RUN_EXPORTERS_GROUP,
+    LOOM_SWEEP_PROVIDERS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+)
 
 
 class _RecipeModule(ModuleType):
@@ -40,7 +54,8 @@ def _fake_entry_point(
 
 
 def _fake_provider(entries: Iterable[object]) -> plugins_command.EntryPointProvider:
-    return lambda: tuple(entries)
+    entries_tuple = tuple(entries)
+    return lambda: entries_tuple
 
 
 def test_plugins_list_json_is_metadata_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,6 +202,76 @@ def test_plugins_check_reports_listing_only_group_as_nonzero(
     assert payload["ok"] is False
     assert payload["result"]["unsupported_groups"] == [LOOM_ARTIFACT_STORE_BACKENDS_GROUP]
     assert payload["result"]["records"][0]["status"] == "listing-only"
+    assert stderr.getvalue() == ""
+
+
+def test_plugins_list_labels_all_future_groups_listing_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plugins_command,
+        "_entry_point_provider",
+        _fake_provider(
+            _fake_entry_point(
+                group=group,
+                name=f"plugin-{index}",
+                value=f"loom.plugins._future_{index}:factory",
+            )
+            for index, group in enumerate(_FUTURE_GROUPS)
+        ),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+
+    payload = json.loads(stdout.getvalue())
+    by_group = {record["group"]: record for record in payload["result"]["records"]}
+    assert set(by_group) == set(_FUTURE_GROUPS)
+    assert {record["readiness"] for record in by_group.values()} == {"listing-only"}
+    assert {record["status"] for record in by_group.values()} == {"listing-only"}
+    assert stderr.getvalue() == ""
+
+
+@pytest.mark.parametrize("group", _FUTURE_GROUPS)
+def test_plugins_check_does_not_import_future_group_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    group: str,
+) -> None:
+    monkeypatch.setattr(
+        plugins_command,
+        "_entry_point_provider",
+        _fake_provider(
+            (
+                _fake_entry_point(
+                    group=group,
+                    name="future",
+                    value="loom.plugins._future:factory",
+                ),
+            )
+        ),
+    )
+
+    def fail_import(name: str, package: str | None = None) -> ModuleType:
+        del package
+        raise AssertionError(f"future group target should not be imported: {name}")
+
+    monkeypatch.setattr(importlib, "import_module", fail_import)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["plugins", "check", "--group", group, "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 4
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload["result"]["unsupported_groups"] == [group]
+    assert payload["result"]["records"][0]["readiness"] == "listing-only"
     assert stderr.getvalue() == ""
 
 

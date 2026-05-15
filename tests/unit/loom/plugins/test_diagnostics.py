@@ -10,15 +10,47 @@ import pytest
 
 from loom.plugins import (
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
+    LOOM_CODECS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+    LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RUN_EXPORTERS_GROUP,
+    LOOM_SOURCES_GROUP,
+    LOOM_SWEEP_PROVIDERS_GROUP,
+    LOADABLE_PLUGIN_GROUPS,
+    PLUGIN_GROUP_READINESS,
     PluginRecord,
     PluginSelection,
     check_plugin_records,
+    plugin_group_readiness,
     summarize_plugin_records,
 )
 
 
 pytestmark = pytest.mark.unit
+
+_FUTURE_GROUPS = (
+    LOOM_SOURCES_GROUP,
+    LOOM_EXECUTORS_GROUP,
+    LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
+    LOOM_RUN_EXPORTERS_GROUP,
+    LOOM_SWEEP_PROVIDERS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+)
+
+
+def test_group_readiness_classifies_only_recipes_and_codecs_as_registry_ready() -> None:
+    assert LOADABLE_PLUGIN_GROUPS == (LOOM_RECIPES_GROUP, LOOM_CODECS_GROUP)
+    assert PLUGIN_GROUP_READINESS[LOOM_RECIPES_GROUP] == "registry-ready"
+    assert PLUGIN_GROUP_READINESS[LOOM_CODECS_GROUP] == "registry-ready"
+
+    for group in _FUTURE_GROUPS:
+        readiness = plugin_group_readiness(group)
+        assert readiness.group == group
+        assert readiness.status == "listing-only"
+        assert readiness.reason
+        assert readiness.revisit_trigger
+        assert readiness.to_summary()["status"] == "listing-only"
 
 
 def test_summarize_plugin_records_keeps_metadata_plain_and_listing_only() -> None:

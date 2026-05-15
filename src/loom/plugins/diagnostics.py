@@ -9,9 +9,15 @@ from loom.serialization import PlainData
 
 from .entrypoints import (
     KNOWN_PLUGIN_GROUPS,
+    LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_CODECS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+    LOOM_EXECUTORS_GROUP,
     LOOM_RECIPES_GROUP,
+    LOOM_RUN_EXPORTERS_GROUP,
     LoadedPlugin,
+    LOOM_SOURCES_GROUP,
+    LOOM_SWEEP_PROVIDERS_GROUP,
     PluginDuplicate,
     PluginFailure,
     PluginLoadResult,
@@ -23,10 +29,88 @@ LOADABLE_PLUGIN_GROUPS: tuple[str, ...] = (LOOM_RECIPES_GROUP, LOOM_CODECS_GROUP
 LISTING_ONLY_PLUGIN_GROUPS: tuple[str, ...] = tuple(
     group for group in KNOWN_PLUGIN_GROUPS if group not in LOADABLE_PLUGIN_GROUPS
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PluginGroupReadiness:
+    """Diagnostic readiness classification for an entry point group."""
+
+    group: str
+    status: str
+    reason: str
+    revisit_trigger: str
+
+    def to_summary(self) -> dict[str, PlainData]:
+        return {
+            "group": self.group,
+            "status": self.status,
+            "reason": self.reason,
+            "revisit_trigger": self.revisit_trigger,
+        }
+
+
+_PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = {
+    LOOM_RECIPES_GROUP: PluginGroupReadiness(
+        group=LOOM_RECIPES_GROUP,
+        status="registry-ready",
+        reason="RecipeCatalog owns recipe name validation and replacement policy.",
+        revisit_trigger="RecipeCatalog plugin registration policy changes.",
+    ),
+    LOOM_CODECS_GROUP: PluginGroupReadiness(
+        group=LOOM_CODECS_GROUP,
+        status="registry-ready",
+        reason="CodecRegistry owns codec object validation and duplicate key policy.",
+        revisit_trigger="CodecRegistry replacement or adapter policy changes.",
+    ),
+    LOOM_SOURCES_GROUP: PluginGroupReadiness(
+        group=LOOM_SOURCES_GROUP,
+        status="listing-only",
+        reason="DataSource exists, but no source plugin registry or loader contract is stable.",
+        revisit_trigger="A source-owned registry and plugin adapter contract lands.",
+    ),
+    LOOM_EXECUTORS_GROUP: PluginGroupReadiness(
+        group=LOOM_EXECUTORS_GROUP,
+        status="listing-only",
+        reason=(
+            "Executor descriptors cover capabilities, not third-party executor "
+            "implementation loading."
+        ),
+        revisit_trigger="An executor implementation registry or descriptor loader lands.",
+    ),
+    LOOM_ARTIFACT_STORE_BACKENDS_GROUP: PluginGroupReadiness(
+        group=LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
+        status="listing-only",
+        reason=(
+            "Stage 15 owns backend descriptors, config handoff, capabilities, "
+            "credentials, URI policy, and operation semantics."
+        ),
+        revisit_trigger="Stage 15 defines a store-owned backend registry and descriptor contract.",
+    ),
+    LOOM_RUN_EXPORTERS_GROUP: PluginGroupReadiness(
+        group=LOOM_RUN_EXPORTERS_GROUP,
+        status="listing-only",
+        reason="RunExporter/RunImporter protocols exist, but no plugin registry/loader is stable.",
+        revisit_trigger="Run exchange defines supplied exporter/importer plugin registries.",
+    ),
+    LOOM_SWEEP_PROVIDERS_GROUP: PluginGroupReadiness(
+        group=LOOM_SWEEP_PROVIDERS_GROUP,
+        status="listing-only",
+        reason="Sweep provider protocols exist, but no plugin registry/loader is stable.",
+        revisit_trigger="Sweep planning defines a supplied provider plugin registry.",
+    ),
+    LOOM_EVENT_SINKS_GROUP: PluginGroupReadiness(
+        group=LOOM_EVENT_SINKS_GROUP,
+        status="listing-only",
+        reason="Event sink and event sink registry contracts are not source-level APIs yet.",
+        revisit_trigger="Stage 19 lands runtime event records and an event sink registry.",
+    ),
+}
+PLUGIN_GROUP_READINESS_DETAILS: dict[str, PluginGroupReadiness] = dict(
+    _PLUGIN_GROUP_READINESS_DETAILS
+)
 PLUGIN_GROUP_READINESS: dict[str, str] = {
-    LOOM_RECIPES_GROUP: "registry-ready",
-    LOOM_CODECS_GROUP: "registry-ready",
-    **{group: "listing-only" for group in LISTING_ONLY_PLUGIN_GROUPS},
+    group: readiness.status
+    for group, readiness in _PLUGIN_GROUP_READINESS_DETAILS.items()
 }
 
 
@@ -163,6 +247,20 @@ def summarize_plugin_records(
     return PluginDiagnosticResult(selection=normalized_selection, records=selected)
 
 
+def plugin_group_readiness(group: str) -> PluginGroupReadiness:
+    """Return readiness metadata for a plugin entry point group."""
+
+    return _PLUGIN_GROUP_READINESS_DETAILS.get(
+        group,
+        PluginGroupReadiness(
+            group=group,
+            status="listing-only",
+            reason="No Stage 14 registry loader is defined for this entry point group.",
+            revisit_trigger="An owning subsystem defines a stable registry and loader contract.",
+        ),
+    )
+
+
 def check_plugin_records(
     records: Iterable[PluginRecord],
     *,
@@ -297,7 +395,7 @@ def _unsupported_groups(
 def _record_summary(record: PluginRecord, *, status: str) -> dict[str, PlainData]:
     summary = record.to_summary()
     summary["status"] = status
-    summary["readiness"] = PLUGIN_GROUP_READINESS.get(record.group, "listing-only")
+    summary["readiness"] = plugin_group_readiness(record.group).status
     return summary
 
 
@@ -350,10 +448,13 @@ __all__ = [
     "LISTING_ONLY_PLUGIN_GROUPS",
     "LOADABLE_PLUGIN_GROUPS",
     "PLUGIN_GROUP_READINESS",
+    "PLUGIN_GROUP_READINESS_DETAILS",
+    "PluginGroupReadiness",
     "PluginDiagnosticResult",
     "PluginMissingRequest",
     "PluginSelection",
     "check_plugin_records",
     "filter_plugin_records",
+    "plugin_group_readiness",
     "summarize_plugin_records",
 ]

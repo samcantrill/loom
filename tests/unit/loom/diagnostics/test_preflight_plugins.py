@@ -10,10 +10,27 @@ import pytest
 
 import loom.diagnostics.preflight as preflight
 from loom.diagnostics import PreflightCheckStatus, PreflightGroup, PreflightRequest, run_preflight
-from loom.plugins import LOOM_ARTIFACT_STORE_BACKENDS_GROUP, LOOM_RECIPES_GROUP
+from loom.plugins import (
+    LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+    LOOM_EXECUTORS_GROUP,
+    LOOM_RECIPES_GROUP,
+    LOOM_RUN_EXPORTERS_GROUP,
+    LOOM_SOURCES_GROUP,
+    LOOM_SWEEP_PROVIDERS_GROUP,
+)
 
 
 pytestmark = pytest.mark.unit
+
+_FUTURE_GROUPS = (
+    LOOM_SOURCES_GROUP,
+    LOOM_EXECUTORS_GROUP,
+    LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
+    LOOM_RUN_EXPORTERS_GROUP,
+    LOOM_SWEEP_PROVIDERS_GROUP,
+    LOOM_EVENT_SINKS_GROUP,
+)
 
 
 class _RecipeModule(ModuleType):
@@ -120,3 +137,40 @@ def test_plugin_preflight_reports_listing_only_groups_without_import(
     assert result.checks[1].status is PreflightCheckStatus.SKIP
     unsupported_groups = cast(list[str], result.checks[1].details["unsupported_groups"])
     assert unsupported_groups == [LOOM_ARTIFACT_STORE_BACKENDS_GROUP]
+
+
+@pytest.mark.parametrize("group", _FUTURE_GROUPS)
+def test_plugin_preflight_skips_loading_for_future_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    group: str,
+) -> None:
+    monkeypatch.setattr(
+        preflight,
+        "_plugin_entry_point_provider",
+        lambda: (
+            _entry_point(
+                group=group,
+                name="future",
+                value="loom.plugins._future:factory",
+            ),
+        ),
+    )
+
+    def fail_import(name: str, package: str | None = None) -> ModuleType:
+        del package
+        raise AssertionError(f"future group target should not be imported: {name}")
+
+    monkeypatch.setattr(importlib, "import_module", fail_import)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="base.yaml",
+            groups=("plugins",),
+            plugin_groups=(group,),
+        )
+    )
+
+    assert result.checks[0].status is PreflightCheckStatus.PASS
+    assert result.checks[1].status is PreflightCheckStatus.SKIP
+    unsupported_groups = cast(list[str], result.checks[1].details["unsupported_groups"])
+    assert unsupported_groups == [group]
