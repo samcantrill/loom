@@ -221,8 +221,8 @@ make test-summary
 
 - Draft plan: completed in this artifact
 - Final phase execution plan: refined and ready for implementation
-- Implementation summary: pending
-- Implementation validation: pending
+- Implementation summary: added `artifact_materialization.py` with request/result records, copy-only local materialization, checksum evidence, derived `ArtifactLocationSummary` and `MaterializedRef` projections, and unsupported results for non-copy policies. Exported public store names and added unit/contract/package tests.
+- Implementation validation: `uv run pytest tests/unit/loom/pipeline/stores/test_artifact_materialization.py tests/contracts/test_artifact_materialization_contract.py tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py` -> `76 passed`; `uv run pytest tests/integration/pipeline/test_artifact_store_split.py tests/integration/pipeline/test_materialization_read_models.py` -> `5 passed`; `uv run ruff check src/loom/pipeline/stores/artifact_materialization.py src/loom/pipeline/stores/__init__.py tests/unit/loom/pipeline/stores/test_artifact_materialization.py tests/contracts/test_artifact_materialization_contract.py tests/package/test_pipeline_store_api.py` -> passed; `uv run pyright src/loom/pipeline/stores/artifact_materialization.py tests/unit/loom/pipeline/stores/test_artifact_materialization.py tests/contracts/test_artifact_materialization_contract.py` -> `0 errors`; `git diff --check` -> passed.
 - Refinement summary: pending
 - Blocker-resolution summary: none
 - PR preparation: pending
