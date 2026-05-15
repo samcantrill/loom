@@ -5,7 +5,7 @@ Roadmap stage: `v16`
 Planning document: `docs/roadmap/stage-16/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 4 in progress
+Current phase: Phase 4 PR open; Phase 5 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-15 after
@@ -280,7 +280,7 @@ contracts and return the same operation evidence used by bundles and preflight.
 | 1 | `shared-operation-evidence-contracts` | merged | `codex/shared-operation-evidence-contracts` | [#166](https://github.com/samcantrill/loom/pull/166) | `loom.operations`, narrow compatibility projections | Add shared operation/evidence value objects and bounded adoption | Unit/contract/package import-boundary tests, `make validate-pr`, `make test-summary` | Unsupported operation, checksum evidence, redacted diagnostic |
 | 2 | `local-materialization-copy-records` | merged | `codex/local-materialization-copy-records` | [#167](https://github.com/samcantrill/loom/pull/167) | `loom.pipeline.stores`, public store exports | Add materialization records and copy-only local behavior | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Local copy, checksum mismatch, unsupported non-copy policy |
 | 3 | `fake-backend-payload-operations` | merged | `codex/fake-backend-payload-operations` | [#168](https://github.com/samcantrill/loom/pull/168) | store backend protocols and fake handlers | Add fake publish/materialize/upload/download/verify operations | Backend unit/contract tests, `make validate-pr`, `make test-summary` | Object-store-style and tracking-system-style fake scenarios |
-| 4 | `bundle-preflight-materialization` | in_progress | `codex/bundle-preflight-materialization` | pending | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
+| 4 | `bundle-preflight-materialization` | pr_open | `codex/bundle-preflight-materialization` | [#169](https://github.com/samcantrill/loom/pull/169) | `loom.runs`, `loom.diagnostics`, conditional catalog ownership, narrow CLI if warranted | Integrate explicit materialization into bundles/import/preflight and catalog only when explicitly opted in | Run exchange, diagnostics, conditional catalog, CLI/API tests, `make validate-pr`, `make test-summary` | Metadata-only default, explicit fake materialization |
 | 5 | `no-backend-user-facing-handles` | pending | `codex/no-backend-user-facing-handles` | pending | docs, examples, package/API hardening | Finalize no-backend decision, docs, unsupported handles, and narrow user-facing affordances | Package/docs/contracts/full PR gate and `make test-summary` | No optional SDK import, unsupported real backend handle |
 
 ## Implementation Readiness Blockers
@@ -618,11 +618,11 @@ behavior and fake conformance coverage
 
 ## Phase 4: Bundle, Import, Catalog, And Preflight Integration
 
-Status: in_progress
+Status: pr_open
 Slug: `bundle-preflight-materialization`
 Branch: `codex/bundle-preflight-materialization`
 Worktree: `/home/samcantrill/work/loom-worktrees/bundle-preflight-materialization`
-PR: pending
+PR: [#169](https://github.com/samcantrill/loom/pull/169)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase changes user-visible run
@@ -722,13 +722,12 @@ exchange, diagnostics, and possible CLI/API behavior
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available
+- Phase execution plan: complete in `docs/roadmap/stage-16/phases/bundle-preflight-materialization.md`
+- Planning/refinement budget: expanded path; draft/refine used in the phase artifact
+- Implementation/refinement budget: not needed; targeted validation and the full PR gate passed without implementation blockers
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phases 1 through 3 merged or valid as stack
-  predecessors
+- Pre-submit blocker gate: Phases 1 through 3 merged; Phase 4 replayed onto updated `develop`
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -744,11 +743,11 @@ exchange, diagnostics, and possible CLI/API behavior
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: complete. Added explicit bundle export materialization through supplied payload handlers, preserved metadata-only defaults, projected materialization evidence through bundle extensions, and added cheap artifact backend materialization readiness preflight.
+- Validation: targeted Phase 4 tests passed with 131 passed and 2 skipped; `make validate-pr` passed; `make test-summary` passed with package, unit, contract, integration, e2e, and config-extra suites green.
+- PR: [#169](https://github.com/samcantrill/loom/pull/169) opened against `develop` and verified with `gh pr view 169 --json baseRefName,headRefName,state,url,statusCheckRollup,mergeable`; GitHub CI `checks` was in progress at verification time.
 - Merge: pending
-- Follow-up: pending
+- Follow-up: merge Phase 4 into `develop` when CI and automated review gates pass; start Phase 5 stacked on Phase 4 if the GitHub-side gate remains open.
 
 ## Phase 5: No-Backend Finalization And User-Facing Handles
 
