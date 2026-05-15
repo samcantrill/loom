@@ -107,6 +107,27 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="preflight check group to run; may be repeated",
     )
     parser.add_argument(
+        "--plugin-group",
+        action="append",
+        default=None,
+        metavar="GROUP",
+        help="plugin entry point group for selected plugin diagnostics; may be repeated",
+    )
+    parser.add_argument(
+        "--plugin-name",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="plugin entry point name for selected plugin diagnostics; may be repeated",
+    )
+    parser.add_argument(
+        "--plugin-package",
+        action="append",
+        default=None,
+        metavar="PACKAGE",
+        help="plugin distribution package for selected plugin diagnostics; may be repeated",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="treat preflight warnings as failures",
@@ -214,6 +235,9 @@ def _build_preflight_request(
         selectors=None if selector_options is None else selector_options.to_runtime_source(),
         runtime_options=runtime_source or None,
         authority_config=authority_config,
+        plugin_groups=preflight_options.plugin_groups,
+        plugin_names=preflight_options.plugin_names,
+        plugin_packages=preflight_options.plugin_packages,
     )
 
 

@@ -34,6 +34,7 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
         "resources",
         "filesystem",
     ]
+    assert PreflightGroup.PLUGINS.value == "plugins"
     assert STABLE_CHECK_IDS == {
         PreflightGroup.CONFIG: ("config.load",),
         PreflightGroup.PIPELINE: ("pipeline.graph",),
@@ -70,6 +71,7 @@ def test_public_status_group_and_check_id_values_are_stable() -> None:
             "filesystem.slurm.generated_paths",
             "filesystem.slurm.generated_writable",
         ),
+        PreflightGroup.PLUGINS: ("plugins.metadata", "plugins.load"),
     }
 
 

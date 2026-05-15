@@ -47,6 +47,7 @@ class PreflightGroup(StrEnum):
     EXECUTOR = "executor"
     RESOURCES = "resources"
     FILESYSTEM = "filesystem"
+    PLUGINS = "plugins"
 
 
 DEFAULT_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
@@ -60,6 +61,15 @@ DEFAULT_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
     PreflightGroup.EXECUTOR,
     PreflightGroup.RESOURCES,
     PreflightGroup.FILESYSTEM,
+)
+
+OPTIONAL_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
+    PreflightGroup.PLUGINS,
+)
+
+ALL_PREFLIGHT_GROUPS: tuple[PreflightGroup, ...] = (
+    *DEFAULT_PREFLIGHT_GROUPS,
+    *OPTIONAL_PREFLIGHT_GROUPS,
 )
 
 STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
@@ -98,6 +108,7 @@ STABLE_CHECK_IDS: Mapping[PreflightGroup, tuple[str, ...]] = {
         "filesystem.slurm.generated_paths",
         "filesystem.slurm.generated_writable",
     ),
+    PreflightGroup.PLUGINS: ("plugins.metadata", "plugins.load"),
 }
 
 
@@ -173,6 +184,9 @@ class PreflightRequest:
     runtime_options: object | None = None
     authority_config: object | None = None
     authority_mode: object | None = None
+    plugin_groups: tuple[str, ...] = ()
+    plugin_names: tuple[str, ...] = ()
+    plugin_packages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "config_path", _path_like(self.config_path, "config_path"))
@@ -183,6 +197,13 @@ class PreflightRequest:
             object.__setattr__(self, "run_uri", _non_empty_str(self.run_uri, field="run_uri"))
         if self.groups is not None:
             object.__setattr__(self, "groups", tuple(self.groups))
+        object.__setattr__(self, "plugin_groups", _str_tuple(self.plugin_groups, "plugin_groups"))
+        object.__setattr__(self, "plugin_names", _str_tuple(self.plugin_names, "plugin_names"))
+        object.__setattr__(
+            self,
+            "plugin_packages",
+            _str_tuple(self.plugin_packages, "plugin_packages"),
+        )
 
 
 def normalize_groups(
@@ -203,10 +224,10 @@ def normalize_groups(
             unknown.append(str(raw))
     if unknown:
         names = ", ".join(sorted(unknown))
-        allowed = ", ".join(group.value for group in DEFAULT_PREFLIGHT_GROUPS)
+        allowed = ", ".join(group.value for group in ALL_PREFLIGHT_GROUPS)
         raise PreflightError(f"unknown preflight group(s): {names}; expected one of: {allowed}")
 
-    return tuple(group for group in DEFAULT_PREFLIGHT_GROUPS if group in normalized)
+    return tuple(group for group in ALL_PREFLIGHT_GROUPS if group in normalized)
 
 
 def aggregate_status(checks: Iterable[PreflightCheckResult]) -> PreflightStatus:
@@ -287,6 +308,8 @@ def _str_tuple(values: tuple[str, ...], field: str) -> tuple[str, ...]:
 
 __all__ = [
     "DEFAULT_PREFLIGHT_GROUPS",
+    "ALL_PREFLIGHT_GROUPS",
+    "OPTIONAL_PREFLIGHT_GROUPS",
     "STABLE_CHECK_IDS",
     "PreflightCheckResult",
     "PreflightCheckStatus",

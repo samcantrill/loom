@@ -6,7 +6,7 @@ import importlib.util
 import shutil
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -34,9 +34,11 @@ from .models import (
 
 if TYPE_CHECKING:
     from loom.pipeline.executors.slurm import SlurmOptions
+    from loom.plugins.entrypoints import EntryPointProvider, PluginRecord
 
 
 _SLURM_EXECUTORS = frozenset({"slurm-single-job", "slurm-afterok"})
+_plugin_entry_point_provider: "EntryPointProvider | None" = None
 
 
 @dataclass
@@ -1463,6 +1465,119 @@ def _check_slurm_generated_paths_writable(
     )
 
 
+def _check_plugins(context: _Context) -> tuple[PreflightCheckResult, ...]:
+    from loom.plugins import (
+        LOADABLE_PLUGIN_GROUPS,
+        PluginSelection,
+        check_plugin_records,
+        summarize_plugin_records,
+    )
+
+    selection = PluginSelection(
+        groups=context.request.plugin_groups,
+        names=context.request.plugin_names,
+        packages=context.request.plugin_packages,
+    )
+    if selection.is_empty:
+        details = {
+            "guidance": (
+                "Use --plugin-group, --plugin-name, or --plugin-package with "
+                "--check plugins to select trusted installed plugins."
+            ),
+            "reason": "missing_plugin_selector",
+        }
+        return (
+            _result(
+                "plugins.metadata",
+                PreflightGroup.PLUGINS,
+                PreflightCheckStatus.SKIP,
+                PreflightSeverity.INFO,
+                "plugin diagnostics require an explicit selector",
+                details,
+            ),
+            _result(
+                "plugins.load",
+                PreflightGroup.PLUGINS,
+                PreflightCheckStatus.SKIP,
+                PreflightSeverity.INFO,
+                "plugin loading skipped because no plugin selector was provided",
+                details,
+            ),
+        )
+
+    try:
+        records = _list_plugin_records(groups=selection.groups or None)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            _fail(
+                "plugins.metadata",
+                PreflightGroup.PLUGINS,
+                "plugin metadata discovery failed",
+                exc,
+            ),
+        )
+
+    metadata = summarize_plugin_records(records, selection=selection)
+    checked = check_plugin_records(records, selection=selection, load=True)
+    metadata_failed = bool(checked.missing or checked.duplicates)
+    metadata_check = _result(
+        "plugins.metadata",
+        PreflightGroup.PLUGINS,
+        PreflightCheckStatus.FAIL if metadata_failed else PreflightCheckStatus.PASS,
+        PreflightSeverity.ERROR if metadata_failed else PreflightSeverity.INFO,
+        (
+            "selected plugin metadata has missing or duplicate records"
+            if metadata_failed
+            else "selected plugin metadata discovered"
+        ),
+        cast(
+            Mapping[str, PlainData],
+            {
+                **metadata.to_summary(),
+                "missing": [missing.to_summary() for missing in checked.missing],
+                "duplicates": [duplicate.to_summary() for duplicate in checked.duplicates],
+            },
+        ),
+    )
+
+    selected_loadable = tuple(
+        record for record in checked.records if record.group in LOADABLE_PLUGIN_GROUPS
+    )
+    if not selected_loadable:
+        load_check = _result(
+            "plugins.load",
+            PreflightGroup.PLUGINS,
+            PreflightCheckStatus.SKIP,
+            PreflightSeverity.INFO,
+            "selected plugin groups are listing-only in Stage 14",
+            cast(Mapping[str, PlainData], checked.to_summary()),
+        )
+    else:
+        load_failed = bool(checked.duplicates or checked.failures)
+        load_check = _result(
+            "plugins.load",
+            PreflightGroup.PLUGINS,
+            PreflightCheckStatus.FAIL if load_failed else PreflightCheckStatus.PASS,
+            PreflightSeverity.ERROR if load_failed else PreflightSeverity.INFO,
+            (
+                "selected plugin loading failed"
+                if load_failed
+                else "selected registry-ready plugins loaded in scratch registries"
+            ),
+            cast(Mapping[str, PlainData], checked.to_summary()),
+        )
+
+    return (metadata_check, load_check)
+
+
+def _list_plugin_records(*, groups: Iterable[str] | None) -> tuple["PluginRecord", ...]:
+    from loom.plugins import list_entry_points
+
+    if _plugin_entry_point_provider is None:
+        return list_entry_points(groups=groups)
+    return list_entry_points(groups=groups, provider=_plugin_entry_point_provider)
+
+
 def _nearest_existing_directory(path: Path) -> Path:
     current = path if path.exists() else path.parent
     while not current.exists() and current != current.parent:
@@ -1748,6 +1863,7 @@ _CHECKS = {
     PreflightGroup.EXECUTOR: _check_executor,
     PreflightGroup.RESOURCES: _check_resources,
     PreflightGroup.FILESYSTEM: _check_filesystem,
+    PreflightGroup.PLUGINS: _check_plugins,
 }
 
 

@@ -29,6 +29,9 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.PluginDuplicate
     assert plugins.PluginFailure
     assert plugins.PluginLoadResult
+    assert plugins.PluginSelection
+    assert plugins.PluginDiagnosticResult
+    assert plugins.PluginMissingRequest
     assert plugins.PluginDiscoveryError
     assert plugins.PluginInvalidEntryPointError
     assert plugins.PluginDuplicateError
@@ -38,6 +41,9 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.load_codec_entry_points
     assert plugins.list_entry_points
     assert plugins.find_plugin_duplicates
+    assert plugins.filter_plugin_records
+    assert plugins.summarize_plugin_records
+    assert plugins.check_plugin_records
     assert plugins.load_entry_points
 
 
@@ -82,3 +88,27 @@ def test_import_loom_plugins_is_import_light() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_cli_help_does_not_discover_plugin_entry_points() -> None:
+    script = dedent(
+        """
+        import importlib.metadata
+
+        def fail_entry_points(*args, **kwargs):
+            raise SystemExit("entry point discovery was called for help")
+
+        importlib.metadata.entry_points = fail_entry_points
+
+        from loom.cli.main import main
+
+        raise SystemExit(main(["plugins", "--help"]))
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert "list" in result.stdout
+    assert "check" in result.stdout
