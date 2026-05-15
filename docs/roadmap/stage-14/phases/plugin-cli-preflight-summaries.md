@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; ready for PR preparation
+- Status: PR open
 - Feature focus: Plugin Discovery
 - PR title:
   `Plugin Discovery - Phase 3: CLI, Preflight, And Summaries`
@@ -13,6 +13,7 @@
   `docs/roadmap/stage-14/phases/plugin-cli-preflight-summaries.md`
 - Full plan: `docs/roadmap/stage-14/implementation-plan.md`
 - Source phase: Phase 3, `plugin-cli-preflight-summaries`
+- PR: [#158](https://github.com/samcantrill/loom/pull/158)
 - Stack predecessor: none
 - Base branch: `develop` at `94bcf5e35be97096190334736775c61a625c8d1f`
 - Target branch: `develop`
@@ -526,7 +527,8 @@ run during PR preparation so the PR body can report suite-level evidence.
 - Phase planning refinement: completed for the expanded path.
 - Phase implementation refinement: not needed; targeted validation and the full
   PR gate passed after the implementation commit.
-- PR body draft/refine: unused until PR preparation.
+- PR body draft/refine: completed; PR body is
+  `docs/roadmap/stage-14/phases/plugin-cli-preflight-summaries-pr-body.md`.
 - PR review: unused until the manager or reviewer consumes the single review
   pass.
 - Blocker resolution: 0/3 used.
@@ -559,7 +561,9 @@ run during PR preparation so the PR body can report suite-level evidence.
     (440 passed, 1620 deselected), and build.
   - `make test-summary` passed: package 87, unit 1117, contract 208,
     integration 156, e2e 43, and config-extra 440 tests passed.
-- PR preparation: pending.
+- PR preparation: completed in PR
+  [#158](https://github.com/samcantrill/loom/pull/158), targeting `develop`
+  from `codex/plugin-cli-preflight-summaries`.
 - Stack maintenance: root phase targets `develop`; no predecessor branch exists
   and no retarget or rebase is needed at planning time.
 - Remaining blockers: none for implementation handoff.
