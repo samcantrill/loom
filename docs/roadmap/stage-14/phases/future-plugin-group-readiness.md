@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implementation complete; ready for PR preparation
+- Status: PR open
 - Feature focus: Plugin Discovery
 - PR title:
   `Plugin Discovery - Phase 4: Future Group Readiness And Contract Hooks`
@@ -13,6 +13,7 @@
   `docs/roadmap/stage-14/phases/future-plugin-group-readiness.md`
 - Full plan: `docs/roadmap/stage-14/implementation-plan.md`
 - Source phase: Phase 4, `future-plugin-group-readiness`
+- PR: [#159](https://github.com/samcantrill/loom/pull/159)
 - Stack predecessor: none
 - Base branch: `develop` at `887ca684b623735fc88b8e85073b84c6d1a1ec8a`
 - Target branch: `develop`
@@ -160,7 +161,8 @@ make test-summary
 - Phase planning refinement: completed in this planning pass.
 - Phase implementation refinement: not needed; targeted validation and the full
   PR gate passed after the implementation commit.
-- PR body draft/refine: unused until PR preparation.
+- PR body draft/refine: completed; PR body is
+  `docs/roadmap/stage-14/phases/future-plugin-group-readiness-pr-body.md`.
 - PR review: unused until the manager or reviewer consumes the single review
   pass.
 - Blocker resolution: 0/3 used.
@@ -189,5 +191,6 @@ make test-summary
     (440 passed, 1636 deselected), and build.
   - `make test-summary` passed: package 87, unit 1131, contract 210,
     integration 156, e2e 43, and config-extra 440 tests passed.
-- PR: pending.
+- PR: [#159](https://github.com/samcantrill/loom/pull/159), targeting
+  `develop` from `codex/future-plugin-group-readiness`.
 - Merge: pending.
