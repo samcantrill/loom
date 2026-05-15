@@ -34,6 +34,8 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.PluginDuplicateError
     assert plugins.PluginRegistrationError
     assert plugins.PluginLoadError
+    assert plugins.load_recipe_entry_points
+    assert plugins.load_codec_entry_points
     assert plugins.list_entry_points
     assert plugins.find_plugin_duplicates
     assert plugins.load_entry_points

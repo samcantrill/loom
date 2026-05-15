@@ -489,8 +489,10 @@ run during PR preparation so the PR body can report suite-level evidence.
 - Draft plan: completed in
   `docs/roadmap/stage-14/phases/recipe-codec-plugin-adapters.md`.
 - Final phase execution plan: completed and ready for implementation handoff.
-- Implementation summary: pending.
-- Implementation validation: pending.
+- Implementation summary: completed.
+- Implementation validation: completed for targeted phase checks via
+  `uv run pytest tests/unit/loom/plugins tests/contracts/test_plugin_discovery_contract.py tests/contracts/test_recipe_contract.py tests/contracts/test_codec_contract.py`
+  (26 passed, 1 skipped).
 - PR preparation: pending.
 - Stack maintenance: root phase targets `develop`; no predecessor branch exists
   and no retarget or rebase is needed at planning time.
