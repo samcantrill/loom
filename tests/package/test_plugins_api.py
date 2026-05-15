@@ -31,6 +31,7 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.PluginLoadResult
     assert plugins.PluginSelection
     assert plugins.PluginDiagnosticResult
+    assert plugins.PluginGroupReadiness
     assert plugins.PluginMissingRequest
     assert plugins.PluginDiscoveryError
     assert plugins.PluginInvalidEntryPointError
@@ -44,6 +45,12 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.filter_plugin_records
     assert plugins.summarize_plugin_records
     assert plugins.check_plugin_records
+    assert plugins.plugin_group_readiness
+    assert plugins.LOADABLE_PLUGIN_GROUPS == (
+        plugins.LOOM_RECIPES_GROUP,
+        plugins.LOOM_CODECS_GROUP,
+    )
+    assert plugins.LOOM_ARTIFACT_STORE_BACKENDS_GROUP in plugins.LISTING_ONLY_PLUGIN_GROUPS
     assert plugins.load_entry_points
 
 

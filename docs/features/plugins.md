@@ -288,8 +288,11 @@ Examples:
 ```text
 loom.recipes
 loom.codecs
-loom.executors
 loom.sources
+loom.executors
+loom.artifact_store_backends
+loom.run_exporters
+loom.sweep_providers
 loom.event_sinks
 ```
 
@@ -608,7 +611,28 @@ Programmatic registration should come first. Entry point loading for
 `loom.event_sinks` should wait until the `RuntimeEvent` model and event sink
 registry contract are stable.
 
-### 7.6 CLI Commands
+### 7.6 Readiness Classifications
+
+Stage 14 exposes all known groups as metadata namespaces, but only recipes and
+codecs are registry-ready:
+
+| Group | Stage 14 readiness | Current contract evidence | Revisit trigger |
+| --- | --- | --- | --- |
+| `loom.recipes` | registry-ready | `RecipeCatalog` owns recipe registration and replacement policy | Recipe catalog plugin policy changes |
+| `loom.codecs` | registry-ready | `CodecRegistry` owns codec validation and duplicate key policy | Codec registry replacement or adapter policy changes |
+| `loom.sources` | listing-only | `DataSource` exists, but no source plugin registry or loader contract is stable | Source-owned registry and plugin adapter contract lands |
+| `loom.executors` | listing-only | Executor descriptors cover capabilities, not third-party implementation loading | Executor implementation registry or descriptor loader lands |
+| `loom.artifact_store_backends` | listing-only | Stage 15 owns backend descriptors, config handoff, capability records, URI policy, credentials, operation semantics, and registry shape | Stage 15 defines a store-owned backend registry and descriptor contract |
+| `loom.run_exporters` | listing-only | `RunExporter` and `RunImporter` protocols exist, but no plugin registry or loader contract is stable | Run exchange defines supplied exporter/importer plugin registries |
+| `loom.sweep_providers` | listing-only | Sweep provider protocols exist, but no plugin registry or loader contract is stable | Sweep planning defines a supplied provider plugin registry |
+| `loom.event_sinks` | listing-only | Event sink and event sink registry contracts are not source-level APIs yet | Runtime event records and event sink registry contracts land |
+
+Listing-only means discovery, CLI list output, and selected diagnostics may
+report installed entry point metadata, but Stage 14 must not import targets,
+construct runtime objects, mutate registries, probe credentials, validate URI
+schemes, or claim run readiness for that group.
+
+### 7.7 CLI Commands
 
 Do not support arbitrary third-party CLI command injection in v0.
 
@@ -1303,9 +1327,9 @@ which plugin version was installed?
 
 ## 19. CLI Integration
 
-### 19.1 Possible Commands
+### 19.1 Commands
 
-Future commands:
+Implemented inspection commands:
 
 ```bash
 loom plugins list
@@ -1330,11 +1354,16 @@ support --format json
 Should:
 
 ```text
-load selected groups in best-effort or strict mode
+load selected registry-ready groups in best-effort mode
 report load failures
 report duplicates
 return non-zero when checks fail
+return non-zero for unsupported listing-only load/check requests
 ```
+
+For listing-only groups such as `loom.artifact_store_backends`,
+`loom plugins check` reports metadata and listing-only status without importing
+targets or claiming runtime availability.
 
 ### 19.4 Event Sink Inspection
 
