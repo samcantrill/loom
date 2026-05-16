@@ -464,6 +464,50 @@ def test_run_build_executor_supports_subprocess(tmp_path: Path) -> None:
     assert getattr(executor, "requires_prepared_worker_request") is True
 
 
+def test_run_build_executor_supports_docker(tmp_path: Path) -> None:
+    executor = run_command._build_executor(
+        "docker",
+        LocalRunStore(tmp_path / "runs"),
+    )
+
+    assert getattr(executor, "name") == "docker"
+    assert getattr(executor, "requires_prepared_worker_request") is True
+
+
+def test_run_explicit_docker_executor_uses_generic_run_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_common(monkeypatch)
+
+    @dataclass(frozen=True, slots=True)
+    class FakeDockerExecutor:
+        name: str = "docker"
+
+    def build_executor(executor: str, store: object) -> FakeDockerExecutor:
+        calls["build_executor"] = executor
+        calls["build_executor_store"] = store
+        return FakeDockerExecutor()
+
+    monkeypatch.setattr(run_command, "_build_executor", build_executor)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            ["run", "base.yaml", "--executor", "docker", "--format", "json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert stderr.getvalue() == ""
+    assert payload["schema_version"] == "loom.cli.run.v2"
+    assert calls["build_executor"] == "docker"
+    assert getattr(calls["executor"], "name") == "docker"
+
+
 def test_run_dry_run_uses_plan_result_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     def build_plan_result(*_args: object, **_kwargs: object) -> PlanCliResult:
         return PlanCliResult(

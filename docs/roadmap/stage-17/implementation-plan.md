@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 pending
+Current phase: Phase 3 pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -320,7 +320,7 @@ Apptainer/Singularity prove enough common behavior.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `docker-container-contracts` | merged | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
 | 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
-| 3 | `docker-executor-integration` | pending | `codex/docker-executor-integration` | pending | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
+| 3 | `docker-executor-integration` | pr_open | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
 | 4 | `docker-preflight-diagnostics` | pending | `codex/docker-preflight-diagnostics` | pending | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
 | 5 | `docker-examples-acceptance` | pending | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
@@ -571,11 +571,11 @@ protocol, process-result records, and redaction-sensitive metadata
 
 ## Phase 3: Docker Executor Integration
 
-Status: pending
+Status: pr_open
 Slug: `docker-executor-integration`
 Branch: `codex/docker-executor-integration`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-executor-integration`
-PR: pending
+PR: [#173](https://github.com/samcantrill/loom/pull/173)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase touches execution lifecycle,
@@ -654,14 +654,14 @@ CLI selection, failure semantics, and result metadata
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails, coverage is missing, or lifecycle/failure semantics are
-  unclear
+- Phase execution plan: complete in
+  `docs/roadmap/stage-17/phases/docker-executor-integration.md`
+- Planning/refinement budget: expanded path draft and refine completed
+- Implementation/refinement budget: not needed; targeted suites, broad phase
+  suite with config extra, and full PR gate passed
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 2 merged or valid as stack predecessor
+- Pre-submit blocker gate: passed; PR opened against verified `develop` target
 - Merge record: pending
 
 ### Risks And Stop Conditions

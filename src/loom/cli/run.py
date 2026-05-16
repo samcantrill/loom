@@ -58,6 +58,7 @@ RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v2"
 SLURM_DRY_RUN_RESULT_SCHEMA_VERSION = "loom.cli.slurm_dry_run.v1"
 SLURM_LIVE_RUN_RESULT_SCHEMA_VERSION = "loom.cli.slurm_live_run.v1"
 _SLURM_EXECUTORS = frozenset({"slurm-single-job", "slurm-afterok"})
+_RUN_EXECUTORS = frozenset({"local", "subprocess", "docker"})
 
 
 class UnsupportedExecutorError(CliError):
@@ -65,9 +66,13 @@ class UnsupportedExecutorError(CliError):
 
     def __init__(self, executor: str) -> None:
         super().__init__(
-            f"unsupported executor {executor!r}; supported executors: local, subprocess.",
+            "unsupported executor "
+            f"{executor!r}; supported executors: docker, local, subprocess.",
             code="cli.run.unsupported_executor",
-            context={"executor": executor, "supported": ["local", "subprocess"]},
+            context={
+                "executor": executor,
+                "supported": ["docker", "local", "subprocess"],
+            },
             exit_code=ExitCode.EXECUTOR,
         )
 
@@ -261,10 +266,7 @@ def build_run_result(
 ) -> RunCliResult:
     """Execute a pipeline and build the CLI-specific run result."""
 
-    if run_options.executor_explicit and run_options.executor not in {
-        "local",
-        "subprocess",
-    }:
+    if run_options.executor_explicit and run_options.executor not in _RUN_EXECUTORS:
         raise UnsupportedExecutorError(cast(str, run_options.executor))
     store = _create_default_run_store(
         authority_config=authority_config,
@@ -1326,6 +1328,10 @@ def _build_executor(executor: str, store: Any) -> "Executor":
         from loom.pipeline.executors import SubprocessExecutor
 
         return SubprocessExecutor(run_store=store)
+    if executor == "docker":
+        from loom.pipeline.executors import DockerExecutor
+
+        return DockerExecutor(run_store=store)
     raise UnsupportedExecutorError(executor)
 
 
