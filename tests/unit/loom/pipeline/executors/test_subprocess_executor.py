@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
@@ -31,6 +32,8 @@ from loom.pipeline.executors import (
 )
 from loom.pipeline.executors.subprocess import build_stage_worker_command
 from loom.pipeline.planning import FingerprintContext, build_stage_fingerprint, plan_pipeline
+from loom.pipeline.reliability import ReliabilityPolicy, TimeoutPolicy
+from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
 from loom.pipeline.stores import (
@@ -42,7 +45,11 @@ from loom.serialization import PlainData
 from tests.support.pipeline_execution_stages import JsonProducerStage
 
 
-def _request(tmp_path: Path) -> tuple[LocalRunStore, str, StageExecutionRequest]:
+def _request(
+    tmp_path: Path,
+    *,
+    timeout_seconds: float | None = None,
+) -> tuple[LocalRunStore, str, StageExecutionRequest]:
     store = LocalRunStore(tmp_path / "runs")
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
     store.create_run(run_uri)
@@ -88,6 +95,20 @@ def _request(tmp_path: Path) -> tuple[LocalRunStore, str, StageExecutionRequest]
         traceback_path=store.local_stage_dir(run_uri, "build")
         / "logs"
         / "traceback.txt",
+        resolved_runtime=ResolvedStageRuntimeOptions(
+            stage_id="build",
+            executor="subprocess",
+            reliability=(
+                None
+                if timeout_seconds is None
+                else ReliabilityPolicy(
+                    timeout=TimeoutPolicy(
+                        enabled=True,
+                        duration_seconds=timeout_seconds,
+                    )
+                )
+            ),
+        ),
     )
     return store, run_uri, request
 
@@ -206,7 +227,11 @@ def test_subprocess_executor_reads_successful_worker_result(tmp_path: Path) -> N
     store, run_uri, request = _request(tmp_path)
     calls: list[tuple[str, ...]] = []
 
-    def runner(command: Sequence[str]) -> SubprocessRunResult:
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
         calls.append(tuple(command))
         store.write_stage_worker_result(
             run_uri,
@@ -229,12 +254,75 @@ def test_subprocess_executor_reads_successful_worker_result(tmp_path: Path) -> N
     assert calls[0][0] == "/usr/bin/python"
 
 
+def test_subprocess_executor_passes_reliability_timeout_to_process_runner(
+    tmp_path: Path,
+) -> None:
+    store, run_uri, request = _request(tmp_path, timeout_seconds=2.5)
+    observed_timeout: list[float | None] = []
+
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        del command
+        observed_timeout.append(timeout_seconds)
+        store.write_stage_worker_result(
+            run_uri,
+            "build",
+            _worker_success(run_uri).to_dict(),
+            attempt=1,
+        )
+        return SubprocessRunResult(returncode=0)
+
+    result = SubprocessExecutor(run_store=store, process_runner=runner).execute(request)
+
+    timeout = cast(dict[str, object], result.executor_metadata["reliability_timeout"])
+    assert observed_timeout == [2.5]
+    assert timeout["timeout_domain"] == "reliability"
+    assert timeout["support_level"] == "enforced"
+    assert timeout["outcome"] == "enforced"
+    assert timeout["duration_seconds"] == 2.5
+
+
+def test_subprocess_executor_timeout_expired_is_structured_failure(
+    tmp_path: Path,
+) -> None:
+    store, _run_uri, request = _request(tmp_path, timeout_seconds=0.25)
+
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        raise subprocess.TimeoutExpired(
+            cmd=tuple(command),
+            timeout=cast(float, timeout_seconds),
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    result = SubprocessExecutor(run_store=store, process_runner=runner).execute(request)
+
+    assert result.status == StageStatus.FAILED
+    failure = cast(ExecutionFailure, result.failure)
+    timeout = cast(dict[str, object], result.executor_metadata["reliability_timeout"])
+    assert failure.message == "subprocess worker exceeded reliability timeout"
+    assert failure.details["timeout_expired"] is True
+    assert timeout["timed_out"] is True
+    assert timeout["outcome"] == "timed_out"
+    assert timeout["support_level"] == "enforced"
+    assert timeout["duration_seconds"] == 0.25
+
+
 def test_subprocess_executor_missing_result_is_failure(tmp_path: Path) -> None:
     store, _run_uri, request = _request(tmp_path)
 
     result = SubprocessExecutor(
         run_store=store,
-        process_runner=lambda _command: SubprocessRunResult(returncode=1),
+        process_runner=lambda command, *, timeout_seconds=None: SubprocessRunResult(
+            returncode=1
+        ),
     ).execute(request)
 
     assert result.status == StageStatus.FAILED
@@ -246,7 +334,12 @@ def test_subprocess_executor_missing_result_is_failure(tmp_path: Path) -> None:
 def test_subprocess_executor_invalid_worker_result_is_failure(tmp_path: Path) -> None:
     store, run_uri, request = _request(tmp_path)
 
-    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        del command, timeout_seconds
         store.write_stage_worker_result(
             run_uri,
             "build",
@@ -296,7 +389,12 @@ def test_subprocess_executor_rejects_mismatched_worker_result_identity(
 ) -> None:
     store, run_uri, request = _request(tmp_path)
 
-    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        del command, timeout_seconds
         worker_result = _worker_success(run_uri).to_dict()
         worker_result[field] = cast(PlainData, value)
         store.write_stage_worker_result(run_uri, "build", worker_result, attempt=1)
@@ -315,7 +413,12 @@ def test_subprocess_executor_process_failure_overrides_structured_success(
 ) -> None:
     store, run_uri, request = _request(tmp_path)
 
-    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        del command, timeout_seconds
         store.write_stage_worker_result(
             run_uri,
             "build",
@@ -338,7 +441,12 @@ def test_subprocess_executor_launch_error_is_structured_failure(
 ) -> None:
     store, _run_uri, request = _request(tmp_path)
 
-    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        del command, timeout_seconds
         raise OSError("worker command missing")
 
     result = SubprocessExecutor(run_store=store, process_runner=runner).execute(request)
@@ -355,7 +463,9 @@ def test_subprocess_executor_preserves_signal_metadata(tmp_path: Path) -> None:
 
     result = SubprocessExecutor(
         run_store=store,
-        process_runner=lambda _command: SubprocessRunResult(returncode=-15),
+        process_runner=lambda command, *, timeout_seconds=None: SubprocessRunResult(
+            returncode=-15
+        ),
     ).execute(request)
 
     assert result.status == StageStatus.FAILED
@@ -368,7 +478,12 @@ def test_subprocess_executor_preserves_signal_metadata(tmp_path: Path) -> None:
 def test_subprocess_executor_redacts_command_metadata(tmp_path: Path) -> None:
     store, run_uri, request = _request(tmp_path)
 
-    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        del command, timeout_seconds
         store.write_stage_worker_result(
             run_uri,
             "build",
@@ -391,7 +506,12 @@ def test_subprocess_executor_redacts_command_metadata(tmp_path: Path) -> None:
 def test_subprocess_executor_wraps_failed_worker_result(tmp_path: Path) -> None:
     store, run_uri, request = _request(tmp_path)
 
-    def runner(_command: Sequence[str]) -> SubprocessRunResult:
+    def runner(
+        command: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> SubprocessRunResult:
+        del command, timeout_seconds
         store.write_stage_worker_result(
             run_uri,
             "build",

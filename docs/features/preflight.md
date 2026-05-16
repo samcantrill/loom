@@ -196,6 +196,7 @@ exact-stage runtime options target known stage IDs
 executor name is known
 executor capability diagnostics can be reported
 resource capability diagnostics can be reported
+reliability retry and timeout capability diagnostics can be reported
 resume, dry-run, selector, tag, and note options are normalized
 ```
 
@@ -308,6 +309,13 @@ They verify that the current Python executable is available and that the public
 launching user stage code. Missing Python or worker command availability is
 reported as selected-executor availability failure, distinct from an unknown
 executor name.
+
+Reliability timeout checks are capability diagnostics, not process probes. A
+selected timeout policy reports whether the executor support level is
+`enforced`, `delegated`, `observed`, or `unsupported`. Subprocess timeout
+support is reported as enforced; local in-process timeout support is reported
+as unsupported. Retry policy remains a warning until runner-owned retry
+decisions are implemented.
 
 ## SLURM Checks
 

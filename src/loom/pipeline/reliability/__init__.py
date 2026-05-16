@@ -17,8 +17,10 @@ from loom.pipeline.reliability._models import (
     StageAttemptTransaction,
     StageAttemptTransactionState,
     TimeoutAdapter,
+    TimeoutOutcome,
     TimeoutOutcomeRecord,
     TimeoutPolicy,
+    TimeoutSupportLevel,
     merge_reliability_options,
 )
 
@@ -39,7 +41,9 @@ __all__ = [
     "StageAttemptTransaction",
     "StageAttemptTransactionState",
     "TimeoutAdapter",
+    "TimeoutOutcome",
     "TimeoutOutcomeRecord",
     "TimeoutPolicy",
+    "TimeoutSupportLevel",
     "merge_reliability_options",
 ]

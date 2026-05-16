@@ -36,6 +36,7 @@ from .reliability import (
     failure_with_reliability_classification,
     record_reliability_transaction,
     record_stage_reliability_transition,
+    record_timeout_outcome_from_metadata,
 )
 
 
@@ -366,6 +367,15 @@ def commit_stage_execution_result(
             executor_name=executor_name,
             clock=clock,
         )
+        record_timeout_outcome_from_metadata(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            stage_status=StageStatus.FAILED,
+            recorded_at=failure.failed_at,
+            executor_metadata=execution_result.executor_metadata,
+        )
         return StageRunResult(
             stage_name=stage.name,
             action=PlanAction.RUN,
@@ -390,6 +400,15 @@ def commit_stage_execution_result(
             cancelled_at=execution_result.finished_at,
             reason=reason,
             clock=clock,
+        )
+        record_timeout_outcome_from_metadata(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            stage_status=StageStatus.CANCELLED,
+            recorded_at=execution_result.finished_at,
+            executor_metadata=execution_result.executor_metadata,
         )
         return StageRunResult(
             stage_name=stage.name,
@@ -457,6 +476,15 @@ def commit_stage_execution_result(
             started_at=execution_result.started_at,
             finished_at=execution_result.finished_at,
             metadata={"action": PlanAction.RUN.value},
+        )
+        record_timeout_outcome_from_metadata(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            stage_status=StageStatus.SUCCEEDED,
+            recorded_at=execution_result.finished_at,
+            executor_metadata=execution_result.executor_metadata,
         )
     except Exception:
         record_stage_reliability_transition(

@@ -16,8 +16,10 @@ from loom.pipeline.reliability import (
     RetryPolicy,
     StageAttemptTransaction,
     StageAttemptTransactionState,
+    TimeoutOutcome,
     TimeoutOutcomeRecord,
     TimeoutPolicy,
+    TimeoutSupportLevel,
 )
 from loom.serialization import stable_json_dumps
 
@@ -69,6 +71,8 @@ def test_reliability_records_are_round_tripped_with_plain_data_contract() -> Non
         timed_out=True,
         duration_seconds=1.5,
         reason_code="runtime.timeout",
+        outcome=TimeoutOutcome.TIMED_OUT,
+        support_level=TimeoutSupportLevel.ENFORCED,
         status=status,
     )
     transaction = StageAttemptTransaction(
@@ -88,6 +92,16 @@ def test_reliability_records_are_round_tripped_with_plain_data_contract() -> Non
     assert ReliabilityStatusDetail.from_dict(status.to_dict()) == status
     assert RetryDecisionRecord.from_dict(decision.to_dict()) == decision
     assert TimeoutOutcomeRecord.from_dict(timeout_outcome.to_dict()) == timeout_outcome
+    assert timeout_outcome.to_dict()["outcome"] == "timed_out"
+    assert timeout_outcome.to_dict()["support_level"] == "enforced"
+    legacy_timeout = {
+        key: value
+        for key, value in timeout_outcome.to_dict().items()
+        if key not in {"outcome", "support_level"}
+    }
+    assert TimeoutOutcomeRecord.from_dict(
+        legacy_timeout
+    ).outcome is TimeoutOutcome.TIMED_OUT
     assert StageAttemptTransaction.from_dict(transaction.to_dict()) == transaction
     assert transaction.to_dict()["state"] == "running"
     legacy_payload = {

@@ -511,6 +511,7 @@ def coordination_requirement_diagnostics(
     *,
     require_shared_filesystem: bool = False,
     require_remote: bool = False,
+    require_resource_leases: bool = False,
 ) -> tuple[StoreDiagnostic, ...]:
     """Report assumptions not proven by a local coordination capability set."""
 
@@ -558,6 +559,34 @@ def coordination_requirement_diagnostics(
                 detail=detail,
             )
         )
+    if require_resource_leases:
+        missing = [
+            capability
+            for capability in (
+                BackendCapability.CROSS_RUN_COORDINATION,
+                BackendCapability.GLOBAL_COUNTERS,
+                BackendCapability.BACKEND_LEASE_TIME,
+            )
+            if not capability_set.supports(capability, scope=CapabilityScope.CROSS_RUN)
+        ]
+        if missing:
+            diagnostics.append(
+                StoreDiagnostic(
+                    code="unsupported_resource_leases",
+                    message=(
+                        f"backend {capability_set.backend_name!r} does not prove "
+                        "resource lease coordination support"
+                    ),
+                    severity=DiagnosticSeverity.ERROR,
+                    detail={
+                        "backend_name": capability_set.backend_name,
+                        "missing_capabilities": [
+                            capability.value for capability in missing
+                        ],
+                        "scope": CapabilityScope.CROSS_RUN.value,
+                    },
+                )
+            )
     return tuple(diagnostics)
 
 

@@ -60,8 +60,10 @@ from loom.pipeline.reliability import (
     StageAttemptTransaction,
     StageAttemptTransactionState,
     TimeoutAdapter,
+    TimeoutOutcome,
     TimeoutOutcomeRecord,
     TimeoutPolicy,
+    TimeoutSupportLevel,
 )
 from loom.pipeline.runtime.profiles import (
     RuntimeProfile,
@@ -112,8 +114,10 @@ __all__ = [
     "StageAttemptTransaction",
     "StageAttemptTransactionState",
     "TimeoutAdapter",
+    "TimeoutOutcome",
     "TimeoutOutcomeRecord",
     "TimeoutPolicy",
+    "TimeoutSupportLevel",
     "build_runtime_metadata",
     "merge_config_run_options",
     "merge_run_options",

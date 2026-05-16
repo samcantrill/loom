@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import cast
 
@@ -11,6 +12,9 @@ from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     StageAttemptTransaction,
     StageAttemptTransactionState,
+    TimeoutOutcome,
+    TimeoutOutcomeRecord,
+    TimeoutSupportLevel,
 )
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import LegacyRunStore, RunReliabilityStore
@@ -20,6 +24,7 @@ from .models import ExecutionFailure
 
 
 _RETRIABLE_FAILURE_TYPES = frozenset({"stage_exception", "executor_infrastructure"})
+_TIMEOUT_METADATA_KEY = "reliability_timeout"
 _TRANSACTION_STATE_ORDER = {
     StageAttemptTransactionState.UNSPECIFIED: 0,
     StageAttemptTransactionState.PREPARED: 10,
@@ -137,6 +142,56 @@ def record_reliability_transaction(
     return transaction
 
 
+def record_timeout_outcome_from_metadata(
+    run_store: LegacyRunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    stage_status: StageStatus,
+    recorded_at: str,
+    executor_metadata: object,
+) -> TimeoutOutcomeRecord | None:
+    metadata = _timeout_metadata(executor_metadata)
+    if metadata is None or not isinstance(run_store, RunReliabilityStore):
+        return None
+    transaction_id = _latest_transaction_id(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+    )
+    if transaction_id is None:
+        return None
+    status = build_reliability_status_detail(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        stage_status=stage_status,
+        attempt=attempt,
+        created_at=recorded_at,
+    )
+    outcome = TimeoutOutcomeRecord(
+        outcome_id=_timeout_outcome_id(
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            transaction_id=transaction_id,
+            outcome=_timeout_outcome(metadata),
+            recorded_at=recorded_at,
+        ),
+        transaction_id=transaction_id,
+        timed_out=_bool_metadata(metadata, "timed_out"),
+        duration_seconds=_positive_float_metadata(metadata, "duration_seconds"),
+        reason_code=_string_metadata(metadata, "reason_code"),
+        outcome=_timeout_outcome(metadata),
+        support_level=_timeout_support_level(metadata),
+        status=status,
+    )
+    run_store.write_timeout_outcome(run_uri, outcome)
+    return outcome
+
+
 def _current_run_status(run_store: LegacyRunStore, run_uri: str) -> RunStatus:
     record = run_store.read_run_status(run_uri)
     if record is None:
@@ -196,12 +251,101 @@ def _transaction_id(
     return f"tx-{digest[:32]}"
 
 
+def _timeout_outcome_id(
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    transaction_id: str,
+    outcome: TimeoutOutcome,
+    recorded_at: str,
+) -> str:
+    digest = hashlib.sha256(
+        stable_json_dumps(
+            {
+                "run_uri": run_uri,
+                "stage_name": stage_name,
+                "attempt": attempt,
+                "transaction_id": transaction_id,
+                "outcome": outcome.value,
+                "recorded_at": recorded_at,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"timeout-{digest[:32]}"
+
+
 def _failure_reason_code(failure: ExecutionFailure) -> str:
+    if _failure_timed_out(failure):
+        return "reliability.timeout.timed_out"
     if failure.signal is not None:
         return "executor_signal"
     if failure.exit_code is not None and failure.exit_code != 0:
         return "executor_exit_code"
     return failure.failure_type
+
+
+def _failure_timed_out(failure: ExecutionFailure) -> bool:
+    metadata = _timeout_metadata(failure.executor_metadata)
+    if metadata is None:
+        metadata = _timeout_metadata(failure.details)
+    return metadata is not None and _bool_metadata(metadata, "timed_out")
+
+
+def _timeout_metadata(value: object) -> dict[str, PlainData] | None:
+    if not isinstance(value, Mapping):
+        return None
+    raw = cast(Mapping[str, object], value).get(_TIMEOUT_METADATA_KEY)
+    if raw is None:
+        raw = cast(Mapping[str, object], value).get("timeout")
+    if not isinstance(raw, dict):
+        return None
+    normalized = ensure_plain_data(raw, path=_TIMEOUT_METADATA_KEY)
+    if not isinstance(normalized, dict):
+        return None
+    return cast(dict[str, PlainData], normalized)
+
+
+def _timeout_outcome(metadata: Mapping[str, PlainData]) -> TimeoutOutcome:
+    value = _string_metadata(metadata, "outcome")
+    try:
+        return TimeoutOutcome(value)
+    except ValueError as exc:
+        valid = ", ".join(outcome.value for outcome in TimeoutOutcome)
+        raise ValueError(f"timeout outcome must be one of: {valid}") from exc
+
+
+def _timeout_support_level(metadata: Mapping[str, PlainData]) -> TimeoutSupportLevel:
+    value = _string_metadata(metadata, "support_level")
+    try:
+        return TimeoutSupportLevel(value)
+    except ValueError as exc:
+        valid = ", ".join(level.value for level in TimeoutSupportLevel)
+        raise ValueError(f"timeout support_level must be one of: {valid}") from exc
+
+
+def _string_metadata(metadata: Mapping[str, PlainData], key: str) -> str:
+    value = metadata.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"timeout metadata {key!r} must be a non-empty string")
+    return value
+
+
+def _bool_metadata(metadata: Mapping[str, PlainData], key: str) -> bool:
+    value = metadata.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"timeout metadata {key!r} must be a bool")
+    return value
+
+
+def _positive_float_metadata(metadata: Mapping[str, PlainData], key: str) -> float:
+    value = metadata.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"timeout metadata {key!r} must be a positive number")
+    number = float(value)
+    if number <= 0:
+        raise ValueError(f"timeout metadata {key!r} must be a positive number")
+    return number
 
 
 def _classification_details(failure: ExecutionFailure) -> dict[str, PlainData]:
@@ -235,6 +379,7 @@ __all__ = [
     "build_reliability_status_detail",
     "classify_execution_failure",
     "failure_with_reliability_classification",
+    "record_timeout_outcome_from_metadata",
     "record_reliability_transaction",
     "record_stage_reliability_transition",
 ]

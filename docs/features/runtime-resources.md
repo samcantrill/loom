@@ -161,7 +161,9 @@ attributes empty
 
 ```text
 expected or requested maximum runtime for the stage
-deferred; rejected in v0 so callers do not assume timeout behavior is honored
+not a resource field; reliability timeout policy lives under runtime.reliability.timeout
+and authored resource timeout aliases are rejected so callers do not assume
+resource admission enforces reliability policy
 ```
 
 Qualified resource kinds:
@@ -309,6 +311,7 @@ class StageRuntimeOptions:
     resources: ResourceRequest = field(default_factory=ResourceRequest)
     execution: ExecutionOptions = field(default_factory=ExecutionOptions)
     environment: StageEnvironmentRequest = field(default_factory=StageEnvironmentRequest)
+    reliability: ReliabilityPolicy | None = None
     adapter_options: Mapping[str, object] = field(default_factory=dict)
 ```
 
@@ -323,6 +326,14 @@ Run and stage environment request models carry future isolated-executor
 environment additions and removals. They do not apply local process environment
 changes. Safe metadata summaries record only counts and inheritance mode, never
 environment variable names or values.
+
+Run-level `RunOptions.reliability` and exact-stage
+`StageRuntimeOptions.reliability` carry reliability retry and timeout policy.
+`timeout.duration_seconds` is an executor capability question, not a resource
+request. The subprocess executor can enforce it at the worker subprocess
+boundary, the local in-process executor reports unsupported timeout policy, and
+capability validation reports the selected executor's timeout support before
+execution.
 
 ## Runtime Profiles
 

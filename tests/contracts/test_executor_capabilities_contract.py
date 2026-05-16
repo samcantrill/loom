@@ -36,6 +36,7 @@ def test_descriptor_and_diagnostic_documents_are_plain_data() -> None:
             "cpu": ResourceCapability(support_level="supported"),
         },
         adapter_namespaces=("batch",),
+        timeout_support="observed",
         details={"owner": "test"},
     )
     diagnostic = CapabilityDiagnostic(
@@ -51,6 +52,7 @@ def test_descriptor_and_diagnostic_documents_are_plain_data() -> None:
     )
 
     assert stable_json_dumps(descriptor.to_dict())
+    assert descriptor.to_dict()["timeout_support"] == "observed"
     assert stable_json_dumps(diagnostic.to_dict())
     assert stable_json_dumps(validate_executor_capabilities(RunOptions()).to_dict())
 

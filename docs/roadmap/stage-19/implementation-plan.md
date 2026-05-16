@@ -1,11 +1,11 @@
 # Roadmap Stage 19 Implementation Plan: Reliability Policies And Transactions
 
-Status: Phase 3 merged
+Status: Phase 4 pr_open
 Roadmap stage: `v19`
 Planning document: `docs/roadmap/stage-19/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 4 pending
+Current phase: Phase 4 pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -290,7 +290,7 @@ drive core retry or transaction behavior.
 | 1 | `reliability-contracts-runtime-policy` | merged | `codex/reliability-contracts-runtime-policy` | [#176](https://github.com/samcantrill/loom/pull/176) | `loom.pipeline.reliability`, `loom.pipeline.runtime` | Add import-light contracts and public runtime policy parsing/merge | Package, unit, runtime contract tests, `make validate-pr`, `make test-summary` | Policy merge, disabled/unset policy, import boundary |
 | 2 | `reliability-persistence-read-models` | merged | `codex/reliability-persistence-read-models` | [#177](https://github.com/samcantrill/loom/pull/177) | `loom.pipeline.stores`, read models | Persist and read versioned reliability facts | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Status detail, transaction, timeout, retry-decision records |
 | 3 | `transaction-failure-classification` | merged | `codex/transaction-failure-classification` | [#178](https://github.com/samcantrill/loom/pull/178) | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
-| 4 | `timeout-capability-diagnostics` | pending | `codex/timeout-capability-diagnostics` | pending | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
+| 4 | `timeout-capability-diagnostics` | pr_open | `codex/timeout-capability-diagnostics` | [#179](https://github.com/samcantrill/loom/pull/179) | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
 | 5 | `retry-decisions-runner-automation` | pending | `codex/retry-decisions-runner-automation` | pending | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
 | 6 | `reliability-inspection-finalization` | pending | `codex/reliability-inspection-finalization` | pending | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
 
@@ -651,11 +651,11 @@ failure semantics
 
 ## Phase 4: Timeout Capability And Reliability Diagnostics
 
-Status: pending
+Status: pr_open
 Slug: `timeout-capability-diagnostics`
 Branch: `codex/timeout-capability-diagnostics`
 Worktree: `/home/samcantrill/work/loom-worktrees/timeout-capability-diagnostics`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/179
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase crosses runtime capability,
@@ -735,11 +735,14 @@ executor, diagnostics, and lease-compatibility surfaces
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
+- Phase execution plan: complete at
+  `docs/roadmap/stage-19/phases/timeout-capability-diagnostics.md`
+- Planning/refinement budget: expanded path; draft and refine complete by
+  manager-local planning
+- Implementation/refinement budget: not needed; targeted validation and PR gate
+  passed without a refinement blocker
 - PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Blocker-resolution budget: 0/3 used
 - Pre-submit blocker gate: Phases 1 through 3 merged or valid stack
   predecessors
 - Merge record: pending
@@ -756,11 +759,21 @@ executor, diagnostics, and lease-compatibility surfaces
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: complete. Added timeout support/outcome vocabulary,
+  descriptor-level timeout support diagnostics, subprocess timeout
+  enforcement, local unsupported-timeout metadata, lifecycle timeout outcome
+  persistence, lease capability diagnostics, and docs clarifying timeout
+  domain separation.
+- Validation: complete. Focused package/unit/contract/integration batch passed
+  with `189` tests; `make validate-pr` passed Ruff, Pyright, default suite
+  (`1800` passed), config-extra (`446` passed), and build; `make
+  test-summary` passed all suites.
+- PR: opened at https://github.com/samcantrill/loom/pull/179 targeting
+  `develop`.
 - Merge: pending
-- Follow-up: pending
+- Follow-up: Phase 5 can branch from updated `develop` after Phase 4 is
+  reviewed and merged; if merge is blocked by GitHub, Phase 5 may continue as a
+  stack on `codex/timeout-capability-diagnostics`.
 
 ## Phase 5: Retry Decisions And Runner-Owned Automation
 

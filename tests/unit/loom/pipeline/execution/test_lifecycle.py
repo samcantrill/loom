@@ -22,8 +22,13 @@ from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
 )
+from loom.pipeline.execution.reliability import record_timeout_outcome_from_metadata
 from loom.pipeline.planning import plan_pipeline
-from loom.pipeline.reliability import StageAttemptTransactionState
+from loom.pipeline.reliability import (
+    StageAttemptTransactionState,
+    TimeoutOutcome,
+    TimeoutSupportLevel,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     LifecycleReason,
@@ -230,6 +235,59 @@ def test_persist_stage_failure_classifies_and_records_failed_transaction(
     ]
     assert transactions[0].status.stage_status is StageStatus.FAILED
     assert store.read_stage_status(run_uri, "build") is not None
+
+
+def test_reliability_timeout_outcome_records_against_latest_transaction(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    write_run_status(
+        store,
+        run_uri=run_uri,
+        status=RunStatus.RUNNING,
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        started_at="2020-01-01T00:00:01Z",
+    )
+    write_stage_running(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        started_at="2020-01-01T00:00:02Z",
+    )
+
+    outcome = record_timeout_outcome_from_metadata(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        stage_status=StageStatus.FAILED,
+        recorded_at="2020-01-01T00:00:03Z",
+        executor_metadata={
+            "reliability_timeout": {
+                "enabled": True,
+                "timeout_domain": "reliability",
+                "duration_seconds": 1.5,
+                "support_level": "enforced",
+                "outcome": "timed_out",
+                "timed_out": True,
+                "reason_code": "reliability.timeout.timed_out",
+            }
+        },
+    )
+
+    assert outcome is not None
+    assert outcome.outcome is TimeoutOutcome.TIMED_OUT
+    assert outcome.support_level is TimeoutSupportLevel.ENFORCED
+    assert outcome.timed_out is True
+    assert outcome.transaction_id == store.list_stage_attempt_transactions(
+        run_uri, stage_name="build"
+    )[0].transaction_id
+    persisted = store.list_timeout_outcomes(run_uri, stage_name="build")
+    assert persisted == (outcome,)
 
 
 def test_persist_stage_cancellation_records_cancelled_transaction(
