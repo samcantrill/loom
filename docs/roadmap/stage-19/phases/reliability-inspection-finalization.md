@@ -2,10 +2,10 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Reliability Policies And Transactions
 - PR title: `Reliability Policies And Transactions - Phase 6: Read-Only Inspection And Finalization`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/181
 - Branch: `codex/reliability-inspection-finalization`
 - Worktree: `/home/samcantrill/work/loom-worktrees/reliability-inspection-finalization`
 - Phase execution plan path: `docs/roadmap/stage-19/phases/reliability-inspection-finalization.md`
@@ -241,7 +241,8 @@ make test-summary
 - Blocker-resolution summary: not needed at plan time
 - PR preparation: completed with
   `docs/roadmap/stage-19/phases/reliability-inspection-finalization-pr-body.md`;
-  PR pending
+  opened as https://github.com/samcantrill/loom/pull/181 targeting `develop`
+  from `codex/reliability-inspection-finalization`
 - Merge summary: pending
 - Stack maintenance: pending
 - Remaining blockers: none

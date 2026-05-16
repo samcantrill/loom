@@ -1,11 +1,11 @@
 # Roadmap Stage 19 Implementation Plan: Reliability Policies And Transactions
 
-Status: Phase 6 in_progress
+Status: Phase 6 pr_open
 Roadmap stage: `v19`
 Planning document: `docs/roadmap/stage-19/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 6 in_progress
+Current phase: Phase 6 pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -292,7 +292,7 @@ drive core retry or transaction behavior.
 | 3 | `transaction-failure-classification` | merged | `codex/transaction-failure-classification` | [#178](https://github.com/samcantrill/loom/pull/178) | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
 | 4 | `timeout-capability-diagnostics` | merged | `codex/timeout-capability-diagnostics` | [#179](https://github.com/samcantrill/loom/pull/179) | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
 | 5 | `retry-decisions-runner-automation` | merged | `codex/retry-decisions-runner-automation` | [#180](https://github.com/samcantrill/loom/pull/180) | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
-| 6 | `reliability-inspection-finalization` | in_progress | `codex/reliability-inspection-finalization` | pending | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
+| 6 | `reliability-inspection-finalization` | pr_open | `codex/reliability-inspection-finalization` | [#181](https://github.com/samcantrill/loom/pull/181) | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
 
 ## Implementation Readiness Blockers
 
@@ -902,11 +902,11 @@ runtime-changing automation
 
 ## Phase 6: Read-Only Inspection, Documentation, And Final Validation
 
-Status: in_progress
+Status: pr_open
 Slug: `reliability-inspection-finalization`
 Branch: `codex/reliability-inspection-finalization`
 Worktree: `/home/samcantrill/work/loom-worktrees/reliability-inspection-finalization`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/181
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase finalizes user-visible
@@ -996,6 +996,8 @@ inspection, docs, and suite evidence
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phases 1 through 5 merged or valid stack
   predecessors
+- PR record: opened as https://github.com/samcantrill/loom/pull/181 with
+  `develop` target and `codex/reliability-inspection-finalization` head.
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -1011,9 +1013,15 @@ inspection, docs, and suite evidence
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: complete. Persisted selected reliability policy facts at the
+  stage-attempt boundary, added read-only diagnostics summaries for reliability
+  policy, status detail, transaction, retry, timeout, and unsupported-timeout
+  evidence, enriched existing status/backend inspection output, and updated
+  feature docs for final Stage 19 behavior.
+- Validation: `make validate-pr` passed; `make test-summary` passed with
+  package, unit, contract, integration, e2e, and config-extra suite evidence.
+- PR: opened as https://github.com/samcantrill/loom/pull/181 targeting
+  `develop`.
 - Merge: pending
 - Follow-up: pending
 
