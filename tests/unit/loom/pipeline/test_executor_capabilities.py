@@ -121,6 +121,7 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     )
 
     assert tuple(DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.descriptors) == (
+        "docker",
         "local",
         "slurm-afterok",
         "slurm-single-job",
@@ -137,6 +138,28 @@ def test_default_registry_contains_import_light_builtin_descriptors() -> None:
     subprocess_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("subprocess")
     assert subprocess_descriptor.details["process_isolating"] is True
     assert subprocess_descriptor.details["serial"] is True
+    docker_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("docker")
+    assert docker_descriptor.adapter_namespaces == ("container", "docker")
+    assert docker_descriptor.details["built_in"] is True
+    assert docker_descriptor.details["containerized"] is True
+    assert docker_descriptor.details["docker_cli"] is True
+    assert docker_descriptor.details["docker_sdk_dependency"] is False
+    assert docker_descriptor.details["security_sandbox"] is False
+    assert docker_descriptor.details["requires_prepared_worker_request"] is True
+    assert {
+        kind: capability.to_dict()["support_level"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability],
+            docker_descriptor.resource_capabilities,
+        ).items()
+    } == {"cpu": "supported", "memory": "supported", "gpu": "unsupported"}
+    assert {
+        kind: capability.to_dict()["enforcement"]
+        for kind, capability in cast(
+            dict[str, ResourceCapability],
+            docker_descriptor.resource_capabilities,
+        ).items()
+    } == {"cpu": "best_effort", "memory": "best_effort", "gpu": "not_applicable"}
     slurm_descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("slurm-single-job")
     assert slurm_descriptor.adapter_namespaces == ("slurm",)
     assert slurm_descriptor.details["dry_run_only"] is False
@@ -209,6 +232,52 @@ def test_slurm_descriptor_claims_adapter_namespace_and_resources() -> None:
         ("resource.supported", "gpu"),
         ("resource.supported", "memory"),
     ]
+
+
+def test_docker_descriptor_claims_container_namespaces_and_rejects_gpu() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="docker",
+            adapter_options={
+                "container": {"image": {"reference": "python:3.12"}},
+                "docker": {},
+            },
+            stage_options={
+                "train": StageRuntimeOptions(
+                    resources=ResourceRequest(
+                        entries={
+                            "cpu": ResourceEntry(kind="cpu", amount=2),
+                            "memory": ResourceEntry(
+                                kind="memory",
+                                amount=4,
+                                unit="GiB",
+                            ),
+                            "gpu": ResourceEntry(kind="gpu", amount=1),
+                        }
+                    )
+                )
+            },
+        )
+    )
+
+    assert not result.ok
+    diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
+    assert [
+        (
+            item["resource_kind"],
+            item["code"],
+            item["severity"],
+            item["enforcement"],
+        )
+        for item in diagnostics
+    ] == [
+        ("cpu", "resource.supported", "info", "best_effort"),
+        ("gpu", "resource.unsupported", "error", "not_applicable"),
+        ("memory", "resource.supported", "info", "best_effort"),
+    ]
+    assert "adapter_namespace.unclaimed" not in {
+        item["code"] for item in diagnostics
+    }
 
 
 def test_whitespace_only_executor_returns_unknown_executor_diagnostic() -> None:

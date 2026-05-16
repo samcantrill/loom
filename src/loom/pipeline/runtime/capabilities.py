@@ -692,6 +692,43 @@ def _slurm_descriptor(name: str) -> ExecutorDescriptor:
     )
 
 
+def _docker_descriptor() -> ExecutorDescriptor:
+    mapped = ResourceCapability(
+        support_level=ResourceSupportLevel.SUPPORTED,
+        enforcement=ResourceEnforcementExpectation.BEST_EFFORT,
+        severity=CapabilitySeverity.INFO,
+        details={
+            "reason": (
+                "Docker command construction maps this resource to Docker CLI flags; "
+                "daemon and platform enforcement can vary"
+            )
+        },
+    )
+    gpu = ResourceCapability(
+        support_level=ResourceSupportLevel.UNSUPPORTED,
+        enforcement=ResourceEnforcementExpectation.NOT_APPLICABLE,
+        severity=CapabilitySeverity.ERROR,
+        details={"reason": "GPU mapping is deferred beyond Stage 17"},
+    )
+    return ExecutorDescriptor(
+        name="docker",
+        resource_capabilities={
+            "cpu": mapped,
+            "memory": mapped,
+            "gpu": gpu,
+        },
+        adapter_namespaces=("container", "docker"),
+        details={
+            "built_in": True,
+            "containerized": True,
+            "docker_cli": True,
+            "docker_sdk_dependency": False,
+            "security_sandbox": False,
+            "requires_prepared_worker_request": True,
+        },
+    )
+
+
 def _adapter_namespace_diagnostics(
     options: RunOptions,
     descriptor: ExecutorDescriptor,
@@ -1067,6 +1104,7 @@ def _reject_unknown(
 
 DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY = ExecutorDescriptorRegistry(
     {
+        "docker": _docker_descriptor(),
         "local": _local_descriptor(),
         "slurm-afterok": _slurm_descriptor("slurm-afterok"),
         "slurm-single-job": _slurm_descriptor("slurm-single-job"),

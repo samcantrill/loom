@@ -122,6 +122,52 @@ def test_runtime_profile_collection_selects_profiles_deterministically() -> None
         RuntimeProfileCollection.from_dict({"": {"executor": "local"}})
 
 
+def test_runtime_profile_container_shorthand_preserves_namespace_contract() -> None:
+    profile = RuntimeProfile.from_dict(
+        {
+            "executor": "docker",
+            "container": {
+                "image": {"reference": "python:3.12"},
+                "workdir": "/workspace",
+                "mounts": [
+                    {
+                        "source": "/workspace",
+                        "target": "/workspace",
+                        "mode": "rw",
+                    }
+                ],
+                "environment": {
+                    "variables": {"TOKEN": "secret"},
+                    "required_host_variables": ["HOME"],
+                },
+            },
+            "docker": {"pull": "never"},
+        }
+    )
+
+    assert profile.to_dict() == {
+        "adapter_options": {
+            "container": {
+                "image": {"reference": "python:3.12"},
+                "workdir": "/workspace",
+                "mounts": [
+                    {
+                        "source": "/workspace",
+                        "target": "/workspace",
+                        "mode": "rw",
+                    }
+                ],
+                "environment": {
+                    "variables": {"TOKEN": "secret"},
+                    "required_host_variables": ["HOME"],
+                },
+            },
+            "docker": {"pull": "never"},
+        },
+        "executor": "docker",
+    }
+
+
 def test_merge_run_options_applies_base_profile_explicit_precedence() -> None:
     base = {
         "executor": "local",
