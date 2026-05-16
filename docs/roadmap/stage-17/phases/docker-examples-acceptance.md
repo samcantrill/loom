@@ -284,8 +284,8 @@ documented and tested is the existing Stage 17 contract:
 Targeted development commands:
 
 ```sh
-uv run pytest tests/integration/docs/test_v0_python_examples.py
-uv run pytest tests/integration/diagnostics tests/integration/pipeline/test_docker_executor_integration.py tests/unit/loom/pipeline/executors tests/unit/loom/diagnostics tests/contracts/test_docker_command_contract.py tests/contracts/test_container_executor_contract.py tests/contracts/test_diagnostics_preflight_contract.py
+uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py
+uv run --extra config pytest tests/integration/diagnostics tests/integration/pipeline/test_docker_executor_integration.py tests/unit/loom/pipeline/executors tests/unit/loom/diagnostics tests/contracts/test_docker_command_contract.py tests/contracts/test_container_executor_contract.py tests/contracts/test_diagnostics_preflight_contract.py
 ```
 
 Final PR-preparation commands:
@@ -322,10 +322,30 @@ make test-summary
 
 - Draft plan: completed on 2026-05-16 in this phase branch.
 - Final phase execution plan: complete for fast-path implementation.
-- Implementation summary:
+- Implementation summary: added `examples/execution/containers/docker/` with
+  daemon-free smoke scripts for `loom run --executor docker`, selected-Docker
+  preflight pass/fail diagnostics, and Docker failure inspection through status
+  and logs. Added a fake `docker` command helper that executes the prepared
+  worker command locally while preserving the public Docker executor and CLI
+  path. Updated feature docs, example catalogs, and container example coverage
+  to document per-stage Docker execution, adapter option shape, path parity,
+  stable preflight IDs, redaction, failure inspection, and optional live Docker
+  guidance.
 - Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+  - `uv run --extra config python examples/execution/containers/docker/run_docker_pipeline.py`: passed; reported `run_status: SUCCEEDED`, `seed_executor: docker`, and `fake_docker_call_count: 2`.
+  - `uv run --extra config python examples/execution/containers/docker/run_preflight.py`: passed; reported Docker command pass, artifact-root visibility pass, and missing-Docker command fail.
+  - `uv run --extra config python examples/execution/containers/docker/run_failure_diagnostics.py`: passed; reported `run_status: FAILED`, `failure_executor: docker`, `failure_exit_code: 1`, and stderr availability.
+  - `uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py`: passed, `33 passed`.
+  - `uv run --extra config pytest tests/integration/docs/test_v0_python_examples.py tests/integration/diagnostics tests/integration/pipeline/test_docker_executor_integration.py tests/unit/loom/pipeline/executors tests/unit/loom/diagnostics tests/contracts/test_docker_command_contract.py tests/contracts/test_container_executor_contract.py tests/contracts/test_diagnostics_preflight_contract.py`: passed, `261 passed`.
+  - `uv run ruff check examples/execution/containers/docker tests/integration/docs/test_v0_python_examples.py`: passed.
+  - `make validate-pr`: passed; Ruff, Pyright (`0 errors`), default harness (`1751 passed, 26 skipped, 18 deselected`), config-extra harness (`446 passed, 1788 deselected`), and build passed.
+  - `make test-summary`: passed; package `100 passed, 1 skipped`, unit `1228 passed, 7 skipped, 1 deselected`, contract `251 passed, 2 skipped`, integration `157 passed, 8 skipped, 13 deselected`, e2e `43 passed, 2 deselected`, config-extra `446 passed, 1788 deselected`, overall `2225 passed, 18 skipped, 1804 deselected`.
+- Refinement summary: no separate phase-refiner pass was needed; local fixes
+  adjusted the preflight example's expected missing-command exit code and reset
+  fake Docker logs between example invocations.
+- Blocker-resolution summary: unused.
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-17/phases/docker-examples-acceptance-pr-body.md`; PR
+  opening pending.
+- Stack maintenance: root phase from `develop`; no predecessor.
+- Remaining blockers: none.
