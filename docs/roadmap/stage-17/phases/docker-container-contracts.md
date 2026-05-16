@@ -393,9 +393,10 @@ make test-summary
 
 - Phase implementation refinement: not needed; targeted suites, broader phase
   suites, `make validate-pr`, and `make test-summary` passed after manager
-  implementation
-- PR review: unused
-- Blocker resolution: 0/3 used
+  implementation.
+- PR review: manager pre-submit review used; image adapter serialization shape
+  was tightened before PR preparation, and no blocking findings remain.
+- Blocker resolution: 0/3 used.
 
 ## Completion Notes
 
@@ -405,7 +406,7 @@ make test-summary
   `loom.pipeline.executors.containers`, lazy executor package exports, Docker
   descriptor namespace/resource claims, and focused unit/contract/package
   coverage for serialization, validation, redaction, profile namespaces, and
-  import boundaries. Implementation commit: `cca4723`.
+  import boundaries. Implementation commits: `cca4723`, `5c0dc19`.
 - Implementation validation:
   - `uv run pytest tests/unit/loom/pipeline/executors/test_containers.py tests/unit/loom/pipeline/test_executor_capabilities.py tests/unit/loom/pipeline/test_runtime_profiles.py tests/contracts/test_container_executor_contract.py tests/contracts/test_executor_capabilities_contract.py tests/contracts/test_runtime_profiles_contract.py tests/package/test_import_boundaries.py tests/package/test_pipeline_executor_api.py` passed: 105 passed.
   - `uv run pytest tests/unit/loom/pipeline/executors tests/unit/loom/pipeline/test_executor_capabilities.py tests/unit/loom/pipeline/test_runtime_profiles.py tests/unit/loom/pipeline/test_runtime_metadata.py tests/contracts tests/package` passed: 479 passed, 3 skipped.
@@ -414,6 +415,6 @@ make test-summary
 - Refinement summary: tightened status, public record shapes, descriptor
   expectations, namespace ownership, and minimal snippet obligations.
 - Blocker-resolution summary: none used.
-- PR preparation: pending.
+- PR preparation: in progress; PR body prepared from final suite evidence.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.
