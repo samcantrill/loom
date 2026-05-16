@@ -209,7 +209,12 @@ class PipelineRunner:
     def run(self, request: RunRequest) -> RunResult:
         if not isinstance(request, RunRequest):
             raise RunRequestError("PipelineRunner.run requires RunRequest")
-        options = parse_run_options(request.options)
+        config_mapping, spec = self._resolve_config_and_spec(request)
+        options = _merged_request_options(
+            request,
+            config_mapping=config_mapping,
+            stage_names=spec.stage_names,
+        )
         if options.dry_run:
             raise RunRequestError(
                 "PipelineRunner.run does not execute dry-run requests; use planning APIs instead"
@@ -219,7 +224,11 @@ class PipelineRunner:
 
         started_at = self.clock()
         local_run_store = self._require_local_run_store()
-        run_uri = self._resolve_request_run_uri(request, local_run_store)
+        run_uri = self._resolve_request_run_uri(
+            request,
+            local_run_store,
+            options=options,
+        )
         self._create_or_open_run(run_uri, request)
         run_dir = local_run_store.local_run_dir(run_uri)
         lock = acquire_run_lock(
@@ -243,6 +252,9 @@ class PipelineRunner:
                 run_uri=run_uri,
                 run_dir=run_dir,
                 local_run_store=local_run_store,
+                config_mapping=config_mapping,
+                spec=spec,
+                options=options,
                 started_at=started_at,
             )
         finally:
@@ -391,6 +403,9 @@ class PipelineRunner:
         run_uri: str,
         run_dir: Path,
         local_run_store: LocalRunStorePaths,
+        config_mapping: Mapping[str, PlainData],
+        spec: PipelineSpec,
+        options: RunOptions,
         started_at: str,
     ) -> RunResult:
         created_at = self._created_at(run_uri, started_at)
@@ -403,15 +418,7 @@ class PipelineRunner:
             started_at=started_at,
             metadata=request.metadata,
         )
-        config_mapping, spec = self._resolve_config_and_spec(request)
-        options = _options_with_resolved_run_uri(
-            merge_config_run_options(
-                config_mapping,
-                explicit=_sparse_request_options(parse_run_options(request.options)),
-                known_stage_ids=spec.stage_names,
-            ),
-            run_uri,
-        )
+        options = _options_with_resolved_run_uri(options, run_uri)
         resolved_runtime = resolve_run_runtime(
             options,
             stage_ids=spec.stage_names,
@@ -1625,9 +1632,13 @@ class PipelineRunner:
         )
 
     def _resolve_request_run_uri(
-        self, request: RunRequest, local_run_store: LocalRunStorePaths
+        self,
+        request: RunRequest,
+        local_run_store: LocalRunStorePaths,
+        *,
+        options: RunOptions,
     ) -> str:
-        run_uri = parse_run_options(request.options).run_uri
+        run_uri = options.run_uri
         if run_uri is None:
             if request.open_existing:
                 raise RunRequestError("RunRequest.open_existing requires run_uri")
@@ -2230,6 +2241,19 @@ def _options_with_resolved_run_uri(options: RunOptions, run_uri: str) -> RunOpti
     data = options.to_dict()
     data["run_uri"] = run_uri
     return RunOptions.from_dict(data)
+
+
+def _merged_request_options(
+    request: RunRequest,
+    *,
+    config_mapping: Mapping[str, PlainData],
+    stage_names: Sequence[str],
+) -> RunOptions:
+    return merge_config_run_options(
+        config_mapping,
+        explicit=_sparse_request_options(parse_run_options(request.options)),
+        known_stage_ids=stage_names,
+    )
 
 
 def _sparse_request_options(options: RunOptions) -> Mapping[str, object]:
