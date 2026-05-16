@@ -219,11 +219,29 @@ make test-summary
 
 - Draft plan: completed in this artifact
 - Final phase execution plan: completed in this artifact
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Implementation summary: persisted selected reliability policy facts at the
+  stage-attempt boundary, added diagnostics summaries for policy facts, status
+  details, transactions, retry decisions, timeout outcomes, and unsupported
+  timeout evidence, enriched `loom status` and `loom backend inspect` with
+  compact read-only reliability presentation, and updated feature docs for
+  final Stage 19 behavior and Stage 20/21 deferrals.
+- Implementation validation: focused changed-area unit tests passed
+  (`55 passed`); broad Phase 6 package/contract/pipeline/diagnostics/CLI unit
+  validation passed (`1343 passed`); Phase 6 integration/e2e validation passed
+  (`174 passed`). `make validate-pr` passed Ruff, Pyright, default tests
+  (`1808 passed, 26 skipped, 18 deselected`), config-extra tests
+  (`447 passed, 1845 deselected`), and package build. `make test-summary`
+  passed package (`102 passed, 1 skipped`), unit (`1276 passed, 7 skipped,
+  1 deselected`), contract (`256 passed, 2 skipped`), integration
+  (`159 passed, 8 skipped, 13 deselected`), e2e (`43 passed, 2 deselected`),
+  and config-extra (`447 passed, 1845 deselected`).
+- Refinement summary: not needed as a separate formal pass; targeted
+  validation findings were resolved directly during implementation before the
+  implementation commit.
 - Blocker-resolution summary: not needed at plan time
-- PR preparation: pending
+- PR preparation: completed with
+  `docs/roadmap/stage-19/phases/reliability-inspection-finalization-pr-body.md`;
+  PR pending
 - Merge summary: pending
 - Stack maintenance: pending
 - Remaining blockers: none
