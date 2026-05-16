@@ -245,10 +245,10 @@ make test-summary
   and focused boundary regression (`4` tests) on
   `UV_CACHE_DIR=/tmp/uv uv run --active pytest tests/package/test_import_boundaries.py::test_runtime_facade_public_imports_are_stable_and_lightweight tests/package/test_pipeline_reliability_api.py::test_pipeline_reliability_imports_are_import_light tests/contracts/test_reliability_contract.py::test_importing_reliability_contracts_remains_import_light tests/unit/loom/pipeline/test_runtime_profiles.py::test_merge_run_options_merges_stage_reliability_with_run_level_defaults`, all passed).
   Final PR gates also passed on escalated rerun:
-  `make validate-pr` passed Ruff, Pyright, default suite (`1779` passed, `26`
-  skipped, `18` deselected), config-extra suite (`446` passed, `1816`
+  `make validate-pr` passed Ruff, Pyright, default suite (`1782` passed, `26`
+  skipped, `18` deselected), config-extra suite (`446` passed, `1819`
   deselected), and build; `make test-summary` passed package (`102` passed),
-  unit (`1249` passed), contract (`254` passed), integration (`159` passed),
+  unit (`1252` passed), contract (`254` passed), integration (`159` passed),
   e2e (`43` passed), and config-extra (`446` passed).
 - Refinement summary: manager-local refinement removed one unused import and
   fixed Pyright annotations/test expectations without changing phase scope.
@@ -260,7 +260,7 @@ make test-summary
   pre-submit review blockers by rejecting legacy top-level `retry`, `timeout`,
   and `timeout_seconds` in runtime profile sources and validating boolean
   fields in direct reliability record constructors; targeted Ruff, Pyright, and
-  affected unit tests passed after the fix.
+  affected unit tests passed after the fix, followed by full PR gates.
 - PR preparation: pending
 - Stack maintenance: pending
 - Remaining blockers: none
