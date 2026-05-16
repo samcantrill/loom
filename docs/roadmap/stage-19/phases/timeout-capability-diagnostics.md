@@ -5,7 +5,7 @@
 - Status: scope-complete phase execution plan
 - Feature focus: Reliability Policies And Transactions
 - PR title: `Reliability Policies And Transactions - Phase 4: Timeout Capability And Diagnostics`
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/179
 - Branch: `codex/timeout-capability-diagnostics`
 - Worktree: `/home/samcantrill/work/loom-worktrees/timeout-capability-diagnostics`
 - Phase execution plan path: `docs/roadmap/stage-19/phases/timeout-capability-diagnostics.md`
@@ -235,7 +235,8 @@ make test-summary
 - Refinement summary: not needed; no targeted-validation, coverage, lint, type,
   or build blocker remained after implementation.
 - Blocker-resolution summary: not needed; 0/3 passes used.
-- PR preparation: pending
+- PR preparation: completed; PR #179 opened against `develop` from
+  `codex/timeout-capability-diagnostics`
 - Merge summary: pending
 - Stack maintenance: pending
 - Remaining blockers: none
