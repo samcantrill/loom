@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import sys
 from types import ModuleType
 from typing import Any, cast
@@ -333,6 +334,289 @@ def test_local_executor_does_not_run_subprocess_availability_checks(
     ]
 
 
+def test_selected_docker_executor_runs_cheap_checks_and_redacts_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "docker" else None,
+    )
+    monkeypatch.setenv("HOST_TOKEN", "host-secret")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("pipeline: {}\n", encoding="utf-8")
+    mount_path = tmp_path / "mounted"
+    mount_path.mkdir()
+    run_uri = path_to_run_uri(tmp_path / "runs" / "docker-pass")
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            groups=("executor", "resources", "filesystem"),
+            run_uri=run_uri,
+            runtime_options={
+                "executor": "docker",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": "python:3.11-slim"},
+                        "mounts": [
+                            {
+                                "source": str(mount_path),
+                                "target": str(mount_path),
+                                "mode": "rw",
+                            }
+                        ],
+                        "environment": {
+                            "variables": {"SECRET_TOKEN": "super-secret"},
+                            "required_host_variables": ["HOST_TOKEN"],
+                        },
+                    },
+                    "docker": {"command": "docker", "network": "none"},
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {
+                                "cpu": {"kind": "cpu", "amount": 2},
+                                "memory": {
+                                    "kind": "memory",
+                                    "amount": 1,
+                                    "unit": "GiB",
+                                },
+                            }
+                        }
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.PASS
+    for check_id in (
+        "executor.docker.command",
+        "executor.docker.container_options",
+        "executor.docker.image",
+        "executor.docker.environment",
+        "resources.docker.mapping",
+        "resources.docker.gpu",
+        "filesystem.docker.mount_sources",
+        "filesystem.docker.mount_targets",
+        "filesystem.docker.run_dir_writable",
+        "filesystem.docker.artifact_root_visible",
+    ):
+        assert by_id[check_id].status is PreflightCheckStatus.PASS
+    payload = json.dumps(result.to_dict(), sort_keys=True)
+    assert "super-secret" not in payload
+    assert "host-secret" not in payload
+    assert "[redacted]" in payload
+    assert not (tmp_path / "runs" / "docker-pass").exists()
+
+
+def test_selected_docker_executor_fails_when_command_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options=_docker_runtime_options(),
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.docker.command"].status is PreflightCheckStatus.FAIL
+    commands = cast(
+        list[dict[str, Any]],
+        by_id["executor.docker.command"].details["commands"],
+    )
+    assert commands[0]["available"] is False
+
+
+def test_selected_docker_executor_reports_missing_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "docker" else None,
+    )
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={
+                "executor": "docker",
+                "adapter_options": {"container": {"mounts": []}},
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.docker.container_options"].status is PreflightCheckStatus.FAIL
+    assert by_id["executor.docker.image"].status is PreflightCheckStatus.FAIL
+    diagnostics = cast(
+        list[dict[str, Any]],
+        by_id["executor.docker.image"].details["diagnostics"],
+    )
+    assert diagnostics[0]["code"] == "docker_image_invalid"
+
+
+def test_selected_docker_filesystem_reports_mount_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "docker" else None,
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("pipeline: {}\n", encoding="utf-8")
+    missing_mount = tmp_path / "missing"
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            groups=("filesystem",),
+            run_uri=path_to_run_uri(tmp_path / "runs" / "docker-fs"),
+            runtime_options={
+                "executor": "docker",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": "python:3.11-slim"},
+                        "mounts": [
+                            {
+                                "source": str(missing_mount),
+                                "target": str(missing_mount),
+                                "mode": "ro",
+                            },
+                            {
+                                "source": str(tmp_path),
+                                "target": "/container-only",
+                                "mode": "rw",
+                            },
+                        ],
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["filesystem.docker.mount_sources"].status is PreflightCheckStatus.FAIL
+    assert by_id["filesystem.docker.mount_targets"].status is PreflightCheckStatus.FAIL
+    missing = cast(
+        list[dict[str, Any]],
+        by_id["filesystem.docker.mount_sources"].details["missing"],
+    )
+    assert missing[0]["source"] == str(missing_mount)
+    invalid = cast(
+        list[dict[str, Any]],
+        by_id["filesystem.docker.mount_targets"].details["invalid"],
+    )
+    assert invalid[0]["reason"] == "host_path and container_path must match in Stage 17"
+
+
+def test_selected_docker_environment_reports_missing_required_host_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    _patch_runtime_preflight_dependencies(monkeypatch)
+    monkeypatch.delenv("MISSING_HOST_TOKEN", raising=False)
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "docker" else None,
+    )
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={
+                "executor": "docker",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": "python:3.11-slim"},
+                        "environment": {
+                            "required_host_variables": ["MISSING_HOST_TOKEN"]
+                        },
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["executor.docker.environment"].status is PreflightCheckStatus.FAIL
+    missing = cast(
+        list[dict[str, Any]],
+        by_id["executor.docker.environment"].details[
+            "missing_required_host_variables"
+        ],
+    )
+    assert missing == [{"stage_id": "train", "name": "MISSING_HOST_TOKEN"}]
+
+
+def test_selected_docker_resource_checks_fail_gpu_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("resources",),
+            runtime_options={
+                "executor": "docker",
+                "adapter_options": {
+                    "container": {"image": {"reference": "python:3.11-slim"}}
+                },
+                "stage_options": {
+                    "train": {
+                        "resources": {
+                            "entries": {"gpu": {"kind": "gpu", "amount": 1}}
+                        }
+                    }
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.FAIL
+    assert by_id["resources.capabilities"].status is PreflightCheckStatus.FAIL
+    assert by_id["resources.docker.mapping"].status is PreflightCheckStatus.FAIL
+    assert by_id["resources.docker.gpu"].status is PreflightCheckStatus.FAIL
+    gpu_diagnostics = cast(
+        list[dict[str, Any]],
+        by_id["resources.docker.gpu"].details["diagnostics"],
+    )
+    assert gpu_diagnostics[0]["code"] == "docker_gpu_unsupported"
+
+
 def test_slurm_dry_run_preflight_emits_stable_checks_and_warns_without_sbatch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -609,3 +893,12 @@ def _patch_runtime_preflight_dependencies(monkeypatch: pytest.MonkeyPatch) -> No
         "validate_pipeline_config",
         lambda _config: _FakePipelineValidation(),
     )
+
+
+def _docker_runtime_options() -> dict[str, object]:
+    return {
+        "executor": "docker",
+        "adapter_options": {
+            "container": {"image": {"reference": "python:3.11-slim"}}
+        },
+    }

@@ -436,6 +436,54 @@ def test_stage_16_default_preflight_avoids_backend_discovery_and_sdks() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_default_executor_preflight_does_not_import_docker_modules() -> None:
+    script = dedent(
+        """
+        import sys
+        from types import ModuleType
+
+        from loom.diagnostics import PreflightCheckStatus, PreflightRequest, run_preflight
+
+        class FakeComposedConfig:
+            resolved = {"pipeline": {}}
+            source_artifacts = ()
+
+        config_package = ModuleType("loom.config")
+        config_api = ModuleType("loom.config.api")
+        config_api.compose_config = lambda *_args, **_kwargs: FakeComposedConfig()
+        config_package.api = config_api
+        sys.modules["loom.config"] = config_package
+        sys.modules["loom.config.api"] = config_api
+
+        result = run_preflight(
+            PreflightRequest(
+                config_path="pipeline.yaml",
+                groups=("executor",),
+                runtime_options={"executor": "local"},
+            )
+        )
+        by_id = {check.check_id: check for check in result.checks}
+        assert by_id["executor.resolve"].status is PreflightCheckStatus.PASS
+
+        for forbidden in (
+            "loom.pipeline.executors.containers",
+            "loom.pipeline.executors.docker",
+            "loom.pipeline.executors.docker.commands",
+            "loom.pipeline.executors.docker.executor",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported by default executor preflight")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() -> (
     None
 ):

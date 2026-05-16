@@ -104,6 +104,54 @@ def test_selected_subprocess_preflight_reports_availability_without_run_document
     assert not run_dir.exists()
 
 
+def test_selected_docker_preflight_reports_readiness_without_run_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    monkeypatch.setattr(
+        preflight_module.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name == "docker" else None,
+    )
+    config_path = _write_valid_config(tmp_path)
+    mount_path = tmp_path / "input"
+    mount_path.mkdir()
+    run_dir = tmp_path / "runs" / "docker-preflight"
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path=config_path,
+            run_uri=path_to_run_uri(run_dir),
+            runtime_options={
+                "executor": "docker",
+                "adapter_options": {
+                    "container": {
+                        "image": {"reference": "python:3.11-slim"},
+                        "mounts": [
+                            {
+                                "source": str(mount_path),
+                                "target": str(mount_path),
+                                "mode": "ro",
+                            }
+                        ],
+                    }
+                },
+            },
+            groups=("executor", "filesystem"),
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    assert result.status is PreflightStatus.PASS
+    assert by_id["executor.docker.command"].status is PreflightCheckStatus.PASS
+    assert by_id["executor.docker.container_options"].status is PreflightCheckStatus.PASS
+    assert by_id["filesystem.docker.mount_sources"].status is PreflightCheckStatus.PASS
+    assert by_id["filesystem.docker.artifact_root_visible"].status is PreflightCheckStatus.PASS
+    assert not run_dir.exists()
+
+
 def test_omitted_run_uri_skips_only_run_path_dependent_checks(tmp_path: Path) -> None:
     config_path = _write_valid_config(tmp_path)
 

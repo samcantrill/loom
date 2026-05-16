@@ -106,6 +106,7 @@ retry/timeout policy, runtime events, transaction policy, and cleanup behavior.
   - `executor.docker.command`
   - `executor.docker.container_options`
   - `executor.docker.image`
+  - `executor.docker.environment`
   - `filesystem.docker.mount_sources`
   - `filesystem.docker.mount_targets`
   - `filesystem.docker.run_dir_writable`
@@ -156,6 +157,8 @@ Stable check IDs added by this phase:
   - `executor.docker.container_options`: pass/fail shared container and Docker
     adapter option parsing, with redacted option-key summaries only.
   - `executor.docker.image`: pass/fail authored image reference presence.
+  - `executor.docker.environment`: pass/fail required host environment
+    variable availability by name only.
 - Filesystem group:
   - `filesystem.docker.mount_sources`: pass/fail authored mount source
     existence and directory/file availability.

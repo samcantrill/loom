@@ -80,3 +80,19 @@ def test_preflight_slurm_check_ids_are_stable() -> None:
         "filesystem.slurm.generated_writable"
         in STABLE_CHECK_IDS[PreflightGroup.FILESYSTEM]
     )
+
+
+def test_preflight_docker_check_ids_are_stable() -> None:
+    assert "executor.docker.command" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert (
+        "executor.docker.container_options"
+        in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    )
+    assert "executor.docker.image" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert "executor.docker.environment" in STABLE_CHECK_IDS[PreflightGroup.EXECUTOR]
+    assert "resources.docker.mapping" in STABLE_CHECK_IDS[PreflightGroup.RESOURCES]
+    assert "resources.docker.gpu" in STABLE_CHECK_IDS[PreflightGroup.RESOURCES]
+    assert (
+        "filesystem.docker.artifact_root_visible"
+        in STABLE_CHECK_IDS[PreflightGroup.FILESYSTEM]
+    )
