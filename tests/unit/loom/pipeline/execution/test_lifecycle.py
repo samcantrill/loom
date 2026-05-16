@@ -9,14 +9,28 @@ from loom.pipeline import PipelineSpec
 from loom.pipeline.execution.errors import PlanExecutionError
 from loom.pipeline.execution.lifecycle import (
     bind_stage_inputs,
+    persist_stage_cancellation,
+    persist_stage_failure,
     write_run_submitted,
+    write_run_status,
     write_stage_artifact_index_refs,
     write_stage_blocked,
+    write_stage_running,
     write_stage_submitted,
 )
+from loom.pipeline.execution.models import (
+    EXECUTION_FAILURE_SCHEMA_VERSION,
+    ExecutionFailure,
+)
 from loom.pipeline.planning import plan_pipeline
+from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
+from loom.pipeline.stores import (
+    LifecycleReason,
+    LocalArtifactStore,
+    LocalRunStore,
+    path_to_run_uri,
+)
 
 
 def _run_uri(tmp_path: Path) -> str:
@@ -127,6 +141,131 @@ def test_submitted_lifecycle_writers_do_not_set_execution_timestamps(
     assert stage_record.finished_at is None
     assert store.read_run_status(run_uri) == run_record
     assert store.read_stage_status(run_uri, "build") == stage_record
+
+
+def test_write_stage_running_records_reliability_transaction(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    write_run_status(
+        store,
+        run_uri=run_uri,
+        status=RunStatus.RUNNING,
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        started_at="2020-01-01T00:00:01Z",
+    )
+
+    record = write_stage_running(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        started_at="2020-01-01T00:00:02Z",
+    )
+
+    assert record.status is StageStatus.RUNNING
+    details = store.list_reliability_status_details(run_uri, stage_name="build")
+    transactions = store.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert [detail.stage_status for detail in details] == [StageStatus.RUNNING]
+    assert [transaction.state for transaction in transactions] == [
+        StageAttemptTransactionState.RUNNING
+    ]
+    assert transactions[0].causal_parent_id is None
+    assert transactions[0].status == details[0]
+
+
+def test_persist_stage_failure_classifies_and_records_failed_transaction(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    write_run_status(
+        store,
+        run_uri=run_uri,
+        status=RunStatus.RUNNING,
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        started_at="2020-01-01T00:00:01Z",
+    )
+    failure = ExecutionFailure(
+        schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        failed_at="2020-01-01T00:00:03Z",
+        executor="local",
+        failure_type="stage_exception",
+        message="boom",
+        exception_type="builtins.RuntimeError",
+        executor_metadata={"executor": "local"},
+        details={"source": "unit"},
+    )
+
+    observed = persist_stage_failure(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        started_at="2020-01-01T00:00:02Z",
+        failure=failure,
+        clock=lambda: "2020-01-01T00:00:04Z",
+    )
+
+    persisted = store.read_stage_failure(run_uri, "build")
+    assert persisted is not None
+    details = persisted["details"]
+    assert isinstance(details, dict)
+    classification = details["reliability_classification"]
+    assert isinstance(classification, dict)
+    assert classification["reason_code"] == "stage_exception"
+    assert classification["retriable"] is True
+    assert observed.details["reliability_classification"] == classification
+    transactions = store.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert [transaction.state for transaction in transactions] == [
+        StageAttemptTransactionState.FAILED
+    ]
+    assert transactions[0].status.stage_status is StageStatus.FAILED
+    assert store.read_stage_status(run_uri, "build") is not None
+
+
+def test_persist_stage_cancellation_records_cancelled_transaction(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    write_run_status(
+        store,
+        run_uri=run_uri,
+        status=RunStatus.RUNNING,
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        started_at="2020-01-01T00:00:01Z",
+    )
+
+    persist_stage_cancellation(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        started_at="2020-01-01T00:00:02Z",
+        cancelled_at="2020-01-01T00:00:03Z",
+        reason=LifecycleReason(code="cancelled", message="stopped"),
+        clock=lambda: "2020-01-01T00:00:04Z",
+    )
+
+    transactions = store.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert [transaction.state for transaction in transactions] == [
+        StageAttemptTransactionState.CANCELLED
+    ]
+    assert transactions[0].status.stage_status is StageStatus.CANCELLED
+    status = store.read_stage_status(run_uri, "build")
+    assert status is not None
+    assert status.status is StageStatus.CANCELLED
 
 
 def test_write_stage_blocked_requires_message_and_reason_code_when_present(

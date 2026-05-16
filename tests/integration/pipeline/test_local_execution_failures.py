@@ -10,6 +10,7 @@ from loom.pipeline.execution.authority_adapter import (
     AuthorityBackedSerialRunStore,
 )
 from loom.pipeline.planning import PlanAction, PlanSelectors
+from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.status import RunStatus, StageStatus, StageStatusRecord
 from loom.pipeline.stores import LocalRunStore, path_to_run_uri
 from loom.pipeline.stores.errors import CorruptStoreDocumentError
@@ -112,6 +113,19 @@ def test_stage_exception_persists_failure_before_failed_status(tmp_path: Path) -
     assert status is not None
     assert blocked_status is not None
     assert failure["failure_type"] == "stage_exception"
+    details = failure["details"]
+    assert isinstance(details, dict)
+    classification = details["reliability_classification"]
+    assert isinstance(classification, dict)
+    assert classification["reason_code"] == "stage_exception"
+    assert classification["retriable"] is True
+    transactions = run_store.list_stage_attempt_transactions(
+        run_uri,
+        stage_name="build",
+    )
+    assert StageAttemptTransactionState.FAILED in {
+        transaction.state for transaction in transactions
+    }
     assert status.status == StageStatus.FAILED
     assert blocked_status.status == StageStatus.BLOCKED
     assert blocked_status.metadata["blocked_by"] == ["build"]

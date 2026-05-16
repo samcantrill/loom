@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.planning import PlanAction, StagePlan
+from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.specs import StageSpec
 from loom.pipeline.status import (
     RunStatus,
@@ -29,6 +30,13 @@ from .models import (
     StageRunResult,
 )
 from .outputs import validate_stage_outputs
+from .reliability import (
+    build_reliability_status_detail,
+    classify_execution_failure,
+    failure_with_reliability_classification,
+    record_reliability_transaction,
+    record_stage_reliability_transition,
+)
 
 
 def next_stage_attempt(run_store: RunStore, run_uri: str, stage_name: str) -> int:
@@ -188,9 +196,25 @@ def persist_stage_failure(
     started_at: str | None,
     failure: ExecutionFailure,
     clock: Callable[[], str] = utc_timestamp,
-) -> None:
+) -> ExecutionFailure:
+    detail = build_reliability_status_detail(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        stage_status=StageStatus.FAILED,
+        attempt=attempt,
+        created_at=failure.failed_at,
+    )
+    classification = classify_execution_failure(failure, status=detail)
+    failure = failure_with_reliability_classification(failure, classification)
     run_store.write_stage_failure(
         run_uri, stage_name, failure.to_dict(), attempt=attempt
+    )
+    record_reliability_transaction(
+        run_store,
+        run_uri=run_uri,
+        status=detail,
+        state=StageAttemptTransactionState.FAILED,
     )
     write_stage_failed(
         run_store,
@@ -210,6 +234,7 @@ def persist_stage_failure(
         timestamp=clock(),
         payload={"attempt": attempt, "failure_type": failure.failure_type},
     )
+    return failure
 
 
 def persist_stage_cancellation(
@@ -223,6 +248,20 @@ def persist_stage_cancellation(
     reason: LifecycleReason,
     clock: Callable[[], str] = utc_timestamp,
 ) -> None:
+    detail = build_reliability_status_detail(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        stage_status=StageStatus.CANCELLED,
+        attempt=attempt,
+        created_at=cancelled_at,
+    )
+    record_reliability_transaction(
+        run_store,
+        run_uri=run_uri,
+        status=detail,
+        state=StageAttemptTransactionState.CANCELLED,
+    )
     write_stage_cancelled(
         run_store,
         run_uri=run_uri,
@@ -257,7 +296,7 @@ def record_stage_failure_and_failed_run(
     clock: Callable[[], str] = utc_timestamp,
 ) -> ExecutionFailure:
     try:
-        persist_stage_failure(
+        failure = persist_stage_failure(
             run_store,
             run_uri=run_uri,
             stage_name=stage_name,
@@ -370,36 +409,66 @@ def commit_stage_execution_result(
         outputs=execution_result.outputs,
         artifact_store=artifact_store,
     )
-    run_store.write_stage_outputs(run_uri, stage.name, outputs, attempt=attempt)
-    write_stage_artifact_index_refs(
-        run_store,
-        run_uri=run_uri,
-        stage_name=stage.name,
-        outputs=outputs,
-        replace=True,
-    )
-    write_stage_provenance(
-        run_store,
-        run_uri=run_uri,
-        stage=stage,
-        status=StageStatus.SUCCEEDED,
-        attempt=attempt,
-        started_at=execution_result.started_at,
-        finished_at=execution_result.finished_at,
-        fingerprint=fingerprint,
-        inputs=inputs,
-        outputs=outputs,
-        executor_metadata=execution_result.executor_metadata,
-    )
-    write_stage_succeeded(
+    record_stage_reliability_transition(
         run_store,
         run_uri=run_uri,
         stage_name=stage.name,
         attempt=attempt,
-        started_at=execution_result.started_at,
-        finished_at=execution_result.finished_at,
-        metadata={"action": PlanAction.RUN.value},
+        state=StageAttemptTransactionState.STAGED,
+        stage_status=StageStatus.RUNNING,
+        recorded_at=clock(),
     )
+    try:
+        run_store.write_stage_outputs(run_uri, stage.name, outputs, attempt=attempt)
+        write_stage_artifact_index_refs(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            outputs=outputs,
+            replace=True,
+        )
+        write_stage_provenance(
+            run_store,
+            run_uri=run_uri,
+            stage=stage,
+            status=StageStatus.SUCCEEDED,
+            attempt=attempt,
+            started_at=execution_result.started_at,
+            finished_at=execution_result.finished_at,
+            fingerprint=fingerprint,
+            inputs=inputs,
+            outputs=outputs,
+            executor_metadata=execution_result.executor_metadata,
+        )
+        record_stage_reliability_transition(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            state=StageAttemptTransactionState.COMMITTED,
+            stage_status=StageStatus.SUCCEEDED,
+            recorded_at=execution_result.finished_at,
+        )
+        write_stage_succeeded(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            started_at=execution_result.started_at,
+            finished_at=execution_result.finished_at,
+            metadata={"action": PlanAction.RUN.value},
+        )
+    except Exception:
+        record_stage_reliability_transition(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            state=StageAttemptTransactionState.COMMIT_FAILED,
+            stage_status=StageStatus.FAILED,
+            recorded_at=clock(),
+        )
+        raise
     emit_stage_event(
         run_store,
         run_uri=run_uri,
@@ -532,6 +601,15 @@ def write_stage_running(
         metadata=normalized_metadata,
     )
     run_store.write_stage_status(run_uri, stage_name, record)
+    record_stage_reliability_transition(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        state=StageAttemptTransactionState.RUNNING,
+        stage_status=StageStatus.RUNNING,
+        recorded_at=started_at,
+    )
     return record
 
 

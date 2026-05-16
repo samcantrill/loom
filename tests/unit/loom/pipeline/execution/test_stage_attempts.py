@@ -14,6 +14,7 @@ from loom.pipeline.planning import (
     StagePlan,
     plan_pipeline,
 )
+from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.status import StageStatus
 from loom.pipeline.stores import LocalArtifactStore, LocalRunStore, path_to_run_uri
@@ -94,6 +95,12 @@ def test_prepare_stage_attempt_writes_durable_request_without_running_stage(
     assert status.status == StageStatus.PENDING
     assert status.attempt == 1
     assert status.metadata["prepared"] is True
+    transactions = store.list_stage_attempt_transactions(run_uri, stage_name="build")
+    assert [transaction.state for transaction in transactions] == [
+        StageAttemptTransactionState.PREPARED
+    ]
+    assert transactions[0].status.stage_status is StageStatus.PENDING
+    assert transactions[0].causal_parent_id is None
     assert store.local_stage_workspace_dir(run_uri, "build").is_dir()
     assert not store.local_stage_worker_result_path(run_uri, "build").exists()
 

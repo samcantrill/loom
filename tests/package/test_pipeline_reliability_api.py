@@ -20,6 +20,7 @@ def test_runtime_namespace_exports_reliability_contract_surface() -> None:
         RetryDecisionRecord,
         RetryPolicy,
         StageAttemptTransaction,
+        StageAttemptTransactionState,
         TimeoutAdapter,
         TimeoutOutcomeRecord,
         TimeoutPolicy,
@@ -31,6 +32,7 @@ def test_runtime_namespace_exports_reliability_contract_surface() -> None:
     assert RetryPolicy
     assert RetryDecisionRecord
     assert StageAttemptTransaction
+    assert StageAttemptTransactionState
     assert TimeoutOutcomeRecord
     assert TimeoutPolicy
     assert TimeoutAdapter
