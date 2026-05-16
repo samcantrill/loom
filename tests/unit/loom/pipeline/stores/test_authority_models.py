@@ -3,6 +3,12 @@
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.reliability import (
+    ReliabilityPolicy,
+    ReliabilityStatusDetail,
+    RetryPolicy,
+    StageAttemptTransaction,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.stores import (
     AUTHORITY_SCHEMA_VERSION,
@@ -36,6 +42,8 @@ from loom.pipeline.stores import (
     ReadModelWarningCode,
     RecoveryKind,
     RecoveryRecord,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
     ResourceLeaseRecord,
     StageAttempt,
     StageLifecycleSnapshot,
@@ -189,6 +197,28 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
         commit_id=commit.commit_id,
         revision=revision,
     )
+    policy_fact = ReliabilityPolicyFact(
+        run_uri="file:///runs/r1",
+        scope=ReliabilityPolicyScope.STAGE,
+        stage_name="build",
+        recorded_at="2020-01-01T00:00:00Z",
+        policy=ReliabilityPolicy(retry=RetryPolicy(enabled=True, max_attempts=2)),
+    )
+    status_detail = ReliabilityStatusDetail(
+        run_uri="file:///runs/r1",
+        run_status=RunStatus.RUNNING,
+        stage_id="build",
+        stage_status=StageStatus.RUNNING,
+        attempt=1,
+        created_at="2020-01-01T00:00:00Z",
+    )
+    transaction = StageAttemptTransaction(
+        transaction_id="tx-1",
+        run_uri="file:///runs/r1",
+        stage_id="build",
+        attempt=1,
+        status=status_detail,
+    )
     cleanup = CleanupCandidate(
         candidate_id="cleanup-1",
         kind=CleanupCandidateKind.STAGED_PAYLOAD,
@@ -239,6 +269,9 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
         active_lease=lease,
         latest_commit=commit,
         artifact_facts=(fact,),
+        reliability_policy_facts=(policy_fact,),
+        reliability_status_details=(status_detail,),
+        reliability_transactions=(transaction,),
         reason=reason,
     )
     run_snapshot = AuthoritativeRunSnapshot(
@@ -250,6 +283,7 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
         submitted_operations=(submitted,),
         cleanup_candidates=(cleanup,),
         materialized_refs=(materialized,),
+        reliability_policy_facts=(policy_fact,),
         warnings=(warning,),
     )
     transition = StatusTransition(
@@ -270,6 +304,7 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
     assert lease.to_dict()["fencing_token"] == "fence-1"
     assert commit.to_dict()["materialized_refs"] == [materialized.to_dict()]
     assert fact.to_dict()["artifact_name"] == "out"
+    assert policy_fact.to_dict()["scope"] == "stage"
     assert cleanup.to_dict()["kind"] == "staged_payload"
     assert recovery.to_dict()["kind"] == "expired_lease"
     assert outcome.to_dict()["outcome"] == "not_selected"
@@ -281,6 +316,7 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
     assert MaterializedRef.from_dict(materialized.to_dict()) == materialized
     assert OutputCommitRecord.from_dict(commit.to_dict()) == commit
     assert ArtifactFactRecord.from_dict(fact.to_dict()) == fact
+    assert ReliabilityPolicyFact.from_dict(policy_fact.to_dict()) == policy_fact
     assert CleanupCandidate.from_dict(cleanup.to_dict()) == cleanup
     assert RecoveryRecord.from_dict(recovery.to_dict()) == recovery
     assert StaticOutcomeRecord.from_dict(outcome.to_dict()) == outcome
@@ -290,6 +326,37 @@ def test_authority_read_models_serialize_attempts_leases_commits_and_warnings() 
     assert StatusTransition.from_dict(transition.to_dict()) == transition
     assert AttemptAllocation.from_dict(allocation.to_dict()) == allocation
     assert OutputCommit.from_dict(output.to_dict()) == output
+
+
+def test_authority_read_models_default_missing_reliability_fields() -> None:
+    revision = BackendRevision(sequence=1, token="rev-1")
+    stage = StageLifecycleSnapshot(
+        stage_name="build",
+        status=StageStatus.PENDING,
+        revision=revision,
+    ).to_dict()
+    for field in (
+        "reliability_policy_facts",
+        "reliability_status_details",
+        "reliability_transactions",
+        "retry_decisions",
+        "timeout_outcomes",
+    ):
+        stage.pop(field)
+    snapshot = AuthoritativeRunSnapshot(
+        run_uri="file:///runs/r1",
+        status=RunStatus.CREATED,
+        schema_version=AUTHORITY_SCHEMA_VERSION,
+        revision=revision,
+    ).to_dict()
+    snapshot["stages"] = [stage]
+    snapshot.pop("reliability_policy_facts")
+
+    parsed = AuthoritativeRunSnapshot.from_dict(snapshot)
+
+    assert parsed.reliability_policy_facts == ()
+    assert parsed.stages[0].reliability_status_details == ()
+    assert parsed.stages[0].retry_decisions == ()
 
 
 def test_workspace_coordination_records_round_trip_with_cross_run_identity() -> None:

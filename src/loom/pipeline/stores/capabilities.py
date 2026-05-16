@@ -26,6 +26,7 @@ class BackendCapability(StrEnum):
     BACKEND_LEASE_TIME = "backend_lease_time"
     ATOMIC_OUTPUT_COMMIT = "atomic_output_commit"
     ARTIFACT_FACTS = "artifact_facts"
+    RELIABILITY_FACTS = "reliability_facts"
     SUBMITTED_OPERATIONS = "submitted_operations"
     REVISIONED_SNAPSHOTS = "revisioned_snapshots"
     MONOTONIC_REVISIONS = "monotonic_revisions"

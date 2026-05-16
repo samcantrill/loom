@@ -13,6 +13,15 @@ import loom.pipeline.stores.run_uri as run_uri_module
 from loom.artifacts import ArtifactRef
 from loom.pipeline import RunStatus, StageStatus
 from loom.pipeline.events import EventScope, PipelineEvent
+from loom.pipeline.reliability import (
+    FailureClassification,
+    ReliabilityPolicy,
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    RetryPolicy,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
@@ -20,6 +29,8 @@ from loom.pipeline.stores import (
     InvalidRunURIError,
     LocalRunStore,
     PreparedRunStorePayloadError,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
     RunLockConflictError,
     RunLockReleaseError,
     RunNotFoundError,
@@ -78,6 +89,61 @@ def _submitted_operation(
         state=state,
         manifest_relative_path=f"submitted/{submission_id}/manifest.json",
         summary_counts=summary_counts or {},
+    )
+
+
+def _reliability_status(run_uri: str) -> ReliabilityStatusDetail:
+    return ReliabilityStatusDetail(
+        run_uri=run_uri,
+        run_status=RunStatus.RUNNING,
+        stage_id="build",
+        stage_status=StageStatus.FAILED,
+        attempt=1,
+        created_at="2020-01-01T00:00:00Z",
+    )
+
+
+def _reliability_transaction(run_uri: str) -> StageAttemptTransaction:
+    status = _reliability_status(run_uri)
+    return StageAttemptTransaction(
+        transaction_id="tx-1",
+        run_uri=run_uri,
+        stage_id=status.stage_id,
+        attempt=status.attempt,
+        status=status,
+    )
+
+
+def _retry_decision(run_uri: str) -> RetryDecisionRecord:
+    status = _reliability_status(run_uri)
+    failure = FailureClassification(
+        reason_code="runtime_error",
+        status=status,
+        retriable=True,
+        details={"source": "unit"},
+    )
+    return RetryDecisionRecord(
+        decision_id="retry-1",
+        transaction_id="tx-1",
+        should_retry=True,
+        next_attempt=2,
+        decision_reason="policy_allows_retry",
+        policy_max_attempts=2,
+        attempt_count=1,
+        status=status,
+        failure=failure,
+    )
+
+
+def _timeout_outcome(run_uri: str) -> TimeoutOutcomeRecord:
+    return TimeoutOutcomeRecord(
+        outcome_id="timeout-1",
+        transaction_id="tx-1",
+        timed_out=True,
+        duration_seconds=30,
+        reason_code="wall_time_exceeded",
+        status=_reliability_status(run_uri),
+        causal_decision_id="retry-1",
     )
 
 
@@ -168,6 +234,94 @@ def test_local_run_metadata_optional_reads(tmp_path: Path) -> None:
     assert store.read_plan(run_uri) is None
     assert store.read_artifact_index(run_uri) == {}
     assert store.read_events(run_uri) == ()
+
+
+def test_local_run_reliability_facts_round_trip_and_are_immutable(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    policy = ReliabilityPolicyFact(
+        run_uri=run_uri,
+        scope=ReliabilityPolicyScope.STAGE,
+        stage_name="build",
+        recorded_at="2020-01-01T00:00:00Z",
+        policy=ReliabilityPolicy(retry=RetryPolicy(enabled=True, max_attempts=2)),
+    )
+    status = _reliability_status(run_uri)
+    transaction = _reliability_transaction(run_uri)
+    decision = _retry_decision(run_uri)
+    timeout = _timeout_outcome(run_uri)
+
+    store.write_reliability_policy_fact(run_uri, policy)
+    store.write_reliability_status_detail(run_uri, status)
+    store.write_stage_attempt_transaction(run_uri, transaction)
+    store.write_stage_attempt_transaction(run_uri, transaction)
+    store.write_retry_decision(run_uri, decision)
+    store.write_timeout_outcome(run_uri, timeout)
+
+    assert store.list_reliability_policy_facts(run_uri, stage_name="build") == (
+        policy,
+    )
+    assert store.list_reliability_status_details(run_uri) == (status,)
+    assert store.read_transaction_chain(run_uri, "tx-1") == (transaction,)
+    assert store.list_retry_decisions(run_uri, stage_name="build") == (decision,)
+    assert store.list_timeout_outcomes(run_uri, stage_name="build") == (timeout,)
+    assert (store.local_run_dir(run_uri) / "reliability" / "transactions").is_dir()
+    freshness = store.read_run_freshness(run_uri)
+    assert freshness is not None
+    assert freshness.reason == "timeout_outcome"
+
+    conflicting = StageAttemptTransaction(
+        transaction_id="tx-1",
+        run_uri=run_uri,
+        stage_id="build",
+        attempt=2,
+        status=ReliabilityStatusDetail(
+            run_uri=run_uri,
+            run_status=RunStatus.RUNNING,
+            stage_id="build",
+            stage_status=StageStatus.FAILED,
+            attempt=2,
+            created_at="2020-01-01T00:00:01Z",
+        ),
+    )
+    with pytest.raises(UnsafeStorePathError, match="conflicting reliability fact"):
+        store.write_stage_attempt_transaction(run_uri, conflicting)
+
+
+def test_local_reliability_reads_ignore_events_status_and_logs(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    store.append_event(
+        run_uri,
+        PipelineEvent(
+            scope=EventScope.stage("build"),
+            event_type="reliability.transaction",
+            payload={"transaction_id": "tx-1"},
+        ),
+    )
+    store.write_stage_status(
+        run_uri,
+        "build",
+        StageStatusRecord(
+            run_uri=run_uri,
+            stage_name="build",
+            status=StageStatus.FAILED,
+            attempt=1,
+            updated_at="2020-01-01T00:00:00Z",
+            metadata={"transaction_id": "tx-1"},
+        ),
+    )
+    store.write_stage_log(run_uri, "build", "stderr", "transaction_id=tx-1")
+
+    assert store.list_stage_attempt_transactions(run_uri) == ()
+    assert store.list_retry_decisions(run_uri) == ()
+    assert store.list_timeout_outcomes(run_uri) == ()
 
 
 def test_local_run_freshness_changes_for_catalog_relevant_writes(

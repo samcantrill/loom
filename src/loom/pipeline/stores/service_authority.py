@@ -6,7 +6,7 @@ import atexit
 import base64
 import secrets
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from multiprocessing.managers import BaseManager
@@ -15,6 +15,12 @@ from urllib.parse import urlparse
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, thaw_plain_data
@@ -50,8 +56,20 @@ from .read_models import (
     OutputCommitRecord,
     RecoveryKind,
     RecoveryRecord,
+    ReliabilityPolicyFact,
     StageAttempt,
     StageLifecycleSnapshot,
+)
+from .reliability_facts import (
+    reliability_payload_matches,
+    reliability_policy_fact_key,
+    reliability_record_stage_name,
+    reliability_status_detail_key,
+    validate_policy_fact_run,
+    validate_retry_decision_run,
+    validate_status_detail_run,
+    validate_timeout_outcome_run,
+    validate_transaction_run,
 )
 from .schema_policy import (
     AUTHORITY_SCHEMA_VERSION,
@@ -86,6 +104,17 @@ _EXPOSED = (
     "write_submitted_operation",
     "read_submitted_operation",
     "list_submitted_operations",
+    "write_reliability_policy_fact",
+    "list_reliability_policy_facts",
+    "write_reliability_status_detail",
+    "list_reliability_status_details",
+    "write_stage_attempt_transaction",
+    "read_transaction_chain",
+    "list_stage_attempt_transactions",
+    "write_retry_decision",
+    "list_retry_decisions",
+    "write_timeout_outcome",
+    "list_timeout_outcomes",
     "record_output_commit",
     "snapshot",
     "scan_recovery",
@@ -375,6 +404,128 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
             ),
         )
 
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call("write_reliability_policy_fact", run_uri, fact.to_dict()),
+        )
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        return tuple(
+            ReliabilityPolicyFact.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call(
+                    "list_reliability_policy_facts",
+                    run_uri,
+                    stage_name=stage_name,
+                ),
+            )
+        )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call("write_reliability_status_detail", run_uri, detail.to_dict()),
+        )
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return tuple(
+            ReliabilityStatusDetail.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call(
+                    "list_reliability_status_details",
+                    run_uri,
+                    stage_name=stage_name,
+                ),
+            )
+        )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call(
+                "write_stage_attempt_transaction",
+                run_uri,
+                transaction.to_dict(),
+            ),
+        )
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return tuple(
+            StageAttemptTransaction.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call("read_transaction_chain", run_uri, transaction_id),
+            )
+        )
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return tuple(
+            StageAttemptTransaction.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call(
+                    "list_stage_attempt_transactions",
+                    run_uri,
+                    stage_name=stage_name,
+                ),
+            )
+        )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call("write_retry_decision", run_uri, decision.to_dict()),
+        )
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        return tuple(
+            RetryDecisionRecord.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call("list_retry_decisions", run_uri, stage_name=stage_name),
+            )
+        )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call("write_timeout_outcome", run_uri, outcome.to_dict()),
+        )
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        return tuple(
+            TimeoutOutcomeRecord.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call("list_timeout_outcomes", run_uri, stage_name=stage_name),
+            )
+        )
+
     def record_output_commit(
         self,
         run_uri: str,
@@ -521,6 +672,11 @@ class _RunState:
         self.facts: dict[str, list[ArtifactFactRecord]] = {}
         self.cleanup: list[CleanupCandidate] = []
         self.events: list[PipelineEventRecord] = []
+        self.reliability_policy_facts: dict[str, ReliabilityPolicyFact] = {}
+        self.reliability_status_details: dict[str, ReliabilityStatusDetail] = {}
+        self.reliability_transactions: dict[str, StageAttemptTransaction] = {}
+        self.retry_decisions: dict[str, RetryDecisionRecord] = {}
+        self.timeout_outcomes: dict[str, TimeoutOutcomeRecord] = {}
 
 
 class _ServiceAuthorityCore:
@@ -552,6 +708,7 @@ class _ServiceAuthorityCore:
             BackendCapability.BACKEND_LEASE_TIME,
             BackendCapability.ATOMIC_OUTPUT_COMMIT,
             BackendCapability.ARTIFACT_FACTS,
+            BackendCapability.RELIABILITY_FACTS,
             BackendCapability.SUBMITTED_OPERATIONS,
             BackendCapability.REVISIONED_SNAPSHOTS,
             BackendCapability.MONOTONIC_REVISIONS,
@@ -820,6 +977,185 @@ class _ServiceAuthorityCore:
                 for record in self._require_run(run_uri).submitted.values()
             )
 
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = ReliabilityPolicyFact.from_dict(fact)
+            validate_policy_fact_run(record, run_uri)
+            return self._store_immutable_reliability_fact(
+                state.reliability_policy_facts,
+                reliability_policy_fact_key(record),
+                record,
+                state,
+            )
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            facts = self._require_run(run_uri).reliability_policy_facts.values()
+            return tuple(
+                fact.to_dict()
+                for fact in sorted(
+                    (
+                        fact
+                        for fact in facts
+                        if stage_name is None or fact.stage_name == stage_name
+                    ),
+                    key=lambda fact: (
+                        fact.scope.value,
+                        fact.stage_name or "",
+                        fact.attempt or 0,
+                        fact.recorded_at,
+                    ),
+                )
+            )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = ReliabilityStatusDetail.from_dict(detail)
+            validate_status_detail_run(record, run_uri)
+            return self._store_immutable_reliability_fact(
+                state.reliability_status_details,
+                reliability_status_detail_key(record),
+                record,
+                state,
+            )
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                record.to_dict()
+                for record in self._stage_reliability_records(
+                    self._require_run(run_uri).reliability_status_details.values(),
+                    stage_name=stage_name,
+                    sort_key=lambda detail: (
+                        detail.stage_id,
+                        detail.attempt,
+                        detail.created_at,
+                    ),
+                )
+            )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = StageAttemptTransaction.from_dict(transaction)
+            validate_transaction_run(record, run_uri)
+            return self._store_immutable_reliability_fact(
+                state.reliability_transactions,
+                record.transaction_id,
+                record,
+                state,
+            )
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            transactions = self._require_run(run_uri).reliability_transactions
+            current = transactions.get(transaction_id)
+            if current is None:
+                return ()
+            chain: list[StageAttemptTransaction] = []
+            seen: set[str] = set()
+            while current is not None:
+                if current.transaction_id in seen:
+                    raise ValueError("reliability transaction chain contains a cycle")
+                seen.add(current.transaction_id)
+                chain.append(current)
+                parent_id = current.causal_parent_id
+                current = None if parent_id is None else transactions.get(parent_id)
+            return tuple(record.to_dict() for record in reversed(chain))
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                record.to_dict()
+                for record in self._stage_reliability_records(
+                    self._require_run(run_uri).reliability_transactions.values(),
+                    stage_name=stage_name,
+                    sort_key=lambda transaction: (
+                        transaction.stage_id,
+                        transaction.attempt,
+                        transaction.transaction_id,
+                    ),
+                )
+            )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = RetryDecisionRecord.from_dict(decision)
+            validate_retry_decision_run(record, run_uri)
+            return self._store_immutable_reliability_fact(
+                state.retry_decisions,
+                record.decision_id,
+                record,
+                state,
+            )
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                record.to_dict()
+                for record in self._stage_reliability_records(
+                    self._require_run(run_uri).retry_decisions.values(),
+                    stage_name=stage_name,
+                    sort_key=lambda decision: (
+                        decision.status.stage_id,
+                        decision.status.attempt,
+                        decision.decision_id,
+                    ),
+                )
+            )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = TimeoutOutcomeRecord.from_dict(outcome)
+            validate_timeout_outcome_run(record, run_uri)
+            return self._store_immutable_reliability_fact(
+                state.timeout_outcomes,
+                record.outcome_id,
+                record,
+                state,
+            )
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                record.to_dict()
+                for record in self._stage_reliability_records(
+                    self._require_run(run_uri).timeout_outcomes.values(),
+                    stage_name=stage_name,
+                    sort_key=lambda outcome: (
+                        outcome.status.stage_id,
+                        outcome.status.attempt,
+                        outcome.outcome_id,
+                    ),
+                )
+            )
+
     def record_output_commit(
         self,
         run_uri: str,
@@ -913,6 +1249,27 @@ class _ServiceAuthorityCore:
             stage_names = set(state.stage_statuses)
             stage_names.update(state.attempts)
             stage_names.update(state.commits)
+            stage_names.update(
+                fact.stage_name
+                for fact in state.reliability_policy_facts.values()
+                if fact.stage_name is not None
+            )
+            stage_names.update(
+                detail.stage_id
+                for detail in state.reliability_status_details.values()
+            )
+            stage_names.update(
+                transaction.stage_id
+                for transaction in state.reliability_transactions.values()
+            )
+            stage_names.update(
+                decision.status.stage_id
+                for decision in state.retry_decisions.values()
+            )
+            stage_names.update(
+                outcome.status.stage_id
+                for outcome in state.timeout_outcomes.values()
+            )
             stages = tuple(
                 StageLifecycleSnapshot(
                     stage_name=stage_name,
@@ -922,6 +1279,41 @@ class _ServiceAuthorityCore:
                     active_lease=self._active_stage_lease(state, stage_name),
                     latest_commit=state.commits.get(stage_name),
                     artifact_facts=tuple(state.facts.get(stage_name, ())),
+                    reliability_policy_facts=tuple(
+                        ReliabilityPolicyFact.from_dict(record)
+                        for record in self.list_reliability_policy_facts(
+                            run_uri,
+                            stage_name=stage_name,
+                        )
+                    ),
+                    reliability_status_details=tuple(
+                        ReliabilityStatusDetail.from_dict(record)
+                        for record in self.list_reliability_status_details(
+                            run_uri,
+                            stage_name=stage_name,
+                        )
+                    ),
+                    reliability_transactions=tuple(
+                        StageAttemptTransaction.from_dict(record)
+                        for record in self.list_stage_attempt_transactions(
+                            run_uri,
+                            stage_name=stage_name,
+                        )
+                    ),
+                    retry_decisions=tuple(
+                        RetryDecisionRecord.from_dict(record)
+                        for record in self.list_retry_decisions(
+                            run_uri,
+                            stage_name=stage_name,
+                        )
+                    ),
+                    timeout_outcomes=tuple(
+                        TimeoutOutcomeRecord.from_dict(record)
+                        for record in self.list_timeout_outcomes(
+                            run_uri,
+                            stage_name=stage_name,
+                        )
+                    ),
                 )
                 for stage_name in sorted(stage_names)
             )
@@ -933,6 +1325,11 @@ class _ServiceAuthorityCore:
                 stages=stages,
                 submitted_operations=tuple(state.submitted.values()),
                 cleanup_candidates=tuple(state.cleanup),
+                reliability_policy_facts=tuple(
+                    fact
+                    for fact in state.reliability_policy_facts.values()
+                    if fact.stage_name is None
+                ),
             ).to_dict()
 
     def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
@@ -967,6 +1364,49 @@ class _ServiceAuthorityCore:
             raise ValueError("seconds must be positive")
         with self._lock:
             self._tick += seconds
+
+    def _store_immutable_reliability_fact[T](
+        self,
+        records: dict[str, T],
+        key: str,
+        record: T,
+        state: _RunState,
+    ) -> BackendRevision:
+        existing = records.get(key)
+        if existing is not None:
+            existing_payload = getattr(existing, "to_dict")()
+            record_payload = getattr(record, "to_dict")()
+            if reliability_payload_matches(existing_payload, record_payload):
+                return state.revision
+            raise ValueError("conflicting reliability fact already exists")
+        records[key] = record
+        state.revision = self._next_revision()
+        return state.revision
+
+    def _stage_reliability_records[T](
+        self,
+        records: Iterable[T],
+        *,
+        stage_name: str | None,
+        sort_key: Callable[[T], tuple[object, ...]],
+    ) -> tuple[T, ...]:
+        values = tuple(records)
+        filtered = (
+            record
+            for record in values
+            if stage_name is None
+            or reliability_record_stage_name(
+                cast(
+                    ReliabilityStatusDetail
+                    | StageAttemptTransaction
+                    | RetryDecisionRecord
+                    | TimeoutOutcomeRecord,
+                    record,
+                )
+            )
+            == stage_name
+        )
+        return tuple(sorted(filtered, key=sort_key))
 
     def _require_run(self, run_uri: str) -> _RunState:
         validate_run_uri(run_uri)

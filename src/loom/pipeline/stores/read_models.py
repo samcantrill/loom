@@ -8,6 +8,14 @@ from enum import StrEnum
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.reliability import (
+    RELIABILITY_POLICY_SCHEMA_VERSION,
+    ReliabilityPolicy,
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data
@@ -67,6 +75,12 @@ class ReadModelWarningCode(StrEnum):
     UNSUPPORTED_SCHEMA = "unsupported_schema"
     ACTIVE_RUN_CHANGING = "active_run_changing"
     PARTIAL_COMMIT = "partial_commit"
+
+
+class ReliabilityPolicyScope(StrEnum):
+    RUN = "run"
+    STAGE = "stage"
+    ATTEMPT = "attempt"
 
 
 @dataclass(frozen=True, slots=True)
@@ -736,6 +750,98 @@ class ReadModelWarning:
 
 
 @dataclass(frozen=True, slots=True)
+class ReliabilityPolicyFact:
+    """Selected reliability policy fact for a run, stage, or stage attempt."""
+
+    run_uri: str
+    scope: ReliabilityPolicyScope
+    policy: ReliabilityPolicy | Mapping[str, object]
+    recorded_at: str
+    stage_name: str | None = None
+    attempt: int | None = None
+    schema_version: int = RELIABILITY_POLICY_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "run_uri", _non_empty_string(self.run_uri, "run_uri"))
+        object.__setattr__(
+            self,
+            "scope",
+            _coerce_enum(self.scope, ReliabilityPolicyScope, "scope"),
+        )
+        if not isinstance(self.policy, ReliabilityPolicy):
+            object.__setattr__(self, "policy", ReliabilityPolicy.from_dict(self.policy))
+        _timestamp(self.recorded_at, "recorded_at")
+        if self.stage_name is not None:
+            object.__setattr__(
+                self, "stage_name", _non_empty_string(self.stage_name, "stage_name")
+            )
+        if self.attempt is not None:
+            object.__setattr__(
+                self, "attempt", _positive_int(self.attempt, "attempt")
+            )
+        if self.schema_version != RELIABILITY_POLICY_SCHEMA_VERSION:
+            raise AuthorityModelError(
+                "schema_version must match reliability policy schema version "
+                f"{RELIABILITY_POLICY_SCHEMA_VERSION}"
+            )
+        if self.scope is ReliabilityPolicyScope.RUN:
+            if self.stage_name is not None or self.attempt is not None:
+                raise AuthorityModelError(
+                    "run reliability policy facts must not include stage_name or attempt"
+                )
+        elif self.scope is ReliabilityPolicyScope.STAGE:
+            if self.stage_name is None or self.attempt is not None:
+                raise AuthorityModelError(
+                    "stage reliability policy facts require stage_name and no attempt"
+                )
+        elif self.stage_name is None or self.attempt is None:
+            raise AuthorityModelError(
+                "attempt reliability policy facts require stage_name and attempt"
+            )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "run_uri": self.run_uri,
+            "scope": self.scope.value,
+            "stage_name": self.stage_name,
+            "attempt": self.attempt,
+            "recorded_at": self.recorded_at,
+            "policy": cast(ReliabilityPolicy, self.policy).to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ReliabilityPolicyFact":
+        mapping = _mapping(data, "ReliabilityPolicyFact")
+        _reject_unknown(
+            mapping,
+            {
+                "schema_version",
+                "run_uri",
+                "scope",
+                "stage_name",
+                "attempt",
+                "recorded_at",
+                "policy",
+            },
+            "ReliabilityPolicyFact",
+        )
+        return cls(
+            schema_version=_positive_int(
+                _required(mapping, "schema_version"), "schema_version"
+            ),
+            run_uri=_non_empty_string(_required(mapping, "run_uri"), "run_uri"),
+            scope=_coerce_enum(
+                _required(mapping, "scope"), ReliabilityPolicyScope, "scope"
+            ),
+            stage_name=_optional_string(mapping.get("stage_name"), "stage_name"),
+            attempt=_optional_positive_int(mapping.get("attempt"), "attempt"),
+            recorded_at=_timestamp(_required(mapping, "recorded_at"), "recorded_at"),
+            policy=ReliabilityPolicy.from_dict(_required(mapping, "policy")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class StageLifecycleSnapshot:
     stage_name: str
     status: StageStatus
@@ -745,6 +851,11 @@ class StageLifecycleSnapshot:
     latest_commit: OutputCommitRecord | None = None
     artifact_facts: tuple[ArtifactFactRecord, ...] = ()
     static_outcome: StaticOutcomeRecord | None = None
+    reliability_policy_facts: tuple[ReliabilityPolicyFact, ...] = ()
+    reliability_status_details: tuple[ReliabilityStatusDetail, ...] = ()
+    reliability_transactions: tuple[StageAttemptTransaction, ...] = ()
+    retry_decisions: tuple[RetryDecisionRecord, ...] = ()
+    timeout_outcomes: tuple[TimeoutOutcomeRecord, ...] = ()
     reason: LifecycleReason | None = None
 
     def __post_init__(self) -> None:
@@ -777,6 +888,47 @@ class StageLifecycleSnapshot:
             raise AuthorityModelError(
                 "static_outcome must be a StaticOutcomeRecord or None"
             )
+        object.__setattr__(
+            self,
+            "reliability_policy_facts",
+            _tuple_of(
+                self.reliability_policy_facts,
+                ReliabilityPolicyFact,
+                "reliability_policy_facts",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "reliability_status_details",
+            _tuple_of(
+                self.reliability_status_details,
+                ReliabilityStatusDetail,
+                "reliability_status_details",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "reliability_transactions",
+            _tuple_of(
+                self.reliability_transactions,
+                StageAttemptTransaction,
+                "reliability_transactions",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "retry_decisions",
+            _tuple_of(self.retry_decisions, RetryDecisionRecord, "retry_decisions"),
+        )
+        object.__setattr__(
+            self,
+            "timeout_outcomes",
+            _tuple_of(
+                self.timeout_outcomes,
+                TimeoutOutcomeRecord,
+                "timeout_outcomes",
+            ),
+        )
         if self.reason is not None and not isinstance(self.reason, LifecycleReason):
             raise AuthorityModelError("reason must be a LifecycleReason or None")
 
@@ -796,6 +948,22 @@ class StageLifecycleSnapshot:
             "static_outcome": None
             if self.static_outcome is None
             else self.static_outcome.to_dict(),
+            "reliability_policy_facts": [
+                fact.to_dict() for fact in self.reliability_policy_facts
+            ],
+            "reliability_status_details": [
+                detail.to_dict() for detail in self.reliability_status_details
+            ],
+            "reliability_transactions": [
+                transaction.to_dict()
+                for transaction in self.reliability_transactions
+            ],
+            "retry_decisions": [
+                decision.to_dict() for decision in self.retry_decisions
+            ],
+            "timeout_outcomes": [
+                outcome.to_dict() for outcome in self.timeout_outcomes
+            ],
             "reason": None if self.reason is None else self.reason.to_dict(),
         }
 
@@ -813,6 +981,11 @@ class StageLifecycleSnapshot:
                 "latest_commit",
                 "artifact_facts",
                 "static_outcome",
+                "reliability_policy_facts",
+                "reliability_status_details",
+                "reliability_transactions",
+                "retry_decisions",
+                "timeout_outcomes",
                 "reason",
             },
             "StageLifecycleSnapshot",
@@ -845,6 +1018,39 @@ class StageLifecycleSnapshot:
             static_outcome=None
             if static_outcome is None
             else StaticOutcomeRecord.from_dict(static_outcome),
+            reliability_policy_facts=tuple(
+                ReliabilityPolicyFact.from_dict(fact)
+                for fact in _sequence(
+                    mapping.get("reliability_policy_facts", ()),
+                    "reliability_policy_facts",
+                )
+            ),
+            reliability_status_details=tuple(
+                ReliabilityStatusDetail.from_dict(detail)
+                for detail in _sequence(
+                    mapping.get("reliability_status_details", ()),
+                    "reliability_status_details",
+                )
+            ),
+            reliability_transactions=tuple(
+                StageAttemptTransaction.from_dict(transaction)
+                for transaction in _sequence(
+                    mapping.get("reliability_transactions", ()),
+                    "reliability_transactions",
+                )
+            ),
+            retry_decisions=tuple(
+                RetryDecisionRecord.from_dict(decision)
+                for decision in _sequence(
+                    mapping.get("retry_decisions", ()), "retry_decisions"
+                )
+            ),
+            timeout_outcomes=tuple(
+                TimeoutOutcomeRecord.from_dict(outcome)
+                for outcome in _sequence(
+                    mapping.get("timeout_outcomes", ()), "timeout_outcomes"
+                )
+            ),
             reason=_optional_reason(mapping.get("reason")),
         )
 
@@ -859,6 +1065,7 @@ class AuthoritativeRunSnapshot:
     submitted_operations: tuple[SubmittedOperationRecord, ...] = ()
     cleanup_candidates: tuple[CleanupCandidate, ...] = ()
     materialized_refs: tuple[MaterializedRef, ...] = ()
+    reliability_policy_facts: tuple[ReliabilityPolicyFact, ...] = ()
     warnings: tuple[ReadModelWarning, ...] = ()
     metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
@@ -895,6 +1102,15 @@ class AuthoritativeRunSnapshot:
             _tuple_of(self.materialized_refs, MaterializedRef, "materialized_refs"),
         )
         object.__setattr__(
+            self,
+            "reliability_policy_facts",
+            _tuple_of(
+                self.reliability_policy_facts,
+                ReliabilityPolicyFact,
+                "reliability_policy_facts",
+            ),
+        )
+        object.__setattr__(
             self, "warnings", _tuple_of(self.warnings, ReadModelWarning, "warnings")
         )
 
@@ -913,6 +1129,9 @@ class AuthoritativeRunSnapshot:
                 candidate.to_dict() for candidate in self.cleanup_candidates
             ],
             "materialized_refs": [ref.to_dict() for ref in self.materialized_refs],
+            "reliability_policy_facts": [
+                fact.to_dict() for fact in self.reliability_policy_facts
+            ],
             "warnings": [warning.to_dict() for warning in self.warnings],
         }
 
@@ -931,6 +1150,7 @@ class AuthoritativeRunSnapshot:
                 "submitted_operations",
                 "cleanup_candidates",
                 "materialized_refs",
+                "reliability_policy_facts",
                 "warnings",
             },
             "AuthoritativeRunSnapshot",
@@ -964,6 +1184,13 @@ class AuthoritativeRunSnapshot:
                 MaterializedRef.from_dict(ref)
                 for ref in _sequence(
                     mapping.get("materialized_refs", ()), "materialized_refs"
+                )
+            ),
+            reliability_policy_facts=tuple(
+                ReliabilityPolicyFact.from_dict(fact)
+                for fact in _sequence(
+                    mapping.get("reliability_policy_facts", ()),
+                    "reliability_policy_facts",
                 )
             ),
             warnings=tuple(
@@ -1007,6 +1234,12 @@ def _positive_int(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise AuthorityModelError(f"{field} must be a positive integer")
     return value
+
+
+def _optional_positive_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    return _positive_int(value, field)
 
 
 def _timestamp(value: object, field: str) -> str:
@@ -1118,6 +1351,7 @@ __all__ = [
     "RecoveryKind",
     "StaticOutcomeKind",
     "ReadModelWarningCode",
+    "ReliabilityPolicyScope",
     "BackendRevision",
     "LifecycleReason",
     "StageAttempt",
@@ -1129,6 +1363,7 @@ __all__ = [
     "RecoveryRecord",
     "StaticOutcomeRecord",
     "ReadModelWarning",
+    "ReliabilityPolicyFact",
     "StageLifecycleSnapshot",
     "AuthoritativeRunSnapshot",
 ]
