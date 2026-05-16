@@ -254,19 +254,22 @@ make test-summary
   and service authority-compatible persistence/readback; added store facade
   exports and backend capability signaling; preserved backward-compatible empty
   defaults in authoritative snapshots and completed-run bundle metadata.
-- Implementation validation: targeted Ruff and Pyright passed for the touched
-  store, adapter, support, and test paths. Targeted pytest evidence passed:
-  `91 passed` for package/store unit/contract coverage,
-  `8 passed` for authoritative read-model contracts,
-  `229 passed` for store/authority contract coverage,
-  `9 passed, 1 skipped` for phase integration coverage,
-  `67 passed` for package/import/reliability API coverage, and
-  `26 passed` for reliability/store/authority contract coverage. Final
-  `make validate-pr` and `make test-summary` remain required before PR
-  opening.
+- Implementation validation: complete. Targeted Ruff and Pyright passed for
+  the touched store, adapter, support, and test paths. Targeted pytest evidence
+  passed: `91 passed` for package/store unit/contract coverage, `8 passed` for
+  authoritative read-model contracts, `229 passed` for store/authority contract
+  coverage, `9 passed, 1 skipped` for phase integration coverage, `67 passed`
+  for package/import/reliability API coverage, and `26 passed` for
+  reliability/store/authority contract coverage. Final `make validate-pr`
+  passed Ruff, Pyright, default suite (`1788 passed, 26 skipped,
+  18 deselected`), config-extra suite (`446 passed, 1825 deselected`), and
+  build. `make test-summary` passed overall (`2262 passed, 18 skipped,
+  1841 deselected`) and wrote `build/test-summary.md`.
 - Refinement summary: not needed so far; no targeted validation blocker
   remains after local implementation cleanup.
 - Blocker-resolution summary: pending
-- PR preparation: pending
+- PR preparation: PR body drafted at
+  `docs/roadmap/stage-19/phases/reliability-persistence-read-models-pr-body.md`;
+  PR opening pending.
 - Stack maintenance: pending
 - Remaining blockers: none
