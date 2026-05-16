@@ -419,23 +419,37 @@ def test_attempt_allocation_after_output_commit_is_rejected(
     ]
 
 
-def test_attempt_allocation_rejects_terminal_stage_state(tmp_path: Path) -> None:
+def test_attempt_allocation_allows_failed_stage_retry(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "run")
     store = SQLitePerRunAuthorityStore(clock=FrozenClock())
     store.create_run(run_uri)
+    allocation = store.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-1",
+        lease_ttl_seconds=30,
+    )
+    assert allocation.lease is not None
     store.transition_stage(
         run_uri,
         "build",
-        from_status=None,
+        from_status=StageStatus.RUNNING,
         to_status=StageStatus.FAILED,
     )
+    store.release_lease(
+        allocation.lease.lease_id,
+        owner_id="worker-1",
+        fencing_token=allocation.lease.fencing_token,
+    )
 
-    with pytest.raises(ValueError, match="terminal"):
-        store.allocate_stage_attempt(
-            run_uri,
-            "build",
-            owner_id="worker-1",
-        )
+    retry = store.allocate_stage_attempt(
+        run_uri,
+        "build",
+        owner_id="worker-2",
+    )
+
+    assert retry.attempt.attempt == 2
+    assert retry.attempt.status is StageStatus.RUNNING
 
 
 def test_output_commit_rejects_terminal_stage_state(tmp_path: Path) -> None:

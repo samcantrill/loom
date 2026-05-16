@@ -24,12 +24,14 @@ from loom.pipeline.planning import (
 )
 from loom.pipeline.resources import ResourceRequest
 from loom.pipeline.offline_evidence import write_offline_evidence_manifest
+from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy
 from loom.pipeline.runtime import (
     ExecutionOptions,
     ParallelExecutionOptions,
     ResolvedStageRuntimeOptions,
     RunOptions,
     build_runtime_metadata,
+    merge_config_run_options,
     parallel_execution_options,
     parse_run_options,
     resolve_run_runtime,
@@ -90,6 +92,7 @@ from .models import (
     StageRunResult,
 )
 from .offline_adapter import OfflineEvidenceRunStore, is_offline_evidence_run_store
+from .reliability import record_retry_decision_for_stage_result
 from .resource_admission import (
     DEFAULT_RESOURCE_LEASE_TTL_SECONDS,
     ResourceAdmissionDecision,
@@ -206,7 +209,12 @@ class PipelineRunner:
     def run(self, request: RunRequest) -> RunResult:
         if not isinstance(request, RunRequest):
             raise RunRequestError("PipelineRunner.run requires RunRequest")
-        options = parse_run_options(request.options)
+        config_mapping, spec = self._resolve_config_and_spec(request)
+        options = _merged_request_options(
+            request,
+            config_mapping=config_mapping,
+            stage_names=spec.stage_names,
+        )
         if options.dry_run:
             raise RunRequestError(
                 "PipelineRunner.run does not execute dry-run requests; use planning APIs instead"
@@ -216,7 +224,11 @@ class PipelineRunner:
 
         started_at = self.clock()
         local_run_store = self._require_local_run_store()
-        run_uri = self._resolve_request_run_uri(request, local_run_store)
+        run_uri = self._resolve_request_run_uri(
+            request,
+            local_run_store,
+            options=options,
+        )
         self._create_or_open_run(run_uri, request)
         run_dir = local_run_store.local_run_dir(run_uri)
         lock = acquire_run_lock(
@@ -240,6 +252,9 @@ class PipelineRunner:
                 run_uri=run_uri,
                 run_dir=run_dir,
                 local_run_store=local_run_store,
+                config_mapping=config_mapping,
+                spec=spec,
+                options=options,
                 started_at=started_at,
             )
         finally:
@@ -388,6 +403,9 @@ class PipelineRunner:
         run_uri: str,
         run_dir: Path,
         local_run_store: LocalRunStorePaths,
+        config_mapping: Mapping[str, PlainData],
+        spec: PipelineSpec,
+        options: RunOptions,
         started_at: str,
     ) -> RunResult:
         created_at = self._created_at(run_uri, started_at)
@@ -400,11 +418,7 @@ class PipelineRunner:
             started_at=started_at,
             metadata=request.metadata,
         )
-        config_mapping, spec = self._resolve_config_and_spec(request)
-        options = _options_with_resolved_run_uri(
-            parse_run_options(request.options),
-            run_uri,
-        )
+        options = _options_with_resolved_run_uri(options, run_uri)
         resolved_runtime = resolve_run_runtime(
             options,
             stage_ids=spec.stage_names,
@@ -863,16 +877,11 @@ class PipelineRunner:
                 reasons=stage_plan.reasons,
                 finished_at=failure.failed_at,
             )
-        return self._run_stage(
+        return self._run_stage_with_retries(
             request=request,
             run_uri=run_uri,
             run_dir=run_dir,
-            local_output_dir=local_run_store.local_stage_artifact_dir(
-                run_uri, stage.name
-            ),
-            local_workspace_dir=local_run_store.local_stage_workspace_dir(
-                run_uri, stage.name
-            ),
+            local_run_store=local_run_store,
             config_mapping=config_mapping,
             spec=spec,
             stage=stage,
@@ -884,6 +893,70 @@ class PipelineRunner:
             created_at=created_at,
             run_started_at=run_started_at,
         )
+
+    def _run_stage_with_retries(
+        self,
+        *,
+        request: RunRequest,
+        run_uri: str,
+        run_dir: Path,
+        config_mapping: Mapping[str, PlainData],
+        spec: PipelineSpec,
+        stage: StageSpec,
+        stage_plan,
+        resolved_runtime: ResolvedStageRuntimeOptions,
+        plan: ExecutionPlan,
+        artifact_store: ArtifactStore,
+        local_run_store: LocalRunStorePaths,
+        produced_outputs: Mapping[str, Mapping[str, ArtifactRef]],
+        created_at: str,
+        run_started_at: str,
+    ) -> StageRunResult:
+        retry_policy = _retry_policy_from_runtime(resolved_runtime)
+        while True:
+            result = self._run_stage(
+                request=request,
+                run_uri=run_uri,
+                run_dir=run_dir,
+                local_output_dir=local_run_store.local_stage_artifact_dir(
+                    run_uri, stage.name
+                ),
+                local_workspace_dir=local_run_store.local_stage_workspace_dir(
+                    run_uri, stage.name
+                ),
+                config_mapping=config_mapping,
+                spec=spec,
+                stage=stage,
+                stage_plan=stage_plan,
+                resolved_runtime=resolved_runtime,
+                plan=plan,
+                artifact_store=artifact_store,
+                produced_outputs=produced_outputs,
+                created_at=created_at,
+                run_started_at=run_started_at,
+            )
+            if result.status not in {StageStatus.FAILED, StageStatus.CANCELLED}:
+                return result
+            if result.attempt is None:
+                return result
+            stage_status = cast(StageStatus, result.status)
+            decision = record_retry_decision_for_stage_result(
+                self.run_store,
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=result.attempt,
+                stage_status=stage_status,
+                recorded_at=result.finished_at or self.clock(),
+                policy=retry_policy,
+                failure=result.failure,
+            )
+            if (
+                decision is None
+                or not decision.should_retry
+                or decision.next_attempt is None
+                or decision.next_attempt <= result.attempt
+            ):
+                return result
 
     def _submit_parallel_ready_stages(
         self,
@@ -1559,9 +1632,13 @@ class PipelineRunner:
         )
 
     def _resolve_request_run_uri(
-        self, request: RunRequest, local_run_store: LocalRunStorePaths
+        self,
+        request: RunRequest,
+        local_run_store: LocalRunStorePaths,
+        *,
+        options: RunOptions,
     ) -> str:
-        run_uri = parse_run_options(request.options).run_uri
+        run_uri = options.run_uri
         if run_uri is None:
             if request.open_existing:
                 raise RunRequestError("RunRequest.open_existing requires run_uri")
@@ -2166,6 +2243,29 @@ def _options_with_resolved_run_uri(options: RunOptions, run_uri: str) -> RunOpti
     return RunOptions.from_dict(data)
 
 
+def _merged_request_options(
+    request: RunRequest,
+    *,
+    config_mapping: Mapping[str, PlainData],
+    stage_names: Sequence[str],
+) -> RunOptions:
+    return merge_config_run_options(
+        config_mapping,
+        explicit=_sparse_request_options(parse_run_options(request.options)),
+        known_stage_ids=stage_names,
+    )
+
+
+def _sparse_request_options(options: RunOptions) -> Mapping[str, object]:
+    default_options = RunOptions()
+    default_data = default_options.to_dict()
+    return {
+        key: value
+        for key, value in options.to_dict().items()
+        if key != "schema_version" and value != default_data.get(key)
+    }
+
+
 def _parallel_policy_from_request(
     request: RunRequest,
     options: RunOptions,
@@ -2250,6 +2350,18 @@ def _stage_cancellation_reason(result: StageRunResult) -> LifecycleReason:
         code="early_stop",
         message="stage requested early stop",
     )
+
+
+def _retry_policy_from_runtime(
+    resolved_runtime: ResolvedStageRuntimeOptions,
+) -> RetryPolicy | None:
+    policy = resolved_runtime.reliability
+    if not isinstance(policy, ReliabilityPolicy):
+        return None
+    retry = policy.retry
+    if not isinstance(retry, RetryPolicy):
+        return None
+    return retry
 
 
 def _resource_lease_ttl_seconds(settings: Mapping[str, PlainData]) -> int:

@@ -105,6 +105,7 @@ _SUPPORTED_PER_RUN_CAPABILITIES = (
 
 _ATTEMPT_ALLOCATABLE_STAGE_STATUSES = frozenset(
     {
+        StageStatus.FAILED,
         StageStatus.PENDING,
         StageStatus.RUNNING,
         StageStatus.SUBMITTED,

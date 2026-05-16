@@ -800,17 +800,17 @@ def _reliability_policy_diagnostics(
         diagnostics.append(
             CapabilityDiagnostic(
                 path=f"{path}.retry",
-                severity=CapabilitySeverity.WARNING,
-                code="reliability.retry.deferred",
+                severity=CapabilitySeverity.INFO,
+                code="reliability.retry.runner_owned",
                 message=(
-                    "automatic retry is not enabled until runner-owned retry "
-                    "decisions are implemented"
+                    "runner-owned retry policy will persist decisions before "
+                    "scheduling another attempt"
                 ),
                 executor=executor,
                 stage_id=stage_id,
                 details={
                     "max_attempts": retry.max_attempts,
-                    "phase": "stage-19-phase-5",
+                    "retry_domain": "reliability",
                 },
             )
         )

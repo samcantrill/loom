@@ -10,6 +10,8 @@ from typing import cast
 from loom.pipeline.reliability import (
     FailureClassification,
     ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    RetryPolicy,
     StageAttemptTransaction,
     StageAttemptTransactionState,
     TimeoutOutcome,
@@ -25,6 +27,13 @@ from .models import ExecutionFailure
 
 _RETRIABLE_FAILURE_TYPES = frozenset({"stage_exception", "executor_infrastructure"})
 _TIMEOUT_METADATA_KEY = "reliability_timeout"
+_RETRY_UNSAFE_TRANSACTION_STATES = frozenset(
+    {
+        StageAttemptTransactionState.STAGED,
+        StageAttemptTransactionState.COMMITTED,
+        StageAttemptTransactionState.COMMIT_FAILED,
+    }
+)
 _TRANSACTION_STATE_ORDER = {
     StageAttemptTransactionState.UNSPECIFIED: 0,
     StageAttemptTransactionState.PREPARED: 10,
@@ -192,6 +201,73 @@ def record_timeout_outcome_from_metadata(
     return outcome
 
 
+def record_retry_decision_for_stage_result(
+    run_store: LegacyRunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    stage_status: StageStatus,
+    recorded_at: str,
+    policy: RetryPolicy | None,
+    failure: ExecutionFailure | None,
+) -> RetryDecisionRecord | None:
+    """Evaluate and persist the retry decision for a completed stage attempt."""
+
+    if not isinstance(run_store, RunReliabilityStore):
+        return None
+    status = build_reliability_status_detail(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        stage_status=stage_status,
+        attempt=attempt,
+        created_at=recorded_at,
+    )
+    classification = (
+        _cancelled_retry_classification(status)
+        if stage_status is StageStatus.CANCELLED
+        else _failure_retry_classification(failure, status=status)
+    )
+    transaction_id = _latest_transaction_id(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+    )
+    policy_max_attempts = 1 if policy is None else policy.max_attempts
+    reason, should_retry = _retry_decision(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        stage_status=stage_status,
+        policy=policy,
+        classification=classification,
+        transaction_id=transaction_id,
+    )
+    decision = RetryDecisionRecord(
+        decision_id=_retry_decision_id(
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+            transaction_id=transaction_id,
+            decision_reason=reason,
+            recorded_at=recorded_at,
+        ),
+        transaction_id=transaction_id or "transaction-missing",
+        should_retry=should_retry,
+        next_attempt=attempt + 1 if should_retry else None,
+        decision_reason=reason,
+        policy_max_attempts=policy_max_attempts,
+        attempt_count=attempt,
+        status=status,
+        failure=classification,
+    )
+    run_store.write_retry_decision(run_uri, decision)
+    return decision
+
+
 def _current_run_status(run_store: LegacyRunStore, run_uri: str) -> RunStatus:
     record = run_store.read_run_status(run_uri)
     if record is None:
@@ -218,15 +294,127 @@ def _latest_transaction_id(
         return None
     latest = sorted(
         transactions,
-        key=lambda transaction: (
-            transaction.status.created_at,
-            _TRANSACTION_STATE_ORDER[
-                cast(StageAttemptTransactionState, transaction.state)
-            ],
-            transaction.transaction_id,
-        ),
+        key=_transaction_order_key,
     )[-1]
     return latest.transaction_id
+
+
+def _stage_attempt_transactions(
+    run_store: RunReliabilityStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+) -> tuple[StageAttemptTransaction, ...]:
+    return tuple(
+        transaction
+        for transaction in run_store.list_stage_attempt_transactions(
+            run_uri,
+            stage_name=stage_name,
+        )
+        if transaction.attempt == attempt
+    )
+
+
+def _retry_decision(
+    run_store: RunReliabilityStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    stage_status: StageStatus,
+    policy: RetryPolicy | None,
+    classification: FailureClassification,
+    transaction_id: str | None,
+) -> tuple[str, bool]:
+    if stage_status is StageStatus.CANCELLED:
+        return "retry.cancelled", False
+    if policy is None or not policy.enabled:
+        return "retry.disabled", False
+    if attempt >= policy.max_attempts:
+        return "retry.max_attempts_exhausted", False
+    if not classification.retriable:
+        return "retry.non_retriable_failure", False
+    if transaction_id is None:
+        return "retry.transaction_missing", False
+    if not _transaction_chain_is_retry_safe(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage_name,
+        attempt=attempt,
+        transaction_id=transaction_id,
+    ):
+        return "retry.unsafe_transaction_state", False
+    return "retry.allowed", True
+
+
+def _transaction_chain_is_retry_safe(
+    run_store: RunReliabilityStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    transaction_id: str,
+) -> bool:
+    chain = run_store.read_transaction_chain(run_uri, transaction_id)
+    if not chain:
+        chain = _stage_attempt_transactions(
+            run_store,
+            run_uri=run_uri,
+            stage_name=stage_name,
+            attempt=attempt,
+        )
+    if not chain:
+        return False
+    if any(
+        cast(StageAttemptTransactionState, transaction.state)
+        in _RETRY_UNSAFE_TRANSACTION_STATES
+        for transaction in chain
+    ):
+        return False
+    latest = sorted(
+        chain,
+        key=_transaction_order_key,
+    )[-1]
+    return cast(StageAttemptTransactionState, latest.state) is StageAttemptTransactionState.FAILED
+
+
+def _transaction_order_key(
+    transaction: StageAttemptTransaction,
+) -> tuple[int, str, str]:
+    return (
+        _TRANSACTION_STATE_ORDER[
+            cast(StageAttemptTransactionState, transaction.state)
+        ],
+        transaction.status.created_at,
+        transaction.transaction_id,
+    )
+
+
+def _failure_retry_classification(
+    failure: ExecutionFailure | None,
+    *,
+    status: ReliabilityStatusDetail,
+) -> FailureClassification:
+    if failure is None:
+        return FailureClassification(
+            reason_code="executor_missing_failure",
+            retriable=False,
+            details={"failure": "missing"},
+            status=status,
+        )
+    return classify_execution_failure(failure, status=status)
+
+
+def _cancelled_retry_classification(
+    status: ReliabilityStatusDetail,
+) -> FailureClassification:
+    return FailureClassification(
+        reason_code="stage.cancelled",
+        retriable=False,
+        details={"status": StageStatus.CANCELLED.value},
+        status=status,
+    )
 
 
 def _transaction_id(
@@ -273,6 +461,30 @@ def _timeout_outcome_id(
         ).encode("utf-8")
     ).hexdigest()
     return f"timeout-{digest[:32]}"
+
+
+def _retry_decision_id(
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    transaction_id: str | None,
+    decision_reason: str,
+    recorded_at: str,
+) -> str:
+    digest = hashlib.sha256(
+        stable_json_dumps(
+            {
+                "run_uri": run_uri,
+                "stage_name": stage_name,
+                "attempt": attempt,
+                "transaction_id": transaction_id,
+                "decision_reason": decision_reason,
+                "recorded_at": recorded_at,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"retry-{digest[:32]}"
 
 
 def _failure_reason_code(failure: ExecutionFailure) -> str:
@@ -379,6 +591,7 @@ __all__ = [
     "build_reliability_status_detail",
     "classify_execution_failure",
     "failure_with_reliability_classification",
+    "record_retry_decision_for_stage_result",
     "record_timeout_outcome_from_metadata",
     "record_reliability_transaction",
     "record_stage_reliability_transition",

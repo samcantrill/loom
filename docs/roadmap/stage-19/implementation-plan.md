@@ -1,11 +1,11 @@
 # Roadmap Stage 19 Implementation Plan: Reliability Policies And Transactions
 
-Status: Phase 5 pending
+Status: Phase 5 pr_open
 Roadmap stage: `v19`
 Planning document: `docs/roadmap/stage-19/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 pending
+Current phase: Phase 5 pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -291,7 +291,7 @@ drive core retry or transaction behavior.
 | 2 | `reliability-persistence-read-models` | merged | `codex/reliability-persistence-read-models` | [#177](https://github.com/samcantrill/loom/pull/177) | `loom.pipeline.stores`, read models | Persist and read versioned reliability facts | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Status detail, transaction, timeout, retry-decision records |
 | 3 | `transaction-failure-classification` | merged | `codex/transaction-failure-classification` | [#178](https://github.com/samcantrill/loom/pull/178) | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
 | 4 | `timeout-capability-diagnostics` | merged | `codex/timeout-capability-diagnostics` | [#179](https://github.com/samcantrill/loom/pull/179) | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
-| 5 | `retry-decisions-runner-automation` | pending | `codex/retry-decisions-runner-automation` | pending | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
+| 5 | `retry-decisions-runner-automation` | pr_open | `codex/retry-decisions-runner-automation` | [#180](https://github.com/samcantrill/loom/pull/180) | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
 | 6 | `reliability-inspection-finalization` | pending | `codex/reliability-inspection-finalization` | pending | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
 
 ## Implementation Readiness Blockers
@@ -781,11 +781,11 @@ executor, diagnostics, and lease-compatibility surfaces
 
 ## Phase 5: Retry Decisions And Runner-Owned Automation
 
-Status: pending
+Status: pr_open
 Slug: `retry-decisions-runner-automation`
 Branch: `codex/retry-decisions-runner-automation`
 Worktree: `/home/samcantrill/work/loom-worktrees/retry-decisions-runner-automation`
-PR: pending
+PR: [#180](https://github.com/samcantrill/loom/pull/180)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase introduces Stage 19's only
@@ -858,9 +858,11 @@ runtime-changing automation
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
+- Phase execution plan: complete at
+  `docs/roadmap/stage-19/phases/retry-decisions-runner-automation.md`
+- Planning/refinement budget: expanded path; draft and refine complete by
+  manager-local planning
+- Implementation/refinement budget: not needed; no formal refiner pass consumed
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phases 1 through 4 merged or valid stack
@@ -872,16 +874,22 @@ runtime-changing automation
 - Risks: retry loops causing duplicate outputs, in-memory decisions, executor
   retry ownership, accidental retry of validation/config/graph failures.
 - Stop conditions: retry cannot be made safe from recorded transaction state;
-  decision persistence must happen after scheduling; retry behavior requires
+  decision persistence cannot happen before scheduling; retry behavior requires
   event sinks or external callbacks.
 - Assumptions: initial Stage 19 retry policy supports bounded total attempts
   only; advanced backoff and budgets remain deferred.
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: complete; runner-owned retry records allowed and denied
+  decisions before scheduling additional attempts, keeps executors
+  one-attempt-at-a-time, and preserves no-policy failure behavior.
+- Validation: complete; targeted Phase 5 suite passed with `184 passed`;
+  `make validate-pr` passed Ruff, Pyright, default tests, config-extra tests,
+  and package build; `make test-summary` passed all suites with `2281 passed,
+  18 skipped, 1859 deselected`.
+- PR: opened as [#180](https://github.com/samcantrill/loom/pull/180) against
+  `develop`
 - Merge: pending
 - Follow-up: pending
 

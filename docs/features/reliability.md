@@ -103,28 +103,37 @@ The exact model should align with state and run-store records.
 ## Retry Policy
 
 Retry policy controls whether a failed stage may be attempted again
-automatically within the same run.
+automatically within the same run. Retry is disabled by default and is owned by
+the runner/controller, not by executors.
 
-Recommended shape:
+Current Stage 19 shape:
 
 ```python
 @dataclass(frozen=True)
 class RetryPolicy:
+    enabled: bool = False
     max_attempts: int = 1
-    retry_on_exit_codes: frozenset[int] | None = None
-    retry_on_exception_types: frozenset[str] | None = None
-    backoff_seconds: float | None = None
 ```
 
 YAML example:
 
 ```yaml
-retry:
-  max_attempts: 2
+runtime:
+  reliability:
+    retry:
+      enabled: true
+      max_attempts: 2
 ```
 
 `max_attempts` includes the first attempt. `max_attempts: 1` means no automatic
 retry.
+
+The runner persists a `RetryDecisionRecord` after each failed or cancelled
+stage attempt that reaches the retry gate. It schedules another attempt only
+after an allowed decision has been written. Denied decisions remain inspectable
+with stable reasons such as `retry.disabled`, `retry.max_attempts_exhausted`,
+`retry.cancelled`, `retry.non_retriable_failure`,
+`retry.transaction_missing`, and `retry.unsafe_transaction_state`.
 
 ## Retry Boundaries
 
@@ -150,8 +159,12 @@ artifact type mismatches
 user cancellation unless explicitly designed
 ```
 
-Executor-specific transient failures can be added later through structured
-failure categories.
+Current automatic retry is conservative: retriable failure classifications are
+limited to stage exceptions and executor infrastructure failures, and any
+attempt that reached staged, committed, or commit-failed output transaction
+state is denied as unsafe. Executors report one attempt result at a time and do
+not schedule retries. Advanced backoff, retry windows, cross-run budgets, and
+resource-aware escalation remain future policy work.
 
 Stage 17 Docker failures record process and worker facts but do not introduce
 Docker-specific retry policy. A Docker failure remains inspectable through the
