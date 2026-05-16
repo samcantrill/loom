@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 2: Command Builder And Runner`
 - Branch: `codex/docker-command-runner`
@@ -13,7 +13,7 @@
 - Stack predecessor: none; Phase 1 is merged
 - Base branch: `develop`
 - Target branch: `develop`
-- PR: pending
+- PR: [#172](https://github.com/samcantrill/loom/pull/172)
 - Merge eligibility: root phase, eligible to merge to `develop` after implementation, validation, PR preparation, and automated review pass
 - Workflow path: expanded path
 - Plan quality gate: passed in the implementation plan on 2026-05-16 with no blockers
@@ -322,6 +322,7 @@ make test-summary
 - Refinement summary: hardened explicit `DockerOptions.command` parsing and
   exception-text redaction before committing the implementation.
 - Blocker-resolution summary: none used.
-- PR preparation: in progress; PR body prepared from final suite evidence.
+- PR preparation: complete; [#172](https://github.com/samcantrill/loom/pull/172)
+  opened against `develop` and verified with `gh pr view`.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.

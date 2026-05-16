@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 2 in_progress
+Current phase: Phase 2 pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -319,7 +319,7 @@ Apptainer/Singularity prove enough common behavior.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `docker-container-contracts` | merged | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
-| 2 | `docker-command-runner` | in_progress | `codex/docker-command-runner` | pending | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
+| 2 | `docker-command-runner` | pr_open | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
 | 3 | `docker-executor-integration` | pending | `codex/docker-executor-integration` | pending | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
 | 4 | `docker-preflight-diagnostics` | pending | `codex/docker-preflight-diagnostics` | pending | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
 | 5 | `docker-examples-acceptance` | pending | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
@@ -453,11 +453,11 @@ and reusable records for Stage 18
 
 ## Phase 2: Docker Command Builder And Runner
 
-Status: in_progress
+Status: pr_open
 Slug: `docker-command-runner`
 Branch: `codex/docker-command-runner`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-command-runner`
-PR: pending
+PR: [#172](https://github.com/samcantrill/loom/pull/172)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates a command-runner
@@ -540,7 +540,7 @@ protocol, process-result records, and redaction-sensitive metadata
   gate passed
 - PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 1 merged
+- Pre-submit blocker gate: passed; PR opened against verified target branch
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -562,7 +562,8 @@ protocol, process-result records, and redaction-sensitive metadata
 - Validation: targeted phase tests passed (`66 passed`); broader phase suite
   passed (`460 passed, 3 skipped`); `make validate-pr` passed; `make
   test-summary` passed with `2194 passed, 18 skipped, 1779 deselected`.
-- PR:
+- PR: [#172](https://github.com/samcantrill/loom/pull/172) opened against
+  `develop` from `codex/docker-command-runner`.
 - Merge:
 - Follow-up:
 
