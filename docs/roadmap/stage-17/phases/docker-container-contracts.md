@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: implemented, validated, pending PR preparation
+- Status: pr_open
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 1: Container Contracts And Runtime Descriptor`
 - Branch: `codex/docker-container-contracts`
@@ -13,6 +13,7 @@
 - Stack predecessor: none
 - Base branch: `develop`
 - Target branch: `develop`
+- PR: [#171](https://github.com/samcantrill/loom/pull/171)
 - Merge eligibility: root phase, eligible to merge to `develop` after implementation, validation, PR preparation, and automated review pass
 - Workflow path: expanded path
 - Successor dependency notes: Phase 2 `docker-command-runner` depends on this branch until Phase 1 merges or is a valid stack predecessor.
@@ -415,6 +416,7 @@ make test-summary
 - Refinement summary: tightened status, public record shapes, descriptor
   expectations, namespace ownership, and minimal snippet obligations.
 - Blocker-resolution summary: none used.
-- PR preparation: in progress; PR body prepared from final suite evidence.
+- PR preparation: complete; [#171](https://github.com/samcantrill/loom/pull/171)
+  opened against `develop` and verified with `gh pr view`.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.
