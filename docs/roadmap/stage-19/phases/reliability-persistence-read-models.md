@@ -237,7 +237,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: unused; targeted validation passed after
+  manager-local implementation cleanup, so no separate refinement pass has
+  been consumed.
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -245,9 +247,25 @@ make test-summary
 
 - Draft plan: completed in this artifact
 - Final phase execution plan: completed in this artifact
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Implementation summary: complete. Added typed reliability policy facts,
+  status details, stage-attempt transactions, retry decisions, and timeout
+  outcomes to store read models; added local run-store JSON materialization
+  under run-scoped `reliability/` family directories; added in-memory, SQLite,
+  and service authority-compatible persistence/readback; added store facade
+  exports and backend capability signaling; preserved backward-compatible empty
+  defaults in authoritative snapshots and completed-run bundle metadata.
+- Implementation validation: targeted Ruff and Pyright passed for the touched
+  store, adapter, support, and test paths. Targeted pytest evidence passed:
+  `91 passed` for package/store unit/contract coverage,
+  `8 passed` for authoritative read-model contracts,
+  `229 passed` for store/authority contract coverage,
+  `9 passed, 1 skipped` for phase integration coverage,
+  `67 passed` for package/import/reliability API coverage, and
+  `26 passed` for reliability/store/authority contract coverage. Final
+  `make validate-pr` and `make test-summary` remain required before PR
+  opening.
+- Refinement summary: not needed so far; no targeted validation blocker
+  remains after local implementation cleanup.
 - Blocker-resolution summary: pending
 - PR preparation: pending
 - Stack maintenance: pending
