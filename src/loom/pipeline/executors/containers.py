@@ -73,8 +73,6 @@ class ContainerImageReference:
 
     @classmethod
     def from_dict(cls, data: object) -> "ContainerImageReference":
-        if isinstance(data, str):
-            return cls(reference=data)
         mapping = _mapping(data, path="ContainerImageReference")
         _reject_unknown(mapping, _IMAGE_FIELDS, path="ContainerImageReference")
         _require_fields(mapping, {"reference"}, path="ContainerImageReference")
@@ -406,11 +404,7 @@ class ContainerOptions:
     resources: ContainerResourceIntent | Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
-        image = (
-            self.image
-            if isinstance(self.image, ContainerImageReference)
-            else ContainerImageReference.from_dict(self.image)
-        )
+        image = _coerce_image_reference(self.image)
         workdir = _optional_container_path(self.workdir, path="ContainerOptions.workdir")
         mounts = tuple(_container_mounts(self.mounts, path="ContainerOptions.mounts"))
         targets = [mount.target for mount in mounts]
@@ -458,7 +452,7 @@ class ContainerOptions:
         _reject_unknown(mapping, _OPTIONS_FIELDS, path="ContainerOptions")
         _require_fields(mapping, {"image"}, path="ContainerOptions")
         return cls(
-            image=cast(Mapping[str, object] | str, mapping["image"]),
+            image=ContainerImageReference.from_dict(mapping["image"]),
             workdir=_optional_string(mapping.get("workdir"), path="ContainerOptions.workdir"),
             mounts=tuple(
                 cast(
@@ -589,6 +583,16 @@ def _container_mounts(
             else ContainerMount.from_dict(item)
         )
     return tuple(mounts)
+
+
+def _coerce_image_reference(
+    value: ContainerImageReference | str | Mapping[str, object],
+) -> ContainerImageReference:
+    if isinstance(value, ContainerImageReference):
+        return value
+    if isinstance(value, str):
+        return ContainerImageReference(reference=value)
+    return ContainerImageReference.from_dict(value)
 
 
 def _resource_entries(

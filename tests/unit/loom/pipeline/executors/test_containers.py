@@ -98,6 +98,8 @@ def test_container_records_reject_invalid_mounts_and_options() -> None:
         )
     with pytest.raises(ContainerOptionError, match="unknown field"):
         parse_container_options({"image": "python", "privileged": True})
+    with pytest.raises(ContainerOptionError, match="ContainerImageReference"):
+        parse_container_options({"image": "python"})
 
 
 def test_container_environment_requires_explicit_strings() -> None:

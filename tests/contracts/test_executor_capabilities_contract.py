@@ -135,7 +135,10 @@ def test_default_registry_includes_docker_container_descriptor_contract() -> Non
     result = validate_executor_capabilities(
         RunOptions(
             executor="docker",
-            adapter_options={"container": {"image": "python"}, "docker": {}},
+            adapter_options={
+                "container": {"image": {"reference": "python"}},
+                "docker": {},
+            },
         )
     )
 
