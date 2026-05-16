@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Reliability Policies And Transactions
 - PR title: `Reliability Policies And Transactions - Phase 6: Read-Only Inspection And Finalization`
 - PR: https://github.com/samcantrill/loom/pull/181
@@ -210,9 +210,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: available; use only if targeted validation
-  or broad validation exposes a concrete implementation/test blocker
-- PR review: unused; one automated review pass available
+- Phase implementation refinement: not needed; targeted and broad validation
+  passed before PR merge
+- PR review: used by manager-local automated review before merge
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -243,6 +243,10 @@ make test-summary
   `docs/roadmap/stage-19/phases/reliability-inspection-finalization-pr-body.md`;
   opened as https://github.com/samcantrill/loom/pull/181 targeting `develop`
   from `codex/reliability-inspection-finalization`
-- Merge summary: pending
-- Stack maintenance: pending
+- Merge summary: https://github.com/samcantrill/loom/pull/181 was
+  squash-merged into `develop` at
+  `6c7feebfa4d73febd9d9dc78bab23df5519b0839` after GitHub CI `checks`
+  passed
+- Stack maintenance: no successor branch depended on Phase 6; branch/worktree
+  cleanup is safe
 - Remaining blockers: none

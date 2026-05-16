@@ -1,11 +1,11 @@
 # Roadmap Stage 19 Implementation Plan: Reliability Policies And Transactions
 
-Status: Phase 6 pr_open
+Status: Phase 6 merged
 Roadmap stage: `v19`
 Planning document: `docs/roadmap/stage-19/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 6 pr_open
+Current phase: Phase 6 merged
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -292,7 +292,7 @@ drive core retry or transaction behavior.
 | 3 | `transaction-failure-classification` | merged | `codex/transaction-failure-classification` | [#178](https://github.com/samcantrill/loom/pull/178) | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
 | 4 | `timeout-capability-diagnostics` | merged | `codex/timeout-capability-diagnostics` | [#179](https://github.com/samcantrill/loom/pull/179) | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
 | 5 | `retry-decisions-runner-automation` | merged | `codex/retry-decisions-runner-automation` | [#180](https://github.com/samcantrill/loom/pull/180) | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
-| 6 | `reliability-inspection-finalization` | pr_open | `codex/reliability-inspection-finalization` | [#181](https://github.com/samcantrill/loom/pull/181) | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
+| 6 | `reliability-inspection-finalization` | merged | `codex/reliability-inspection-finalization` | [#181](https://github.com/samcantrill/loom/pull/181) | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
 
 ## Implementation Readiness Blockers
 
@@ -902,7 +902,7 @@ runtime-changing automation
 
 ## Phase 6: Read-Only Inspection, Documentation, And Final Validation
 
-Status: pr_open
+Status: merged
 Slug: `reliability-inspection-finalization`
 Branch: `codex/reliability-inspection-finalization`
 Worktree: `/home/samcantrill/work/loom-worktrees/reliability-inspection-finalization`
@@ -991,14 +991,17 @@ inspection, docs, and suite evidence
 
 - Phase execution plan: completed in `docs/roadmap/stage-19/phases/reliability-inspection-finalization.md`
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
-- PR review budget: one automated review pass available
+- Implementation/refinement budget: not needed; implementation validation
+  passed without a formal refiner pass
+- PR review budget: used by manager-local automated review before merge
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phases 1 through 5 merged or valid stack
   predecessors
 - PR record: opened as https://github.com/samcantrill/loom/pull/181 with
   `develop` target and `codex/reliability-inspection-finalization` head.
-- Merge record: pending
+- Merge record: PR #181 was squash-merged into `develop` at
+  `6c7feebfa4d73febd9d9dc78bab23df5519b0839` after GitHub CI `checks`
+  passed.
 
 ### Risks And Stop Conditions
 
@@ -1022,8 +1025,10 @@ inspection, docs, and suite evidence
   package, unit, contract, integration, e2e, and config-extra suite evidence.
 - PR: opened as https://github.com/samcantrill/loom/pull/181 targeting
   `develop`.
-- Merge: pending
-- Follow-up: pending
+- Merge: squash-merged into `develop` at
+  `6c7feebfa4d73febd9d9dc78bab23df5519b0839`.
+- Follow-up: no product follow-up; Phase 6 branch cleanup is safe because no
+  successor phase depends on it.
 
 ## Cross-Phase Validation
 
