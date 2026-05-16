@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 3: Executor Integration`
 - Branch: `codex/docker-executor-integration`
@@ -13,7 +13,7 @@
 - Stack predecessor: none; Phase 2 is merged
 - Base branch: `develop`
 - Target branch: `develop`
-- PR: pending
+- PR: [#173](https://github.com/samcantrill/loom/pull/173)
 - Merge eligibility: root phase, eligible to merge to `develop` after implementation, validation, PR preparation, and automated review pass
 - Workflow path: expanded path
 - Plan quality gate: passed in the implementation plan on 2026-05-16 with no blockers
@@ -322,6 +322,7 @@ make test-summary
 - Blocker-resolution summary:
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-17/phases/docker-executor-integration-pr-body.md`; PR
-  creation pending.
+  [#173](https://github.com/samcantrill/loom/pull/173) opened against verified
+  `develop` from `codex/docker-executor-integration`.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.
