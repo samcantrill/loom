@@ -1093,6 +1093,38 @@ def test_import_executors_does_not_import_project_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_container_records_does_not_import_execution_or_docker_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.containers
+
+        for forbidden in (
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors.docker",
+            "docker",
+            "subprocess",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through container records")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_slurm_models_does_not_import_scheduler_cli_or_config_layers() -> None:
     script = dedent(
         """

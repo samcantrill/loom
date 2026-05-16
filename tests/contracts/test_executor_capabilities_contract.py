@@ -131,6 +131,28 @@ def test_default_registry_includes_import_light_subprocess_descriptor() -> None:
     assert descriptor.details["serial"] is True
 
 
+def test_default_registry_includes_docker_container_descriptor_contract() -> None:
+    result = validate_executor_capabilities(
+        RunOptions(
+            executor="docker",
+            adapter_options={"container": {"image": "python"}, "docker": {}},
+        )
+    )
+
+    assert result.ok
+    descriptor = DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY.resolve("docker")
+    assert descriptor.name == "docker"
+    assert descriptor.adapter_namespaces == ("container", "docker")
+    assert descriptor.details["docker_cli"] is True
+    assert descriptor.details["docker_sdk_dependency"] is False
+    resource_capabilities = cast(
+        dict[str, object],
+        descriptor.to_dict()["resource_capabilities"],
+    )
+    gpu_capability = cast(dict[str, object], resource_capabilities["gpu"])
+    assert gpu_capability["support_level"] == "unsupported"
+
+
 def test_runtime_capability_imports_do_not_load_diagnostics_or_executors() -> None:
     script = dedent(
         """

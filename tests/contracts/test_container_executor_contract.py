@@ -1,0 +1,106 @@
+"""Contracts for shared container executor records."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from textwrap import dedent
+from typing import cast
+
+import pytest
+
+from loom.pipeline.executors.containers import (
+    ContainerOptions,
+    ContainerResourceIntent,
+    parse_container_options,
+)
+from loom.pipeline.resources import ResourceEntry, ResourceRequest
+from loom.pipeline.runtime import ResourceCapability
+from loom.serialization import PlainData, stable_json_dumps
+
+
+pytestmark = pytest.mark.contract
+
+
+def test_container_adapter_options_plain_data_contract_is_stable() -> None:
+    options = parse_container_options(
+        {
+            "image": {"reference": "example/runtime:latest"},
+            "workdir": "/workspace",
+            "mounts": [
+                {"source": "/workspace", "target": "/workspace", "mode": "rw"}
+            ],
+            "environment": {
+                "variables": {"TOKEN": "secret"},
+                "required_host_variables": ["HOME"],
+            },
+        }
+    )
+
+    document = options.to_dict()
+
+    assert stable_json_dumps(document)
+    assert ContainerOptions.from_dict(document).to_dict() == document
+    assert "secret" not in repr(options.to_redacted_metadata())
+
+
+def test_container_resource_intent_reuses_resource_and_capability_records() -> None:
+    resources = ResourceRequest(
+        entries={"cpu": ResourceEntry(kind="cpu", amount=2)}
+    )
+    intent = ContainerResourceIntent.from_runtime(
+        resources,
+        {
+            "cpu": ResourceCapability(
+                support_level="supported",
+                enforcement="best_effort",
+            )
+        },
+    )
+
+    document = intent.to_dict()
+
+    assert stable_json_dumps(document)
+    entries = cast(dict[str, PlainData], document["entries"])
+    capabilities = cast(dict[str, PlainData], document["capabilities"])
+    cpu_entry = cast(dict[str, PlainData], entries["cpu"])
+    cpu_capability = cast(dict[str, PlainData], capabilities["cpu"])
+    assert cpu_entry["kind"] == "cpu"
+    assert cpu_capability["enforcement"] == "best_effort"
+
+
+def test_container_records_do_not_import_docker_or_runtime_presentation_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.containers as containers
+
+        assert containers.ContainerOptions
+        for forbidden in (
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors.docker",
+            "docker",
+            "subprocess",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through container records")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"

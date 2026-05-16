@@ -3,10 +3,10 @@
 from typing import TYPE_CHECKING
 
 from loom.pipeline.executors.base import Executor
-from loom.pipeline.executors.errors import ExecutorError, LocalExecutorError
-from loom.pipeline.executors.local import LocalExecutor
 
 if TYPE_CHECKING:
+    from loom.pipeline.executors.errors import ExecutorError, LocalExecutorError
+    from loom.pipeline.executors.local import LocalExecutor
     from loom.pipeline.executors.subprocess import (
         SubprocessExecutor,
         SubprocessRunResult,
@@ -14,6 +14,17 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> object:
+    if name in {"ExecutorError", "LocalExecutorError"}:
+        from loom.pipeline.executors.errors import ExecutorError, LocalExecutorError
+
+        return {
+            "ExecutorError": ExecutorError,
+            "LocalExecutorError": LocalExecutorError,
+        }[name]
+    if name == "LocalExecutor":
+        from loom.pipeline.executors.local import LocalExecutor
+
+        return LocalExecutor
     if name in {"SubprocessExecutor", "SubprocessRunResult"}:
         from loom.pipeline.executors.subprocess import (
             SubprocessExecutor,

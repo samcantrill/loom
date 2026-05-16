@@ -55,6 +55,35 @@ def test_runtime_profiles_are_plain_data_and_deterministically_serialized() -> N
     }
 
 
+def test_runtime_profiles_accept_container_and_docker_adapter_namespaces() -> None:
+    profiles = RuntimeProfileCollection.from_dict(
+        {
+            "containerized": {
+                "executor": "docker",
+                "container": {
+                    "image": {"reference": "python:3.12"},
+                    "workdir": "/workspace",
+                },
+                "docker": {"pull": "never"},
+            }
+        }
+    )
+
+    assert stable_json_dumps(profiles.to_dict())
+    assert profiles.to_dict() == {
+        "containerized": {
+            "adapter_options": {
+                "container": {
+                    "image": {"reference": "python:3.12"},
+                    "workdir": "/workspace",
+                },
+                "docker": {"pull": "never"},
+            },
+            "executor": "docker",
+        }
+    }
+
+
 def test_runtime_profile_merge_returns_normalized_run_options_contract() -> None:
     result = merge_run_options(
         base={
