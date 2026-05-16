@@ -13,6 +13,7 @@ import loom.cli.status as status_command
 from loom.diagnostics.inspection import (
     LogStreamSummary,
     RunStatusSummary,
+    StageReliabilitySummary,
     StageLogsSummary,
     StageStatusSummary,
     SubmittedOperationSummary,
@@ -53,6 +54,13 @@ def test_status_json_uses_diagnostics_payload(monkeypatch: pytest.MonkeyPatch) -
                     stage_name="build",
                     status="SUBMITTED",
                     output_count=1,
+                    reliability=StageReliabilitySummary(
+                        stage_name="build",
+                        policy_count=1,
+                        latest_policy={
+                            "policy": {"retry": {"enabled": True, "max_attempts": 2}}
+                        },
+                    ),
                 ),
             ),
         ),
@@ -76,7 +84,73 @@ def test_status_json_uses_diagnostics_payload(monkeypatch: pytest.MonkeyPatch) -
     assert payload["result"]["submitted_operations"][0]["submission_id"] == "sub-1"
     assert payload["result"]["stages"][0]["state_source"]["label"] == "unknown"
     assert payload["result"]["stages"][0]["stage_name"] == "build"
+    reliability = payload["result"]["stages"][0]["reliability"]
+    assert reliability["counts"]["policy_facts"] == 1
+    assert reliability["latest_policy"]["policy"]["retry"]["max_attempts"] == 2
     assert stderr.getvalue() == ""
+
+
+def test_status_text_includes_reliability_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        status_command,
+        "build_status_result",
+        lambda run_uri, authority_config=None: RunStatusSummary(
+            run_uri=run_uri,
+            status="FAILED",
+            stages=(
+                StageStatusSummary(
+                    stage_name="build",
+                    status="FAILED",
+                    reliability=StageReliabilitySummary(
+                        stage_name="build",
+                        policy_count=1,
+                        transaction_count=1,
+                        retry_decision_count=1,
+                        timeout_outcome_count=1,
+                        unsupported_timeout_count=1,
+                        latest_policy={
+                            "policy": {
+                                "retry": {"enabled": True, "max_attempts": 2},
+                                "timeout": {
+                                    "enabled": True,
+                                    "duration_seconds": 3.0,
+                                },
+                            }
+                        },
+                        latest_transaction={"state": "failed", "attempt": 1},
+                        latest_retry_decision={
+                            "decision_reason": "retry.disabled",
+                            "should_retry": False,
+                        },
+                        latest_timeout_outcome={
+                            "outcome": "unsupported",
+                            "support_level": "unsupported",
+                        },
+                        diagnostics=(
+                            {
+                                "code": "reliability.timeout.unsupported",
+                                "message": "timeout policy was selected but not enforced",
+                                "details": {"stage_name": "build"},
+                            },
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    stdout = io.StringIO()
+
+    assert main(["status", "file:///tmp/run1"], stdout=stdout) == 0
+
+    output = stdout.getvalue()
+    assert "reliability: policies=1" in output
+    assert "policy: retry=enabled max_attempts=2" in output
+    assert "transaction: failed attempt=1" in output
+    assert "retry: retry.disabled retry=False" in output
+    assert "timeout: unsupported support=unsupported" in output
+    assert "diagnostic: reliability.timeout.unsupported" in output
 
 
 def test_status_jobs_json_uses_scheduler_payload(

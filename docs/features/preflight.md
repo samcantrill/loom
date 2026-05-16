@@ -318,6 +318,10 @@ as unsupported. Enabled retry policy is reported as runner-owned runtime
 behavior because executors still run one attempt at a time while the controller
 persists retry decisions before scheduling another attempt.
 
+After execution, unsupported timeout facts are also visible through read-only
+status/backend inspection as timeout outcomes. Preflight remains the place to
+explain capability support before a run starts.
+
 ## SLURM Checks
 
 For SLURM runs, preflight checks:

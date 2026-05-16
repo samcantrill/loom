@@ -514,6 +514,32 @@ Callback failures should be recorded and execution should continue by default.
 A future strict mode may treat callback failures as fatal for audit-heavy
 workflows, but observer failure must not silently alter run correctness.
 
+## Read-Only Inspection
+
+Current Stage 19 reliability facts are inspectable through authoritative read
+models and existing status/backend diagnostics.
+
+`loom status RUN_URI` includes compact per-stage reliability summaries when
+facts exist:
+
+```text
+selected reliability policy
+status detail count
+stage-attempt transaction count and latest state
+retry decision count and latest decision reason
+timeout outcome count and unsupported timeout diagnostics
+```
+
+`loom backend inspect RUN_URI --format json` exposes the raw authoritative
+snapshot fields for reliability policy facts, status details, transactions,
+retry decisions, and timeout outcomes. Text output reports compact counts.
+
+Inspection is read-only. It must not allocate attempts, schedule retries,
+clean files, delete artifacts, emit external events, or contact notification
+services. Stage 20 may project these facts into events. Stage 21 may consume
+transaction and timeout evidence for cleanup and retention planning, but Stage
+19 does not perform deletion.
+
 ## Testing
 
 Tests should cover:
@@ -525,6 +551,7 @@ retry disabled behavior
 non-retryable validation failures
 timeout policy normalization
 executor timeout unsupported warning
+status/backend reliability inspection
 cleanup dry-run reports candidates
 cleanup rejects paths outside managed roots
 cleanup does not follow symlinks
@@ -538,14 +565,15 @@ test environment explicitly provides real commands.
 
 ## Implementation Plan
 
-1. Define reliability policy and event models.
+1. Define reliability policy and record models.
 2. Persist failure metadata for every failed stage attempt.
-3. Add retry planning around atomic output transactions.
+3. Record stage-attempt transactions, timeout outcomes, and retry decisions.
 4. Add timeout support where the selected executor can enforce it.
-5. Add cleanup dry-run reporting for known temporary paths.
-6. Add conservative deletion behind explicit CLI flags.
-7. Add retention metadata before adding automatic deletion behavior.
-8. Add plugin callback hooks on top of generic event records.
+5. Expose read-only reliability facts through diagnostics and CLI status.
+6. Add cleanup dry-run reporting for known temporary paths in later work.
+7. Add conservative deletion behind explicit CLI flags in later work.
+8. Add retention metadata before adding automatic deletion behavior.
+9. Add plugin callback hooks on top of generic event records.
 
 ## Deferred Work
 

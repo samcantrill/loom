@@ -1178,6 +1178,7 @@ artifact index
 failure summaries
 log paths
 provenance summaries
+reliability policy and outcome summaries
 ```
 
 Should not:
@@ -1204,6 +1205,12 @@ build_manifest  SUCCEEDED  1         -
 train           FAILED     1         process exited 1
 evaluate        PENDING    0         blocked: train
 ```
+
+When reliability facts exist, status output may include compact per-stage
+policy, transaction, retry, timeout, and unsupported-timeout summaries. JSON
+output carries the same information under each stage reliability summary.
+Detailed raw reliability records remain available through backend inspection
+JSON.
 
 ---
 

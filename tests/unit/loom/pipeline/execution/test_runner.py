@@ -432,9 +432,7 @@ def test_runner_passes_resolved_runtime_to_stage_execution_request(
                 "executor": "local",
                 "stage_options": {
                     "build": {
-                        "resources": {
-                            "entries": {"cpu": {"kind": "cpu", "amount": 2}}
-                        }
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 2}}}
                     }
                 },
             },
@@ -460,6 +458,14 @@ def test_runner_passes_resolved_runtime_to_stage_execution_request(
     entries = cast(Mapping[str, PlainData], resources["entries"])
     cpu = cast(Mapping[str, PlainData], entries["cpu"])
     assert cpu["amount"] == 2
+    policy_facts = run_store.list_reliability_policy_facts(
+        result.run_uri,
+        stage_name="build",
+    )
+    assert len(policy_facts) == 1
+    assert policy_facts[0].to_dict()["policy"] == {
+        "retry": {"enabled": False, "max_attempts": 1}
+    }
 
 
 def test_runner_acquires_and_releases_stage_resource_admission(
@@ -481,9 +487,7 @@ def test_runner_acquires_and_releases_stage_resource_admission(
             options={
                 "stage_options": {
                     "build": {
-                        "resources": {
-                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
-                        }
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 1}}}
                     }
                 },
             },
@@ -528,9 +532,7 @@ def test_runner_fails_fast_when_stage_resources_are_unavailable(
             options={
                 "stage_options": {
                     "build": {
-                        "resources": {
-                            "entries": {"cpu": {"kind": "cpu", "amount": 1}}
-                        }
+                        "resources": {"entries": {"cpu": {"kind": "cpu", "amount": 1}}}
                     }
                 },
             },
@@ -922,7 +924,9 @@ def test_runner_rejects_legacy_continue_failure_policy_without_parallelism(
     with pytest.raises(ParallelExecutionUnsupportedError) as exc_info:
         PipelineRunner(run_store=_authority_run_store(tmp_path)).run(request)
 
-    assert exc_info.value.code == "pipeline.parallel.failure_policy_requires_parallelism"
+    assert (
+        exc_info.value.code == "pipeline.parallel.failure_policy_requires_parallelism"
+    )
     assert not run_root.exists()
 
 
@@ -964,7 +968,10 @@ def test_runner_rejects_parallel_when_backend_capabilities_are_missing(
         raw_detail = diagnostic["detail"]
         assert isinstance(raw_detail, dict)
         diagnostic_details.append(raw_detail)
-    assert {"missing_capability": "stage_leases", "scope": "per_run"} in diagnostic_details
+    assert {
+        "missing_capability": "stage_leases",
+        "scope": "per_run",
+    } in diagnostic_details
     assert not run_root.exists()
 
 

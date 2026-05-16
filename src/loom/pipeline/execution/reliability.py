@@ -9,6 +9,7 @@ from typing import cast
 
 from loom.pipeline.reliability import (
     FailureClassification,
+    ReliabilityPolicy,
     ReliabilityStatusDetail,
     RetryDecisionRecord,
     RetryPolicy,
@@ -19,7 +20,12 @@ from loom.pipeline.reliability import (
     TimeoutSupportLevel,
 )
 from loom.pipeline.status import RunStatus, StageStatus
-from loom.pipeline.stores import LegacyRunStore, RunReliabilityStore
+from loom.pipeline.stores import (
+    LegacyRunStore,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
+    RunReliabilityStore,
+)
 from loom.serialization import PlainData, ensure_plain_data, stable_json_dumps
 
 from .models import ExecutionFailure
@@ -88,6 +94,34 @@ def failure_with_reliability_classification(
     details = dict(failure.details)
     details["reliability_classification"] = classification.to_dict()
     return replace(failure, details=details)
+
+
+def record_resolved_reliability_policy_fact(
+    run_store: LegacyRunStore,
+    *,
+    run_uri: str,
+    stage_name: str,
+    attempt: int,
+    resolved_runtime: object,
+    recorded_at: str,
+) -> ReliabilityPolicyFact | None:
+    """Persist the selected reliability policy for one stage attempt."""
+
+    if not isinstance(run_store, RunReliabilityStore):
+        return None
+    policy = getattr(resolved_runtime, "reliability", None)
+    if not isinstance(policy, ReliabilityPolicy):
+        return None
+    fact = ReliabilityPolicyFact(
+        run_uri=run_uri,
+        scope=ReliabilityPolicyScope.ATTEMPT,
+        stage_name=stage_name,
+        attempt=attempt,
+        recorded_at=recorded_at,
+        policy=policy,
+    )
+    run_store.write_reliability_policy_fact(run_uri, fact)
+    return fact
 
 
 def record_stage_reliability_transition(
@@ -376,16 +410,17 @@ def _transaction_chain_is_retry_safe(
         chain,
         key=_transaction_order_key,
     )[-1]
-    return cast(StageAttemptTransactionState, latest.state) is StageAttemptTransactionState.FAILED
+    return (
+        cast(StageAttemptTransactionState, latest.state)
+        is StageAttemptTransactionState.FAILED
+    )
 
 
 def _transaction_order_key(
     transaction: StageAttemptTransaction,
 ) -> tuple[int, str, str]:
     return (
-        _TRANSACTION_STATE_ORDER[
-            cast(StageAttemptTransactionState, transaction.state)
-        ],
+        _TRANSACTION_STATE_ORDER[cast(StageAttemptTransactionState, transaction.state)],
         transaction.status.created_at,
         transaction.transaction_id,
     )
@@ -591,6 +626,7 @@ __all__ = [
     "build_reliability_status_detail",
     "classify_execution_failure",
     "failure_with_reliability_classification",
+    "record_resolved_reliability_policy_fact",
     "record_retry_decision_for_stage_result",
     "record_timeout_outcome_from_metadata",
     "record_reliability_transaction",

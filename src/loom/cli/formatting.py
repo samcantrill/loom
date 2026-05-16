@@ -149,9 +149,7 @@ def format_queue_preflight_text(result: object) -> str:
         "FAIL": "FAILED",
         "SKIP": "SKIP",
     }.get(status, status)
-    lines = [
-        f"{prefix} queue preflight {getattr(result, 'config_path')}: {status}"
-    ]
+    lines = [f"{prefix} queue preflight {getattr(result, 'config_path')}: {status}"]
     for check in getattr(result, "checks", ()):
         check_status = _enum_value(getattr(check, "status"))
         check_id = str(getattr(check, "check_id"))
@@ -160,7 +158,11 @@ def format_queue_preflight_text(result: object) -> str:
         details = getattr(check, "details", {})
         if isinstance(details, Mapping):
             missing = details.get("missing")
-            if isinstance(missing, Sequence) and not isinstance(missing, str) and missing:
+            if (
+                isinstance(missing, Sequence)
+                and not isinstance(missing, str)
+                and missing
+            ):
                 lines.append("  missing: " + ", ".join(str(item) for item in missing))
             reason = details.get("reason")
             if isinstance(reason, str) and reason:
@@ -376,6 +378,9 @@ def format_status_text(result: object) -> str:
         stage_source = getattr(stage, "state_source", {})
         if isinstance(stage_source, Mapping):
             lines.append(f"  source: {stage_source.get('label', 'unknown')}")
+        reliability = getattr(stage, "reliability", None)
+        if reliability is not None:
+            lines.extend(_format_stage_reliability_text(reliability))
         failure = getattr(stage, "failure")
         if isinstance(failure, Mapping):
             message = failure.get("message")
@@ -383,6 +388,85 @@ def format_status_text(result: object) -> str:
                 lines.append(f"  failure: {message}")
     lines.append(f"artifacts: {getattr(result, 'artifact_count')}")
     return "\n".join(lines)
+
+
+def _format_stage_reliability_text(reliability: object) -> list[str]:
+    lines: list[str] = []
+    counts = _stage_reliability_counts(reliability)
+    if any(counts.values()):
+        lines.append(
+            "  reliability: "
+            f"policies={counts['policy_facts']} "
+            f"status_details={counts['status_details']} "
+            f"transactions={counts['transactions']} "
+            f"retries={counts['retry_decisions']} "
+            f"timeouts={counts['timeout_outcomes']} "
+            f"unsupported_timeouts={counts['unsupported_timeouts']}"
+        )
+    latest_policy = getattr(reliability, "latest_policy", None)
+    if isinstance(latest_policy, Mapping):
+        policy_text = _reliability_policy_text(latest_policy)
+        if policy_text:
+            lines.append(f"  policy: {policy_text}")
+    latest_transaction = getattr(reliability, "latest_transaction", None)
+    if isinstance(latest_transaction, Mapping):
+        state = latest_transaction.get("state")
+        attempt = latest_transaction.get("attempt")
+        if state is not None:
+            lines.append(f"  transaction: {state} attempt={attempt}")
+    latest_retry = getattr(reliability, "latest_retry_decision", None)
+    if isinstance(latest_retry, Mapping):
+        reason = latest_retry.get("decision_reason")
+        should_retry = latest_retry.get("should_retry")
+        if reason is not None:
+            lines.append(f"  retry: {reason} retry={should_retry}")
+    latest_timeout = getattr(reliability, "latest_timeout_outcome", None)
+    if isinstance(latest_timeout, Mapping):
+        outcome = latest_timeout.get("outcome")
+        support = latest_timeout.get("support_level")
+        if outcome is not None:
+            lines.append(f"  timeout: {outcome} support={support}")
+    for diagnostic in getattr(reliability, "diagnostics", ()):
+        if isinstance(diagnostic, Mapping):
+            lines.append(
+                f"  diagnostic: {diagnostic.get('code')}: {diagnostic.get('message')}"
+            )
+    return lines
+
+
+def _stage_reliability_counts(reliability: object) -> dict[str, int]:
+    return {
+        "policy_facts": int(getattr(reliability, "policy_count", 0)),
+        "status_details": int(getattr(reliability, "status_detail_count", 0)),
+        "transactions": int(getattr(reliability, "transaction_count", 0)),
+        "retry_decisions": int(getattr(reliability, "retry_decision_count", 0)),
+        "timeout_outcomes": int(getattr(reliability, "timeout_outcome_count", 0)),
+        "unsupported_timeouts": int(
+            getattr(reliability, "unsupported_timeout_count", 0)
+        ),
+    }
+
+
+def _reliability_policy_text(policy_fact: Mapping[str, object]) -> str:
+    policy = policy_fact.get("policy")
+    if not isinstance(policy, Mapping):
+        return ""
+    parts: list[str] = []
+    retry = policy.get("retry")
+    if isinstance(retry, Mapping):
+        enabled = "enabled" if retry.get("enabled") is True else "disabled"
+        parts.append(f"retry={enabled} max_attempts={retry.get('max_attempts')}")
+    else:
+        parts.append("retry=unset")
+    timeout = policy.get("timeout")
+    if isinstance(timeout, Mapping):
+        enabled = "enabled" if timeout.get("enabled") is True else "disabled"
+        parts.append(
+            f"timeout={enabled} duration_seconds={timeout.get('duration_seconds')}"
+        )
+    else:
+        parts.append("timeout=unset")
+    return " ".join(parts)
 
 
 def format_status_jobs_text(result: object) -> str:
@@ -415,7 +499,9 @@ def format_status_jobs_text(result: object) -> str:
         )
         dependency_state = getattr(job, "dependency_state")
         if dependency_state is not None:
-            dependencies = ", ".join(str(item) for item in getattr(job, "dependency_job_ids", ()))
+            dependencies = ", ".join(
+                str(item) for item in getattr(job, "dependency_job_ids", ())
+            )
             lines.append(f"  dependency: {dependency_state} [{dependencies}]")
         log_paths = getattr(job, "log_paths")
         if isinstance(log_paths, Mapping) and log_paths:
@@ -426,16 +512,16 @@ def format_status_jobs_text(result: object) -> str:
             lines.append(
                 f"  warning {getattr(warning, 'code')}: {getattr(warning, 'message')}"
             )
-    failed = cast(Sequence[Mapping[str, object]], getattr(result, "failed_submissions", ()))
+    failed = cast(
+        Sequence[Mapping[str, object]], getattr(result, "failed_submissions", ())
+    )
     for item in failed:
         lines.append(f"failed {item.get('logical_key')}: {item.get('reason')}")
     warnings = getattr(result, "warnings", ())
     if warnings:
         lines.append("warnings:")
         for warning in warnings:
-            lines.append(
-                f"  {getattr(warning, 'code')}: {getattr(warning, 'message')}"
-            )
+            lines.append(f"  {getattr(warning, 'code')}: {getattr(warning, 'message')}")
     return "\n".join(lines)
 
 
@@ -823,9 +909,7 @@ def _extend_identity_lines(lines: list[str], manifest: object) -> None:
         f"run_uri={getattr(source, 'run_uri')}"
     )
     target = getattr(manifest, "target_identity")
-    lines.append(
-        f"target_identity: mode={_enum_value(getattr(target, 'mode'))}"
-    )
+    lines.append(f"target_identity: mode={_enum_value(getattr(target, 'mode'))}")
 
 
 def _text_value(value: object) -> str:
@@ -853,7 +937,9 @@ def _queue_item_lines(item: object) -> list[str]:
     ]
     handle = getattr(item, "dispatch_handle")
     if handle is not None:
-        lines.append(f"handle: {getattr(handle, 'adapter')} {getattr(handle, 'handle_id')}")
+        lines.append(
+            f"handle: {getattr(handle, 'adapter')} {getattr(handle, 'handle_id')}"
+        )
         evidence = getattr(handle, "evidence", {})
         if isinstance(evidence, Mapping):
             handoff = evidence.get("delegated_handoff")
