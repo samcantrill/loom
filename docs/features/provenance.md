@@ -829,6 +829,17 @@ allow caller to disable or customize only with explicit local/full provenance mo
 
 ### 11.5 Container Metadata
 
+Stage 17 Docker provenance records executor metadata as factual run evidence,
+not as semantic stage identity. Docker facts may include the executor name,
+image reference, redacted command projection, selected option summaries,
+path-parity summaries, return code, bounded stdout/stderr facts, and timing
+facts.
+
+Raw environment values must not be persisted. Container environment metadata
+should record variable names and redacted values only. Image references are
+recorded as authored facts; digest resolution remains best-effort and must not
+pull images or contact registries by default.
+
 Container identity may come from environment variables or explicit runtime
 metadata.
 

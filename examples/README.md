@@ -17,7 +17,7 @@ level concepts.
 
 | Group | Primary user-facing workflows |
 | --- | --- |
-| [Execution](execution/README.md) | Runtime-profile runs, subprocess execution, offline-first import, and SLURM dry-run/live command flows. |
+| [Execution](execution/README.md) | Runtime-profile runs, subprocess execution, Docker container execution, offline-first import, and SLURM dry-run/live command flows. |
 | [Operations](operations/README.md) | Authority lifecycle, local diagnostics, failure inspection, resource preflight, offline import rejection, and live SLURM job commands. |
 
 ## Public Python API Workflows
@@ -51,6 +51,8 @@ V6/v7 SLURM and submitted-operation example coverage is tracked in
 [`docs/features/slurm-example-coverage.md`](../docs/features/slurm-example-coverage.md).
 V10 user-facing authority workflow coverage is tracked in
 [`docs/features/authority-example-coverage.md`](../docs/features/authority-example-coverage.md).
+V17 container executor coverage is tracked in
+[`docs/features/container-example-coverage.md`](../docs/features/container-example-coverage.md).
 
 Runnable examples stay local and synthetic. Manual SLURM examples document the
 real-cluster commands and shared-filesystem assumptions but are not executed by

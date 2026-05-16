@@ -425,12 +425,15 @@ Examples:
 ```text
 local
 subprocess
-slurm-afterok, later
-slurm-single-job, later
-docker, later
+slurm-afterok
+slurm-single-job
+docker
 ```
 
 Invocation mode belongs to executor metadata, not to the stage implementation.
+The Stage 17 Docker invocation mode is per-stage: the parent runner prepares
+stage attempts and finalizes outputs on the host, while the Docker executor
+launches the prepared worker command inside `docker run`.
 
 ### 5.8 Runtime Options And Profiles
 

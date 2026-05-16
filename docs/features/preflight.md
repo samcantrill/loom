@@ -366,6 +366,30 @@ required environment variables are available
 Preflight should not pull large images by default. Image existence checks should
 be explicit because they may require network access.
 
+Implemented Stage 17 Docker checks run only when Docker is the selected
+executor. Stable Docker check IDs are:
+
+```text
+executor.docker.command
+executor.docker.container_options
+executor.docker.image
+executor.docker.environment
+filesystem.docker.mount_sources
+filesystem.docker.mount_targets
+filesystem.docker.run_dir_writable
+filesystem.docker.artifact_root_visible
+resources.docker.mapping
+resources.docker.gpu
+```
+
+These checks are daemon-free by default. They verify `docker` command presence
+on `PATH`, parse the `container` and `docker` adapter namespaces, check image
+reference presence, summarize required host environment variable names, inspect
+authored mount source paths, verify Stage 17 path-parity targets, and report
+CPU/memory or unsupported GPU resource mapping. They do not run
+`docker version`, inspect images, pull images, contact registries, or read raw
+environment values.
+
 ## Plugin Checks
 
 Plugin checks should verify:

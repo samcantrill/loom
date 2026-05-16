@@ -60,7 +60,11 @@ USER_FACING_V10_EXAMPLES = {
 NON_USER_FACING_V10_EXAMPLES = {
     "operations.authority-backend-diagnostics": "smoke",
 }
+USER_FACING_V17_EXAMPLES = {
+    "execution.containers.docker": "smoke",
+}
 CO_LOCATED_VARIANT_EXAMPLES = {
+    "execution.containers.docker",
     "execution.runtime-profile",
     "execution.subprocess",
     "execution.offline-first-import",
@@ -197,6 +201,38 @@ def test_v10_authority_examples_are_cataloged_and_documented() -> None:
         assert example_id in coverage_doc
     for example_id in NON_USER_FACING_V10_EXAMPLES:
         assert example_id in coverage_doc
+
+
+def test_v17_docker_examples_are_cataloged_and_documented() -> None:
+    manifests = _example_manifest_map()
+
+    for example_id, validation in USER_FACING_V17_EXAMPLES.items():
+        manifest = manifests[example_id]
+        assert manifest["introduced_in"] == "v17"
+        assert manifest["status"] == "runnable"
+        assert manifest["validation"] == validation
+        assert manifest["surface"] == "cli"
+
+    examples_readme = (EXAMPLES_ROOT / "README.md").read_text(encoding="utf-8")
+    execution_readme = (EXAMPLES_ROOT / "execution" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    coverage_doc = (
+        EXAMPLES_ROOT.parent / "docs" / "features" / "container-example-coverage.md"
+    ).read_text(encoding="utf-8")
+    docker_readme = _example_readme_path("execution.containers.docker").read_text(
+        encoding="utf-8"
+    )
+
+    assert "container-example-coverage.md" in examples_readme
+    assert "execution.containers.docker" in execution_readme
+    assert "execution.containers.docker" in coverage_doc
+    assert "--executor docker" in docker_readme
+    assert "executor.docker.command" in docker_readme
+    assert "filesystem.docker.artifact_root_visible" in docker_readme
+    assert "security sandbox" in docker_readme
+    assert "untrusted project code" in docker_readme
+    assert "Docker daemon" in docker_readme
 
 
 def test_internal_demos_are_excluded_from_primary_catalogs() -> None:
