@@ -10,6 +10,15 @@ import pytest
 
 from loom.artifacts import ArtifactRef
 from loom.fingerprints import hash_text
+from loom.pipeline.reliability import (
+    FailureClassification,
+    ReliabilityPolicy,
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    RetryPolicy,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
@@ -17,6 +26,8 @@ from loom.pipeline.stores import (
     MaterializedRefKind,
     PerRunAuthorityStore,
     ReadModelWarningCode,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
     path_to_run_uri,
     read_authoritative_run,
     read_completed_run_bundle_metadata,
@@ -71,6 +82,73 @@ def _submitted_record(run_uri: str) -> SubmittedOperationRecord:
         state=SubmittedOperationState.SUBMITTED,
         manifest_relative_path="submitted/sub-1.json",
         summary_counts={"submitted": 1},
+    )
+
+
+def _reliability_status(run_uri: str) -> ReliabilityStatusDetail:
+    return ReliabilityStatusDetail(
+        run_uri=run_uri,
+        run_status=RunStatus.RUNNING,
+        stage_id="build",
+        stage_status=StageStatus.FAILED,
+        attempt=1,
+        created_at="2020-01-01T00:00:00Z",
+    )
+
+
+def _write_reliability_facts(case: ReadModelCase) -> None:
+    status = _reliability_status(case.run_uri)
+    failure = FailureClassification(
+        reason_code="runtime_error",
+        status=status,
+        retriable=True,
+    )
+    case.store.write_reliability_policy_fact(
+        case.run_uri,
+        ReliabilityPolicyFact(
+            run_uri=case.run_uri,
+            scope=ReliabilityPolicyScope.STAGE,
+            stage_name="build",
+            recorded_at="2020-01-01T00:00:00Z",
+            policy=ReliabilityPolicy(retry=RetryPolicy(enabled=True, max_attempts=2)),
+        ),
+    )
+    case.store.write_reliability_status_detail(case.run_uri, status)
+    case.store.write_stage_attempt_transaction(
+        case.run_uri,
+        StageAttemptTransaction(
+            transaction_id="tx-1",
+            run_uri=case.run_uri,
+            stage_id="build",
+            attempt=1,
+            status=status,
+        ),
+    )
+    case.store.write_retry_decision(
+        case.run_uri,
+        RetryDecisionRecord(
+            decision_id="retry-1",
+            transaction_id="tx-1",
+            should_retry=True,
+            next_attempt=2,
+            decision_reason="policy_allows_retry",
+            policy_max_attempts=2,
+            attempt_count=1,
+            status=status,
+            failure=failure,
+        ),
+    )
+    case.store.write_timeout_outcome(
+        case.run_uri,
+        TimeoutOutcomeRecord(
+            outcome_id="timeout-1",
+            transaction_id="tx-1",
+            timed_out=False,
+            duration_seconds=1,
+            reason_code="completed",
+            status=status,
+            causal_decision_id="retry-1",
+        ),
     )
 
 
@@ -142,6 +220,27 @@ def test_authoritative_read_contract_carries_backend_facts_and_materialized_refs
     )
     assert bundle.artifact_facts[0] == snapshot.stages[0].artifact_facts[0]
     assert bundle.materialized_refs[0].kind is MaterializedRefKind.ARTIFACT_PAYLOAD
+
+
+def test_authoritative_read_contract_carries_reliability_facts(
+    read_model_case: ReadModelCase,
+) -> None:
+    _populate(read_model_case, materialize_output=True)
+    _write_reliability_facts(read_model_case)
+
+    snapshot = read_authoritative_run(read_model_case.store, read_model_case.run_uri)
+    stage = snapshot.stages[0]
+
+    assert stage.reliability_policy_facts[0].stage_name == "build"
+    assert stage.reliability_status_details[0].stage_id == "build"
+    assert stage.reliability_transactions[0].transaction_id == "tx-1"
+    assert stage.retry_decisions[0].decision_id == "retry-1"
+    assert stage.timeout_outcomes[0].outcome_id == "timeout-1"
+    assert snapshot.reliability_policy_facts == ()
+    assert read_model_case.store.read_transaction_chain(
+        read_model_case.run_uri,
+        "tx-1",
+    ) == stage.reliability_transactions
 
 
 def test_authoritative_read_contract_warns_for_missing_materialization(

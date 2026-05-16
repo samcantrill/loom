@@ -10,11 +10,19 @@ from typing import Protocol, cast, runtime_checkable
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
 from loom.pipeline.stores.inspection import RunStateInspection
 from loom.serialization import PlainData
 from loom.timestamps import parse_timestamp
+
+from .read_models import ReliabilityPolicyFact
 
 
 RUN_FRESHNESS_SCHEMA_VERSION = 1
@@ -225,6 +233,53 @@ class RunSubmittedOperationStore(Protocol):
     def latest_active_submitted_operation(
         self, run_uri: str
     ) -> SubmittedOperationRecord | None: ...
+
+
+@runtime_checkable
+class RunReliabilityStore(Protocol):
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> None: ...
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]: ...
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> None: ...
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]: ...
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> None: ...
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]: ...
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]: ...
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> None: ...
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]: ...
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> None: ...
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]: ...
 
 
 @runtime_checkable

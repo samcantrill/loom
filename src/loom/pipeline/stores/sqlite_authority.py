@@ -13,6 +13,12 @@ from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.serialization import PlainData, ensure_plain_data, thaw_plain_data
@@ -45,8 +51,19 @@ from .read_models import (
     OutputCommitRecord,
     RecoveryKind,
     RecoveryRecord,
+    ReliabilityPolicyFact,
     StageAttempt,
     StageLifecycleSnapshot,
+)
+from .reliability_facts import (
+    reliability_payload_matches,
+    reliability_policy_fact_key,
+    reliability_status_detail_key,
+    validate_policy_fact_run,
+    validate_retry_decision_run,
+    validate_status_detail_run,
+    validate_timeout_outcome_run,
+    validate_transaction_run,
 )
 from .run_uri import run_uri_to_path
 from .schema_policy import (
@@ -73,6 +90,7 @@ _SUPPORTED_PER_RUN_CAPABILITIES = (
     BackendCapability.BACKEND_LEASE_TIME,
     BackendCapability.ATOMIC_OUTPUT_COMMIT,
     BackendCapability.ARTIFACT_FACTS,
+    BackendCapability.RELIABILITY_FACTS,
     BackendCapability.SUBMITTED_OPERATIONS,
     BackendCapability.REVISIONED_SNAPSHOTS,
     BackendCapability.MONOTONIC_REVISIONS,
@@ -176,6 +194,57 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "scope_json",
             "event_type",
             "payload_json",
+            "revision_sequence",
+        }
+    ),
+    "reliability_policy_facts": frozenset(
+        {
+            "fact_key",
+            "scope",
+            "stage_name",
+            "attempt_number",
+            "recorded_at",
+            "fact_json",
+            "revision_sequence",
+        }
+    ),
+    "reliability_status_details": frozenset(
+        {
+            "fact_key",
+            "stage_name",
+            "attempt_number",
+            "created_at",
+            "detail_json",
+            "revision_sequence",
+        }
+    ),
+    "reliability_transactions": frozenset(
+        {
+            "transaction_id",
+            "stage_name",
+            "attempt_number",
+            "causal_parent_id",
+            "record_json",
+            "revision_sequence",
+        }
+    ),
+    "retry_decisions": frozenset(
+        {
+            "decision_id",
+            "transaction_id",
+            "stage_name",
+            "attempt_number",
+            "record_json",
+            "revision_sequence",
+        }
+    ),
+    "timeout_outcomes": frozenset(
+        {
+            "outcome_id",
+            "transaction_id",
+            "stage_name",
+            "attempt_number",
+            "record_json",
             "revision_sequence",
         }
     ),
@@ -653,6 +722,267 @@ class SQLitePerRunAuthorityStore:
                 for row in rows
             )
 
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> BackendRevision:
+        self._bind_run_uri(run_uri)
+        if not isinstance(fact, ReliabilityPolicyFact):
+            raise AuthorityStoreError("fact must be a ReliabilityPolicyFact")
+        validate_policy_fact_run(fact, run_uri)
+        with self._transaction(run_uri) as conn:
+            key = reliability_policy_fact_key(fact)
+            return self._insert_reliability_fact(
+                conn,
+                table="reliability_policy_facts",
+                key_column="fact_key",
+                key=key,
+                payload_column="fact_json",
+                payload=fact.to_dict(),
+                insert_sql="""
+                    INSERT INTO reliability_policy_facts (
+                        fact_key, scope, stage_name, attempt_number, recorded_at,
+                        fact_json, revision_sequence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                insert_values=(
+                    key,
+                    fact.scope.value,
+                    fact.stage_name,
+                    fact.attempt,
+                    fact.recorded_at,
+                    _json_dumps(fact.to_dict()),
+                ),
+            )
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            if stage_name is None:
+                rows = conn.execute(
+                    """
+                    SELECT fact_json
+                    FROM reliability_policy_facts
+                    ORDER BY scope, COALESCE(stage_name, ''), COALESCE(attempt_number, 0), recorded_at
+                    """
+                ).fetchall()
+            else:
+                _non_empty(stage_name, "stage_name")
+                rows = conn.execute(
+                    """
+                    SELECT fact_json
+                    FROM reliability_policy_facts
+                    WHERE stage_name = ?
+                    ORDER BY scope, COALESCE(attempt_number, 0), recorded_at
+                    """,
+                    (stage_name,),
+                ).fetchall()
+            return tuple(
+                ReliabilityPolicyFact.from_dict(_json_loads(cast(str, row["fact_json"])))
+                for row in rows
+            )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> BackendRevision:
+        self._bind_run_uri(run_uri)
+        if not isinstance(detail, ReliabilityStatusDetail):
+            raise AuthorityStoreError("detail must be a ReliabilityStatusDetail")
+        validate_status_detail_run(detail, run_uri)
+        with self._transaction(run_uri) as conn:
+            key = reliability_status_detail_key(detail)
+            return self._insert_reliability_fact(
+                conn,
+                table="reliability_status_details",
+                key_column="fact_key",
+                key=key,
+                payload_column="detail_json",
+                payload=detail.to_dict(),
+                insert_sql="""
+                    INSERT INTO reliability_status_details (
+                        fact_key, stage_name, attempt_number, created_at,
+                        detail_json, revision_sequence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                insert_values=(
+                    key,
+                    detail.stage_id,
+                    detail.attempt,
+                    detail.created_at,
+                    _json_dumps(detail.to_dict()),
+                ),
+            )
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            table="reliability_status_details",
+            payload_column="detail_json",
+            parser=ReliabilityStatusDetail.from_dict,
+            stage_name=stage_name,
+            order_by="stage_name, attempt_number, created_at",
+        )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> BackendRevision:
+        self._bind_run_uri(run_uri)
+        if not isinstance(transaction, StageAttemptTransaction):
+            raise AuthorityStoreError("transaction must be a StageAttemptTransaction")
+        validate_transaction_run(transaction, run_uri)
+        with self._transaction(run_uri) as conn:
+            return self._insert_reliability_fact(
+                conn,
+                table="reliability_transactions",
+                key_column="transaction_id",
+                key=transaction.transaction_id,
+                payload_column="record_json",
+                payload=transaction.to_dict(),
+                insert_sql="""
+                    INSERT INTO reliability_transactions (
+                        transaction_id, stage_name, attempt_number,
+                        causal_parent_id, record_json, revision_sequence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                insert_values=(
+                    transaction.transaction_id,
+                    transaction.stage_id,
+                    transaction.attempt,
+                    transaction.causal_parent_id,
+                    _json_dumps(transaction.to_dict()),
+                ),
+            )
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        _non_empty(transaction_id, "transaction_id")
+        transactions = {
+            transaction.transaction_id: transaction
+            for transaction in self.list_stage_attempt_transactions(run_uri)
+        }
+        current = transactions.get(transaction_id)
+        if current is None:
+            return ()
+        chain: list[StageAttemptTransaction] = []
+        seen: set[str] = set()
+        while current is not None:
+            if current.transaction_id in seen:
+                raise AuthorityStoreError(
+                    "reliability transaction chain contains a cycle"
+                )
+            seen.add(current.transaction_id)
+            chain.append(current)
+            parent_id = current.causal_parent_id
+            current = None if parent_id is None else transactions.get(parent_id)
+        return tuple(reversed(chain))
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            table="reliability_transactions",
+            payload_column="record_json",
+            parser=StageAttemptTransaction.from_dict,
+            stage_name=stage_name,
+            order_by="stage_name, attempt_number, transaction_id",
+        )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> BackendRevision:
+        self._bind_run_uri(run_uri)
+        if not isinstance(decision, RetryDecisionRecord):
+            raise AuthorityStoreError("decision must be a RetryDecisionRecord")
+        validate_retry_decision_run(decision, run_uri)
+        with self._transaction(run_uri) as conn:
+            return self._insert_reliability_fact(
+                conn,
+                table="retry_decisions",
+                key_column="decision_id",
+                key=decision.decision_id,
+                payload_column="record_json",
+                payload=decision.to_dict(),
+                insert_sql="""
+                    INSERT INTO retry_decisions (
+                        decision_id, transaction_id, stage_name, attempt_number,
+                        record_json, revision_sequence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                insert_values=(
+                    decision.decision_id,
+                    decision.transaction_id,
+                    decision.status.stage_id,
+                    decision.status.attempt,
+                    _json_dumps(decision.to_dict()),
+                ),
+            )
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            table="retry_decisions",
+            payload_column="record_json",
+            parser=RetryDecisionRecord.from_dict,
+            stage_name=stage_name,
+            order_by="stage_name, attempt_number, decision_id",
+        )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> BackendRevision:
+        self._bind_run_uri(run_uri)
+        if not isinstance(outcome, TimeoutOutcomeRecord):
+            raise AuthorityStoreError("outcome must be a TimeoutOutcomeRecord")
+        validate_timeout_outcome_run(outcome, run_uri)
+        with self._transaction(run_uri) as conn:
+            return self._insert_reliability_fact(
+                conn,
+                table="timeout_outcomes",
+                key_column="outcome_id",
+                key=outcome.outcome_id,
+                payload_column="record_json",
+                payload=outcome.to_dict(),
+                insert_sql="""
+                    INSERT INTO timeout_outcomes (
+                        outcome_id, transaction_id, stage_name, attempt_number,
+                        record_json, revision_sequence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                insert_values=(
+                    outcome.outcome_id,
+                    outcome.transaction_id,
+                    outcome.status.stage_id,
+                    outcome.status.attempt,
+                    _json_dumps(outcome.to_dict()),
+                ),
+            )
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        return self._list_stage_reliability_records(
+            run_uri,
+            table="timeout_outcomes",
+            payload_column="record_json",
+            parser=TimeoutOutcomeRecord.from_dict,
+            stage_name=stage_name,
+            order_by="stage_name, attempt_number, outcome_id",
+        )
+
     def record_output_commit(
         self,
         run_uri: str,
@@ -1082,6 +1412,65 @@ class SQLitePerRunAuthorityStore:
             attempt_id=attempt_id,
         )
 
+    def _insert_reliability_fact(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        key_column: str,
+        key: str,
+        payload_column: str,
+        payload: Mapping[str, PlainData],
+        insert_sql: str,
+        insert_values: tuple[object, ...],
+    ) -> BackendRevision:
+        existing = conn.execute(
+            f"SELECT {payload_column}, revision_sequence FROM {table} WHERE {key_column} = ?",
+            (key,),
+        ).fetchone()
+        if existing is not None:
+            existing_payload = _json_loads(cast(str, existing[payload_column]))
+            if not isinstance(existing_payload, Mapping):
+                raise AuthorityStoreError("stored reliability fact must be a mapping")
+            if reliability_payload_matches(
+                cast(Mapping[str, PlainData], existing_payload),
+                payload,
+            ):
+                return _revision_for(conn, cast(int, existing["revision_sequence"]))
+            raise AuthorityStoreError("conflicting reliability fact already exists")
+        revision = self._next_revision(conn)
+        conn.execute(insert_sql, (*insert_values, revision.sequence))
+        _touch_run(conn, revision)
+        return revision
+
+    def _list_stage_reliability_records[T](
+        self,
+        run_uri: str,
+        *,
+        table: str,
+        payload_column: str,
+        parser: Callable[[object], T],
+        stage_name: str | None,
+        order_by: str,
+    ) -> tuple[T, ...]:
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            if stage_name is None:
+                rows = conn.execute(
+                    f"SELECT {payload_column} FROM {table} ORDER BY {order_by}"
+                ).fetchall()
+            else:
+                _non_empty(stage_name, "stage_name")
+                rows = conn.execute(
+                    f"SELECT {payload_column} FROM {table} WHERE stage_name = ? ORDER BY {order_by}",
+                    (stage_name,),
+                ).fetchall()
+            return tuple(
+                parser(_json_loads(cast(str, row[payload_column]))) for row in rows
+            )
+
     def _bind_run_uri(self, run_uri: str) -> str:
         run_uri_to_path(run_uri)
         if self._run_uri is None:
@@ -1294,6 +1683,57 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS reliability_policy_facts (
+            fact_key TEXT PRIMARY KEY,
+            scope TEXT NOT NULL,
+            stage_name TEXT,
+            attempt_number INTEGER,
+            recorded_at TEXT NOT NULL,
+            fact_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reliability_status_details (
+            fact_key TEXT PRIMARY KEY,
+            stage_name TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            detail_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reliability_transactions (
+            transaction_id TEXT PRIMARY KEY,
+            stage_name TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            causal_parent_id TEXT,
+            record_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS retry_decisions (
+            decision_id TEXT PRIMARY KEY,
+            transaction_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            record_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS timeout_outcomes (
+            outcome_id TEXT PRIMARY KEY,
+            transaction_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            record_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
         CREATE INDEX IF NOT EXISTS idx_attempts_stage
             ON attempts(stage_name, attempt_number)
         """,
@@ -1308,6 +1748,26 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_artifact_facts_stage
             ON artifact_facts(stage_name)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_reliability_policy_stage
+            ON reliability_policy_facts(stage_name, attempt_number)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_reliability_status_stage
+            ON reliability_status_details(stage_name, attempt_number)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_reliability_transactions_stage
+            ON reliability_transactions(stage_name, attempt_number)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_retry_decisions_stage
+            ON retry_decisions(stage_name, attempt_number)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_timeout_outcomes_stage
+            ON timeout_outcomes(stage_name, attempt_number)
         """,
     )
     for statement in schema_statements:
@@ -1469,6 +1929,26 @@ def _snapshot(
         cast(str, row["stage_name"])
         for row in conn.execute("SELECT DISTINCT stage_name FROM commits")
     )
+    stage_names.update(
+        cast(str, row["stage_name"])
+        for row in conn.execute(
+            """
+            SELECT DISTINCT stage_name
+            FROM reliability_policy_facts
+            WHERE stage_name IS NOT NULL
+            """
+        )
+    )
+    for table_name in (
+        "reliability_status_details",
+        "reliability_transactions",
+        "retry_decisions",
+        "timeout_outcomes",
+    ):
+        stage_names.update(
+            cast(str, row["stage_name"])
+            for row in conn.execute(f"SELECT DISTINCT stage_name FROM {table_name}")
+        )
     stages = tuple(
         _stage_snapshot(conn, run_uri=run_uri, stage_name=stage_name, now=now)
         for stage_name in sorted(stage_names)
@@ -1487,6 +1967,7 @@ def _snapshot(
         stages=stages,
         submitted_operations=submitted,
         cleanup_candidates=_cleanup_candidates(conn),
+        reliability_policy_facts=_reliability_policy_facts(conn, stage_name=None),
     )
 
 
@@ -1561,6 +2042,20 @@ def _stage_snapshot(
         active_lease=active_lease,
         latest_commit=latest_commit,
         artifact_facts=facts,
+        reliability_policy_facts=_reliability_policy_facts(
+            conn,
+            stage_name=stage_name,
+        ),
+        reliability_status_details=_reliability_status_details(
+            conn,
+            stage_name=stage_name,
+        ),
+        reliability_transactions=_reliability_transactions(
+            conn,
+            stage_name=stage_name,
+        ),
+        retry_decisions=_retry_decisions(conn, stage_name=stage_name),
+        timeout_outcomes=_timeout_outcomes(conn, stage_name=stage_name),
         reason=reason,
     )
 
@@ -1625,6 +2120,102 @@ def _artifact_fact_from_row(
         artifact=ArtifactRef.from_dict(_json_loads(cast(str, row["artifact_json"]))),
         commit_id=cast(str, row["commit_id"]),
         revision=_revision_for(conn, cast(int, row["revision_sequence"])),
+    )
+
+
+def _reliability_policy_facts(
+    conn: sqlite3.Connection, *, stage_name: str | None
+) -> tuple[ReliabilityPolicyFact, ...]:
+    if stage_name is None:
+        rows = conn.execute(
+            """
+            SELECT fact_json
+            FROM reliability_policy_facts
+            WHERE stage_name IS NULL
+            ORDER BY scope, recorded_at
+            """
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT fact_json
+            FROM reliability_policy_facts
+            WHERE stage_name = ?
+            ORDER BY scope, COALESCE(attempt_number, 0), recorded_at
+            """,
+            (stage_name,),
+        ).fetchall()
+    return tuple(
+        ReliabilityPolicyFact.from_dict(_json_loads(cast(str, row["fact_json"])))
+        for row in rows
+    )
+
+
+def _reliability_status_details(
+    conn: sqlite3.Connection, *, stage_name: str
+) -> tuple[ReliabilityStatusDetail, ...]:
+    return tuple(
+        ReliabilityStatusDetail.from_dict(_json_loads(cast(str, row["detail_json"])))
+        for row in conn.execute(
+            """
+            SELECT detail_json
+            FROM reliability_status_details
+            WHERE stage_name = ?
+            ORDER BY attempt_number, created_at
+            """,
+            (stage_name,),
+        )
+    )
+
+
+def _reliability_transactions(
+    conn: sqlite3.Connection, *, stage_name: str
+) -> tuple[StageAttemptTransaction, ...]:
+    return tuple(
+        StageAttemptTransaction.from_dict(_json_loads(cast(str, row["record_json"])))
+        for row in conn.execute(
+            """
+            SELECT record_json
+            FROM reliability_transactions
+            WHERE stage_name = ?
+            ORDER BY attempt_number, transaction_id
+            """,
+            (stage_name,),
+        )
+    )
+
+
+def _retry_decisions(
+    conn: sqlite3.Connection, *, stage_name: str
+) -> tuple[RetryDecisionRecord, ...]:
+    return tuple(
+        RetryDecisionRecord.from_dict(_json_loads(cast(str, row["record_json"])))
+        for row in conn.execute(
+            """
+            SELECT record_json
+            FROM retry_decisions
+            WHERE stage_name = ?
+            ORDER BY attempt_number, decision_id
+            """,
+            (stage_name,),
+        )
+    )
+
+
+def _timeout_outcomes(
+    conn: sqlite3.Connection, *, stage_name: str
+) -> tuple[TimeoutOutcomeRecord, ...]:
+    return tuple(
+        TimeoutOutcomeRecord.from_dict(_json_loads(cast(str, row["record_json"])))
+        for row in conn.execute(
+            """
+            SELECT record_json
+            FROM timeout_outcomes
+            WHERE stage_name = ?
+            ORDER BY attempt_number, outcome_id
+            """,
+            (stage_name,),
+        )
     )
 
 

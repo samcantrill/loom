@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord
 from loom.pipeline.stores import (
@@ -32,6 +39,7 @@ from loom.pipeline.stores import (
     PerRunAuthorityStore,
     RecoveryKind,
     RecoveryRecord,
+    ReliabilityPolicyFact,
     ResourceLeaseRecord,
     StageAttempt,
     StageLifecycleSnapshot,
@@ -42,6 +50,17 @@ from loom.pipeline.stores import (
     WorkspaceCoordinationStore,
     WorkspaceIdentity,
     check_authority_schema_version,
+)
+from loom.pipeline.stores.reliability_facts import (
+    reliability_payload_matches,
+    reliability_policy_fact_key,
+    reliability_record_stage_name,
+    reliability_status_detail_key,
+    validate_policy_fact_run,
+    validate_retry_decision_run,
+    validate_status_detail_run,
+    validate_timeout_outcome_run,
+    validate_transaction_run,
 )
 from loom.serialization import PlainData
 
@@ -59,6 +78,17 @@ class _RunState:
     facts: dict[str, list[ArtifactFactRecord]] = field(default_factory=dict)
     cleanup: list[CleanupCandidate] = field(default_factory=list)
     events: list[PipelineEventRecord] = field(default_factory=list)
+    reliability_policy_facts: dict[str, ReliabilityPolicyFact] = field(
+        default_factory=dict
+    )
+    reliability_status_details: dict[str, ReliabilityStatusDetail] = field(
+        default_factory=dict
+    )
+    reliability_transactions: dict[str, StageAttemptTransaction] = field(
+        default_factory=dict
+    )
+    retry_decisions: dict[str, RetryDecisionRecord] = field(default_factory=dict)
+    timeout_outcomes: dict[str, TimeoutOutcomeRecord] = field(default_factory=dict)
 
 
 class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
@@ -87,6 +117,7 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                     BackendCapability.BACKEND_LEASE_TIME,
                     BackendCapability.ATOMIC_OUTPUT_COMMIT,
                     BackendCapability.ARTIFACT_FACTS,
+                    BackendCapability.RELIABILITY_FACTS,
                     BackendCapability.SUBMITTED_OPERATIONS,
                     BackendCapability.REVISIONED_SNAPSHOTS,
                     BackendCapability.MONOTONIC_REVISIONS,
@@ -296,6 +327,152 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
     ) -> tuple[SubmittedOperationRecord, ...]:
         return tuple(self._require_run(run_uri).submitted.values())
 
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> BackendRevision:
+        state = self._require_run(run_uri)
+        validate_policy_fact_run(fact, run_uri)
+        return self._store_immutable_reliability_fact(
+            state.reliability_policy_facts,
+            reliability_policy_fact_key(fact),
+            fact,
+            state,
+        )
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        facts = self._require_run(run_uri).reliability_policy_facts.values()
+        return tuple(
+            sorted(
+                (
+                    fact
+                    for fact in facts
+                    if stage_name is None or fact.stage_name == stage_name
+                ),
+                key=lambda fact: (
+                    fact.scope.value,
+                    fact.stage_name or "",
+                    fact.attempt or 0,
+                    fact.recorded_at,
+                ),
+            )
+        )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> BackendRevision:
+        state = self._require_run(run_uri)
+        validate_status_detail_run(detail, run_uri)
+        return self._store_immutable_reliability_fact(
+            state.reliability_status_details,
+            reliability_status_detail_key(detail),
+            detail,
+            state,
+        )
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return self._stage_reliability_records(
+            self._require_run(run_uri).reliability_status_details.values(),
+            stage_name=stage_name,
+            sort_key=lambda detail: (detail.stage_id, detail.attempt, detail.created_at),
+        )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> BackendRevision:
+        state = self._require_run(run_uri)
+        validate_transaction_run(transaction, run_uri)
+        return self._store_immutable_reliability_fact(
+            state.reliability_transactions,
+            transaction.transaction_id,
+            transaction,
+            state,
+        )
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        transactions = self._require_run(run_uri).reliability_transactions
+        current = transactions.get(transaction_id)
+        if current is None:
+            return ()
+        chain: list[StageAttemptTransaction] = []
+        seen: set[str] = set()
+        while current is not None:
+            if current.transaction_id in seen:
+                raise ValueError("reliability transaction chain contains a cycle")
+            seen.add(current.transaction_id)
+            chain.append(current)
+            parent_id = current.causal_parent_id
+            current = None if parent_id is None else transactions.get(parent_id)
+        return tuple(reversed(chain))
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return self._stage_reliability_records(
+            self._require_run(run_uri).reliability_transactions.values(),
+            stage_name=stage_name,
+            sort_key=lambda transaction: (
+                transaction.stage_id,
+                transaction.attempt,
+                transaction.transaction_id,
+            ),
+        )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> BackendRevision:
+        state = self._require_run(run_uri)
+        validate_retry_decision_run(decision, run_uri)
+        return self._store_immutable_reliability_fact(
+            state.retry_decisions,
+            decision.decision_id,
+            decision,
+            state,
+        )
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        return self._stage_reliability_records(
+            self._require_run(run_uri).retry_decisions.values(),
+            stage_name=stage_name,
+            sort_key=lambda decision: (
+                decision.status.stage_id,
+                decision.status.attempt,
+                decision.decision_id,
+            ),
+        )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> BackendRevision:
+        state = self._require_run(run_uri)
+        validate_timeout_outcome_run(outcome, run_uri)
+        return self._store_immutable_reliability_fact(
+            state.timeout_outcomes,
+            outcome.outcome_id,
+            outcome,
+            state,
+        )
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        return self._stage_reliability_records(
+            self._require_run(run_uri).timeout_outcomes.values(),
+            stage_name=stage_name,
+            sort_key=lambda outcome: (
+                outcome.status.stage_id,
+                outcome.status.attempt,
+                outcome.outcome_id,
+            ),
+        )
+
     def record_output_commit(
         self,
         run_uri: str,
@@ -372,6 +549,24 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         stage_names = set(state.stage_statuses)
         stage_names.update(state.attempts)
         stage_names.update(state.commits)
+        stage_names.update(
+            fact.stage_name
+            for fact in state.reliability_policy_facts.values()
+            if fact.stage_name is not None
+        )
+        stage_names.update(
+            detail.stage_id for detail in state.reliability_status_details.values()
+        )
+        stage_names.update(
+            transaction.stage_id
+            for transaction in state.reliability_transactions.values()
+        )
+        stage_names.update(
+            decision.status.stage_id for decision in state.retry_decisions.values()
+        )
+        stage_names.update(
+            outcome.status.stage_id for outcome in state.timeout_outcomes.values()
+        )
         stages = tuple(
             StageLifecycleSnapshot(
                 stage_name=stage_name,
@@ -381,6 +576,26 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
                 active_lease=self._active_stage_lease(state, stage_name),
                 latest_commit=state.commits.get(stage_name),
                 artifact_facts=tuple(state.facts.get(stage_name, ())),
+                reliability_policy_facts=self.list_reliability_policy_facts(
+                    run_uri,
+                    stage_name=stage_name,
+                ),
+                reliability_status_details=self.list_reliability_status_details(
+                    run_uri,
+                    stage_name=stage_name,
+                ),
+                reliability_transactions=self.list_stage_attempt_transactions(
+                    run_uri,
+                    stage_name=stage_name,
+                ),
+                retry_decisions=self.list_retry_decisions(
+                    run_uri,
+                    stage_name=stage_name,
+                ),
+                timeout_outcomes=self.list_timeout_outcomes(
+                    run_uri,
+                    stage_name=stage_name,
+                ),
             )
             for stage_name in sorted(stage_names)
         )
@@ -392,6 +607,11 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
             stages=stages,
             submitted_operations=tuple(state.submitted.values()),
             cleanup_candidates=tuple(state.cleanup),
+            reliability_policy_facts=tuple(
+                fact
+                for fact in self.list_reliability_policy_facts(run_uri)
+                if fact.stage_name is None
+            ),
         )
 
     def scan_recovery(self, run_uri: str) -> tuple[RecoveryRecord, ...]:
@@ -422,6 +642,49 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         if seconds <= 0:
             raise ValueError("seconds must be positive")
         self._tick += seconds
+
+    def _store_immutable_reliability_fact[T](
+        self,
+        records: dict[str, T],
+        key: str,
+        record: T,
+        state: _RunState,
+    ) -> BackendRevision:
+        existing = records.get(key)
+        if existing is not None:
+            existing_payload = getattr(existing, "to_dict")()
+            record_payload = getattr(record, "to_dict")()
+            if reliability_payload_matches(existing_payload, record_payload):
+                return state.revision
+            raise ValueError("conflicting reliability fact already exists")
+        records[key] = record
+        state.revision = self._next_revision()
+        return state.revision
+
+    def _stage_reliability_records[T](
+        self,
+        records: object,
+        *,
+        stage_name: str | None,
+        sort_key: Callable[[T], tuple[object, ...]],
+    ) -> tuple[T, ...]:
+        values = tuple(cast(tuple[T, ...], records))
+        filtered = (
+            record
+            for record in values
+            if stage_name is None
+            or reliability_record_stage_name(
+                cast(
+                    ReliabilityStatusDetail
+                    | StageAttemptTransaction
+                    | RetryDecisionRecord
+                    | TimeoutOutcomeRecord,
+                    record,
+                )
+            )
+            == stage_name
+        )
+        return tuple(sorted(filtered, key=sort_key))
 
     def _require_run(self, run_uri: str) -> _RunState:
         try:

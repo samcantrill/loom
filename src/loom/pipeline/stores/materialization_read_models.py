@@ -28,6 +28,7 @@ from .read_models import (
     OutputCommitRecord,
     ReadModelWarning,
     ReadModelWarningCode,
+    ReliabilityPolicyFact,
     StageLifecycleSnapshot,
 )
 from .run_store import LocalRunStorePaths
@@ -93,6 +94,7 @@ class CompletedRunBundleMetadata:
     artifact_facts: tuple[ArtifactFactRecord, ...] = ()
     cleanup_candidates: tuple[CleanupCandidate, ...] = ()
     materialized_refs: tuple[MaterializedRef, ...] = ()
+    reliability_policy_facts: tuple[ReliabilityPolicyFact, ...] = ()
     warnings: tuple[ReadModelWarning, ...] = ()
 
     @classmethod
@@ -111,6 +113,7 @@ class CompletedRunBundleMetadata:
             ),
             cleanup_candidates=snapshot.cleanup_candidates,
             materialized_refs=snapshot.materialized_refs,
+            reliability_policy_facts=snapshot.reliability_policy_facts,
             warnings=snapshot.warnings,
         )
 
@@ -129,6 +132,9 @@ class CompletedRunBundleMetadata:
                 candidate.to_dict() for candidate in self.cleanup_candidates
             ],
             "materialized_refs": [ref.to_dict() for ref in self.materialized_refs],
+            "reliability_policy_facts": [
+                fact.to_dict() for fact in self.reliability_policy_facts
+            ],
             "warnings": [warning.to_dict() for warning in self.warnings],
         }
 
@@ -232,6 +238,7 @@ def read_authoritative_run(
         submitted_operations=snapshot.submitted_operations,
         cleanup_candidates=snapshot.cleanup_candidates,
         materialized_refs=materialized_refs,
+        reliability_policy_facts=snapshot.reliability_policy_facts,
         warnings=tuple(warnings),
     )
     if read_options.strict and assembled.warnings:

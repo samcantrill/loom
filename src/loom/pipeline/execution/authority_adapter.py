@@ -10,6 +10,12 @@ from typing import cast
 from loom.artifacts import ArtifactRef
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
+from loom.pipeline.reliability import (
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    StageAttemptTransaction,
+    TimeoutOutcomeRecord,
+)
 from loom.pipeline.status import RunStatus, RunStatusRecord, StageStatus, StageStatusRecord
 from loom.pipeline.stores import (
     AttemptAllocation,
@@ -45,6 +51,7 @@ from loom.pipeline.stores.read_models import (
     LeaseRecord,
     LifecycleReason,
     RecoveryRecord,
+    ReliabilityPolicyFact,
     StageAttempt,
     StageLifecycleSnapshot,
 )
@@ -394,6 +401,121 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
             operation="list submitted operations",
         )
         return result.submitted_operations
+
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> BackendRevision:
+        _ = (run_uri, fact)
+        raise AuthorityStoreError(
+            "HTTP authority reliability fact writes are not implemented in this phase"
+        )
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        if stage_name is None:
+            return self.snapshot(run_uri).reliability_policy_facts
+        return tuple(
+            fact
+            for stage in self.snapshot(run_uri).stages
+            if stage.stage_name == stage_name
+            for fact in stage.reliability_policy_facts
+        )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> BackendRevision:
+        _ = (run_uri, detail)
+        raise AuthorityStoreError(
+            "HTTP authority reliability fact writes are not implemented in this phase"
+        )
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        return tuple(
+            detail
+            for stage in self.snapshot(run_uri).stages
+            if stage_name is None or stage.stage_name == stage_name
+            for detail in stage.reliability_status_details
+        )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> BackendRevision:
+        _ = (run_uri, transaction)
+        raise AuthorityStoreError(
+            "HTTP authority reliability fact writes are not implemented in this phase"
+        )
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        transactions = {
+            transaction.transaction_id: transaction
+            for transaction in self.list_stage_attempt_transactions(run_uri)
+        }
+        current = transactions.get(transaction_id)
+        if current is None:
+            return ()
+        chain: list[StageAttemptTransaction] = []
+        seen: set[str] = set()
+        while current is not None:
+            if current.transaction_id in seen:
+                raise AuthorityStoreError(
+                    "reliability transaction chain contains a cycle"
+                )
+            seen.add(current.transaction_id)
+            chain.append(current)
+            parent_id = current.causal_parent_id
+            current = None if parent_id is None else transactions.get(parent_id)
+        return tuple(reversed(chain))
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        return tuple(
+            transaction
+            for stage in self.snapshot(run_uri).stages
+            if stage_name is None or stage.stage_name == stage_name
+            for transaction in stage.reliability_transactions
+        )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> BackendRevision:
+        _ = (run_uri, decision)
+        raise AuthorityStoreError(
+            "HTTP authority reliability fact writes are not implemented in this phase"
+        )
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        return tuple(
+            decision
+            for stage in self.snapshot(run_uri).stages
+            if stage_name is None or stage.stage_name == stage_name
+            for decision in stage.retry_decisions
+        )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> BackendRevision:
+        _ = (run_uri, outcome)
+        raise AuthorityStoreError(
+            "HTTP authority reliability fact writes are not implemented in this phase"
+        )
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        return tuple(
+            outcome
+            for stage in self.snapshot(run_uri).stages
+            if stage_name is None or stage.stage_name == stage_name
+            for outcome in stage.timeout_outcomes
+        )
 
     def record_output_commit(
         self,
