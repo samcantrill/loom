@@ -10,17 +10,17 @@
 - Phase execution plan path: `docs/roadmap/stage-19/phases/reliability-persistence-read-models.md`
 - Full plan: `docs/roadmap/stage-19/implementation-plan.md`
 - Source phase: Phase 2, `reliability-persistence-read-models`
-- Stack predecessor: `codex/reliability-contracts-runtime-policy`
-- Base branch: `codex/reliability-contracts-runtime-policy` at `b1c17057beccd3fcf1779ebf53442a01ed0f8840`
-- Target branch: `codex/reliability-contracts-runtime-policy`
-- Merge eligibility: stacked PR is reviewable against the predecessor branch, but is merge-eligible only after Phase 1 lands and this branch is rebased or retargeted to `develop`
+- Stack predecessor: none; Phase 1 merged before implementation began
+- Base branch: `develop` at `9ec336e` after Phase 1 merge metadata
+- Target branch: `develop`
+- Merge eligibility: root PR is eligible to merge into `develop` only after phase implementation, targeted validation, `make validate-pr`, `make test-summary`, automated review, and CI pass with no blockers
 - Workflow path: expanded path
 - Successor dependency notes: Phase 3 may stack on this branch only after Phase 2 is open or prepared, validated, and recorded by the manager; keep this branch while successors depend on it
 - Plan quality gate: passed on 2026-05-16 in the selected implementation plan
 - Plan quality gate loop budget: implementation-plan review, bounded refinement, and confirmation review are complete; no blocking findings remain
 - Draft pass: completed by `loom_phase_planner` in this assignment
 - Refine pass: completed by `loom_phase_planner` in this assignment
-- Setup limitations: no remote fetch was needed for planning; the local predecessor branch was available and verified at the assigned Phase 1 head `b1c1705`
+- Setup limitations: initial planning used `codex/reliability-contracts-runtime-policy` at `b1c1705`; after Phase 1 merged, the manager rebased the Phase 2 plan commit onto updated `origin/develop` at `9ec336e` and retargeted this phase to `develop` before implementation.
 - Blockers: none
 
 ## Objective
@@ -33,11 +33,11 @@ Stage 19 implements reliability policies and transactions in six phases. Phase 1
 
 ## Stack Context
 
-- Root or stacked phase: stacked phase
-- Current predecessor branch or PR: `codex/reliability-contracts-runtime-policy`, PR https://github.com/samcantrill/loom/pull/176
-- Why this base branch is correct: Phase 2 depends on the Phase 1 `loom.pipeline.reliability` contracts and runtime policy records, and Phase 1 is `pr_open` with local validation evidence recorded
-- Retarget/rebase plan after predecessor merge: once Phase 1 merges, replay this branch onto updated `develop`, retarget the Phase 2 PR to `develop`, rerun validation, and record stack maintenance before merge eligibility
-- Branch cleanup constraints: do not delete the Phase 1 branch while this branch or any successor still depends on it; do not delete this branch while Phase 3 or later successors target it
+- Root or stacked phase: root phase after predecessor merge and rebase
+- Current predecessor branch or PR: Phase 1 PR https://github.com/samcantrill/loom/pull/176 is merged into `develop`
+- Why this base branch is correct: Phase 2 depends on the Phase 1 reliability contracts now present on `develop`
+- Retarget/rebase plan after predecessor merge: complete before implementation; rerun validation before PR submission
+- Branch cleanup constraints: do not delete this branch while Phase 3 or later successors target it
 
 ## Source Phase Summary
 
