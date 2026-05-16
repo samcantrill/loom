@@ -226,7 +226,8 @@ make test-summary
 - Phase implementation refinement: used by manager-local type/lint cleanup after
   initial implementation
 - PR review: unused
-- Blocker resolution: 0/3 used
+- Blocker resolution: 1/3 used for pytest import-name collision in reliability
+  unit tests
 
 ## Completion Notes
 
@@ -237,14 +238,16 @@ make test-summary
   - Added `runtime.reliability` and `runtime.stage_options.<stage>.reliability` parsing, strict unknown-field rejection, and merged runtime/profile behavior with omitted-vs-explicit-disable semantics.
 - Implementation validation: completed with Ruff, Pyright, and targeted suite
   (`131` tests) on
-  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/reliability src/loom/pipeline/runtime src/loom/pipeline/__init__.py tests/contracts/test_reliability_contract.py tests/package/test_pipeline_reliability_api.py tests/unit/loom/pipeline/reliability/test_models.py tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_runtime_profiles.py tests/unit/loom/pipeline/test_runtime_metadata.py tests/integration/pipeline/test_runtime_options_integration.py tests/integration/pipeline/test_runtime_profiles_integration.py`,
+  `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check src/loom/pipeline/reliability src/loom/pipeline/runtime src/loom/pipeline/__init__.py tests/contracts/test_reliability_contract.py tests/package/test_pipeline_reliability_api.py tests/unit/loom/pipeline/reliability/test_reliability_models.py tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_runtime_profiles.py tests/unit/loom/pipeline/test_runtime_metadata.py tests/integration/pipeline/test_runtime_options_integration.py tests/integration/pipeline/test_runtime_profiles_integration.py`,
   `UV_CACHE_DIR=/tmp/uv-cache uv run --extra config pyright`, and
-  `UV_CACHE_DIR=/tmp/uv-cache uv run --active pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/package/test_pipeline_reliability_api.py tests/contracts/test_runtime_options_contract.py tests/contracts/test_reliability_contract.py tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_runtime_metadata.py tests/unit/loom/pipeline/test_runtime_profiles.py tests/unit/loom/pipeline/reliability/test_models.py tests/integration/pipeline/test_runtime_options_integration.py tests/integration/pipeline/test_runtime_profiles_integration.py`
+  `UV_CACHE_DIR=/tmp/uv-cache uv run --active pytest tests/package/test_import_boundaries.py tests/package/test_pipeline_api.py tests/package/test_pipeline_reliability_api.py tests/contracts/test_runtime_options_contract.py tests/contracts/test_reliability_contract.py tests/unit/loom/pipeline/test_runtime_options.py tests/unit/loom/pipeline/test_runtime_metadata.py tests/unit/loom/pipeline/test_runtime_profiles.py tests/unit/loom/pipeline/reliability/test_reliability_models.py tests/integration/pipeline/test_runtime_options_integration.py tests/integration/pipeline/test_runtime_profiles_integration.py`
   and focused boundary regression (`4` tests) on
   `UV_CACHE_DIR=/tmp/uv uv run --active pytest tests/package/test_import_boundaries.py::test_runtime_facade_public_imports_are_stable_and_lightweight tests/package/test_pipeline_reliability_api.py::test_pipeline_reliability_imports_are_import_light tests/contracts/test_reliability_contract.py::test_importing_reliability_contracts_remains_import_light tests/unit/loom/pipeline/test_runtime_profiles.py::test_merge_run_options_merges_stage_reliability_with_run_level_defaults`, all passed).
 - Refinement summary: manager-local refinement removed one unused import and
   fixed Pyright annotations/test expectations without changing phase scope.
-- Blocker-resolution summary: none used
+- Blocker-resolution summary: one manager-local pass renamed the reliability
+  unit test file to avoid pytest import-name collision with existing
+  `test_models.py` modules.
 - PR preparation: pending
 - Stack maintenance: pending
 - Remaining blockers: none
