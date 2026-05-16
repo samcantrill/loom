@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 pending
+Current phase: Phase 5 in_progress
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -322,7 +322,7 @@ Apptainer/Singularity prove enough common behavior.
 | 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
 | 3 | `docker-executor-integration` | merged | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
 | 4 | `docker-preflight-diagnostics` | merged | `codex/docker-preflight-diagnostics` | [#174](https://github.com/samcantrill/loom/pull/174) | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
-| 5 | `docker-examples-acceptance` | pending | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
+| 5 | `docker-examples-acceptance` | in_progress | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
 ## Implementation Readiness Blockers
 
@@ -828,7 +828,7 @@ selected-executor preflight behavior
 
 ## Phase 5: Examples, Documentation, And Acceptance Hardening
 
-Status: pending
+Status: in_progress
 Slug: `docker-examples-acceptance`
 Branch: `codex/docker-examples-acceptance`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-examples-acceptance`
@@ -903,9 +903,10 @@ blocker or optional live Docker acceptance changes public behavior
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: fast path by default; refine only if examples or
-  validation expose unresolved public behavior
+- Phase execution plan: complete in
+  `docs/roadmap/stage-17/phases/docker-examples-acceptance.md`
+- Planning/refinement budget: fast-path draft complete; refine only if examples
+  or validation expose unresolved public behavior
 - Implementation/refinement budget: zero on fast path, one available if final
   validation fails or example coverage is missing
 - PR review budget: one automated review pass available
