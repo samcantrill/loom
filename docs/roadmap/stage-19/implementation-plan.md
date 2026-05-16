@@ -1,11 +1,11 @@
 # Roadmap Stage 19 Implementation Plan: Reliability Policies And Transactions
 
-Status: Phase 3 in progress
+Status: Phase 3 PR open
 Roadmap stage: `v19`
 Planning document: `docs/roadmap/stage-19/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 implementation
+Current phase: Phase 3 automated review and merge
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -289,7 +289,7 @@ drive core retry or transaction behavior.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `reliability-contracts-runtime-policy` | merged | `codex/reliability-contracts-runtime-policy` | [#176](https://github.com/samcantrill/loom/pull/176) | `loom.pipeline.reliability`, `loom.pipeline.runtime` | Add import-light contracts and public runtime policy parsing/merge | Package, unit, runtime contract tests, `make validate-pr`, `make test-summary` | Policy merge, disabled/unset policy, import boundary |
 | 2 | `reliability-persistence-read-models` | merged | `codex/reliability-persistence-read-models` | [#177](https://github.com/samcantrill/loom/pull/177) | `loom.pipeline.stores`, read models | Persist and read versioned reliability facts | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Status detail, transaction, timeout, retry-decision records |
-| 3 | `transaction-failure-classification` | in_progress | `codex/transaction-failure-classification` | pending | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
+| 3 | `transaction-failure-classification` | pr_open | `codex/transaction-failure-classification` | [#178](https://github.com/samcantrill/loom/pull/178) | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
 | 4 | `timeout-capability-diagnostics` | pending | `codex/timeout-capability-diagnostics` | pending | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
 | 5 | `retry-decisions-runner-automation` | pending | `codex/retry-decisions-runner-automation` | pending | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
 | 6 | `reliability-inspection-finalization` | pending | `codex/reliability-inspection-finalization` | pending | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
@@ -540,11 +540,11 @@ and durable record layout
 
 ## Phase 3: Transaction And Failure Classification Integration
 
-Status: in_progress
+Status: pr_open
 Slug: `transaction-failure-classification`
 Branch: `codex/transaction-failure-classification`
 Worktree: `/home/samcantrill/work/loom-worktrees/transaction-failure-classification`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/178
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase changes execution lifecycle and
@@ -621,7 +621,7 @@ failure semantics
 - Phase execution plan: complete at
   `docs/roadmap/stage-19/phases/transaction-failure-classification.md`
 - Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one pass available
+- Implementation/refinement budget: unused; implementation-pass fixes resolved targeted validation findings
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed; Phases 1 and 2 are merged into `develop`
@@ -639,9 +639,9 @@ failure semantics
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: complete. Added stateful stage-attempt transactions, execution-owned failure classification, lifecycle transaction writes, and authority-backed reliability delegation without changing `RunStatus` or `StageStatus`.
+- Validation: complete. `make validate-pr` passed Ruff, Pyright, default suite (`1791 passed, 26 skipped, 18 deselected`), config-extra suite (`446 passed, 1828 deselected`), and build. `make test-summary` passed all suite groups.
+- PR: opened at https://github.com/samcantrill/loom/pull/178 targeting `develop`
 - Merge: pending
 - Follow-up: pending
 
