@@ -261,6 +261,10 @@ make test-summary
   and `timeout_seconds` in runtime profile sources and validating boolean
   fields in direct reliability record constructors; targeted Ruff, Pyright, and
   affected unit tests passed after the fix, followed by full PR gates.
-- PR preparation: pending
+- PR preparation: PR body prepared in
+  `docs/roadmap/stage-19/phases/reliability-contracts-runtime-policy-pr-body.md`;
+  PR opened at `https://github.com/samcantrill/loom/pull/176` with
+  `baseRefName=develop`, `headRefName=codex/reliability-contracts-runtime-policy`,
+  and state `OPEN`.
 - Stack maintenance: pending
 - Remaining blockers: none
