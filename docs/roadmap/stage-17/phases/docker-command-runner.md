@@ -223,8 +223,10 @@ Error behavior and edge cases:
 - Expected paths: `tests/package/test_import_boundaries.py` and adjacent
   package API tests if exports change.
 - Required assertions or deferral reason: importing Docker command records must
-  not import Docker SDK, diagnostics, CLI, execution lifecycle, stores, network
-  libraries, or daemon-facing code.
+  not import Docker SDK, diagnostics, CLI, execution lifecycle, network
+  libraries, subprocess, or daemon-facing code. Existing `loom.pipeline` parent
+  package imports may load store-facing symbols, so Phase 2 does not use that
+  as a Docker-specific failure signal.
 
 ### Unit Suite
 
@@ -272,8 +274,8 @@ Error behavior and edge cases:
   exist.
 - Process result output grows unbounded.
 - Fake runner diverges from the subprocess-backed protocol.
-- Docker command code imports execution lifecycle, CLI, diagnostics, stores, or
-  optional Docker SDK modules.
+- Docker command code imports execution lifecycle, CLI, diagnostics,
+  subprocess at import time, network libraries, or optional Docker SDK modules.
 
 ## Validation Commands
 

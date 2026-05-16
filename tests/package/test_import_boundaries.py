@@ -164,6 +164,40 @@ def test_import_pipeline_does_not_import_forbidden_runtime_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_docker_command_contracts_do_not_import_runtime_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.docker as docker
+
+        assert docker.DockerRunCommand
+        for forbidden in (
+            "docker",
+            "subprocess",
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through Docker commands")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_authority_root_does_not_import_fastapi() -> None:
     script = dedent(
         """
