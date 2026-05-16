@@ -290,7 +290,9 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
+- Phase implementation refinement: not needed; targeted tests, file-scoped
+  Pyright, Ruff, broad phase validation, and full PR gate passed after local
+  implementation fixes.
 - PR review: unused.
 - Blocker resolution: 0/3 used.
 
@@ -299,10 +301,27 @@ make test-summary
 - Draft plan: completed in this planning pass.
 - Final phase execution plan: refined in this planning pass; no open planning
   blockers.
-- Implementation summary:
+- Implementation summary: added `DockerExecutor` as a prepared-worker executor;
+  parsed container/Docker adapter options; derived resource flags from resolved
+  runtime resources; added run-dir and artifact-root path-parity mounts; mapped
+  Docker command results and worker results into `StageExecutionResult`; kept
+  Docker package exports lazy; wired `loom run --executor docker`; and added
+  unit, integration, package, and CLI coverage.
 - Implementation validation:
-- Refinement summary:
+  - `uv run pytest tests/unit/loom/pipeline/executors/docker/test_executor.py tests/unit/loom/cli/test_run.py tests/integration/pipeline/test_docker_executor_integration.py tests/package/test_pipeline_executor_api.py tests/package/test_import_boundaries.py`: passed, `87 passed`.
+  - `uv run ruff check src/loom/pipeline/executors/docker src/loom/pipeline/executors/__init__.py src/loom/cli/run.py tests/unit/loom/pipeline/executors/docker/test_executor.py tests/unit/loom/cli/test_run.py tests/integration/pipeline/test_docker_executor_integration.py tests/package/test_pipeline_executor_api.py`: passed.
+  - `uv run pyright src/loom/pipeline/executors/docker/executor.py tests/unit/loom/pipeline/executors/docker/test_executor.py tests/integration/pipeline/test_docker_executor_integration.py`: passed, `0 errors`.
+  - `uv run pytest tests/unit/loom/pipeline/executors tests/integration tests/e2e tests/package`: failed in the no-extra ad hoc environment because optional-dependency diagnostics tests selected config-dependent CLI paths without installing `loom[config]`; reproduced error was `MissingConfigDependencyError` for `omegaconf`/`yaml`.
+  - `uv run --extra config pytest tests/unit/loom/pipeline/executors tests/integration tests/e2e tests/package`: passed, `502 passed`.
+  - `make validate-pr`: passed; Ruff, Pyright, default harness (`1742 passed, 26 skipped, 18 deselected`), config-extra harness (`440 passed, 1779 deselected`), and build passed.
+  - `make test-summary`: passed; package `99 passed, 1 skipped`, unit `1221 passed, 7 skipped, 1 deselected`, contract `250 passed, 2 skipped`, integration `157 passed, 8 skipped, 13 deselected`, e2e `43 passed, 2 deselected`, config-extra `440 passed, 1779 deselected`, overall `2210 passed, 18 skipped, 1795 deselected`.
+- Refinement summary: local implementation fixes addressed import-boundary
+  eagerness in `loom.pipeline.executors.docker`, empty adapter-option test
+  setup, and Pyright `PlainData`/protocol typing before the implementation
+  commit; no separate phase-refiner pass was needed.
 - Blocker-resolution summary:
-- PR preparation:
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-17/phases/docker-executor-integration-pr-body.md`; PR
+  creation pending.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.
