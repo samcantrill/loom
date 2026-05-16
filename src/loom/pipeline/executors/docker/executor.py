@@ -384,13 +384,26 @@ def _with_required_path_mounts(
             kind="artifact_root",
         ),
     ):
-        if path not in {mount.target for mount in mounts}:
+        existing = next((mount for mount in mounts if mount.target == path), None)
+        if existing is None:
             mounts.append(
                 ContainerMount(
                     source=path,
                     target=path,
                     mode=ContainerMountMode.READ_WRITE,
                 )
+            )
+            continue
+        mode = cast(ContainerMountMode, existing.mode)
+        if existing.source != path or mode is not ContainerMountMode.READ_WRITE:
+            raise _DockerSetupError(
+                "docker required path-parity mount must be read-write",
+                details={
+                    "path": path,
+                    "source": existing.source,
+                    "target": existing.target,
+                    "mode": mode.value,
+                },
             )
     return ContainerOptions(
         image=container.image,

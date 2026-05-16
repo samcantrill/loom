@@ -48,10 +48,9 @@ New tests implemented:
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Targeted Phase 3 pytest | Passed | `87 passed` |
-| Broad phase pytest with config extra | Passed | `502 passed` |
+| Targeted Docker executor pytest | Passed | `14 passed` |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
-| `make test-summary` | Passed | `2210 passed, 18 skipped, 1795 deselected` |
+| `make test-summary` | Passed | `2211 passed, 18 skipped, 1796 deselected` |
 | GitHub checks | Pending | Will be recorded after PR creation |
 
 ### Test Suite Summary
@@ -59,11 +58,11 @@ New tests implemented:
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | package | passed | 99 | 0 | 0 | 1 | 0 |
-| unit | passed | 1221 | 0 | 0 | 7 | 1 |
+| unit | passed | 1222 | 0 | 0 | 7 | 1 |
 | contract | passed | 250 | 0 | 0 | 2 | 0 |
 | integration | passed | 157 | 0 | 0 | 8 | 13 |
 | e2e | passed | 43 | 0 | 0 | 0 | 2 |
-| config-extra | passed | 440 | 0 | 0 | 0 | 1779 |
+| config-extra | passed | 440 | 0 | 0 | 0 | 1780 |
 
 ## Risks / Follow-Ups
 

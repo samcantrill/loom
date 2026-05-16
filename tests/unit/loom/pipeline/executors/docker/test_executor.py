@@ -369,6 +369,32 @@ def test_docker_executor_missing_container_options_is_failure(tmp_path: Path) ->
     assert failure.details["setup_error"] == "docker container adapter options are missing"
 
 
+def test_docker_executor_requires_writable_run_mount(tmp_path: Path) -> None:
+    store = LocalRunStore(tmp_path / "runs")
+    run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
+    run_path = str(store.local_run_dir(run_uri))
+    adapter_options: dict[str, PlainData] = {
+        "container": {
+            "image": {"reference": "python:3.12-slim"},
+            "mounts": [{"source": run_path, "target": run_path, "mode": "ro"}],
+        }
+    }
+    store, _run_uri, request = _request(tmp_path, adapter_options=adapter_options)
+
+    result = DockerExecutor(
+        run_store=store,
+        docker_command_runner=RecordingDockerRunner(),
+    ).execute(request)
+
+    assert result.status == StageStatus.FAILED
+    failure = cast(ExecutionFailure, result.failure)
+    assert failure.message == (
+        "docker worker setup failed: "
+        "docker required path-parity mount must be read-write"
+    )
+    assert failure.details["mode"] == "ro"
+
+
 def test_docker_executor_missing_result_is_failure(tmp_path: Path) -> None:
     store, _run_uri, request = _request(tmp_path)
 
