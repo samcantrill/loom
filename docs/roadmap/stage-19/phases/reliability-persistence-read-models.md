@@ -10,12 +10,13 @@
 - Phase execution plan path: `docs/roadmap/stage-19/phases/reliability-persistence-read-models.md`
 - Full plan: `docs/roadmap/stage-19/implementation-plan.md`
 - Source phase: Phase 2, `reliability-persistence-read-models`
+- PR: https://github.com/samcantrill/loom/pull/177
 - Stack predecessor: none; Phase 1 merged before implementation began
 - Base branch: `develop` at `9ec336e` after Phase 1 merge metadata
 - Target branch: `develop`
-- Merge eligibility: root PR is eligible to merge into `develop` only after phase implementation, targeted validation, `make validate-pr`, `make test-summary`, automated review, and CI pass with no blockers
+- Merge eligibility: root PR is eligible to merge into `develop` only after automated review and CI pass with no blockers
 - Workflow path: expanded path
-- Successor dependency notes: Phase 3 may stack on this branch only after Phase 2 is open or prepared, validated, and recorded by the manager; keep this branch while successors depend on it
+- Successor dependency notes: Phase 3 may stack on this branch only if PR #177 cannot merge after automated review and CI; keep this branch while successors depend on it
 - Plan quality gate: passed on 2026-05-16 in the selected implementation plan
 - Plan quality gate loop budget: implementation-plan review, bounded refinement, and confirmation review are complete; no blocking findings remain
 - Draft pass: completed by `loom_phase_planner` in this assignment
@@ -268,8 +269,8 @@ make test-summary
 - Refinement summary: not needed so far; no targeted validation blocker
   remains after local implementation cleanup.
 - Blocker-resolution summary: pending
-- PR preparation: PR body drafted at
-  `docs/roadmap/stage-19/phases/reliability-persistence-read-models-pr-body.md`;
-  PR opening pending.
+- PR preparation: complete. PR body drafted at
+  `docs/roadmap/stage-19/phases/reliability-persistence-read-models-pr-body.md`
+  and PR #177 opened against `develop`.
 - Stack maintenance: pending
 - Remaining blockers: none
