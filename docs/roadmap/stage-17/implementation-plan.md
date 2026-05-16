@@ -1,11 +1,11 @@
 # Roadmap Stage 17 Implementation Plan: Docker Container Executor
 
-Status: ready for phase implementation
+Status: complete
 Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 pr_open
+Current phase: Phase 5 merged
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -322,7 +322,7 @@ Apptainer/Singularity prove enough common behavior.
 | 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
 | 3 | `docker-executor-integration` | merged | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
 | 4 | `docker-preflight-diagnostics` | merged | `codex/docker-preflight-diagnostics` | [#174](https://github.com/samcantrill/loom/pull/174) | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
-| 5 | `docker-examples-acceptance` | pr_open | `codex/docker-examples-acceptance` | [#175](https://github.com/samcantrill/loom/pull/175) | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
+| 5 | `docker-examples-acceptance` | merged | `codex/docker-examples-acceptance` | [#175](https://github.com/samcantrill/loom/pull/175) | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
 ## Implementation Readiness Blockers
 
@@ -828,7 +828,7 @@ selected-executor preflight behavior
 
 ## Phase 5: Examples, Documentation, And Acceptance Hardening
 
-Status: pr_open
+Status: merged
 Slug: `docker-examples-acceptance`
 Branch: `codex/docker-examples-acceptance`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-examples-acceptance`
@@ -909,10 +909,12 @@ blocker or optional live Docker acceptance changes public behavior
   or validation expose unresolved public behavior
 - Implementation/refinement budget: zero on fast path, one available if final
   validation fails or example coverage is missing
-- PR review budget: one automated review pass available
+- PR review budget: manager automated review used; no blocking findings remain
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed; PR opened against verified `develop` target
-- Merge record: pending
+- Merge record: PR [#175](https://github.com/samcantrill/loom/pull/175)
+  merged into `develop` by squash merge after GitHub CI `checks` passed; merge
+  commit `0255276fa7303cc6712148b952e97e2d66b1a673`; remote branch deleted.
 
 ### Risks And Stop Conditions
 
@@ -938,8 +940,17 @@ blocker or optional live Docker acceptance changes public behavior
   passed, 18 skipped, 1804 deselected`.
 - PR: [#175](https://github.com/samcantrill/loom/pull/175) opened and
   verified against `develop` from `codex/docker-examples-acceptance`.
-- Merge:
-- Follow-up:
+- Review: manager automated review found no blocking issues; scope remained
+  docs/examples/tests, default validation remained Docker-free, and no
+  future-phase container behavior was introduced.
+- Merge: [#175](https://github.com/samcantrill/loom/pull/175) merged into
+  `develop` by squash merge after GitHub CI `checks` passed; merge commit
+  `0255276fa7303cc6712148b952e97e2d66b1a673`; remote branch and stale local
+  tracking ref were deleted.
+- Follow-up: none for Stage 17. Later roadmap stages retain the deferred
+  Apptainer/Singularity, SLURM-container composition, live Docker acceptance,
+  retry/timeout, event, cleanup, image-build, registry-auth, and advanced GPU
+  items recorded as out of scope.
 
 ## Cross-Phase Validation
 

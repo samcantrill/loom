@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 5: Examples And Acceptance`
 - Branch: `codex/docker-examples-acceptance`
@@ -14,8 +14,9 @@
 - Base branch: `develop`
 - Target branch: `develop`
 - PR: [#175](https://github.com/samcantrill/loom/pull/175)
-- Merge eligibility: pending GitHub CI, manager automated review, and final
-  target-branch verification
+- Merge eligibility: merged to `develop` after implementation, validation, PR
+  preparation, GitHub CI, manager automated review, and final target-branch
+  verification
 - Workflow path: fast path
 - Successor dependency notes: this is the final Stage 17 phase; no successor
   phase branch depends on this branch.
@@ -316,7 +317,7 @@ make test-summary
 
 - Phase implementation refinement: unused; not needed on fast path if targeted
   and final validation pass
-- PR review: unused
+- PR review: manager automated review used; no blocking findings remain
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -348,6 +349,16 @@ make test-summary
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-17/phases/docker-examples-acceptance-pr-body.md`; PR
   [#175](https://github.com/samcantrill/loom/pull/175) opened against
-  verified `develop` from `codex/docker-examples-acceptance`.
+  verified `develop` from `codex/docker-examples-acceptance`; GitHub PR body
+  updated after CI to record passed `checks`.
+- PR review: manager automated review used after final diff and
+  `git diff --check`; no blocking findings remained. Final pre-merge
+  verification confirmed base `develop`, head
+  `codex/docker-examples-acceptance`, open state, and GitHub CI `checks`
+  success.
 - Stack maintenance: root phase from `develop`; no predecessor.
+- Merge record: PR [#175](https://github.com/samcantrill/loom/pull/175)
+  merged into `develop` by squash merge after GitHub CI `checks` passed; merge
+  commit `0255276fa7303cc6712148b952e97e2d66b1a673`; remote branch and stale
+  local tracking ref were deleted.
 - Remaining blockers: none.
