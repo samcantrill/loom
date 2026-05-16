@@ -241,6 +241,13 @@ make test-summary
 - Implementation validation: targeted Ruff and Pyright passed for touched
   source/tests; targeted pytest passed with `184 passed` across package,
   unit, contract, and local/subprocess integration reliability suites.
+  `make validate-pr` passed Ruff, Pyright, default tests
+  (`1806 passed, 26 skipped, 18 deselected`), config-extra tests
+  (`447 passed, 1843 deselected`), and package build. `make test-summary`
+  passed package (`102 passed, 1 skipped`), unit (`1274 passed, 7 skipped,
+  1 deselected`), contract (`256 passed, 2 skipped`), integration
+  (`159 passed, 8 skipped, 13 deselected`), e2e (`43 passed, 2 deselected`),
+  and config-extra (`447 passed, 1843 deselected`).
 - Refinement summary: not needed as a separate formal pass; validation findings
   were addressed directly during implementation before commits.
 - Blocker-resolution summary: not needed at plan time
