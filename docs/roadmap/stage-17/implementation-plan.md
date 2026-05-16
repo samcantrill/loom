@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 4 in_progress
+Current phase: Phase 4 pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -321,7 +321,7 @@ Apptainer/Singularity prove enough common behavior.
 | 1 | `docker-container-contracts` | merged | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
 | 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
 | 3 | `docker-executor-integration` | merged | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
-| 4 | `docker-preflight-diagnostics` | in_progress | `codex/docker-preflight-diagnostics` | pending | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
+| 4 | `docker-preflight-diagnostics` | pr_open | `codex/docker-preflight-diagnostics` | [#174](https://github.com/samcantrill/loom/pull/174) | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
 | 5 | `docker-examples-acceptance` | pending | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
 ## Implementation Readiness Blockers
@@ -705,11 +705,11 @@ CLI selection, failure semantics, and result metadata
 
 ## Phase 4: Docker Preflight And Diagnostics
 
-Status: in_progress
+Status: pr_open
 Slug: `docker-preflight-diagnostics`
 Branch: `codex/docker-preflight-diagnostics`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-preflight-diagnostics`
-PR: pending
+PR: [#174](https://github.com/samcantrill/loom/pull/174)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase creates stable diagnostics and
@@ -784,9 +784,9 @@ selected-executor preflight behavior
 - Planning/refinement budget: expanded path draft and refine completed
 - Implementation/refinement budget: one `loom_phase_refiner` pass available if
   validation fails, check IDs are unstable, or diagnostics leak raw data
-- PR review budget: one automated review pass available
+- PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 3 merged
+- Pre-submit blocker gate: passed; PR opened against verified `develop` target
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -801,9 +801,22 @@ selected-executor preflight behavior
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
+- Implementation: added stable selected-Docker preflight diagnostics for Docker
+  command availability, container/Docker option shape, image reference
+  presence, required host environment variables, authored mount source
+  existence, Stage 17 mount target path parity, run-directory writability,
+  local artifact-root visibility, CPU/memory mapping, and unsupported GPU
+  requests. Details are plain-data and redaction-safe, and default checks avoid
+  Docker daemon, network, registry, image-pull, and SDK behavior.
+- Validation: targeted Phase 4 suite passed (`87 passed, 2 skipped`);
+  `uv run --extra config pytest tests/unit/loom/diagnostics tests/contracts
+  tests/integration tests/package` passed (`666 passed`); `make validate-pr`
+  passed with Ruff, Pyright, default harness (`1751 passed, 26 skipped, 18
+  deselected`), config-extra harness (`442 passed, 1788 deselected`), and
+  build; `make test-summary` passed with overall `2221 passed, 18 skipped,
+  1804 deselected`.
+- PR: [#174](https://github.com/samcantrill/loom/pull/174) opened and verified
+  against `develop` from `codex/docker-preflight-diagnostics`.
 - Merge:
 - Follow-up:
 

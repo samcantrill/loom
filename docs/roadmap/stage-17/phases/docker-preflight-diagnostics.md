@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in progress
+- Status: pr_open
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 4: Preflight Diagnostics`
 - Branch: `codex/docker-preflight-diagnostics`
@@ -13,7 +13,7 @@
 - Stack predecessor: none; Phase 3 is merged
 - Base branch: `develop`
 - Target branch: `develop`
-- PR: pending
+- PR: [#174](https://github.com/samcantrill/loom/pull/174)
 - Merge eligibility: eligible after implementation, validation, PR
   preparation, GitHub CI, and manager automated review
 - Workflow path: expanded path
@@ -323,7 +323,7 @@ make test-summary
 
 - Phase implementation refinement: unused; one pass available if validation
   fails, check IDs are unstable, or diagnostics leak raw data.
-- PR review: unused
+- PR review: manager pre-submit review used; no blocking findings remain
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -354,6 +354,7 @@ make test-summary
 - Blocker-resolution summary: unused.
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-17/phases/docker-preflight-diagnostics-pr-body.md`;
-  PR pending.
+  PR [#174](https://github.com/samcantrill/loom/pull/174) opened against
+  verified `develop` from `codex/docker-preflight-diagnostics`.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.
