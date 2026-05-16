@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 3 pr_open
+Current phase: Phase 4 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -320,7 +320,7 @@ Apptainer/Singularity prove enough common behavior.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `docker-container-contracts` | merged | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
 | 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
-| 3 | `docker-executor-integration` | pr_open | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
+| 3 | `docker-executor-integration` | merged | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
 | 4 | `docker-preflight-diagnostics` | pending | `codex/docker-preflight-diagnostics` | pending | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
 | 5 | `docker-examples-acceptance` | pending | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
@@ -571,7 +571,7 @@ protocol, process-result records, and redaction-sensitive metadata
 
 ## Phase 3: Docker Executor Integration
 
-Status: pr_open
+Status: merged
 Slug: `docker-executor-integration`
 Branch: `codex/docker-executor-integration`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-executor-integration`
@@ -659,10 +659,13 @@ CLI selection, failure semantics, and result metadata
 - Planning/refinement budget: expanded path draft and refine completed
 - Implementation/refinement budget: not needed; targeted suites, broad phase
   suite with config extra, and full PR gate passed
-- PR review budget: one automated review pass available
+- PR review budget: manager automated review used; writable required-mount
+  finding fixed before merge, with no blocking findings remaining
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed; PR opened against verified `develop` target
-- Merge record: pending
+- Merge record: PR [#173](https://github.com/samcantrill/loom/pull/173) merged
+  into `develop` by squash merge after GitHub CI `checks` passed; merge commit
+  `2333297486a08df5b694056d709ad9cf9fb75c58`; remote branch deleted.
 
 ### Risks And Stop Conditions
 
@@ -677,11 +680,28 @@ CLI selection, failure semantics, and result metadata
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
-- Merge:
-- Follow-up:
+- Implementation: added `DockerExecutor` as a prepared-worker executor using
+  Phase 1 container records and the Phase 2 Docker command runner; added
+  required writable run-dir and artifact-root path-parity mounts; mapped Docker
+  command facts and standard worker results into `StageExecutionResult`; kept
+  Docker package/root executor exports lazy; wired `loom run --executor docker`;
+  and added unit, integration, package, and CLI coverage.
+- Validation: targeted Docker executor unit test passed (`14 passed`);
+  `make validate-pr` passed with Ruff, Pyright, default harness (`1743 passed,
+  26 skipped, 18 deselected`), config-extra harness (`440 passed, 1780
+  deselected`), and build; `make test-summary` passed with overall `2211
+  passed, 18 skipped, 1796 deselected`.
+- PR: [#173](https://github.com/samcantrill/loom/pull/173) opened and verified
+  against `develop` from `codex/docker-executor-integration`; GitHub CI
+  `checks` passed.
+- Review: manager automated review found and fixed a required writable
+  run/artifact mount edge case before merge; no blockers remained.
+- Merge: [#173](https://github.com/samcantrill/loom/pull/173) merged into
+  `develop` by squash merge; merge commit
+  `2333297486a08df5b694056d709ad9cf9fb75c58`; remote branch and stale local
+  tracking ref were deleted.
+- Follow-up: Phase 4 consumes the executor/container metadata and path checks
+  for Docker selected-executor preflight diagnostics.
 
 ## Phase 4: Docker Preflight And Diagnostics
 
@@ -765,7 +785,7 @@ selected-executor preflight behavior
   validation fails, check IDs are unstable, or diagnostics leak raw data
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 3 merged or valid as stack predecessor
+- Pre-submit blocker gate: Phase 3 merged
 - Merge record: pending
 
 ### Risks And Stop Conditions

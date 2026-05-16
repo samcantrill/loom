@@ -51,7 +51,7 @@ New tests implemented:
 | Targeted Docker executor pytest | Passed | `14 passed` |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
 | `make test-summary` | Passed | `2211 passed, 18 skipped, 1796 deselected` |
-| GitHub checks | Pending | Will be recorded after PR creation |
+| GitHub checks | Passed | PR #173 `checks` succeeded before merge |
 
 ### Test Suite Summary
 
