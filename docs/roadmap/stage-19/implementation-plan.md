@@ -1,11 +1,11 @@
 # Roadmap Stage 19 Implementation Plan: Reliability Policies And Transactions
 
-Status: Phase 5 merged
+Status: Phase 6 in_progress
 Roadmap stage: `v19`
 Planning document: `docs/roadmap/stage-19/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 6 pending
+Current phase: Phase 6 in_progress
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -292,7 +292,7 @@ drive core retry or transaction behavior.
 | 3 | `transaction-failure-classification` | merged | `codex/transaction-failure-classification` | [#178](https://github.com/samcantrill/loom/pull/178) | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
 | 4 | `timeout-capability-diagnostics` | merged | `codex/timeout-capability-diagnostics` | [#179](https://github.com/samcantrill/loom/pull/179) | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
 | 5 | `retry-decisions-runner-automation` | merged | `codex/retry-decisions-runner-automation` | [#180](https://github.com/samcantrill/loom/pull/180) | runner, lifecycle, retry evaluator | Implement conservative runner-owned retry | Evaluator matrix, fake runner integration tests, `make validate-pr`, `make test-summary` | Retry-safe failed stage, unsafe transaction denial |
-| 6 | `reliability-inspection-finalization` | pending | `codex/reliability-inspection-finalization` | pending | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
+| 6 | `reliability-inspection-finalization` | in_progress | `codex/reliability-inspection-finalization` | pending | read models, CLI if included, docs, final validation | Expose read-only inspection and finalize docs/evidence | Read-model/CLI/docs tests, `make validate-pr`, `make test-summary` | Read-only reliability inspection |
 
 ## Implementation Readiness Blockers
 
@@ -902,7 +902,7 @@ runtime-changing automation
 
 ## Phase 6: Read-Only Inspection, Documentation, And Final Validation
 
-Status: pending
+Status: in_progress
 Slug: `reliability-inspection-finalization`
 Branch: `codex/reliability-inspection-finalization`
 Worktree: `/home/samcantrill/work/loom-worktrees/reliability-inspection-finalization`
@@ -989,7 +989,7 @@ inspection, docs, and suite evidence
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
+- Phase execution plan: completed in `docs/roadmap/stage-19/phases/reliability-inspection-finalization.md`
 - Planning/refinement budget: expanded path; draft and refine expected
 - Implementation/refinement budget: one pass available
 - PR review budget: one automated review pass available
