@@ -11,6 +11,7 @@ def test_pipeline_executor_public_exports_are_phase_scoped() -> None:
 
     assert executors.__all__ == [
         "Executor",
+        "DockerExecutor",
         "ExecutorError",
         "LocalExecutor",
         "LocalExecutorError",

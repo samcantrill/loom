@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from loom.pipeline.executors.base import Executor
 
 if TYPE_CHECKING:
+    from loom.pipeline.executors.docker import DockerExecutor
     from loom.pipeline.executors.errors import ExecutorError, LocalExecutorError
     from loom.pipeline.executors.local import LocalExecutor
     from loom.pipeline.executors.subprocess import (
@@ -25,6 +26,10 @@ def __getattr__(name: str) -> object:
         from loom.pipeline.executors.local import LocalExecutor
 
         return LocalExecutor
+    if name == "DockerExecutor":
+        from loom.pipeline.executors.docker import DockerExecutor
+
+        return DockerExecutor
     if name in {"SubprocessExecutor", "SubprocessRunResult"}:
         from loom.pipeline.executors.subprocess import (
             SubprocessExecutor,
@@ -39,6 +44,7 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "Executor",
+    "DockerExecutor",
     "ExecutorError",
     "LocalExecutor",
     "LocalExecutorError",
