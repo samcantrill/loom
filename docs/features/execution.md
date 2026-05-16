@@ -1990,6 +1990,11 @@ budget, cancellation, non-retriable failure classification, missing transaction
 evidence, or unsafe output transaction state. Attempts that reached staged,
 committed, or commit-failed output state are not retried automatically.
 
+Selected per-stage reliability policy is persisted as a read-model fact during
+runner startup. Status diagnostics can therefore show the policy, transaction,
+retry, and timeout facts without reconstructing behavior from runtime metadata,
+executor logs, or status messages.
+
 ### 17.6 Deferred Behavior Owners
 
 Later roadmap work should own deferred behavior explicitly:

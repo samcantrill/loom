@@ -1056,6 +1056,26 @@ stage_metadata
 Detailed provenance policy should live in `provenance.md`. The run store only
 defines where this file belongs and how it is written.
 
+### 8.12 Reliability Facts
+
+Purpose: durable reliability policy and outcome records.
+
+Current records include:
+
+```text
+selected reliability policy facts
+reliability status details
+stage-attempt transactions
+retry decisions
+timeout outcomes
+```
+
+These records are keyed by existing run, stage, attempt, status, and
+transaction references. They are part of authoritative read models and are not
+stored as status metadata, event-log payloads, or executor-log annotations.
+Readers should use store/read-model APIs or diagnostics helpers rather than
+private file paths.
+
 ---
 
 ## 9. RunStore Protocol

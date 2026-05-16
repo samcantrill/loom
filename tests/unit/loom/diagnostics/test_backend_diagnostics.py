@@ -82,6 +82,8 @@ def test_inspect_backend_reports_authoritative_facts_without_mutation(
     assert result.counts["stages"] == 2
     assert result.counts["commits"] == 2
     assert result.counts["artifact_facts"] == 2
+    assert result.counts["reliability_policy_facts"] == 2
+    assert result.stages[0]["reliability_policy_count"] == 1
     assert [stage["stage_name"] for stage in result.stages] == ["build", "report"]
     assert authority.snapshot(run_uri).revision.sequence == before.sequence
 

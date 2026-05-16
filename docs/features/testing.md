@@ -140,6 +140,7 @@ synthetic complete pipeline
 public Python API workflow path
 future CLI run path
 status/log/artifact inspection
+read-only reliability inspection
 resume behavior
 failure behavior
 ```
@@ -894,6 +895,7 @@ structured worker failure wrapping
 redacted command/process metadata
 local/subprocess equivalence for synthetic pipelines
 status/log diagnostics compatibility for subprocess failures
+reliability policy, transaction, retry, and timeout inspection compatibility
 ```
 
 Use synthetic stage workers and temporary run directories.

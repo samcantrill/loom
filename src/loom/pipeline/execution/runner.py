@@ -92,7 +92,10 @@ from .models import (
     StageRunResult,
 )
 from .offline_adapter import OfflineEvidenceRunStore, is_offline_evidence_run_store
-from .reliability import record_retry_decision_for_stage_result
+from .reliability import (
+    record_resolved_reliability_policy_fact,
+    record_retry_decision_for_stage_result,
+)
 from .resource_admission import (
     DEFAULT_RESOURCE_LEASE_TTL_SECONDS,
     ResourceAdmissionDecision,
@@ -179,9 +182,7 @@ class PipelineRunner:
         clock: Callable[[], str] = utc_timestamp,
     ) -> None:
         offline_evidence_store = is_offline_evidence_run_store(run_store)
-        if not offline_evidence_store and not isinstance(
-            run_store, LegacyRunStore
-        ):
+        if not offline_evidence_store and not isinstance(run_store, LegacyRunStore):
             raise PipelineExecutionError("run_store must satisfy LegacyRunStore")
         if isinstance(run_store, LocalRunStore):
             raise PipelineExecutionError(
@@ -260,9 +261,7 @@ class PipelineRunner:
         finally:
             release_run_lock(self.run_store, lock)
 
-    def _preflight_authority_admission(
-        self, policy: ParallelExecutionOptions
-    ) -> None:
+    def _preflight_authority_admission(self, policy: ParallelExecutionOptions) -> None:
         if is_offline_evidence_run_store(self.run_store):
             if policy.enabled:
                 raise ParallelExecutionUnsupportedError(
@@ -571,7 +570,9 @@ class PipelineRunner:
         else:
             failure = outcome.failure
             if failure is None:
-                raise PipelineExecutionError("execution failed without failure metadata")
+                raise PipelineExecutionError(
+                    "execution failed without failure metadata"
+                )
             self._write_failed_run(run_uri, created_at, started_at, failure)
             self._emit_run_event(
                 run_uri,
@@ -1058,7 +1059,9 @@ class PipelineRunner:
             if stage_name in submitted or stage_name in stage_results:
                 continue
             stage_plan = plan_by_stage[stage_name]
-            if all(upstream in stage_results for upstream in stage_plan.upstream_stages):
+            if all(
+                upstream in stage_results for upstream in stage_plan.upstream_stages
+            ):
                 return stage_plan
         return None
 
@@ -1160,6 +1163,14 @@ class PipelineRunner:
             )
 
         attempt = next_stage_attempt(self.run_store, run_uri, stage.name)
+        record_resolved_reliability_policy_fact(
+            self.run_store,
+            run_uri=run_uri,
+            stage_name=stage.name,
+            attempt=attempt,
+            resolved_runtime=resolved_runtime,
+            recorded_at=self.clock(),
+        )
         stage_started_at: str | None = None
         local_run_store = self._require_local_run_store()
         resource_admission: ResourceAdmissionDecision | None = None
@@ -1327,6 +1338,14 @@ class PipelineRunner:
                 clock=self.clock,
             )
             attempt = prepared.attempt
+            record_resolved_reliability_policy_fact(
+                self.run_store,
+                run_uri=run_uri,
+                stage_name=stage.name,
+                attempt=attempt,
+                resolved_runtime=resolved_runtime,
+                recorded_at=self.clock(),
+            )
             inputs = prepared.inputs
             fingerprint = cast(StageFingerprintRecord, prepared.fingerprint)
             resource_admission = self._acquire_stage_resource_admission(
@@ -2365,7 +2384,9 @@ def _retry_policy_from_runtime(
 
 
 def _resource_lease_ttl_seconds(settings: Mapping[str, PlainData]) -> int:
-    value = settings.get("resource_lease_ttl_seconds", DEFAULT_RESOURCE_LEASE_TTL_SECONDS)
+    value = settings.get(
+        "resource_lease_ttl_seconds", DEFAULT_RESOURCE_LEASE_TTL_SECONDS
+    )
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ResourceAdmissionError(
             "resource_lease_ttl_seconds must be a positive integer",

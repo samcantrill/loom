@@ -15,6 +15,18 @@ from loom.diagnostics.inspection import (
     inspect_run_status,
     inspect_stage_logs,
 )
+from loom.pipeline.reliability import (
+    FailureClassification,
+    ReliabilityPolicy,
+    ReliabilityStatusDetail,
+    RetryDecisionRecord,
+    RetryPolicy,
+    StageAttemptTransaction,
+    StageAttemptTransactionState,
+    TimeoutOutcome,
+    TimeoutOutcomeRecord,
+    TimeoutSupportLevel,
+)
 from loom.pipeline.status import (
     RunStatus,
     RunStatusRecord,
@@ -23,7 +35,13 @@ from loom.pipeline.status import (
 )
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.execution import create_authority_backed_serial_run_store
-from loom.pipeline.stores import LocalRunStore, path_to_run_uri, run_uri_to_path
+from loom.pipeline.stores import (
+    LocalRunStore,
+    ReliabilityPolicyFact,
+    ReliabilityPolicyScope,
+    path_to_run_uri,
+    run_uri_to_path,
+)
 from loom.pipeline.stores.sqlite_authority import (
     SQLitePerRunAuthorityStore,
     _authority_database_path,
@@ -115,6 +133,72 @@ def _artifact_ref(
     )
 
 
+def _write_reliability_records(store: Any, run_uri: str) -> None:
+    status = ReliabilityStatusDetail(
+        run_uri=run_uri,
+        run_status=RunStatus.RUNNING,
+        stage_id="build",
+        stage_status=StageStatus.FAILED,
+        attempt=1,
+        created_at="2020-01-01T00:00:03Z",
+    )
+    store.write_reliability_policy_fact(
+        run_uri,
+        ReliabilityPolicyFact(
+            run_uri=run_uri,
+            scope=ReliabilityPolicyScope.STAGE,
+            stage_name="build",
+            recorded_at="2020-01-01T00:00:01Z",
+            policy=ReliabilityPolicy(
+                retry=RetryPolicy(enabled=True, max_attempts=2),
+            ),
+        ),
+    )
+    store.write_reliability_status_detail(run_uri, status)
+    transaction = StageAttemptTransaction(
+        transaction_id="tx-1",
+        run_uri=run_uri,
+        stage_id="build",
+        attempt=1,
+        status=status,
+        state=StageAttemptTransactionState.FAILED,
+    )
+    store.write_stage_attempt_transaction(run_uri, transaction)
+    failure = FailureClassification(
+        reason_code="stage_exception",
+        status=status,
+        retriable=True,
+        details={"failure_type": "stage_exception"},
+    )
+    store.write_retry_decision(
+        run_uri,
+        RetryDecisionRecord(
+            decision_id="retry-1",
+            transaction_id=transaction.transaction_id,
+            should_retry=False,
+            next_attempt=None,
+            decision_reason="retry.disabled",
+            policy_max_attempts=2,
+            attempt_count=1,
+            status=status,
+            failure=failure,
+        ),
+    )
+    store.write_timeout_outcome(
+        run_uri,
+        TimeoutOutcomeRecord(
+            outcome_id="timeout-1",
+            transaction_id=transaction.transaction_id,
+            timed_out=False,
+            duration_seconds=2.0,
+            reason_code="timeout.unsupported",
+            outcome=TimeoutOutcome.UNSUPPORTED,
+            support_level=TimeoutSupportLevel.UNSUPPORTED,
+            status=status,
+        ),
+    )
+
+
 def test_inspect_run_status_uses_store_scan(tmp_path: Path) -> None:
     store, run_uri = _authority_store_with_stage(tmp_path)
 
@@ -161,6 +245,45 @@ def test_inspect_run_status_includes_submitted_operation_summaries(
     assert operations[0]["backend"] == "test-backend"
 
 
+def test_inspect_run_status_includes_reliability_summaries(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _authority_store_with_stage(tmp_path)
+    _write_reliability_records(store, run_uri)
+
+    summary = inspect_run_status(run_uri, run_store=store)
+
+    assert summary.reliability is not None
+    assert summary.reliability.to_dict()["counts"] == {
+        "run_policy_facts": 0,
+        "stage_policy_facts": 1,
+        "status_details": 1,
+        "transactions": 1,
+        "retry_decisions": 1,
+        "timeout_outcomes": 1,
+        "unsupported_timeouts": 1,
+    }
+    reliability = summary.stages[0].reliability
+    assert reliability is not None
+    assert reliability.latest_policy is not None
+    assert reliability.latest_policy["policy"] == {
+        "retry": {"enabled": True, "max_attempts": 2}
+    }
+    assert reliability.latest_transaction is not None
+    assert reliability.latest_transaction["state"] == "failed"
+    assert reliability.latest_retry_decision is not None
+    assert reliability.latest_retry_decision["decision_reason"] == "retry.disabled"
+    assert reliability.latest_timeout_outcome is not None
+    assert reliability.latest_timeout_outcome["outcome"] == "unsupported"
+    assert reliability.diagnostics[0]["code"] == "reliability.timeout.unsupported"
+    payload = summary.to_dict()
+    stages_payload = cast(list[object], payload["stages"])
+    stage_payload = cast(dict[str, object], stages_payload[0])
+    reliability_payload = cast(dict[str, object], stage_payload["reliability"])
+    counts = cast(dict[str, object], reliability_payload["counts"])
+    assert counts["retry_decisions"] == 1
+
+
 def test_inspect_run_status_rejects_local_only_lifecycle_state(
     tmp_path: Path,
 ) -> None:
@@ -176,7 +299,9 @@ def test_inspect_run_status_uses_authoritative_facts_over_corrupt_legacy_files(
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     store = _store(tmp_path, authority)
     run_uri = _run_uri(tmp_path)
-    PipelineRunner(run_store=store).run(RunRequest(pipeline=_pipeline(), run_uri=run_uri))
+    PipelineRunner(run_store=store).run(
+        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
+    )
     run_path = run_uri_to_path(run_uri)
     (run_path / "status.json").write_text("not json", encoding="utf-8")
     (run_path / "artifacts.json").write_text("not json", encoding="utf-8")
@@ -204,7 +329,9 @@ def test_default_status_read_rejects_missing_authority_backend(
     authority = SQLitePerRunAuthorityStore(clock=lambda: "2020-01-01T00:00:00Z")
     store = _store(tmp_path, authority)
     run_uri = _run_uri(tmp_path)
-    PipelineRunner(run_store=store).run(RunRequest(pipeline=_pipeline(), run_uri=run_uri))
+    PipelineRunner(run_store=store).run(
+        RunRequest(pipeline=_pipeline(), run_uri=run_uri)
+    )
     _authority_database_path(run_uri).unlink()
 
     with pytest.raises(DiagnosticsInspectionError, match="authoritative backend"):

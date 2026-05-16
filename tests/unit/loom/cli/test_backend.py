@@ -64,6 +64,8 @@ def test_backend_inspect_json_outputs_authoritative_summary(
     assert payload["ok"] is True
     assert payload["result"]["status"] == "SUCCEEDED"
     assert payload["result"]["counts"]["stages"] == 2
+    assert payload["result"]["counts"]["reliability_policy_facts"] == 2
+    assert payload["result"]["stages"][0]["reliability_policy_count"] == 1
     assert payload["result"]["state_source"]["label"] == "authoritative_service_truth"
     assert stderr.getvalue() == ""
 
@@ -88,6 +90,8 @@ def test_backend_inspect_text_includes_revision_and_stage(
     assert output.startswith(f"backend inspect {run_uri}: SUCCEEDED")
     assert "source: authoritative_service_truth" in output
     assert "revision:" in output
+    assert "reliability: policies=2" in output
+    assert "  reliability: policies=1" in output
     assert "stage build: SUCCEEDED" in output
     assert "stage report" not in output
 
@@ -127,21 +131,18 @@ def test_backend_capabilities_explicit_remote_requirement_fails_json(
     run_uri = _authority_run(tmp_path, authority_config=authority_config)
     stdout = io.StringIO()
 
-    assert (
-        main(
-            [
-                "backend",
-                "capabilities",
-                run_uri,
-                "--require-remote",
-                *authority_args,
-                "--format",
-                "json",
-            ],
-            stdout=stdout,
-        )
-        == int(ExitCode.RUN_STATE)
-    )
+    assert main(
+        [
+            "backend",
+            "capabilities",
+            run_uri,
+            "--require-remote",
+            *authority_args,
+            "--format",
+            "json",
+        ],
+        stdout=stdout,
+    ) == int(ExitCode.RUN_STATE)
 
     payload = json.loads(stdout.getvalue())
     assert payload["ok"] is False
@@ -158,20 +159,17 @@ def test_backend_capabilities_explicit_requirements_fail_text_with_detail(
     run_uri = _authority_run(tmp_path, authority_config=authority_config)
     stderr = io.StringIO()
 
-    assert (
-        main(
-            [
-                "backend",
-                "capabilities",
-                run_uri,
-                "--require-shared-filesystem",
-                "--require-remote",
-                *authority_args,
-            ],
-            stderr=stderr,
-        )
-        == int(ExitCode.RUN_STATE)
-    )
+    assert main(
+        [
+            "backend",
+            "capabilities",
+            run_uri,
+            "--require-shared-filesystem",
+            "--require-remote",
+            *authority_args,
+        ],
+        stderr=stderr,
+    ) == int(ExitCode.RUN_STATE)
 
     error = stderr.getvalue()
     assert "unsafe_shared_filesystem" in error

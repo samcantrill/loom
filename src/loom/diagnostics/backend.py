@@ -59,9 +59,7 @@ class BackendDiagnosticsError(ValueError):
             "message": str(self),
             "code": self.code,
             "context": dict(self.context),
-            "diagnostics": [
-                diagnostic.to_dict() for diagnostic in self.diagnostics
-            ],
+            "diagnostics": [diagnostic.to_dict() for diagnostic in self.diagnostics],
         }
 
 
@@ -98,9 +96,7 @@ class BackendInspectionResult:
             "cleanup_candidates": [
                 dict(candidate) for candidate in self.cleanup_candidates
             ],
-            "recovery_records": [
-                dict(record) for record in self.recovery_records
-            ],
+            "recovery_records": [dict(record) for record in self.recovery_records],
             "materialized_refs": [dict(ref) for ref in self.materialized_refs],
             "warnings": [dict(warning) for warning in self.warnings],
             "state_source": dict(self.state_source),
@@ -131,12 +127,8 @@ class BackendCapabilitiesResult:
             "run_uri": self.run_uri,
             "backend_name": self.backend_name,
             "schema": dict(self.schema),
-            "capabilities": [
-                dict(capability) for capability in self.capabilities
-            ],
-            "diagnostics": [
-                dict(diagnostic) for diagnostic in self.diagnostics
-            ],
+            "capabilities": [dict(capability) for capability in self.capabilities],
+            "diagnostics": [dict(diagnostic) for diagnostic in self.diagnostics],
             "requirements": dict(self.requirements),
             "state_source": dict(self.state_source),
         }
@@ -187,7 +179,8 @@ def inspect_backend(
             },
         ) from exc
     stages = tuple(
-        stage for stage in snapshot.stages
+        stage
+        for stage in snapshot.stages
         if stage_name is None or stage.stage_name == stage_name
     )
     if stage_name is not None and not stages:
@@ -199,15 +192,38 @@ def inspect_backend(
     recovery_records = store.scan_recovery(resolved_run_uri)
     cleanup_candidates = store.list_cleanup_candidates(resolved_run_uri)
     active_leases = tuple(
-        stage.active_lease for stage in snapshot.stages if stage.active_lease is not None
+        stage.active_lease
+        for stage in snapshot.stages
+        if stage.active_lease is not None
     )
     commits = tuple(
-        stage.latest_commit for stage in snapshot.stages if stage.latest_commit is not None
+        stage.latest_commit
+        for stage in snapshot.stages
+        if stage.latest_commit is not None
     )
     artifact_facts = tuple(
         fact for stage in snapshot.stages for fact in stage.artifact_facts
     )
     attempts = tuple(attempt for stage in snapshot.stages for attempt in stage.attempts)
+    stage_policy_facts = tuple(
+        fact for stage in snapshot.stages for fact in stage.reliability_policy_facts
+    )
+    status_details = tuple(
+        detail
+        for stage in snapshot.stages
+        for detail in stage.reliability_status_details
+    )
+    transactions = tuple(
+        transaction
+        for stage in snapshot.stages
+        for transaction in stage.reliability_transactions
+    )
+    retry_decisions = tuple(
+        decision for stage in snapshot.stages for decision in stage.retry_decisions
+    )
+    timeout_outcomes = tuple(
+        outcome for stage in snapshot.stages for outcome in stage.timeout_outcomes
+    )
     return BackendInspectionResult(
         run_uri=resolved_run_uri,
         backend_name=capability_set.backend_name,
@@ -225,6 +241,12 @@ def inspect_backend(
             "recovery_records": len(recovery_records),
             "materialized_refs": len(snapshot.materialized_refs),
             "warnings": len(snapshot.warnings),
+            "reliability_policy_facts": len(snapshot.reliability_policy_facts)
+            + len(stage_policy_facts),
+            "reliability_status_details": len(status_details),
+            "reliability_transactions": len(transactions),
+            "retry_decisions": len(retry_decisions),
+            "timeout_outcomes": len(timeout_outcomes),
         },
         stages=tuple(_stage_detail(stage) for stage in stages),
         submitted_operations=tuple(
@@ -310,7 +332,9 @@ def _default_authority_store(
         AuthorityBackendKind.MANAGED_SERVICE,
         AuthorityBackendKind.ALLOCATION_SCOPED_SERVICE,
     }:
-        from loom.pipeline.stores.service_authority import create_service_authority_store
+        from loom.pipeline.stores.service_authority import (
+            create_service_authority_store,
+        )
 
         if config.endpoint is None:
             raise BackendDiagnosticsError(
@@ -464,7 +488,30 @@ def _stage_detail(stage: StageLifecycleSnapshot) -> Mapping[str, PlainData]:
     artifacts = detail.get("artifact_facts")
     if isinstance(artifacts, Sequence) and not isinstance(artifacts, str):
         detail["artifact_count"] = len(artifacts)
+    _add_sequence_count(detail, "reliability_policy_facts", "reliability_policy_count")
+    _add_sequence_count(
+        detail,
+        "reliability_status_details",
+        "reliability_status_detail_count",
+    )
+    _add_sequence_count(
+        detail,
+        "reliability_transactions",
+        "reliability_transaction_count",
+    )
+    _add_sequence_count(detail, "retry_decisions", "retry_decision_count")
+    _add_sequence_count(detail, "timeout_outcomes", "timeout_outcome_count")
     return detail
+
+
+def _add_sequence_count(
+    detail: dict[str, PlainData],
+    field: str,
+    count_field: str,
+) -> None:
+    value = detail.get(field)
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        detail[count_field] = len(value)
 
 
 def _requirement_diagnostics(
