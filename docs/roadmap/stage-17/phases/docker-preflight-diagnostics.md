@@ -331,10 +331,29 @@ make test-summary
 - Draft plan: completed in this planning pass.
 - Final phase execution plan: refined in this planning pass; no open planning
   blockers.
-- Implementation summary:
+- Implementation summary: added selected-Docker preflight diagnostics for
+  Docker command availability, container/Docker option shape, image reference
+  presence, required host environment variables, mount sources, mount targets,
+  run-directory writability, local artifact-root path-parity visibility,
+  CPU/memory mapping, and unsupported GPU requests. The checks reuse shared
+  container and Docker option records, keep details plain-data and redacted,
+  and avoid daemon, registry, network, image-pull, or Docker SDK behavior by
+  default.
 - Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
-- Stack maintenance:
-- Remaining blockers:
+  - `uv run pytest tests/unit/loom/diagnostics/test_diagnostics_preflight.py tests/contracts/test_diagnostics_preflight_contract.py tests/contracts/test_cli_preflight_contract.py tests/integration/diagnostics/test_diagnostics_preflight_integration.py tests/integration/diagnostics/test_cli_preflight.py tests/package/test_import_boundaries.py`: passed, `87 passed, 2 skipped`.
+  - `uv run ruff check src/loom/diagnostics/models.py src/loom/diagnostics/preflight.py tests/unit/loom/diagnostics/test_diagnostics_preflight.py tests/contracts/test_diagnostics_preflight_contract.py tests/contracts/test_cli_preflight_contract.py tests/integration/diagnostics/test_diagnostics_preflight_integration.py tests/integration/diagnostics/test_cli_preflight.py tests/package/test_import_boundaries.py`: passed.
+  - `uv run pyright src/loom/diagnostics/models.py src/loom/diagnostics/preflight.py tests/unit/loom/diagnostics/test_diagnostics_preflight.py tests/integration/diagnostics/test_diagnostics_preflight_integration.py tests/integration/diagnostics/test_cli_preflight.py`: passed, `0 errors`.
+  - `uv run pytest tests/unit/loom/diagnostics tests/contracts tests/integration tests/package`: failed in the no-extra ad hoc environment because config-dependent integration tests in `tests/integration/diagnostics/test_cli_status_logs.py` exited with config errors before run execution.
+  - `uv run --extra config pytest tests/unit/loom/diagnostics tests/contracts tests/integration tests/package`: passed, `666 passed`.
+  - `make validate-pr`: passed; Ruff, Pyright, default harness (`1751 passed, 26 skipped, 18 deselected`), config-extra harness (`442 passed, 1788 deselected`), and build passed.
+  - `make test-summary`: passed; package `100 passed, 1 skipped`, unit `1228 passed, 7 skipped, 1 deselected`, contract `251 passed, 2 skipped`, integration `157 passed, 8 skipped, 13 deselected`, e2e `43 passed, 2 deselected`, config-extra `442 passed, 1788 deselected`, overall `2221 passed, 18 skipped, 1804 deselected`.
+- Refinement summary: local implementation fixes addressed stable ID map
+  updates, option-shape parsing expectations for image references, package
+  import-boundary coverage without optional config dependencies, and Pyright
+  casts for plain-data details; no separate phase-refiner pass was needed.
+- Blocker-resolution summary: unused.
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-17/phases/docker-preflight-diagnostics-pr-body.md`;
+  PR pending.
+- Stack maintenance: root phase from `develop`; no predecessor.
+- Remaining blockers: none.
