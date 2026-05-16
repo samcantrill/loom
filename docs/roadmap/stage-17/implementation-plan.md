@@ -536,10 +536,9 @@ protocol, process-result records, and redaction-sensitive metadata
 - Phase execution plan: complete in
   `docs/roadmap/stage-17/phases/docker-command-runner.md`
 - Planning/refinement budget: expanded path draft and refine completed
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails, coverage is missing, or redaction/process-contract risk
-  remains
-- PR review budget: one automated review pass available
+- Implementation/refinement budget: not needed; targeted suites and full PR
+  gate passed
+- PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phase 1 merged
 - Merge record: pending
@@ -556,8 +555,13 @@ protocol, process-result records, and redaction-sensitive metadata
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
+- Implementation: Docker command package, option parsing, deterministic
+  shell-free argv construction, redacted command projections, bounded command
+  results, fake/subprocess runners, and cheap version/local image digest
+  commands added.
+- Validation: targeted phase tests passed (`66 passed`); broader phase suite
+  passed (`460 passed, 3 skipped`); `make validate-pr` passed; `make
+  test-summary` passed with `2194 passed, 18 skipped, 1779 deselected`.
 - PR:
 - Merge:
 - Follow-up:

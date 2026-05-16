@@ -296,8 +296,12 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused.
-- PR review: unused.
+- Phase implementation refinement: not needed; targeted suites, broader phase
+  suite, `make validate-pr`, and `make test-summary` passed after manager
+  implementation.
+- PR review: manager pre-submit review used; strict Docker option parsing and
+  exception redaction were hardened before PR preparation, and no blocking
+  findings remain.
 - Blocker resolution: 0/3 used.
 
 ## Completion Notes
@@ -305,10 +309,19 @@ make test-summary
 - Draft plan: completed in this planning pass.
 - Final phase execution plan: refined in this planning pass; no open planning
   blockers.
-- Implementation summary:
+- Implementation summary: added `loom.pipeline.executors.docker` with strict
+  Docker option parsing, deterministic shell-free `docker run` command
+  construction, redacted argv/metadata projections, bounded
+  `DockerCommandResult`, fake/subprocess runners, and cheap version/local image
+  digest commands. Implementation commit: `891b692`.
 - Implementation validation:
-- Refinement summary:
-- Blocker-resolution summary:
-- PR preparation:
+  - `uv run pytest tests/unit/loom/pipeline/executors/docker/test_commands.py tests/contracts/test_docker_command_contract.py tests/package/test_import_boundaries.py` passed: 66 passed.
+  - `uv run pytest tests/unit/loom/pipeline/executors tests/contracts tests/package` passed: 460 passed, 3 skipped.
+  - `make validate-pr` passed: ruff, pyright, default harness, config-extra harness, and build.
+  - `make test-summary` passed and wrote `build/test-summary.md`; overall 2194 passed, 18 skipped, 1779 deselected.
+- Refinement summary: hardened explicit `DockerOptions.command` parsing and
+  exception-text redaction before committing the implementation.
+- Blocker-resolution summary: none used.
+- PR preparation: in progress; PR body prepared from final suite evidence.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.
