@@ -55,7 +55,8 @@ splits oversized steps:
   then explicit payload materialization and optional backend adapter work only
   if selected by a concrete need.
 - Container execution is split into Docker and Apptainer/SLURM composition.
-- Reliability is split into retry/timeout/events and cleanup/retention/GC.
+- Reliability is split into retry/timeout/transaction policy, runtime
+  events/event sinks, and cleanup/retention/GC.
 
 The result is a longer roadmap, but each version has a more comparable scope
 and a clearer acceptance boundary.
@@ -139,8 +140,9 @@ written.
 | v16 | Artifact payload materialization | Explicit local/external/remote payload materialization, publish, upload/download paths, and at most one optional backend adapter family, if selected. |
 | v17 | Docker container executor | Docker CLI executor using the stage-worker and artifact/run-store contracts. |
 | v18 | HPC container execution | Apptainer/Singularity executor and SLURM-container composition. |
-| v19 | Reliability policies and event sinks | Retry, timeout, failure-category, runtime event, and observe-only event sink policies across executors. |
-| v20 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
+| v19 | Reliability policies and transactions | Retry, timeout, failure-category, status-detail, transaction, and retry-safety records across executors. |
+| v20 | Runtime events and event sinks | Audit-ready runtime event grammar plus observe-only event sink contracts over committed runtime facts. |
+| v21 | Cleanup and retention | Conservative cleanup, retention metadata, explicit deletion, and run-collection GC. |
 
 ## v0 - Local Runtime Kernel
 
@@ -1229,7 +1231,7 @@ Implement:
 - Source, executor, and store backend loading after corresponding registries
   exist.
 - Run exporter plugin loading after the v12 exporter protocol exists.
-- Event sink plugin listing, with registration deferred until the v19
+- Event sink plugin listing, with registration deferred until the v20
   `RuntimeEvent` and `EventSinkRegistry` contracts are stable.
 - Plugin provenance summaries for plugin names, packages, versions, groups, and
   load results.
@@ -1496,20 +1498,20 @@ Primary feature docs:
 - `reliability.md`
 - `testing.md`
 
-## v19 - Reliability Policies And Event Sinks
+## v19 - Reliability Policies And Transactions
 
 Goal:
 
-- Make retry, timeout, failure classification, runtime events, and event sink
-  delivery explicit and inspectable across executors.
+- Make retry, timeout, failure classification, status detail, stage-attempt
+  transaction, and retry-safety decisions explicit and inspectable across
+  executors.
 
 Implement:
 
-- Shared retry, timeout, failure-category, runtime event, and event sink policy
-  models.
+- Shared retry, timeout, failure-category, and reliability policy models.
 - Status detail records that keep the machine policy status stable while adding
   human/debug fields such as lifecycle phase, reason code, and message. This
-  should improve CLI, catalog, audit, retry, and cancellation diagnostics
+  should improve CLI, catalog, retry, and cancellation diagnostics
   without expanding core status enums for every backend-specific situation.
 - Retry planning around safe output transactions and explicit idempotency
   assumptions.
@@ -1519,38 +1521,18 @@ Implement:
 - Explicit stage-attempt transaction records for begin, stage, commit, rollback
   or failure, and cleanup outcomes. These records define when staged artifacts
   become authoritative and when retry is safe.
-- Event records for run and stage lifecycle events, submission events, retry
-  decisions, timeout outcomes, stage-attempt transaction transitions, and
-  plugin callback hooks.
-- A structured event grammar for audit logs and event sinks: event id,
-  sequence, occurred timestamp, event name, primary resource, related
-  resources, payload, and optional causal predecessor. Local `events.jsonl`
-  should remain append-only and machine-readable.
-- `EventSink` and `EventSinkRegistry` contracts for observe-only callbacks over
-  committed runtime facts. Event sinks may write external side effects or links
-  back into run metadata through explicit store APIs, but they must not mutate
-  plans, configs, artifacts, stage outputs, status transitions, retry
-  decisions, or core store records.
-- Callback failure records and default best-effort failure policy. A later
-  strict mode may fail runs for audit-heavy deployments, but the default must
-  not let observer failures change run correctness.
-- Event payload shapes that include enough stable metadata for external
-  tracking projections: run URI, stage name, status, timestamps, executor,
-  artifact refs, fingerprints, submitted-operation IDs, and selected
-  provenance facts.
 - Global concurrency lease models for future sweeps and shared-resource
   environments, including named keys, slot counts, lease duration, renewal
-  records, and explicit behavior when lease renewal fails.
-- Programmatic event sink registration first, with plugin-discovered event sink
-  loading integrated after the v14 plugin surfaces and this version's event
-  sink registry are both stable.
-- Preflight warnings for unsupported retry, timeout, event, transaction, and
+  records, and explicit behavior when lease renewal fails. Reuse or harden
+  existing authority/coordination lease contracts where they already satisfy
+  this shape rather than inventing a parallel lease model.
+- Preflight warnings for unsupported retry, timeout, transaction, and
   concurrency-lease policies.
-- CLI inspection for event records where useful.
+- CLI inspection for reliability and transaction records where useful.
 - Tests for retry boundaries, retry-disabled behavior, non-retryable validation
   failures, timeout metadata, unsupported timeout warnings, transaction
-  transition records, status detail records, event record serialization, event
-  sink dispatch, lease renewal behavior, and callback failure behavior.
+  transition records, status detail records, lease renewal behavior, and
+  retry-safety behavior.
 
 Exit criteria:
 
@@ -1564,23 +1546,20 @@ Exit criteria:
   run and stage status vocabulary used by planning and resume.
 - Stage-attempt transaction records make committed outputs, failed attempts,
   retry eligibility, and cleanup candidates unambiguous.
-- Event records are suitable as an audit log: ordered, typed, resource-linked,
-  and useful without importing project code.
-- Event sinks are observer-only and cannot become an alternate execution,
-  planning, artifact, retry, or metric semantics layer.
 - Global concurrency leases can be consumed by later bounded sweeps or external
   adapters without making v13 sweeps concurrent by default.
 
 Defer:
 
-- Cleanup and deletion operations, artifact retention policy, full
-  run-collection garbage collection, service-specific notifications and
-  tracking sinks such as MLflow or W&B, distributed event streaming, advanced
-  exponential backoff, retry budgets across runs, and resource-aware retry
-  escalation.
+- Runtime event grammar expansion, event sink contracts, plugin-discovered
+  event sink loading, service-specific notifications and tracking sinks such
+  as MLflow or W&B, distributed event streaming, cleanup and deletion
+  operations, artifact retention policy, full run-collection garbage
+  collection, advanced exponential backoff, retry budgets across runs, and
+  resource-aware retry escalation.
 - Worker-daemon prefetch, advanced scheduling, and worker-health orchestration
   beyond the v11 queue controller. V19 should stay focused on the durable
-  runtime records and policies that orchestration adapters consume.
+  reliability records and policies that orchestration adapters consume.
 
 Primary feature docs:
 
@@ -1590,11 +1569,83 @@ Primary feature docs:
 - `state.md`
 - `artifacts.md`
 - `preflight.md`
-- `plugins.md`
 - `cli.md`
 - `testing.md`
 
-## v20 - Cleanup And Retention
+## v20 - Runtime Events And Event Sinks
+
+Goal:
+
+- Add audit-ready runtime event records and observe-only event sink contracts
+  over committed Loom facts without making observers part of execution
+  correctness.
+
+Implement:
+
+- Event records for run and stage lifecycle events, submission events, retry
+  decisions, timeout outcomes, stage-attempt transaction transitions, and
+  plugin callback hooks.
+- A structured event grammar for audit logs and event sinks: event id,
+  sequence, occurred timestamp, event name, primary resource, related
+  resources, payload, and optional causal predecessor. Local `events.jsonl`
+  should remain append-only and machine-readable.
+- Compatibility or versioning behavior for existing local event records and
+  `events.jsonl` readers.
+- Event payload shapes that include enough stable metadata for external
+  tracking projections: run URI, stage name, status, timestamps, executor,
+  artifact refs, fingerprints, submitted-operation IDs, retry/timeout
+  decisions, transaction IDs, and selected provenance facts.
+- `EventSink` and `EventSinkRegistry` contracts for observe-only callbacks over
+  committed runtime facts. Event sinks may write external side effects or links
+  back into run metadata through explicit store APIs, but they must not mutate
+  plans, configs, artifacts, stage outputs, status transitions, retry
+  decisions, transaction records, or core store records.
+- Programmatic event sink registration first.
+- Plugin-discovered event sink loading after the v14 plugin surfaces and this
+  version's event sink registry are both stable.
+- Callback failure records and default best-effort failure policy. A later
+  strict mode may fail runs for audit-heavy deployments, but the default must
+  not let observer failures change run correctness.
+- Preflight warnings for unsupported event persistence, event sink
+  registration, and callback failure policies.
+- CLI inspection for event records where useful.
+- Tests for event record serialization, event ordering after durable state
+  transitions, event payload compatibility, event sink dispatch, plugin event
+  sink loading, and callback failure behavior.
+
+Exit criteria:
+
+- Event records are suitable as an audit log: ordered, typed, resource-linked,
+  and useful without importing project code.
+- Event sinks are observer-only and cannot become an alternate execution,
+  planning, artifact, retry, transaction, status, or metric semantics layer.
+- Callback failures are visible and best-effort by default.
+- Existing local event records have an explicit compatibility or versioning
+  path.
+- Plugin-discovered event sinks can be loaded only through explicit user or
+  programmatic action.
+
+Defer:
+
+- Cleanup and deletion operations, artifact retention policy, full
+  run-collection garbage collection, service-specific notifications and
+  tracking sinks such as MLflow or W&B, distributed event streaming, strict
+  audit-failure mode, retry budgets across runs, and resource-aware retry
+  escalation.
+
+Primary feature docs:
+
+- `reliability.md`
+- `execution.md`
+- `run-store.md`
+- `state.md`
+- `preflight.md`
+- `plugins.md`
+- `cli.md`
+- `provenance.md`
+- `testing.md`
+
+## v21 - Cleanup And Retention
 
 Goal:
 
@@ -1677,7 +1728,7 @@ future roadmap candidates, not as implicit scope for the versions above.
   authored-source provenance, fingerprints, and path-aware error behavior well
   enough for Loom resume decisions to stay trustworthy.
 - OpenTelemetry, W&B, JSONL audit, webhook, or notification event sinks. These
-  should be service-specific plugins over the v19 event sink model. Core Loom
+  should be service-specific plugins over the v20 event sink model. Core Loom
   should provide the event contract and failure policy, not service delivery.
 - No `MetricExtractor` layer. Loom may track a metrics file as an ordinary
   artifact reference because project code produced it, but core Loom should not
@@ -1721,25 +1772,25 @@ Before turning any roadmap version into a full implementation plan:
 | `serialization.md` | v0, v1 | Plain data and canonical JSON are prerequisites for fingerprints, stores, provenance, config snapshots, and composition manifests. |
 | `fingerprints.md` | v0, v1 | Hash helpers and digest records underpin resume, artifact integrity, included-config provenance, copies, replacements, and source snapshots. |
 | `io.md` | v0, v1, v14, v15, v16 | Local sources/codecs in v0; include URI resolution and source snapshots begin in v1; plugin source/codec loading in v14; remote hooks and operations in v15/v16. |
-| `artifacts.md` | v0, v3, v9, v9-post, v10, v12, v15, v16, v20 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v12; external/remote interface, multi-location refs, and immutable reuse semantics in v15; payload materialization operations in v16; retention in v20. |
+| `artifacts.md` | v0, v3, v9, v9-post, v10, v12, v15, v16, v21 | Local artifact refs/stores in v0; inspection in v3; commit/concurrency semantics in v9; authority-backed commit use is mandatory after v9; v10 adds durable service/offline import evidence; bundles/exporters in v12; external/remote interface, multi-location refs, and immutable reuse semantics in v15; payload materialization operations in v16; retention in v21. |
 | `config.md` | v0, v1, v2, v13, v14 | Composition, recipes, and instantiation in v0; includes, replacement, copy, and rebuildable manifests in v1; CLI exposure in v2; sweep overrides in v13; recipe plugins in v14. |
 | `pipeline.md` | v0, v2, v9, v13 | Static DAG specs, stage contracts, planning, and local execution belong to v0; CLI exposes them in v2; concurrent DAG lifecycle contracts land in v9; sweeps expose them later. |
 | `pipeline-graph.md` | v0, v2, v3 | Pure graph construction, binding, traversal, and cycle checks precede execution and preflight. |
 | `runtime-resources.md` | v4, v6, v7, v11, v17, v18 | Shared runtime/resource objects arrive before executor-specific mapping; v11 adds queue pool reconciliation over authority resource leases. |
 | `execution.md` | v0, v4, v5, v6, v7, v9, v9-post, v10, v11, v17, v18, v19 | Local execution in v0; options in v4; subprocess in v5; SLURM and containers later; concurrency foundations in v9; v9-post removes local-only mutation entrypoints; v10 makes service connection/start policy explicit and durable; v11 adds whole-run queue dispatch; reliability in v19. |
-| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; v9-post deprecates `LocalRunStore` as a runtime entrypoint; v10 adds DB-backed authority service and offline import; v11 links queue state to authority facts; bundles/reliability/cleanup build later. |
+| `run-store.md` | v0, v3, v5, v8, v9, v9-post, v10, v11, v12, v19, v20, v21 | Local layout in v0; inspection/failures/catalog build on it; v9 strengthens authoritative persistence contracts; v9-post deprecates `LocalRunStore` as a runtime entrypoint; v10 adds DB-backed authority service and offline import; v11 links queue state to authority facts; bundles/reliability/events/cleanup build later. |
 | `state.md` | v0, v5, v7, v9, v9-post, v10, v11, v19 | Basic statuses in v0; attempts/failures, scheduler state, concurrent lifecycle semantics, mandatory authority-backed lifecycle use, durable service state, queue status, and reliability records mature later. |
-| `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v19 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities. |
+| `provenance.md` | v0, v1, v6, v7, v10, v11, v14, v17, v18, v20 | Generic provenance in v0; config composition provenance in v1; submission, offline import evidence, queue dispatch facts, plugin, container, event, and event-sink facts added with those capabilities. |
 | `resume.md` | v0, v2, v3, v9, v9-post, v10, v13, v19 | Same-run-directory resume in v0; CLI/preflight expose it; v9 clarifies interrupted attempts and leases; v9-post authority-backs continuation entrypoints; v10 adds offline import/equivalence policy; sweeps and retry policies build later. |
-| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20 | Core check runner in v3; new checks arrive with each operational feature. |
-| `run-catalog.md` | v8, v9, v9-post, v10, v12, v13, v15, v16, v20 | Catalog/comparison in v8; active-query guarantees and projections in v9; v9-post clarifies authority-backed behavior reads versus artifact-only local directory access; v10 service registry/offline import updates run visibility; bundles and exporters in v12; sweeps integrate in v13; metadata-only external/remote refs and immutable lookup in v15; explicit payload materialization in v16; cleanup later. |
+| `preflight.md` | v3, v4, v5, v6, v7, v9, v10, v11, v14, v15, v16, v17, v18, v19, v20, v21 | Core check runner in v3; new checks arrive with each operational feature. |
+| `run-catalog.md` | v8, v9, v9-post, v10, v12, v13, v15, v16, v21 | Catalog/comparison in v8; active-query guarantees and projections in v9; v9-post clarifies authority-backed behavior reads versus artifact-only local directory access; v10 service registry/offline import updates run visibility; bundles and exporters in v12; sweeps integrate in v13; metadata-only external/remote refs and immutable lookup in v15; explicit payload materialization in v16; cleanup later. |
 | `sweeps.md` | v9, v9-post, v10, v11, v13 | V9 defines coordination primitives for large sweeps; v9-post shapes workspace authority and service-backed coordination; v10 service-backs workspace coordination; v11 provides whole-run queue dispatch that later sweeps can use; v13 implements deterministic sweeps as many ordinary runs. |
 | `slurm.md` | v6, v7, v9-post, v10, v11, v18 | Script/dry-run support first; live operations second; v9-post removes local-only submitted-state mutation; v10 clarifies allocation-scoped service supervision and connection policy; v11 adds delegated queue dispatch; container composition after both are stable. |
 | `container-executors.md` | v17, v18 | Docker first; Apptainer and SLURM-container composition second. |
 | `remote-stores.md` | v9, v9-post, v10, v15, v16 | V9 shapes backend capability expectations; v9-post plans service/database authority for multi-host state; v10 delivers durable service supervision; external/remote interface contract, fake handlers, multi-location refs, and bundle ref semantics first; payload operations and optional real backends second. |
-| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry, timeout, runtime events, event sinks, and cleanup land later. |
-| `plugins.md` | v14, v15, v16, v19 | Explicit discovery in v14; remote backend, exporter, and event sink integration later. |
-| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations. |
+| `reliability.md` | v5, v9, v9-post, v10, v11, v19, v20, v21 | Baseline failure metadata starts with subprocess; v9 defines concurrency/attempt foundations; v9-post makes those foundations mandatory across entrypoints; v10 adds service durability and offline import rejection/acceptance evidence; v11 requires accurate queue cancellation/status reporting; retry and timeout land in v19, runtime events and event sinks in v20, and cleanup in v21. |
+| `plugins.md` | v14, v15, v16, v20 | Explicit discovery in v14; remote backend, exporter, and event sink integration later. |
+| `cli.md` | v2, v3, v5, v6, v7, v8, v9-post, v10, v11, v12, v13, v14, v16, v17, v18, v19, v20, v21 | Core CLI lands in v2; commands grow only with their owning feature; v9-post authority-backs remaining mutating runtime commands; v10 adds service lifecycle/configuration and offline import commands; v11 adds queue operations. |
 | `testing.md` | all versions | Unit, contract, fake-backend, e2e, and opt-in integration suites should grow each version. |
 
 ## Functionality Not Encompassed By This Roadmap
