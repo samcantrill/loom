@@ -8,10 +8,12 @@ import pytest
 
 from loom.pipeline import ResourceEntry, ResourceRequest
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 from loom.pipeline.runtime import (
     RUNTIME_METADATA_SCHEMA_VERSION,
     ExecutionOptions,
     RunOptions,
+    ResolvedStageRuntimeOptions,
     RuntimeMetadata,
     build_runtime_metadata,
     resolve_run_runtime,
@@ -129,3 +131,43 @@ def test_runtime_metadata_rejects_unknown_stage_options() -> None:
 def test_runtime_metadata_rejects_schema_version_mismatch() -> None:
     with pytest.raises(RuntimeResourceError, match="schema_version"):
         RuntimeMetadata(schema_version=999)
+
+
+def test_resolve_run_runtime_reliability_defaults_to_run_level_conservative_policy() -> None:
+    resolved = resolve_run_runtime(RunOptions(), stage_ids=("train",))
+
+    assert isinstance(resolved["train"], ResolvedStageRuntimeOptions)
+    assert resolved["train"].reliability == ReliabilityPolicy.defaults()
+
+
+def test_resolve_run_runtime_merges_run_and_stage_reliability() -> None:
+    options = RunOptions(
+        reliability={
+            "retry": {"enabled": True, "max_attempts": 4},
+            "timeout": {"enabled": True, "duration_seconds": 120},
+        },
+        stage_options={
+            "train": {
+                "reliability": {"retry": {"enabled": False, "max_attempts": 1}},
+            },
+            "extract": {
+                "reliability": {"timeout": {"enabled": False}},
+            },
+        },
+    )
+    resolved = resolve_run_runtime(options, stage_ids=("train", "extract"))
+
+    assert cast(
+        ReliabilityPolicy,
+        resolved["train"].reliability,
+    ) == ReliabilityPolicy(
+        retry=RetryPolicy(enabled=False, max_attempts=1),
+        timeout=TimeoutPolicy(enabled=True, duration_seconds=120),
+    )
+    assert cast(
+        ReliabilityPolicy,
+        resolved["extract"].reliability,
+    ) == ReliabilityPolicy(
+        retry=RetryPolicy(enabled=True, max_attempts=4),
+        timeout=TimeoutPolicy(enabled=False),
+    )
