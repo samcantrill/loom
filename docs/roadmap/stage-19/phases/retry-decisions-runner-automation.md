@@ -213,17 +213,18 @@ make test-summary
 
 - Files and areas to inspect: `src/loom/pipeline/execution/reliability.py`,
   `src/loom/pipeline/execution/runner.py`,
+  `src/loom/pipeline/stores/sqlite_authority.py`,
   `src/loom/pipeline/runtime/capabilities.py`, runner tests, reliability
-  contract tests, and docs.
+  contract tests, authority retry allocation coverage, and docs.
 - Scope-control checks: no executor-local retry loop, no backoff, no event
   sink behavior, no cleanup/deletion behavior, no resource-aware retry
   escalation.
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; one pass available if targeted
-  validation fails, suite coverage is missing, or expanded-path review finds a
-  concrete blocker
+- Phase implementation refinement: not needed; manager-local implementation
+  iteration resolved targeted validation findings before PR preparation and no
+  formal refiner pass was consumed
 - PR review: unused; one automated review pass available
 - Blocker resolution: 0/3 used
 
@@ -231,9 +232,17 @@ make test-summary
 
 - Draft plan: completed in this artifact
 - Final phase execution plan: completed in this artifact
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Implementation summary: added runner-owned retry evaluation and scheduling,
+  persisted allowed and denied `RetryDecisionRecord` facts, kept executors
+  one-attempt-at-a-time, allowed SQLite authority allocation after failed
+  uncommitted attempts, merged config-authored runtime reliability options into
+  runner execution, updated retry capability diagnostics, and documented
+  conservative retry behavior.
+- Implementation validation: targeted Ruff and Pyright passed for touched
+  source/tests; targeted pytest passed with `184 passed` across package,
+  unit, contract, and local/subprocess integration reliability suites.
+- Refinement summary: not needed as a separate formal pass; validation findings
+  were addressed directly during implementation before commits.
 - Blocker-resolution summary: not needed at plan time
 - PR preparation: pending
 - Merge summary: pending

@@ -232,7 +232,7 @@ def test_executor_preflight_reports_reliability_policy_diagnostics(
     )
     assert result.status is PreflightStatus.WARN
     assert [item["code"] for item in diagnostics] == [
-        "reliability.retry.deferred",
+        "reliability.retry.runner_owned",
         "reliability.timeout.unsupported",
     ]
     timeout_details = cast(dict[str, Any], diagnostics[1]["details"])

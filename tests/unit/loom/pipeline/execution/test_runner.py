@@ -12,6 +12,7 @@ from loom.pipeline.context import StageContext
 from loom.pipeline.errors import StageContractError
 from loom.pipeline.execution import (
     ConfigSnapshotInputs,
+    ExecutionFailure,
     FailurePolicy,
     ParallelExecutionUnsupportedError,
     PipelineExecutionError,
@@ -22,6 +23,7 @@ from loom.pipeline.execution import (
     StageExecutionResult,
     run_pipeline,
 )
+from loom.pipeline.execution.models import EXECUTION_FAILURE_SCHEMA_VERSION
 from loom.pipeline.execution.authority_adapter import (
     AuthorityBackedSerialRunStore,
     create_authority_backed_serial_run_store,
@@ -183,6 +185,60 @@ class PreparedWorkerExecutor:
             stdout_path=str(request.stdout_path),
             stderr_path=str(request.stderr_path),
             executor_metadata={"fake_subprocess": True},
+        )
+
+
+class RetrySequenceExecutor:
+    name = "local"
+
+    def __init__(
+        self,
+        *,
+        failures_before_success: int,
+        failure_type: str = "stage_exception",
+    ) -> None:
+        self.failures_before_success = failures_before_success
+        self.failure_type = failure_type
+        self.requests: list[StageExecutionRequest] = []
+
+    def execute(self, request: StageExecutionRequest) -> StageExecutionResult:
+        self.requests.append(request)
+        if len(self.requests) <= self.failures_before_success:
+            failure = ExecutionFailure(
+                schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+                run_uri=request.run_uri,
+                stage_name=request.stage.name,
+                attempt=request.attempt,
+                failed_at=f"2020-01-01T00:00:0{request.attempt + 1}Z",
+                executor=self.name,
+                failure_type=self.failure_type,
+                message=f"{self.failure_type} on attempt {request.attempt}",
+            )
+            return StageExecutionResult(
+                stage_name=request.stage.name,
+                status=StageStatus.FAILED,
+                outputs={},
+                failure=failure,
+                started_at=f"2020-01-01T00:00:0{request.attempt}Z",
+                finished_at=failure.failed_at,
+                executor_name=self.name,
+                attempt=request.attempt,
+            )
+        ref = request.context.save_artifact(
+            "data",
+            {"attempt": request.attempt},
+            artifact_type="json",
+            codec_key="json.v1",
+        )
+        return StageExecutionResult(
+            stage_name=request.stage.name,
+            status=StageStatus.SUCCEEDED,
+            outputs={"data": ref},
+            failure=None,
+            started_at=f"2020-01-01T00:00:0{request.attempt}Z",
+            finished_at=f"2020-01-01T00:00:0{request.attempt + 1}Z",
+            executor_name=self.name,
+            attempt=request.attempt,
         )
 
 
@@ -583,6 +639,177 @@ def test_runner_prepares_worker_attempt_for_subprocess_without_constructing_stag
     provenance = run_store.read_stage_provenance(result.run_uri, "build")
     assert provenance is not None
     assert provenance["executor_metadata"] == {"fake_subprocess": True}
+
+
+def test_runner_retries_allowed_failure_after_persisting_decision(
+    tmp_path: Path,
+) -> None:
+    run_store = _authority_run_store(tmp_path)
+    executor = RetrySequenceExecutor(failures_before_success=1)
+
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            options={"reliability": {"retry": {"enabled": True, "max_attempts": 2}}},
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert [request.attempt for request in executor.requests] == [1, 2]
+    stage_result = result.stage_results["build"]
+    assert stage_result.status == StageStatus.SUCCEEDED
+    assert stage_result.attempt == 2
+    decisions = run_store.list_retry_decisions(result.run_uri, stage_name="build")
+    assert len(decisions) == 1
+    assert decisions[0].decision_reason == "retry.allowed"
+    assert decisions[0].should_retry is True
+    assert decisions[0].next_attempt == 2
+    assert decisions[0].attempt_count == 1
+
+
+def test_runner_records_disabled_retry_decision_without_retrying(
+    tmp_path: Path,
+) -> None:
+    run_store = _authority_run_store(tmp_path)
+    executor = RetrySequenceExecutor(failures_before_success=1)
+
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert [request.attempt for request in executor.requests] == [1]
+    decisions = run_store.list_retry_decisions(result.run_uri, stage_name="build")
+    assert len(decisions) == 1
+    assert decisions[0].decision_reason == "retry.disabled"
+    assert decisions[0].should_retry is False
+    assert decisions[0].next_attempt is None
+
+
+def test_runner_records_exhausted_retry_decision_on_final_attempt(
+    tmp_path: Path,
+) -> None:
+    run_store = _authority_run_store(tmp_path)
+    executor = RetrySequenceExecutor(failures_before_success=3)
+
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            options={"reliability": {"retry": {"enabled": True, "max_attempts": 2}}},
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert [request.attempt for request in executor.requests] == [1, 2]
+    decisions = run_store.list_retry_decisions(result.run_uri, stage_name="build")
+    assert [decision.decision_reason for decision in decisions] == [
+        "retry.allowed",
+        "retry.max_attempts_exhausted",
+    ]
+    assert [decision.should_retry for decision in decisions] == [True, False]
+    assert decisions[-1].next_attempt is None
+
+
+def test_runner_does_not_retry_non_retriable_failure_type(tmp_path: Path) -> None:
+    run_store = _authority_run_store(tmp_path)
+    executor = RetrySequenceExecutor(
+        failures_before_success=1,
+        failure_type="stage_contract",
+    )
+
+    result = PipelineRunner(run_store=run_store, executor=executor).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.JsonProducerStage"
+                    ),
+                )
+            ),
+            options={"reliability": {"retry": {"enabled": True, "max_attempts": 2}}},
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert [request.attempt for request in executor.requests] == [1]
+    decisions = run_store.list_retry_decisions(result.run_uri, stage_name="build")
+    assert len(decisions) == 1
+    assert decisions[0].decision_reason == "retry.non_retriable_failure"
+    assert decisions[0].failure.retriable is False
+
+
+def test_runner_records_cancelled_retry_denial(tmp_path: Path) -> None:
+    run_store = _authority_run_store(tmp_path)
+
+    result = PipelineRunner(run_store=run_store).run(
+        RunRequest(
+            pipeline=PipelineSpec(
+                stages=(
+                    _stage(
+                        target_path="tests.support.pipeline_execution_stages.EarlyStopStage"
+                    ),
+                )
+            ),
+            options={"reliability": {"retry": {"enabled": True, "max_attempts": 2}}},
+            provenance_options=ProvenanceCaptureOptions(
+                capture_git=False,
+                capture_environment=False,
+                capture_dependencies=False,
+                capture_command=False,
+            ),
+        )
+    )
+
+    assert result.status == RunStatus.CANCELLED
+    decisions = run_store.list_retry_decisions(result.run_uri, stage_name="build")
+    assert len(decisions) == 1
+    assert decisions[0].decision_reason == "retry.cancelled"
+    assert decisions[0].should_retry is False
+    assert decisions[0].failure.reason_code == "stage.cancelled"
 
 
 def test_runner_rejects_dry_run_execution_request(tmp_path: Path) -> None:

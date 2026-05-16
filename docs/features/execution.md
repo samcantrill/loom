@@ -282,7 +282,7 @@ scheduling in v0.
 
 ```text
 parallel local scheduling
-retry policies beyond a single attempt
+advanced retry policies beyond bounded total attempts
 timeout enforcement
 dynamic DAG mutation
 continue-on-failure for independent branches
@@ -1970,21 +1970,25 @@ be the first implementation when timeouts are added.
 
 ### 17.5 Retries
 
-V0 should not automatically retry failed stages.
+Automatic retry is opt-in and conservative. The runner owns retry decisions and
+executors continue to execute a single attempt at a time.
 
-Future retry policy:
+Retry policy is configured through runtime reliability options:
 
 ```yaml
-retry:
-  max_attempts: 2
-  retry_on:
-    - executor_failure
-    - timeout
+runtime:
+  reliability:
+    retry:
+      enabled: true
+      max_attempts: 2
 ```
 
-Retries require careful attempt directories, failure preservation, and artifact
-commit semantics. They should be designed after single-attempt execution is
-stable.
+`max_attempts` is the total attempt budget including the first attempt. Before
+the runner schedules attempt 2 or later, it persists a retry decision with the
+denial or allow reason. Retry is denied for disabled policy, exhausted attempt
+budget, cancellation, non-retriable failure classification, missing transaction
+evidence, or unsafe output transaction state. Attempts that reached staged,
+committed, or commit-failed output state are not retried automatically.
 
 ### 17.6 Deferred Behavior Owners
 

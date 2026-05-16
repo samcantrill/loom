@@ -314,8 +314,9 @@ Reliability timeout checks are capability diagnostics, not process probes. A
 selected timeout policy reports whether the executor support level is
 `enforced`, `delegated`, `observed`, or `unsupported`. Subprocess timeout
 support is reported as enforced; local in-process timeout support is reported
-as unsupported. Retry policy remains a warning until runner-owned retry
-decisions are implemented.
+as unsupported. Enabled retry policy is reported as runner-owned runtime
+behavior because executors still run one attempt at a time while the controller
+persists retry decisions before scheduling another attempt.
 
 ## SLURM Checks
 

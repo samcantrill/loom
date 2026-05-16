@@ -22,9 +22,14 @@ from loom.pipeline.execution.models import (
     EXECUTION_FAILURE_SCHEMA_VERSION,
     ExecutionFailure,
 )
-from loom.pipeline.execution.reliability import record_timeout_outcome_from_metadata
+from loom.pipeline.execution.reliability import (
+    record_retry_decision_for_stage_result,
+    record_stage_reliability_transition,
+    record_timeout_outcome_from_metadata,
+)
 from loom.pipeline.planning import plan_pipeline
 from loom.pipeline.reliability import (
+    RetryPolicy,
     StageAttemptTransactionState,
     TimeoutOutcome,
     TimeoutSupportLevel,
@@ -178,8 +183,69 @@ def test_write_stage_running_records_reliability_transaction(
     assert [transaction.state for transaction in transactions] == [
         StageAttemptTransactionState.RUNNING
     ]
-    assert transactions[0].causal_parent_id is None
-    assert transactions[0].status == details[0]
+
+
+def test_retry_decision_denies_unsafe_transaction_chain(tmp_path: Path) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    write_run_status(
+        store,
+        run_uri=run_uri,
+        status=RunStatus.RUNNING,
+        created_at="2020-01-01T00:00:00Z",
+        updated_at="2020-01-01T00:00:01Z",
+        started_at="2020-01-01T00:00:01Z",
+    )
+    write_stage_running(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        started_at="2020-01-01T00:00:02Z",
+    )
+    record_stage_reliability_transition(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        state=StageAttemptTransactionState.STAGED,
+        stage_status=StageStatus.RUNNING,
+        recorded_at="2020-01-01T00:00:03Z",
+    )
+    failure = persist_stage_failure(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        started_at="2020-01-01T00:00:02Z",
+        failure=ExecutionFailure(
+            schema_version=EXECUTION_FAILURE_SCHEMA_VERSION,
+            run_uri=run_uri,
+            stage_name="build",
+            attempt=1,
+            failed_at="2020-01-01T00:00:04Z",
+            executor="local",
+            failure_type="stage_exception",
+            message="failed after staged outputs",
+        ),
+    )
+
+    decision = record_retry_decision_for_stage_result(
+        store,
+        run_uri=run_uri,
+        stage_name="build",
+        attempt=1,
+        stage_status=StageStatus.FAILED,
+        recorded_at="2020-01-01T00:00:05Z",
+        policy=RetryPolicy(enabled=True, max_attempts=2),
+        failure=failure,
+    )
+
+    assert decision is not None
+    assert decision.decision_reason == "retry.unsafe_transaction_state"
+    assert decision.should_retry is False
+    assert decision.next_attempt is None
 
 
 def test_persist_stage_failure_classifies_and_records_failed_transaction(

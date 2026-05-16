@@ -404,7 +404,7 @@ def test_unsupported_reliability_timeout_is_warning_not_resource_error() -> None
     assert diagnostics[0]["resource_kind"] is None
 
 
-def test_enabled_retry_reports_deferred_runtime_diagnostic() -> None:
+def test_enabled_retry_reports_runner_owned_runtime_diagnostic() -> None:
     result = validate_executor_capabilities(
         RunOptions(
             reliability=ReliabilityPolicy(
@@ -415,8 +415,8 @@ def test_enabled_retry_reports_deferred_runtime_diagnostic() -> None:
 
     assert result.ok
     diagnostics = cast(list[dict[str, object]], result.to_dict()["diagnostics"])
-    assert diagnostics[0]["code"] == "reliability.retry.deferred"
-    assert diagnostics[0]["severity"] == "warning"
+    assert diagnostics[0]["code"] == "reliability.retry.runner_owned"
+    assert diagnostics[0]["severity"] == "info"
 
 
 def test_omitted_resource_capability_uses_descriptor_fallback_policy() -> None:
