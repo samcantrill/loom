@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 4: Preflight Diagnostics`
 - Branch: `codex/docker-preflight-diagnostics`
@@ -14,7 +14,7 @@
 - Base branch: `develop`
 - Target branch: `develop`
 - PR: [#174](https://github.com/samcantrill/loom/pull/174)
-- Merge eligibility: eligible after implementation, validation, PR
+- Merge eligibility: merged to `develop` after implementation, validation, PR
   preparation, GitHub CI, and manager automated review
 - Workflow path: expanded path
 - Successor dependency notes: Phase 5 should start from `develop` after this
@@ -55,9 +55,9 @@ retry/timeout policy, runtime events, transaction policy, and cleanup behavior.
 - Why this base branch is correct: Phase 4 depends on the merged container
   records, Docker command layer, and Docker executor integration.
 - Retarget/rebase plan after predecessor merge: not applicable.
-- Branch cleanup constraints: no successor branch currently depends on
-  `codex/docker-preflight-diagnostics`; delete it after merge unless Phase 5 is
-  stacked on it because of a GitHub-side blocker.
+- Branch cleanup constraints: no successor branch depended on
+  `codex/docker-preflight-diagnostics`; remote branch and stale local tracking
+  ref were deleted after merge.
 
 ## Source Phase Summary
 
@@ -357,4 +357,8 @@ make test-summary
   PR [#174](https://github.com/samcantrill/loom/pull/174) opened against
   verified `develop` from `codex/docker-preflight-diagnostics`.
 - Stack maintenance: root phase from `develop`; no predecessor.
+- Merge record: PR [#174](https://github.com/samcantrill/loom/pull/174)
+  merged into `develop` by squash merge after GitHub CI `checks` passed; merge
+  commit `7471538b9fbdeae7f109b6006fd96c28cb5e714b`; remote branch and stale
+  local tracking ref deleted.
 - Remaining blockers: none.

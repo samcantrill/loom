@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 4 pr_open
+Current phase: Phase 5 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -321,7 +321,7 @@ Apptainer/Singularity prove enough common behavior.
 | 1 | `docker-container-contracts` | merged | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
 | 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
 | 3 | `docker-executor-integration` | merged | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
-| 4 | `docker-preflight-diagnostics` | pr_open | `codex/docker-preflight-diagnostics` | [#174](https://github.com/samcantrill/loom/pull/174) | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
+| 4 | `docker-preflight-diagnostics` | merged | `codex/docker-preflight-diagnostics` | [#174](https://github.com/samcantrill/loom/pull/174) | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
 | 5 | `docker-examples-acceptance` | pending | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
 ## Implementation Readiness Blockers
@@ -705,7 +705,7 @@ CLI selection, failure semantics, and result metadata
 
 ## Phase 4: Docker Preflight And Diagnostics
 
-Status: pr_open
+Status: merged
 Slug: `docker-preflight-diagnostics`
 Branch: `codex/docker-preflight-diagnostics`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-preflight-diagnostics`
@@ -787,7 +787,9 @@ selected-executor preflight behavior
 - PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed; PR opened against verified `develop` target
-- Merge record: pending
+- Merge record: PR [#174](https://github.com/samcantrill/loom/pull/174)
+  merged into `develop` by squash merge after GitHub CI `checks` passed; merge
+  commit `7471538b9fbdeae7f109b6006fd96c28cb5e714b`; remote branch deleted.
 
 ### Risks And Stop Conditions
 
@@ -817,8 +819,12 @@ selected-executor preflight behavior
   1804 deselected`.
 - PR: [#174](https://github.com/samcantrill/loom/pull/174) opened and verified
   against `develop` from `codex/docker-preflight-diagnostics`.
-- Merge:
-- Follow-up:
+- Merge: [#174](https://github.com/samcantrill/loom/pull/174) merged into
+  `develop` by squash merge after GitHub CI `checks` passed; merge commit
+  `7471538b9fbdeae7f109b6006fd96c28cb5e714b`; remote branch and stale local
+  tracking ref were deleted.
+- Follow-up: Phase 5 consumes the Docker preflight checks for docs, examples,
+  failure inspection guidance, and optional live Docker smoke notes.
 
 ## Phase 5: Examples, Documentation, And Acceptance Hardening
 

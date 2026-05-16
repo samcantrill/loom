@@ -46,7 +46,7 @@ real preflight integration, selected-executor behavior, and import boundaries.
 | Broader Phase 4 suite with config extra | Passed | `666 passed` |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
 | `make test-summary` | Passed | Overall `2221 passed, 18 skipped, 1804 deselected` |
-| GitHub checks | Pending | To be reported after PR creation |
+| GitHub checks | Passed | GitHub Actions `checks` passed |
 
 ### Test Suite Summary
 
