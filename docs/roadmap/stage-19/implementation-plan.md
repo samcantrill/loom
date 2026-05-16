@@ -287,7 +287,7 @@ drive core retry or transaction behavior.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `reliability-contracts-runtime-policy` | pr_open | `codex/reliability-contracts-runtime-policy` | [#176](https://github.com/samcantrill/loom/pull/176) | `loom.pipeline.reliability`, `loom.pipeline.runtime` | Add import-light contracts and public runtime policy parsing/merge | Package, unit, runtime contract tests, `make validate-pr`, `make test-summary` | Policy merge, disabled/unset policy, import boundary |
+| 1 | `reliability-contracts-runtime-policy` | merged | `codex/reliability-contracts-runtime-policy` | [#176](https://github.com/samcantrill/loom/pull/176) | `loom.pipeline.reliability`, `loom.pipeline.runtime` | Add import-light contracts and public runtime policy parsing/merge | Package, unit, runtime contract tests, `make validate-pr`, `make test-summary` | Policy merge, disabled/unset policy, import boundary |
 | 2 | `reliability-persistence-read-models` | pending | `codex/reliability-persistence-read-models` | pending | `loom.pipeline.stores`, read models | Persist and read versioned reliability facts | Store unit/contract/integration tests, `make validate-pr`, `make test-summary` | Status detail, transaction, timeout, retry-decision records |
 | 3 | `transaction-failure-classification` | pending | `codex/transaction-failure-classification` | pending | `loom.pipeline.execution`, lifecycle, status detail | Record transaction/classification facts around attempts | Classifier unit tests, lifecycle/store integration tests, `make validate-pr`, `make test-summary` | Commit failure, status detail without enum churn |
 | 4 | `timeout-capability-diagnostics` | pending | `codex/timeout-capability-diagnostics` | pending | runtime capabilities, executors, diagnostics, lease compatibility | Add timeout outcomes and reliability diagnostics | Capability, preflight, fake/subprocess tests, `make validate-pr`, `make test-summary` | Unsupported timeout, distinct timeout outcomes, lease diagnostic |
@@ -302,7 +302,7 @@ drive core retry or transaction behavior.
 
 ## Phase 1: Reliability Contracts And Runtime Policy
 
-Status: pr_open
+Status: merged
 Slug: `reliability-contracts-runtime-policy`
 Branch: `codex/reliability-contracts-runtime-policy`
 Worktree: `/home/samcantrill/work/loom-worktrees/reliability-contracts-runtime-policy`
@@ -391,7 +391,10 @@ record/protocol surface
 - PR review budget: used by `loom_phase_reviewer` pre-submit review
 - Blocker-resolution budget: 2/3 used
 - Pre-submit blocker gate: implementation-plan quality gate must pass
-- Merge record: pending
+- Merge record: merged into `develop` at
+  `c7415fd10e285d181481249f3fc06c7104908e17` on 2026-05-16 after automated
+  review, local validation, and GitHub CI passed. Branch retained because
+  Phase 2 was already stacked on `codex/reliability-contracts-runtime-policy`.
 
 ### Risks And Stop Conditions
 
@@ -412,8 +415,11 @@ record/protocol surface
   and build; `make test-summary` passed all suites.
 - PR: opened at https://github.com/samcantrill/loom/pull/176 targeting
   `develop`.
-- Merge: pending
-- Follow-up: pending
+- Merge: merged into `develop` at
+  `c7415fd10e285d181481249f3fc06c7104908e17`.
+- Follow-up: Phase 2 was created as stacked continuation from the Phase 1
+  branch and will need retarget/rebase maintenance before merge eligibility if
+  it remains stacked.
 
 ## Phase 2: Reliability Persistence And Read Models
 
