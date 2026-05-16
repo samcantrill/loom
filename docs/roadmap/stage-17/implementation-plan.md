@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 1 pr_open
+Current phase: Phase 2 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -318,7 +318,7 @@ Apptainer/Singularity prove enough common behavior.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `docker-container-contracts` | pr_open | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
+| 1 | `docker-container-contracts` | merged | `codex/docker-container-contracts` | [#171](https://github.com/samcantrill/loom/pull/171) | Shared container records, Docker descriptor, runtime/profile adapter contracts | Establish Stage 18-compatible container config and capability surface | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Runtime/profile config snippets |
 | 2 | `docker-command-runner` | pending | `codex/docker-command-runner` | pending | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
 | 3 | `docker-executor-integration` | pending | `codex/docker-executor-integration` | pending | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
 | 4 | `docker-preflight-diagnostics` | pending | `codex/docker-preflight-diagnostics` | pending | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
@@ -332,7 +332,7 @@ Apptainer/Singularity prove enough common behavior.
 
 ## Phase 1: Container Contracts And Runtime Descriptor
 
-Status: pr_open
+Status: merged
 Slug: `docker-container-contracts`
 Branch: `codex/docker-container-contracts`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-container-contracts`
@@ -423,7 +423,7 @@ and reusable records for Stage 18
 - PR review budget: manager pre-submit review used; no blocking findings remain
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed; PR opened against verified target branch
-- Merge record: pending
+- Merge record: merged to `develop` by squash merge after CI success.
 
 ### Risks And Stop Conditions
 
@@ -445,7 +445,9 @@ and reusable records for Stage 18
   test-summary` passed with `2180 passed, 18 skipped, 1765 deselected`.
 - PR: [#171](https://github.com/samcantrill/loom/pull/171) opened against
   `develop` from `codex/docker-container-contracts`.
-- Merge: pending.
+- Merge: [#171](https://github.com/samcantrill/loom/pull/171) merged into
+  `develop` after GitHub CI `checks` passed and the PR target was reverified as
+  `develop`.
 - Follow-up: Phase 2 consumes these records for Docker command construction
   after Phase 1 merges or remains a valid stack predecessor.
 

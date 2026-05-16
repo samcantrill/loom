@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 1: Container Contracts And Runtime Descriptor`
 - Branch: `codex/docker-container-contracts`
@@ -14,7 +14,7 @@
 - Base branch: `develop`
 - Target branch: `develop`
 - PR: [#171](https://github.com/samcantrill/loom/pull/171)
-- Merge eligibility: root phase, eligible to merge to `develop` after implementation, validation, PR preparation, and automated review pass
+- Merge eligibility: merged to `develop`
 - Workflow path: expanded path
 - Successor dependency notes: Phase 2 `docker-command-runner` depends on this branch until Phase 1 merges or is a valid stack predecessor.
 - Plan quality gate: passed in the implementation plan on 2026-05-16 with no blockers
@@ -418,5 +418,9 @@ make test-summary
 - Blocker-resolution summary: none used.
 - PR preparation: complete; [#171](https://github.com/samcantrill/loom/pull/171)
   opened against `develop` and verified with `gh pr view`.
-- Stack maintenance: root phase from `develop`; no predecessor.
+- Merge summary: [#171](https://github.com/samcantrill/loom/pull/171)
+  merged to `develop` by squash merge after GitHub CI `checks` passed and the
+  target was reverified as `develop`.
+- Stack maintenance: root phase from `develop`; no predecessor and no
+  successor branch depended on the phase branch at merge time.
 - Remaining blockers: none.
