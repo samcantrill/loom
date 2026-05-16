@@ -9,6 +9,8 @@ import pytest
 from loom.pipeline.stores import (
     AuthoritySchemaFailureKind,
     BackendCapability,
+    BackendCapabilityRecord,
+    BackendCapabilitySet,
     CapabilityScope,
     CapabilitySupport,
     WorkspaceIdentity,
@@ -81,8 +83,32 @@ def test_capabilities_are_explicit_about_local_coordination_limits(
         capabilities,
         require_shared_filesystem=True,
         require_remote=True,
+        require_resource_leases=True,
     )
     assert [diagnostic.code for diagnostic in diagnostics] == [
         "unsafe_shared_filesystem",
         "unsafe_remote_coordination",
+    ]
+
+
+def test_resource_lease_requirement_reports_existing_capability_gap() -> None:
+    diagnostics = coordination_requirement_diagnostics(
+        BackendCapabilitySet(
+            backend_name="minimal",
+            records=(
+                BackendCapabilityRecord(
+                    capability=BackendCapability.CROSS_RUN_COORDINATION,
+                    scope=CapabilityScope.CROSS_RUN,
+                ),
+            ),
+        ),
+        require_resource_leases=True,
+    )
+
+    assert [diagnostic.code for diagnostic in diagnostics] == [
+        "unsupported_resource_leases"
+    ]
+    assert diagnostics[0].detail["missing_capabilities"] == [
+        "global_counters",
+        "backend_lease_time",
     ]

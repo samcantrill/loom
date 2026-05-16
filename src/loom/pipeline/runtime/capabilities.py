@@ -23,6 +23,11 @@ from loom.pipeline.runtime.options import (
     StageRuntimeOptions,
     parse_run_options,
 )
+from loom.pipeline.reliability import (
+    ReliabilityPolicy,
+    TimeoutPolicy,
+    TimeoutSupportLevel,
+)
 
 
 class ResourceSupportLevel(StrEnum):
@@ -127,6 +132,7 @@ class ExecutorDescriptor:
         field(default_factory=dict)
     )
     adapter_namespaces: Iterable[str] | Mapping[str, object] = ()
+    timeout_support: TimeoutSupportLevel | str = TimeoutSupportLevel.UNSUPPORTED
     details: Mapping[str, PlainData] = field(default_factory=dict)
     unknown_resource_capability: ResourceCapability | Mapping[str, object] = field(
         default_factory=lambda: ResourceCapability(
@@ -153,6 +159,14 @@ class ExecutorDescriptor:
             _adapter_namespace_tuple(
                 self.adapter_namespaces,
                 path=f"ExecutorDescriptor[{name!r}].adapter_namespaces",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "timeout_support",
+            _coerce_timeout_support(
+                self.timeout_support,
+                path=f"ExecutorDescriptor[{name!r}].timeout_support",
             ),
         )
         object.__setattr__(
@@ -192,6 +206,7 @@ class ExecutorDescriptor:
                 ).items()
             },
             "adapter_namespaces": list(cast(tuple[str, ...], self.adapter_namespaces)),
+            "timeout_support": cast(TimeoutSupportLevel, self.timeout_support).value,
             "details": _thaw_mapping(
                 self.details,
                 path=f"ExecutorDescriptor[{self.name!r}].details",
@@ -212,6 +227,7 @@ class ExecutorDescriptor:
                     "name",
                     "resource_capabilities",
                     "adapter_namespaces",
+                    "timeout_support",
                     "details",
                     "unknown_resource_capability",
                 }
@@ -234,6 +250,10 @@ class ExecutorDescriptor:
             adapter_namespaces=cast(
                 Sequence[str],
                 mapping.get("adapter_namespaces", ()),
+            ),
+            timeout_support=_coerce_timeout_support(
+                mapping.get("timeout_support", TimeoutSupportLevel.UNSUPPORTED.value),
+                path="ExecutorDescriptor.timeout_support",
             ),
             details=_plain_mapping(
                 mapping.get("details", {}),
@@ -603,6 +623,7 @@ def validate_executor_capabilities(
 
     diagnostics: list[CapabilityDiagnostic] = []
     diagnostics.extend(_adapter_namespace_diagnostics(run_options, descriptor))
+    diagnostics.extend(_reliability_capability_diagnostics(run_options, descriptor))
     diagnostics.extend(_resource_capability_diagnostics(run_options, descriptor))
     return CapabilityValidationResult(diagnostics)
 
@@ -643,6 +664,7 @@ def _local_descriptor() -> ExecutorDescriptor:
             "gpu": ignored,
         },
         adapter_namespaces=(),
+        timeout_support=TimeoutSupportLevel.UNSUPPORTED,
         details={"built_in": True},
     )
 
@@ -664,6 +686,7 @@ def _subprocess_descriptor() -> ExecutorDescriptor:
             "gpu": ignored,
         },
         adapter_namespaces=(),
+        timeout_support=TimeoutSupportLevel.ENFORCED,
         details={"built_in": True, "process_isolating": True, "serial": True},
     )
 
@@ -683,6 +706,7 @@ def _slurm_descriptor(name: str) -> ExecutorDescriptor:
             "gpu": supported,
         },
         adapter_namespaces=("slurm",),
+        timeout_support=TimeoutSupportLevel.DELEGATED,
         details={
             "built_in": True,
             "dry_run_only": False,
@@ -718,6 +742,7 @@ def _docker_descriptor() -> ExecutorDescriptor:
             "gpu": gpu,
         },
         adapter_namespaces=("container", "docker"),
+        timeout_support=TimeoutSupportLevel.UNSUPPORTED,
         details={
             "built_in": True,
             "containerized": True,
@@ -727,6 +752,125 @@ def _docker_descriptor() -> ExecutorDescriptor:
             "requires_prepared_worker_request": True,
         },
     )
+
+
+def _reliability_capability_diagnostics(
+    options: RunOptions,
+    descriptor: ExecutorDescriptor,
+) -> list[CapabilityDiagnostic]:
+    diagnostics: list[CapabilityDiagnostic] = []
+    diagnostics.extend(
+        _reliability_policy_diagnostics(
+            path="RunOptions.reliability",
+            executor=descriptor.name,
+            stage_id=None,
+            policy=cast(ReliabilityPolicy | None, options.reliability),
+            timeout_support=cast(TimeoutSupportLevel, descriptor.timeout_support),
+        )
+    )
+    for stage_id, stage_options in cast(
+        Mapping[str, StageRuntimeOptions],
+        options.stage_options,
+    ).items():
+        diagnostics.extend(
+            _reliability_policy_diagnostics(
+                path=f"RunOptions.stage_options[{stage_id!r}].reliability",
+                executor=descriptor.name,
+                stage_id=stage_id,
+                policy=cast(ReliabilityPolicy | None, stage_options.reliability),
+                timeout_support=cast(TimeoutSupportLevel, descriptor.timeout_support),
+            )
+        )
+    return diagnostics
+
+
+def _reliability_policy_diagnostics(
+    *,
+    path: str,
+    executor: str,
+    stage_id: str | None,
+    policy: ReliabilityPolicy | None,
+    timeout_support: TimeoutSupportLevel,
+) -> list[CapabilityDiagnostic]:
+    if policy is None:
+        return []
+    diagnostics: list[CapabilityDiagnostic] = []
+    retry = policy.retry
+    if retry is not None and retry.enabled:
+        diagnostics.append(
+            CapabilityDiagnostic(
+                path=f"{path}.retry",
+                severity=CapabilitySeverity.WARNING,
+                code="reliability.retry.deferred",
+                message=(
+                    "automatic retry is not enabled until runner-owned retry "
+                    "decisions are implemented"
+                ),
+                executor=executor,
+                stage_id=stage_id,
+                details={
+                    "max_attempts": retry.max_attempts,
+                    "phase": "stage-19-phase-5",
+                },
+            )
+        )
+    timeout = policy.timeout
+    if timeout is not None and timeout.enabled:
+        diagnostics.append(
+            _timeout_capability_diagnostic(
+                path=f"{path}.timeout",
+                executor=executor,
+                stage_id=stage_id,
+                policy=timeout,
+                timeout_support=timeout_support,
+            )
+        )
+    return diagnostics
+
+
+def _timeout_capability_diagnostic(
+    *,
+    path: str,
+    executor: str,
+    stage_id: str | None,
+    policy: TimeoutPolicy,
+    timeout_support: TimeoutSupportLevel,
+) -> CapabilityDiagnostic:
+    severity = (
+        CapabilitySeverity.WARNING
+        if timeout_support is TimeoutSupportLevel.UNSUPPORTED
+        else CapabilitySeverity.INFO
+    )
+    return CapabilityDiagnostic(
+        path=path,
+        severity=severity,
+        code=f"reliability.timeout.{timeout_support.value}",
+        message=_timeout_capability_message(
+            executor=executor,
+            timeout_support=timeout_support,
+        ),
+        executor=executor,
+        stage_id=stage_id,
+        details={
+            "duration_seconds": policy.duration_seconds,
+            "timeout_support": timeout_support.value,
+            "timeout_domain": "reliability",
+        },
+    )
+
+
+def _timeout_capability_message(
+    *,
+    executor: str,
+    timeout_support: TimeoutSupportLevel,
+) -> str:
+    if timeout_support is TimeoutSupportLevel.ENFORCED:
+        return f"executor {executor!r} can enforce reliability timeout policy"
+    if timeout_support is TimeoutSupportLevel.DELEGATED:
+        return f"executor {executor!r} delegates reliability timeout policy"
+    if timeout_support is TimeoutSupportLevel.OBSERVED:
+        return f"executor {executor!r} can observe reliability timeout outcomes"
+    return f"executor {executor!r} does not support reliability timeout policy"
 
 
 def _adapter_namespace_diagnostics(
@@ -913,6 +1057,22 @@ def _normalize_executor_name(value: object, *, path: str) -> str:
     if not text:
         raise RuntimeResourceError(f"{path} must be a non-empty string")
     return text
+
+
+def _coerce_timeout_support(
+    value: TimeoutSupportLevel | str | object,
+    *,
+    path: str,
+) -> TimeoutSupportLevel:
+    if isinstance(value, TimeoutSupportLevel):
+        return value
+    if not isinstance(value, str):
+        raise RuntimeResourceError(f"{path} must be a string")
+    try:
+        return TimeoutSupportLevel(value)
+    except ValueError as exc:
+        valid = ", ".join(level.value for level in TimeoutSupportLevel)
+        raise RuntimeResourceError(f"{path} must be one of: {valid}") from exc
 
 
 def _diagnostic_sort_key(diagnostic: CapabilityDiagnostic) -> tuple[str, str, str, str]:

@@ -13,10 +13,16 @@ from loom.pipeline.early_stopping import (
     EarlyStopSignal,
     lifecycle_reason_from_early_stop,
 )
+from loom.pipeline.reliability import TimeoutOutcome, TimeoutSupportLevel
 from loom.pipeline.stage import Stage
 from loom.pipeline.status import StageStatus
 from loom.timestamps import utc_timestamp
 
+from ._reliability import (
+    metadata_with_timeout,
+    timeout_metadata,
+    timeout_policy_from_request,
+)
 from .errors import LocalExecutorError
 
 if TYPE_CHECKING:
@@ -51,6 +57,18 @@ class LocalExecutor:
             raise LocalExecutorError("Stage object does not satisfy the Stage protocol")
 
         started_at = utc_timestamp()
+        policy = timeout_policy_from_request(request)
+        timeout = (
+            None
+            if policy is None
+            else timeout_metadata(
+                policy=policy,
+                support_level=TimeoutSupportLevel.UNSUPPORTED,
+                outcome=TimeoutOutcome.UNSUPPORTED,
+                timed_out=False,
+                message="local executor cannot safely interrupt in-process stage code",
+            )
+        )
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         try:
@@ -81,10 +99,13 @@ class LocalExecutor:
                 attempt=request.attempt,
                 stdout_path=str(request.stdout_path),
                 stderr_path=str(request.stderr_path),
-                executor_metadata={
-                    "capture_stdout_stderr": self.capture_stdout_stderr,
-                    "lifecycle_reason": reason.to_dict(),
-                },
+                executor_metadata=metadata_with_timeout(
+                    {
+                        "capture_stdout_stderr": self.capture_stdout_stderr,
+                        "lifecycle_reason": reason.to_dict(),
+                    },
+                    timeout,
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - trusted stage failures become structured results.
             finished_at = utc_timestamp()
@@ -121,6 +142,10 @@ class LocalExecutor:
                 stdout_path=str(request.stdout_path),
                 stderr_path=str(request.stderr_path),
                 traceback_path=str(request.traceback_path),
+                executor_metadata=metadata_with_timeout(
+                    {"capture_stdout_stderr": self.capture_stdout_stderr},
+                    timeout,
+                ),
             )
 
         finished_at = utc_timestamp()
@@ -151,6 +176,10 @@ class LocalExecutor:
                 attempt=request.attempt,
                 stdout_path=str(request.stdout_path),
                 stderr_path=str(request.stderr_path),
+                executor_metadata=metadata_with_timeout(
+                    {"capture_stdout_stderr": self.capture_stdout_stderr},
+                    timeout,
+                ),
             )
         return StageExecutionResult(
             stage_name=request.stage.name,
@@ -163,7 +192,10 @@ class LocalExecutor:
             attempt=request.attempt,
             stdout_path=str(request.stdout_path),
             stderr_path=str(request.stderr_path),
-            executor_metadata={"capture_stdout_stderr": self.capture_stdout_stderr},
+            executor_metadata=metadata_with_timeout(
+                {"capture_stdout_stderr": self.capture_stdout_stderr},
+                timeout,
+            ),
         )
 
 

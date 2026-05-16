@@ -360,6 +360,25 @@ class StageAttemptTransactionState(StrEnum):
     COMMIT_FAILED = "commit_failed"
 
 
+class TimeoutSupportLevel(StrEnum):
+    """Executor timeout support classification for reliability policy."""
+
+    ENFORCED = "enforced"
+    DELEGATED = "delegated"
+    OBSERVED = "observed"
+    UNSUPPORTED = "unsupported"
+
+
+class TimeoutOutcome(StrEnum):
+    """Recorded timeout policy outcome for one stage attempt."""
+
+    ENFORCED = "enforced"
+    DELEGATED = "delegated"
+    OBSERVED = "observed"
+    UNSUPPORTED = "unsupported"
+    TIMED_OUT = "timed_out"
+
+
 @dataclass(frozen=True, slots=True)
 class StageAttemptTransaction:
     """Reference transaction for one stage attempt evaluation cycle."""
@@ -619,10 +638,24 @@ class TimeoutOutcomeRecord:
     duration_seconds: float
     reason_code: str
     status: ReliabilityStatusDetail
+    outcome: TimeoutOutcome | str | None = None
+    support_level: TimeoutSupportLevel | str | None = None
     causal_decision_id: str | None = None
     schema_version: int = RELIABILITY_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        timed_out = _bool_value(self.timed_out, path="TimeoutOutcomeRecord.timed_out")
+        outcome = _coerce_timeout_outcome(
+            self.outcome,
+            timed_out=timed_out,
+            reason_code=self.reason_code,
+            path="TimeoutOutcomeRecord.outcome",
+        )
+        support_level = _coerce_timeout_support_level(
+            self.support_level,
+            outcome=outcome,
+            path="TimeoutOutcomeRecord.support_level",
+        )
         object.__setattr__(
             self,
             "outcome_id",
@@ -636,7 +669,7 @@ class TimeoutOutcomeRecord:
         object.__setattr__(
             self,
             "timed_out",
-            _bool_value(self.timed_out, path="TimeoutOutcomeRecord.timed_out"),
+            timed_out,
         )
         object.__setattr__(
             self,
@@ -648,6 +681,8 @@ class TimeoutOutcomeRecord:
             "reason_code",
             _non_empty_string(self.reason_code, path="TimeoutOutcomeRecord.reason_code"),
         )
+        object.__setattr__(self, "outcome", outcome)
+        object.__setattr__(self, "support_level", support_level)
         if self.causal_decision_id is not None:
             object.__setattr__(
                 self,
@@ -672,6 +707,8 @@ class TimeoutOutcomeRecord:
             "timed_out": self.timed_out,
             "duration_seconds": self.duration_seconds,
             "reason_code": self.reason_code,
+            "outcome": cast(TimeoutOutcome, self.outcome).value,
+            "support_level": cast(TimeoutSupportLevel, self.support_level).value,
             "causal_decision_id": self.causal_decision_id,
             "status": self.status.to_dict(),
         }
@@ -689,6 +726,7 @@ class TimeoutOutcomeRecord:
         }
         _require_fields(mapping, required=required, path="TimeoutOutcomeRecord")
         unknown = set(mapping) - required - {"causal_decision_id", "schema_version"}
+        unknown = unknown - {"outcome", "support_level"}
         if unknown:
             fields = ", ".join(sorted(unknown))
             raise RuntimeResourceError(
@@ -715,6 +753,42 @@ class TimeoutOutcomeRecord:
             reason_code=_non_empty_string(
                 mapping["reason_code"],
                 path="TimeoutOutcomeRecord.reason_code",
+            ),
+            outcome=(
+                None
+                if mapping.get("outcome") is None
+                else _coerce_timeout_outcome(
+                    mapping.get("outcome"),
+                    timed_out=_bool_value(
+                        mapping["timed_out"],
+                        path="TimeoutOutcomeRecord.timed_out",
+                    ),
+                    reason_code=_non_empty_string(
+                        mapping["reason_code"],
+                        path="TimeoutOutcomeRecord.reason_code",
+                    ),
+                    path="TimeoutOutcomeRecord.outcome",
+                )
+            ),
+            support_level=(
+                None
+                if mapping.get("support_level") is None
+                else _coerce_timeout_support_level(
+                    mapping.get("support_level"),
+                    outcome=_coerce_timeout_outcome(
+                        mapping.get("outcome"),
+                        timed_out=_bool_value(
+                            mapping["timed_out"],
+                            path="TimeoutOutcomeRecord.timed_out",
+                        ),
+                        reason_code=_non_empty_string(
+                            mapping["reason_code"],
+                            path="TimeoutOutcomeRecord.reason_code",
+                        ),
+                        path="TimeoutOutcomeRecord.outcome",
+                    ),
+                    path="TimeoutOutcomeRecord.support_level",
+                )
             ),
             status=ReliabilityStatusDetail.from_dict(mapping["status"]),
             causal_decision_id=(
@@ -880,6 +954,65 @@ def _coerce_transaction_state(
         raise RuntimeResourceError(f"{path} must be one of: {valid}") from exc
 
 
+def _coerce_timeout_support_level(
+    value: object,
+    *,
+    outcome: TimeoutOutcome,
+    path: str,
+) -> TimeoutSupportLevel:
+    if value is None:
+        if outcome is TimeoutOutcome.TIMED_OUT:
+            return TimeoutSupportLevel.ENFORCED
+        return TimeoutSupportLevel(outcome.value)
+    if isinstance(value, TimeoutSupportLevel):
+        return value
+    if not isinstance(value, str) or not value:
+        raise RuntimeResourceError(f"{path} must be a non-empty string")
+    try:
+        return TimeoutSupportLevel(value)
+    except ValueError as exc:
+        valid = ", ".join(level.value for level in TimeoutSupportLevel)
+        raise RuntimeResourceError(f"{path} must be one of: {valid}") from exc
+
+
+def _coerce_timeout_outcome(
+    value: object,
+    *,
+    timed_out: bool,
+    reason_code: object,
+    path: str,
+) -> TimeoutOutcome:
+    if value is not None:
+        if isinstance(value, TimeoutOutcome):
+            outcome = value
+        elif isinstance(value, str) and value:
+            try:
+                outcome = TimeoutOutcome(value)
+            except ValueError as exc:
+                valid = ", ".join(item.value for item in TimeoutOutcome)
+                raise RuntimeResourceError(f"{path} must be one of: {valid}") from exc
+        else:
+            raise RuntimeResourceError(f"{path} must be a non-empty string")
+    elif timed_out:
+        outcome = TimeoutOutcome.TIMED_OUT
+    else:
+        reason = reason_code if isinstance(reason_code, str) else ""
+        matched = next(
+            (item for item in TimeoutOutcome if reason.endswith(item.value)),
+            None,
+        )
+        outcome = matched or TimeoutOutcome.ENFORCED
+    if timed_out and outcome is not TimeoutOutcome.TIMED_OUT:
+        raise RuntimeResourceError(
+            "TimeoutOutcomeRecord.outcome must be timed_out when timed_out is true"
+        )
+    if not timed_out and outcome is TimeoutOutcome.TIMED_OUT:
+        raise RuntimeResourceError(
+            "TimeoutOutcomeRecord.timed_out must be true for timed_out outcome"
+        )
+    return outcome
+
+
 def _object_mapping(value: object, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise RuntimeResourceError(f"{path} must be a mapping")
@@ -1000,8 +1133,10 @@ __all__ = [
     "StageAttemptTransaction",
     "StageAttemptTransactionState",
     "TimeoutAdapter",
+    "TimeoutOutcome",
     "TimeoutOutcomeRecord",
     "TimeoutPolicy",
+    "TimeoutSupportLevel",
     "ReliabilityTransactionStore",
     "merge_reliability_options",
 ]

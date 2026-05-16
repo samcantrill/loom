@@ -206,6 +206,39 @@ def test_runtime_executor_and_resource_checks_map_capability_diagnostics(
     assert resource_diagnostics[0]["code"] == "resource.ignored"
 
 
+def test_executor_preflight_reports_reliability_policy_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_preflight_dependencies(monkeypatch)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="config.yaml",
+            groups=("executor",),
+            runtime_options={
+                "executor": "local",
+                "reliability": {
+                    "retry": {"enabled": True, "max_attempts": 2},
+                    "timeout": {"enabled": True, "duration_seconds": 3},
+                },
+            },
+        )
+    )
+
+    by_id = {check.check_id: check for check in result.checks}
+    diagnostics = cast(
+        list[dict[str, Any]],
+        by_id["executor.capabilities"].details["diagnostics"],
+    )
+    assert result.status is PreflightStatus.WARN
+    assert [item["code"] for item in diagnostics] == [
+        "reliability.retry.deferred",
+        "reliability.timeout.unsupported",
+    ]
+    timeout_details = cast(dict[str, Any], diagnostics[1]["details"])
+    assert timeout_details["timeout_domain"] == "reliability"
+
+
 def test_unknown_executor_fails_resolve_and_skips_capability_checks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

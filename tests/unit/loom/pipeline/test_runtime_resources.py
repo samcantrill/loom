@@ -198,6 +198,14 @@ def test_resource_request_from_dict_rejects_old_serialized_fields() -> None:
                 "cpus": 1,
             }
         )
+    with pytest.raises(RuntimeResourceError, match="unknown field"):
+        ResourceRequest.from_dict(
+            {
+                "schema_version": RESOURCE_SCHEMA_VERSION,
+                "entries": {},
+                "timeout": 30,
+            }
+        )
 
 
 def test_registry_registration_and_composition_are_explicit_and_isolated() -> None:

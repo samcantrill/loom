@@ -164,51 +164,74 @@ those facts.
 
 Timeout policy controls maximum runtime for a stage attempt.
 
-Recommended shape:
+Current Stage 19 shape:
 
 ```python
 @dataclass(frozen=True)
 class TimeoutPolicy:
-    wall_time_seconds: int | None = None
-    grace_seconds: int | None = None
+    enabled: bool = True
+    duration_seconds: float | None = None
 ```
 
-`wall_time_seconds` is not a v0 `ResourceRequest` field; v0 rejects authored
-timeout fields so callers do not assume timeout behavior is honored. A later
-phase may add timeout policy as an explicit reliability policy or as a future
-resource extension, but the design should avoid two conflicting ways to express
-the same timeout.
+YAML example:
+
+```yaml
+runtime:
+  reliability:
+    timeout:
+      enabled: true
+      duration_seconds: 300
+```
+
+`duration_seconds` lives under `runtime.reliability.timeout` or an exact-stage
+`runtime.stage_options.<stage>.reliability.timeout` override. It is not a
+`ResourceRequest` field, an executor resource request, a resource admission wait
+timeout, or an authority-client operational timeout. Authored resource fields
+such as `timeout`, `timeout_seconds`, and `wall_time_seconds` remain rejected so
+callers do not assume resource admission will enforce reliability policy.
 
 ## Timeout Enforcement
 
 Timeout enforcement depends on executor capability.
 
-Local/subprocess:
+Subprocess:
 
 ```text
-controller can terminate the child process after the timeout
-logs and exit status should record timeout as the failure reason
+the executor passes duration_seconds to the worker subprocess boundary
+timeout expiry returns a structured failed attempt
+the timeout outcome is persisted as a reliability fact
+```
+
+Local:
+
+```text
+in-process stage code is not interrupted
+execution records an unsupported timeout outcome when policy is selected
+preflight and capability diagnostics warn that timeout is unsupported
 ```
 
 SLURM:
 
 ```text
-wall time maps to scheduler submission where possible
-controller may observe scheduler timeout after the fact
+timeout intent can be delegated to scheduler submission where possible
+controller may observe scheduler timeout facts after the attempt
 ```
 
 Containers:
 
 ```text
-timeout may wrap the container runtime command
+timeout may wrap the container runtime command in a future adapter
 container runtime-specific stop behavior should be recorded
 ```
 
 Stage 17 records Docker process timeout fields when supplied by the command
 runner, but it does not add a user-facing timeout policy.
 
-If an executor cannot enforce a timeout, preflight or execution should warn and
-record that the timeout was not enforced.
+Executor descriptors classify timeout support as `enforced`, `delegated`,
+`observed`, or `unsupported`. Attempt outcomes use `enforced`, `delegated`,
+`observed`, `unsupported`, or `timed_out`. If an executor cannot enforce or
+observe a timeout, preflight or execution should warn and record that the
+timeout was not enforced.
 
 ## Temporary File Cleanup
 

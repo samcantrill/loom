@@ -17,7 +17,9 @@ from loom.pipeline.reliability import (
     StageAttemptTransaction,
     StageAttemptTransactionState,
     TimeoutOutcomeRecord,
+    TimeoutOutcome,
     TimeoutPolicy,
+    TimeoutSupportLevel,
     merge_reliability_options,
 )
 
@@ -191,11 +193,21 @@ def test_retry_and_timeout_records_round_trip() -> None:
         timed_out=False,
         duration_seconds=10,
         reason_code="test.timeout",
+        outcome=TimeoutOutcome.ENFORCED,
+        support_level=TimeoutSupportLevel.ENFORCED,
         status=status,
     )
 
     assert RetryDecisionRecord.from_dict(decision.to_dict()) == decision
     assert TimeoutOutcomeRecord.from_dict(outcome.to_dict()) == outcome
+    legacy_timeout_payload = {
+        key: value
+        for key, value in outcome.to_dict().items()
+        if key not in {"outcome", "support_level"}
+    }
+    assert TimeoutOutcomeRecord.from_dict(
+        legacy_timeout_payload
+    ).outcome is TimeoutOutcome.ENFORCED
     with pytest.raises(RuntimeResourceError, match="bool"):
         RetryDecisionRecord(
             decision_id="retry-2",
@@ -215,6 +227,16 @@ def test_retry_and_timeout_records_round_trip() -> None:
             timed_out="no",  # type: ignore[arg-type]
             duration_seconds=10,
             reason_code="invalid",
+            status=status,
+        )
+    with pytest.raises(RuntimeResourceError, match="timed_out"):
+        TimeoutOutcomeRecord(
+            outcome_id="timeout-3",
+            transaction_id="tx-1",
+            timed_out=True,
+            duration_seconds=10,
+            reason_code="invalid",
+            outcome=TimeoutOutcome.ENFORCED,
             status=status,
         )
 

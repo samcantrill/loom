@@ -215,7 +215,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused; one pass available if targeted validation fails, suite coverage is missing, or expanded-path review finds a concrete blocker
+- Phase implementation refinement: not needed; targeted validation and the PR gate passed without a refinement blocker
 - PR review: unused; one automated review pass available
 - Blocker resolution: 0/3 used
 
@@ -223,10 +223,18 @@ make test-summary
 
 - Draft plan: completed in this artifact
 - Final phase execution plan: completed in this artifact
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
-- Blocker-resolution summary: not needed at plan time
+- Implementation summary: completed. Added timeout support/outcome vocabulary,
+  backward-compatible timeout outcome serialization, descriptor-level timeout
+  support diagnostics, subprocess timeout enforcement, local unsupported-timeout
+  metadata, lifecycle timeout outcome persistence, lease capability diagnostics,
+  and docs clarifying reliability timeout boundaries.
+- Implementation validation: completed. Focused Phase 4 package/unit/contract/
+  integration pytest batch passed with `189 passed`; `make validate-pr` passed
+  Ruff, Pyright, default/config test harnesses, and build; `make test-summary`
+  wrote suite evidence with overall `passed`.
+- Refinement summary: not needed; no targeted-validation, coverage, lint, type,
+  or build blocker remained after implementation.
+- Blocker-resolution summary: not needed; 0/3 passes used.
 - PR preparation: pending
 - Merge summary: pending
 - Stack maintenance: pending
