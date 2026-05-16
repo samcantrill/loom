@@ -105,6 +105,17 @@ def test_runtime_profile_rejects_reserved_and_invalid_fields(data: object) -> No
         RuntimeProfile.from_dict(data)
 
 
+@pytest.mark.parametrize("field", ["retry", "timeout", "timeout_seconds"])
+def test_runtime_profile_rejects_legacy_top_level_reliability_fields(field: str) -> None:
+    with pytest.raises(RuntimeResourceError, match="unsupported reliability field"):
+        RuntimeProfile.from_dict({field: {"enabled": True}})
+    with pytest.raises(RuntimeResourceError, match="unsupported reliability field"):
+        merge_run_options(
+            base={field: {"enabled": True}},
+            known_stage_ids={"train"},
+        )
+
+
 def test_runtime_profile_collection_selects_profiles_deterministically() -> None:
     profiles = RuntimeProfileCollection.from_dict(
         {

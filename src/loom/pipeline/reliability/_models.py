@@ -303,6 +303,11 @@ class FailureClassification:
         )
         object.__setattr__(
             self,
+            "retriable",
+            _bool_value(self.retriable, path="FailureClassification.retriable"),
+        )
+        object.__setattr__(
+            self,
             "details",
             _freeze_plain_mapping(self.details, path="FailureClassification.details"),
         )
@@ -471,6 +476,11 @@ class RetryDecisionRecord:
         )
         object.__setattr__(
             self,
+            "should_retry",
+            _bool_value(self.should_retry, path="RetryDecisionRecord.should_retry"),
+        )
+        object.__setattr__(
+            self,
             "decision_reason",
             _non_empty_string(self.decision_reason, path="RetryDecisionRecord.decision_reason"),
         )
@@ -595,6 +605,11 @@ class TimeoutOutcomeRecord:
             self,
             "transaction_id",
             _non_empty_string(self.transaction_id, path="TimeoutOutcomeRecord.transaction_id"),
+        )
+        object.__setattr__(
+            self,
+            "timed_out",
+            _bool_value(self.timed_out, path="TimeoutOutcomeRecord.timed_out"),
         )
         object.__setattr__(
             self,

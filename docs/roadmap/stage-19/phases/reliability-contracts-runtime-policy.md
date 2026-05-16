@@ -225,9 +225,10 @@ make test-summary
 
 - Phase implementation refinement: used by manager-local type/lint cleanup after
   initial implementation
-- PR review: unused
+- PR review: used by `loom_phase_reviewer` pre-submit review
 - Blocker resolution: 1/3 used for pytest import-name collision in reliability
-  unit tests
+  unit tests; 2/3 used after pre-submit review for legacy reliability profile
+  field rejection and boolean constructor validation
 
 ## Completion Notes
 
@@ -255,7 +256,11 @@ make test-summary
   unit test file to avoid pytest import-name collision with existing
   `test_models.py` modules. Sandbox validation failed on service/socket-backed
   authority tests with `PermissionError: Operation not permitted`, then the
-  required gates passed outside the sandbox.
+  required gates passed outside the sandbox. A second manager-local pass fixed
+  pre-submit review blockers by rejecting legacy top-level `retry`, `timeout`,
+  and `timeout_seconds` in runtime profile sources and validating boolean
+  fields in direct reliability record constructors; targeted Ruff, Pyright, and
+  affected unit tests passed after the fix.
 - PR preparation: pending
 - Stack maintenance: pending
 - Remaining blockers: none

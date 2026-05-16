@@ -106,6 +106,13 @@ def test_failure_classification_round_trip_is_plain_data() -> None:
     )
 
     assert FailureClassification.from_dict(payload.to_dict()) == payload
+    with pytest.raises(RuntimeResourceError, match="bool"):
+        FailureClassification(
+            reason_code="runtime.error",
+            retriable="yes",  # type: ignore[arg-type]
+            details={},
+            status=status,
+        )
     with pytest.raises(RuntimeResourceError):
         FailureClassification.from_dict(
             {
@@ -178,6 +185,27 @@ def test_retry_and_timeout_records_round_trip() -> None:
 
     assert RetryDecisionRecord.from_dict(decision.to_dict()) == decision
     assert TimeoutOutcomeRecord.from_dict(outcome.to_dict()) == outcome
+    with pytest.raises(RuntimeResourceError, match="bool"):
+        RetryDecisionRecord(
+            decision_id="retry-2",
+            transaction_id="tx-1",
+            should_retry="yes",  # type: ignore[arg-type]
+            next_attempt=None,
+            decision_reason="invalid",
+            policy_max_attempts=1,
+            attempt_count=1,
+            status=status,
+            failure=failure,
+        )
+    with pytest.raises(RuntimeResourceError, match="bool"):
+        TimeoutOutcomeRecord(
+            outcome_id="timeout-2",
+            transaction_id="tx-1",
+            timed_out="no",  # type: ignore[arg-type]
+            duration_seconds=10,
+            reason_code="invalid",
+            status=status,
+        )
 
 
 def test_protocol_types_are_importable_and_protocol_only() -> None:

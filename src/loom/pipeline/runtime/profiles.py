@@ -55,6 +55,7 @@ _RUN_SOURCE_FIELDS = frozenset(
 )
 _PROFILE_CORE_FIELDS = _RUN_SOURCE_FIELDS - {"schema_version", "profile"}
 _PROFILE_RESERVED_FIELDS = frozenset({"schema_version", "profile"})
+_LEGACY_RELIABILITY_FIELDS = frozenset({"retry", "timeout", "timeout_seconds"})
 _SELECTOR_FIELDS = frozenset(
     {"force_stages", "from_stage", "only_stages", "skip_stages"}
 )
@@ -255,6 +256,13 @@ def _normalize_run_source(
         }
 
     mapping = _object_mapping(source, path=path)
+    legacy_reliability_fields = set(mapping) & _LEGACY_RELIABILITY_FIELDS
+    if legacy_reliability_fields:
+        fields = ", ".join(sorted(legacy_reliability_fields))
+        raise RuntimeResourceError(
+            f"{path} contains unsupported reliability field(s): {fields}; "
+            "use reliability.retry or reliability.timeout"
+        )
     if profile_source:
         reserved = set(mapping) & _PROFILE_RESERVED_FIELDS
         if reserved:
