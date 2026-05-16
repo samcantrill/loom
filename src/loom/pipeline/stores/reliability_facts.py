@@ -35,6 +35,8 @@ def reliability_status_detail_key(detail: ReliabilityStatusDetail) -> str:
             "run_uri": detail.run_uri,
             "stage_name": detail.stage_id,
             "attempt": detail.attempt,
+            "run_status": str(detail.run_status),
+            "stage_status": str(detail.stage_status),
             "created_at": detail.created_at,
         }
     )

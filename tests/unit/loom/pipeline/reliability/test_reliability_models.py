@@ -15,6 +15,7 @@ from loom.pipeline.reliability import (
     RetryPolicy,
     RetryEvaluator,
     StageAttemptTransaction,
+    StageAttemptTransactionState,
     TimeoutOutcomeRecord,
     TimeoutPolicy,
     merge_reliability_options,
@@ -140,12 +141,22 @@ def test_stage_attempt_transaction_round_trip() -> None:
         stage_id="train",
         attempt=2,
         status=status,
+        state=StageAttemptTransactionState.RUNNING,
     )
 
     payload = transaction.to_dict()
+    assert payload["state"] == "running"
     assert StageAttemptTransaction.from_dict(payload) == transaction
+    missing_state_payload = {
+        key: value for key, value in payload.items() if key != "state"
+    }
+    assert StageAttemptTransaction.from_dict(
+        missing_state_payload
+    ).state is StageAttemptTransactionState.UNSPECIFIED
     with pytest.raises(RuntimeResourceError):
         StageAttemptTransaction.from_dict({**payload, "attempt": 0})
+    with pytest.raises(RuntimeResourceError, match="StageAttemptTransaction.state"):
+        StageAttemptTransaction.from_dict({**payload, "state": "unknown"})
 
 
 def test_retry_and_timeout_records_round_trip() -> None:

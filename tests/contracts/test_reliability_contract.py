@@ -15,6 +15,7 @@ from loom.pipeline.reliability import (
     RetryDecisionRecord,
     RetryPolicy,
     StageAttemptTransaction,
+    StageAttemptTransactionState,
     TimeoutOutcomeRecord,
     TimeoutPolicy,
 )
@@ -76,6 +77,7 @@ def test_reliability_records_are_round_tripped_with_plain_data_contract() -> Non
         stage_id="train",
         attempt=1,
         status=status,
+        state=StageAttemptTransactionState.RUNNING,
     )
 
     assert stable_json_dumps(status.to_dict())
@@ -87,6 +89,13 @@ def test_reliability_records_are_round_tripped_with_plain_data_contract() -> Non
     assert RetryDecisionRecord.from_dict(decision.to_dict()) == decision
     assert TimeoutOutcomeRecord.from_dict(timeout_outcome.to_dict()) == timeout_outcome
     assert StageAttemptTransaction.from_dict(transaction.to_dict()) == transaction
+    assert transaction.to_dict()["state"] == "running"
+    legacy_payload = {
+        key: value for key, value in transaction.to_dict().items() if key != "state"
+    }
+    assert StageAttemptTransaction.from_dict(
+        legacy_payload
+    ).state is StageAttemptTransactionState.UNSPECIFIED
 
 
 def test_importing_reliability_contracts_remains_import_light() -> None:

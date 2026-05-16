@@ -1121,6 +1121,7 @@ def test_runtime_facade_public_imports_are_stable_and_lightweight() -> None:
             "RetryPolicy",
             "RetryEvaluator",
             "StageAttemptTransaction",
+            "StageAttemptTransactionState",
             "TimeoutAdapter",
             "TimeoutOutcomeRecord",
             "TimeoutPolicy",

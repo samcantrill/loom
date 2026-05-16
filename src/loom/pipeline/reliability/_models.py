@@ -347,6 +347,19 @@ class FailureClassification:
         )
 
 
+class StageAttemptTransactionState(StrEnum):
+    """Named stage-attempt transaction transition states."""
+
+    UNSPECIFIED = "unspecified"
+    PREPARED = "prepared"
+    RUNNING = "running"
+    STAGED = "staged"
+    COMMITTED = "committed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    COMMIT_FAILED = "commit_failed"
+
+
 @dataclass(frozen=True, slots=True)
 class StageAttemptTransaction:
     """Reference transaction for one stage attempt evaluation cycle."""
@@ -356,6 +369,7 @@ class StageAttemptTransaction:
     stage_id: str
     attempt: int
     status: ReliabilityStatusDetail
+    state: StageAttemptTransactionState | str = StageAttemptTransactionState.UNSPECIFIED
     causal_parent_id: str | None = None
     schema_version: int = RELIABILITY_RECORD_SCHEMA_VERSION
 
@@ -379,6 +393,14 @@ class StageAttemptTransaction:
             self,
             "attempt",
             _positive_int(self.attempt, path="StageAttemptTransaction.attempt"),
+        )
+        object.__setattr__(
+            self,
+            "state",
+            _coerce_transaction_state(
+                self.state,
+                path="StageAttemptTransaction.state",
+            ),
         )
         if self.causal_parent_id is not None:
             object.__setattr__(
@@ -405,6 +427,7 @@ class StageAttemptTransaction:
             "run_uri": self.run_uri,
             "stage_id": self.stage_id,
             "attempt": self.attempt,
+            "state": cast(StageAttemptTransactionState, self.state).value,
             "causal_parent_id": self.causal_parent_id,
             "status": self.status.to_dict(),
         }
@@ -414,7 +437,7 @@ class StageAttemptTransaction:
         mapping = _object_mapping(data, path="StageAttemptTransaction")
         required = {"transaction_id", "run_uri", "stage_id", "attempt", "status"}
         _require_fields(mapping, required=required, path="StageAttemptTransaction")
-        allowed = required | {"causal_parent_id", "schema_version"}
+        allowed = required | {"state", "causal_parent_id", "schema_version"}
         unknown = set(mapping) - allowed
         if unknown:
             fields = ", ".join(sorted(unknown))
@@ -435,6 +458,10 @@ class StageAttemptTransaction:
             run_uri=_non_empty_string(mapping["run_uri"], path="StageAttemptTransaction.run_uri"),
             stage_id=_non_empty_string(mapping["stage_id"], path="StageAttemptTransaction.stage_id"),
             attempt=_positive_int(mapping["attempt"], path="StageAttemptTransaction.attempt"),
+            state=_coerce_transaction_state(
+                mapping.get("state", StageAttemptTransactionState.UNSPECIFIED.value),
+                path="StageAttemptTransaction.state",
+            ),
             causal_parent_id=(
                 None
                 if mapping.get("causal_parent_id") is None
@@ -837,6 +864,22 @@ def _coerce_optional_timeout(
     return TimeoutPolicy.from_dict(value)
 
 
+def _coerce_transaction_state(
+    value: object,
+    *,
+    path: str,
+) -> StageAttemptTransactionState:
+    if isinstance(value, StageAttemptTransactionState):
+        return value
+    if not isinstance(value, str) or not value:
+        raise RuntimeResourceError(f"{path} must be a non-empty string")
+    try:
+        return StageAttemptTransactionState(value)
+    except ValueError as exc:
+        valid = ", ".join(state.value for state in StageAttemptTransactionState)
+        raise RuntimeResourceError(f"{path} must be one of: {valid}") from exc
+
+
 def _object_mapping(value: object, path: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise RuntimeResourceError(f"{path} must be a mapping")
@@ -955,6 +998,7 @@ __all__ = [
     "RetryPolicy",
     "RunnerReliabilityController",
     "StageAttemptTransaction",
+    "StageAttemptTransactionState",
     "TimeoutAdapter",
     "TimeoutOutcomeRecord",
     "TimeoutPolicy",

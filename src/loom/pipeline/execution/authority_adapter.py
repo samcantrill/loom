@@ -71,6 +71,9 @@ from loom.timestamps import utc_timestamp
 _CONTROLLER_LEASE_TTL_SECONDS = 24 * 60 * 60
 _STAGE_LEASE_TTL_SECONDS = 24 * 60 * 60
 _AUTHORITY_METADATA_KEY = "authority_attempt"
+_HTTP_RELIABILITY_WRITE_GAP = (
+    "HTTP authority reliability fact writes are not implemented in this phase"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -828,6 +831,152 @@ class AuthorityBackedSerialRunStore:
     ) -> SubmittedOperationRecord | None:
         return latest_active_submitted_operation(
             self.list_submitted_operations(run_uri)
+        )
+
+    def write_reliability_policy_fact(
+        self, run_uri: str, fact: ReliabilityPolicyFact
+    ) -> None:
+        try:
+            self.authority_store.write_reliability_policy_fact(run_uri, fact)
+        except AuthorityStoreError as exc:
+            if not _is_http_reliability_write_gap(self.authority_store, exc):
+                raise
+        self.local_store.write_reliability_policy_fact(run_uri, fact)
+
+    def list_reliability_policy_facts(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityPolicyFact, ...]:
+        records = self.authority_store.list_reliability_policy_facts(
+            run_uri,
+            stage_name=stage_name,
+        )
+        if records or not isinstance(
+            self.authority_store,
+            AuthorityClientBackedPerRunAuthorityStore,
+        ):
+            return records
+        return self.local_store.list_reliability_policy_facts(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_reliability_status_detail(
+        self, run_uri: str, detail: ReliabilityStatusDetail
+    ) -> None:
+        try:
+            self.authority_store.write_reliability_status_detail(run_uri, detail)
+        except AuthorityStoreError as exc:
+            if not _is_http_reliability_write_gap(self.authority_store, exc):
+                raise
+        self.local_store.write_reliability_status_detail(run_uri, detail)
+
+    def list_reliability_status_details(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[ReliabilityStatusDetail, ...]:
+        records = self.authority_store.list_reliability_status_details(
+            run_uri,
+            stage_name=stage_name,
+        )
+        if records or not isinstance(
+            self.authority_store,
+            AuthorityClientBackedPerRunAuthorityStore,
+        ):
+            return records
+        return self.local_store.list_reliability_status_details(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_stage_attempt_transaction(
+        self, run_uri: str, transaction: StageAttemptTransaction
+    ) -> None:
+        try:
+            self.authority_store.write_stage_attempt_transaction(run_uri, transaction)
+        except AuthorityStoreError as exc:
+            if not _is_http_reliability_write_gap(self.authority_store, exc):
+                raise
+        self.local_store.write_stage_attempt_transaction(run_uri, transaction)
+
+    def read_transaction_chain(
+        self, run_uri: str, transaction_id: str
+    ) -> tuple[StageAttemptTransaction, ...]:
+        chain = self.authority_store.read_transaction_chain(run_uri, transaction_id)
+        if chain or not isinstance(
+            self.authority_store,
+            AuthorityClientBackedPerRunAuthorityStore,
+        ):
+            return chain
+        return self.local_store.read_transaction_chain(run_uri, transaction_id)
+
+    def list_stage_attempt_transactions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[StageAttemptTransaction, ...]:
+        records = self.authority_store.list_stage_attempt_transactions(
+            run_uri,
+            stage_name=stage_name,
+        )
+        if records or not isinstance(
+            self.authority_store,
+            AuthorityClientBackedPerRunAuthorityStore,
+        ):
+            return records
+        return self.local_store.list_stage_attempt_transactions(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_retry_decision(
+        self, run_uri: str, decision: RetryDecisionRecord
+    ) -> None:
+        try:
+            self.authority_store.write_retry_decision(run_uri, decision)
+        except AuthorityStoreError as exc:
+            if not _is_http_reliability_write_gap(self.authority_store, exc):
+                raise
+        self.local_store.write_retry_decision(run_uri, decision)
+
+    def list_retry_decisions(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[RetryDecisionRecord, ...]:
+        records = self.authority_store.list_retry_decisions(
+            run_uri,
+            stage_name=stage_name,
+        )
+        if records or not isinstance(
+            self.authority_store,
+            AuthorityClientBackedPerRunAuthorityStore,
+        ):
+            return records
+        return self.local_store.list_retry_decisions(
+            run_uri,
+            stage_name=stage_name,
+        )
+
+    def write_timeout_outcome(
+        self, run_uri: str, outcome: TimeoutOutcomeRecord
+    ) -> None:
+        try:
+            self.authority_store.write_timeout_outcome(run_uri, outcome)
+        except AuthorityStoreError as exc:
+            if not _is_http_reliability_write_gap(self.authority_store, exc):
+                raise
+        self.local_store.write_timeout_outcome(run_uri, outcome)
+
+    def list_timeout_outcomes(
+        self, run_uri: str, *, stage_name: str | None = None
+    ) -> tuple[TimeoutOutcomeRecord, ...]:
+        records = self.authority_store.list_timeout_outcomes(
+            run_uri,
+            stage_name=stage_name,
+        )
+        if records or not isinstance(
+            self.authority_store,
+            AuthorityClientBackedPerRunAuthorityStore,
+        ):
+            return records
+        return self.local_store.list_timeout_outcomes(
+            run_uri,
+            stage_name=stage_name,
         )
 
     def read_artifact_index(self, run_uri: str) -> dict[str, ArtifactRef]:
@@ -1718,6 +1867,16 @@ def _value_mismatches(
         for key, expected_value in expected.items()
         if actual.get(key) != expected_value
     }
+
+
+def _is_http_reliability_write_gap(
+    authority_store: PerRunAuthorityStore,
+    exc: AuthorityStoreError,
+) -> bool:
+    return (
+        isinstance(authority_store, AuthorityClientBackedPerRunAuthorityStore)
+        and _HTTP_RELIABILITY_WRITE_GAP in str(exc)
+    )
 
 
 __all__ = [

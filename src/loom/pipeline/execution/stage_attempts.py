@@ -11,6 +11,7 @@ from loom.pipeline.planning import (
     StagePlan,
     build_stage_fingerprint,
 )
+from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.runtime import ResolvedStageRuntimeOptions
 from loom.pipeline.specs import StageSpec
 from loom.pipeline.status import StageStatus, StageStatusRecord
@@ -26,6 +27,7 @@ from .models import (
     StageWorkerRequest,
     redact_executor_metadata,
 )
+from .reliability import record_stage_reliability_transition
 
 
 Clock = Callable[[], str]
@@ -140,6 +142,15 @@ def prepare_stage_attempt(
                 **dict(metadata or {}),
             },
         ),
+    )
+    record_stage_reliability_transition(
+        run_store,
+        run_uri=run_uri,
+        stage_name=stage.name,
+        attempt=attempt,
+        state=StageAttemptTransactionState.PREPARED,
+        stage_status=StageStatus.PENDING,
+        recorded_at=prepared_at,
     )
     return request
 

@@ -35,6 +35,7 @@ from loom.pipeline.execution.continuation import (
 from loom.pipeline.execution.lifecycle import write_run_status, write_stage_submitted
 from loom.pipeline.execution.stage_attempts import prepare_stage_attempt
 from loom.pipeline.planning import plan_pipeline
+from loom.pipeline.reliability import StageAttemptTransactionState
 from loom.pipeline.runtime import (
     ResolvedStageRuntimeOptions,
     RunOptions,
@@ -675,6 +676,30 @@ def test_authority_backed_commit_failure_leaves_no_authoritative_outputs(
     assert build.latest_commit is None
     assert build.artifact_facts == ()
     assert build.active_lease is None
+    by_id = {
+        transaction.transaction_id: transaction
+        for transaction in build.reliability_transactions
+    }
+    latest = next(
+        transaction
+        for transaction in build.reliability_transactions
+        if transaction.state is StageAttemptTransactionState.FAILED
+    )
+    chain = []
+    current = latest
+    while current is not None:
+        chain.append(current)
+        current = (
+            None
+            if current.causal_parent_id is None
+            else by_id[current.causal_parent_id]
+        )
+    assert [transaction.state for transaction in reversed(chain)] == [
+        StageAttemptTransactionState.RUNNING,
+        StageAttemptTransactionState.STAGED,
+        StageAttemptTransactionState.COMMIT_FAILED,
+        StageAttemptTransactionState.FAILED,
+    ]
     assert authority.list_cleanup_candidates(run_uri) == ()
 
 
