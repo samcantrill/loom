@@ -17,11 +17,14 @@ from loom.pipeline import (
     RuntimeProfileCollection,
     StageEnvironmentRequest,
     StageRuntimeOptions,
+    ResolvedStageRuntimeOptions,
+    resolve_run_runtime,
     merge_run_options,
     parse_runtime_profile,
     parse_runtime_profiles,
     select_runtime_profile,
 )
+from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 from loom.pipeline.errors import RuntimeResourceError
 
 
@@ -100,6 +103,17 @@ def test_runtime_profile_serializes_sparse_core_fields_and_adapter_sections() ->
 def test_runtime_profile_rejects_reserved_and_invalid_fields(data: object) -> None:
     with pytest.raises(RuntimeResourceError):
         RuntimeProfile.from_dict(data)
+
+
+@pytest.mark.parametrize("field", ["retry", "timeout", "timeout_seconds"])
+def test_runtime_profile_rejects_legacy_top_level_reliability_fields(field: str) -> None:
+    with pytest.raises(RuntimeResourceError, match="unsupported reliability field"):
+        RuntimeProfile.from_dict({field: {"enabled": True}})
+    with pytest.raises(RuntimeResourceError, match="unsupported reliability field"):
+        merge_run_options(
+            base={field: {"enabled": True}},
+            known_stage_ids={"train"},
+        )
 
 
 def test_runtime_profile_collection_selects_profiles_deterministically() -> None:
@@ -439,3 +453,32 @@ def test_known_stage_validation_is_applied_after_merge() -> None:
             explicit={"profile": "cluster"},
             known_stage_ids={"extract"},
         )
+
+
+def test_merge_run_options_respects_run_level_reliability_precedence() -> None:
+    result = merge_run_options(
+        base={"reliability": {"retry": {"enabled": True, "max_attempts": 3}}},
+        profiles={"cluster": {"reliability": {"timeout": {"enabled": True, "duration_seconds": 30}}}},
+        explicit={"reliability": {"retry": {"enabled": False, "max_attempts": 1}}},
+        profile="cluster",
+        known_stage_ids={"train"},
+    )
+
+    assert result.reliability == ReliabilityPolicy(
+        retry=RetryPolicy(enabled=False, max_attempts=1),
+        timeout=TimeoutPolicy(enabled=True, duration_seconds=30),
+    )
+
+
+def test_merge_run_options_merges_stage_reliability_with_run_level_defaults() -> None:
+    result = merge_run_options(
+        base={"stage_options": {"train": {"reliability": {"retry": {"enabled": True, "max_attempts": 2}}}}},
+        explicit={"reliability": {"timeout": {"enabled": False}}},
+        known_stage_ids={"train"},
+    )
+    resolved = resolve_run_runtime(result, stage_ids=("train",))
+
+    assert cast(ResolvedStageRuntimeOptions, resolved["train"]).reliability == ReliabilityPolicy(
+        retry=RetryPolicy(enabled=True, max_attempts=2),
+        timeout=TimeoutPolicy(enabled=False),
+    )

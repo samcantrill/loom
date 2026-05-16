@@ -21,6 +21,7 @@ from loom.pipeline import (
 )
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.planning.models import PlanSelectors, ResumeOptions
+from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 from loom.pipeline.runtime import RUN_OPTIONS_SCHEMA_VERSION
 
 
@@ -91,6 +92,10 @@ def test_run_options_populated_round_trip_freezes_inputs_and_sorts_mappings() ->
             "unset_variables": ["LEGACY_SECRET"],
         },
         adapter_options={"local": {"dry_run_reason": "inspection"}},
+        reliability={
+            "retry": {"enabled": False, "max_attempts": 1},
+            "timeout": None,
+        },
     )
     tags["a"] = "mutated"
     adapter_options["slurm"] = {"partition": "mutated"}
@@ -102,6 +107,9 @@ def test_run_options_populated_round_trip_freezes_inputs_and_sorts_mappings() ->
     )
     assert options.to_resume_options() == ResumeOptions(enabled=False)
     assert RunOptions.from_dict(options.to_dict()) == options
+    assert options.to_safe_metadata()["reliability"] == {
+        "retry": {"enabled": False, "max_attempts": 1}
+    }
     with pytest.raises(TypeError):
         cast(Any, options.tags)["a"] = "changed"
     with pytest.raises(TypeError):
@@ -172,6 +180,20 @@ def test_parallel_execution_settings_are_validated_and_normalized() -> None:
     )
 
 
+def test_reliability_is_supported_with_merge_contracts() -> None:
+    options = RunOptions(
+        reliability=ReliabilityPolicy(
+            retry=RetryPolicy(enabled=False, max_attempts=1),
+            timeout=TimeoutPolicy(enabled=True, duration_seconds=42),
+        ),
+    )
+
+    assert options.to_dict()["reliability"] == {
+        "retry": {"enabled": False, "max_attempts": 1},
+        "timeout": {"enabled": True, "duration_seconds": 42},
+    }
+
+
 @pytest.mark.parametrize(
     "factory",
     [
@@ -180,11 +202,26 @@ def test_parallel_execution_settings_are_validated_and_normalized() -> None:
         lambda: StageRuntimeOptions.from_dict({"retry": {"attempts": 2}}),
         lambda: RunEnvironmentRequest.from_dict({"env": {"TOKEN": "secret"}}),
         lambda: StageEnvironmentRequest.from_dict({"set_variables": {"BAD=KEY": "x"}}),
+        lambda: RunOptions.from_dict({"reliability": {"retry": {"attempts": 2}}}),
+        lambda: StageRuntimeOptions.from_dict(
+            {"reliability": {"timeout": {"enabled": "yes"}}}
+        ),
+        lambda: RunOptions.from_dict({"retry": {"attempts": 2}}),
+        lambda: RunOptions.from_dict({"timeout": 120}),
+        lambda: RunOptions.from_dict({"timeout_seconds": 120}),
     ],
 )
+
 def test_runtime_options_reject_unknown_and_invalid_fields(factory: Any) -> None:
     with pytest.raises(RuntimeResourceError):
         factory()
+
+
+def test_run_options_invalid_max_attempts_is_rejected() -> None:
+    with pytest.raises(RuntimeResourceError):
+        RunOptions(
+            reliability={"retry": {"enabled": True, "max_attempts": 0}}
+        )
 
 
 @pytest.mark.parametrize(
@@ -201,6 +238,9 @@ def test_runtime_options_reject_unknown_and_invalid_fields(factory: Any) -> None
         lambda: RunOptions(execution={"settings": {"failure_policy": "retry"}}),
         lambda: RunOptions(stage_options={"bad.stage": StageRuntimeOptions()}),
         lambda: RunEnvironmentRequest(unset_variables=["TOKEN", "TOKEN"]),
+        lambda: RunOptions(
+            reliability={"timeout": {"enabled": True}},
+        ),
     ],
 )
 def test_runtime_options_reject_invalid_scalars(factory: Any) -> None:

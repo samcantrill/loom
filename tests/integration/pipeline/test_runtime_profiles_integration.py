@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import cast
+from collections.abc import Mapping
+
 import pytest
 
-from loom.pipeline import merge_run_options
+from loom.pipeline import StageRuntimeOptions, merge_run_options
 from loom.pipeline.errors import RuntimeResourceError
+from loom.pipeline.reliability import ReliabilityPolicy, RetryPolicy, TimeoutPolicy
 
 
 pytestmark = pytest.mark.integration
@@ -95,3 +99,39 @@ def test_profile_null_clearing_skips_profile_and_known_stage_validation_is_deter
             },
             known_stage_ids={"extract"},
         )
+
+
+def test_profile_merge_preserves_run_and_stage_reliability_contracts() -> None:
+    result = merge_run_options(
+        base={"reliability": {"retry": {"enabled": True, "max_attempts": 5}}},
+        profiles={
+            "cluster": {
+                "reliability": {"timeout": {"enabled": False}},
+                "stage_options": {
+                    "train": {
+                        "reliability": {"retry": {"enabled": True, "max_attempts": 2}}
+                    }
+                },
+            }
+        },
+        explicit={
+            "profile": "cluster",
+            "stage_options": {
+                "train": {
+                    "reliability": {
+                        "timeout": {"enabled": True, "duration_seconds": 12}
+                    }
+                }
+            },
+        },
+    )
+
+    assert result.reliability == ReliabilityPolicy(
+        retry=RetryPolicy(enabled=True, max_attempts=5),
+        timeout=TimeoutPolicy(enabled=False),
+    )
+    stage_options = cast(Mapping[str, StageRuntimeOptions], result.stage_options)
+    assert stage_options["train"].reliability == ReliabilityPolicy(
+        retry=RetryPolicy(enabled=True, max_attempts=2),
+        timeout=TimeoutPolicy(enabled=True, duration_seconds=12),
+    )

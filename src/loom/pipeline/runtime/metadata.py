@@ -12,6 +12,7 @@ from loom.serialization.errors import PlainDataError
 
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
+from loom.pipeline.reliability import ReliabilityPolicy, merge_reliability_options
 from loom.pipeline.runtime.environment import (
     RunEnvironmentRequest,
     StageEnvironmentRequest,
@@ -20,6 +21,7 @@ from loom.pipeline.runtime.options import (
     ExecutionOptions,
     RunOptions,
     StageRuntimeOptions,
+    _coerce_reliability,
     parse_run_options,
     validate_stage_runtime_options,
 )
@@ -35,6 +37,7 @@ class ResolvedStageRuntimeOptions:
     executor: str = "local"
     resources: ResourceRequest | Mapping[str, object] = field(default_factory=ResourceRequest)
     execution: ExecutionOptions | Mapping[str, object] = field(default_factory=ExecutionOptions)
+    reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     run_environment: RunEnvironmentRequest | Mapping[str, object] = field(
         default_factory=RunEnvironmentRequest
     )
@@ -48,6 +51,14 @@ class ResolvedStageRuntimeOptions:
         object.__setattr__(self, "executor", _non_empty_string(self.executor, "executor"))
         object.__setattr__(self, "resources", _coerce_resources(self.resources))
         object.__setattr__(self, "execution", _coerce_execution(self.execution))
+        object.__setattr__(
+            self,
+            "reliability",
+            _coerce_reliability(
+                self.reliability,
+                path=f"ResolvedStageRuntimeOptions[{self.stage_id!r}].reliability",
+            ),
+        )
         object.__setattr__(
             self,
             "run_environment",
@@ -74,6 +85,11 @@ class ResolvedStageRuntimeOptions:
             "executor": self.executor,
             "resources": _resource_request_metadata(resources),
             "execution": execution.to_safe_metadata(),
+            "reliability": (
+                cast(ReliabilityPolicy, self.reliability).to_dict()
+                if isinstance(self.reliability, ReliabilityPolicy)
+                else None
+            ),
             "environment": {
                 "run": run_environment.to_safe_metadata(),
                 "stage": stage_environment.to_safe_metadata(),
@@ -102,11 +118,13 @@ class RuntimeMetadata:
         options = cast(RunOptions, self.options)
         execution = cast(ExecutionOptions, options.execution)
         run_environment = cast(RunEnvironmentRequest, options.environment)
+        reliability = cast(ReliabilityPolicy | None, options.reliability)
         stages = cast(Mapping[str, ResolvedStageRuntimeOptions], self.stages)
         return {
             "schema_version": self.schema_version,
             "options_schema_version": options.schema_version,
             "run_uri": options.run_uri,
+            "reliability": reliability.to_dict() if reliability is not None else None,
             "executor": options.executor or "local",
             "dry_run": options.dry_run,
             "profile": options.profile,
@@ -135,6 +153,7 @@ def resolve_run_runtime(
     stage_id_tuple = tuple(_non_empty_string(stage_id, "stage_ids") for stage_id in stage_ids)
     validate_stage_runtime_options(normalized, known_stage_ids=stage_id_tuple)
     run_execution = cast(ExecutionOptions, normalized.execution)
+    run_reliability = cast(ReliabilityPolicy | None, normalized.reliability)
     run_environment = cast(RunEnvironmentRequest, normalized.environment)
     executor = normalized.executor or "local"
     resolved: dict[str, ResolvedStageRuntimeOptions] = {}
@@ -144,6 +163,11 @@ def resolve_run_runtime(
             normalized.stage_options,
         ).get(stage_id, StageRuntimeOptions())
         stage_execution = cast(ExecutionOptions, stage_runtime.execution)
+        resolved_reliability = _resolve_reliability(
+            run_reliability=run_reliability,
+            stage_reliability=stage_runtime.reliability,
+            stage_id=stage_id,
+        )
         stage_adapter_options = _merge_plain_mappings(
             normalized.adapter_options,
             stage_runtime.adapter_options,
@@ -158,6 +182,7 @@ def resolve_run_runtime(
                     **stage_execution.settings,
                 }
             ),
+            reliability=resolved_reliability,
             run_environment=run_environment,
             stage_environment=stage_runtime.environment,
             adapter_options=stage_adapter_options,
@@ -216,6 +241,23 @@ def _coerce_execution(value: object) -> ExecutionOptions:
     if isinstance(value, ExecutionOptions):
         return value
     return ExecutionOptions.from_dict(_object_mapping(value, "execution"))
+
+
+def _resolve_reliability(
+    *,
+    run_reliability: ReliabilityPolicy | None,
+    stage_reliability: ReliabilityPolicy | Mapping[str, object] | None,
+    stage_id: str | None = None,
+) -> ReliabilityPolicy:
+    path = (
+        f"RunOptions.stage_options[{stage_id!r}].reliability"
+        if stage_id is not None
+        else "StageRuntimeOptions.reliability"
+    )
+    return merge_reliability_options(
+        run_reliability,
+        _coerce_reliability(stage_reliability, path=path),
+    )
 
 
 def _coerce_run_environment(value: object) -> RunEnvironmentRequest:
