@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: refined phase execution plan, ready for implementation
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 1: Container Contracts And Runtime Descriptor`
 - Branch: `codex/docker-container-contracts`
@@ -18,8 +18,8 @@
 - Successor dependency notes: Phase 2 `docker-command-runner` depends on this branch until Phase 1 merges or is a valid stack predecessor.
 - Plan quality gate: passed in the implementation plan on 2026-05-16 with no blockers
 - Plan quality gate loop budget: consumed before phase planning; no additional plan-quality review assigned here
-- Draft pass: in progress in this commit
-- Refine pass: required by expanded path; pending after draft commit
+- Draft pass: completed in commit `894857d`
+- Refine pass: completed in this planning pass
 - Setup limitations: Stage 17 source docs were copied from the dirty control checkout because they are not on `develop`; no `docs/roadmap.md` or stage 19 files are copied or edited.
 - Blockers: none
 
@@ -119,6 +119,10 @@ SLURM-container composition, image pulls, registry auth, and live Docker tests.
 - Add package/import tests proving shared container records do not import Docker
   command modules, diagnostics, CLI, execution, stores, optional SDKs, network,
   or daemon-facing code.
+- Add a minimal runtime/profile config snippet in tests, module docs, or a
+  narrow feature-doc section showing `container` for generic fields and
+  `docker` reserved for Docker-specific fields. Broad user-facing examples stay
+  in Phase 5.
 
 ## Out-of-Scope Work
 
@@ -154,11 +158,13 @@ rejection.
 
 Target shared record names and serialized shapes:
 
+- `ContainerImageReference`: `{reference: str}`. The reference must be
+  non-empty after stripping. Digest resolution and image inspection are not part
+  of this phase.
 - `ContainerMountMode`: enum values `ro` and `rw`.
 - `ContainerMount`: `{source: str, target: str, mode: "ro" | "rw"}`. Source
-  is an explicit host path string. Target must be absolute. Mode defaults only
-  if an existing local parser pattern has a clear precedent; otherwise require
-  it explicitly.
+  is an explicit host path string. Target must be absolute. Mode is required;
+  no implicit mount mode is introduced in the public contract.
 - `ContainerEnvironment`: `{variables: Mapping[str, str], required_host_variables: list[str]}`.
   `variables` are explicit values supplied by config. `required_host_variables`
   are host names the executor may resolve at launch. Full host environment
@@ -169,9 +175,11 @@ Target shared record names and serialized shapes:
   later what to map.
 - `ContainerPathParitySummary`: `{kind: str, host_path: str, container_path: str, writable_required: bool, ok: bool, reason: str | None}`.
   It is a validation summary, not a path-translation protocol.
-- `ContainerOptions`: `{image: str, workdir: str | None, mounts: list[ContainerMount], environment: ContainerEnvironment, resources: ContainerResourceIntent | None}`.
+- `ContainerOptions`: `{image: ContainerImageReference, workdir: str | None, mounts: list[ContainerMount], environment: ContainerEnvironment, resources: ContainerResourceIntent | None}`.
   Image is required for Docker execution. Workdir, mounts, environment, and
-  resources stay generic.
+  resources stay generic. Resource intent is derived from existing runtime
+  resource requests and descriptor capabilities; this phase must not add a
+  second authored resource surface under `container`.
 - `RedactedContainerMetadata`: plain-data projection with image reference,
   workdir, mount summaries, selected environment key names, redacted explicit
   env values when needed, and resource support summaries. It must not include
@@ -183,10 +191,15 @@ Adapter namespace contract:
 - Runtime profile shorthand `container:` may normalize into
   `adapter_options.container` through existing profile behavior.
 - `adapter_options.docker` is claimed by the Docker descriptor but remains
-  Docker-owned and must not accept generic container fields that belong under
-  `container`.
+  Docker-owned. In Phase 1 it may be an empty or strictly reserved plain
+  mapping; it must reject generic container fields such as `image`, `workdir`,
+  `mounts`, `environment`, and `resources` when supplied under `docker`.
 - Capability validation may warn for unclaimed namespaces but must not inspect
   or persist raw namespace payloads.
+- The built-in Docker descriptor name is `docker`. It should be present in
+  `DEFAULT_EXECUTOR_DESCRIPTOR_REGISTRY`, claim `("container", "docker")` after
+  deterministic sorting, and use details that describe it as built-in,
+  containerized, CLI-backed, and not a Docker SDK dependency.
 
 Error behavior and edge cases:
 
@@ -266,7 +279,9 @@ Error behavior and edge cases:
    details.
 4. Extend runtime/profile validation only where needed to validate or preserve
    the new namespace contract through existing merge behavior.
-5. Add focused package, unit, and contract coverage for records, descriptors,
+5. Add the minimal config snippet showing `container` versus `docker`
+   namespace ownership.
+6. Add focused package, unit, and contract coverage for records, descriptors,
    profile namespaces, redaction, persistence boundaries, and import-light
    behavior.
 
@@ -382,11 +397,12 @@ make test-summary
 
 ## Completion Notes
 
-- Draft plan: drafted in this assignment.
-- Final phase execution plan: pending required refine pass.
+- Draft plan: completed in commit `894857d`.
+- Final phase execution plan: refined in this assignment and ready for implementation.
 - Implementation summary: not started.
 - Implementation validation: not run; implementation has not started.
-- Refinement summary: pending required refine pass.
+- Refinement summary: tightened status, public record shapes, descriptor
+  expectations, namespace ownership, and minimal snippet obligations.
 - Blocker-resolution summary: none used.
 - PR preparation: not started.
 - Stack maintenance: root phase from `develop`; no predecessor.
