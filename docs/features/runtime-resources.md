@@ -355,6 +355,18 @@ runtime_profiles:
     slurm:
       partition: compute
       account: project-a
+
+  docker:
+    executor: docker
+    adapter_options:
+      container:
+        image:
+          reference: python:3.12-slim
+        environment:
+          variables:
+            LOOM_CONTAINER_EXAMPLE: docker-pipeline
+      docker:
+        network: none
 ```
 
 Profiles are useful because the same pipeline may be run locally, on a shared
@@ -380,6 +392,12 @@ exact stage ID. Stage resource requests merge by `ResourceRequest.entries`
 kind, replacing the whole `ResourceEntry` for a conflicting kind. Adapter
 namespaces are opaque plain data; a higher-precedence namespace replaces the
 whole lower-precedence payload.
+
+Container executor profiles should keep generic image, mount, workdir,
+environment, and resource intent under `adapter_options.container`. Docker
+flags such as `network`, `platform`, `user`, `hostname`, and `remove` belong
+under `adapter_options.docker`. Semantic pipeline stage specs should not gain
+Docker-specific fields.
 
 `merge_run_options` can run the existing known-stage validation helper after
 merge when callers supply canonical stage IDs. It does not implement glob,

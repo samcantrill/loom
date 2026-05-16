@@ -255,17 +255,66 @@ record image digest when available
 The executor should use the Docker CLI initially rather than requiring the
 Docker Python SDK.
 
+Stage 17 implements Docker as a per-stage executor. The controller remains on
+the host, prepares one stage attempt in the normal run store, and launches the
+prepared worker command through `docker run`. It does not implement
+whole-controller-in-container execution.
+
+Implemented Stage 17 config uses runtime or profile adapter options:
+
+```yaml
+runtime_profiles:
+  docker-default:
+    executor: docker
+    adapter_options:
+      container:
+        image:
+          reference: python:3.12-slim
+        environment:
+          variables:
+            LOOM_CONTAINER_EXAMPLE: docker-pipeline
+      docker:
+        network: none
+```
+
+The shared `container` namespace owns image, workdir, mounts, explicit
+environment handoff, and resource intent. The `docker` namespace owns
+Docker-specific command flags such as `network`, `platform`, `user`,
+`hostname`, and `remove`.
+
+Stage 17 requires path parity for local run directories and local artifact
+roots: the host path and container-visible path must match. The executor adds
+required read-write mounts for those paths and fails closed when an authored
+mount conflicts with them.
+
+Failure inspection uses the same surfaces as other executors:
+
+```sh
+loom status RUN_URI --format json
+loom logs RUN_URI STAGE --stream stderr --format json
+```
+
+Executor metadata records the redacted Docker command, image reference,
+container option summary, path-parity summary, return code, and bounded
+stdout/stderr facts. It must not persist raw environment values.
+
 Potential preflight checks:
 
 ```text
 docker command exists
-daemon is reachable when practical
 image reference is present
 mount sources exist
 run directory mount is writable
+artifact root is visible through a path-parity mount
+required environment variable names are present
+CPU and memory mapping is supported
+GPU requests fail because Stage 17 does not map GPUs
 ```
 
 Image pulls should be explicit because they can require network access.
+Default Stage 17 preflight is cheaper than daemon health: it checks command
+availability through `PATH` and never pulls images, contacts registries, probes
+networks, or requires a live daemon.
 
 ## Apptainer Executor
 
@@ -429,6 +478,11 @@ SLURM wrapper composition shape
 
 Integration tests that require real Docker or Apptainer should be optional and
 skipped unless explicitly enabled.
+
+Stage 17 example smoke tests use a fake `docker` command that executes the
+prepared worker command locally while exercising the public Docker executor and
+CLI path. A manual live Docker smoke is useful only when the selected image can
+import `loom` and the example project code at the same paths used by the host.
 
 ## Implementation Plan
 

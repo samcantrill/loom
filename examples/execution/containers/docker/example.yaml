@@ -1,0 +1,24 @@
+id: execution.containers.docker
+title: Docker Container Executor
+summary: Run a synthetic pipeline with Docker stage workers, inspect Docker failures, and review selected-Docker preflight checks without requiring a real daemon in default validation.
+capability: execution
+level: intermediate
+introduced_in: v17
+status: runnable
+validation: smoke
+surface: cli
+entrypoints:
+  - path: run_docker_pipeline.py
+    kind: python
+    description: Run the example pipeline through loom run --executor docker with a daemon-free fake Docker command.
+  - path: run_preflight.py
+    kind: python
+    description: Inspect selected-Docker preflight pass and fail diagnostics.
+  - path: run_failure_diagnostics.py
+    kind: python
+    description: Run a failing Docker stage and inspect persisted status and stderr logs.
+tags:
+  - docker
+  - containers
+  - preflight
+  - diagnostics

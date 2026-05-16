@@ -153,6 +153,13 @@ user cancellation unless explicitly designed
 Executor-specific transient failures can be added later through structured
 failure categories.
 
+Stage 17 Docker failures record process and worker facts but do not introduce
+Docker-specific retry policy. A Docker failure remains inspectable through the
+normal failure record, status view, log paths, executor name, exit code or
+signal when available, redacted command metadata, and bounded process output.
+Stage 19 owns any shared retry, timeout, or failure-category policy that uses
+those facts.
+
 ## Timeout Policy
 
 Timeout policy controls maximum runtime for a stage attempt.
@@ -196,6 +203,9 @@ Containers:
 timeout may wrap the container runtime command
 container runtime-specific stop behavior should be recorded
 ```
+
+Stage 17 records Docker process timeout fields when supplied by the command
+runner, but it does not add a user-facing timeout policy.
 
 If an executor cannot enforce a timeout, preflight or execution should warn and
 record that the timeout was not enforced.
