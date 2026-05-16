@@ -47,13 +47,13 @@ failed uncommitted stage attempt, and documents the current
 
 | Suite | Status | Passed | Failed | Errors | Skipped | Deselected | Total | Duration | Coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| package | passed | 102 | 0 | 0 | 1 | 0 | 103 | 15.14s | 19% |
-| unit | passed | 1274 | 0 | 0 | 7 | 1 | 1281 | 67.11s | 76% |
-| contract | passed | 256 | 0 | 0 | 2 | 0 | 258 | 12.78s | 58% |
-| integration | passed | 159 | 0 | 0 | 8 | 13 | 167 | 58.45s | 63% |
-| e2e | passed | 43 | 0 | 0 | 0 | 2 | 43 | 41.13s | 59% |
-| config-extra | passed | 447 | 0 | 0 | 0 | 1843 | 447 | 94.86s | 63% |
-| Overall | passed | 2281 | 0 | 0 | 18 | 1859 | 2299 | 289.47s | - |
+| package | passed | 102 | 0 | 0 | 1 | 0 | 103 | 15.28s | 19% |
+| unit | passed | 1274 | 0 | 0 | 7 | 1 | 1281 | 66.27s | 76% |
+| contract | passed | 256 | 0 | 0 | 2 | 0 | 258 | 12.70s | 58% |
+| integration | passed | 159 | 0 | 0 | 8 | 13 | 167 | 59.31s | 63% |
+| e2e | passed | 43 | 0 | 0 | 0 | 2 | 43 | 40.86s | 59% |
+| config-extra | passed | 447 | 0 | 0 | 0 | 1843 | 447 | 96.29s | 63% |
+| Overall | passed | 2281 | 0 | 0 | 18 | 1859 | 2299 | 290.70s | - |
 
 ## Assumptions And Risks
 
