@@ -2,7 +2,6 @@
 
 from typing import TYPE_CHECKING
 
-from loom.pipeline.context import StageContext
 from loom.pipeline.errors import (
     InputBindingError,
     PipelineCycleError,
@@ -88,10 +87,15 @@ from loom.pipeline.status import (
 from loom.pipeline.status import parse_run_status, parse_stage_status
 
 if TYPE_CHECKING:
+    from loom.pipeline.context import StageContext
     from loom.pipeline.execution import PipelineRunner, RunRequest, RunResult
 
 
 def __getattr__(name: str) -> object:
+    if name == "StageContext":
+        from loom.pipeline.context import StageContext as _StageContext
+
+        return _StageContext
     if name in {"PipelineRunner", "RunRequest", "RunResult"}:
         from loom.pipeline import execution
 

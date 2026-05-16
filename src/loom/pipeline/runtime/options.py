@@ -12,6 +12,7 @@ from loom.serialization.errors import PlainDataError
 
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.resources import ResourceEntry, ResourceRequest, parse_resource_request
+from loom.pipeline.reliability import ReliabilityPolicy
 from loom.pipeline.runtime.environment import RunEnvironmentRequest, StageEnvironmentRequest
 
 if TYPE_CHECKING:
@@ -43,11 +44,12 @@ _RUN_OPTIONS_FIELDS = frozenset(
         "stage_options",
         "environment",
         "adapter_options",
+        "reliability",
     }
 )
 _EXECUTION_OPTIONS_FIELDS = frozenset({"settings"})
 _STAGE_RUNTIME_OPTIONS_FIELDS = frozenset(
-    {"resources", "execution", "environment", "adapter_options"}
+    {"resources", "execution", "environment", "reliability", "adapter_options"}
 )
 
 
@@ -135,6 +137,7 @@ class StageRuntimeOptions:
     environment: StageEnvironmentRequest | Mapping[str, object] = field(
         default_factory=StageEnvironmentRequest
     )
+    reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -158,6 +161,11 @@ class StageRuntimeOptions:
         )
         object.__setattr__(
             self,
+            "reliability",
+            _coerce_reliability(self.reliability, path="StageRuntimeOptions.reliability"),
+        )
+        object.__setattr__(
+            self,
             "adapter_options",
             _freeze_plain_mapping(
                 self.adapter_options,
@@ -169,7 +177,8 @@ class StageRuntimeOptions:
         resources = cast(ResourceRequest, self.resources)
         execution = cast(ExecutionOptions, self.execution)
         environment = cast(StageEnvironmentRequest, self.environment)
-        return {
+        reliability = cast(ReliabilityPolicy | None, self.reliability)
+        payload: dict[str, PlainData] = {
             "resources": resources.to_dict(),
             "execution": execution.to_dict(),
             "environment": environment.to_dict(),
@@ -178,6 +187,9 @@ class StageRuntimeOptions:
                 path="StageRuntimeOptions.adapter_options",
             ),
         }
+        if reliability is not None:
+            payload["reliability"] = reliability.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: object) -> "StageRuntimeOptions":
@@ -200,6 +212,10 @@ class StageRuntimeOptions:
                 mapping.get("environment", {}),
                 path="StageRuntimeOptions.environment",
             ),
+            reliability=_coerce_reliability(
+                mapping.get("reliability"),
+                path="StageRuntimeOptions.reliability",
+            ),
             adapter_options=_plain_mapping(
                 mapping.get("adapter_options", {}),
                 path="StageRuntimeOptions.adapter_options",
@@ -210,10 +226,16 @@ class StageRuntimeOptions:
         resources = cast(ResourceRequest, self.resources)
         execution = cast(ExecutionOptions, self.execution)
         environment = cast(StageEnvironmentRequest, self.environment)
+        reliability = cast(ReliabilityPolicy | None, self.reliability)
         return {
             "resources": _safe_resource_metadata(resources),
             "execution": execution.to_safe_metadata(),
             "environment": environment.to_safe_metadata(),
+            **(
+                {"reliability": reliability.to_dict()}
+                if reliability is not None
+                else {}
+            ),
             "adapter_options": _safe_adapter_metadata(self.adapter_options),
         }
 
@@ -238,6 +260,7 @@ class RunOptions:
         default_factory=RunEnvironmentRequest
     )
     adapter_options: Mapping[str, PlainData] = field(default_factory=dict)
+    reliability: ReliabilityPolicy | Mapping[str, object] | None = None
     schema_version: int = RUN_OPTIONS_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -290,12 +313,18 @@ class RunOptions:
             "adapter_options",
             _freeze_plain_mapping(self.adapter_options, path="RunOptions.adapter_options"),
         )
+        object.__setattr__(
+            self,
+            "reliability",
+            _coerce_reliability(self.reliability, path="RunOptions.reliability"),
+        )
 
     def to_dict(self) -> dict[str, PlainData]:
         selectors = cast("PlanSelectors", self.selectors)
         resume = cast("ResumeOptions", self.resume)
         execution = cast(ExecutionOptions, self.execution)
         environment = cast(RunEnvironmentRequest, self.environment)
+        reliability = cast(ReliabilityPolicy | None, self.reliability)
         return {
             "schema_version": self.schema_version,
             "run_uri": self.run_uri,
@@ -315,6 +344,11 @@ class RunOptions:
                 ).items()
             },
             "environment": environment.to_dict(),
+            **(
+                {"reliability": reliability.to_dict()}
+                if reliability is not None
+                else {}
+            ),
             "adapter_options": _thaw_mapping(self.adapter_options, path="RunOptions.adapter_options"),
         }
 
@@ -350,6 +384,10 @@ class RunOptions:
                 mapping.get("environment", {}),
                 path="RunOptions.environment",
             ),
+            reliability=_coerce_reliability(
+                mapping.get("reliability"),
+                path="RunOptions.reliability",
+            ),
             adapter_options=_plain_mapping(
                 mapping.get("adapter_options", {}),
                 path="RunOptions.adapter_options",
@@ -367,6 +405,7 @@ class RunOptions:
         environment = cast(RunEnvironmentRequest, self.environment)
         selectors = cast("PlanSelectors", self.selectors)
         resume = cast("ResumeOptions", self.resume)
+        reliability = cast(ReliabilityPolicy | None, self.reliability)
         return {
             "schema_version": self.schema_version,
             "run_uri": self.run_uri,
@@ -386,6 +425,7 @@ class RunOptions:
                 ).items()
             },
             "environment": environment.to_safe_metadata(),
+            "reliability": reliability.to_dict() if reliability is not None else None,
             "adapter_options": _safe_adapter_metadata(self.adapter_options),
         }
 
@@ -462,6 +502,18 @@ def _coerce_run_environment(value: object, *, path: str) -> RunEnvironmentReques
     if isinstance(value, RunEnvironmentRequest):
         return value
     return RunEnvironmentRequest.from_dict(_object_mapping(value, path=path))
+
+
+def _coerce_reliability(
+    value: object,
+    *,
+    path: str,
+) -> ReliabilityPolicy | None:
+    if value is None:
+        return None
+    if isinstance(value, ReliabilityPolicy):
+        return value
+    return ReliabilityPolicy.from_dict(value)
 
 
 def _coerce_selectors(value: object, *, path: str) -> PlanSelectors:
