@@ -2,10 +2,10 @@
 
 ## Metadata
 
-- Status: scope-complete phase execution plan
+- Status: pr_open
 - Feature focus: Reliability Policies And Transactions
 - PR title: `Reliability Policies And Transactions - Phase 5: Retry Decisions And Runner Automation`
-- PR: pending
+- PR: [#180](https://github.com/samcantrill/loom/pull/180)
 - Branch: `codex/retry-decisions-runner-automation`
 - Worktree: `/home/samcantrill/work/loom-worktrees/retry-decisions-runner-automation`
 - Phase execution plan path: `docs/roadmap/stage-19/phases/retry-decisions-runner-automation.md`
@@ -251,7 +251,10 @@ make test-summary
 - Refinement summary: not needed as a separate formal pass; validation findings
   were addressed directly during implementation before commits.
 - Blocker-resolution summary: not needed at plan time
-- PR preparation: pending
+- PR preparation: completed with
+  `docs/roadmap/stage-19/phases/retry-decisions-runner-automation-pr-body.md`;
+  PR [#180](https://github.com/samcantrill/loom/pull/180) is open against
+  `develop`
 - Merge summary: pending
 - Stack maintenance: pending
 - Remaining blockers: none
