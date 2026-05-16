@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: Docker Container Executor
 - PR title: `Docker Container Executor - Phase 5: Examples And Acceptance`
 - Branch: `codex/docker-examples-acceptance`
@@ -13,8 +13,9 @@
 - Stack predecessor: none; Phase 4 is merged
 - Base branch: `develop`
 - Target branch: `develop`
-- Merge eligibility: pending implementation, validation, PR preparation, GitHub
-  CI, and manager automated review
+- PR: [#175](https://github.com/samcantrill/loom/pull/175)
+- Merge eligibility: pending GitHub CI, manager automated review, and final
+  target-branch verification
 - Workflow path: fast path
 - Successor dependency notes: this is the final Stage 17 phase; no successor
   phase branch depends on this branch.
@@ -346,6 +347,7 @@ make test-summary
 - Blocker-resolution summary: unused.
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-17/phases/docker-examples-acceptance-pr-body.md`; PR
-  opening pending.
+  [#175](https://github.com/samcantrill/loom/pull/175) opened against
+  verified `develop` from `codex/docker-examples-acceptance`.
 - Stack maintenance: root phase from `develop`; no predecessor.
 - Remaining blockers: none.

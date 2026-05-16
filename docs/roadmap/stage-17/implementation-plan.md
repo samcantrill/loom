@@ -5,7 +5,7 @@ Roadmap stage: `v17`
 Planning document: `docs/roadmap/stage-17/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 in_progress
+Current phase: Phase 5 pr_open
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-16 after
@@ -322,7 +322,7 @@ Apptainer/Singularity prove enough common behavior.
 | 2 | `docker-command-runner` | merged | `codex/docker-command-runner` | [#172](https://github.com/samcantrill/loom/pull/172) | Docker options, command builder, command-runner protocol, process metadata | Build deterministic redacted Docker CLI commands and fakeable process results | Unit and contract tests for argv, redaction, resources, bounded output; `make validate-pr`; `make test-summary` | Prepared worker command projection |
 | 3 | `docker-executor-integration` | merged | `codex/docker-executor-integration` | [#173](https://github.com/samcantrill/loom/pull/173) | `DockerExecutor`, CLI executor selection, prepared-worker result handling | Run stage attempts through Docker while preserving parent-owned finalization | Executor unit/integration, CLI fake-runner, failure mapping, regression tests; `make validate-pr`; `make test-summary` | Normal pipeline via `loom run --executor docker` |
 | 4 | `docker-preflight-diagnostics` | merged | `codex/docker-preflight-diagnostics` | [#174](https://github.com/samcantrill/loom/pull/174) | Docker preflight check IDs, diagnostics, cheap readiness checks | Add selected-executor Docker diagnostics without daemon/network defaults | Unit, contract, JSON/preflight integration tests; `make validate-pr`; `make test-summary` | Docker preflight pass/fail examples |
-| 5 | `docker-examples-acceptance` | in_progress | `codex/docker-examples-acceptance` | pending | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
+| 5 | `docker-examples-acceptance` | pr_open | `codex/docker-examples-acceptance` | [#175](https://github.com/samcantrill/loom/pull/175) | Docs, examples, example tests, optional live Docker smoke | Publish stage/pipeline/failure examples and final validation evidence | Docs/config/example tests, optional marked live Docker smoke, full PR gate; `make validate-pr`; `make test-summary` | Stage, pipeline, failure, and optional live Docker examples |
 
 ## Implementation Readiness Blockers
 
@@ -828,11 +828,11 @@ selected-executor preflight behavior
 
 ## Phase 5: Examples, Documentation, And Acceptance Hardening
 
-Status: in_progress
+Status: pr_open
 Slug: `docker-examples-acceptance`
 Branch: `codex/docker-examples-acceptance`
 Worktree: `/home/samcantrill/work/loom-worktrees/docker-examples-acceptance`
-PR: pending
+PR: [#175](https://github.com/samcantrill/loom/pull/175)
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: fast path unless docs/example validation exposes a concrete
@@ -911,7 +911,7 @@ blocker or optional live Docker acceptance changes public behavior
   validation fails or example coverage is missing
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phase 4 merged or valid as stack predecessor
+- Pre-submit blocker gate: passed; PR opened against verified `develop` target
 - Merge record: pending
 
 ### Risks And Stop Conditions
@@ -927,9 +927,17 @@ blocker or optional live Docker acceptance changes public behavior
 
 ### Completion Summary
 
-- Implementation:
-- Validation:
-- PR:
+- Implementation: added Docker examples, feature docs, catalog coverage, and
+  docs/example tests for normal Docker pipeline execution, selected-Docker
+  preflight, failure inspection, runtime/profile adapter options, path-parity
+  guidance, redaction, and optional live Docker smoke notes.
+- Validation: targeted Phase 5 suite passed (`261 passed`); `make
+  validate-pr` passed with Ruff, Pyright, default harness (`1751 passed, 26
+  skipped, 18 deselected`), config-extra harness (`446 passed, 1788
+  deselected`), and build; `make test-summary` passed with overall `2225
+  passed, 18 skipped, 1804 deselected`.
+- PR: [#175](https://github.com/samcantrill/loom/pull/175) opened and
+  verified against `develop` from `codex/docker-examples-acceptance`.
 - Merge:
 - Follow-up:
 
