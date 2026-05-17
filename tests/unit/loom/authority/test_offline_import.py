@@ -97,18 +97,27 @@ def _assert_replay_events_match_manifest(
     for manifest_event, replay_event in zip(
         manifest_events, cast(tuple[PipelineEventRecord, ...], tuple(replay_events))
     ):
-        assert replay_event.event_type == f"offline_import.replay.{manifest_event.event_type}"
+        assert (
+            replay_event.event_type
+            == f"offline_import.replay.{manifest_event.event_type}"
+        )
         assert replay_event.sequence == manifest_event.sequence + 1
         assert replay_event.scope == manifest_event.scope
         assert replay_event.timestamp == manifest_event.timestamp
         payload = cast(Mapping[str, object], replay_event.payload)
         offline_event = cast(Mapping[str, object], payload["offline_event"])
-        assert PipelineEventRecord.from_dict(thaw_plain_data(offline_event)) == manifest_event
+        assert (
+            PipelineEventRecord.from_dict(thaw_plain_data(offline_event))
+            == manifest_event
+        )
         assert offline_event["run_uri"] == manifest.run_uri
         assert offline_event["sequence"] == manifest_event.sequence
         assert offline_event["event_type"] == manifest_event.event_type
-        assert offline_event["scope"] == manifest_event.scope.to_dict()
-        assert offline_event["timestamp"] == manifest_event.timestamp
+        assert (
+            offline_event["primary_resource"]
+            == manifest_event.primary_resource.to_dict()
+        )
+        assert offline_event["occurred_at"] == manifest_event.occurred_at
 
 
 def test_offline_import_rejects_existing_run_identity(tmp_path: Path) -> None:
@@ -205,7 +214,9 @@ def test_offline_import_rolls_back_repository_transaction_on_mid_import_failure(
         repository.open_run(manifest.run_uri)
 
 
-def _complete_manifest(tmp_path: Path, *, name: str = "offline-run") -> OfflineEvidenceManifest:
+def _complete_manifest(
+    tmp_path: Path, *, name: str = "offline-run"
+) -> OfflineEvidenceManifest:
     run_store = create_offline_evidence_run_store(
         tmp_path / "offline-runs",
         owner_id="offline-test",

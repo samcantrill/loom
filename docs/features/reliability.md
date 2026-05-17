@@ -374,11 +374,11 @@ These are policy hints. They do not replace artifact store ownership checks.
 ## Event Hooks
 
 Event records expose structured lifecycle facts for inspection and future
-external tools. Phase 4 defines the strict event model and local
-`events.jsonl` persistence. The local v0-post runner emits lifecycle events for
-run planning/start/completion/failure and stage planned/started/completed,
-failed, skipped, reused, and blocked outcomes. Callback hooks and
-plugin-discovered event sinks remain deferred.
+external tools. The strict event model and local `events.jsonl` persistence use
+append-only audit records, not current-state records. The local runner emits
+lifecycle events for run planning/start/completion/failure and stage
+planned/started/completed, failed, skipped, reused, and blocked outcomes.
+Callback hooks and plugin-discovered event sinks remain deferred.
 
 Events:
 
@@ -415,14 +415,20 @@ Current persisted foundation shape:
 @dataclass(frozen=True)
 class PipelineEventRecord:
     schema_version: int
-    run_id: str
+    event_id: str
+    run_uri: str
     sequence: int
-    timestamp: str
-    scope: EventScope
+    occurred_at: str
     event_type: str
+    primary_resource: EventResourceRef
+    related_resources: tuple[EventResourceRef, ...]
     payload: Mapping[str, PlainData] = field(default_factory=dict)
+    causal_predecessor: EventResourceRef | EventReference | None = None
 ```
 
+Schema-version 2 records use `occurred_at` and resource references. Existing
+schema-version 1 records with `timestamp` and `scope` remain readable through
+compatibility projection; reading an old `events.jsonl` does not rewrite it.
 Event payloads must be plain-data mappings. Local stores allocate contiguous
 per-run sequence numbers and append one JSON object per line to
 `<run_dir>/events.jsonl`.

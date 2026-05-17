@@ -1232,7 +1232,7 @@ class _ServiceAuthorityCore:
             record = PipelineEventRecord(
                 run_uri=run_uri,
                 sequence=len(state.events) + 1,
-                timestamp=self._now(),
+                timestamp=resolved_event.timestamp or self._now(),
                 scope=resolved_event.scope,
                 event_type=resolved_event.event_type,
                 payload=_plain_mapping_from_wire(

@@ -1203,6 +1203,7 @@ class AuthorityRepository:
         if not isinstance(event, PipelineEvent):
             raise AuthorityRepositoryError("event must be a PipelineEvent")
         with self.transaction() as conn:
+            _ensure_audit_event_json_column(conn)
             current = _current_run_revision(conn, run_uri)
             _require_expected_revision(current, expected_revision)
             revision = self._next_revision(conn)
@@ -1211,32 +1212,37 @@ class AuthorityRepository:
                 Mapping[str, PlainData],
                 thaw_plain_data(event.payload, path="event.payload"),
             )
-            cursor = conn.execute(
-                """
-                INSERT INTO audit_events (
-                    run_uri, timestamp, scope_json, event_type, payload_json,
-                    revision_sequence
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_uri,
-                    timestamp,
-                    _json_dumps(event.scope.to_dict()),
-                    event.event_type,
-                    _json_dumps(payload),
-                    revision.sequence,
-                ),
-            )
-            _touch_run(conn, run_uri=run_uri, revision=revision)
-            return PipelineEventRecord(
+            sequence = _next_audit_event_sequence(conn, run_uri=run_uri)
+            record = PipelineEventRecord(
                 run_uri=run_uri,
-                sequence=cast(int, cursor.lastrowid),
+                sequence=sequence,
                 timestamp=timestamp,
                 scope=event.scope,
                 event_type=event.event_type,
                 payload=payload,
             )
+            conn.execute(
+                """
+                INSERT INTO audit_events (
+                    run_uri, sequence, timestamp, scope_json, event_type, payload_json,
+                    event_json,
+                    revision_sequence
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_uri,
+                    sequence,
+                    timestamp,
+                    _json_dumps(event.scope.to_dict()),
+                    event.event_type,
+                    _json_dumps(payload),
+                    _json_dumps(record.to_dict()),
+                    revision.sequence,
+                ),
+            )
+            _touch_run(conn, run_uri=run_uri, revision=revision)
+            return record
 
     def list_audit_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
         """List persisted audit events for a run."""
@@ -2140,13 +2146,15 @@ def _initialize_schema(
         """,
         """
         CREATE TABLE IF NOT EXISTS audit_events (
-            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            sequence INTEGER NOT NULL,
             run_uri TEXT NOT NULL,
             timestamp TEXT NOT NULL,
             scope_json TEXT NOT NULL,
             event_type TEXT NOT NULL,
             payload_json TEXT NOT NULL,
-            revision_sequence INTEGER NOT NULL
+            event_json TEXT,
+            revision_sequence INTEGER NOT NULL,
+            PRIMARY KEY(run_uri, sequence)
         )
         """,
         """
@@ -2262,6 +2270,7 @@ def _initialize_schema(
     )
     for statement in schema_statements:
         conn.execute(statement)
+    _ensure_audit_event_json_column(conn)
     _insert_metadata_if_missing(conn, "schema_version", str(schema_version))
     _insert_metadata_if_missing(conn, "service_generation", service_generation)
     _insert_metadata_if_missing(conn, "created_at", timestamp)
@@ -2577,20 +2586,33 @@ def _insert_import_audit_event(
     scope: EventScope | None = None,
 ) -> None:
     event_scope = scope or EventScope.run()
+    _ensure_audit_event_json_column(conn)
+    sequence = _next_audit_event_sequence(conn, run_uri=run_uri)
+    record = PipelineEventRecord(
+        run_uri=run_uri,
+        sequence=sequence,
+        timestamp=timestamp,
+        scope=event_scope,
+        event_type=event_type,
+        payload=payload,
+    )
     conn.execute(
         """
         INSERT INTO audit_events (
-            run_uri, timestamp, scope_json, event_type, payload_json,
+            run_uri, sequence, timestamp, scope_json, event_type, payload_json,
+            event_json,
             revision_sequence
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_uri,
+            sequence,
             timestamp,
             _json_dumps(event_scope.to_dict()),
             event_type,
             _json_dumps(dict(payload)),
+            _json_dumps(record.to_dict()),
             revision.sequence,
         ),
     )
@@ -3240,6 +3262,8 @@ def _recovery_records(
 def _audit_event_from_row(
     row: sqlite3.Row, *, run_uri: str
 ) -> PipelineEventRecord:
+    if "event_json" in row.keys() and row["event_json"] is not None:
+        return PipelineEventRecord.from_dict(_json_loads(cast(str, row["event_json"])))
     payload = _json_loads(cast(str, row["payload_json"]))
     if not isinstance(payload, Mapping):
         raise AuthorityRepositoryError("stored audit event payload must be a mapping")
@@ -3251,6 +3275,67 @@ def _audit_event_from_row(
         event_type=cast(str, row["event_type"]),
         payload=cast(Mapping[str, PlainData], payload),
     )
+
+
+def _ensure_audit_event_json_column(conn: sqlite3.Connection) -> None:
+    table_info = tuple(conn.execute("PRAGMA table_info(audit_events)"))
+    columns = {cast(str, row["name"]) for row in table_info}
+    if "event_json" not in columns:
+        conn.execute("ALTER TABLE audit_events ADD COLUMN event_json TEXT")
+        columns.add("event_json")
+    pk_columns = {cast(str, row["name"]) for row in table_info if row["pk"]}
+    if pk_columns != {"run_uri", "sequence"}:
+        _migrate_audit_events_to_per_run_primary_key(conn)
+
+
+def _migrate_audit_events_to_per_run_primary_key(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP INDEX IF EXISTS idx_audit_events_run")
+    conn.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy_migration")
+    conn.execute(
+        """
+        CREATE TABLE audit_events (
+            sequence INTEGER NOT NULL,
+            run_uri TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            scope_json TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            event_json TEXT,
+            revision_sequence INTEGER NOT NULL,
+            PRIMARY KEY(run_uri, sequence)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO audit_events (
+            sequence, run_uri, timestamp, scope_json, event_type, payload_json,
+            event_json, revision_sequence
+        )
+        SELECT sequence, run_uri, timestamp, scope_json, event_type, payload_json,
+            event_json, revision_sequence
+        FROM audit_events_legacy_migration
+        """
+    )
+    conn.execute("DROP TABLE audit_events_legacy_migration")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_audit_events_run
+            ON audit_events(run_uri, sequence)
+        """
+    )
+
+
+def _next_audit_event_sequence(conn: sqlite3.Connection, *, run_uri: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(MAX(sequence), 0) + 1
+        FROM audit_events
+        WHERE run_uri = ?
+        """,
+        (run_uri,),
+    ).fetchone()
+    return cast(int, row[0])
 
 
 def _require_row(row: sqlite3.Row | None, message: str) -> sqlite3.Row:

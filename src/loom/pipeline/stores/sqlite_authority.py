@@ -1153,37 +1153,42 @@ class SQLitePerRunAuthorityStore:
         if not isinstance(event, PipelineEvent):
             raise AuthorityStoreError("event must be a PipelineEvent")
         with self._transaction(run_uri) as conn:
+            _ensure_audit_event_json_column(conn)
             revision = self._next_revision(conn)
             timestamp = event.timestamp or self._now()
             payload = cast(
                 Mapping[str, PlainData],
                 thaw_plain_data(event.payload, path="event.payload"),
             )
-            cursor = conn.execute(
-                """
-                INSERT INTO audit_events (
-                    timestamp, scope_json, event_type, payload_json,
-                    revision_sequence
-                )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    timestamp,
-                    _json_dumps(event.scope.to_dict()),
-                    event.event_type,
-                    _json_dumps(payload),
-                    revision.sequence,
-                ),
-            )
-            _touch_run(conn, revision)
-            return PipelineEventRecord(
+            sequence = _next_audit_event_sequence(conn)
+            record = PipelineEventRecord(
                 run_uri=run_uri,
-                sequence=cast(int, cursor.lastrowid),
+                sequence=sequence,
                 timestamp=timestamp,
                 scope=event.scope,
                 event_type=event.event_type,
                 payload=payload,
             )
+            conn.execute(
+                """
+                INSERT INTO audit_events (
+                    sequence, timestamp, scope_json, event_type, payload_json, event_json,
+                    revision_sequence
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sequence,
+                    timestamp,
+                    _json_dumps(event.scope.to_dict()),
+                    event.event_type,
+                    _json_dumps(payload),
+                    _json_dumps(record.to_dict()),
+                    revision.sequence,
+                ),
+            )
+            _touch_run(conn, revision)
+            return record
 
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
         self._bind_run_uri(run_uri)
@@ -1680,6 +1685,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             scope_json TEXT NOT NULL,
             event_type TEXT NOT NULL,
             payload_json TEXT NOT NULL,
+            event_json TEXT,
             revision_sequence INTEGER NOT NULL
         )
         """,
@@ -1773,6 +1779,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     )
     for statement in schema_statements:
         conn.execute(statement)
+    _ensure_audit_event_json_column(conn)
     conn.execute(
         """
         INSERT INTO metadata(key, value)
@@ -1781,6 +1788,22 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         """,
         (str(AUTHORITY_SCHEMA_VERSION),),
     )
+
+
+def _ensure_audit_event_json_column(conn: sqlite3.Connection) -> None:
+    columns = {
+        cast(str, row["name"])
+        for row in conn.execute("PRAGMA table_info(audit_events)")
+    }
+    if "event_json" not in columns:
+        conn.execute("ALTER TABLE audit_events ADD COLUMN event_json TEXT")
+
+
+def _next_audit_event_sequence(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COALESCE(MAX(sequence), 0) + 1 FROM audit_events"
+    ).fetchone()
+    return cast(int, row[0])
 
 
 def _check_schema_connection(conn: sqlite3.Connection) -> AuthoritySchemaCheck:

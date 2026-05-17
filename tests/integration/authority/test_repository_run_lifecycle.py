@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 import pytest
 
 from loom.pipeline.events import EventScope, PipelineEvent
@@ -87,6 +90,42 @@ def test_run_lifecycle_records_persist_across_repository_handles(tmp_path) -> No
     assert reopened.list_recovery_records(RUN_URI) == (recovery,)
 
 
+def test_legacy_audit_table_accepts_per_run_event_sequences(tmp_path) -> None:
+    repository = initialize_authority_repository(
+        tmp_path, service_generation="generation-1"
+    )
+    run_a = "file:///runs/integration-r1"
+    run_b = "file:///runs/integration-r2"
+    repository.admit_run(run_a)
+    repository.admit_run(run_b)
+    _replace_audit_events_with_legacy_table(repository.database_path, run_uri=run_a)
+
+    event_b = repository.append_audit_event(
+        run_b,
+        PipelineEvent(scope=EventScope.run(), event_type="run.started"),
+    )
+    event_a = repository.append_audit_event(
+        run_a,
+        PipelineEvent(scope=EventScope.run(), event_type="run.completed"),
+    )
+
+    assert event_b.sequence == 1
+    assert event_a.sequence == 2
+    assert [event.event_type for event in repository.list_audit_events(run_a)] == [
+        "run.legacy",
+        "run.completed",
+    ]
+    assert repository.list_audit_events(run_b) == (event_b,)
+    with sqlite3.connect(repository.database_path) as conn:
+        conn.row_factory = sqlite3.Row
+        pk_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(audit_events)")
+            if row["pk"]
+        }
+    assert pk_columns == {"run_uri", "sequence"}
+
+
 def test_controller_lease_expiry_is_recovered_from_file_backed_state(tmp_path) -> None:
     now = "2020-01-01T00:00:00Z"
     repository = AuthorityRepository(tmp_path, clock=lambda: now)
@@ -137,3 +176,47 @@ def test_run_lifecycle_transaction_rolls_back_failed_write(tmp_path) -> None:
 
     with pytest.raises(AuthorityRepositoryError, match="unknown run"):
         repository.open_run("file:///runs/rolled-back")
+
+
+def _replace_audit_events_with_legacy_table(
+    database_path: Path, *, run_uri: str
+) -> None:
+    with sqlite3.connect(database_path) as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_audit_events_run")
+        conn.execute("DROP TABLE audit_events")
+        conn.execute(
+            """
+            CREATE TABLE audit_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_uri TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                scope_json TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                revision_sequence INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_events_run
+                ON audit_events(run_uri, sequence)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_events (
+                run_uri, timestamp, scope_json, event_type, payload_json,
+                revision_sequence
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_uri,
+                "2020-01-01T00:00:00Z",
+                '{"kind":"RUN","stage_name":null}',
+                "run.legacy",
+                "{}",
+                1,
+            ),
+        )
