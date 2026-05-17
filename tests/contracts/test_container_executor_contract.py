@@ -10,8 +10,13 @@ from typing import cast
 import pytest
 
 from loom.pipeline.executors.containers import (
+    ContainerBuildOptions,
+    ContainerBuildOutputRef,
+    ContainerBuildTarget,
     ContainerOptions,
     ContainerResourceIntent,
+    build_container_build_key,
+    parse_container_build_options,
     parse_container_options,
 )
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
@@ -27,9 +32,7 @@ def test_container_adapter_options_plain_data_contract_is_stable() -> None:
         {
             "image": {"reference": "example/runtime:latest"},
             "workdir": "/workspace",
-            "mounts": [
-                {"source": "/workspace", "target": "/workspace", "mode": "rw"}
-            ],
+            "mounts": [{"source": "/workspace", "target": "/workspace", "mode": "rw"}],
             "environment": {
                 "variables": {"TOKEN": "secret"},
                 "required_host_variables": ["HOME"],
@@ -45,9 +48,7 @@ def test_container_adapter_options_plain_data_contract_is_stable() -> None:
 
 
 def test_container_resource_intent_reuses_resource_and_capability_records() -> None:
-    resources = ResourceRequest(
-        entries={"cpu": ResourceEntry(kind="cpu", amount=2)}
-    )
+    resources = ResourceRequest(entries={"cpu": ResourceEntry(kind="cpu", amount=2)})
     intent = ContainerResourceIntent.from_runtime(
         resources,
         {
@@ -69,7 +70,55 @@ def test_container_resource_intent_reuses_resource_and_capability_records() -> N
     assert cpu_capability["enforcement"] == "best_effort"
 
 
-def test_container_records_do_not_import_docker_or_runtime_presentation_layers() -> None:
+def test_container_build_adapter_options_plain_data_contract_is_stable() -> None:
+    options = parse_container_build_options(
+        {
+            "targets": {
+                "analysis-env": {
+                    "runtime": "apptainer",
+                    "source": {
+                        "kind": "definition_file",
+                        "path": "containers/analysis.def",
+                    },
+                    "output": {
+                        "kind": "apptainer_sif",
+                        "path": ".loom/containers/analysis-env.sif",
+                    },
+                    "policy": {"mode": "if_stale"},
+                    "build_args": {"TOKEN": "secret"},
+                }
+            }
+        }
+    )
+
+    document = options.to_dict()
+
+    assert stable_json_dumps(document)
+    assert ContainerBuildOptions.from_dict(document).to_dict() == document
+    target = cast(dict[str, ContainerBuildTarget], options.targets)["analysis-env"]
+    assert build_container_build_key(target).to_dict()["target_name"] == "analysis-env"
+    assert "secret" not in repr(target.to_redacted_metadata())
+
+
+def test_build_output_refs_distinguish_docker_images_from_apptainer_sifs() -> None:
+    docker = ContainerBuildOutputRef(
+        kind="docker_image",
+        reference="example/runtime:latest",
+    )
+    apptainer = ContainerBuildOutputRef(
+        kind="apptainer_sif",
+        path=".loom/containers/runtime.sif",
+    )
+
+    assert docker.to_dict()["reference"] == "example/runtime:latest"
+    assert "path" not in docker.to_dict()
+    assert apptainer.to_dict()["path"] == ".loom/containers/runtime.sif"
+    assert "reference" not in apptainer.to_dict()
+
+
+def test_container_records_do_not_import_docker_or_runtime_presentation_layers() -> (
+    None
+):
     script = dedent(
         """
         import sys
@@ -77,6 +126,7 @@ def test_container_records_do_not_import_docker_or_runtime_presentation_layers()
         import loom.pipeline.executors.containers as containers
 
         assert containers.ContainerOptions
+        assert containers.ContainerBuildOptions
         for forbidden in (
             "loom.cli",
             "loom.config",

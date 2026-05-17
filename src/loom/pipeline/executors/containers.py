@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import cast
 
+from loom.fingerprints import hash_mapping
 from loom.pipeline.errors import RuntimeResourceError
 from loom.pipeline.resources import ResourceEntry, ResourceRequest
 from loom.pipeline.runtime.capabilities import (
@@ -21,6 +22,7 @@ from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 from loom.serialization.errors import PlainDataError
 
 
+CONTAINER_BUILD_SCHEMA_VERSION = 1
 REDACTED_VALUE = "[redacted]"
 _IMAGE_FIELDS = frozenset({"reference"})
 _MOUNT_FIELDS = frozenset({"source", "target", "mode"})
@@ -36,11 +38,60 @@ _PATH_PARITY_FIELDS = frozenset(
         "reason",
     }
 )
-_OPTIONS_FIELDS = frozenset(
-    {"image", "workdir", "mounts", "environment", "resources"}
-)
+_OPTIONS_FIELDS = frozenset({"image", "workdir", "mounts", "environment", "resources"})
 _DOCKER_RESERVED_GENERIC_FIELDS = frozenset(
     {"image", "workdir", "mounts", "environment", "resources"}
+)
+_BUILD_SOURCE_FIELDS = frozenset(
+    {"schema_version", "kind", "path", "uri", "context_path", "recipe_path", "metadata"}
+)
+_BUILD_OUTPUT_FIELDS = frozenset(
+    {"schema_version", "kind", "reference", "path", "metadata"}
+)
+_BUILD_POLICY_FIELDS = frozenset({"schema_version", "mode"})
+_BUILD_TARGET_FIELDS = frozenset(
+    {
+        "schema_version",
+        "name",
+        "runtime",
+        "source",
+        "output",
+        "policy",
+        "build_args",
+        "metadata",
+    }
+)
+_BUILD_OPTIONS_FIELDS = frozenset({"schema_version", "targets", "service"})
+_BUILD_KEY_FIELDS = frozenset(
+    {"schema_version", "target_name", "digest", "algorithm", "fields"}
+)
+_BUILD_COMMAND_FIELDS = frozenset(
+    {
+        "schema_version",
+        "argv",
+        "environment_keys",
+        "build_arg_names",
+        "metadata",
+    }
+)
+_BUILD_EVIDENCE_FIELDS = frozenset(
+    {"schema_version", "builder", "log_paths", "metadata"}
+)
+_BUILD_FAILURE_FIELDS = frozenset({"schema_version", "code", "message", "details"})
+_BUILD_REQUEST_FIELDS = frozenset(
+    {"schema_version", "target", "requested_by", "build_key"}
+)
+_BUILD_RESULT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "target_name",
+        "status",
+        "output",
+        "build_key",
+        "command",
+        "evidence",
+        "failure",
+    }
 )
 
 
@@ -53,6 +104,46 @@ class ContainerMountMode(StrEnum):
 
     READ_ONLY = "ro"
     READ_WRITE = "rw"
+
+
+class ContainerBuildRuntime(StrEnum):
+    """Container runtime family for a shared build target."""
+
+    DOCKER = "docker"
+    APPTAINER = "apptainer"
+
+
+class ContainerBuildSourceKind(StrEnum):
+    """Supported authored build source descriptions."""
+
+    DEFINITION_FILE = "definition_file"
+    DOCKER_CONTEXT = "docker_context"
+    LOCAL_PATH = "local_path"
+    URI = "uri"
+
+
+class ContainerBuildOutputKind(StrEnum):
+    """Portable output reference kinds produced by builders."""
+
+    DOCKER_IMAGE = "docker_image"
+    APPTAINER_SIF = "apptainer_sif"
+
+
+class ContainerBuildPolicyMode(StrEnum):
+    """Foreground build/reuse policy names."""
+
+    IF_STALE = "if_stale"
+    ALWAYS = "always"
+    NEVER = "never"
+
+
+class ContainerBuildStatus(StrEnum):
+    """Build result status values shared by local/fake builders."""
+
+    BUILT = "built"
+    REUSED = "reused"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +168,9 @@ class ContainerImageReference:
         _reject_unknown(mapping, _IMAGE_FIELDS, path="ContainerImageReference")
         _require_fields(mapping, {"reference"}, path="ContainerImageReference")
         return cls(
-            reference=_string(mapping["reference"], path="ContainerImageReference.reference")
+            reference=_string(
+                mapping["reference"], path="ContainerImageReference.reference"
+            )
         )
 
 
@@ -207,7 +300,9 @@ class ContainerResourceIntent:
     )
 
     def __post_init__(self) -> None:
-        entries = _resource_entries(self.entries, path="ContainerResourceIntent.entries")
+        entries = _resource_entries(
+            self.entries, path="ContainerResourceIntent.entries"
+        )
         capabilities = _resource_capabilities(
             self.capabilities,
             path="ContainerResourceIntent.capabilities",
@@ -253,7 +348,9 @@ class ContainerResourceIntent:
         if data is None:
             return None
         mapping = _mapping(data, path="ContainerResourceIntent")
-        _reject_unknown(mapping, _RESOURCE_INTENT_FIELDS, path="ContainerResourceIntent")
+        _reject_unknown(
+            mapping, _RESOURCE_INTENT_FIELDS, path="ContainerResourceIntent"
+        )
         return cls(
             entries=cast(
                 Mapping[str, ResourceEntry | Mapping[str, PlainData]],
@@ -405,7 +502,9 @@ class ContainerOptions:
 
     def __post_init__(self) -> None:
         image = _coerce_image_reference(self.image)
-        workdir = _optional_container_path(self.workdir, path="ContainerOptions.workdir")
+        workdir = _optional_container_path(
+            self.workdir, path="ContainerOptions.workdir"
+        )
         mounts = tuple(_container_mounts(self.mounts, path="ContainerOptions.mounts"))
         targets = [mount.target for mount in mounts]
         duplicates = sorted({target for target in targets if targets.count(target) > 1})
@@ -453,11 +552,15 @@ class ContainerOptions:
         _require_fields(mapping, {"image"}, path="ContainerOptions")
         return cls(
             image=ContainerImageReference.from_dict(mapping["image"]),
-            workdir=_optional_string(mapping.get("workdir"), path="ContainerOptions.workdir"),
+            workdir=_optional_string(
+                mapping.get("workdir"), path="ContainerOptions.workdir"
+            ),
             mounts=tuple(
                 cast(
                     Sequence[ContainerMount | Mapping[str, object]],
-                    _sequence(mapping.get("mounts", ()), path="ContainerOptions.mounts"),
+                    _sequence(
+                        mapping.get("mounts", ()), path="ContainerOptions.mounts"
+                    ),
                 )
             ),
             environment=cast(
@@ -478,7 +581,9 @@ class ContainerOptions:
                 for mount in cast(tuple[ContainerMount, ...], self.mounts)
             ],
             "environment": environment.to_redacted_metadata(),
-            "resources": None if resources is None else resources.to_redacted_metadata(),
+            "resources": None
+            if resources is None
+            else resources.to_redacted_metadata(),
         }
 
     def path_parity_summaries(self) -> tuple[ContainerPathParitySummary, ...]:
@@ -504,10 +609,1057 @@ class ContainerOptions:
         return tuple(summaries)
 
 
+@dataclass(frozen=True, slots=True)
+class ContainerBuildSource:
+    """Authored container build source without fetching or inspection."""
+
+    kind: ContainerBuildSourceKind | str
+    path: str | None = None
+    uri: str | None = None
+    context_path: str | None = None
+    recipe_path: str | None = None
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        version = _schema_version(
+            self.schema_version,
+            path="ContainerBuildSource.schema_version",
+        )
+        kind = _build_source_kind(self.kind, path="ContainerBuildSource.kind")
+        path = _optional_portable_path(self.path, path="ContainerBuildSource.path")
+        uri = _optional_uri(self.uri, path="ContainerBuildSource.uri")
+        context_path = _optional_portable_path(
+            self.context_path,
+            path="ContainerBuildSource.context_path",
+        )
+        recipe_path = _optional_portable_path(
+            self.recipe_path,
+            path="ContainerBuildSource.recipe_path",
+        )
+        _validate_build_source_shape(
+            kind=kind,
+            path=path,
+            uri=uri,
+            context_path=context_path,
+            recipe_path=recipe_path,
+        )
+        object.__setattr__(self, "schema_version", version)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "path", path)
+        object.__setattr__(self, "uri", uri)
+        object.__setattr__(self, "context_path", context_path)
+        object.__setattr__(self, "recipe_path", recipe_path)
+        object.__setattr__(
+            self,
+            "metadata",
+            _frozen_plain_mapping(
+                self.metadata,
+                path="ContainerBuildSource.metadata",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        data: dict[str, PlainData] = {
+            "schema_version": self.schema_version,
+            "kind": cast(ContainerBuildSourceKind, self.kind).value,
+            "metadata": _thaw_plain_mapping(
+                self.metadata,
+                path="ContainerBuildSource.metadata",
+            ),
+        }
+        if self.path is not None:
+            data["path"] = self.path
+        if self.uri is not None:
+            data["uri"] = self.uri
+        if self.context_path is not None:
+            data["context_path"] = self.context_path
+        if self.recipe_path is not None:
+            data["recipe_path"] = self.recipe_path
+        return data
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ContainerBuildSource":
+        mapping = _mapping(data, path="ContainerBuildSource")
+        _reject_unknown(mapping, _BUILD_SOURCE_FIELDS, path="ContainerBuildSource")
+        _require_fields(mapping, {"kind"}, path="ContainerBuildSource")
+        kind = _build_source_kind(
+            _string(mapping["kind"], path="ContainerBuildSource.kind"),
+            path="ContainerBuildSource.kind",
+        )
+        _reject_build_source_fields(kind=kind, mapping=mapping)
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildSource.schema_version",
+            ),
+            kind=kind,
+            path=_optional_string(
+                mapping.get("path"), path="ContainerBuildSource.path"
+            ),
+            uri=_optional_string(mapping.get("uri"), path="ContainerBuildSource.uri"),
+            context_path=_optional_string(
+                mapping.get("context_path"),
+                path="ContainerBuildSource.context_path",
+            ),
+            recipe_path=_optional_string(
+                mapping.get("recipe_path"),
+                path="ContainerBuildSource.recipe_path",
+            ),
+            metadata=_plain_mapping(
+                mapping.get("metadata", {}),
+                path="ContainerBuildSource.metadata",
+            ),
+        )
+
+    def to_redacted_metadata(self) -> dict[str, PlainData]:
+        data = self.to_dict()
+        metadata = cast(dict[str, PlainData], data.pop("metadata"))
+        data["metadata_keys"] = _plain_string_list(sorted(metadata))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildOutputRef:
+    """Reusable output reference produced by a container build target."""
+
+    kind: ContainerBuildOutputKind | str
+    reference: str | None = None
+    path: str | None = None
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        version = _schema_version(
+            self.schema_version,
+            path="ContainerBuildOutputRef.schema_version",
+        )
+        kind = _build_output_kind(self.kind, path="ContainerBuildOutputRef.kind")
+        reference = _optional_non_empty_string(
+            self.reference,
+            path="ContainerBuildOutputRef.reference",
+        )
+        path = _optional_portable_path(self.path, path="ContainerBuildOutputRef.path")
+        _validate_build_output_shape(kind=kind, reference=reference, path=path)
+        object.__setattr__(self, "schema_version", version)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "reference", reference)
+        object.__setattr__(self, "path", path)
+        object.__setattr__(
+            self,
+            "metadata",
+            _frozen_plain_mapping(
+                self.metadata,
+                path="ContainerBuildOutputRef.metadata",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        data: dict[str, PlainData] = {
+            "schema_version": self.schema_version,
+            "kind": cast(ContainerBuildOutputKind, self.kind).value,
+            "metadata": _thaw_plain_mapping(
+                self.metadata,
+                path="ContainerBuildOutputRef.metadata",
+            ),
+        }
+        if self.reference is not None:
+            data["reference"] = self.reference
+        if self.path is not None:
+            data["path"] = self.path
+        return data
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ContainerBuildOutputRef":
+        mapping = _mapping(data, path="ContainerBuildOutputRef")
+        _reject_unknown(mapping, _BUILD_OUTPUT_FIELDS, path="ContainerBuildOutputRef")
+        _require_fields(mapping, {"kind"}, path="ContainerBuildOutputRef")
+        kind = _build_output_kind(
+            _string(mapping["kind"], path="ContainerBuildOutputRef.kind"),
+            path="ContainerBuildOutputRef.kind",
+        )
+        _reject_build_output_fields(kind=kind, mapping=mapping)
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildOutputRef.schema_version",
+            ),
+            kind=kind,
+            reference=_optional_string(
+                mapping.get("reference"),
+                path="ContainerBuildOutputRef.reference",
+            ),
+            path=_optional_string(
+                mapping.get("path"),
+                path="ContainerBuildOutputRef.path",
+            ),
+            metadata=_plain_mapping(
+                mapping.get("metadata", {}),
+                path="ContainerBuildOutputRef.metadata",
+            ),
+        )
+
+    def to_redacted_metadata(self) -> dict[str, PlainData]:
+        data = self.to_dict()
+        metadata = cast(dict[str, PlainData], data.pop("metadata"))
+        data["metadata_keys"] = _plain_string_list(sorted(metadata))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildPolicy:
+    """Build policy for local foreground builders."""
+
+    mode: ContainerBuildPolicyMode | str = ContainerBuildPolicyMode.IF_STALE
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildPolicy.schema_version",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "mode",
+            _build_policy_mode(self.mode, path="ContainerBuildPolicy.mode"),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "mode": cast(ContainerBuildPolicyMode, self.mode).value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object | None) -> "ContainerBuildPolicy":
+        if data is None:
+            return cls()
+        mapping = _mapping(data, path="ContainerBuildPolicy")
+        _reject_unknown(mapping, _BUILD_POLICY_FIELDS, path="ContainerBuildPolicy")
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildPolicy.schema_version",
+            ),
+            mode=_string(
+                mapping.get("mode", ContainerBuildPolicyMode.IF_STALE.value),
+                path="ContainerBuildPolicy.mode",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildTarget:
+    """Named reusable build target for Docker or Apptainer builders."""
+
+    name: str
+    runtime: ContainerBuildRuntime | str
+    source: ContainerBuildSource | Mapping[str, object]
+    output: ContainerBuildOutputRef | Mapping[str, object]
+    policy: ContainerBuildPolicy | Mapping[str, object] | None = None
+    build_args: Mapping[str, PlainData] = field(default_factory=dict)
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        version = _schema_version(
+            self.schema_version,
+            path="ContainerBuildTarget.schema_version",
+        )
+        name = _build_target_name(self.name, path="ContainerBuildTarget.name")
+        runtime = _build_runtime(self.runtime, path="ContainerBuildTarget.runtime")
+        source = (
+            self.source
+            if isinstance(self.source, ContainerBuildSource)
+            else ContainerBuildSource.from_dict(self.source)
+        )
+        output = (
+            self.output
+            if isinstance(self.output, ContainerBuildOutputRef)
+            else ContainerBuildOutputRef.from_dict(self.output)
+        )
+        policy = (
+            self.policy
+            if isinstance(self.policy, ContainerBuildPolicy)
+            else ContainerBuildPolicy.from_dict(self.policy)
+        )
+        _validate_runtime_output_compatibility(
+            runtime=runtime,
+            output=cast(ContainerBuildOutputRef, output),
+        )
+        object.__setattr__(self, "schema_version", version)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "runtime", runtime)
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "output", output)
+        object.__setattr__(self, "policy", policy)
+        object.__setattr__(
+            self,
+            "build_args",
+            _frozen_plain_mapping(
+                self.build_args,
+                path="ContainerBuildTarget.build_args",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "metadata",
+            _frozen_plain_mapping(
+                self.metadata,
+                path="ContainerBuildTarget.metadata",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "name": self.name,
+            "runtime": cast(ContainerBuildRuntime, self.runtime).value,
+            "source": cast(ContainerBuildSource, self.source).to_dict(),
+            "output": cast(ContainerBuildOutputRef, self.output).to_dict(),
+            "policy": cast(ContainerBuildPolicy, self.policy).to_dict(),
+            "build_args": _thaw_plain_mapping(
+                self.build_args,
+                path="ContainerBuildTarget.build_args",
+            ),
+            "metadata": _thaw_plain_mapping(
+                self.metadata,
+                path="ContainerBuildTarget.metadata",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ContainerBuildTarget":
+        mapping = _mapping(data, path="ContainerBuildTarget")
+        _reject_unknown(mapping, _BUILD_TARGET_FIELDS, path="ContainerBuildTarget")
+        _require_fields(
+            mapping,
+            {"name", "runtime", "source", "output"},
+            path="ContainerBuildTarget",
+        )
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildTarget.schema_version",
+            ),
+            name=_string(mapping["name"], path="ContainerBuildTarget.name"),
+            runtime=_string(mapping["runtime"], path="ContainerBuildTarget.runtime"),
+            source=ContainerBuildSource.from_dict(mapping["source"]),
+            output=ContainerBuildOutputRef.from_dict(mapping["output"]),
+            policy=cast(Mapping[str, object] | None, mapping.get("policy")),
+            build_args=_plain_mapping(
+                mapping.get("build_args", {}),
+                path="ContainerBuildTarget.build_args",
+            ),
+            metadata=_plain_mapping(
+                mapping.get("metadata", {}),
+                path="ContainerBuildTarget.metadata",
+            ),
+        )
+
+    def build_key(self) -> "ContainerBuildKeySummary":
+        return build_container_build_key(self)
+
+    def to_redacted_metadata(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "name": self.name,
+            "runtime": cast(ContainerBuildRuntime, self.runtime).value,
+            "source": cast(ContainerBuildSource, self.source).to_redacted_metadata(),
+            "output": cast(ContainerBuildOutputRef, self.output).to_redacted_metadata(),
+            "policy": cast(ContainerBuildPolicy, self.policy).to_dict(),
+            "build_arg_names": _plain_string_list(list(self.build_args)),
+            "metadata_keys": _plain_string_list(list(self.metadata)),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildOptions:
+    """Parsed ``adapter_options.container_build`` namespace payload."""
+
+    targets: Mapping[str, ContainerBuildTarget | Mapping[str, object]] = field(
+        default_factory=dict
+    )
+    service: Mapping[str, PlainData] = field(default_factory=dict)
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        version = _schema_version(
+            self.schema_version,
+            path="ContainerBuildOptions.schema_version",
+        )
+        targets = _build_targets(self.targets, path="ContainerBuildOptions.targets")
+        object.__setattr__(self, "schema_version", version)
+        object.__setattr__(
+            self,
+            "targets",
+            MappingProxyType(dict(sorted(targets.items()))),
+        )
+        object.__setattr__(
+            self,
+            "service",
+            _frozen_plain_mapping(
+                self.service,
+                path="ContainerBuildOptions.service",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "targets": {
+                name: target.to_dict()
+                for name, target in cast(
+                    Mapping[str, ContainerBuildTarget],
+                    self.targets,
+                ).items()
+            },
+            "service": _thaw_plain_mapping(
+                self.service,
+                path="ContainerBuildOptions.service",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object | None) -> "ContainerBuildOptions":
+        if data is None:
+            return cls()
+        mapping = _mapping(data, path="ContainerBuildOptions")
+        _reject_unknown(mapping, _BUILD_OPTIONS_FIELDS, path="ContainerBuildOptions")
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildOptions.schema_version",
+            ),
+            targets=cast(
+                Mapping[str, ContainerBuildTarget | Mapping[str, object]],
+                _mapping(
+                    mapping.get("targets", {}),
+                    path="ContainerBuildOptions.targets",
+                ),
+            ),
+            service=_plain_mapping(
+                mapping.get("service", {}),
+                path="ContainerBuildOptions.service",
+            ),
+        )
+
+    def to_redacted_metadata(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "targets": {
+                name: target.to_redacted_metadata()
+                for name, target in cast(
+                    Mapping[str, ContainerBuildTarget],
+                    self.targets,
+                ).items()
+            },
+            "service_keys": _plain_string_list(list(self.service)),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildKeySummary:
+    """Deterministic local build-key summary without source fetching."""
+
+    target_name: str
+    digest: str
+    fields: Mapping[str, PlainData]
+    algorithm: str = "sha256"
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildKeySummary.schema_version",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "target_name",
+            _build_target_name(
+                self.target_name,
+                path="ContainerBuildKeySummary.target_name",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "digest",
+            _non_empty_string(self.digest, path="ContainerBuildKeySummary.digest"),
+        )
+        object.__setattr__(
+            self,
+            "algorithm",
+            _non_empty_string(
+                self.algorithm,
+                path="ContainerBuildKeySummary.algorithm",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "fields",
+            _frozen_plain_mapping(
+                self.fields,
+                path="ContainerBuildKeySummary.fields",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "target_name": self.target_name,
+            "digest": self.digest,
+            "algorithm": self.algorithm,
+            "fields": _thaw_plain_mapping(
+                self.fields,
+                path="ContainerBuildKeySummary.fields",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ContainerBuildKeySummary":
+        mapping = _mapping(data, path="ContainerBuildKeySummary")
+        _reject_unknown(mapping, _BUILD_KEY_FIELDS, path="ContainerBuildKeySummary")
+        _require_fields(
+            mapping,
+            {"target_name", "digest", "fields"},
+            path="ContainerBuildKeySummary",
+        )
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildKeySummary.schema_version",
+            ),
+            target_name=_string(
+                mapping["target_name"],
+                path="ContainerBuildKeySummary.target_name",
+            ),
+            digest=_string(mapping["digest"], path="ContainerBuildKeySummary.digest"),
+            algorithm=_string(
+                mapping.get("algorithm", "sha256"),
+                path="ContainerBuildKeySummary.algorithm",
+            ),
+            fields=_plain_mapping(
+                mapping["fields"],
+                path="ContainerBuildKeySummary.fields",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildCommandProjection:
+    """Redacted command projection recorded as build evidence."""
+
+    argv: Sequence[str]
+    environment_keys: Sequence[str] = ()
+    build_arg_names: Sequence[str] = ()
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildCommandProjection.schema_version",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "argv",
+            _str_sequence_tuple(
+                self.argv,
+                path="ContainerBuildCommandProjection.argv",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "environment_keys",
+            _str_tuple(
+                self.environment_keys,
+                path="ContainerBuildCommandProjection.environment_keys",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "build_arg_names",
+            _str_tuple(
+                self.build_arg_names,
+                path="ContainerBuildCommandProjection.build_arg_names",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "metadata",
+            _frozen_plain_mapping(
+                self.metadata,
+                path="ContainerBuildCommandProjection.metadata",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "argv": list(self.argv),
+            "environment_keys": list(self.environment_keys),
+            "build_arg_names": list(self.build_arg_names),
+            "metadata": _thaw_plain_mapping(
+                self.metadata,
+                path="ContainerBuildCommandProjection.metadata",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object | None) -> "ContainerBuildCommandProjection | None":
+        if data is None:
+            return None
+        mapping = _mapping(data, path="ContainerBuildCommandProjection")
+        _reject_unknown(
+            mapping,
+            _BUILD_COMMAND_FIELDS,
+            path="ContainerBuildCommandProjection",
+        )
+        _require_fields(mapping, {"argv"}, path="ContainerBuildCommandProjection")
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildCommandProjection.schema_version",
+            ),
+            argv=_str_sequence_tuple(
+                mapping["argv"],
+                path="ContainerBuildCommandProjection.argv",
+            ),
+            environment_keys=_str_tuple(
+                mapping.get("environment_keys", ()),
+                path="ContainerBuildCommandProjection.environment_keys",
+            ),
+            build_arg_names=_str_tuple(
+                mapping.get("build_arg_names", ()),
+                path="ContainerBuildCommandProjection.build_arg_names",
+            ),
+            metadata=_plain_mapping(
+                mapping.get("metadata", {}),
+                path="ContainerBuildCommandProjection.metadata",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildEvidence:
+    """Run-local build evidence summary."""
+
+    builder: str
+    log_paths: Sequence[str] = ()
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildEvidence.schema_version",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "builder",
+            _non_empty_string(self.builder, path="ContainerBuildEvidence.builder"),
+        )
+        object.__setattr__(
+            self,
+            "log_paths",
+            tuple(
+                _portable_path(path, path=f"ContainerBuildEvidence.log_paths[{index}]")
+                for index, path in enumerate(
+                    _sequence(
+                        self.log_paths,
+                        path="ContainerBuildEvidence.log_paths",
+                    )
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "metadata",
+            _frozen_plain_mapping(
+                self.metadata,
+                path="ContainerBuildEvidence.metadata",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "builder": self.builder,
+            "log_paths": list(self.log_paths),
+            "metadata": _thaw_plain_mapping(
+                self.metadata,
+                path="ContainerBuildEvidence.metadata",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object | None) -> "ContainerBuildEvidence | None":
+        if data is None:
+            return None
+        mapping = _mapping(data, path="ContainerBuildEvidence")
+        _reject_unknown(mapping, _BUILD_EVIDENCE_FIELDS, path="ContainerBuildEvidence")
+        _require_fields(mapping, {"builder"}, path="ContainerBuildEvidence")
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildEvidence.schema_version",
+            ),
+            builder=_string(
+                mapping["builder"],
+                path="ContainerBuildEvidence.builder",
+            ),
+            log_paths=_str_sequence_tuple(
+                mapping.get("log_paths", ()),
+                path="ContainerBuildEvidence.log_paths",
+            ),
+            metadata=_plain_mapping(
+                mapping.get("metadata", {}),
+                path="ContainerBuildEvidence.metadata",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildFailure:
+    """Redacted build failure summary."""
+
+    code: str
+    message: str
+    details: Mapping[str, PlainData] = field(default_factory=dict)
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildFailure.schema_version",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "code",
+            _non_empty_string(self.code, path="ContainerBuildFailure.code"),
+        )
+        object.__setattr__(
+            self,
+            "message",
+            _non_empty_string(self.message, path="ContainerBuildFailure.message"),
+        )
+        object.__setattr__(
+            self,
+            "details",
+            _frozen_plain_mapping(
+                self.details,
+                path="ContainerBuildFailure.details",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "code": self.code,
+            "message": self.message,
+            "details": _thaw_plain_mapping(
+                self.details,
+                path="ContainerBuildFailure.details",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object | None) -> "ContainerBuildFailure | None":
+        if data is None:
+            return None
+        mapping = _mapping(data, path="ContainerBuildFailure")
+        _reject_unknown(mapping, _BUILD_FAILURE_FIELDS, path="ContainerBuildFailure")
+        _require_fields(mapping, {"code", "message"}, path="ContainerBuildFailure")
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildFailure.schema_version",
+            ),
+            code=_string(mapping["code"], path="ContainerBuildFailure.code"),
+            message=_string(
+                mapping["message"],
+                path="ContainerBuildFailure.message",
+            ),
+            details=_plain_mapping(
+                mapping.get("details", {}),
+                path="ContainerBuildFailure.details",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildRequest:
+    """One local build request for a named target."""
+
+    target: ContainerBuildTarget | Mapping[str, object]
+    requested_by: str
+    build_key: ContainerBuildKeySummary | Mapping[str, object] | None = None
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        target = (
+            self.target
+            if isinstance(self.target, ContainerBuildTarget)
+            else ContainerBuildTarget.from_dict(self.target)
+        )
+        build_key = (
+            self.build_key
+            if isinstance(self.build_key, ContainerBuildKeySummary)
+            else (
+                None
+                if self.build_key is None
+                else ContainerBuildKeySummary.from_dict(self.build_key)
+            )
+        )
+        if build_key is None:
+            build_key = cast(ContainerBuildTarget, target).build_key()
+        if cast(ContainerBuildKeySummary, build_key).target_name != target.name:
+            raise ContainerOptionError(
+                "ContainerBuildRequest.build_key target_name must match target.name"
+            )
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildRequest.schema_version",
+            ),
+        )
+        object.__setattr__(self, "target", target)
+        object.__setattr__(
+            self,
+            "requested_by",
+            _non_empty_string(
+                self.requested_by,
+                path="ContainerBuildRequest.requested_by",
+            ),
+        )
+        object.__setattr__(self, "build_key", build_key)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "target": cast(ContainerBuildTarget, self.target).to_dict(),
+            "requested_by": self.requested_by,
+            "build_key": cast(ContainerBuildKeySummary, self.build_key).to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ContainerBuildRequest":
+        mapping = _mapping(data, path="ContainerBuildRequest")
+        _reject_unknown(mapping, _BUILD_REQUEST_FIELDS, path="ContainerBuildRequest")
+        _require_fields(
+            mapping,
+            {"target", "requested_by"},
+            path="ContainerBuildRequest",
+        )
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildRequest.schema_version",
+            ),
+            target=ContainerBuildTarget.from_dict(mapping["target"]),
+            requested_by=_string(
+                mapping["requested_by"],
+                path="ContainerBuildRequest.requested_by",
+            ),
+            build_key=cast(Mapping[str, object] | None, mapping.get("build_key")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerBuildResult:
+    """Build, reuse, skip, or failure result for one target."""
+
+    target_name: str
+    status: ContainerBuildStatus | str
+    output: ContainerBuildOutputRef | Mapping[str, object] | None = None
+    build_key: ContainerBuildKeySummary | Mapping[str, object] | None = None
+    command: ContainerBuildCommandProjection | Mapping[str, object] | None = None
+    evidence: ContainerBuildEvidence | Mapping[str, object] | None = None
+    failure: ContainerBuildFailure | Mapping[str, object] | None = None
+    schema_version: int = CONTAINER_BUILD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        target_name = _build_target_name(
+            self.target_name,
+            path="ContainerBuildResult.target_name",
+        )
+        status = _build_status(self.status, path="ContainerBuildResult.status")
+        output = (
+            self.output
+            if isinstance(self.output, ContainerBuildOutputRef) or self.output is None
+            else ContainerBuildOutputRef.from_dict(self.output)
+        )
+        build_key = (
+            self.build_key
+            if isinstance(self.build_key, ContainerBuildKeySummary)
+            or self.build_key is None
+            else ContainerBuildKeySummary.from_dict(self.build_key)
+        )
+        command = (
+            self.command
+            if isinstance(self.command, ContainerBuildCommandProjection)
+            or self.command is None
+            else ContainerBuildCommandProjection.from_dict(self.command)
+        )
+        evidence = (
+            self.evidence
+            if isinstance(self.evidence, ContainerBuildEvidence)
+            or self.evidence is None
+            else ContainerBuildEvidence.from_dict(self.evidence)
+        )
+        failure = (
+            self.failure
+            if isinstance(self.failure, ContainerBuildFailure) or self.failure is None
+            else ContainerBuildFailure.from_dict(self.failure)
+        )
+        if status is ContainerBuildStatus.FAILED and failure is None:
+            raise ContainerOptionError(
+                "ContainerBuildResult.failure is required when status is failed"
+            )
+        if status is not ContainerBuildStatus.FAILED and failure is not None:
+            raise ContainerOptionError(
+                "ContainerBuildResult.failure is only allowed when status is failed"
+            )
+        if (
+            status in {ContainerBuildStatus.BUILT, ContainerBuildStatus.REUSED}
+            and output is None
+        ):
+            raise ContainerOptionError(
+                "ContainerBuildResult.output is required when status is built or reused"
+            )
+        if build_key is not None and build_key.target_name != target_name:
+            raise ContainerOptionError(
+                "ContainerBuildResult.build_key target_name must match target_name"
+            )
+        object.__setattr__(
+            self,
+            "schema_version",
+            _schema_version(
+                self.schema_version,
+                path="ContainerBuildResult.schema_version",
+            ),
+        )
+        object.__setattr__(self, "target_name", target_name)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "output", output)
+        object.__setattr__(self, "build_key", build_key)
+        object.__setattr__(self, "command", command)
+        object.__setattr__(self, "evidence", evidence)
+        object.__setattr__(self, "failure", failure)
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "schema_version": self.schema_version,
+            "target_name": self.target_name,
+            "status": cast(ContainerBuildStatus, self.status).value,
+            "output": (
+                None
+                if self.output is None
+                else cast(ContainerBuildOutputRef, self.output).to_dict()
+            ),
+            "build_key": (
+                None
+                if self.build_key is None
+                else cast(ContainerBuildKeySummary, self.build_key).to_dict()
+            ),
+            "command": (
+                None
+                if self.command is None
+                else cast(ContainerBuildCommandProjection, self.command).to_dict()
+            ),
+            "evidence": (
+                None
+                if self.evidence is None
+                else cast(ContainerBuildEvidence, self.evidence).to_dict()
+            ),
+            "failure": (
+                None
+                if self.failure is None
+                else cast(ContainerBuildFailure, self.failure).to_dict()
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ContainerBuildResult":
+        mapping = _mapping(data, path="ContainerBuildResult")
+        _reject_unknown(mapping, _BUILD_RESULT_FIELDS, path="ContainerBuildResult")
+        _require_fields(
+            mapping,
+            {"target_name", "status"},
+            path="ContainerBuildResult",
+        )
+        return cls(
+            schema_version=_schema_version(
+                mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
+                path="ContainerBuildResult.schema_version",
+            ),
+            target_name=_string(
+                mapping["target_name"],
+                path="ContainerBuildResult.target_name",
+            ),
+            status=_string(mapping["status"], path="ContainerBuildResult.status"),
+            output=cast(Mapping[str, object] | None, mapping.get("output")),
+            build_key=cast(Mapping[str, object] | None, mapping.get("build_key")),
+            command=cast(Mapping[str, object] | None, mapping.get("command")),
+            evidence=cast(Mapping[str, object] | None, mapping.get("evidence")),
+            failure=cast(Mapping[str, object] | None, mapping.get("failure")),
+        )
+
+
 def parse_container_options(data: object) -> ContainerOptions:
     """Parse ``adapter_options.container`` into shared container records."""
 
     return ContainerOptions.from_dict(data)
+
+
+def parse_container_build_options(data: object | None) -> ContainerBuildOptions:
+    """Parse ``adapter_options.container_build`` into shared build records."""
+
+    return ContainerBuildOptions.from_dict(data)
+
+
+def build_container_build_key(
+    target: ContainerBuildTarget | Mapping[str, object],
+) -> ContainerBuildKeySummary:
+    """Build a deterministic local key summary without probing external sources."""
+
+    parsed = (
+        target
+        if isinstance(target, ContainerBuildTarget)
+        else ContainerBuildTarget.from_dict(target)
+    )
+    fields = {
+        "schema_version": CONTAINER_BUILD_SCHEMA_VERSION,
+        "target": parsed.to_dict(),
+    }
+    digest = hash_mapping(fields)
+    return ContainerBuildKeySummary(
+        target_name=parsed.name,
+        digest=digest,
+        fields=fields,
+    )
 
 
 def validate_reserved_docker_options(data: object | None) -> Mapping[str, PlainData]:
@@ -578,9 +1730,7 @@ def _container_mounts(
     mounts: list[ContainerMount] = []
     for index, item in enumerate(items):
         mounts.append(
-            item
-            if isinstance(item, ContainerMount)
-            else ContainerMount.from_dict(item)
+            item if isinstance(item, ContainerMount) else ContainerMount.from_dict(item)
         )
     return tuple(mounts)
 
@@ -743,6 +1893,18 @@ def _str_tuple(value: object, *, path: str) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
+def _str_sequence_tuple(value: object, *, path: str) -> tuple[str, ...]:
+    items = _sequence(value, path=path)
+    return tuple(
+        _non_empty_string(item, path=f"{path}[{index}]")
+        for index, item in enumerate(items)
+    )
+
+
+def _plain_string_list(values: Sequence[str]) -> list[PlainData]:
+    return [value for value in values]
+
+
 def _string(value: object, *, path: str) -> str:
     if not isinstance(value, str):
         raise ContainerOptionError(f"{path} must be a string")
@@ -765,6 +1927,322 @@ def _optional_string(value: object | None, *, path: str) -> str | None:
 def _bool(value: object, *, path: str) -> bool:
     if not isinstance(value, bool):
         raise ContainerOptionError(f"{path} must be a bool")
+    return value
+
+
+def _schema_version(value: object, *, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ContainerOptionError(f"{path} must be an integer")
+    if value != CONTAINER_BUILD_SCHEMA_VERSION:
+        raise ContainerOptionError(f"{path} must be {CONTAINER_BUILD_SCHEMA_VERSION}")
+    return value
+
+
+def _build_runtime(
+    value: ContainerBuildRuntime | str, *, path: str
+) -> ContainerBuildRuntime:
+    if isinstance(value, ContainerBuildRuntime):
+        return value
+    if not isinstance(value, str):
+        raise ContainerOptionError(f"{path} must be a string")
+    try:
+        return ContainerBuildRuntime(value)
+    except ValueError as exc:
+        valid = ", ".join(runtime.value for runtime in ContainerBuildRuntime)
+        raise ContainerOptionError(f"{path} must be one of: {valid}") from exc
+
+
+def _build_source_kind(
+    value: ContainerBuildSourceKind | str,
+    *,
+    path: str,
+) -> ContainerBuildSourceKind:
+    if isinstance(value, ContainerBuildSourceKind):
+        return value
+    if not isinstance(value, str):
+        raise ContainerOptionError(f"{path} must be a string")
+    try:
+        return ContainerBuildSourceKind(value)
+    except ValueError as exc:
+        valid = ", ".join(kind.value for kind in ContainerBuildSourceKind)
+        raise ContainerOptionError(f"{path} must be one of: {valid}") from exc
+
+
+def _build_output_kind(
+    value: ContainerBuildOutputKind | str,
+    *,
+    path: str,
+) -> ContainerBuildOutputKind:
+    if isinstance(value, ContainerBuildOutputKind):
+        return value
+    if not isinstance(value, str):
+        raise ContainerOptionError(f"{path} must be a string")
+    try:
+        return ContainerBuildOutputKind(value)
+    except ValueError as exc:
+        valid = ", ".join(kind.value for kind in ContainerBuildOutputKind)
+        raise ContainerOptionError(f"{path} must be one of: {valid}") from exc
+
+
+def _build_policy_mode(
+    value: ContainerBuildPolicyMode | str,
+    *,
+    path: str,
+) -> ContainerBuildPolicyMode:
+    if isinstance(value, ContainerBuildPolicyMode):
+        return value
+    if not isinstance(value, str):
+        raise ContainerOptionError(f"{path} must be a string")
+    try:
+        return ContainerBuildPolicyMode(value)
+    except ValueError as exc:
+        valid = ", ".join(mode.value for mode in ContainerBuildPolicyMode)
+        raise ContainerOptionError(f"{path} must be one of: {valid}") from exc
+
+
+def _build_status(
+    value: ContainerBuildStatus | str, *, path: str
+) -> ContainerBuildStatus:
+    if isinstance(value, ContainerBuildStatus):
+        return value
+    if not isinstance(value, str):
+        raise ContainerOptionError(f"{path} must be a string")
+    try:
+        return ContainerBuildStatus(value)
+    except ValueError as exc:
+        valid = ", ".join(status.value for status in ContainerBuildStatus)
+        raise ContainerOptionError(f"{path} must be one of: {valid}") from exc
+
+
+def _validate_build_source_shape(
+    *,
+    kind: ContainerBuildSourceKind,
+    path: str | None,
+    uri: str | None,
+    context_path: str | None,
+    recipe_path: str | None,
+) -> None:
+    if kind is ContainerBuildSourceKind.DEFINITION_FILE:
+        if path is None:
+            raise ContainerOptionError(
+                "ContainerBuildSource.path is required for definition_file sources"
+            )
+        if uri is not None or context_path is not None or recipe_path is not None:
+            raise ContainerOptionError(
+                "definition_file sources only allow path and metadata"
+            )
+        return
+    if kind is ContainerBuildSourceKind.DOCKER_CONTEXT:
+        if context_path is None:
+            raise ContainerOptionError(
+                "ContainerBuildSource.context_path is required for docker_context sources"
+            )
+        if path is not None or uri is not None:
+            raise ContainerOptionError(
+                "docker_context sources only allow context_path, recipe_path, and metadata"
+            )
+        return
+    if kind is ContainerBuildSourceKind.LOCAL_PATH:
+        if path is None:
+            raise ContainerOptionError(
+                "ContainerBuildSource.path is required for local_path sources"
+            )
+        if uri is not None or context_path is not None or recipe_path is not None:
+            raise ContainerOptionError(
+                "local_path sources only allow path and metadata"
+            )
+        return
+    if uri is None:
+        raise ContainerOptionError(
+            "ContainerBuildSource.uri is required for uri sources"
+        )
+    if path is not None or context_path is not None or recipe_path is not None:
+        raise ContainerOptionError("uri sources only allow uri and metadata")
+
+
+def _reject_build_source_fields(
+    *,
+    kind: ContainerBuildSourceKind,
+    mapping: Mapping[str, object],
+) -> None:
+    allowed = {"schema_version", "kind", "metadata"}
+    if kind in {
+        ContainerBuildSourceKind.DEFINITION_FILE,
+        ContainerBuildSourceKind.LOCAL_PATH,
+    }:
+        allowed.add("path")
+    elif kind is ContainerBuildSourceKind.DOCKER_CONTEXT:
+        allowed.update({"context_path", "recipe_path"})
+    else:
+        allowed.add("uri")
+    extra = set(mapping) - allowed
+    if extra:
+        fields = ", ".join(sorted(extra))
+        raise ContainerOptionError(
+            f"ContainerBuildSource contains field(s) not allowed for {kind.value}: {fields}"
+        )
+
+
+def _validate_build_output_shape(
+    *,
+    kind: ContainerBuildOutputKind,
+    reference: str | None,
+    path: str | None,
+) -> None:
+    if kind is ContainerBuildOutputKind.DOCKER_IMAGE:
+        if reference is None:
+            raise ContainerOptionError(
+                "ContainerBuildOutputRef.reference is required for docker_image outputs"
+            )
+        if path is not None:
+            raise ContainerOptionError("docker_image outputs only allow reference")
+        return
+    if path is None:
+        raise ContainerOptionError(
+            "ContainerBuildOutputRef.path is required for apptainer_sif outputs"
+        )
+    if reference is not None:
+        raise ContainerOptionError("apptainer_sif outputs only allow path")
+
+
+def _reject_build_output_fields(
+    *,
+    kind: ContainerBuildOutputKind,
+    mapping: Mapping[str, object],
+) -> None:
+    allowed = {"schema_version", "kind", "metadata"}
+    if kind is ContainerBuildOutputKind.DOCKER_IMAGE:
+        allowed.add("reference")
+    else:
+        allowed.add("path")
+    extra = set(mapping) - allowed
+    if extra:
+        fields = ", ".join(sorted(extra))
+        raise ContainerOptionError(
+            f"ContainerBuildOutputRef contains field(s) not allowed for {kind.value}: {fields}"
+        )
+
+
+def _validate_runtime_output_compatibility(
+    *,
+    runtime: ContainerBuildRuntime,
+    output: ContainerBuildOutputRef,
+) -> None:
+    output_kind = cast(ContainerBuildOutputKind, output.kind)
+    if runtime is ContainerBuildRuntime.DOCKER:
+        expected = ContainerBuildOutputKind.DOCKER_IMAGE
+    else:
+        expected = ContainerBuildOutputKind.APPTAINER_SIF
+    if output_kind is not expected:
+        raise ContainerOptionError(
+            f"ContainerBuildTarget.output kind {output_kind.value!r} is not compatible "
+            f"with runtime {runtime.value!r}"
+        )
+
+
+def _build_targets(
+    value: Mapping[str, ContainerBuildTarget | Mapping[str, object]],
+    *,
+    path: str,
+) -> dict[str, ContainerBuildTarget]:
+    mapping = _mapping(value, path=path)
+    targets: dict[str, ContainerBuildTarget] = {}
+    for key, item in mapping.items():
+        target_name = _build_target_name(key, path=f"{path} key")
+        if isinstance(item, ContainerBuildTarget):
+            target = item
+        else:
+            target_mapping = _mapping(item, path=f"{path}[{target_name!r}]")
+            target = ContainerBuildTarget.from_dict(
+                {**target_mapping, "name": target_mapping.get("name", key)}
+            )
+        if target.name != target_name:
+            raise ContainerOptionError(
+                f"{path}[{target_name!r}].name must match its key"
+            )
+        targets[target_name] = target
+    return targets
+
+
+def _build_target_name(value: object, *, path: str) -> str:
+    text = _non_empty_string(value, path=path)
+    if text in {".", ".."}:
+        raise ContainerOptionError(f"{path} cannot be '.' or '..'")
+    if "/" in text or "\\" in text:
+        raise ContainerOptionError(f"{path} cannot contain path separators")
+    if any(ch.isspace() for ch in text):
+        raise ContainerOptionError(f"{path} cannot contain whitespace")
+    if not all(ch.isalnum() or ch in {"_", "-", "."} for ch in text):
+        raise ContainerOptionError(
+            f"{path} may only contain letters, numbers, '.', '_', or '-'"
+        )
+    return text
+
+
+def _portable_path(value: object, *, path: str) -> str:
+    text = _non_empty_string(value, path=path)
+    if "\\" in text:
+        raise ContainerOptionError(f"{path} must use POSIX '/' separators")
+    if "\x00" in text:
+        raise ContainerOptionError(f"{path} cannot contain NUL")
+    if text == ".":
+        return text
+    if _has_unsafe_parts(text):
+        raise ContainerOptionError(f"{path} cannot contain '.' or '..' path parts")
+    if text in {".", ".."}:
+        raise ContainerOptionError(f"{path} cannot be '.' or '..'")
+    return text
+
+
+def _optional_portable_path(value: object | None, *, path: str) -> str | None:
+    if value is None:
+        return None
+    return _portable_path(value, path=path)
+
+
+def _optional_uri(value: object | None, *, path: str) -> str | None:
+    if value is None:
+        return None
+    text = _non_empty_string(value, path=path)
+    if "\x00" in text:
+        raise ContainerOptionError(f"{path} cannot contain NUL")
+    if "://" not in text:
+        raise ContainerOptionError(f"{path} must include a URI scheme")
+    return text
+
+
+def _optional_non_empty_string(value: object | None, *, path: str) -> str | None:
+    if value is None:
+        return None
+    return _non_empty_string(value, path=path)
+
+
+def _frozen_plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
+    mapping = _plain_mapping(value, path=path)
+    return cast(
+        Mapping[str, PlainData],
+        freeze_plain_data(_sorted_plain_mapping(mapping), path=path),
+    )
+
+
+def _thaw_plain_mapping(
+    value: Mapping[str, PlainData], *, path: str
+) -> dict[str, PlainData]:
+    thawed = thaw_plain_data(value, path=path)
+    if not isinstance(thawed, Mapping):
+        raise ContainerOptionError(f"{path} must be a mapping")
+    return _sorted_plain_mapping(cast(Mapping[str, PlainData], thawed))
+
+
+def _sorted_plain_mapping(value: Mapping[str, PlainData]) -> dict[str, PlainData]:
+    return {key: _sort_plain_value(value[key]) for key in sorted(value)}
+
+
+def _sort_plain_value(value: PlainData) -> PlainData:
+    if isinstance(value, dict):
+        return _sorted_plain_mapping(value)
+    if isinstance(value, list):
+        return [_sort_plain_value(item) for item in value]
     return value
 
 
@@ -793,6 +2271,23 @@ def _reject_unknown(
 
 
 __all__ = [
+    "CONTAINER_BUILD_SCHEMA_VERSION",
+    "ContainerBuildCommandProjection",
+    "ContainerBuildEvidence",
+    "ContainerBuildFailure",
+    "ContainerBuildKeySummary",
+    "ContainerBuildOptions",
+    "ContainerBuildOutputKind",
+    "ContainerBuildOutputRef",
+    "ContainerBuildPolicy",
+    "ContainerBuildPolicyMode",
+    "ContainerBuildRequest",
+    "ContainerBuildResult",
+    "ContainerBuildRuntime",
+    "ContainerBuildSource",
+    "ContainerBuildSourceKind",
+    "ContainerBuildStatus",
+    "ContainerBuildTarget",
     "ContainerEnvironment",
     "ContainerImageReference",
     "ContainerMount",
@@ -802,6 +2297,8 @@ __all__ = [
     "ContainerPathParitySummary",
     "ContainerResourceIntent",
     "REDACTED_VALUE",
+    "build_container_build_key",
+    "parse_container_build_options",
     "parse_container_options",
     "summarize_path_parity",
     "validate_reserved_docker_options",

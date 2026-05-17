@@ -11,6 +11,15 @@ import pytest
 
 from loom.pipeline.executors.containers import (
     REDACTED_VALUE,
+    ContainerBuildCommandProjection,
+    ContainerBuildFailure,
+    ContainerBuildOptions,
+    ContainerBuildOutputRef,
+    ContainerBuildPolicy,
+    ContainerBuildRequest,
+    ContainerBuildResult,
+    ContainerBuildSource,
+    ContainerBuildTarget,
     ContainerEnvironment,
     ContainerImageReference,
     ContainerMount,
@@ -18,6 +27,8 @@ from loom.pipeline.executors.containers import (
     ContainerOptionError,
     ContainerOptions,
     ContainerResourceIntent,
+    build_container_build_key,
+    parse_container_build_options,
     parse_container_options,
     summarize_path_parity,
     validate_reserved_docker_options,
@@ -233,3 +244,140 @@ def test_container_records_import_without_docker_or_presentation_layers() -> Non
 def test_mount_mode_enum_values_are_stable() -> None:
     assert ContainerMountMode.READ_ONLY.value == "ro"
     assert ContainerMountMode.READ_WRITE.value == "rw"
+
+
+def test_container_build_targets_round_trip_and_redact_metadata() -> None:
+    options = parse_container_build_options(
+        {
+            "targets": {
+                "analysis-env": {
+                    "runtime": "apptainer",
+                    "source": {
+                        "kind": "definition_file",
+                        "path": "containers/analysis.def",
+                    },
+                    "output": {
+                        "kind": "apptainer_sif",
+                        "path": ".loom/containers/analysis-env.sif",
+                        "metadata": {"token": "output-secret"},
+                    },
+                    "policy": {"mode": "if_stale"},
+                    "build_args": {"TOKEN": "secret", "MODE": "test"},
+                    "metadata": {"token": "target-secret"},
+                },
+                "ci-image": {
+                    "runtime": "docker",
+                    "source": {
+                        "kind": "docker_context",
+                        "context_path": ".",
+                        "recipe_path": "Dockerfile",
+                    },
+                    "output": {
+                        "kind": "docker_image",
+                        "reference": "example/ci:latest",
+                    },
+                    "policy": {"mode": "never"},
+                },
+            },
+            "service": {"mode": "local"},
+        }
+    )
+
+    document = options.to_dict()
+    assert stable_json_dumps(document)
+    assert ContainerBuildOptions.from_dict(document).to_dict() == document
+    assert tuple(options.targets) == ("analysis-env", "ci-image")
+
+    target = cast(dict[str, ContainerBuildTarget], options.targets)["analysis-env"]
+    key = target.build_key()
+    assert key == build_container_build_key(target)
+    assert key.digest.startswith("sha256:")
+    redacted = target.to_redacted_metadata()
+    assert redacted["build_arg_names"] == ["MODE", "TOKEN"]
+    assert redacted["metadata_keys"] == ["token"]
+    redacted_output = cast(dict[str, PlainData], redacted["output"])
+    assert redacted_output["metadata_keys"] == ["token"]
+    assert "secret" not in repr(redacted)
+
+
+def test_container_build_request_and_result_records_are_plain_data() -> None:
+    target = ContainerBuildTarget(
+        name="analysis-env",
+        runtime="apptainer",
+        source=ContainerBuildSource(kind="definition_file", path="containers/a.def"),
+        output=ContainerBuildOutputRef(
+            kind="apptainer_sif",
+            path=".loom/containers/a.sif",
+        ),
+        policy=ContainerBuildPolicy(mode="always"),
+    )
+    request = ContainerBuildRequest(target=target, requested_by="controller")
+    command = ContainerBuildCommandProjection(
+        argv=["apptainer", "build", REDACTED_VALUE, "containers/a.def"],
+        environment_keys=["HOME"],
+        build_arg_names=["TOKEN"],
+    )
+    result = ContainerBuildResult(
+        target_name="analysis-env",
+        status="built",
+        output=target.output,
+        build_key=request.build_key,
+        command=command,
+    )
+
+    assert stable_json_dumps(request.to_dict())
+    assert (
+        ContainerBuildRequest.from_dict(request.to_dict()).to_dict()
+        == request.to_dict()
+    )
+    assert stable_json_dumps(result.to_dict())
+    assert (
+        ContainerBuildResult.from_dict(result.to_dict()).to_dict() == result.to_dict()
+    )
+    command_document = cast(dict[str, PlainData], result.to_dict()["command"])
+    assert command_document["argv"] == [
+        "apptainer",
+        "build",
+        REDACTED_VALUE,
+        "containers/a.def",
+    ]
+    assert "TOKEN" in repr(command.to_dict())
+    assert "secret" not in repr(result.to_dict())
+
+    failure = ContainerBuildResult(
+        target_name="analysis-env",
+        status="failed",
+        failure=ContainerBuildFailure(
+            code="container_build.failed",
+            message="build command failed",
+            details={"argv": [REDACTED_VALUE]},
+        ),
+    )
+    assert failure.to_dict()["failure"] is not None
+    with pytest.raises(ContainerOptionError, match="failure is required"):
+        ContainerBuildResult(target_name="analysis-env", status="failed")
+
+
+def test_container_build_records_reject_invalid_shapes() -> None:
+    with pytest.raises(ContainerOptionError, match="definition_file"):
+        ContainerBuildSource(kind="definition_file", uri="docker://python")
+    with pytest.raises(ContainerOptionError, match="URI scheme"):
+        ContainerBuildSource(kind="uri", uri="python:3.12")
+    with pytest.raises(ContainerOptionError, match="reference is required"):
+        ContainerBuildOutputRef(kind="docker_image", path="image.sif")
+    with pytest.raises(ContainerOptionError, match="not compatible"):
+        ContainerBuildTarget(
+            name="bad",
+            runtime="docker",
+            source={"kind": "docker_context", "context_path": "."},
+            output={"kind": "apptainer_sif", "path": "bad.sif"},
+        )
+    with pytest.raises(ContainerOptionError, match="one of"):
+        ContainerBuildPolicy(mode="missing")
+    with pytest.raises(ContainerOptionError, match="whitespace"):
+        ContainerBuildTarget(
+            name="bad target",
+            runtime="apptainer",
+            source={"kind": "definition_file", "path": "a.def"},
+            output={"kind": "apptainer_sif", "path": "a.sif"},
+        )
