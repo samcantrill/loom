@@ -94,6 +94,50 @@ def test_cli_slurm_dry_run_generates_artifacts_without_scheduler(
             assert stderr.getvalue() == ""
 
 
+def test_cli_slurm_dry_run_renders_direct_apptainer_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loom.diagnostics.preflight as preflight_module
+
+    monkeypatch.setattr(preflight_module.shutil, "which", lambda _name: None)
+    config_path = tmp_path / "container.yaml"
+    _write_container_config(config_path)
+
+    with LocalAuthorityService.start() as service:
+        payload = _run_slurm_dry_run(
+            config_path,
+            tmp_path / "runs" / "container-afterok",
+            "slurm-afterok",
+            authority_args=authority_config_to_cli_args(service.config()),
+        )
+
+    result = payload["result"]
+    manifest = _read_json(Path(result["manifest_path"]))
+    scripts = {
+        item["logical_key"]: Path(item["path"]).read_text(encoding="utf-8")
+        for item in result["script_paths"]
+    }
+    commands = {
+        command["logical_key"]: command["argv"]
+        for command in result["generated_commands"]
+    }
+
+    assert commands["stage:extract"][:4] == [
+        "apptainer",
+        "exec",
+        "--cleanenv",
+        "--nv",
+    ]
+    assert "analysis.sif" in commands["stage:extract"]
+    assert "apptainer exec --cleanenv --nv" in scripts["stage:report"]
+    assert "analysis.sif loom stage-job run" in scripts["stage:report"]
+    assert "apptainer build" not in "".join(scripts.values())
+    assert manifest["jobs"][0]["command"]["metadata"]["container_runtime"] == (
+        "apptainer"
+    )
+
+
 def test_cli_slurm_dry_run_artifacts_cover_diamond_and_secret_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -283,6 +327,40 @@ def _write_diamond_config(path: Path) -> None:
         "          schema_version: 1\n"
         "          partition: report\n"
         "          launcher_argv: [uv, run, loom]\n",
+        encoding="utf-8",
+    )
+
+
+def _write_container_config(path: Path) -> None:
+    path.write_text(
+        "pipeline:\n"
+        "  name: slurm-container-e2e\n"
+        "  stages:\n"
+        "    - name: extract\n"
+        "      factory:\n"
+        "        _target_: tests.support.pipeline_execution_stages.JsonProducerStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n"
+        "          codec_key: json.v1\n"
+        "    - name: report\n"
+        "      depends_on: [extract]\n"
+        "      factory:\n"
+        "        _target_: tests.support.pipeline_execution_stages.JsonProducerStage\n"
+        "      outputs:\n"
+        "        data:\n"
+        "          artifact_type: json\n"
+        "          codec_key: json.v1\n"
+        "runtime:\n"
+        "  adapter_options:\n"
+        "    slurm:\n"
+        "      schema_version: 1\n"
+        "      partition: shared\n"
+        "    container:\n"
+        "      image:\n"
+        "        reference: analysis.sif\n"
+        "    apptainer:\n"
+        "      nv: true\n",
         encoding="utf-8",
     )
 

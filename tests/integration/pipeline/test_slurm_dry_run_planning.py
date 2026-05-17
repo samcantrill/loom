@@ -13,6 +13,7 @@ from loom.pipeline.execution import (
     create_authority_backed_serial_run_store,
 )
 from loom.pipeline.executors.slurm import (
+    SlurmCommandArgv,
     SlurmOptions,
     SlurmPlannedDependency,
     SlurmPlannedJob,
@@ -131,6 +132,38 @@ def test_afterok_dry_run_writes_manifest_round_trip_and_stage_scripts(
     assert SlurmPlannedSubmission.from_dict(
         _read_json(result.manifest_artifact.local_path)
     ) == result.submission
+
+
+def test_afterok_dry_run_renders_apptainer_exec_without_build_commands(
+    tmp_path: Path,
+) -> None:
+    store, run_uri = _prepared_store(tmp_path, {"extract": (), "report": ("extract",)})
+
+    result = plan_afterok_slurm_dry_run(
+        run_store=store,
+        run_uri=run_uri,
+        container_options={"image": {"reference": "analysis.sif"}},
+        apptainer_options={"nv": True},
+        planning_id="planning-container-afterok",
+        created_at="2026-05-08T00:00:00Z",
+    )
+
+    script = result.script_artifacts["stage:report"].local_path.read_text()
+    manifest = SlurmPlannedSubmission.from_dict(
+        _read_json(result.manifest_artifact.local_path)
+    )
+    report_job = {
+        job.logical_key: job for job in cast(tuple[SlurmPlannedJob, ...], manifest.jobs)
+    }["stage:report"]
+    command = cast(SlurmCommandArgv, report_job.command)
+    plan_payload = cast(dict[str, object], _read_json(result.plan_artifact.local_path))
+
+    assert "apptainer exec --cleanenv --nv" in script
+    assert "--bind" in script
+    assert "analysis.sif loom stage-job run" in script
+    assert "apptainer build" not in script
+    assert command.metadata["container_runtime"] == "apptainer"
+    assert "container_build_results" not in plan_payload
 
 
 def test_default_planning_ids_are_distinct_for_repeated_dry_runs(
