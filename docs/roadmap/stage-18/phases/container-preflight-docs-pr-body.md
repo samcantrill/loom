@@ -31,7 +31,7 @@ The phase also updates user-facing docs for container execution, SLURM compositi
 | Pyright | Passed | `uv run --extra config pyright` |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed outside the sandbox |
 | `make test-summary` | Passed | Overall 2350 passed, 21 skipped, 1928 deselected |
-| GitHub checks | Pending | To be verified after PR creation |
+| GitHub checks | Passed | PR #186 `checks` passed before merge |
 
 ### Test Suite Summary
 

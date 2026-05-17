@@ -5,7 +5,7 @@ Roadmap stage: `v18`
 Planning document: `docs/roadmap/stage-18/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 pr_open
+Current phase: Phase 5 approved
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after manager
@@ -360,7 +360,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 | 2 | `local-container-builders` | merged | `codex/local-container-builders` | [#183](https://github.com/samcantrill/loom/pull/183) | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
 | 3 | `apptainer-executor` | merged | `codex/apptainer-executor` | [#184](https://github.com/samcantrill/loom/pull/184) | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
 | 4 | `slurm-apptainer-composition` | merged | `codex/slurm-apptainer-composition` | [#185](https://github.com/samcantrill/loom/pull/185) | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
-| 5 | `container-preflight-docs` | pr_open | `codex/container-preflight-docs` | [#186](https://github.com/samcantrill/loom/pull/186) | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
+| 5 | `container-preflight-docs` | approved | `codex/container-preflight-docs` | [#186](https://github.com/samcantrill/loom/pull/186) | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
 
 ## Implementation Readiness Blockers
 
@@ -870,7 +870,7 @@ container behavior across dry-run and live submission paths
 
 ## Phase 5: Preflight, Docs, And Opt-In Runtime Smoke
 
-Status: pr_open
+Status: approved
 Slug: `container-preflight-docs`
 Branch: `codex/container-preflight-docs`
 Worktree: `/home/samcantrill/work/loom-worktrees/container-preflight-docs`
@@ -960,10 +960,10 @@ diagnostics, docs, examples, and validation evidence across prior phases
   this phase verifies cross-cutting user-facing behavior
 - Implementation/refinement budget: not needed; targeted and full validation
   passed without a refinement pass
-- PR review budget: one automated review pass pending
+- PR review budget: completed by manager; no blocking findings
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phase 4 merged or valid stack predecessor recorded
-- Merge record: pending GitHub checks, automated review, and merge
+- Merge record: pending final target verification and merge
 
 ### Risks And Stop Conditions
 
@@ -987,7 +987,9 @@ diagnostics, docs, examples, and validation evidence across prior phases
   targeted diagnostics/package/e2e suite passed with 217 passed; Ruff and
   Pyright passed; `make validate-pr` passed; `make test-summary` passed with
   overall 2350 passed, 21 skipped, 1928 deselected.
-- PR: https://github.com/samcantrill/loom/pull/186 opened against `develop`
+- PR: https://github.com/samcantrill/loom/pull/186 opened against `develop`;
+  automated manager review found no blocking findings and GitHub `checks`
+  passed before merge.
 - Merge: pending
 - Follow-up: direct Apptainer/Singularity preflight intentionally does not
   resolve `container.target`; users should pass built SIF paths through
