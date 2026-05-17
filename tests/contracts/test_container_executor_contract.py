@@ -12,7 +12,10 @@ import pytest
 from loom.pipeline.executors.containers import (
     ContainerBuildOptions,
     ContainerBuildOutputRef,
+    ContainerBuildPolicyDecision,
     ContainerBuildTarget,
+    FakeContainerBuilder,
+    LocalContainerBuildService,
     ContainerOptions,
     ContainerResourceIntent,
     build_container_build_key,
@@ -114,6 +117,40 @@ def test_build_output_refs_distinguish_docker_images_from_apptainer_sifs() -> No
     assert "path" not in docker.to_dict()
     assert apptainer.to_dict()["path"] == ".loom/containers/runtime.sif"
     assert "reference" not in apptainer.to_dict()
+
+
+def test_local_container_build_service_contract_uses_shared_results() -> None:
+    options = parse_container_build_options(
+        {
+            "targets": {
+                "analysis-env": {
+                    "runtime": "apptainer",
+                    "source": {
+                        "kind": "definition_file",
+                        "path": "containers/analysis.def",
+                    },
+                    "output": {
+                        "kind": "apptainer_sif",
+                        "path": ".loom/containers/analysis.sif",
+                    },
+                    "policy": {"mode": "always"},
+                }
+            }
+        }
+    )
+    service = LocalContainerBuildService(
+        {"apptainer": FakeContainerBuilder("apptainer")}
+    )
+
+    result = service.build_options(options)[0]
+    document = result.to_dict()
+    evidence = cast(dict[str, PlainData], document["evidence"])
+    metadata = cast(dict[str, PlainData], evidence["metadata"])
+    decision = ContainerBuildPolicyDecision.from_dict(metadata["decision"])
+
+    assert stable_json_dumps(document)
+    assert result.status == "built"
+    assert decision.action == "build"
 
 
 def test_container_records_do_not_import_docker_or_runtime_presentation_layers() -> (
