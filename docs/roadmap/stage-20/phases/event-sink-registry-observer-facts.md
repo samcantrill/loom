@@ -254,7 +254,13 @@ make test-summary
 - Refinement summary: added observer-fact methods to the HTTP
   `AuthorityClientBackedPerRunAuthorityStore` fallback surface and tightened
   event-sink unit test type signatures after Pyright validation.
-- Blocker-resolution summary: pending
-- PR preparation: pending
-- Stack maintenance: pending
+- Blocker-resolution summary: none needed
+- PR preparation: PR body artifact completed at
+  `docs/roadmap/stage-20/phases/event-sink-registry-observer-facts-pr-body.md`;
+  PR [#188](https://github.com/samcantrill/loom/pull/188) opened against
+  `develop`; verification confirmed base `develop`, head
+  `codex/event-sink-registry-observer-facts`, state `OPEN`, and GitHub CI
+  `checks` in progress.
+- Stack maintenance: root PR; no predecessor or successor stack maintenance
+  needed at PR open.
 - Remaining blockers: none
