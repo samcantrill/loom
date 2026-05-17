@@ -358,7 +358,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `container-build-contracts` | merged | `codex/container-build-contracts` | [#182](https://github.com/samcantrill/loom/pull/182) | Shared build records, config semantics, descriptor namespaces | Establish `container_build` contracts and whole-namespace replacement behavior | Package, unit, contract, profile/descriptor tests; `make validate-pr`; `make test-summary` | Named build-target config and namespace override |
 | 2 | `local-container-builders` | merged | `codex/local-container-builders` | [#183](https://github.com/samcantrill/loom/pull/183) | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
-| 3 | `apptainer-executor` | in_progress | `codex/apptainer-executor` | pending | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
+| 3 | `apptainer-executor` | pr_open | `codex/apptainer-executor` | [#184](https://github.com/samcantrill/loom/pull/184) | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
 | 4 | `slurm-apptainer-composition` | pending | `codex/slurm-apptainer-composition` | pending | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
 | 5 | `container-preflight-docs` | pending | `codex/container-preflight-docs` | pending | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
 
@@ -621,11 +621,11 @@ protocols and runtime-specific command semantics
 
 ## Phase 3: Direct Apptainer And Singularity Execution
 
-Status: in_progress
+Status: pr_open
 Slug: `apptainer-executor`
 Branch: `codex/apptainer-executor`
 Worktree: `/home/samcantrill/work/loom-worktrees/apptainer-executor`
-PR: pending
+PR: https://github.com/samcantrill/loom/pull/184
 Base branch: `develop`
 Target branch: `develop`
 Workflow path: expanded path because this phase adds a new executor and public
@@ -731,7 +731,7 @@ runtime behavior
   integration coverage are implemented in `codex/apptainer-executor`.
 - Validation: `make validate-pr` passed outside the sandbox; `make
   test-summary` passed with overall 2334 passed, 18 skipped, 1912 deselected.
-- PR: pending
+- PR: https://github.com/samcantrill/loom/pull/184 opened against `develop`
 - Merge: pending
 - Follow-up: SLURM wrapping, selected preflight, docs/examples, and optional
   real runtime smoke remain Phase 4 and Phase 5 work.
