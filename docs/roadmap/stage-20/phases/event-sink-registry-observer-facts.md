@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft phase execution plan
+- Status: final phase execution plan; scope-complete for implementation
 - Feature focus: Runtime Events
 - PR title: `Runtime Events - Phase 2: Sink Registry and Observer Facts`
 - Branch: `codex/event-sink-registry-observer-facts`
@@ -19,9 +19,9 @@
 - Plan quality gate: verified passed in the implementation plan on 2026-05-17; no quality-gate rerun performed
 - Plan quality gate loop budget: consumed and passed before this phase plan; the implementation plan records one review, one bounded refinement, and one confirmation review with no remaining findings
 - Draft pass: completed by `loom_phase_planner` on 2026-05-17
-- Refine pass: pending for expanded path
-- Setup limitations: existing branch/worktree supplied by the manager was reused after verification; it is checked out as `codex/event-sink-registry-observer-facts` at `f17fe6955c26f55d4071ef49037e787121aaee69`, already realigned to current `develop`. No remote synchronization, branch recreation, broad validation, or product-code implementation was performed in this draft pass.
-- Blockers: none for draft planning; implementation should not begin until the expanded-path refine pass marks this artifact scope-complete
+- Refine pass: completed by `loom_phase_planner` on 2026-05-17; manager boundary findings incorporated
+- Setup limitations: existing branch/worktree supplied by the manager was reused after verification; it is checked out as `codex/event-sink-registry-observer-facts` at `f17fe6955c26f55d4071ef49037e787121aaee69`, already realigned to current `develop`. No remote synchronization, branch recreation, broad validation, product-code implementation, or PR work was performed in the draft or refine pass.
+- Blockers: none; this artifact is scope-complete for Phase 2 implementation
 
 ## Objective
 
@@ -48,9 +48,9 @@ Stage 20 first stabilized the canonical event grammar in merged Phase 1. Phase 2
 
 ## Current Source And Harness Findings
 
-- Existing files or modules that constrain this phase: current `develop` includes Phase 1's schema-version 2 `PipelineEventRecord`, `EventResourceRef`, `EventReference`, and durable `to_event_reference()` helpers in `src/loom/pipeline/events.py`; `src/loom/pipeline/stores/run_store.py` exposes `RunEventStore`; local event persistence lives in `src/loom/pipeline/stores/local_runs.py`; authority-compatible audit event paths exist in `src/loom/pipeline/stores/sqlite_authority.py`, `src/loom/pipeline/stores/service_authority.py`, `src/loom/authority/_repository.py`, and `src/loom/pipeline/execution/authority_adapter.py`.
-- Existing tests or harness behavior: `tests/unit/loom/pipeline/test_events.py` locks event identity and reference semantics; `tests/package/test_import_boundaries.py` checks import boundaries; `tests/package/test_pipeline_store_api.py` checks store API exports; `tests/contracts/test_store_contract.py` and `tests/contracts/test_authority_store_contract.py` exercise store protocols; local integration coverage lives under `tests/integration/pipeline/test_local_stores.py`.
-- Import-boundary or dependency constraints: `loom.pipeline.event_sinks` must be as import-light as the event model layer and must not import concrete stores, execution, diagnostics, CLI, plugin discovery, optional service SDKs, backend clients, or project code. Store protocols may import the observer record types, but sink contracts must use narrow structural protocols rather than broad store protocols.
+- Existing files or modules that constrain this phase: current `develop` includes Phase 1's schema-version 2 `PipelineEventRecord`, `EventResourceRef`, `EventReference`, and durable `to_event_reference()` helpers in `src/loom/pipeline/events.py`; `src/loom/pipeline/stores/run_store.py` exposes `RunEventStore`; local event persistence lives in `src/loom/pipeline/stores/local_runs.py`; likely store/read touch points are `src/loom/pipeline/stores/run_store.py`, `src/loom/pipeline/stores/local_runs.py`, `src/loom/pipeline/stores/sqlite_authority.py`, `src/loom/pipeline/stores/service_authority.py`, `src/loom/pipeline/stores/read_models.py`, and authority-compatible repository/adapters only where those store paths require them.
+- Existing tests or harness behavior: `tests/unit/loom/pipeline/test_events.py` locks event identity and reference semantics; `tests/package/test_import_boundaries.py` checks import boundaries; `tests/package/test_pipeline_store_api.py` checks store API exports; `tests/contracts/test_store_contract.py` and `tests/contracts/test_authority_store_contract.py` exercise store protocols; local observer-fact integration coverage belongs in `tests/integration/pipeline/test_local_stores.py` or an adjacent local-store integration test.
+- Import-boundary or dependency constraints: `loom.pipeline.event_sinks` must be as import-light as the event model layer and must not import `loom.pipeline.stores`, concrete stores, execution, diagnostics, CLI, plugin discovery, optional service SDKs, backend clients, or project code. Store modules may import observer record types from `loom.pipeline.event_sinks`; sink contracts must use narrow structural protocols rather than broad store protocols.
 
 ## In-Scope Work
 
@@ -58,10 +58,11 @@ Stage 20 first stabilized the canonical event grammar in merged Phase 1. Phase 2
 - Define the event sink callback contract and context contract over Phase 1 event identity records and references.
 - Define an instance-local `EventSinkRegistry` with deterministic registration order and duplicate-name rejection.
 - Define dispatch result and per-sink result/failure data that can represent successful callbacks and best-effort callback exceptions without changing run correctness.
-- Define plain-data-compatible callback failure records that reference the triggering durable or non-durable event identity through `EventReference`.
-- Define plain-data-compatible observer-link records for narrow external references written by trusted sinks.
+- Define plain-data-compatible `EventSinkFailureRecord` values that reference the triggering durable or non-durable event identity through `EventReference`.
+- Define plain-data-compatible `EventObserverLinkRecord` values for narrow external references written by trusted sinks.
 - Add narrow structural protocols for observer-link recording and callback-failure recording; these protocols must not expose full `RunStore`, status, artifact, retry, transaction, or metadata mutation APIs.
-- Add store/read facets for callback failure and observer-link facts, including local persistence/readback and authority/fake-store contract support as needed.
+- Add store/read facets for callback failure and observer-link facts, including typed append/read methods, deterministic append-order readback, local sidecar JSONL persistence, and authority/fake-store contract support as needed.
+- Keep local observer facts in separate observer-fact sidecar JSONL files rather than writing them as ordinary `events.jsonl` event records.
 - Add package, unit, contract, and integration tests for the new sink API, registry behavior, mutation boundary, observer fact serialization, and observer fact persistence.
 - Add concise docstrings or nearby feature-doc updates where needed to state observe-only guarantees, duplicate behavior, best-effort failure policy, and writeback limits.
 
@@ -71,6 +72,7 @@ Stage 20 first stabilized the canonical event grammar in merged Phase 1. Phase 2
 - Plugin entry point loading, ambient plugin discovery, or a global sink registry.
 - Service-specific sinks or bundled clients for telemetry, webhooks, notifications, tracking services, OpenTelemetry, or streaming systems.
 - Persistence-disabled non-durable runtime dispatch behavior beyond validating inert record/reference shapes needed by the public contract.
+- Persisting callback failures or observer links as ordinary `PipelineEventRecord` values, `audit_events` rows, or `events.jsonl` lines.
 - Strict audit mode, distributed streaming, cleanup, deletion, retention, run-collection GC, or retry/resource policy changes.
 - Event-driven mutation of plans, configs, artifacts, stage outputs, statuses, retry decisions, transactions, submitted operations, core store records, or broad run metadata.
 - CLI or diagnostics presentation except minimal docs/import-boundary changes required by the new module surface.
@@ -82,21 +84,24 @@ Stage 20 first stabilized the canonical event grammar in merged Phase 1. Phase 2
 - Duplicate sink names should fail by default instead of silently overwriting an existing registration. Future plugin loading can surface duplicate entry point names as registration errors.
 - Observer links are generic external-reference facts, not service-specific telemetry records.
 - Callback failures are event-adjacent observer facts. They are not ordinary sink-dispatched runtime events in this phase.
+- Stores may import `EventSinkFailureRecord` and `EventObserverLinkRecord` from `loom.pipeline.event_sinks`; `loom.pipeline.event_sinks` must not import stores to discover or type those facets.
 - If `develop` changes event identity fields before Phase 2 implementation starts, the expanded-path refine pass must update this plan before implementation starts.
 
 ## Scope Contract
 
-`loom.pipeline.event_sinks` is the public contract surface for sink mechanics in this phase. It must remain import-light and independent of store implementations. Direct imports of `loom.pipeline.event_sinks` may import `loom.pipeline.events`, serialization helpers, timestamps, dataclasses, standard typing, and standard library helpers only when needed; they must not import `loom.pipeline.stores`, execution, plugins, diagnostics, CLI, optional service SDKs, backend clients, or project code.
+`loom.pipeline.event_sinks` is the public contract surface for sink mechanics in this phase. It must remain import-light and independent of store implementations. Direct imports of `loom.pipeline.event_sinks` may import `loom.pipeline.events`, serialization helpers, timestamps, dataclasses, standard typing, and standard library helpers only when needed; they must not import `loom.pipeline.stores`, execution, plugins, diagnostics, CLI, optional service SDKs, backend clients, or project code. The allowed direction is store modules importing observer record types from `event_sinks`, not `event_sinks` importing stores or broad store protocols.
 
 `EventSink` is an observe-only callback contract. A sink may observe the triggering event identity/record and may write only observer-link facts through a narrow context protocol. It must not receive a full store, runner, execution plan, mutable stage state, artifact writer, status mutator, retry mutator, transaction mutator, submitted-operation mutator, or arbitrary run metadata writer. Registry dispatch must continue to later sinks after a sink failure by default and report failures through dispatch results and callback failure records.
 
 `EventSinkRegistry` is instance-local. It must not use module-level mutable global registration. Registrations are keyed by non-empty deterministic sink names. Names should use the same lower-case dotted or identifier-like vocabulary already used for event/plugin keys unless the implementation discovers a stronger existing local validator. Registration order defines dispatch order. Registering a duplicate name without an explicit future override API must raise a registry error; silent replacement is out of scope.
 
-Callback failure records must include a schema version, sink name, failure type, failure message, optional plain-data detail, failure timestamp, run URI, and an `EventReference` for the triggering event identity. Failure detail must avoid raw callback objects, credentials, large blobs, or backend-specific exception objects. Failure records may include a generated failure id or store-assigned identity, but they must not reuse durable event sequence numbers or recursively become ordinary runtime events.
+`EventSinkFailureRecord` is the callback failure fact. It must include a schema version, sink name, failure type, failure message, optional plain-data detail, failure timestamp, run URI, and an `EventReference` for the triggering event identity. Failure detail must avoid raw callback objects, credentials, large blobs, or backend-specific exception objects. Failure records may include a generated failure id or store-assigned observer-fact identity, but they must not reuse durable event sequence numbers or recursively become ordinary runtime events.
 
-Observer-link records must include a schema version, sink name, run URI, triggering `EventReference`, recorded timestamp, and a generic external reference with a non-empty kind and plain-data identifiers. Optional metadata must remain bounded plain data. The schema must not include service-specific top-level fields such as tracking server URLs, webhook payloads, model IDs, metric names, credentials, or notification channels. Richer observer summaries are future work.
+`EventObserverLinkRecord` is the observer-link fact. It must include a schema version, sink name, run URI, triggering `EventReference`, recorded timestamp, and a generic external reference with a non-empty kind and plain-data identifiers. Optional metadata must remain bounded plain data. The schema must not include service-specific top-level fields such as tracking server URLs, webhook payloads, model IDs, metric names, credentials, or notification channels. Richer observer summaries are future work.
 
-Store/read facets must persist and read callback failure and observer-link facts as append-only event-adjacent facts. Stores own persistence and ordering; sinks and registries do not execute store writes directly except through narrow structural context protocols supplied by runtime setup. Read methods must return typed record values in deterministic append order. Local stores should use separate observer-fact files or sections rather than mixing these facts into `events.jsonl` as ordinary runtime events. Authority-compatible stores and fake contract stores must validate run ownership and plain-data shapes.
+Store/read facets must persist and read callback failure and observer-link facts as append-only event-adjacent facts. The public store protocol surface for this phase is `RunEventSinkFailureStore` with `append_event_sink_failure` and `read_event_sink_failures`, plus `RunEventObserverLinkStore` with `append_event_observer_link` and `read_event_observer_links`. Append methods accept typed observer records; read methods return typed record values in deterministic append order. Stores own persistence, append ordering, and run ownership validation where the existing store can enforce it; sinks and registries do not execute store writes directly except through narrow structural context protocols supplied by runtime setup.
+
+Local stores must persist observer facts in separate observer-fact sidecar JSONL files under the run directory, expected as `event_sink_failures.jsonl` and `event_observer_links.jsonl` unless the implementation finds a stronger existing local naming convention. They must not mix callback failures or observer links into ordinary `events.jsonl`, and ordinary `read_events` must continue to return only `PipelineEventRecord` audit events. Authority-compatible stores should use distinct tables or fields for observer facts rather than `audit_events` rows. Fake and contract stores must validate run ownership where possible and reject plain-data or event-reference shape errors consistently with existing store error behavior.
 
 ## Design Impact
 
@@ -135,16 +140,17 @@ Store/read facets must persist and read callback failure and observer-link facts
 ## Reviewability
 
 - Expected PR size and shape: moderate public-contract and store-facet PR with one import-light sink module/package, observer record types, narrow store protocol/readback additions, local/fake/authority persistence support where required, and focused tests.
-- Files and areas to inspect: `src/loom/pipeline/event_sinks.py` or `src/loom/pipeline/event_sinks/`, `src/loom/pipeline/stores/run_store.py`, `src/loom/pipeline/stores/__init__.py`, `src/loom/pipeline/stores/local_runs.py`, authority-compatible store adapters, `tests/unit/loom/pipeline/test_event_sinks.py`, package import/API tests, store contract tests, and local store integration tests.
-- Scope-control checks: no runtime dispatch wiring, no plugin loader, no global registry, no sink access to full stores or runtime mutators, no service SDK dependencies, no ordinary runtime events for callback failures, and no `events.jsonl` rewrite or schema-v1 event grammar changes.
+- Files and areas to inspect: `src/loom/pipeline/event_sinks.py` or `src/loom/pipeline/event_sinks/`, `src/loom/pipeline/stores/run_store.py`, `src/loom/pipeline/stores/__init__.py`, `src/loom/pipeline/stores/local_runs.py`, `src/loom/pipeline/stores/sqlite_authority.py`, `src/loom/pipeline/stores/service_authority.py`, `src/loom/pipeline/stores/read_models.py`, authority-compatible repository/adapters only as needed, `tests/unit/loom/pipeline/test_event_sinks.py`, package import/API tests, store contract tests, authority-store contract tests, and local store integration tests.
+- Scope-control checks: no runtime dispatch wiring, no plugin loader, no global registry, no sink access to full stores or runtime mutators, no service SDK dependencies, no ordinary runtime events for callback failures or observer links, no observer facts in `events.jsonl`, and no `events.jsonl` rewrite or schema-v1 event grammar changes.
 
 ## Implementation Steps
 
-1. Add the import-light `loom.pipeline.event_sinks` public surface with sink/context protocols, registry errors, deterministic instance-local registry behavior, and dispatch result records.
-2. Add callback failure and observer-link value records with strict plain-data serialization/deserialization, event-reference validation, bounded detail/metadata handling, and tests for malformed shapes.
-3. Add narrow observer-fact store/read facets and exports, then implement them in local, fake, and authority-compatible stores as append-only facts that are read back in deterministic order.
-4. Add registry and mutation-boundary tests using fake sinks and fake structural contexts; assert duplicate rejection, dispatch order, best-effort failure collection, and absence of broad mutation handles.
-5. Add package/import-boundary tests and minimal docs/docstrings for observe-only guarantees, writeback limits, duplicate handling, and best-effort callback failure semantics.
+1. Add the import-light `loom.pipeline.event_sinks` public surface with sink/context protocols, registry errors, deterministic instance-local registry behavior, dispatch result records, `EventSinkFailureRecord`, and `EventObserverLinkRecord`.
+2. Add strict plain-data serialization/deserialization, event-reference validation, bounded detail/metadata handling, and malformed-shape tests for the observer records.
+3. Add `RunEventSinkFailureStore` and `RunEventObserverLinkStore` facets/exports, then implement them in local, fake, and authority-compatible stores as append-only typed facts with deterministic append-order readback and run ownership validation where enforceable.
+4. Add local sidecar JSONL persistence for observer facts, keeping `event_sink_failures.jsonl` and `event_observer_links.jsonl` separate from ordinary `events.jsonl` reads/writes.
+5. Add registry and mutation-boundary tests using fake sinks and fake structural contexts; assert duplicate rejection, dispatch order, best-effort failure collection, and absence of broad mutation handles.
+6. Add package/import-boundary tests and minimal docs/docstrings for observe-only guarantees, writeback limits, duplicate handling, and best-effort callback failure semantics.
 
 ## Test Plan
 
