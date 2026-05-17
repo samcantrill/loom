@@ -3,6 +3,11 @@
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import (
+    EventObserverExternalRef,
+    EventObserverLinkRecord,
+    EventSinkFailureRecord,
+)
 from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline.execution import PreparedRunRecord
 from loom.pipeline.status import (
@@ -141,6 +146,32 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
         "run.created",
         "stage.started",
     ]
+    failure = EventSinkFailureRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=first_event.to_event_reference(),
+        failed_at="2020-01-01T00:00:02Z",
+        failure_type="RuntimeError",
+        failure_message="callback failed",
+        detail={"phase": "integration"},
+    )
+    observer_link = EventObserverLinkRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=first_event.to_event_reference(),
+        recorded_at="2020-01-01T00:00:03Z",
+        external_ref=EventObserverExternalRef(
+            kind="trace",
+            identifiers={"trace_id": "trace-1"},
+        ),
+        metadata={"source": "integration"},
+    )
+    run_store.append_event_sink_failure(run_uri, failure)
+    run_store.append_event_observer_link(run_uri, observer_link)
+    reopened_run_store = LocalRunStore(root=root)
+    assert reopened_run_store.read_event_sink_failures(run_uri) == (failure,)
+    assert reopened_run_store.read_event_observer_links(run_uri) == (observer_link,)
+    assert reopened_run_store.read_events(run_uri) == run_store.read_events(run_uri)
 
     lock_record = run_store.acquire_run_lock(run_uri, owner={"workflow": "integration"})
     assert run_store.read_run_lock(run_uri) == lock_record
@@ -216,6 +247,8 @@ def test_local_stores_integration_roundtrip(tmp_path: Path) -> None:
         run_store.local_run_dir(run_uri) / "runtime.json",
         run_store.local_run_dir(run_uri) / "submitted_operations" / "sub-1.json",
         run_store.local_run_dir(run_uri) / "events.jsonl",
+        run_store.local_event_sink_failures_path(run_uri),
+        run_store.local_event_observer_links_path(run_uri),
         run_store.local_run_dir(run_uri) / "artifacts.json",
         artifact_root / "stage",
         run_store.local_config_path(run_uri, "raw"),

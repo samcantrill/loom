@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import (
+    EventObserverExternalRef,
+    EventObserverLinkRecord,
+    EventSinkFailureRecord,
+)
 from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline.reliability import (
     FailureClassification,
@@ -300,6 +305,43 @@ def test_lease_fencing_release_failure_and_audit_sequence(tmp_path: Path) -> Non
             fencing_token=allocation.lease.fencing_token,
             reason=LifecycleReason(code="worker_failed"),
         )
+
+
+def test_sqlite_authority_persists_observer_facts(tmp_path: Path) -> None:
+    run_uri = path_to_run_uri(tmp_path / "run")
+    store = SQLitePerRunAuthorityStore(clock=FrozenClock())
+    store.create_run(run_uri)
+    event = store.append_audit_event(
+        run_uri,
+        PipelineEvent(scope=EventScope.run(), event_type="run.started"),
+    )
+    failure = EventSinkFailureRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=event.to_event_reference(),
+        failed_at="2020-01-01T00:00:02Z",
+        failure_type="RuntimeError",
+        failure_message="callback failed",
+    )
+    link = EventObserverLinkRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=event.to_event_reference(),
+        recorded_at="2020-01-01T00:00:03Z",
+        external_ref=EventObserverExternalRef(
+            kind="trace",
+            identifiers={"trace_id": "trace-1"},
+        ),
+    )
+
+    failure_revision = store.append_event_sink_failure(run_uri, failure)
+    link_revision = store.append_event_observer_link(run_uri, link)
+    reopened = SQLitePerRunAuthorityStore(clock=FrozenClock())
+
+    assert failure_revision.sequence > event.sequence
+    assert link_revision.sequence > failure_revision.sequence
+    assert reopened.read_event_sink_failures(run_uri) == (failure,)
+    assert reopened.read_event_observer_links(run_uri) == (link,)
 
 
 def test_expired_lease_cannot_be_released_or_failed(tmp_path: Path) -> None:

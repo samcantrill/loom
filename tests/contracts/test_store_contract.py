@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.diagnostics.inspection import inspect_run_artifact, inspect_run_artifacts
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
@@ -27,6 +28,8 @@ from loom.pipeline.stores import (
     RunArtifactIndexStore,
     RunConfigStore,
     RunDocumentStore,
+    RunEventObserverLinkStore,
+    RunEventSinkFailureStore,
     RunEventStore,
     RunFreshnessRecord,
     RunFreshnessStore,
@@ -303,6 +306,26 @@ class DummyRunStore:
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
         return ()
 
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> None:
+        return None
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        return ()
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> None:
+        return None
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        return ()
+
     def acquire_run_lock(
         self,
         run_uri: str,
@@ -508,6 +531,12 @@ class DummyRunStorePaths:
     def local_run_freshness_path(self, run_uri: str) -> Path:
         return Path(run_uri) / "freshness.json"
 
+    def local_event_sink_failures_path(self, run_uri: str) -> Path:
+        return Path(run_uri) / "event_sink_failures.jsonl"
+
+    def local_event_observer_links_path(self, run_uri: str) -> Path:
+        return Path(run_uri) / "event_observer_links.jsonl"
+
 
 class TrackingArtifactDiagnosticsStore:
     def __init__(self) -> None:
@@ -586,6 +615,8 @@ def test_fake_run_store_matches_protocol() -> None:
     assert isinstance(DummyRunStore(), RunConfigStore)
     assert isinstance(DummyRunStore(), RunProvenanceStore)
     assert isinstance(DummyRunStore(), RunEventStore)
+    assert isinstance(DummyRunStore(), RunEventSinkFailureStore)
+    assert isinstance(DummyRunStore(), RunEventObserverLinkStore)
     assert isinstance(DummyRunStore(), RunInspectionStore)
     assert isinstance(DummyRunStore(), RunLockStore)
     assert isinstance(DummyRunStore(), StageStateStore)
@@ -621,6 +652,8 @@ def test_local_run_store_matches_expanded_protocols(tmp_path: Path) -> None:
     run_uri = path_to_run_uri(tmp_path / "runs" / "run1")
 
     assert isinstance(store, RunEventStore)
+    assert isinstance(store, RunEventSinkFailureStore)
+    assert isinstance(store, RunEventObserverLinkStore)
     assert isinstance(store, RunFreshnessStore)
     assert isinstance(store, RunInspectionStore)
     assert isinstance(store, RunLockStore)

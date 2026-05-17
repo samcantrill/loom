@@ -771,6 +771,42 @@ def test_import_runtime_facade_does_not_import_forbidden_runtime_layers() -> Non
     assert result.stdout.strip() == "ok"
 
 
+def test_import_event_sinks_does_not_import_forbidden_runtime_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.event_sinks
+
+        for forbidden in (
+            "loom.config",
+            "loom.cli",
+            "loom.pipeline.execution",
+            "loom.pipeline.executors",
+            "loom.pipeline.stores",
+            "loom.plugins",
+            "loom.diagnostics",
+            "project",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+            "fastapi",
+            "starlette",
+            "sqlite3",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} was imported through loom.pipeline.event_sinks")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_stores_does_not_import_config_or_cli_layers() -> None:
     script = dedent(
         """
