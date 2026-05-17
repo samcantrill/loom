@@ -26,11 +26,14 @@ New runtime-specific behavior:
 - `loom.pipeline.executors.docker.build` constructs `docker build` and `docker buildx build` argv, checks local image presence with the existing fakeable Docker runner, and returns shared `ContainerBuildResult` records.
 - `loom.pipeline.executors.apptainer.build` constructs `apptainer build`/`singularity build` SIF commands, uses local output/source mtimes for cheap reuse decisions, and exposes fake/subprocess build runners.
 
+Automated manager review after PR creation fixed real runner availability/launch paths so Docker and Apptainer builders return structured `ContainerBuildResult` failures rather than propagating command exceptions.
+
 ## Tests And Validation
 
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Focused Phase 2 suite | Passed | 133 passed, 1 skipped |
+| Post-review focused suite | Passed | 11 passed |
 | Phase-level targeted suite | Passed | 519 passed, 7 skipped |
 | `make validate-pr` | Passed | Ruff, Pyright, default harness, config-extra harness, and build passed |
 | `make test-summary` | Passed | Overall 2308 passed, 18 skipped, 1886 deselected |

@@ -580,12 +580,12 @@ protocols and runtime-specific command semantics
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
-- Implementation/refinement budget: one `loom_phase_refiner` pass available if
-  validation fails or adapter boundaries blur
-- PR review budget: one automated review pass available
-- Blocker-resolution budget: unused
+- Phase execution plan: complete
+- Planning/refinement budget: expanded path; draft and refine completed
+- Implementation/refinement budget: not needed; local and full validation passed
+- PR review budget: completed by manager before merge
+- Blocker-resolution budget: 1/3 used for structured builder launch-failure
+  results after manager review
 - Pre-submit blocker gate: Phase 1 merged or valid stack predecessor recorded
 - Merge record: pending
 
@@ -610,7 +610,8 @@ protocols and runtime-specific command semantics
 - Validation: focused Phase 2 suite passed with 133 passed, 1 skipped;
   phase-level targeted suite passed with 519 passed, 7 skipped; `make
   validate-pr` passed; `make test-summary` passed with 2308 passed, 18
-  skipped, 1886 deselected.
+  skipped, 1886 deselected; post-review focused adapter suite passed with 11
+  passed, and full validation was rerun after the review fix.
 - PR: https://github.com/samcantrill/loom/pull/183
 - Merge: pending
 - Follow-up: pending

@@ -166,8 +166,8 @@ make test-summary
 ## Refinement And Review Budget Status
 
 - Phase implementation refinement: not needed; targeted suite and full PR gate passed
-- PR review: unused
-- Blocker resolution: 0/3 used
+- PR review: completed by manager after PR #183 opened; findings resolved
+- Blocker resolution: 1/3 used for structured builder launch-failure results
 
 ## Completion Notes
 
@@ -196,8 +196,24 @@ make test-summary
   - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed outside the sandbox
     and wrote `build/test-summary.md`; overall summary: 2308 passed, 18
     skipped, 1886 deselected.
+- Automated review summary: manager review after PR #183 opened found and
+  fixed real runner availability/launch exceptions so Docker and Apptainer
+  builders return structured `ContainerBuildResult` failures instead of
+  propagating exceptions.
+- Post-review validation:
+  - Focused Docker/Apptainer adapter tests passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/docker/test_docker_build.py tests/unit/loom/pipeline/executors/apptainer/test_apptainer_build.py`:
+    11 passed.
+  - Targeted Ruff and Pyright passed for the touched builder modules.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed outside the sandbox
+    after the post-review fix.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed outside the sandbox
+    after the post-review fix; overall summary remained 2308 passed, 18
+    skipped, 1886 deselected.
 - Refinement summary: not needed; validation passed after manager
-  implementation.
+  implementation and post-review fix.
+- Blocker-resolution summary: 1/3 used for the post-review structured failure
+  fix; no remaining blockers
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-18/phases/local-container-builders-pr-body.md`
 - Stack maintenance: root phase from `develop`
