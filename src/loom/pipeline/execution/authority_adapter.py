@@ -116,6 +116,8 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         )
         self._leases: dict[str, LeaseRecord] = {}
         self._event_sequences: dict[str, int] = {}
+        self._event_sink_failures: dict[str, list[EventSinkFailureRecord]] = {}
+        self._event_observer_links: dict[str, list[EventObserverLinkRecord]] = {}
 
     @property
     def authority_config(self) -> AuthorityConfig:
@@ -575,6 +577,36 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
             event_type=event.event_type,
             payload=payload,
         )
+
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> BackendRevision:
+        if failure.run_uri != run_uri:
+            raise AuthorityStoreError("event sink failure run_uri does not match run")
+        self.open_run(run_uri)
+        self._event_sink_failures.setdefault(run_uri, []).append(failure)
+        return self.snapshot(run_uri).revision
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        self.open_run(run_uri)
+        return tuple(self._event_sink_failures.get(run_uri, ()))
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> BackendRevision:
+        if link.run_uri != run_uri:
+            raise AuthorityStoreError("event observer link run_uri does not match run")
+        self.open_run(run_uri)
+        self._event_observer_links.setdefault(run_uri, []).append(link)
+        return self.snapshot(run_uri).revision
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        self.open_run(run_uri)
+        return tuple(self._event_observer_links.get(run_uri, ()))
 
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
         return self.open_run(run_uri)

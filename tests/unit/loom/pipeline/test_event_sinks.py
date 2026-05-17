@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import cast
 
 import pytest
 
@@ -17,7 +19,8 @@ from loom.pipeline.event_sinks import (
     EventSinkRegistry,
     EventSinkRegistryError,
 )
-from loom.pipeline.events import EventScope, PipelineEventRecord
+from loom.pipeline.events import EventReference, EventScope, PipelineEventRecord
+from loom.serialization import PlainData
 
 
 RUN_URI = "file:///tmp/loom-runs/run-1"
@@ -53,7 +56,7 @@ def _observer_link(*, sink_name: str = "audit.sink") -> EventObserverLinkRecord:
 @dataclass(slots=True)
 class RecordingContext:
     run_uri: str
-    event_reference: object
+    event_reference: EventReference
     links: list[EventObserverLinkRecord] = field(default_factory=list)
     failures: list[EventSinkFailureRecord] = field(default_factory=list)
 
@@ -120,7 +123,7 @@ def test_observer_records_reject_malformed_shapes() -> None:
             failed_at="2020-01-01T00:00:02Z",
             failure_type="RuntimeError",
             failure_message="callback failed",
-            detail={"bad": object()},
+            detail=cast(Mapping[str, PlainData], {"bad": object()}),
         )
 
 
@@ -134,17 +137,26 @@ def test_registry_rejects_duplicates_and_dispatches_in_order() -> None:
     )
 
     def first(
-        _event: PipelineEventRecord,
-        sink_context: EventSinkContext,
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
     ) -> None:
+        assert isinstance(event, PipelineEventRecord)
         calls.append("first")
-        sink_context.record_event_observer_link(_observer_link(sink_name="audit.one"))
+        context.record_event_observer_link(_observer_link(sink_name="audit.one"))
 
-    def failing(_event: PipelineEventRecord, _context: EventSinkContext) -> None:
+    def failing(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        _ = event, context
         calls.append("failing")
         raise RuntimeError("boom")
 
-    def last(_event: PipelineEventRecord, _context: EventSinkContext) -> None:
+    def last(
+        event: PipelineEventRecord | EventReference,
+        context: EventSinkContext,
+    ) -> None:
+        _ = event, context
         calls.append("last")
 
     registry.register("audit.one", first)
