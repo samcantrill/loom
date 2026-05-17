@@ -10,24 +10,24 @@
 - Phase execution plan path: `docs/roadmap/stage-20/phases/runtime-event-dispatch.md`
 - Full plan: `docs/roadmap/stage-20/implementation-plan.md`
 - Source phase: Phase 3, `runtime-event-dispatch`
-- Stack predecessor: `codex/event-sink-registry-observer-facts`
-- Base branch: `codex/event-sink-registry-observer-facts`
-- Target branch: `codex/event-sink-registry-observer-facts`
-- Merge eligibility: stacked PR; reviewable against Phase 2, but merge-eligible
-  only after Phase 2 merges and this branch is rebased or otherwise replayed
-  onto `develop` with PR target `develop`
+- Stack predecessor: none; Phase 2 PR
+  [#188](https://github.com/samcantrill/loom/pull/188) merged before Phase 3
+  PR preparation
+- Base branch: `develop`
+- Target branch: `develop`
+- Merge eligibility: root PR; merge-eligible after the PR targets `develop`,
+  automated review passes, local validation passes, GitHub CI passes, and the
+  phase remains scoped to Phase 3
 - Workflow path: expanded path
 - Plan quality gate: verified passed in the implementation plan on 2026-05-17
 - Draft pass: completed by manager on 2026-05-17
 - Refine pass: completed by manager on 2026-05-17; Phase 2 stack and CI state
   incorporated
 - Setup limitations: Phase 2 PR [#188](https://github.com/samcantrill/loom/pull/188)
-  is open with CI pending at plan creation, so this branch starts from
-  `codex/event-sink-registry-observer-facts`. If Phase 2 merges before this PR
-  opens, rebase onto updated `develop`, update target branch metadata, rerun
-  validation, and open as a root PR.
-- Blockers: none for implementation while Phase 2 remains a valid stack
-  predecessor
+  merged into `develop` at
+  `f0c9f36c5253f490508e3cb8207a2f21da44cb94`; this branch was replayed onto
+  `origin/develop` before Phase 3 validation and PR preparation.
+- Blockers: none
 
 ## Objective
 
@@ -168,5 +168,7 @@ make test-summary
 - Refinement summary: pending
 - Blocker-resolution summary: pending
 - PR preparation: pending
-- Stack maintenance: pending Phase 2 merge outcome
+- Stack maintenance: Phase 2 merged before Phase 3 PR preparation; Phase 3 was
+  replayed onto `origin/develop` and no longer depends on
+  `codex/event-sink-registry-observer-facts`
 - Remaining blockers: none
