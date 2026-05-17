@@ -700,6 +700,7 @@ Current execution modules:
 ```text
 runner.py      PipelineRunner facade and local serial orchestration
 eventing.py    typed local lifecycle event append helpers
+event_sinks.py import-light observer sink registry and observer fact records
 run_locks.py   runner-held run lock owner/acquire/release helpers
 lifecycle.py   run and stage status writers
 models.py      execution request/result/failure models
@@ -763,6 +764,8 @@ artifacts.json
 plan.json
 freshness.json
 events.jsonl
+event_sink_failures.jsonl
+event_observer_links.jsonl
 lock.json
 ```
 

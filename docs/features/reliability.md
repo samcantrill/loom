@@ -433,6 +433,11 @@ Event payloads must be plain-data mappings. Local stores allocate contiguous
 per-run sequence numbers and append one JSON object per line to
 `<run_dir>/events.jsonl`.
 
+Event sink callback failures and observer links are event-adjacent facts, not
+ordinary runtime events. Local stores persist them in separate JSONL sidecars:
+`event_sink_failures.jsonl` and `event_observer_links.jsonl`. They reference
+the triggering event identity and remain read-only observer evidence.
+
 ## Notification Boundary
 
 Core should not include direct Slack, email, Teams, PagerDuty, or webhook

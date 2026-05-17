@@ -158,25 +158,25 @@ Local stores must persist observer facts in separate observer-fact sidecar JSONL
 
 - Status: required
 - Expected paths: `tests/package/test_pipeline_store_api.py`, `tests/package/test_import_boundaries.py`
-- Required assertions or deferral reason: `loom.pipeline.event_sinks` is importable without importing concrete stores, execution, diagnostics, CLI, plugins, optional SDKs, backend clients, or project code; public observer record and registry names are intentionally exposed through the chosen module/store API; new store facet protocols or exports appear in package API tests where repository convention requires.
+- Required assertions or deferral reason: add a subprocess import-boundary test that imports `loom.pipeline.event_sinks` directly and fails if it imports concrete stores (`loom.pipeline.stores`, `local_runs`, `sqlite_authority`, `service_authority`), execution, plugins, diagnostics, CLI, optional SDKs/backend clients (`mlflow`, `wandb`, `boto3`, `botocore`, `google.cloud`, `azure`, `requests`, `httpx`, or similar), or project code. Package API tests must intentionally expose `EventSink`, `EventSinkRegistry`, `EventSinkContext`, dispatch result types, `EventSinkFailureRecord`, `EventObserverLinkRecord`, `RunEventSinkFailureStore`, and `RunEventObserverLinkStore` through the chosen public module/store exports where repository convention requires.
 
 ### Unit Suite
 
 - Status: required
 - Expected paths: `tests/unit/loom/pipeline/test_event_sinks.py`, plus `tests/unit/loom/pipeline/stores/test_local_runs.py` or an adjacent local observer-fact test module if local persistence helpers need direct unit coverage
-- Required assertions or deferral reason: registry names validate; duplicate registration raises; dispatch order follows registration order; sink failures are captured without stopping later sinks; failure records include sink name, event reference, timestamp, failure type/message, and plain-data detail; observer-link records validate generic external references and reject service-specific or non-plain-data shapes; fake contexts expose only narrow observer-link/failure recorder methods.
+- Required assertions or deferral reason: registry names validate; duplicate registration raises; dispatch order follows registration order; sink failures are captured without stopping later sinks; `EventSinkFailureRecord` includes sink name, event reference, timestamp, failure type/message, optional plain-data detail, and any store-assigned observer-fact identity without reusing event sequence semantics; `EventObserverLinkRecord` validates generic external references and rejects service-specific or non-plain-data shapes; fake contexts expose only narrow observer-link/failure recorder methods.
 
 ### Contract Suite
 
 - Status: required
 - Expected paths: `tests/contracts/test_store_contract.py`, `tests/contracts/test_authority_store_contract.py`
-- Required assertions or deferral reason: fake and concrete contract stores satisfy the new observer-fact store/read facets; callback failure and observer-link append/read methods validate run ownership and plain-data shapes; readback returns typed records in deterministic append order; observer facts do not satisfy or mutate lifecycle, artifact, status, retry, transaction, submitted-operation, or runtime metadata protocols.
+- Required assertions or deferral reason: fake and concrete contract stores satisfy `RunEventSinkFailureStore` and `RunEventObserverLinkStore`; callback failure and observer-link append/read methods validate run ownership where existing stores can enforce it and reject invalid plain-data/event-reference shapes; readback returns typed records in deterministic append order; observer facts do not satisfy or mutate lifecycle, artifact, status, retry, transaction, submitted-operation, or runtime metadata protocols.
 
 ### Integration Suite
 
 - Status: required
 - Expected paths: `tests/integration/pipeline/test_local_stores.py` and authority/local integration paths touched by the store implementation
-- Required assertions or deferral reason: local run directories persist callback failure and observer-link facts durably, read them after a fresh store instance is created, preserve append order, and keep ordinary event reads separate from observer-fact reads.
+- Required assertions or deferral reason: local run directories persist callback failure and observer-link facts durably to separate observer-fact sidecar JSONL files, read them after a fresh store instance is created, preserve append order, keep ordinary event reads separate from observer-fact reads, and prove `events.jsonl` contains only `PipelineEventRecord` audit events.
 
 ### E2E Suite
 
@@ -225,18 +225,36 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: used by manager local refinement after
+  `make validate-pr` Pyright found the HTTP authority adapter missing the new
+  observer-fact methods and unit test callables using overly narrow types
 - PR review: unused
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
 
 - Draft plan: completed by `loom_phase_planner` on 2026-05-17
-- Final phase execution plan: pending expanded-path refine pass
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Final phase execution plan: completed by expanded-path refine pass on
+  2026-05-17; manager boundary findings incorporated
+- Implementation summary: import-light `loom.pipeline.event_sinks` contract,
+  instance-local `EventSinkRegistry`, dispatch result records,
+  `EventSinkFailureRecord`, `EventObserverLinkRecord`, narrow observer
+  recorder/context protocols, local JSONL observer-fact sidecars, SQLite and
+  service authority observer-fact persistence, authority-adapter forwarding,
+  fake authority support, package/import tests, unit tests, store contract
+  tests, authority contract tests, local store integration coverage, and docs
+  updates are implemented.
+- Implementation validation: targeted Phase 2 package/event-sink suite passed
+  with 72 tests; targeted store contract/local integration suite passed with
+  225 tests; `make validate-pr` passed Ruff, Pyright, default harness,
+  config-extra harness, and build; `make test-summary` passed with package 105
+  passed/1 skipped, unit 1350 passed/7 skipped/1 deselected, contract 263
+  passed/2 skipped, integration 165 passed/8 skipped/13 deselected, e2e 44
+  passed/2 deselected, and config-extra 447 passed/3 skipped/1936 deselected.
+- Refinement summary: added observer-fact methods to the HTTP
+  `AuthorityClientBackedPerRunAuthorityStore` fallback surface and tightened
+  event-sink unit test type signatures after Pyright validation.
 - Blocker-resolution summary: pending
 - PR preparation: pending
 - Stack maintenance: pending
-- Remaining blockers: none for draft planning
+- Remaining blockers: none
