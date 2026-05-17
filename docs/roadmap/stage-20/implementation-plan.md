@@ -1,11 +1,11 @@
 # Roadmap Stage 20 Implementation Plan: Runtime Events And Event Sinks
 
-Status: Phase 4 pr_open
+Status: Phase 4 merged; Stage 20 complete
 Roadmap stage: `v20`
 Planning document: `docs/roadmap/stage-20/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 4 `event-sink-plugins-diagnostics` pr_open
+Current phase: none; all phases merged
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after
@@ -343,7 +343,7 @@ but must preserve the programmatic-before-plugin-loading sequence.
 | 1 | `event-grammar-compatibility` | merged | `codex/event-grammar-compatibility` | [#187](https://github.com/samcantrill/loom/pull/187) | `loom.pipeline.events`, store event readers | Evolve event grammar and preserve schema-v1 compatibility | Package/import, event unit, store contract/integration, `make validate-pr`, `make test-summary` | Ordered audit log, schema-v1 compatibility |
 | 2 | `event-sink-registry-observer-facts` | merged | `codex/event-sink-registry-observer-facts` | [#188](https://github.com/samcantrill/loom/pull/188) | `loom.pipeline.event_sinks`, store failure/link facets | Add sink registry, dispatch result, callback failure, and observer-link facts | Package/import, sink unit, store contract/integration, `make validate-pr`, `make test-summary` | Observe-only dispatch, callback failure, observer links |
 | 3 | `runtime-event-dispatch` | merged | `codex/runtime-event-dispatch` | [#189](https://github.com/samcantrill/loom/pull/189) | `loom.pipeline.execution`, lifecycle, eventing | Dispatch events from committed runtime and Stage 19 facts | Eventing/runner/lifecycle unit and integration tests, diagnostics tests, `make validate-pr`, `make test-summary` | Committed fact projection, non-durable opt-out dispatch |
-| 4 | `event-sink-plugins-diagnostics` | pr_open | `codex/event-sink-plugins-diagnostics` | [#190](https://github.com/samcantrill/loom/pull/190) | `loom.plugins`, diagnostics, CLI/read models, docs | Add explicit plugin loading, warnings, inspection, docs, and final evidence | Plugin unit/contract, diagnostics/CLI tests as changed, docs, `make validate-pr`, `make test-summary` | Explicit plugin loading, read-only inspection |
+| 4 | `event-sink-plugins-diagnostics` | merged | `codex/event-sink-plugins-diagnostics` | [#190](https://github.com/samcantrill/loom/pull/190) | `loom.plugins`, diagnostics, CLI/read models, docs | Add explicit plugin loading, warnings, inspection, docs, and final evidence | Plugin unit/contract, diagnostics/CLI tests as changed, docs, `make validate-pr`, `make test-summary` | Explicit plugin loading, read-only inspection |
 
 ## Implementation Readiness Blockers
 
@@ -753,7 +753,7 @@ failure policy, and persistence defaults
 
 ## Phase 4: Plugins, Diagnostics, Inspection, And Docs
 
-Status: pr_open
+Status: merged
 Slug: `event-sink-plugins-diagnostics`
 Branch: `codex/event-sink-plugins-diagnostics`
 Worktree: `/home/samcantrill/work/loom-worktrees/event-sink-plugins-diagnostics`
@@ -860,7 +860,9 @@ diagnostics, possible CLI/read-model surfaces, and feature docs
   findings found
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed; Phases 1 through 3 merged into `develop`
-- Merge record: pending
+- Merge record: merged into `develop` by squash merge after final
+  target-branch verification and GitHub CI success; merge commit
+  `425b56c6dc8e1f42ee0d72a0d95cba7bebbd3e86`
 
 ### Risks And Stop Conditions
 
@@ -886,9 +888,14 @@ diagnostics, possible CLI/read-model surfaces, and feature docs
 - PR: [#190](https://github.com/samcantrill/loom/pull/190) opened against
   `develop`; verification confirmed base `develop`, head
   `codex/event-sink-plugins-diagnostics`, state `OPEN`.
-- Merge: pending
-- Follow-up: merge Phase 4 after GitHub CI passes and final target-branch
-  verification confirms `develop`.
+- Merge: squash-merged into `develop` at
+  `425b56c6dc8e1f42ee0d72a0d95cba7bebbd3e86` after final target-branch
+  verification confirmed base `develop`, head
+  `codex/event-sink-plugins-diagnostics`, mergeable state `CLEAN`, and GitHub
+  CI `checks` success.
+- Follow-up: no successor branch depends on
+  `codex/event-sink-plugins-diagnostics`; phase worktree and local branch are
+  eligible for cleanup.
 
 ## Cross-Phase Validation
 
