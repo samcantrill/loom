@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: pr_open
+- Status: merged
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 2: Local Container Builders`
 - Branch: `codex/local-container-builders`
@@ -14,7 +14,8 @@
 - Base branch: `origin/develop` at `b5d5967`
 - Target branch: `develop`
 - PR: https://github.com/samcantrill/loom/pull/183
-- Merge eligibility: root phase; merge to `develop` after validation and automated review
+- Merge eligibility: merged to `develop`
+- Merge commit: `a3f62c246a6505915c8c631d41bb1da2710ff129`
 - Workflow path: expanded path
 - Successor dependency notes: Phase 3 depends on resolved output refs and build-service result shapes.
 - Plan quality gate: passed in the implementation plan on 2026-05-17
@@ -217,4 +218,7 @@ make test-summary
 - PR preparation: PR body drafted in
   `docs/roadmap/stage-18/phases/local-container-builders-pr-body.md`
 - Stack maintenance: root phase from `develop`
+- Merge record: PR #183 merged to `develop` as
+  `a3f62c246a6505915c8c631d41bb1da2710ff129`; no successor branch depended on
+  `codex/local-container-builders` at merge time.
 - Remaining blockers: none
