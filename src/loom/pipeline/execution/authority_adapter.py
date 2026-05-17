@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.reliability import (
@@ -1046,6 +1047,28 @@ class AuthorityBackedSerialRunStore:
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
         return self.local_store.read_events(run_uri)
 
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> None:
+        self.authority_store.append_event_sink_failure(run_uri, failure)
+        self.local_store.append_event_sink_failure(run_uri, failure)
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        return self.local_store.read_event_sink_failures(run_uri)
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> None:
+        self.authority_store.append_event_observer_link(run_uri, link)
+        self.local_store.append_event_observer_link(run_uri, link)
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        return self.local_store.read_event_observer_links(run_uri)
+
     def acquire_run_lock(
         self,
         run_uri: str,
@@ -1472,6 +1495,12 @@ class AuthorityBackedSerialRunStore:
 
     def local_run_freshness_path(self, run_uri: str) -> Path:
         return self.local_store.local_run_freshness_path(run_uri)
+
+    def local_event_sink_failures_path(self, run_uri: str) -> Path:
+        return self.local_store.local_event_sink_failures_path(run_uri)
+
+    def local_event_observer_links_path(self, run_uri: str) -> Path:
+        return self.local_store.local_event_observer_links_path(run_uri)
 
     def _ensure_stage_attempt(
         self, run_uri: str, stage_name: str, attempt: int

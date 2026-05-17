@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
@@ -78,6 +79,8 @@ class _RunState:
     facts: dict[str, list[ArtifactFactRecord]] = field(default_factory=dict)
     cleanup: list[CleanupCandidate] = field(default_factory=list)
     events: list[PipelineEventRecord] = field(default_factory=list)
+    event_sink_failures: list[EventSinkFailureRecord] = field(default_factory=list)
+    event_observer_links: list[EventObserverLinkRecord] = field(default_factory=list)
     reliability_policy_facts: dict[str, ReliabilityPolicyFact] = field(
         default_factory=dict
     )
@@ -543,6 +546,36 @@ class InMemoryPerRunAuthorityStore(PerRunAuthorityStore):
         state.events.append(record)
         state.revision = self._next_revision()
         return record
+
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> BackendRevision:
+        state = self._require_run(run_uri)
+        if failure.run_uri != run_uri:
+            raise ValueError("event sink failure run_uri does not match run")
+        state.event_sink_failures.append(failure)
+        state.revision = self._next_revision()
+        return state.revision
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        return tuple(self._require_run(run_uri).event_sink_failures)
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> BackendRevision:
+        state = self._require_run(run_uri)
+        if link.run_uri != run_uri:
+            raise ValueError("event observer link run_uri does not match run")
+        state.event_observer_links.append(link)
+        state.revision = self._next_revision()
+        return state.revision
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        return tuple(self._require_run(run_uri).event_observer_links)
 
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
         state = self._require_run(run_uri)

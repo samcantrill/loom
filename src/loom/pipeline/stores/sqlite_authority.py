@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
@@ -195,6 +196,26 @@ _REQUIRED_SCHEMA_COLUMNS = {
             "scope_json",
             "event_type",
             "payload_json",
+            "revision_sequence",
+        }
+    ),
+    "event_sink_failures": frozenset(
+        {
+            "id",
+            "sink_name",
+            "failed_at",
+            "event_id",
+            "record_json",
+            "revision_sequence",
+        }
+    ),
+    "event_observer_links": frozenset(
+        {
+            "id",
+            "sink_name",
+            "recorded_at",
+            "event_id",
+            "record_json",
             "revision_sequence",
         }
     ),
@@ -1190,6 +1211,92 @@ class SQLitePerRunAuthorityStore:
             _touch_run(conn, revision)
             return record
 
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> BackendRevision:
+        self._bind_run_uri(run_uri)
+        if not isinstance(failure, EventSinkFailureRecord):
+            raise AuthorityStoreError("failure must be an EventSinkFailureRecord")
+        _validate_observer_fact_run_uri(failure.run_uri, run_uri, "event sink failure")
+        with self._transaction(run_uri) as conn:
+            revision = self._next_revision(conn)
+            conn.execute(
+                """
+                INSERT INTO event_sink_failures (
+                    sink_name, failed_at, event_id, record_json, revision_sequence
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    failure.sink_name,
+                    failure.failed_at,
+                    failure.event_reference.event_id,
+                    _json_dumps(failure.to_dict()),
+                    revision.sequence,
+                ),
+            )
+            _touch_run(conn, revision)
+            return revision
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            return tuple(
+                EventSinkFailureRecord.from_dict(
+                    _json_loads(cast(str, row["record_json"]))
+                )
+                for row in conn.execute(
+                    "SELECT record_json FROM event_sink_failures ORDER BY id"
+                )
+            )
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> BackendRevision:
+        self._bind_run_uri(run_uri)
+        if not isinstance(link, EventObserverLinkRecord):
+            raise AuthorityStoreError("link must be an EventObserverLinkRecord")
+        _validate_observer_fact_run_uri(link.run_uri, run_uri, "event observer link")
+        with self._transaction(run_uri) as conn:
+            revision = self._next_revision(conn)
+            conn.execute(
+                """
+                INSERT INTO event_observer_links (
+                    sink_name, recorded_at, event_id, record_json, revision_sequence
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    link.sink_name,
+                    link.recorded_at,
+                    link.event_reference.event_id,
+                    _json_dumps(link.to_dict()),
+                    revision.sequence,
+                ),
+            )
+            _touch_run(conn, revision)
+            return revision
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        self._bind_run_uri(run_uri)
+        with self._read_connection_for_run(run_uri) as conn:
+            _raise_for_schema(conn)
+            _require_run_status(conn)
+            return tuple(
+                EventObserverLinkRecord.from_dict(
+                    _json_loads(cast(str, row["record_json"]))
+                )
+                for row in conn.execute(
+                    "SELECT record_json FROM event_observer_links ORDER BY id"
+                )
+            )
+
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
         self._bind_run_uri(run_uri)
         with self._read_connection_for_run(run_uri) as conn:
@@ -1686,6 +1793,26 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
             event_type TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             event_json TEXT,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS event_sink_failures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sink_name TEXT NOT NULL,
+            failed_at TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            revision_sequence INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS event_observer_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sink_name TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            record_json TEXT NOT NULL,
             revision_sequence INTEGER NOT NULL
         )
         """,
@@ -2485,6 +2612,13 @@ def _plain_mapping(
     if not isinstance(normalized, Mapping):
         raise AuthorityStoreError(f"{field} must be a mapping")
     return cast(Mapping[str, PlainData], normalized)
+
+
+def _validate_observer_fact_run_uri(actual: str, expected: str, label: str) -> None:
+    if actual != expected:
+        raise AuthorityStoreError(
+            f"{label} run_uri {actual!r} does not match {expected!r}"
+        )
 
 
 def _require_row(row: sqlite3.Row | None, message: str) -> sqlite3.Row:

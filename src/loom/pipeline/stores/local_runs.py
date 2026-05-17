@@ -12,6 +12,11 @@ from threading import Lock
 from typing import cast
 
 from loom.artifacts import ArtifactRef, ArtifactValidationError
+from loom.pipeline.event_sinks import (
+    EventObserverLinkRecord,
+    EventSinkError,
+    EventSinkFailureRecord,
+)
 from loom.pipeline.events import PipelineEvent, PipelineEventError, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord, RunLockValidationError
 from loom.pipeline.reliability import (
@@ -115,6 +120,7 @@ class LocalRunStore:
     def __init__(self, root: str | Path = "runs") -> None:
         self.root = Path(root)
         self._event_lock = Lock()
+        self._observer_fact_lock = Lock()
 
     def resolve_run_uri(self, run_uri: str) -> str:
         return validate_run_uri(run_uri)
@@ -256,6 +262,14 @@ class LocalRunStore:
     def local_run_freshness_path(self, run_uri: str) -> Path:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         return self.local_run_dir(run_uri_text) / "freshness.json"
+
+    def local_event_sink_failures_path(self, run_uri: str) -> Path:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        return self.local_run_dir(run_uri_text) / "event_sink_failures.jsonl"
+
+    def local_event_observer_links_path(self, run_uri: str) -> Path:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        return self.local_run_dir(run_uri_text) / "event_observer_links.jsonl"
 
     def prepare_stage_workspace(self, run_uri: str, stage_name: str) -> None:
         self.local_stage_workspace_dir(run_uri, stage_name).mkdir(
@@ -980,6 +994,68 @@ class LocalRunStore:
                 )
         return tuple(record for _, record in records)
 
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> None:
+        if not isinstance(failure, EventSinkFailureRecord):
+            raise CorruptStoreDocumentError(
+                "append_event_sink_failure requires an EventSinkFailureRecord"
+            )
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        self.open_run(run_uri_text)
+        _require_matching_observer_fact_run_uri(
+            failure.run_uri,
+            run_uri_text,
+            label="event sink failure",
+        )
+        path = self.local_event_sink_failures_path(run_uri_text)
+        with self._observer_fact_lock:
+            self._append_observer_fact(path, failure.to_dict(), label="event sink failure")
+        self._touch_run_freshness(run_uri_text, reason="event_sink_failure")
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_event_sink_failures_path(run_uri_text)
+        return self._read_observer_fact_log(
+            run_uri_text,
+            path,
+            parser=EventSinkFailureRecord.from_dict,
+            label="event sink failure",
+        )
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> None:
+        if not isinstance(link, EventObserverLinkRecord):
+            raise CorruptStoreDocumentError(
+                "append_event_observer_link requires an EventObserverLinkRecord"
+            )
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        self.open_run(run_uri_text)
+        _require_matching_observer_fact_run_uri(
+            link.run_uri,
+            run_uri_text,
+            label="event observer link",
+        )
+        path = self.local_event_observer_links_path(run_uri_text)
+        with self._observer_fact_lock:
+            self._append_observer_fact(path, link.to_dict(), label="event observer link")
+        self._touch_run_freshness(run_uri_text, reason="event_observer_link")
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        run_uri_text = validate_run_uri(run_uri, field="run_uri")
+        path = self.local_event_observer_links_path(run_uri_text)
+        return self._read_observer_fact_log(
+            run_uri_text,
+            path,
+            parser=EventObserverLinkRecord.from_dict,
+            label="event observer link",
+        )
+
     def acquire_run_lock(
         self,
         run_uri: str,
@@ -1541,6 +1617,53 @@ class LocalRunStore:
             )
         return value
 
+    def _append_observer_fact(
+        self, path: Path, payload: Mapping[str, PlainData], *, label: str
+    ) -> None:
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(stable_json_dumps(payload))
+                handle.write("\n")
+        except OSError as exc:
+            raise CorruptStoreDocumentError(
+                f"Could not append {label} at {path}: {exc}"
+            ) from exc
+
+    def _read_observer_fact_log[T](
+        self,
+        run_uri: str,
+        path: Path,
+        *,
+        parser: Callable[[object], T],
+        label: str,
+    ) -> tuple[T, ...]:
+        if not path.exists():
+            return ()
+        if not path.is_file():
+            raise CorruptStoreDocumentError(f"Expected {label} log file at {path}")
+        records: list[T] = []
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            try:
+                parsed = json_loads(line, path=f"{path}:{line_number}")
+                record = parser(parsed)
+            except (DeserializationError, EventSinkError) as exc:
+                raise CorruptStoreDocumentError(
+                    f"Malformed {label} record at {path}:{line_number}: {exc}"
+                ) from exc
+            record_run_uri = getattr(record, "run_uri", None)
+            _require_matching_observer_fact_run_uri(
+                record_run_uri,
+                run_uri,
+                label=label,
+                location=f"{path}:{line_number}",
+            )
+            records.append(record)
+        return tuple(records)
+
     def _touch_run_freshness(self, run_uri: str, *, reason: str) -> RunFreshnessRecord:
         run_uri_text = validate_run_uri(run_uri, field="run_uri")
         path = self.local_run_freshness_path(run_uri_text)
@@ -1754,6 +1877,25 @@ def _require_run_uri_field(
             f"{label} at {path} has run_uri {value_text!r}, expected {expected_text!r}"
         )
     return value_text
+
+
+def _require_matching_observer_fact_run_uri(
+    actual: object,
+    expected: str,
+    *,
+    label: str,
+    location: str | None = None,
+) -> None:
+    if not isinstance(actual, str):
+        where = "" if location is None else f" at {location}"
+        raise CorruptStoreDocumentError(f"{label}{where} must include run_uri")
+    actual_text = validate_run_uri(actual, field=f"{label}.run_uri")
+    expected_text = validate_run_uri(expected, field="run_uri")
+    if actual_text != expected_text:
+        where = "" if location is None else f" at {location}"
+        raise CorruptStoreDocumentError(
+            f"{label}{where} has run_uri {actual_text!r}, expected {expected_text!r}"
+        )
 
 
 def _require_string_field(
