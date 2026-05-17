@@ -1,11 +1,11 @@
 # Roadmap Stage 20 Implementation Plan: Runtime Events And Event Sinks
 
-Status: Phase 2 PR open
+Status: Phase 2 merged; Phase 3 in progress
 Roadmap stage: `v20`
 Planning document: `docs/roadmap/stage-20/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 2 PR open; GitHub CI pending
+Current phase: Phase 3 `runtime-event-dispatch` in progress
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after
@@ -341,8 +341,8 @@ but must preserve the programmatic-before-plugin-loading sequence.
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | `event-grammar-compatibility` | merged | `codex/event-grammar-compatibility` | [#187](https://github.com/samcantrill/loom/pull/187) | `loom.pipeline.events`, store event readers | Evolve event grammar and preserve schema-v1 compatibility | Package/import, event unit, store contract/integration, `make validate-pr`, `make test-summary` | Ordered audit log, schema-v1 compatibility |
-| 2 | `event-sink-registry-observer-facts` | pr_open | `codex/event-sink-registry-observer-facts` | [#188](https://github.com/samcantrill/loom/pull/188) | `loom.pipeline.event_sinks`, store failure/link facets | Add sink registry, dispatch result, callback failure, and observer-link facts | Package/import, sink unit, store contract/integration, `make validate-pr`, `make test-summary` | Observe-only dispatch, callback failure, observer links |
-| 3 | `runtime-event-dispatch` | pending | `codex/runtime-event-dispatch` | pending | `loom.pipeline.execution`, lifecycle, eventing | Dispatch events from committed runtime and Stage 19 facts | Eventing/runner/lifecycle unit and integration tests, diagnostics tests, `make validate-pr`, `make test-summary` | Committed fact projection, non-durable opt-out dispatch |
+| 2 | `event-sink-registry-observer-facts` | merged | `codex/event-sink-registry-observer-facts` | [#188](https://github.com/samcantrill/loom/pull/188) | `loom.pipeline.event_sinks`, store failure/link facets | Add sink registry, dispatch result, callback failure, and observer-link facts | Package/import, sink unit, store contract/integration, `make validate-pr`, `make test-summary` | Observe-only dispatch, callback failure, observer links |
+| 3 | `runtime-event-dispatch` | in_progress | `codex/runtime-event-dispatch` | pending | `loom.pipeline.execution`, lifecycle, eventing | Dispatch events from committed runtime and Stage 19 facts | Eventing/runner/lifecycle unit and integration tests, diagnostics tests, `make validate-pr`, `make test-summary` | Committed fact projection, non-durable opt-out dispatch |
 | 4 | `event-sink-plugins-diagnostics` | pending | `codex/event-sink-plugins-diagnostics` | pending | `loom.plugins`, diagnostics, CLI/read models, docs | Add explicit plugin loading, warnings, inspection, docs, and final evidence | Plugin unit/contract, diagnostics/CLI tests as changed, docs, `make validate-pr`, `make test-summary` | Explicit plugin loading, read-only inspection |
 
 ## Implementation Readiness Blockers
@@ -479,7 +479,7 @@ and compatibility behavior
 
 ## Phase 2: Sink Registry And Observer Facts
 
-Status: pr_open
+Status: merged
 Slug: `event-sink-registry-observer-facts`
 Branch: `codex/event-sink-registry-observer-facts`
 Worktree: `/home/samcantrill/work/loom-worktrees/event-sink-registry-observer-facts`
@@ -570,10 +570,13 @@ and durable observer facts
 - Planning/refinement budget: expanded path; draft and refine completed
 - Implementation/refinement budget: used after Pyright found missing HTTP
   authority-adapter observer-fact methods and narrow unit test callables
-- PR review budget: one automated review pass available
+- PR review budget: used by manager local review on 2026-05-17; no blocking
+  findings found
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phase 1 merged or valid as stack predecessor
-- Merge record: pending GitHub CI and automated PR review
+- Merge record: merged into `develop` by squash merge after final target-branch
+  verification and GitHub CI success; merge commit
+  `f0c9f36c5253f490508e3cb8207a2f21da44cb94`
 
 ### Risks And Stop Conditions
 
@@ -601,15 +604,16 @@ and durable observer facts
 - PR: [#188](https://github.com/samcantrill/loom/pull/188) opened against
   `develop`; verified base `develop`, head
   `codex/event-sink-registry-observer-facts`, state `OPEN`; GitHub CI `checks`
-  was in progress at PR-open verification.
-- Merge: pending
-- Follow-up: Phase 3 may start from
-  `codex/event-sink-registry-observer-facts` only if Phase 2 cannot be merged
-  immediately after CI; otherwise Phase 3 should start from updated `develop`.
+  passed before merge.
+- Merge: squash-merged into `develop` at
+  `f0c9f36c5253f490508e3cb8207a2f21da44cb94`.
+- Follow-up: Phase 3 branch `codex/runtime-event-dispatch` was replayed onto
+  updated `develop`; no successor branch still depends on
+  `codex/event-sink-registry-observer-facts`.
 
 ## Phase 3: Runtime Dispatch From Committed Facts
 
-Status: pending
+Status: in_progress
 Slug: `runtime-event-dispatch`
 Branch: `codex/runtime-event-dispatch`
 Worktree: `/home/samcantrill/work/loom-worktrees/runtime-event-dispatch`
@@ -702,14 +706,16 @@ failure policy, and persistence defaults
 
 ### Phase Workflow State
 
-- Phase execution plan: pending
-- Planning/refinement budget: expanded path; draft and refine expected
+- Phase execution plan: completed in
+  `docs/roadmap/stage-20/phases/runtime-event-dispatch.md`
+- Planning/refinement budget: expanded path; draft and refine completed; Phase
+  2 merged and Phase 3 replayed onto `develop` before PR preparation
 - Implementation/refinement budget: one pass available because this phase
   changes runtime ordering and failure policy
 - PR review budget: one automated review pass available
 - Blocker-resolution budget: unused
-- Pre-submit blocker gate: Phases 1 and 2 merged or valid stack predecessors;
-  Stage 19 dependency state must be recorded
+- Pre-submit blocker gate: Phases 1 and 2 merged; Stage 19 dependency state
+  must be recorded in Phase 3 completion notes if projection remains deferred
 - Merge record: pending
 
 ### Risks And Stop Conditions
