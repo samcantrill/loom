@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.reliability import (
@@ -335,6 +336,28 @@ class RunEventStore(Protocol):
 
 
 @runtime_checkable
+class RunEventSinkFailureStore(Protocol):
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> None: ...
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]: ...
+
+
+@runtime_checkable
+class RunEventObserverLinkStore(Protocol):
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> None: ...
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]: ...
+
+
+@runtime_checkable
 class RunLockStore(Protocol):
     def acquire_run_lock(
         self,
@@ -509,6 +532,10 @@ class LocalRunStorePaths(Protocol):
 
     def local_run_freshness_path(self, run_uri: str) -> Path: ...
 
+    def local_event_sink_failures_path(self, run_uri: str) -> Path: ...
+
+    def local_event_observer_links_path(self, run_uri: str) -> Path: ...
+
 
 @runtime_checkable
 class LegacyRunStore(
@@ -522,6 +549,8 @@ class LegacyRunStore(
     RunConfigStore,
     RunProvenanceStore,
     RunEventStore,
+    RunEventSinkFailureStore,
+    RunEventObserverLinkStore,
     RunLockStore,
     RunInspectionStore,
     RunRuntimeMetadataStore,

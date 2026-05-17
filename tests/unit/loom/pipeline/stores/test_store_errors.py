@@ -250,6 +250,8 @@ def test_store_error_exports() -> None:
         "RunFreshnessRecord",
         "RunFreshnessError",
         "RunEventStore",
+        "RunEventSinkFailureStore",
+        "RunEventObserverLinkStore",
         "RunInspectionStore",
         "RunLockStore",
         "RunStatusStore",

@@ -12,6 +12,11 @@ import pytest
 import loom.pipeline.stores.run_uri as run_uri_module
 from loom.artifacts import ArtifactRef
 from loom.pipeline import RunStatus, StageStatus
+from loom.pipeline.event_sinks import (
+    EventObserverExternalRef,
+    EventObserverLinkRecord,
+    EventSinkFailureRecord,
+)
 from loom.pipeline.events import EventScope, PipelineEvent
 from loom.pipeline.reliability import (
     FailureClassification,
@@ -500,6 +505,58 @@ def test_local_run_appends_and_reads_events(tmp_path: Path) -> None:
     assert (store.local_run_dir(run_uri) / "events.jsonl").read_text(
         encoding="utf-8"
     ).count("\n") == 2
+
+
+def test_local_run_persists_observer_facts_separately_from_events(
+    tmp_path: Path,
+) -> None:
+    store = LocalRunStore(root=tmp_path / "runs")
+    run_uri = _run_uri(tmp_path)
+    store.create_run(run_uri)
+    event = store.append_event(
+        run_uri,
+        PipelineEvent(
+            scope=EventScope.run(),
+            event_type="run.created",
+            timestamp="2020-01-01T00:00:00Z",
+        ),
+    )
+    failure = EventSinkFailureRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=event.to_event_reference(),
+        failed_at="2020-01-01T00:00:01Z",
+        failure_type="RuntimeError",
+        failure_message="callback failed",
+        detail={"retryable": False},
+    )
+    link = EventObserverLinkRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=event.to_event_reference(),
+        recorded_at="2020-01-01T00:00:02Z",
+        external_ref=EventObserverExternalRef(
+            kind="trace",
+            identifiers={"trace_id": "trace-1"},
+        ),
+        metadata={"source": "unit"},
+    )
+
+    store.append_event_sink_failure(run_uri, failure)
+    store.append_event_observer_link(run_uri, link)
+    reopened = LocalRunStore(root=tmp_path / "runs")
+
+    assert reopened.read_event_sink_failures(run_uri) == (failure,)
+    assert reopened.read_event_observer_links(run_uri) == (link,)
+    assert [record.event_type for record in reopened.read_events(run_uri)] == [
+        "run.created"
+    ]
+    assert store.local_event_sink_failures_path(run_uri).name == (
+        "event_sink_failures.jsonl"
+    )
+    assert store.local_event_observer_links_path(run_uri).name == (
+        "event_observer_links.jsonl"
+    )
 
 
 def test_local_run_appends_events_with_unique_sequences_across_threads(

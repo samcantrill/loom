@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from loom.artifacts import ArtifactRef
-from loom.pipeline.events import EventScope, PipelineEvent
+from loom.pipeline.event_sinks import (
+    EventObserverExternalRef,
+    EventObserverLinkRecord,
+    EventSinkFailureRecord,
+)
+from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.status import RunStatus, StageStatus
 from loom.pipeline.submitted import SubmittedOperationRecord, SubmittedOperationState
 from loom.pipeline.stores import (
@@ -65,6 +70,36 @@ def _submitted_record(run_uri: str) -> SubmittedOperationRecord:
         state=SubmittedOperationState.SUBMITTED,
         manifest_relative_path="submitted/sub-1.json",
         summary_counts={"submitted": 1},
+    )
+
+
+def _event_sink_failure(
+    run_uri: str, event: PipelineEventRecord
+) -> EventSinkFailureRecord:
+    return EventSinkFailureRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=event.to_event_reference(),
+        failed_at="2020-01-01T00:00:02Z",
+        failure_type="RuntimeError",
+        failure_message="callback failed",
+        detail={"phase": "contract"},
+    )
+
+
+def _event_observer_link(
+    run_uri: str, event: PipelineEventRecord
+) -> EventObserverLinkRecord:
+    return EventObserverLinkRecord(
+        sink_name="audit.sink",
+        run_uri=run_uri,
+        event_reference=event.to_event_reference(),
+        recorded_at="2020-01-01T00:00:03Z",
+        external_ref=EventObserverExternalRef(
+            kind="trace",
+            identifiers={"trace_id": "trace-1"},
+        ),
+        metadata={"source": "contract"},
     )
 
 
@@ -148,6 +183,15 @@ def test_per_run_authority_contract_records_revisioned_lifecycle_facts(
         PipelineEvent(scope=EventScope.stage("build"), event_type="stage.succeeded"),
     )
     assert event.sequence == 1
+    failure = _event_sink_failure(run_uri, event)
+    failure_revision = store.append_event_sink_failure(run_uri, failure)
+    link = _event_observer_link(run_uri, event)
+    link_revision = store.append_event_observer_link(run_uri, link)
+
+    assert failure_revision.sequence > submitted_revision.sequence
+    assert link_revision.sequence > failure_revision.sequence
+    assert store.read_event_sink_failures(run_uri) == (failure,)
+    assert store.read_event_observer_links(run_uri) == (link,)
 
     snapshot = store.snapshot(run_uri)
     assert snapshot.status is RunStatus.RUNNING

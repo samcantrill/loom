@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.reliability import (
@@ -115,6 +116,8 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
         )
         self._leases: dict[str, LeaseRecord] = {}
         self._event_sequences: dict[str, int] = {}
+        self._event_sink_failures: dict[str, list[EventSinkFailureRecord]] = {}
+        self._event_observer_links: dict[str, list[EventObserverLinkRecord]] = {}
 
     @property
     def authority_config(self) -> AuthorityConfig:
@@ -574,6 +577,36 @@ class AuthorityClientBackedPerRunAuthorityStore(PerRunAuthorityStore):
             event_type=event.event_type,
             payload=payload,
         )
+
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> BackendRevision:
+        if failure.run_uri != run_uri:
+            raise AuthorityStoreError("event sink failure run_uri does not match run")
+        self.open_run(run_uri)
+        self._event_sink_failures.setdefault(run_uri, []).append(failure)
+        return self.snapshot(run_uri).revision
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        self.open_run(run_uri)
+        return tuple(self._event_sink_failures.get(run_uri, ()))
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> BackendRevision:
+        if link.run_uri != run_uri:
+            raise AuthorityStoreError("event observer link run_uri does not match run")
+        self.open_run(run_uri)
+        self._event_observer_links.setdefault(run_uri, []).append(link)
+        return self.snapshot(run_uri).revision
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        self.open_run(run_uri)
+        return tuple(self._event_observer_links.get(run_uri, ()))
 
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
         return self.open_run(run_uri)
@@ -1046,6 +1079,28 @@ class AuthorityBackedSerialRunStore:
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]:
         return self.local_store.read_events(run_uri)
 
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> None:
+        self.authority_store.append_event_sink_failure(run_uri, failure)
+        self.local_store.append_event_sink_failure(run_uri, failure)
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        return self.local_store.read_event_sink_failures(run_uri)
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> None:
+        self.authority_store.append_event_observer_link(run_uri, link)
+        self.local_store.append_event_observer_link(run_uri, link)
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        return self.local_store.read_event_observer_links(run_uri)
+
     def acquire_run_lock(
         self,
         run_uri: str,
@@ -1472,6 +1527,12 @@ class AuthorityBackedSerialRunStore:
 
     def local_run_freshness_path(self, run_uri: str) -> Path:
         return self.local_store.local_run_freshness_path(run_uri)
+
+    def local_event_sink_failures_path(self, run_uri: str) -> Path:
+        return self.local_store.local_event_sink_failures_path(run_uri)
+
+    def local_event_observer_links_path(self, run_uri: str) -> Path:
+        return self.local_store.local_event_observer_links_path(run_uri)
 
     def _ensure_stage_attempt(
         self, run_uri: str, stage_name: str, attempt: int

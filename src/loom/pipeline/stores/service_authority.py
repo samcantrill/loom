@@ -14,6 +14,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import EventScope, PipelineEvent, PipelineEventRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
@@ -116,6 +117,10 @@ _EXPOSED = (
     "write_timeout_outcome",
     "list_timeout_outcomes",
     "record_output_commit",
+    "append_event_sink_failure",
+    "read_event_sink_failures",
+    "append_event_observer_link",
+    "read_event_observer_links",
     "snapshot",
     "scan_recovery",
     "list_cleanup_candidates",
@@ -564,6 +569,44 @@ class ServiceAuthorityStore(PerRunAuthorityStore):
             ),
         )
 
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call("append_event_sink_failure", run_uri, failure.to_dict()),
+        )
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]:
+        return tuple(
+            EventSinkFailureRecord.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call("read_event_sink_failures", run_uri),
+            )
+        )
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> BackendRevision:
+        return cast(
+            BackendRevision,
+            self._call("append_event_observer_link", run_uri, link.to_dict()),
+        )
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]:
+        return tuple(
+            EventObserverLinkRecord.from_dict(record)
+            for record in cast(
+                tuple[object, ...],
+                self._call("read_event_observer_links", run_uri),
+            )
+        )
+
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot:
         return AuthoritativeRunSnapshot.from_dict(self._call("snapshot", run_uri))
 
@@ -672,6 +715,8 @@ class _RunState:
         self.facts: dict[str, list[ArtifactFactRecord]] = {}
         self.cleanup: list[CleanupCandidate] = []
         self.events: list[PipelineEventRecord] = []
+        self.event_sink_failures: list[EventSinkFailureRecord] = []
+        self.event_observer_links: list[EventObserverLinkRecord] = []
         self.reliability_policy_facts: dict[str, ReliabilityPolicyFact] = {}
         self.reliability_status_details: dict[str, ReliabilityStatusDetail] = {}
         self.reliability_transactions: dict[str, StageAttemptTransaction] = {}
@@ -1243,6 +1288,46 @@ class _ServiceAuthorityCore:
             state.revision = self._next_revision()
             return record.to_dict()
 
+    def append_event_sink_failure(
+        self, run_uri: str, failure: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = EventSinkFailureRecord.from_dict(failure)
+            _validate_observer_fact_run_uri(record.run_uri, run_uri, "event sink failure")
+            state.event_sink_failures.append(record)
+            state.revision = self._next_revision()
+            return state.revision
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                failure.to_dict()
+                for failure in self._require_run(run_uri).event_sink_failures
+            )
+
+    def append_event_observer_link(
+        self, run_uri: str, link: object
+    ) -> BackendRevision:
+        with self._lock:
+            state = self._require_run(run_uri)
+            record = EventObserverLinkRecord.from_dict(link)
+            _validate_observer_fact_run_uri(record.run_uri, run_uri, "event observer link")
+            state.event_observer_links.append(record)
+            state.revision = self._next_revision()
+            return state.revision
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[dict[str, PlainData], ...]:
+        with self._lock:
+            return tuple(
+                link.to_dict()
+                for link in self._require_run(run_uri).event_observer_links
+            )
+
     def snapshot(self, run_uri: str) -> dict[str, PlainData]:
         with self._lock:
             state = self._require_run(run_uri)
@@ -1632,6 +1717,13 @@ def _plain_mapping_from_wire(value: object, path: str) -> dict[str, PlainData]:
     if not isinstance(normalized, dict):
         raise AuthorityStoreError(f"{path} must be a mapping")
     return cast(dict[str, PlainData], normalized)
+
+
+def _validate_observer_fact_run_uri(actual: str, expected: str, label: str) -> None:
+    if actual != expected:
+        raise AuthorityStoreError(
+            f"{label} run_uri {actual!r} does not match {expected!r}"
+        )
 
 
 def _object_mapping(value: object, field: str) -> Mapping[str, object]:

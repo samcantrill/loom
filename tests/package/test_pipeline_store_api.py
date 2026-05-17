@@ -234,6 +234,8 @@ def test_pipeline_store_public_exports() -> None:
         "RunFreshnessRecord",
         "RunFreshnessError",
         "RunEventStore",
+        "RunEventSinkFailureStore",
+        "RunEventObserverLinkStore",
         "RunInspectionStore",
         "RunLockStore",
         "RunStatusStore",
@@ -320,6 +322,10 @@ def test_pipeline_store_public_exports() -> None:
     assert "read_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "write_prepared_run" in stores.RunPreparedRunStore.__dict__
     assert "read_run_freshness" in stores.RunFreshnessStore.__dict__
+    assert "append_event_sink_failure" in stores.RunEventSinkFailureStore.__dict__
+    assert "read_event_sink_failures" in stores.RunEventSinkFailureStore.__dict__
+    assert "append_event_observer_link" in stores.RunEventObserverLinkStore.__dict__
+    assert "read_event_observer_links" in stores.RunEventObserverLinkStore.__dict__
     assert "write_reliability_status_detail" in stores.RunReliabilityStore.__dict__
     assert "write_stage_attempt_transaction" in stores.RunReliabilityStore.__dict__
     assert "list_retry_decisions" in stores.RunReliabilityStore.__dict__
