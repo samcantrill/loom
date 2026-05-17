@@ -9,8 +9,13 @@ from types import MappingProxyType
 from typing import cast
 
 from loom.pipeline.stores.config import AuthorityConfig, authority_config_to_cli_args
-from loom.serialization import PlainData, load_versioned_document
-from loom.serialization.errors import SchemaVersionError
+from loom.serialization import (
+    PlainData,
+    freeze_plain_data,
+    load_versioned_document,
+    thaw_plain_data,
+)
+from loom.serialization.errors import PlainDataError, SchemaVersionError
 
 from .errors import SlurmOptionError
 
@@ -63,6 +68,7 @@ class SlurmCommandArgv:
 
     launcher_argv: Sequence[str] = DEFAULT_SLURM_LAUNCHER_ARGV
     command_args: Sequence[str] = ()
+    metadata: Mapping[str, PlainData] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -79,24 +85,39 @@ class SlurmCommandArgv:
                 allow_empty=True,
             ),
         )
+        object.__setattr__(
+            self,
+            "metadata",
+            _plain_mapping(self.metadata, path="SlurmCommandArgv.metadata"),
+        )
 
     @property
     def argv(self) -> tuple[str, ...]:
         return (*self.launcher_argv, *self.command_args)
 
     def to_dict(self) -> dict[str, PlainData]:
-        return {
+        payload: dict[str, PlainData] = {
             "launcher_argv": list(self.launcher_argv),
             "command_args": list(self.command_args),
             "argv": list(self.argv),
         }
+        if self.metadata:
+            payload["metadata"] = _thaw_plain_mapping(
+                self.metadata,
+                path="SlurmCommandArgv.metadata",
+            )
+        return payload
 
     @classmethod
     def from_dict(
         cls, data: object, *, path: str = "SlurmCommandArgv"
     ) -> "SlurmCommandArgv":
         mapping = _mapping(data, path=path)
-        _reject_unknown(mapping, {"launcher_argv", "command_args", "argv"}, path=path)
+        _reject_unknown(
+            mapping,
+            {"launcher_argv", "command_args", "argv", "metadata"},
+            path=path,
+        )
         missing = {"launcher_argv", "command_args"} - set(mapping)
         if missing:
             fields = ", ".join(sorted(missing))
@@ -107,6 +128,10 @@ class SlurmCommandArgv:
             ),
             command_args=_sequence(
                 mapping["command_args"], path=f"{path}.command_args"
+            ),
+            metadata=_plain_mapping(
+                mapping.get("metadata", {}),
+                path=f"{path}.metadata",
             ),
         )
         if "argv" in mapping:
@@ -489,6 +514,26 @@ def _mapping(value: object, *, path: str) -> Mapping[str, object]:
     if any(not isinstance(key, str) for key in value):
         raise SlurmOptionError(f"{path} must use string keys")
     return cast(Mapping[str, object], value)
+
+
+def _plain_mapping(value: object, *, path: str) -> Mapping[str, PlainData]:
+    try:
+        frozen = freeze_plain_data(value, path=path)
+    except PlainDataError as exc:
+        raise SlurmOptionError(f"{path} must be plain data: {exc}") from exc
+    thawed = thaw_plain_data(frozen, path=path)
+    if not isinstance(thawed, Mapping):
+        raise SlurmOptionError(f"{path} must be a mapping")
+    if any(not isinstance(key, str) for key in thawed):
+        raise SlurmOptionError(f"{path} must use string keys")
+    return MappingProxyType(dict(sorted(cast(Mapping[str, PlainData], thawed).items())))
+
+
+def _thaw_plain_mapping(value: Mapping[str, PlainData], *, path: str) -> dict[str, PlainData]:
+    thawed = thaw_plain_data(value, path=path)
+    if not isinstance(thawed, Mapping):
+        raise SlurmOptionError(f"{path} must be a mapping")
+    return dict(sorted(cast(Mapping[str, PlainData], thawed).items()))
 
 
 def _reject_unknown(

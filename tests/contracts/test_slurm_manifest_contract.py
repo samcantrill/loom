@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -10,6 +11,7 @@ from loom.pipeline.executors.slurm import (
     SLURM_LIVE_SUBMISSION_SCHEMA_VERSION,
     SLURM_PLANNED_SUBMISSION_SCHEMA_VERSION,
     SlurmCancellationAttempt,
+    SlurmCommandArgv,
     SlurmCommandResult,
     SlurmGeneratedArtifactPath,
     SlurmLiveSubmissionManifest,
@@ -89,6 +91,59 @@ def test_slurm_planned_submission_manifest_schema_is_stable_plain_data() -> None
     assert "scheduler_job_id" not in rendered
     assert "scheduler_state" not in rendered
     assert "raw_adapter" not in rendered
+
+
+def test_slurm_command_metadata_round_trips_in_manifest_plain_data() -> None:
+    command = SlurmCommandArgv(
+        launcher_argv=("apptainer",),
+        command_args=(
+            "exec",
+            "--cleanenv",
+            "analysis.sif",
+            "loom",
+            "prepared-run",
+            "continue",
+            "--run-uri",
+            "file:///runs/run-1",
+            "--executor",
+            "local",
+        ),
+        metadata={
+            "container_runtime": "apptainer",
+            "redacted_argv": [
+                "apptainer",
+                "exec",
+                "--cleanenv",
+                "analysis.sif",
+                "loom",
+            ],
+        },
+    )
+    manifest = SlurmPlannedSubmission(
+        run_uri="file:///runs/run-1",
+        mode=SlurmMode.SINGLE_JOB,
+        planning_id="p-container",
+        created_at="2026-05-08T00:00:00Z",
+        plan_relative_path="slurm/submissions/p-container/plan.json",
+        manifest_relative_path="slurm/submissions/p-container/manifest.json",
+        jobs=(
+            SlurmPlannedJob(
+                logical_key="pipeline",
+                mode=SlurmMode.SINGLE_JOB,
+                command=command,
+            ),
+        ),
+        generated_command_argv=(command,),
+    )
+
+    payload = cast(dict[str, Any], ensure_plain_data(manifest.to_dict()))
+
+    assert SlurmPlannedSubmission.from_dict(payload).to_dict() == payload
+    assert payload["jobs"][0]["command"]["metadata"]["container_runtime"] == "apptainer"
+    assert (
+        payload["generated_command_argv"][0]["metadata"]["container_runtime"]
+        == "apptainer"
+    )
 
 
 def test_slurm_live_manifest_schema_extends_canonical_manifest_path() -> None:

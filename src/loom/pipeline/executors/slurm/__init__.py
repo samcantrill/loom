@@ -29,6 +29,13 @@ from .commands import (
     command_result_from_exception,
     parse_sbatch_parsable_output,
 )
+from .container import (
+    SlurmResolvedContainerTarget,
+    container_build_results_metadata,
+    prepare_slurm_container_options,
+    resolve_slurm_container_target,
+    wrap_slurm_command_with_apptainer,
+)
 from .manifest import (
     SLURM_PLANNED_SUBMISSION_SCHEMA_VERSION,
     SlurmDependencyType,
@@ -146,6 +153,7 @@ __all__ = [
     "SlurmPlannedSubmission",
     "SlurmPlanningError",
     "SlurmResourceMappingError",
+    "SlurmResolvedContainerTarget",
     "SlurmSbatchDirective",
     "SlurmSchedulerStatusSnapshot",
     "SlurmSubmittedJob",
@@ -159,6 +167,7 @@ __all__ = [
     "build_stage_job_command_argv",
     "build_slurm_plan_metadata",
     "command_result_from_exception",
+    "container_build_results_metadata",
     "default_slurm_command_runner",
     "live_manifest_from_planned_submission",
     "map_slurm_resources",
@@ -167,6 +176,7 @@ __all__ = [
     "plan_afterok_slurm_dry_run",
     "plan_single_job_slurm_dry_run",
     "parse_sbatch_parsable_output",
+    "prepare_slurm_container_options",
     "read_slurm_live_manifest",
     "render_command_argv",
     "render_dependency_value",
@@ -174,6 +184,7 @@ __all__ = [
     "render_slurm_script",
     "resolve_slurm_generated_artifact_path",
     "resolve_slurm_manifest_path",
+    "resolve_slurm_container_target",
     "slurm_job_log_relative_path",
     "slurm_job_script_relative_path",
     "slurm_manifest_relative_path",
@@ -183,6 +194,7 @@ __all__ = [
     "submit_afterok_slurm",
     "submit_single_job_slurm",
     "validate_logical_job_key",
+    "wrap_slurm_command_with_apptainer",
     "write_slurm_live_manifest",
     "write_slurm_dry_run_artifacts",
 ]

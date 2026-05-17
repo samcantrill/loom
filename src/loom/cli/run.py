@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -44,6 +45,11 @@ if TYPE_CHECKING:
         SlurmDryRunPlanningResult,
         SlurmLiveSubmissionResult,
         SlurmOptions,
+    )
+    from loom.pipeline.executors.apptainer import ApptainerExecOptions
+    from loom.pipeline.executors.containers import (
+        ContainerBuildResult,
+        LocalContainerBuildService,
     )
     from loom.pipeline.executors import Executor
     from loom.pipeline.planning import ExecutionPlan, PlanSelectors
@@ -479,6 +485,10 @@ def build_slurm_dry_run_result(
         authority_config=authority_config,
     )
     warnings = _preflight_cli_warnings(preflight)
+    runtime_options, container_build_results = _resolve_slurm_container_runtime_options(
+        runtime_options,
+        requested_by="slurm-dry-run",
+    )
     if not run_options.resume:
         store.create_run(
             run_uri,
@@ -516,6 +526,9 @@ def build_slurm_dry_run_result(
             run_uri=run_uri,
             options=slurm_options,
             resources=None,
+            container_options=_slurm_container_options_from_runtime(runtime_options),
+            apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
+            container_build_results=container_build_results,
         )
     else:
         from loom.pipeline.executors.slurm import plan_afterok_slurm_dry_run
@@ -529,6 +542,11 @@ def build_slurm_dry_run_result(
                 fallback=slurm_options,
             ),
             stage_resources=cast(Any, _stage_slurm_resources(runtime_options)),
+            container_options=_slurm_container_options_from_runtime(runtime_options),
+            stage_container_options=_stage_slurm_container_options(runtime_options),
+            apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
+            stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
+            container_build_results=container_build_results,
         )
     return _slurm_dry_run_cli_result(result, warnings=warnings), warnings
 
@@ -1037,6 +1055,202 @@ def _stage_slurm_resources(runtime_options: "RunOptions") -> Mapping[str, object
     }
 
 
+def _resolve_slurm_container_runtime_options(
+    runtime_options: "RunOptions",
+    *,
+    requested_by: str,
+) -> tuple["RunOptions", tuple["ContainerBuildResult", ...]]:
+    from loom.pipeline.runtime import RunOptions
+
+    data = cast(dict[str, object], runtime_options.to_dict())
+    build_service = _build_container_build_service()
+    build_results: list[ContainerBuildResult] = []
+    data["adapter_options"] = _resolve_slurm_container_adapter_options(
+        cast(Mapping[str, object], data["adapter_options"]),
+        build_service=build_service,
+        requested_by=requested_by,
+        build_results=build_results,
+        path="runtime.adapter_options",
+    )
+    stage_options = cast(dict[str, object], data["stage_options"])
+    for stage_id, raw_stage_options in list(stage_options.items()):
+        if not isinstance(raw_stage_options, Mapping):
+            continue
+        stage_data = dict(raw_stage_options)
+        stage_data["adapter_options"] = _resolve_slurm_container_adapter_options(
+            cast(Mapping[str, object], stage_data.get("adapter_options", {})),
+            build_service=build_service,
+            requested_by=f"{requested_by}:{stage_id}",
+            build_results=build_results,
+            path=f"runtime.stage_options.{stage_id}.adapter_options",
+        )
+        stage_options[stage_id] = stage_data
+    data["stage_options"] = stage_options
+    return RunOptions.from_dict(data), tuple(build_results)
+
+
+def _resolve_slurm_container_adapter_options(
+    adapter_options: Mapping[str, object],
+    *,
+    build_service: "LocalContainerBuildService",
+    requested_by: str,
+    build_results: list["ContainerBuildResult"],
+    path: str,
+) -> Mapping[str, object]:
+    from loom.pipeline.executors.slurm import resolve_slurm_container_target
+
+    if "container" not in adapter_options:
+        return dict(adapter_options)
+    container = adapter_options["container"]
+    if not isinstance(container, Mapping):
+        raise CliError(
+            "SLURM container adapter options must be a mapping.",
+            code="cli.run.slurm_container_options_invalid",
+            context={"path": f"{path}.container"},
+            exit_code=ExitCode.PIPELINE,
+        )
+    try:
+        resolved = resolve_slurm_container_target(
+            cast(Mapping[str, object], container),
+            build_options=cast(
+                Mapping[str, object] | None,
+                adapter_options.get("container_build"),
+            ),
+            build_service=build_service,
+            requested_by=requested_by,
+        )
+    except CliError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - adapter validation becomes a CLI error.
+        raise CliError(
+            f"SLURM container build resolution failed: {exc}",
+            code="cli.run.slurm_container_build_failed",
+            context={"path": f"{path}.container"},
+            exit_code=ExitCode.EXECUTOR,
+        ) from exc
+    if resolved.build_result is not None:
+        build_results.append(resolved.build_result)
+    return {**dict(adapter_options), "container": dict(resolved.container_options)}
+
+
+def _build_container_build_service() -> "LocalContainerBuildService":
+    from loom.pipeline.executors.apptainer import ApptainerContainerBuilder
+    from loom.pipeline.executors.containers import LocalContainerBuildService
+    from loom.pipeline.executors.docker import DockerContainerBuilder
+
+    return LocalContainerBuildService(
+        {
+            "apptainer": ApptainerContainerBuilder(workspace_root=Path.cwd()),
+            "docker": DockerContainerBuilder(),
+        }
+    )
+
+
+def _slurm_container_options_from_runtime(
+    runtime_options: "RunOptions",
+) -> Mapping[str, object] | None:
+    return _container_options_from_adapter_options(
+        runtime_options.adapter_options,
+        path="runtime.adapter_options.container",
+    )
+
+
+def _stage_slurm_container_options(
+    runtime_options: "RunOptions",
+) -> Mapping[str, Mapping[str, object]]:
+    containers: dict[str, Mapping[str, object]] = {}
+    for stage_id, stage_options in cast(
+        Mapping[str, Any],
+        runtime_options.stage_options,
+    ).items():
+        container = _container_options_from_adapter_options(
+            stage_options.adapter_options,
+            path=f"runtime.stage_options.{stage_id}.adapter_options.container",
+        )
+        if container is not None:
+            containers[stage_id] = container
+    return containers
+
+
+def _container_options_from_adapter_options(
+    adapter_options: Mapping[str, object],
+    *,
+    path: str,
+) -> Mapping[str, object] | None:
+    raw = adapter_options.get("container")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise CliError(
+            "SLURM container adapter options must be a mapping.",
+            code="cli.run.slurm_container_options_invalid",
+            context={"path": path},
+            exit_code=ExitCode.PIPELINE,
+        )
+    return cast(Mapping[str, object], raw)
+
+
+def _slurm_apptainer_options_from_runtime(
+    runtime_options: "RunOptions",
+) -> "ApptainerExecOptions | None":
+    return _apptainer_options_from_adapter_options(
+        runtime_options.adapter_options,
+        path="runtime.adapter_options",
+    )
+
+
+def _stage_slurm_apptainer_options(
+    runtime_options: "RunOptions",
+) -> Mapping[str, "ApptainerExecOptions"]:
+    options: dict[str, ApptainerExecOptions] = {}
+    for stage_id, stage_options in cast(
+        Mapping[str, Any],
+        runtime_options.stage_options,
+    ).items():
+        value = _apptainer_options_from_adapter_options(
+            stage_options.adapter_options,
+            path=f"runtime.stage_options.{stage_id}.adapter_options",
+        )
+        if value is not None:
+            options[stage_id] = value
+    return options
+
+
+def _apptainer_options_from_adapter_options(
+    adapter_options: Mapping[str, object],
+    *,
+    path: str,
+) -> "ApptainerExecOptions | None":
+    from loom.pipeline.executors.apptainer import ApptainerExecOptions
+
+    raw_options: object | None
+    use_singularity = "singularity" in adapter_options
+    if use_singularity:
+        raw_options = adapter_options.get("singularity")
+        namespace = "singularity"
+    else:
+        raw_options = adapter_options.get("apptainer")
+        namespace = "apptainer"
+    if raw_options is None:
+        return None
+    try:
+        options = ApptainerExecOptions.from_dict(raw_options)
+    except Exception as exc:  # noqa: BLE001 - adapter validation becomes CLI error.
+        raise CliError(
+            f"SLURM Apptainer adapter options are invalid: {exc}",
+            code="cli.run.slurm_apptainer_options_invalid",
+            context={"path": f"{path}.{namespace}"},
+            exit_code=ExitCode.PIPELINE,
+        ) from exc
+    if (
+        use_singularity
+        and isinstance(raw_options, Mapping)
+        and "command" not in raw_options
+    ):
+        return replace(options, command="singularity")
+    return options
+
+
 def _runtime_resource_summary(runtime_options: "RunOptions") -> dict[str, object]:
     summary: dict[str, object] = {}
     for stage_id, stage_options in cast(
@@ -1166,6 +1380,10 @@ def build_slurm_live_submission_result(
         open_existing=run_options.resume,
         authority_config=authority_config,
     )
+    runtime_options, container_build_results = _resolve_slurm_container_runtime_options(
+        runtime_options,
+        requested_by="slurm-live-submission",
+    )
     if not run_options.resume:
         store.create_run(
             run_uri,
@@ -1222,6 +1440,9 @@ def build_slurm_live_submission_result(
             run_uri=run_uri,
             options=slurm_options,
             resources=None,
+            container_options=_slurm_container_options_from_runtime(runtime_options),
+            apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
+            container_build_results=container_build_results,
         )
         submit = submit_single_job_slurm
     else:
@@ -1234,6 +1455,11 @@ def build_slurm_live_submission_result(
                 fallback=slurm_options,
             ),
             stage_resources=cast(Any, _stage_slurm_resources(runtime_options)),
+            container_options=_slurm_container_options_from_runtime(runtime_options),
+            stage_container_options=_stage_slurm_container_options(runtime_options),
+            apptainer_options=_slurm_apptainer_options_from_runtime(runtime_options),
+            stage_apptainer_options=_stage_slurm_apptainer_options(runtime_options),
+            container_build_results=container_build_results,
         )
         submit = submit_afterok_slurm
     try:
