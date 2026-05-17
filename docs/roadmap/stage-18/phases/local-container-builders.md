@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: implemented; PR pending
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 2: Local Container Builders`
 - Branch: `codex/local-container-builders`
@@ -165,7 +165,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted suite and full PR gate passed
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -173,9 +173,32 @@ make test-summary
 
 - Draft plan: completed by manager in this file before code changes.
 - Final phase execution plan: refined in this planning pass; ready for implementation.
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
-- PR preparation: pending
+- Implementation summary: added shared local build policy decisions, an
+  import-light `LocalContainerBuildService`, deterministic fake builders,
+  Docker `build`/`buildx build` command construction and local runner-backed
+  build/reuse behavior, a build-only Apptainer package for SIF construction,
+  local Apptainer path probes, redacted command/evidence/failure records, and
+  focused unit/contract/integration/package coverage.
+- Implementation validation:
+  - Focused Phase 2 suite passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/test_containers.py tests/unit/loom/pipeline/executors/docker/test_docker_build.py tests/unit/loom/pipeline/executors/apptainer/test_apptainer_build.py tests/contracts/test_container_executor_contract.py tests/integration/pipeline/test_container_builders.py tests/package`:
+    133 passed, 1 skipped.
+  - Phase-level targeted suite passed outside the sandbox:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors tests/integration/pipeline tests/contracts`:
+    519 passed, 7 skipped. The same command was terminated in the sandbox
+    after service-backed tests failed/hung under sandbox restrictions.
+  - Targeted Ruff and Pyright passed for touched implementation and test
+    files.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed outside the sandbox:
+    Ruff passed; Pyright passed; default harness passed with 1833 passed, 26
+    skipped, 18 deselected; config-extra harness passed with 447 passed, 1870
+    deselected; `uv build` produced the source distribution and wheel.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed outside the sandbox
+    and wrote `build/test-summary.md`; overall summary: 2308 passed, 18
+    skipped, 1886 deselected.
+- Refinement summary: not needed; validation passed after manager
+  implementation.
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-18/phases/local-container-builders-pr-body.md`
 - Stack maintenance: root phase from `develop`
 - Remaining blockers: none

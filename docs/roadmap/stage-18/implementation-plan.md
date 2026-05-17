@@ -604,8 +604,13 @@ protocols and runtime-specific command semantics
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
+- Implementation: complete; added shared local build policy/service/fake
+  builder behavior, Docker build adapters over the existing runner, and a
+  build-only Apptainer SIF builder package.
+- Validation: focused Phase 2 suite passed with 133 passed, 1 skipped;
+  phase-level targeted suite passed with 519 passed, 7 skipped; `make
+  validate-pr` passed; `make test-summary` passed with 2308 passed, 18
+  skipped, 1886 deselected.
 - PR: pending
 - Merge: pending
 - Follow-up: pending
