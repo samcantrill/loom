@@ -403,6 +403,42 @@ CPU/memory or unsupported GPU resource mapping. They do not run
 `docker version`, inspect images, pull images, contact registries, or read raw
 environment values.
 
+Stage 18 adds cheap selected checks for shared build targets,
+Apptainer/Singularity execution, and SLURM plus Apptainer composition.
+
+Stable container build and Apptainer check IDs include:
+
+```text
+runtime.container_build.options
+executor.container_build.targets
+executor.apptainer.command
+executor.apptainer.container_options
+executor.apptainer.image
+executor.apptainer.environment
+resources.apptainer.mapping
+resources.apptainer.gpu
+resources.slurm.container_compatibility
+filesystem.container_build.sources
+filesystem.container_build.outputs
+filesystem.apptainer.bind_sources
+filesystem.apptainer.bind_targets
+filesystem.apptainer.run_dir_writable
+filesystem.apptainer.artifact_root_visible
+```
+
+These checks parse `container_build`, `container`, `apptainer`, `singularity`,
+and `slurm` adapter namespaces, verify required local paths where statically
+knowable, summarize build target output refs and policies, and inspect command
+availability through `PATH`. They do not run `docker`, `apptainer`,
+`singularity`, or `sbatch` beyond command lookup; they do not build SIF files,
+pull images, contact registries, submit scheduler jobs, read raw environment
+values, or probe fakeroot.
+
+`executor.apptainer.command` fails for direct Apptainer/Singularity execution
+when the selected command is missing. For SLURM dry-run plus Apptainer it warns
+instead, matching the dry-run behavior for missing `sbatch`. Live SLURM plus
+Apptainer treats missing runtime or scheduler commands as run-time blockers.
+
 ## Plugin Checks
 
 Plugin checks should verify:

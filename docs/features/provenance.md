@@ -239,6 +239,7 @@ redaction boundary documentation
 
 ```text
 dependency lockfile digest capture
+container build target/output facts and executor command metadata
 container image/digest capture from environment variables
 config provenance aggregation
 stage event timeline
@@ -249,6 +250,26 @@ input/source inventory records
 run comparison summaries
 lightweight lifecycle event records
 ```
+
+Stage 18 records container facts through executor and submitted-operation
+metadata rather than by making provenance own container runtime behavior.
+Docker, Apptainer/Singularity, and SLURM plus Apptainer paths may provide:
+
+```text
+selected image or SIF reference
+container build target name and output ref
+build result status and redacted command/evidence summary
+container runtime command name
+redacted exec argv
+bind/mount summaries and path-parity facts
+clean environment flag and environment variable names only
+runtime/device flags such as nv or rocm
+scheduler/container resource ownership summary
+```
+
+These are factual execution records. They do not make build outputs
+authoritative stage artifacts, do not imply image immutability, and do not claim
+container isolation is a security boundary for untrusted project code.
 
 ### 4.3 Should Not Support in v0
 

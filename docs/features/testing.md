@@ -570,9 +570,31 @@ cluster
 network service
 remote storage
 heavy optional dependency
+real Docker
+real Apptainer/Singularity
+real SIF build
 ```
 
 mark them explicitly and skip unless the environment opts in.
+
+Stage 18 real container smoke hooks are acceptance tests, not default CI
+evidence. The repository provides skipped-by-default tests under
+`tests/container_acceptance/` for Docker command availability,
+Apptainer/Singularity command availability, and configured Apptainer SIF build.
+They require explicit environment variables:
+
+```text
+LOOM_RUN_DOCKER_ACCEPTANCE=1
+LOOM_RUN_APPTAINER_ACCEPTANCE=1
+LOOM_RUN_APPTAINER_BUILD_ACCEPTANCE=1
+LOOM_APPTAINER_BUILD_DEFINITION=/path/to/definition.def
+```
+
+The existing real SLURM acceptance suite remains under `tests/slurm_acceptance/`
+and is enabled with `LOOM_RUN_SLURM_ACCEPTANCE=1` plus a shared
+`LOOM_SLURM_ACCEPTANCE_ROOT`. Default `make validate-pr` and
+`make test-summary` do not require these runtimes, clusters, registries, or
+network access.
 
 ---
 
