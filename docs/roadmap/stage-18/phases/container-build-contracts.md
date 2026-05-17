@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: implemented; PR pending
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 1: Container Build Contracts`
 - Branch: `codex/container-build-contracts`
@@ -231,7 +231,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: unused
+- Phase implementation refinement: not needed; targeted suite and full PR gate passed
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -239,10 +239,30 @@ make test-summary
 
 - Draft plan: completed by manager in this file before code changes.
 - Final phase execution plan: refined in this planning pass; ready for implementation.
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
+- Implementation summary: extended `loom.pipeline.executors.containers` with
+  schema-versioned `container_build` records for build sources, output refs,
+  policies, targets, options, build keys, requests, results, redacted command
+  projections, evidence, and failures; added Apptainer/Singularity and
+  container-build namespace claims to the import-light descriptor registry; and
+  added focused unit, contract, profile, descriptor, and package coverage.
+- Implementation validation:
+  - Targeted Phase 1 suite passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/test_containers.py tests/unit/loom/pipeline/test_runtime_profiles.py tests/unit/loom/pipeline/test_executor_capabilities.py tests/contracts/test_container_executor_contract.py tests/contracts/test_runtime_profiles_contract.py tests/contracts/test_executor_capabilities_contract.py tests/package`:
+    172 passed, 1 skipped.
+  - Targeted Ruff and Pyright checks passed for touched implementation and
+    test files.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed outside the sandbox
+    after sandboxed authority service tests hung: Ruff passed; Pyright passed;
+    default harness passed with 1818 passed, 26 skipped, 18 deselected;
+    config-extra harness passed with 447 passed, 1855 deselected; `uv build`
+    produced the source distribution and wheel.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed outside the sandbox
+    and wrote `build/test-summary.md`; overall summary: 2293 passed, 18
+    skipped, 1871 deselected.
+- Refinement summary: not needed; validation passed after manager
+  implementation.
 - Blocker-resolution summary: none used
-- PR preparation: pending
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-18/phases/container-build-contracts-pr-body.md`
 - Stack maintenance: root phase from `develop`
 - Remaining blockers: none
