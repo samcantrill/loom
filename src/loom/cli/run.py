@@ -58,7 +58,10 @@ RUN_RESULT_SCHEMA_VERSION = "loom.cli.run.v2"
 SLURM_DRY_RUN_RESULT_SCHEMA_VERSION = "loom.cli.slurm_dry_run.v1"
 SLURM_LIVE_RUN_RESULT_SCHEMA_VERSION = "loom.cli.slurm_live_run.v1"
 _SLURM_EXECUTORS = frozenset({"slurm-single-job", "slurm-afterok"})
-_RUN_EXECUTORS = frozenset({"local", "subprocess", "docker"})
+_RUN_EXECUTORS = frozenset(
+    {"apptainer", "docker", "local", "singularity", "subprocess"}
+)
+_RUN_EXECUTOR_LIST = sorted(_RUN_EXECUTORS)
 
 
 class UnsupportedExecutorError(CliError):
@@ -67,11 +70,12 @@ class UnsupportedExecutorError(CliError):
     def __init__(self, executor: str) -> None:
         super().__init__(
             "unsupported executor "
-            f"{executor!r}; supported executors: docker, local, subprocess.",
+            f"{executor!r}; supported executors: "
+            f"{', '.join(_RUN_EXECUTOR_LIST)}.",
             code="cli.run.unsupported_executor",
             context={
                 "executor": executor,
-                "supported": ["docker", "local", "subprocess"],
+                "supported": _RUN_EXECUTOR_LIST,
             },
             exit_code=ExitCode.EXECUTOR,
         )
@@ -1332,6 +1336,14 @@ def _build_executor(executor: str, store: Any) -> "Executor":
         from loom.pipeline.executors import DockerExecutor
 
         return DockerExecutor(run_store=store)
+    if executor == "apptainer":
+        from loom.pipeline.executors import ApptainerExecutor
+
+        return ApptainerExecutor(run_store=store)
+    if executor == "singularity":
+        from loom.pipeline.executors import SingularityExecutor
+
+        return SingularityExecutor(run_store=store)
     raise UnsupportedExecutorError(executor)
 
 

@@ -198,6 +198,39 @@ def test_import_docker_command_contracts_do_not_import_runtime_layers() -> None:
     assert result.stdout.strip() == "ok"
 
 
+def test_import_apptainer_command_contracts_do_not_import_runtime_layers() -> None:
+    script = dedent(
+        """
+        import sys
+
+        import loom.pipeline.executors.apptainer as apptainer
+
+        assert apptainer.ApptainerExecCommand
+        for forbidden in (
+            "subprocess",
+            "loom.cli",
+            "loom.config",
+            "loom.diagnostics",
+            "loom.pipeline.execution",
+            "yaml",
+            "omegaconf",
+            "pydantic",
+        ):
+            if forbidden in sys.modules:
+                raise SystemExit(f"{forbidden} imported through Apptainer commands")
+        print("ok")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
 def test_import_authority_root_does_not_import_fastapi() -> None:
     script = dedent(
         """
@@ -484,9 +517,7 @@ def test_default_executor_preflight_does_not_import_docker_modules() -> None:
     assert result.stdout.strip() == "ok"
 
 
-def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() -> (
-    None
-):
+def test_stage_15_bundle_inspect_preserves_metadata_without_backend_imports() -> None:
     script = dedent(
         """
         import io

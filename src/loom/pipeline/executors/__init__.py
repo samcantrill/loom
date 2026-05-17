@@ -5,6 +5,10 @@ from typing import TYPE_CHECKING
 from loom.pipeline.executors.base import Executor
 
 if TYPE_CHECKING:
+    from loom.pipeline.executors.apptainer import (
+        ApptainerExecutor,
+        SingularityExecutor,
+    )
     from loom.pipeline.executors.docker import DockerExecutor
     from loom.pipeline.executors.errors import ExecutorError, LocalExecutorError
     from loom.pipeline.executors.local import LocalExecutor
@@ -30,6 +34,16 @@ def __getattr__(name: str) -> object:
         from loom.pipeline.executors.docker import DockerExecutor
 
         return DockerExecutor
+    if name in {"ApptainerExecutor", "SingularityExecutor"}:
+        from loom.pipeline.executors.apptainer import (
+            ApptainerExecutor,
+            SingularityExecutor,
+        )
+
+        return {
+            "ApptainerExecutor": ApptainerExecutor,
+            "SingularityExecutor": SingularityExecutor,
+        }[name]
     if name in {"SubprocessExecutor", "SubprocessRunResult"}:
         from loom.pipeline.executors.subprocess import (
             SubprocessExecutor,
@@ -42,12 +56,15 @@ def __getattr__(name: str) -> object:
         }[name]
     raise AttributeError(f"module 'loom.pipeline.executors' has no attribute {name!r}")
 
+
 __all__ = [
+    "ApptainerExecutor",
     "Executor",
     "DockerExecutor",
     "ExecutorError",
     "LocalExecutor",
     "LocalExecutorError",
+    "SingularityExecutor",
     "SubprocessExecutor",
     "SubprocessRunResult",
 ]
