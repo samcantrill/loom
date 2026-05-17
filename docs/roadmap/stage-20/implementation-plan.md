@@ -1,11 +1,11 @@
 # Roadmap Stage 20 Implementation Plan: Runtime Events And Event Sinks
 
-Status: Phase 1 PR open
+Status: Phase 1 merged; Phase 2 pending
 Roadmap stage: `v20`
 Planning document: `docs/roadmap/stage-20/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 1 PR open; GitHub CI pending
+Current phase: Phase 2 pending
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after
@@ -340,7 +340,7 @@ but must preserve the programmatic-before-plugin-loading sequence.
 
 | Phase | Slug | Status | Branch | PR | Ownership | Goal | Validation | Examples |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `event-grammar-compatibility` | pr_open | `codex/event-grammar-compatibility` | [#187](https://github.com/samcantrill/loom/pull/187) | `loom.pipeline.events`, store event readers | Evolve event grammar and preserve schema-v1 compatibility | Package/import, event unit, store contract/integration, `make validate-pr`, `make test-summary` | Ordered audit log, schema-v1 compatibility |
+| 1 | `event-grammar-compatibility` | merged | `codex/event-grammar-compatibility` | [#187](https://github.com/samcantrill/loom/pull/187) | `loom.pipeline.events`, store event readers | Evolve event grammar and preserve schema-v1 compatibility | Package/import, event unit, store contract/integration, `make validate-pr`, `make test-summary` | Ordered audit log, schema-v1 compatibility |
 | 2 | `event-sink-registry-observer-facts` | pending | `codex/event-sink-registry-observer-facts` | pending | `loom.pipeline.event_sinks`, store failure/link facets | Add sink registry, dispatch result, callback failure, and observer-link facts | Package/import, sink unit, store contract/integration, `make validate-pr`, `make test-summary` | Observe-only dispatch, callback failure, observer links |
 | 3 | `runtime-event-dispatch` | pending | `codex/runtime-event-dispatch` | pending | `loom.pipeline.execution`, lifecycle, eventing | Dispatch events from committed runtime and Stage 19 facts | Eventing/runner/lifecycle unit and integration tests, diagnostics tests, `make validate-pr`, `make test-summary` | Committed fact projection, non-durable opt-out dispatch |
 | 4 | `event-sink-plugins-diagnostics` | pending | `codex/event-sink-plugins-diagnostics` | pending | `loom.plugins`, diagnostics, CLI/read models, docs | Add explicit plugin loading, warnings, inspection, docs, and final evidence | Plugin unit/contract, diagnostics/CLI tests as changed, docs, `make validate-pr`, `make test-summary` | Explicit plugin loading, read-only inspection |
@@ -353,7 +353,7 @@ but must preserve the programmatic-before-plugin-loading sequence.
 
 ## Phase 1: Event Grammar And Compatibility
 
-Status: pr_open
+Status: merged
 Slug: `event-grammar-compatibility`
 Branch: `codex/event-grammar-compatibility`
 Worktree: `/home/samcantrill/work/loom-worktrees/event-grammar-compatibility`
@@ -446,7 +446,9 @@ and compatibility behavior
 - PR review budget: used by manager local review
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: passed before PR creation
-- Merge record: pending GitHub CI and final target-branch verification
+- Merge record: merged into `develop` by squash merge after final target-branch
+  verification and GitHub CI success; merge commit
+  `e6564ce250bcb586c86aa0456bf2f6e1fb9b37f5`
 
 ### Risks And Stop Conditions
 
@@ -467,14 +469,13 @@ and compatibility behavior
   `codex/event-grammar-compatibility`.
 - Validation: `make validate-pr` passed after implementation refinement; `make
   test-summary` passed with overall status passed.
-- PR: [#187](https://github.com/samcantrill/loom/pull/187) opened against
-  `develop`; verified base `develop`, head
-  `codex/event-grammar-compatibility`, state `OPEN`; GitHub CI `checks` was in
-  progress at PR-open verification.
-- Merge: pending
-- Follow-up: Phase 2 may start from `codex/event-grammar-compatibility` only if
-  Phase 1 cannot be merged immediately after CI; otherwise Phase 2 should start
-  from updated `develop`.
+- PR: [#187](https://github.com/samcantrill/loom/pull/187) opened and merged
+  against `develop`; final pre-merge verification confirmed base `develop`,
+  head `codex/event-grammar-compatibility`, and GitHub CI `checks` success.
+- Merge: squash-merged into `develop` at
+  `e6564ce250bcb586c86aa0456bf2f6e1fb9b37f5`.
+- Follow-up: Phase 2 should start from updated `develop`; no successor branch
+  depends on `codex/event-grammar-compatibility`.
 
 ## Phase 2: Sink Registry And Observer Facts
 
