@@ -264,6 +264,33 @@ make test-summary
     - `uv run pyright src/loom/pipeline/events.py src/loom/authority/_repository.py tests/unit/loom/pipeline/test_events.py tests/integration/authority/test_repository_run_lifecycle.py` passed.
   - PR preparation handoff: completion notes updated, phase implementation refinement budget marked `used`, blocker-resolution budget unchanged at `0/3 used`, and final PR preparation should still run `make validate-pr` and `make test-summary`.
 - Blocker-resolution summary: pending
-- PR preparation: pending
+- PR preparation:
+  - Draft pass: completed on 2026-05-17 using
+    `.codex/prompts/pr-body-draft.md`.
+  - PR body artifact:
+    `docs/roadmap/stage-20/phases/event-grammar-compatibility-pr-body.md`.
+  - Refine pass: pending because this phase uses the expanded path.
+  - PR title confirmed:
+    `Runtime Events - Phase 1: Event Grammar and Compatibility`.
+  - Branch confirmed: `codex/event-grammar-compatibility`.
+  - Stack predecessor confirmed: none.
+  - Target branch confirmed: `develop`.
+  - PR creation: not performed in this draft pass by instruction; expanded-path
+    PR body refine owns opening or final preparation.
+  - Scope confirmation: implementation matches Phase 1 event grammar and
+    compatibility scope, and future Phase 2+ work was not implemented. No sink
+    registry, runtime sink dispatch, plugin loading, callback failure records,
+    observer links, CLI event presentation, cleanup, service clients, or
+    Stage 19 fact projection were added.
+  - Test confirmation: relevant event model, authority compatibility, offline
+    evidence/import, package, unit, contract, integration, e2e, and config-extra
+    suites were run or summarized; focused tests were added or updated for the
+    changed behavior.
+  - Final local validation evidence: `make validate-pr` passed after
+    refinement: Ruff, Pyright, default harness, config-extra harness, and build.
+  - Suite evidence from `make test-summary`: overall status passed; package 103
+    passed/1 skipped; unit 1343 passed/7 skipped/1 deselected; contract 263
+    passed/2 skipped; integration 165 passed/8 skipped/13 deselected; e2e 44
+    passed/2 deselected; config-extra 447 passed/3 skipped/1927 deselected.
 - Stack maintenance: pending
 - Remaining blockers: none currently recorded
