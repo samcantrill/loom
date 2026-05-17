@@ -168,7 +168,7 @@ make test-summary
 
 ## Refinement And Review Budget Status
 
-- Phase implementation refinement: available if scheduler/container boundary validation fails
+- Phase implementation refinement: not needed; targeted suite and full PR gate passed
 - PR review: unused
 - Blocker resolution: 0/3 used
 
@@ -176,8 +176,32 @@ make test-summary
 
 - Draft plan: completed by manager in this file before code changes.
 - Final phase execution plan: refined in this planning pass; ready for implementation.
-- Implementation summary: pending
-- Validation: pending
-- PR preparation: pending
+- Implementation summary: added `SlurmCommandArgv` metadata, a
+  SLURM-owned Apptainer composition helper, container target-to-SIF resolution,
+  path-parity bind injection for SLURM dry-run/live planning, run-level and
+  stage-level container/Apptainer option threading, CLI build resolution before
+  rendering or live `sbatch`, redacted command/build metadata, and focused
+  unit/contract/integration/e2e coverage.
+- Implementation validation:
+  - Targeted SLURM and CLI unit suite passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/slurm tests/unit/loom/cli/test_run.py`:
+    103 passed.
+  - Targeted contract/integration/e2e suite passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/contracts/test_slurm_manifest_contract.py tests/contracts/test_container_executor_contract.py tests/integration/pipeline/test_slurm_dry_run_planning.py tests/integration/pipeline/test_slurm_live_single_job.py tests/integration/pipeline/test_slurm_live_afterok.py tests/e2e/test_cli_slurm_dry_run.py tests/e2e/test_cli_slurm_live_single_job.py tests/e2e/test_cli_slurm_live_afterok.py`:
+    21 passed, 3 skipped.
+  - Targeted Ruff and Pyright passed for touched implementation and test files.
+  - `make validate-pr` passed outside the sandbox: Ruff passed; Pyright
+    passed; default harness passed with 1868 passed, 26 skipped, 18 deselected;
+    config-extra harness passed with 447 passed, 1906 deselected; `uv build`
+    produced the source distribution and wheel. The same command was
+    terminated in the sandbox after existing localhost authority-service tests
+    hung under network restrictions.
+  - `make test-summary` passed outside the sandbox and wrote
+    `build/test-summary.md`; overall summary: 2344 passed, 18 skipped, 1922
+    deselected.
+- Refinement summary: not needed; implementation and validation passed without
+  spending the phase refiner budget.
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-18/phases/slurm-apptainer-composition-pr-body.md`
 - Stack maintenance: root phase from `develop`
 - Remaining blockers: none

@@ -846,11 +846,22 @@ container behavior across dry-run and live submission paths
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
-- PR: pending
+- Implementation: added SLURM/Apptainer command composition helpers,
+  `SlurmCommandArgv` metadata, run-level and stage-level container wrapping,
+  selected Apptainer SIF target resolution before dry-run rendering/live
+  submission, redacted container command/build metadata, and focused
+  unit/contract/integration/e2e coverage in
+  `codex/slurm-apptainer-composition`.
+- Validation: targeted SLURM/CLI unit suite passed with 103 passed; targeted
+  contract/integration/e2e suite passed with 21 passed and 3 skipped;
+  `make validate-pr` passed outside the sandbox; `make test-summary` passed
+  with overall 2344 passed, 18 skipped, 1922 deselected.
+- PR: body drafted in
+  `docs/roadmap/stage-18/phases/slurm-apptainer-composition-pr-body.md`;
+  PR pending.
 - Merge: pending
-- Follow-up: pending
+- Follow-up: selected-executor preflight, user docs/examples, and optional
+  real runtime/cluster smoke remain Phase 5 work.
 
 ## Phase 5: Preflight, Docs, And Opt-In Runtime Smoke
 
