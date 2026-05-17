@@ -173,9 +173,38 @@ make test-summary
 
 - Draft plan: completed by manager in this file before code changes.
 - Final phase execution plan: refined in this planning pass; ready for implementation.
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
-- PR preparation: pending
+- Implementation summary: added `ApptainerExecOptions`, deterministic
+  `apptainer exec`/`singularity exec` command construction, fake/subprocess
+  exec runners, direct `ApptainerExecutor` and `SingularityExecutor`
+  prepared-worker execution, CLI/top-level executor selection, selected-command
+  metadata, redacted environment projection, path-parity bind injection,
+  resource-intent metadata, package import-boundary coverage, and fake-runner
+  integration coverage. SLURM composition, docs/preflight, and real runtime
+  smoke remain later phases.
+- Implementation validation:
+  - Focused Apptainer unit suite passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/apptainer -q`:
+    28 passed.
+  - Targeted package/unit/contract suite passed:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/loom/pipeline/executors/apptainer tests/unit/loom/pipeline/test_executor_capabilities.py tests/contracts/test_executor_contract.py tests/contracts/test_executor_capabilities_contract.py tests/package -q`:
+    159 passed, 1 skipped.
+  - Integration slice passed outside the sandbox:
+    `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/integration/pipeline/test_apptainer_executor.py -q`:
+    2 passed. The same integration tests cannot start the local authority
+    service in the sandbox because socket creation is blocked.
+  - Targeted Ruff and Pyright passed for touched implementation and test
+    files.
+  - `UV_CACHE_DIR=/tmp/uv-cache make validate-pr` passed outside the sandbox:
+    Ruff passed; Pyright passed; default harness passed with 1859 passed, 26
+    skipped, 18 deselected; config-extra harness passed with 447 passed, 1896
+    deselected; `uv build` produced the source distribution and wheel.
+  - `UV_CACHE_DIR=/tmp/uv-cache make test-summary` passed outside the sandbox
+    and wrote `build/test-summary.md`; overall summary: 2334 passed, 18
+    skipped, 1912 deselected.
+- Refinement summary: no phase refiner pass used; the only validation issue was
+  a pytest module-name collision fixed by renaming new Apptainer unit test
+  files to unique basenames.
+- PR preparation: PR body drafted in
+  `docs/roadmap/stage-18/phases/apptainer-executor-pr-body.md`.
 - Stack maintenance: root phase from `develop`
 - Remaining blockers: none

@@ -724,11 +724,17 @@ runtime behavior
 
 ### Completion Summary
 
-- Implementation: pending
-- Validation: pending
+- Implementation: direct Apptainer/Singularity command construction,
+  fake/subprocess exec runners, prepared-worker executor integration,
+  CLI/top-level executor selection, selected-command metadata, redaction-safe
+  environment projection, path-parity bind injection, and fake-runner
+  integration coverage are implemented in `codex/apptainer-executor`.
+- Validation: `make validate-pr` passed outside the sandbox; `make
+  test-summary` passed with overall 2334 passed, 18 skipped, 1912 deselected.
 - PR: pending
 - Merge: pending
-- Follow-up: pending
+- Follow-up: SLURM wrapping, selected preflight, docs/examples, and optional
+  real runtime smoke remain Phase 4 and Phase 5 work.
 
 ## Phase 4: SLURM Plus Apptainer Composition
 
