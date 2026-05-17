@@ -183,8 +183,11 @@ make test-summary
   after implementation-local type fixes before the implementation commit.
 - Blocker-resolution summary: none needed
 - PR preparation: PR body artifact prepared at
-  `docs/roadmap/stage-20/phases/runtime-event-dispatch-pr-body.md`; PR opening
-  pending
+  `docs/roadmap/stage-20/phases/runtime-event-dispatch-pr-body.md`; PR
+  [#189](https://github.com/samcantrill/loom/pull/189) opened against
+  `develop`; verification confirmed base `develop`, head
+  `codex/runtime-event-dispatch`, state `OPEN`, and GitHub CI `checks` in
+  progress
 - Stack maintenance: Phase 2 merged before Phase 3 PR preparation; Phase 3 was
   replayed onto `origin/develop` and no longer depends on
   `codex/event-sink-registry-observer-facts`
