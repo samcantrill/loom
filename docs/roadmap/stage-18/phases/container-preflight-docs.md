@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: approved
+- Status: merged
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 5: Preflight Docs And Smoke Hooks`
 - Branch: `codex/container-preflight-docs`
@@ -14,7 +14,7 @@
 - Base branch: `origin/develop` at `bbf6ac1`
 - Target branch: `develop`
 - PR: https://github.com/samcantrill/loom/pull/186
-- Merge eligibility: ready for merge after final target verification
+- Merge eligibility: merged to `develop`
 - Workflow path: expanded path
 - Successor dependency notes: final Stage 18 phase; no product successor branch depends on this branch.
 - Plan quality gate: passed in the implementation plan on 2026-05-17
@@ -176,5 +176,7 @@ make test-summary
 - Refinement summary: no implementation refinement pass needed.
 - Blocker-resolution summary: no blocker-resolution pass used.
 - PR preparation: PR #186 opened against `develop`; PR body recorded in `docs/roadmap/stage-18/phases/container-preflight-docs-pr-body.md`; GitHub `checks` passed before merge.
-- Stack maintenance: root phase from `develop`
+- Stack maintenance: root phase from `develop`; PR #186 merged as squash
+  commit `de103bc`, and the remote branch was deleted because no successor
+  branch depends on it.
 - Remaining blockers: none

@@ -1,11 +1,11 @@
 # Roadmap Stage 18 Implementation Plan: HPC Container Execution
 
-Status: in_progress
+Status: complete
 Roadmap stage: `v18`
 Planning document: `docs/roadmap/stage-18/planning.md`
 Workflow: `.codex/workflows/roadmap-stage-implementation.md`
 Target branch: `develop`
-Current phase: Phase 5 approved
+Current phase: all phases merged
 Blockers:
 
 - None. Implementation-plan quality gate passed on 2026-05-17 after manager
@@ -60,6 +60,16 @@ Blockers:
   submit-side build ordering, clean environment defaults, and cheap preflight.
 - Source phase shaping: five phases confirmed in the planning artifact.
 - Source plan quality gate: passed on 2026-05-17.
+- Final implementation status: complete. Phases 1-5 merged through PRs
+  [#182](https://github.com/samcantrill/loom/pull/182),
+  [#183](https://github.com/samcantrill/loom/pull/183),
+  [#184](https://github.com/samcantrill/loom/pull/184),
+  [#185](https://github.com/samcantrill/loom/pull/185), and
+  [#186](https://github.com/samcantrill/loom/pull/186).
+- Final validation evidence: every phase ran `make validate-pr` and
+  `make test-summary`; the final Phase 5 gate passed locally with overall
+  2350 passed, 21 skipped, 1928 deselected, and GitHub CI `checks` passed
+  before merge.
 - Out of scope: external/site build services, Apptainer remote build,
   registry/auth helpers, automatic image conversion beyond explicit build
   sources, Docker Compose, Kubernetes, image publishing, whole-controller
@@ -360,7 +370,7 @@ of Docker, Apptainer, SLURM, registry clients, or cloud SDKs.
 | 2 | `local-container-builders` | merged | `codex/local-container-builders` | [#183](https://github.com/samcantrill/loom/pull/183) | Local build service, fake service, Docker/Apptainer build adapters | Build or reuse Docker image refs and Apptainer SIF refs through shared requests | Unit, contract, fake builder integration; `make validate-pr`; `make test-summary` | SIF build, build policy, output refs |
 | 3 | `apptainer-executor` | merged | `codex/apptainer-executor` | [#184](https://github.com/samcantrill/loom/pull/184) | Apptainer/Singularity options, command builders, direct executor | Run prepared stage attempts through `apptainer exec`/`singularity exec` | Command-builder, descriptor, fake-runner executor tests; `make validate-pr`; `make test-summary` | Direct Apptainer stage execution |
 | 4 | `slurm-apptainer-composition` | merged | `codex/slurm-apptainer-composition` | [#185](https://github.com/samcantrill/loom/pull/185) | SLURM argv wrapping, build-before-render/submission, live reuse | Compose existing SLURM dry-run/live paths with resolved Apptainer execution | Script rendering, manifest, fake `sbatch`/status/cancel integration; `make validate-pr`; `make test-summary` | SLURM plus Apptainer dry-run/live |
-| 5 | `container-preflight-docs` | approved | `codex/container-preflight-docs` | [#186](https://github.com/samcantrill/loom/pull/186) | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
+| 5 | `container-preflight-docs` | merged | `codex/container-preflight-docs` | [#186](https://github.com/samcantrill/loom/pull/186) | Preflight, docs, examples, optional smoke hooks | Finish selected diagnostics, docs, examples, and opt-in runtime smoke | Stable check-ID tests, docs examples, fake e2e where practical; `make validate-pr`; `make test-summary` | Preflight, docs, optional smoke |
 
 ## Implementation Readiness Blockers
 
@@ -870,7 +880,7 @@ container behavior across dry-run and live submission paths
 
 ## Phase 5: Preflight, Docs, And Opt-In Runtime Smoke
 
-Status: approved
+Status: merged
 Slug: `container-preflight-docs`
 Branch: `codex/container-preflight-docs`
 Worktree: `/home/samcantrill/work/loom-worktrees/container-preflight-docs`
@@ -963,7 +973,8 @@ diagnostics, docs, examples, and validation evidence across prior phases
 - PR review budget: completed by manager; no blocking findings
 - Blocker-resolution budget: unused
 - Pre-submit blocker gate: Phase 4 merged or valid stack predecessor recorded
-- Merge record: pending final target verification and merge
+- Merge record: PR #186 merged to `develop` on 2026-05-17 as squash commit
+  `de103bc`
 
 ### Risks And Stop Conditions
 
@@ -990,7 +1001,9 @@ diagnostics, docs, examples, and validation evidence across prior phases
 - PR: https://github.com/samcantrill/loom/pull/186 opened against `develop`;
   automated manager review found no blocking findings and GitHub `checks`
   passed before merge.
-- Merge: pending
+- Merge: PR #186 merged into `develop` as squash commit `de103bc`; no
+  successor branches depend on `codex/container-preflight-docs`, and the remote
+  branch was deleted by the merge command.
 - Follow-up: direct Apptainer/Singularity preflight intentionally does not
   resolve `container.target`; users should pass built SIF paths through
   `container.image.reference` until a future explicit target-resolution
