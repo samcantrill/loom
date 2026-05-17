@@ -712,6 +712,12 @@ class ContainerBuildSource:
             ),
         )
 
+    def to_redacted_metadata(self) -> dict[str, PlainData]:
+        data = self.to_dict()
+        metadata = cast(dict[str, PlainData], data.pop("metadata"))
+        data["metadata_keys"] = _plain_string_list(sorted(metadata))
+        return data
+
 
 @dataclass(frozen=True, slots=True)
 class ContainerBuildOutputRef:
@@ -794,7 +800,10 @@ class ContainerBuildOutputRef:
         )
 
     def to_redacted_metadata(self) -> dict[str, PlainData]:
-        return self.to_dict()
+        data = self.to_dict()
+        metadata = cast(dict[str, PlainData], data.pop("metadata"))
+        data["metadata_keys"] = _plain_string_list(sorted(metadata))
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -960,14 +969,11 @@ class ContainerBuildTarget:
             "schema_version": self.schema_version,
             "name": self.name,
             "runtime": cast(ContainerBuildRuntime, self.runtime).value,
-            "source": cast(ContainerBuildSource, self.source).to_dict(),
+            "source": cast(ContainerBuildSource, self.source).to_redacted_metadata(),
             "output": cast(ContainerBuildOutputRef, self.output).to_redacted_metadata(),
             "policy": cast(ContainerBuildPolicy, self.policy).to_dict(),
-            "build_arg_names": list(self.build_args),
-            "metadata": _thaw_plain_mapping(
-                self.metadata,
-                path="ContainerBuildTarget.metadata",
-            ),
+            "build_arg_names": _plain_string_list(list(self.build_args)),
+            "metadata_keys": _plain_string_list(list(self.metadata)),
         }
 
 
@@ -1052,10 +1058,7 @@ class ContainerBuildOptions:
                     self.targets,
                 ).items()
             },
-            "service": _thaw_plain_mapping(
-                self.service,
-                path="ContainerBuildOptions.service",
-            ),
+            "service_keys": _plain_string_list(list(self.service)),
         }
 
 
@@ -1172,7 +1175,10 @@ class ContainerBuildCommandProjection:
         object.__setattr__(
             self,
             "argv",
-            _str_tuple(self.argv, path="ContainerBuildCommandProjection.argv"),
+            _str_sequence_tuple(
+                self.argv,
+                path="ContainerBuildCommandProjection.argv",
+            ),
         )
         object.__setattr__(
             self,
@@ -1227,7 +1233,7 @@ class ContainerBuildCommandProjection:
                 mapping.get("schema_version", CONTAINER_BUILD_SCHEMA_VERSION),
                 path="ContainerBuildCommandProjection.schema_version",
             ),
-            argv=_str_tuple(
+            argv=_str_sequence_tuple(
                 mapping["argv"],
                 path="ContainerBuildCommandProjection.argv",
             ),
@@ -1318,7 +1324,7 @@ class ContainerBuildEvidence:
                 mapping["builder"],
                 path="ContainerBuildEvidence.builder",
             ),
-            log_paths=_str_tuple(
+            log_paths=_str_sequence_tuple(
                 mapping.get("log_paths", ()),
                 path="ContainerBuildEvidence.log_paths",
             ),
@@ -1885,6 +1891,18 @@ def _str_tuple(value: object, *, path: str) -> tuple[str, ...]:
     if len(set(normalized)) != len(normalized):
         raise ContainerOptionError(f"{path} contains duplicate variable names")
     return tuple(sorted(normalized))
+
+
+def _str_sequence_tuple(value: object, *, path: str) -> tuple[str, ...]:
+    items = _sequence(value, path=path)
+    return tuple(
+        _non_empty_string(item, path=f"{path}[{index}]")
+        for index, item in enumerate(items)
+    )
+
+
+def _plain_string_list(values: Sequence[str]) -> list[PlainData]:
+    return [value for value in values]
 
 
 def _string(value: object, *, path: str) -> str:

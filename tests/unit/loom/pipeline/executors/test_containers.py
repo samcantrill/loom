@@ -259,9 +259,11 @@ def test_container_build_targets_round_trip_and_redact_metadata() -> None:
                     "output": {
                         "kind": "apptainer_sif",
                         "path": ".loom/containers/analysis-env.sif",
+                        "metadata": {"token": "output-secret"},
                     },
                     "policy": {"mode": "if_stale"},
                     "build_args": {"TOKEN": "secret", "MODE": "test"},
+                    "metadata": {"token": "target-secret"},
                 },
                 "ci-image": {
                     "runtime": "docker",
@@ -292,6 +294,9 @@ def test_container_build_targets_round_trip_and_redact_metadata() -> None:
     assert key.digest.startswith("sha256:")
     redacted = target.to_redacted_metadata()
     assert redacted["build_arg_names"] == ["MODE", "TOKEN"]
+    assert redacted["metadata_keys"] == ["token"]
+    redacted_output = cast(dict[str, PlainData], redacted["output"])
+    assert redacted_output["metadata_keys"] == ["token"]
     assert "secret" not in repr(redacted)
 
 
@@ -329,6 +334,13 @@ def test_container_build_request_and_result_records_are_plain_data() -> None:
     assert (
         ContainerBuildResult.from_dict(result.to_dict()).to_dict() == result.to_dict()
     )
+    command_document = cast(dict[str, PlainData], result.to_dict()["command"])
+    assert command_document["argv"] == [
+        "apptainer",
+        "build",
+        REDACTED_VALUE,
+        "containers/a.def",
+    ]
     assert "TOKEN" in repr(command.to_dict())
     assert "secret" not in repr(result.to_dict())
 
