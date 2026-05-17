@@ -474,6 +474,24 @@ def test_run_build_executor_supports_docker(tmp_path: Path) -> None:
     assert getattr(executor, "requires_prepared_worker_request") is True
 
 
+def test_run_build_executor_supports_apptainer_and_singularity(
+    tmp_path: Path,
+) -> None:
+    apptainer = run_command._build_executor(
+        "apptainer",
+        LocalRunStore(tmp_path / "runs"),
+    )
+    singularity = run_command._build_executor(
+        "singularity",
+        LocalRunStore(tmp_path / "runs2"),
+    )
+
+    assert getattr(apptainer, "name") == "apptainer"
+    assert getattr(apptainer, "requires_prepared_worker_request") is True
+    assert getattr(singularity, "name") == "singularity"
+    assert getattr(singularity, "requires_prepared_worker_request") is True
+
+
 def test_run_explicit_docker_executor_uses_generic_run_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
