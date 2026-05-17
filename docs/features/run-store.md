@@ -719,6 +719,14 @@ events.jsonl:
   append-friendly lifecycle events for inspection and later external
   notification tools
 
+event_sink_failures.jsonl:
+  append-friendly event-adjacent callback failure facts for explicitly
+  configured event sinks
+
+event_observer_links.jsonl:
+  append-friendly links from Loom event identities to generic external observer
+  references
+
 lock.json:
   conservative local run lock with token and owner metadata
 ```
@@ -1092,6 +1100,7 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.events import PipelineEvent, PipelineEventRecord
 from loom.pipeline.locks import RunLockRecord
 from loom.pipeline.status import RunStatusRecord, StageStatusRecord
@@ -1133,6 +1142,14 @@ class RunProvenanceStore(Protocol):
 class RunEventStore(Protocol):
     def append_event(self, run_uri: str, event: PipelineEvent) -> PipelineEventRecord: ...
     def read_events(self, run_uri: str) -> tuple[PipelineEventRecord, ...]: ...
+
+class RunEventSinkFailureStore(Protocol):
+    def append_event_sink_failure(self, run_uri: str, failure: EventSinkFailureRecord) -> None: ...
+    def read_event_sink_failures(self, run_uri: str) -> tuple[EventSinkFailureRecord, ...]: ...
+
+class RunEventObserverLinkStore(Protocol):
+    def append_event_observer_link(self, run_uri: str, link: EventObserverLinkRecord) -> None: ...
+    def read_event_observer_links(self, run_uri: str) -> tuple[EventObserverLinkRecord, ...]: ...
 
 class RunLockStore(Protocol):
     def acquire_run_lock(self, run_uri: str, *, owner: Mapping[str, PlainData] | None = None) -> RunLockRecord: ...

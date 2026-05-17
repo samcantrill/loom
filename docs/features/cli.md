@@ -1492,6 +1492,7 @@ loom preflight CONFIG --run-uri RUN_URI
 loom diff RUN_A RUN_B
 loom clean RUN_URI --failed-temp
 loom gc RUNS_DIR --older-than 30d
+loom events RUN_URI
 loom export RUN_URI ARCHIVE
 loom inspect ARCHIVE
 ```
@@ -1499,8 +1500,10 @@ loom inspect ARCHIVE
 `graph` should format pipeline graph APIs, `preflight` should call best-effort
 config/pipeline/store/executor checks, `diff` should format planning and
 provenance summaries, and cleanup/export commands should operate only through
-run-store and artifact-store APIs. The CLI should not load domain artifact
-payloads or implement file deletion policy directly.
+run-store and artifact-store APIs. A future `events` command should read
+runtime event records, callback failures, and observer links without mutating
+run state or loading event sink plugins. The CLI should not load domain
+artifact payloads or implement file deletion policy directly.
 
 ---
 

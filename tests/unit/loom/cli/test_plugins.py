@@ -31,7 +31,6 @@ _FUTURE_GROUPS = (
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
-    LOOM_EVENT_SINKS_GROUP,
 )
 
 
@@ -124,9 +123,11 @@ def test_plugins_list_load_imports_only_selected_recipe(
         ),
     )
     imported: list[str] = []
+    real_import_module = importlib.import_module
 
     def import_module(name: str, package: str | None = None) -> ModuleType:
-        del package
+        if not name.startswith("loom.plugins._"):
+            return real_import_module(name, package)
         imported.append(name)
         module = _RecipeModule(name)
         module.recipe = lambda value: {"value": value}
@@ -233,6 +234,35 @@ def test_plugins_list_labels_all_future_groups_listing_only(
     assert stderr.getvalue() == ""
 
 
+def test_plugins_list_labels_event_sinks_registry_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plugins_command,
+        "_entry_point_provider",
+        _fake_provider(
+            (
+                _fake_entry_point(
+                    group=LOOM_EVENT_SINKS_GROUP,
+                    name="audit",
+                    value="loom.plugins._event_sink:audit",
+                ),
+            )
+        ),
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert main(["plugins", "list", "--format", "json"], stdout=stdout, stderr=stderr) == 0
+
+    payload = json.loads(stdout.getvalue())
+    record = payload["result"]["records"][0]
+    assert record["group"] == LOOM_EVENT_SINKS_GROUP
+    assert record["readiness"] == "registry-ready"
+    assert record["status"] == "metadata"
+    assert stderr.getvalue() == ""
+
+
 @pytest.mark.parametrize("group", _FUTURE_GROUPS)
 def test_plugins_check_does_not_import_future_group_targets(
     monkeypatch: pytest.MonkeyPatch,
@@ -272,6 +302,63 @@ def test_plugins_check_does_not_import_future_group_targets(
     payload = json.loads(stdout.getvalue())
     assert payload["result"]["unsupported_groups"] == [group]
     assert payload["result"]["records"][0]["readiness"] == "listing-only"
+    assert stderr.getvalue() == ""
+
+
+def test_plugins_check_loads_selected_event_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plugins_command,
+        "_entry_point_provider",
+        _fake_provider(
+            (
+                _fake_entry_point(
+                    group=LOOM_EVENT_SINKS_GROUP,
+                    name="audit",
+                    value="loom.plugins._event_sink:audit",
+                ),
+            )
+        ),
+    )
+    imported: list[str] = []
+
+    def import_module(name: str, package: str | None = None) -> ModuleType:
+        del package
+        imported.append(name)
+        module = ModuleType(name)
+
+        def audit(event: object, context: object) -> None:
+            del event, context
+
+        module.audit = audit  # type: ignore[attr-defined]
+        return module
+
+    monkeypatch.setattr(importlib, "import_module", import_module)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    assert (
+        main(
+            [
+                "plugins",
+                "check",
+                "--group",
+                LOOM_EVENT_SINKS_GROUP,
+                "--format",
+                "json",
+            ],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        == 0
+    )
+
+    payload = json.loads(stdout.getvalue())
+    assert imported == ["loom.plugins._event_sink"]
+    assert payload["result"]["unsupported_groups"] == []
+    assert payload["result"]["records"][0]["status"] == "loaded"
+    assert payload["result"]["records"][0]["readiness"] == "registry-ready"
     assert stderr.getvalue() == ""
 
 

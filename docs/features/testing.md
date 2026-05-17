@@ -499,6 +499,7 @@ artifact store -> fingerprints -> resume decisions
 executor -> lifecycle hooks -> failure status writes
 sweep expansion -> trial run requests
 plugin loading -> registry population
+event sink plugin loading -> scratch EventSinkRegistry population
 ```
 
 ### 8.3 Boundaries
@@ -1301,7 +1302,7 @@ missing artifacts
 checksum mismatch
 subprocess non-zero exit, post-v0
 SLURM submission failure, post-v0
-plugin load failure, post-v0
+plugin load failure
 codec decode failure
 ```
 

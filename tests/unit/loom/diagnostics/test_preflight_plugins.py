@@ -29,7 +29,6 @@ _FUTURE_GROUPS = (
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
-    LOOM_EVENT_SINKS_GROUP,
 )
 
 
@@ -76,9 +75,11 @@ def test_plugin_preflight_loads_selected_recipe_in_scratch_registry(
         ),
     )
     imported: list[str] = []
+    real_import_module = importlib.import_module
 
     def import_module(name: str, package: str | None = None) -> ModuleType:
-        del package
+        if not name.startswith("loom.plugins._"):
+            return real_import_module(name, package)
         imported.append(name)
         module = _RecipeModule(name)
         module.recipe = lambda value: {"value": value}
@@ -100,6 +101,61 @@ def test_plugin_preflight_loads_selected_recipe_in_scratch_registry(
         PreflightCheckStatus.PASS,
     ]
     assert imported == ["loom.plugins._selected"]
+    counts = cast(dict[str, Any], result.checks[1].details["counts"])
+    assert counts["loaded"] == 1
+
+
+def test_plugin_preflight_loads_selected_event_sink_in_scratch_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        preflight,
+        "_plugin_entry_point_provider",
+        lambda: (
+            _entry_point(
+                group=LOOM_EVENT_SINKS_GROUP,
+                name="selected",
+                value="loom.plugins._selected_event_sink:sink",
+            ),
+            _entry_point(
+                group=LOOM_EVENT_SINKS_GROUP,
+                name="skipped",
+                value="loom.plugins._skipped_event_sink:sink",
+            ),
+        ),
+    )
+    imported: list[str] = []
+    calls: list[str] = []
+
+    def import_module(name: str, package: str | None = None) -> ModuleType:
+        del package
+        imported.append(name)
+        module = ModuleType(name)
+
+        def sink(event: object, context: object) -> None:
+            del event, context
+            calls.append(name)
+
+        module.sink = sink  # type: ignore[attr-defined]
+        return module
+
+    monkeypatch.setattr(importlib, "import_module", import_module)
+
+    result = run_preflight(
+        PreflightRequest(
+            config_path="base.yaml",
+            groups=("plugins",),
+            plugin_groups=(LOOM_EVENT_SINKS_GROUP,),
+            plugin_names=("selected",),
+        )
+    )
+
+    assert [check.status for check in result.checks] == [
+        PreflightCheckStatus.PASS,
+        PreflightCheckStatus.PASS,
+    ]
+    assert imported == ["loom.plugins._selected_event_sink"]
+    assert calls == []
     counts = cast(dict[str, Any], result.checks[1].details["counts"])
     assert counts["loaded"] == 1
 

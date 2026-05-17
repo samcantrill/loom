@@ -179,16 +179,16 @@ Runtime event semantics belong to `loom` reliability and execution layers.
 Plugin responsibilities:
 
 ```text
-discover event sink entry points, later
-load observe-only event sink callables, later
-register event sinks with a supplied event sink registry, later
+discover event sink entry points
+load observe-only event sink callables explicitly
+register event sinks with a supplied event sink registry
 report event sink load or registration failures
 ```
 
 Plugin non-responsibilities:
 
 ```text
-define RuntimeEvent semantics
+define runtime event semantics
 emit lifecycle events
 deliver Slack, email, PagerDuty, webhook, or monitoring notifications
 decide whether a callback failure should fail a run
@@ -348,7 +348,7 @@ event emitted by the execution or reliability layer.
 Representative shape:
 
 ```python
-EventSink = Callable[[RuntimeEvent], None]
+EventSink = Callable[[PipelineEventRecord | EventReference, EventSinkContext], object]
 ```
 
 Event sinks may send notifications, append audit logs, or forward events to an
@@ -479,7 +479,7 @@ Event sinks are observers of committed runtime facts.
 They may:
 
 ```text
-receive RuntimeEvent records
+receive PipelineEventRecord or EventReference values
 write external audit or notification side effects
 raise errors that are recorded as callback failures
 ```
@@ -582,7 +582,7 @@ Defer until executor registry shape is stable.
 
 ### 7.5 Event Sinks
 
-Future group:
+Registry-ready group:
 
 ```text
 loom.event_sinks
@@ -603,18 +603,18 @@ event sink class with no-arg constructor
 factory returning an event sink callable
 ```
 
-The sink receives `RuntimeEvent` records from execution or reliability
-infrastructure. It should return `None` and must not mutate the event or runtime
+The sink receives `PipelineEventRecord` or `EventReference` values from runtime
+event dispatch. It should return `None` and must not mutate the event or runtime
 state.
 
-Programmatic registration should come first. Entry point loading for
-`loom.event_sinks` should wait until the `RuntimeEvent` model and event sink
-registry contract are stable.
+Programmatic registration remains the lowest-level setup path. Entry point
+loading is available through `load_event_sink_entry_points(records, registry,
+...)` and only registers into the supplied `EventSinkRegistry`.
 
 ### 7.6 Readiness Classifications
 
-Stage 14 exposes all known groups as metadata namespaces, but only recipes and
-codecs are registry-ready:
+Stage 14 exposed all known groups as metadata namespaces. Runtime event work now
+makes event sinks registry-ready as an explicit supplied-registry adapter:
 
 | Group | Stage 14 readiness | Current contract evidence | Revisit trigger |
 | --- | --- | --- | --- |
@@ -625,15 +625,14 @@ codecs are registry-ready:
 | `loom.artifact_store_backends` | listing-only | Stage 15 owns backend descriptors, config handoff, capability records, URI policy, credentials, operation semantics, and registry shape | Stage 15 defines a store-owned backend registry and descriptor contract |
 | `loom.run_exporters` | listing-only | `RunExporter` and `RunImporter` protocols exist, but no plugin registry or loader contract is stable | Run exchange defines supplied exporter/importer plugin registries |
 | `loom.sweep_providers` | listing-only | Sweep provider protocols exist, but no plugin registry or loader contract is stable | Sweep planning defines a supplied provider plugin registry |
-| `loom.event_sinks` | listing-only | Event sink and event sink registry contracts are not source-level APIs yet | Runtime event records and event sink registry contracts land |
+| `loom.event_sinks` | registry-ready | `EventSinkRegistry` owns explicit registration and duplicate-name policy | Event sink plugin constructor or registry policy changes |
 
 Listing-only means discovery, CLI list output, and selected diagnostics may
 report installed entry point metadata, but Stage 14 must not import targets,
 construct runtime objects, mutate registries, probe credentials, validate URI
 schemes, or claim run readiness for that group.
 
-Stage 15 adds a specialized artifact-store backend adapter boundary without
-changing the generic readiness table above. Artifact-store backend entry points
+Stage 15 adds a specialized artifact-store backend adapter boundary. Artifact-store backend entry points
 may be loaded only by code that supplies an `ArtifactStoreBackendRegistry`.
 Loading a descriptor into that supplied registry proves descriptor compatibility;
 it does not prove URI reachability, credentials, read/write/list support, or run
@@ -664,14 +663,8 @@ from loom.plugins import (
     load_entry_points,
     load_recipe_entry_points,
     load_codec_entry_points,
+    load_event_sink_entry_points,
 )
-```
-
-Future event sink helpers should be exported only after the runtime event model
-is stable:
-
-```python
-from loom.plugins import load_event_sink_entry_points
 ```
 
 ### 8.2 Initial Files
@@ -1021,15 +1014,15 @@ The plugin layer discovers and loads sinks. The reliability and execution layers
 define events, emit events, persist event records, and decide callback failure
 policy.
 
-Representative future signature:
+Current signature:
 
 ```python
 def load_event_sink_entry_points(
+    records: Iterable[PluginRecord],
     registry: EventSinkRegistry,
     *,
-    group: str = "loom.event_sinks",
+    selected: Iterable[PluginRecord] | None = None,
     strict: bool = True,
-    replace: bool = False,
 ) -> PluginLoadResult: ...
 ```
 
@@ -1040,9 +1033,8 @@ event_sinks = EventSinkRegistry()
 event_sinks.register("audit_log", ProjectAuditSink())
 ```
 
-Exact registry naming can follow the runtime event implementation, but the
-registration path should stay explicit and instance-local for deterministic
-tests.
+Entry point names are used as deterministic registry names, and the registration
+path stays explicit and instance-local for deterministic tests.
 
 ### 14.2 Accepted Shapes
 
@@ -1069,14 +1061,19 @@ Runtime event records are facts emitted by `loom`.
 Event sink plugins may observe:
 
 ```text
-run_started
-stage_started
-stage_succeeded
-stage_failed
-run_finished
-submission_created
-retry_scheduled
-cleanup_performed
+run.created
+run.opened
+run.planned
+run.started
+run.completed
+run.failed
+stage.planned
+stage.started
+stage.completed
+stage.failed
+stage.skipped
+stage.reused
+stage.blocked
 ```
 
 The event list, event payload, persistence behavior, and timing of emission are
@@ -1094,18 +1091,19 @@ continue execution
 preserve the original callback exception through chaining or failure context
 ```
 
-Callback failures should be visible in run metadata or event records when event
-persistence is enabled. A strict failure policy may be added later, but plugin
-loading should not make observer failures part of run correctness by default.
+Callback failures are visible as event-adjacent observer facts when event
+persistence and the runtime sink context can record them. A strict failure
+policy may be added later, but plugin loading does not make observer failures
+part of run correctness by default.
 
 ### 14.5 Event Persistence
 
 When event sinks are configured, event persistence should be enabled by default
 unless the caller explicitly disables it.
 
-Persisted event records should be plain-data-compatible and should not include
-loaded Python sink objects, callback closure state, raw credentials, or large
-payloads.
+Persisted event records and observer facts are plain-data-compatible and do not
+include loaded Python sink objects, callback closure state, raw credentials, or
+large payloads.
 
 ### 14.6 Notification Boundary
 
@@ -1371,16 +1369,20 @@ return non-zero for unsupported listing-only load/check requests
 
 For listing-only groups such as `loom.artifact_store_backends`,
 `loom plugins check` reports metadata and listing-only status without importing
-targets or claiming runtime availability.
+targets or claiming runtime availability. For `loom.event_sinks`, checks may
+load selected targets into a scratch `EventSinkRegistry` but must not dispatch
+events or write observer facts.
 
 ### 19.4 Event Sink Inspection
 
 Plugin inspection commands may list event sink entry points without loading
-them. Loading event sink targets should require an explicit `--load` or check
-command because targets may import service SDKs or project packages.
+them. Loading event sink targets requires an explicit `--load` or check command
+because targets may import service SDKs or project packages.
 
-Runtime event streaming or event-record inspection belongs to the CLI/runtime
-event feature, not to generic plugin listing.
+Runtime event streaming or event-record inspection belongs to a future
+CLI/runtime event feature, not to generic plugin listing. Current read-only
+inspection uses run-store APIs for events, callback failures, and observer
+links.
 
 ### 19.5 Deferred
 
@@ -1544,8 +1546,8 @@ event persistence setting is represented in plain data
 ```
 
 Runtime event emission tests belong to reliability and execution suites. Plugin
-tests should use fake `RuntimeEvent` records and fake registries rather than
-running a pipeline.
+tests should use fake `PipelineEventRecord` or `EventReference` values and fake
+registries rather than running a pipeline.
 
 ### 21.7 Import Boundary Tests
 
@@ -1666,14 +1668,13 @@ load_sweep_provider_entry_points
 
 ### 22.8 Phase 8: Event Sink Plugins
 
-After runtime event models and an event sink registry stabilize:
+Landed after runtime event models and an event sink registry stabilized:
 
 ```text
 load_event_sink_entry_points
 event sink registration adapter
 observe-only sink validation
-callback failure record integration
-event sink provenance summaries
+callback failure record integration through runtime dispatch
 ```
 
 ---
@@ -1766,7 +1767,7 @@ load selected entry points
 return structured load results
 register recipes with recipe catalogs
 register codecs with codec registries
-register event sinks with event sink registries, later
+register event sinks with event sink registries
 detect duplicates deterministically
 report plugin failures clearly
 support provenance and optional CLI inspection

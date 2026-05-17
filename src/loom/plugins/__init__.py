@@ -52,11 +52,13 @@ if TYPE_CHECKING:
         load_artifact_store_backend_entry_points as load_artifact_store_backend_entry_points,
     )
     from .codecs import load_codec_entry_points as load_codec_entry_points
+    from .event_sinks import load_event_sink_entry_points as load_event_sink_entry_points
     from .recipes import load_recipe_entry_points as load_recipe_entry_points
 
 _LAZY_EXPORTS = {
     "load_artifact_store_backend_entry_points": ".artifact_backends",
     "load_codec_entry_points": ".codecs",
+    "load_event_sink_entry_points": ".event_sinks",
     "load_recipe_entry_points": ".recipes",
 }
 
@@ -105,6 +107,7 @@ __all__ = [
     "load_artifact_store_backend_entry_points",
     "list_entry_points",
     "load_codec_entry_points",
+    "load_event_sink_entry_points",
     "load_recipe_entry_points",
     "load_entry_points",
     "plugin_group_readiness",

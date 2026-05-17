@@ -49,11 +49,13 @@ def test_import_loom_plugins_public_symbols() -> None:
     assert plugins.LOADABLE_PLUGIN_GROUPS == (
         plugins.LOOM_RECIPES_GROUP,
         plugins.LOOM_CODECS_GROUP,
+        plugins.LOOM_EVENT_SINKS_GROUP,
     )
     assert (
         plugins.LOOM_ARTIFACT_STORE_BACKENDS_GROUP in plugins.LISTING_ONLY_PLUGIN_GROUPS
     )
     assert plugins.load_artifact_store_backend_entry_points
+    assert plugins.load_event_sink_entry_points
     assert plugins.load_entry_points
 
 

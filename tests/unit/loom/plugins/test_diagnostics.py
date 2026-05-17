@@ -29,22 +29,29 @@ from loom.plugins import (
 
 pytestmark = pytest.mark.unit
 
-_FUTURE_GROUPS = (
+_LISTING_ONLY_GROUPS = (
     LOOM_SOURCES_GROUP,
     LOOM_EXECUTORS_GROUP,
     LOOM_ARTIFACT_STORE_BACKENDS_GROUP,
     LOOM_RUN_EXPORTERS_GROUP,
     LOOM_SWEEP_PROVIDERS_GROUP,
-    LOOM_EVENT_SINKS_GROUP,
 )
 
 
-def test_group_readiness_classifies_only_recipes_and_codecs_as_registry_ready() -> None:
-    assert LOADABLE_PLUGIN_GROUPS == (LOOM_RECIPES_GROUP, LOOM_CODECS_GROUP)
+def test_group_readiness_classifies_registry_ready_groups() -> None:
+    assert LOADABLE_PLUGIN_GROUPS == (
+        LOOM_RECIPES_GROUP,
+        LOOM_CODECS_GROUP,
+        LOOM_EVENT_SINKS_GROUP,
+    )
     assert PLUGIN_GROUP_READINESS[LOOM_RECIPES_GROUP] == "registry-ready"
     assert PLUGIN_GROUP_READINESS[LOOM_CODECS_GROUP] == "registry-ready"
+    assert PLUGIN_GROUP_READINESS[LOOM_EVENT_SINKS_GROUP] == "registry-ready"
+    assert plugin_group_readiness(LOOM_EVENT_SINKS_GROUP).to_summary()["status"] == (
+        "registry-ready"
+    )
 
-    for group in _FUTURE_GROUPS:
+    for group in _LISTING_ONLY_GROUPS:
         readiness = plugin_group_readiness(group)
         assert readiness.group == group
         assert readiness.status == "listing-only"
@@ -124,9 +131,11 @@ def test_check_plugin_records_loads_selected_recipe_only(monkeypatch: pytest.Mon
         value="loom.plugins._recipe_skipped:recipe",
     )
     imported: list[str] = []
+    real_import_module = importlib.import_module
 
     def import_module(name: str, package: str | None = None) -> ModuleType:
-        del package
+        if not name.startswith("loom.plugins._"):
+            return real_import_module(name, package)
         imported.append(name)
         module = ModuleType(name)
         module.recipe = lambda value: {"value": value}  # type: ignore[attr-defined]
@@ -145,6 +154,51 @@ def test_check_plugin_records_loads_selected_recipe_only(monkeypatch: pytest.Mon
     assert summary["loaded"] == [selected.to_summary()]
     records = cast(list[dict[str, Any]], summary["records"])
     assert records[0]["status"] == "loaded"
+
+
+def test_check_plugin_records_loads_selected_event_sink_in_scratch_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="selected",
+        value="loom.plugins._event_sink_selected:sink",
+    )
+    skipped = PluginRecord(
+        group=LOOM_EVENT_SINKS_GROUP,
+        name="skipped",
+        value="loom.plugins._event_sink_skipped:sink",
+    )
+    imported: list[str] = []
+
+    def import_module(name: str, package: str | None = None) -> ModuleType:
+        del package
+        imported.append(name)
+        module = ModuleType(name)
+
+        def sink(event: object, context: object) -> None:
+            del event, context
+
+        module.sink = sink  # type: ignore[attr-defined]
+        return module
+
+    monkeypatch.setattr(importlib, "import_module", import_module)
+
+    result = check_plugin_records(
+        (selected, skipped),
+        selection=PluginSelection(
+            groups=(LOOM_EVENT_SINKS_GROUP,),
+            names=("selected",),
+        ),
+    )
+
+    assert result.ok is True
+    assert imported == ["loom.plugins._event_sink_selected"]
+    summary = result.to_summary()
+    assert summary["loaded"] == [selected.to_summary()]
+    records = cast(list[dict[str, Any]], summary["records"])
+    assert records[0]["status"] == "loaded"
+    assert records[0]["readiness"] == "registry-ready"
 
 
 def test_check_plugin_records_fails_closed_for_missing_and_listing_only() -> None:
