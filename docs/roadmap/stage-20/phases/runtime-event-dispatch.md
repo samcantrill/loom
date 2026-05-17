@@ -163,11 +163,28 @@ make test-summary
 
 - Draft plan: completed by manager on 2026-05-17
 - Final phase execution plan: completed by manager on 2026-05-17
-- Implementation summary: pending
-- Implementation validation: pending
-- Refinement summary: pending
-- Blocker-resolution summary: pending
-- PR preparation: pending
+- Implementation summary: added `RuntimeEventDispatcher`,
+  `EventDispatchWarning`, execution-local sink context writeback, explicit
+  `RunRequest.event_sink_registry` and `event_persistence` plumbing, runner and
+  lifecycle dispatch wiring, non-durable `EventReference` dispatch identity,
+  best-effort callback failure persistence, and unit/integration coverage for
+  durable ordering, observer links, callback failures, and non-durable
+  dispatch. Stage 19-specific retry, timeout, transaction, and submission event
+  names remain deferred; this phase preserves committed lifecycle fact ordering
+  and does not invent new reliability event semantics.
+- Implementation validation: targeted unit dispatch suite passed with 68
+  tests; targeted local integration/store suite passed with 1 test and 3
+  optional-dependency modules skipped in the plain dev environment; diagnostics
+  suite passed with 100 tests when run with `--extra config`; `make
+  validate-pr` passed Ruff, Pyright, default harness, config-extra harness, and
+  build; `make test-summary` passed with overall 2381 passed, 21 skipped, and
+  1957 deselected.
+- Refinement summary: not needed; targeted validation and final PR gates passed
+  after implementation-local type fixes before the implementation commit.
+- Blocker-resolution summary: none needed
+- PR preparation: PR body artifact prepared at
+  `docs/roadmap/stage-20/phases/runtime-event-dispatch-pr-body.md`; PR opening
+  pending
 - Stack maintenance: Phase 2 merged before Phase 3 PR preparation; Phase 3 was
   replayed onto `origin/develop` and no longer depends on
   `codex/event-sink-registry-observer-facts`
