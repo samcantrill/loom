@@ -228,7 +228,9 @@ make test-summary
 - Phase implementation refinement: used by manager local refinement after
   `make validate-pr` Pyright found the HTTP authority adapter missing the new
   observer-fact methods and unit test callables using overly narrow types
-- PR review: unused
+- PR review: used by manager local review on 2026-05-17; no blocking findings
+  found, scope confirmed limited to Phase 2 sink contracts, observer fact
+  stores, tests, and docs
 - Blocker resolution: 0/3 used
 
 ## Completion Notes
@@ -260,7 +262,9 @@ make test-summary
   PR [#188](https://github.com/samcantrill/loom/pull/188) opened against
   `develop`; verification confirmed base `develop`, head
   `codex/event-sink-registry-observer-facts`, state `OPEN`, and GitHub CI
-  `checks` in progress.
-- Stack maintenance: root PR; no predecessor or successor stack maintenance
-  needed at PR open.
+  `checks` success.
+- Stack maintenance: root PR; Phase 3 successor branch
+  `codex/runtime-event-dispatch` was created from this branch before merge, so
+  the branch must be kept during Phase 2 merge and deleted only after Phase 3 is
+  rebased or replayed onto `develop`.
 - Remaining blockers: none
