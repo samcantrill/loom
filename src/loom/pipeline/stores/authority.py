@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 from typing import cast
 
 from loom.artifacts import ArtifactRef
+from loom.pipeline.event_sinks import EventObserverLinkRecord, EventSinkFailureRecord
 from loom.pipeline.reliability import (
     ReliabilityStatusDetail,
     RetryDecisionRecord,
@@ -350,6 +351,22 @@ class PerRunAuthorityStore(Protocol):
     def append_audit_event(
         self, run_uri: str, event: PipelineEvent
     ) -> PipelineEventRecord: ...
+
+    def append_event_sink_failure(
+        self, run_uri: str, failure: EventSinkFailureRecord
+    ) -> BackendRevision: ...
+
+    def read_event_sink_failures(
+        self, run_uri: str
+    ) -> tuple[EventSinkFailureRecord, ...]: ...
+
+    def append_event_observer_link(
+        self, run_uri: str, link: EventObserverLinkRecord
+    ) -> BackendRevision: ...
+
+    def read_event_observer_links(
+        self, run_uri: str
+    ) -> tuple[EventObserverLinkRecord, ...]: ...
 
     def snapshot(self, run_uri: str) -> AuthoritativeRunSnapshot: ...
 
