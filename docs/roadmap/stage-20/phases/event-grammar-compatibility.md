@@ -235,8 +235,18 @@ make test-summary
 
 - Draft plan: completed in this commit
 - Final phase execution plan: completed by expanded-path refine pass on 2026-05-17
-- Implementation summary: pending
-- Implementation validation: pending
+- Implementation summary: implemented schema-version 2 `PipelineEventRecord`
+  grammar with `EventResourceRef`, `EventReference`,
+  `compatibility_event_id`, schema-v1 projection helpers, v2 durable
+  references, local `events.jsonl` v2 writes, authority `event_json` retention
+  for canonical records, offline evidence/import compatibility, focused tests,
+  and minimal reliability docs.
+- Implementation validation:
+  - `uv run pytest tests/package/test_pipeline_store_api.py tests/package/test_import_boundaries.py tests/unit/loom/pipeline/test_events.py` passed, 98 tests.
+  - `uv run pytest tests/unit/loom/pipeline/stores/test_local_runs.py tests/contracts/test_store_contract.py tests/contracts/test_authority_store_contract.py tests/integration/pipeline/test_local_stores.py` passed, 67 tests.
+  - `uv run pytest tests/unit/loom/pipeline/test_offline_evidence.py tests/integration/authority/test_offline_import_api.py` passed, 5 tests.
+  - Additional authority/offline confidence run: `uv run pytest tests/unit/loom/pipeline/test_offline_evidence.py tests/integration/authority/test_offline_import_api.py tests/unit/loom/authority/test_offline_import.py tests/integration/authority/test_repository_run_lifecycle.py tests/unit/loom/pipeline/stores/test_sqlite_authority.py` passed, 26 tests.
+  - `make validate-pr` passed: Ruff, Pyright, default harness, config-extra harness, and build.
 - Refinement summary: clarified public schema-version 2 field names, compatibility helper names and semantics, strict resource/reference validation, offline evidence/import behavior, local and authority persistence impacts, package/import-boundary obligations, immediate docs/docstring needs, and stop conditions
 - Blocker-resolution summary: pending
 - PR preparation: pending
