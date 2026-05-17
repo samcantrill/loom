@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: in_progress
+- Status: pr_open
 - Feature focus: HPC Container Execution
 - PR title: `HPC Container Execution - Phase 4: SLURM Apptainer Composition`
 - Branch: `codex/slurm-apptainer-composition`
@@ -13,8 +13,8 @@
 - Stack predecessor: none
 - Base branch: `origin/develop` at `a2d0aa9`
 - Target branch: `develop`
-- PR: pending
-- Merge eligibility: root phase; merge to `develop` after validation and automated review
+- PR: https://github.com/samcantrill/loom/pull/185
+- Merge eligibility: root phase; merge to `develop` after validation, automated review, and GitHub checks
 - Workflow path: expanded path
 - Successor dependency notes: Phase 5 depends on the resulting user-facing SLURM/Apptainer behavior for docs and preflight.
 - Plan quality gate: passed in the implementation plan on 2026-05-17
@@ -201,7 +201,7 @@ make test-summary
     deselected.
 - Refinement summary: not needed; implementation and validation passed without
   spending the phase refiner budget.
-- PR preparation: PR body drafted in
+- PR preparation: PR #185 opened against `develop`; PR body drafted in
   `docs/roadmap/stage-18/phases/slurm-apptainer-composition-pr-body.md`
 - Stack maintenance: root phase from `develop`
 - Remaining blockers: none
